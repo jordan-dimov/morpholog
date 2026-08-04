@@ -21,7 +21,7 @@
 use std::collections::BTreeSet;
 
 use crate::compiled::CompiledProgram;
-use crate::definitions::DefinitionIndex;
+use crate::definitions::DefinitionTable;
 use crate::disciplines::append_only_predicates;
 use crate::ir::{
     DefinitionName, Discipline, Invariant, InvariantOrigin, PredicateName, Prop, Term, ValueExpr,
@@ -178,7 +178,7 @@ impl std::fmt::Display for Lint {
 /// sub-expression position awaits the node-identified IR.
 pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
     let program = compiled.program();
-    let definitions = compiled.definition_index();
+    let definitions = compiled.definition_table();
     let append_only = append_only_predicates(program);
     let pointers: BTreeSet<PredicateName> = program
         .predicates
@@ -301,7 +301,7 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
 fn calls_definition(
     body: &Prop,
     target: &DefinitionName,
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
 ) -> bool {
     let mut reached = BTreeSet::new();
     crate::definitions::defined_calls_in_prop(body, &mut reached);
@@ -329,7 +329,7 @@ fn governing_selection_findings(
     implications: &[CollectedImplication<'_>],
     witnesses: &[BTreeSet<PredicateName>],
     declared_totality: &[Option<PredicateName>],
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
     out: &mut Vec<Lint>,
 ) {
     let mut selected = BTreeSet::new();
@@ -379,7 +379,7 @@ fn gate_vs_invariant_findings(
     implications: &[CollectedImplication<'_>],
     append_only: &BTreeSet<PredicateName>,
     pointers: &BTreeSet<PredicateName>,
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
     out: &mut Vec<Lint>,
 ) {
     for implication in implications {
@@ -419,7 +419,7 @@ fn unsupplied_antecedent_findings(
     inv: &Invariant,
     implications: &[CollectedImplication<'_>],
     declared: &BTreeSet<PredicateName>,
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
     out: &mut Vec<Lint>,
 ) {
     let mut missing = BTreeSet::new();
@@ -472,7 +472,7 @@ pub(crate) struct CollectedImplication<'a> {
 pub(crate) fn collect_implications<'a>(
     prop: &'a Prop,
     positive: bool,
-    definitions: DefinitionIndex<'a>,
+    definitions: DefinitionTable<'a>,
     seen: &mut BTreeSet<crate::ir::DefinitionName>,
     calls: &mut Vec<DefinedCall<'a>>,
     out: &mut Vec<CollectedImplication<'a>>,
@@ -491,11 +491,11 @@ pub(crate) fn collect_implications<'a>(
         }
         // Polarity is part of the meaning here, so the same definition
         // called again at a different polarity must be expanded again -
-        // exactly the stack-guard semantics `DefinitionIndex::enter`
+        // exactly the stack-guard semantics `DefinitionTable::enter`
         // provides.
-        Prop::Defined { name, args } => definitions.enter(name, seen, |body, seen| {
+        Prop::Defined { name, args } => definitions.enter(name, seen, |def_, seen| {
             calls.push((name, args));
-            collect_implications(body, positive, definitions, seen, calls, out);
+            collect_implications(&def_.body, positive, definitions, seen, calls, out);
             calls.pop();
         }),
         Prop::Claim { .. } | Prop::In(_, _) => {}
@@ -531,7 +531,7 @@ pub(crate) fn collect_implications<'a>(
 pub(crate) fn positive_claims(
     prop: &Prop,
     positive: bool,
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
     seen: &mut BTreeSet<crate::ir::DefinitionName>,
     out: &mut BTreeSet<PredicateName>,
 ) {
@@ -541,8 +541,8 @@ pub(crate) fn positive_claims(
                 out.insert(predicate.clone());
             }
         }
-        Prop::Defined { name, .. } => definitions.enter(name, seen, |body, seen| {
-            positive_claims(body, positive, definitions, seen, out);
+        Prop::Defined { name, .. } => definitions.enter(name, seen, |def_, seen| {
+            positive_claims(&def_.body, positive, definitions, seen, out);
         }),
         Prop::Not(inner) => positive_claims(inner, !positive, definitions, seen, out),
         Prop::Implies { left, right } => {
@@ -588,7 +588,7 @@ pub(crate) fn positive_claims(
 fn positive_value_claims(
     expr: &ValueExpr,
     positive: bool,
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
     seen: &mut BTreeSet<crate::ir::DefinitionName>,
     out: &mut BTreeSet<PredicateName>,
 ) {
@@ -663,7 +663,7 @@ fn positive_value_claims(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::definitions::DefinitionIndex;
+    use crate::definitions::DefinitionTable;
     use crate::ir::Term;
     use std::collections::BTreeSet;
 
@@ -686,7 +686,7 @@ mod tests {
         collect_implications(
             prop,
             true,
-            DefinitionIndex::new(&[]),
+            DefinitionTable::new(&[]),
             &mut BTreeSet::new(),
             &mut Vec::new(),
             &mut out,
@@ -715,7 +715,7 @@ mod tests {
         positive_claims(
             prop,
             true,
-            DefinitionIndex::new(&[]),
+            DefinitionTable::new(&[]),
             &mut BTreeSet::new(),
             &mut out,
         );

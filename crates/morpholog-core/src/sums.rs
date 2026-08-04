@@ -13,10 +13,11 @@
 //! the definition's body). Idempotent; hand-built IR that skips it
 //! keeps the decimal default, which is the pre-pass behaviour.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use crate::definitions::DefinitionTable;
 use crate::ir::{
-    Definition, PredicateArgKind, Program, Prop, Stmt, SumSeed, Term, Value, ValueExpr, Var,
+    DefinitionName, PredicateArgKind, Program, Prop, Stmt, SumSeed, Term, Value, ValueExpr, Var,
 };
 
 /// Resolve every `Sum` node's empty-case seed from the summed
@@ -38,7 +39,7 @@ pub fn lower_sum_seeds(program: &mut Program) {
     let definitions = program.definitions.clone();
     let ctx = SeedContext {
         kinds: &kinds,
-        definitions: &definitions,
+        definitions: DefinitionTable::new(&definitions),
     };
     for def in &mut program.definitions {
         lower_in_prop(&mut def.body, &ctx);
@@ -61,7 +62,7 @@ pub fn lower_sum_seeds(program: &mut Program) {
 
 struct SeedContext<'a> {
     kinds: &'a BTreeMap<String, Vec<PredicateArgKind>>,
-    definitions: &'a [Definition],
+    definitions: DefinitionTable<'a>,
 }
 
 fn lower_in_prop(prop: &mut Prop, ctx: &SeedContext<'_>) {
@@ -114,7 +115,7 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
                 // A variable's kind comes from the claim position that
                 // binds it; a literal target carries its kind itself
                 // (`sum(1 t | ...)` counts in tonnes, empty or not).
-                Term::Var(v) => var_seed(v, body, ctx, 0),
+                Term::Var(v) => var_seed(v, body, ctx, &mut BTreeSet::new()),
                 Term::Literal(Value::Quantity { unit, .. }) => {
                     Some(SumSeed::Quantity(unit.clone()))
                 }
@@ -166,20 +167,17 @@ fn lower_in_stmt(stmt: &mut Stmt, ctx: &SeedContext<'_>) {
     }
 }
 
-/// A definition can call a definition; genuine cycles are refused at
-/// validation, so this bound only guards the pass against unvalidated
-/// hand-built IR.
-const MAX_DEFINED_DEPTH: usize = 16;
-
 /// The seed for a variable summed over `body`: the declared kind of the
 /// first claim position that binds it, descending into definition calls
 /// by mapping the call argument onto the parameter it binds. `None`
 /// (no summable position found - a pre-bound variable, a subject join)
 /// leaves the decimal default standing.
-fn var_seed(var: &Var, body: &Prop, ctx: &SeedContext<'_>, depth: usize) -> Option<SumSeed> {
-    if depth > MAX_DEFINED_DEPTH {
-        return None;
-    }
+fn var_seed(
+    var: &Var,
+    body: &Prop,
+    ctx: &SeedContext<'_>,
+    seen: &mut BTreeSet<DefinitionName>,
+) -> Option<SumSeed> {
     match body {
         Prop::Claim { predicate, args } => {
             let kinds = ctx.kinds.get(predicate.as_str())?;
@@ -196,22 +194,26 @@ fn var_seed(var: &Var, body: &Prop, ctx: &SeedContext<'_>, depth: usize) -> Opti
                     _ => None,
                 })
         }
-        Prop::Defined { name, args } => {
-            let def = ctx.definitions.iter().find(|d| &d.name == name)?;
+        // The shared table's stack guard, so this pass no longer
+        // carries its own descent bound: a cycle in unvalidated IR
+        // terminates because the name is already on the stack, and a
+        // long chain of DISTINCT definitions now resolves instead of
+        // being truncated at an arbitrary depth.
+        Prop::Defined { name, args } => ctx.definitions.enter(name, seen, |def, seen| {
             args.iter()
                 .zip(&def.parameters)
                 .filter(|(arg, _)| matches!(arg, Term::Var(v) if v == var))
-                .find_map(|(_, param)| var_seed(param, &def.body, ctx, depth + 1))
-        }
+                .find_map(|(_, param)| var_seed(param, &def.body, ctx, seen))
+        }),
         Prop::And(props) | Prop::Or(props) => {
-            props.iter().find_map(|p| var_seed(var, p, ctx, depth))
+            props.iter().find_map(|p| var_seed(var, p, ctx, seen))
         }
         Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            var_seed(var, left, ctx, depth).or_else(|| var_seed(var, right, ctx, depth))
+            var_seed(var, left, ctx, seen).or_else(|| var_seed(var, right, ctx, seen))
         }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => var_seed(var, p, ctx, depth),
+        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => var_seed(var, p, ctx, seen),
         Prop::Forall { source, body, .. } => {
-            var_seed(var, source, ctx, depth).or_else(|| var_seed(var, body, ctx, depth))
+            var_seed(var, source, ctx, seen).or_else(|| var_seed(var, body, ctx, seen))
         }
         Prop::In(_, _) | Prop::Eq(_, _) | Prop::Neq(_, _) | Prop::Compare { .. } => None,
     }
@@ -221,6 +223,7 @@ fn var_seed(var: &Var, body: &Prop, ctx: &SeedContext<'_>, depth: usize) -> Opti
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::ir::Definition;
     use crate::ir_builder::{defined, invariant, predicate, program, sum};
     use crate::{CompareOp, OrderedDomain, Term, Value, Var};
 
@@ -321,19 +324,30 @@ mod tests {
         );
     }
 
-    /// The definition-descent cap, boundary-exact: a chain at the cap
-    /// still resolves the summed variable's kind; one hop past it
-    /// falls back to the decimal default. The cap only guards the
-    /// pass against unvalidated cyclic IR - validated programmes never
-    /// reach it - so its one observable behaviour is pinned here.
+    /// Descent through definition calls is bounded by the shared
+    /// stack guard, not by a depth number. A long chain of DISTINCT
+    /// definitions therefore resolves the summed variable's kind all
+    /// the way down - the old descent cap truncated it and silently
+    /// fell back to the decimal default, which was a wrong answer for
+    /// a programme that had done nothing unusual.
     #[test]
-    fn the_defined_descent_cap_is_boundary_exact() {
-        let mut at_cap = chained(MAX_DEFINED_DEPTH);
-        lower_sum_seeds(&mut at_cap);
-        assert_eq!(seed_of(&at_cap), SumSeed::Quantity("t".into()));
+    fn a_long_chain_of_definitions_still_resolves_the_summed_kind() {
+        let mut deep = chained(64);
+        lower_sum_seeds(&mut deep);
+        assert_eq!(seed_of(&deep), SumSeed::Quantity("t".into()));
+    }
 
-        let mut past_cap = chained(MAX_DEFINED_DEPTH + 1);
-        lower_sum_seeds(&mut past_cap);
-        assert_eq!(seed_of(&past_cap), SumSeed::Decimal);
+    /// The hazard the descent bound actually existed for: a CYCLE in
+    /// hand-built IR, which validation would refuse but this pass runs
+    /// before. The stack guard stops it - the pass terminates and the
+    /// unresolvable variable keeps the decimal default.
+    #[test]
+    fn a_cyclic_definition_terminates_and_falls_back() {
+        let mut p = chained(3);
+        // Close the chain: the last definition calls the first.
+        let last = p.definitions.len() - 1;
+        p.definitions[last].body = defined("d0", vec![Term::Var(Var::from("x"))]);
+        lower_sum_seeds(&mut p);
+        assert_eq!(seed_of(&p), SumSeed::Decimal);
     }
 }

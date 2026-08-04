@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use crate::definitions::DefinitionIndex;
+use crate::definitions::DefinitionTable;
 use crate::ir::{
     Definition, DefinitionName, DerivedClaim, IntentDecl, IntentName, Invariant, InvariantName,
     PredicateDecl, PredicateName, Program, Transformation, TransformationName,
@@ -46,7 +46,6 @@ pub struct CompiledProgram {
     program: Program,
     transformations: HashMap<TransformationName, usize>,
     invariants: HashMap<InvariantName, usize>,
-    definitions: HashMap<DefinitionName, usize>,
     predicates: HashMap<PredicateName, usize>,
     intents: HashMap<IntentName, usize>,
     /// Derived claims are keyed by their output predicate, matching
@@ -69,7 +68,6 @@ impl CompiledProgram {
         Ok(Self {
             transformations: position_index(&program.transformations, |t| t.name.clone()),
             invariants: position_index(&program.invariants, |i| i.name.clone()),
-            definitions: position_index(&program.definitions, |d| d.name.clone()),
             predicates: position_index(&program.predicates, |p| p.name.clone()),
             intents: position_index(&program.intents, |i| i.name.clone()),
             derived_claims: position_index(&program.derived_claims, |d| d.predicate.clone()),
@@ -103,11 +101,15 @@ impl CompiledProgram {
             .map(|&i| &self.program.invariants[i])
     }
 
-    /// The definition with this name, or `None`. O(1).
+    /// The definition with this name, or `None`.
+    ///
+    /// Routed through the same definition table every walker uses,
+    /// rather than a second index of its own. A programme names a
+    /// handful of definitions, so the scan is not the cost the map was
+    /// paying for - and one authority for "which definition is this"
+    /// is worth more than a lookup nothing measures.
     pub fn definition(&self, name: &DefinitionName) -> Option<&Definition> {
-        self.definitions
-            .get(name)
-            .map(|&i| &self.program.definitions[i])
+        self.definition_table().get(name)
     }
 
     /// The predicate declaration with this name, or `None`. O(1).
@@ -129,12 +131,12 @@ impl CompiledProgram {
             .map(|&i| &self.program.derived_claims[i])
     }
 
-    /// The definition index over this programme's definitions - one place
-    /// the analysis walkers source it from. The index borrows the
-    /// definitions slice, so this constructs it on demand rather than
-    /// caching (a cached `DefinitionIndex<'_>` would be self-referential);
-    /// it centralises the construction, it does not eliminate it.
-    pub(crate) fn definition_index(&self) -> DefinitionIndex<'_> {
-        DefinitionIndex::new(&self.program.definitions)
+    /// The definition table over this programme's definitions - the
+    /// one handle every walker and the accessor above share. It
+    /// borrows the definitions slice, so it is constructed on demand
+    /// rather than cached (a cached `DefinitionTable<'_>` would be
+    /// self-referential); construction is a pointer copy.
+    pub(crate) fn definition_table(&self) -> DefinitionTable<'_> {
+        DefinitionTable::new(&self.program.definitions)
     }
 }

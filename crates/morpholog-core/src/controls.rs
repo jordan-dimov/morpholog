@@ -56,7 +56,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analysis::{predicates_asserted_by, predicates_referenced_by_prop};
 use crate::compiled::CompiledProgram;
-use crate::definitions::DefinitionIndex;
+use crate::definitions::DefinitionTable;
 use crate::format;
 use crate::guarantees::{Guarantee, guarantees};
 use crate::ir::{InvariantOrigin, PredicateName, Program, Prop, Stmt};
@@ -191,7 +191,7 @@ pub struct ControlMatrix {
 /// gates in body order, plus the invariant guarantees.
 pub fn controls(compiled: &CompiledProgram) -> ControlMatrix {
     let program = compiled.program();
-    let defs = compiled.definition_index();
+    let defs = compiled.definition_table();
     let implications = authored_implications(program, defs);
 
     let transformations: Vec<TransformationControls> = program
@@ -296,7 +296,7 @@ struct InvImplication {
     failure_shape: String,
 }
 
-fn authored_implications(program: &Program, defs: DefinitionIndex<'_>) -> Vec<InvImplication> {
+fn authored_implications(program: &Program, defs: DefinitionTable<'_>) -> Vec<InvImplication> {
     let mut out = Vec::new();
     for inv in &program.invariants {
         if inv.origin != InvariantOrigin::Authored {
@@ -372,7 +372,7 @@ fn gate(
     prop: &Prop,
     name: Option<String>,
     definitions: &[crate::ir::Definition],
-    defs: DefinitionIndex<'_>,
+    defs: DefinitionTable<'_>,
     asserted: &BTreeSet<PredicateName>,
     implications: &[InvImplication],
 ) -> GateControl {

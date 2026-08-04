@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::definitions::DefinitionIndex;
+use crate::definitions::DefinitionTable;
 use crate::derive::eval_invariant;
 use crate::eval::{
     EvalContext, EvalError, RenderedClaim, eval_value, find_failing_subexpr, find_matches,
@@ -453,14 +453,14 @@ pub(crate) fn propose_inner(
     let mut emitted: Vec<IntentInstance> = vec![];
 
     let actor = Some(&transition.actor);
-    let definition_index = DefinitionIndex::new(definitions);
+    let definition_table = DefinitionTable::new(definitions);
     for stmt in &transformation.body {
         match execute_stmt(
             stmt,
             pre_state,
             &mut bindings,
             actor,
-            definition_index,
+            definition_table,
             &mut asserted,
             &mut retracted,
             &mut emitted,
@@ -513,7 +513,7 @@ pub(crate) fn execute_stmt(
     pre_state: &State,
     bindings: &mut Bindings,
     actor: Option<&Subject>,
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
     asserted: &mut Vec<ClaimInstance>,
     retracted: &mut Vec<ClaimInstance>,
     emitted: &mut Vec<IntentInstance>,

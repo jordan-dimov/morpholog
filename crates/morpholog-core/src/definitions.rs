@@ -1,5 +1,5 @@
 //! The canonical home for definition machinery: name lookup
-//! ([`DefinitionIndex`]), the definition reference graph
+//! ([`DefinitionTable`]), the definition reference graph
 //! ([`definition_topo_order`], shared by cycle detection, kind
 //! inference, and the depth budget), and the direct-call collector they
 //! build on. Every subsystem that must see through a [`Prop::Defined`]
@@ -155,15 +155,21 @@ fn resolve_in_stmt(stmt: &mut Stmt, names: &BTreeSet<String>) {
 /// entry point (a proposal, an invariant evaluation, a static walk) and
 /// threaded by reference.
 #[derive(Clone, Copy)]
-pub(crate) struct DefinitionIndex<'a> {
+pub(crate) struct DefinitionTable<'a> {
     definitions: &'a [Definition],
 }
 
-impl<'a> DefinitionIndex<'a> {
+impl<'a> DefinitionTable<'a> {
     pub(crate) fn new(definitions: &'a [Definition]) -> Self {
         Self { definitions }
     }
 
+    /// Deliberately a scan rather than a map. Definitions are the
+    /// handful a programme names - the largest worked example declares
+    /// five - and the table is built per walk over a borrowed slice,
+    /// so building a map would cost more than the scan it replaced.
+    /// The point of one table is one authority for "which definition
+    /// is this", not a faster lookup.
     pub(crate) fn get(&self, name: &DefinitionName) -> Option<&'a Definition> {
         self.definitions.iter().find(|d| &d.name == name)
     }
@@ -178,17 +184,22 @@ impl<'a> DefinitionIndex<'a> {
     /// guarantees every call resolves, so the undeclared arm is
     /// unreachable on a compiled programme, and every walker treats
     /// a cycle as contributing nothing.
+    /// The callback receives the whole [`Definition`], not just its
+    /// body: a walker that needs the parameter list to match call
+    /// arguments against would otherwise have to look the definition
+    /// up a second time, which is how a third lookup site grew here
+    /// once already.
     pub(crate) fn enter<T: Default>(
         &self,
         name: &DefinitionName,
         seen: &mut BTreeSet<DefinitionName>,
-        f: impl FnOnce(&'a Prop, &mut BTreeSet<DefinitionName>) -> T,
+        f: impl FnOnce(&'a Definition, &mut BTreeSet<DefinitionName>) -> T,
     ) -> T {
         if !seen.insert(name.clone()) {
             return T::default();
         }
         let out = match self.get(name) {
-            Some(def) => f(&def.body, seen),
+            Some(def) => f(def, seen),
             None => T::default(),
         };
         seen.remove(name);

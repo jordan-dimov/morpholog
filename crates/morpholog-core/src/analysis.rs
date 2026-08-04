@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::definitions::DefinitionIndex;
+use crate::definitions::DefinitionTable;
 use crate::ir::{
     ArgDecl, ArithOp, CompareOp, Definition, DefinitionName, DerivedClaim, OrderedDomain,
     PredicateArgKind, PredicateName, Program, Prop, Stmt, Term, TransformationName, ValueExpr, Var,
@@ -41,7 +41,7 @@ pub fn predicates_referenced_by_prop(
 ) {
     prop_refs(
         prop,
-        DefinitionIndex::new(definitions),
+        DefinitionTable::new(definitions),
         &mut BTreeSet::new(),
         out,
     );
@@ -53,7 +53,7 @@ pub fn predicates_referenced_by_prop(
 /// terminating on (invalid, cyclic) unvalidated IR.
 pub(crate) fn prop_refs(
     prop: &Prop,
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
     seen: &mut BTreeSet<DefinitionName>,
     out: &mut BTreeSet<PredicateName>,
 ) {
@@ -118,7 +118,7 @@ pub(crate) fn predicates_referenced_by_value(
 ) {
     value_refs(
         expr,
-        DefinitionIndex::new(definitions),
+        DefinitionTable::new(definitions),
         &mut BTreeSet::new(),
         out,
     );
@@ -127,7 +127,7 @@ pub(crate) fn predicates_referenced_by_value(
 /// Recursive worker for [`predicates_referenced_by_value`].
 fn value_refs(
     expr: &ValueExpr,
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
     seen: &mut BTreeSet<DefinitionName>,
     out: &mut BTreeSet<PredicateName>,
 ) {
@@ -366,7 +366,7 @@ fn collect_asserted(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
 pub(crate) fn undeclared_blockers(
     prop: &Prop,
     declared: &BTreeSet<PredicateName>,
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
 ) -> Option<BTreeSet<PredicateName>> {
     undeclared_blockers_inner(prop, declared, definitions, &mut BTreeSet::new())
 }
@@ -374,7 +374,7 @@ pub(crate) fn undeclared_blockers(
 fn undeclared_blockers_inner(
     prop: &Prop,
     declared: &BTreeSet<PredicateName>,
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
     seen: &mut BTreeSet<DefinitionName>,
 ) -> Option<BTreeSet<PredicateName>> {
     match prop {
@@ -386,8 +386,8 @@ fn undeclared_blockers_inner(
             }
         }
         // A call blocks iff its body does.
-        Prop::Defined { name, .. } => definitions.enter(name, seen, |body, seen| {
-            undeclared_blockers_inner(body, declared, definitions, seen)
+        Prop::Defined { name, .. } => definitions.enter(name, seen, |def_, seen| {
+            undeclared_blockers_inner(&def_.body, declared, definitions, seen)
         }),
         // A conjunction is blocked if any conjunct is; only the blocked
         // conjuncts are the cause.
@@ -509,7 +509,7 @@ fn claim_vars(args: &[Term]) -> BTreeSet<&Var> {
 /// over an empty window is vacuous in exactly the same way.
 pub(crate) fn governing_selections(
     prop: &Prop,
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
 ) -> BTreeSet<PredicateName> {
     let mut out = BTreeSet::new();
     selections_in_scope(prop, definitions, &mut out);
@@ -518,7 +518,7 @@ pub(crate) fn governing_selections(
 
 fn selections_in_scope(
     prop: &Prop,
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
     out: &mut BTreeSet<PredicateName>,
 ) {
     let mut ev = SelectionEvidence::default();
@@ -550,7 +550,7 @@ fn selections_in_scope(
 
 fn gather_selection_evidence<'a>(
     prop: &'a Prop,
-    definitions: DefinitionIndex<'a>,
+    definitions: DefinitionTable<'a>,
     seen: &mut BTreeSet<DefinitionName>,
     ev: &mut SelectionEvidence<'a>,
     out: &mut BTreeSet<PredicateName>,
@@ -576,8 +576,8 @@ fn gather_selection_evidence<'a>(
             }
         }
         Prop::Pre(body) => gather_selection_evidence(body, definitions, seen, ev, out),
-        Prop::Defined { name, .. } => definitions.enter(name, seen, |body, seen| {
-            gather_selection_evidence(body, definitions, seen, ev, out);
+        Prop::Defined { name, .. } => definitions.enter(name, seen, |def_, seen| {
+            gather_selection_evidence(&def_.body, definitions, seen, ev, out);
         }),
         Prop::Not(inner) => {
             if let Prop::Exists { binding, body } = inner.as_ref() {
@@ -613,11 +613,11 @@ fn gather_selection_evidence<'a>(
 /// conjunctive closure (descending `and`, `pre`, and `Defined`).
 fn collect_strict_temporal<'a>(
     prop: &'a Prop,
-    definitions: DefinitionIndex<'a>,
+    definitions: DefinitionTable<'a>,
 ) -> Vec<(&'a Var, &'a Var)> {
     fn walk<'a>(
         prop: &'a Prop,
-        definitions: DefinitionIndex<'a>,
+        definitions: DefinitionTable<'a>,
         seen: &mut BTreeSet<DefinitionName>,
         out: &mut Vec<(&'a Var, &'a Var)>,
     ) {
@@ -638,8 +638,8 @@ fn collect_strict_temporal<'a>(
                 }
             }
             Prop::Pre(body) => walk(body, definitions, seen, out),
-            Prop::Defined { name, .. } => definitions.enter(name, seen, |body, seen| {
-                walk(body, definitions, seen, out);
+            Prop::Defined { name, .. } => definitions.enter(name, seen, |def_, seen| {
+                walk(&def_.body, definitions, seen, out);
             }),
             Prop::Claim { .. }
             | Prop::Not(_)
@@ -673,11 +673,11 @@ fn collect_strict_temporal<'a>(
 /// arc's static-vacuity tier, not a lint.
 pub(crate) fn guaranteed_dated_witnesses(
     invariant_body: &Prop,
-    definitions: DefinitionIndex<'_>,
+    definitions: DefinitionTable<'_>,
 ) -> BTreeSet<PredicateName> {
     fn top(
         prop: &Prop,
-        definitions: DefinitionIndex<'_>,
+        definitions: DefinitionTable<'_>,
         seen: &mut BTreeSet<DefinitionName>,
     ) -> BTreeSet<PredicateName> {
         match prop {
@@ -688,7 +688,7 @@ pub(crate) fn guaranteed_dated_witnesses(
                 .collect(),
             Prop::Forall { body, .. } => top(body, definitions, seen),
             Prop::Defined { name, .. } => {
-                definitions.enter(name, seen, |body, seen| top(body, definitions, seen))
+                definitions.enter(name, seen, |def_, seen| top(&def_.body, definitions, seen))
             }
             Prop::Claim { .. }
             | Prop::Or(_)
@@ -704,7 +704,7 @@ pub(crate) fn guaranteed_dated_witnesses(
     }
     fn algebra(
         prop: &Prop,
-        definitions: DefinitionIndex<'_>,
+        definitions: DefinitionTable<'_>,
         seen: &mut BTreeSet<DefinitionName>,
     ) -> BTreeSet<PredicateName> {
         match prop {
@@ -740,9 +740,9 @@ pub(crate) fn guaranteed_dated_witnesses(
                     .map(|(p, _)| (*p).clone())
                     .collect()
             }
-            Prop::Defined { name, .. } => {
-                definitions.enter(name, seen, |body, seen| algebra(body, definitions, seen))
-            }
+            Prop::Defined { name, .. } => definitions.enter(name, seen, |def_, seen| {
+                algebra(&def_.body, definitions, seen)
+            }),
             Prop::Claim { .. }
             | Prop::Not(_)
             | Prop::Implies { .. }
@@ -1546,7 +1546,7 @@ mod blocker_tests {
     }
 
     fn blockers(prop: &Prop, supplied: &[&str]) -> Option<BTreeSet<PredicateName>> {
-        undeclared_blockers(prop, &pset(supplied), DefinitionIndex::new(&[]))
+        undeclared_blockers(prop, &pset(supplied), DefinitionTable::new(&[]))
     }
 
     fn p(name: &str) -> Prop {

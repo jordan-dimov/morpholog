@@ -180,7 +180,7 @@ mod tests {
             None,
             bindings,
             None,
-            crate::definitions::DefinitionIndex::new(&[]),
+            crate::definitions::DefinitionTable::new(&[]),
         )
     }
 
@@ -196,7 +196,7 @@ mod tests {
             Some(pre),
             bindings,
             None,
-            crate::definitions::DefinitionIndex::new(&[]),
+            crate::definitions::DefinitionTable::new(&[]),
         )
     }
 
