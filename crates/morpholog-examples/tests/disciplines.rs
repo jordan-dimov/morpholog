@@ -483,7 +483,11 @@ fn bio_state_with_decision() -> State {
     let defs = &p.definitions;
     let mut state = State::default();
     for (t, args, actor) in [
-        ("deploy_system", vec![subj("sys"), subj("authority")], "ops"),
+        (
+            "deploy_system",
+            vec![subj("sys"), subj("authority"), subj("ops_login")],
+            "ops",
+        ),
         (
             "place_version_in_service",
             vec![

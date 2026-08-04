@@ -120,9 +120,29 @@ impl SessionErrorReceipt {
 /// with. `serialization_failure` is the one a caller may re-submit on
 /// (retries stay the caller's); the rest describe the request itself.
 /// Operational failures never become receipts - the session aborts.
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionErrorCode {
+/// One list, two products: the enum and the slice a contract test
+/// walks. Declaring a variant anywhere else is impossible, so a code
+/// the binary can emit cannot go missing from the published set - a
+/// hand-kept array would compile happily while the enum grew past it.
+macro_rules! session_error_codes {
+    ($($variant:ident),+ $(,)?) => {
+        #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+        #[serde(rename_all = "snake_case")]
+        pub enum SessionErrorCode {
+            $($variant),+
+        }
+
+        impl SessionErrorCode {
+            /// Every code, so a test can hold `result.json` to what
+            /// the binary can actually emit.
+            pub const ALL: &'static [SessionErrorCode] =
+                &[$(SessionErrorCode::$variant),+];
+        }
+    };
+}
+
+session_error_codes!(
+    ActorAssertionUnauthorised,
     DuplicateIntent,
     InvalidArguments,
     InvalidRequest,
@@ -130,7 +150,7 @@ pub enum SessionErrorCode {
     SerializationFailure,
     UnknownOperation,
     UnknownTransformation,
-}
+);
 
 /// `init`: day-zero provisioning outcome.
 #[derive(Serialize)]

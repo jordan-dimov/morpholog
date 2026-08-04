@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM morpholog.claims\n               WHERE predicate_name = $1 AND arguments = $2\n           ) AS \"authorised!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "authorised!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e206d164e42178c8ee29f36c18b6c5b1bf67c28892d1bac9205c1026d1d59d50"
+}

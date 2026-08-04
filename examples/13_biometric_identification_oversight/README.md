@@ -105,6 +105,13 @@ admission decision comes out the same.
 - The matcher's internals - confidence scores, thresholds, embeddings - are
   outside the boundary. The runtime governs what may enter the record, not
   how the model computed its candidate.
+- Restricting who may assert a verifier's name proves that a proposal
+  arrived over a connection authorised for that name. It does not prove the
+  person was present, or consented, or looked at anything. And it binds only
+  callers who reach the record through Morpholog: the runtime's own database
+  role can write claims and audit rows directly, so two verifier identities
+  are genuinely distinct only when the two applications and their credentials
+  are genuinely separate.
 - Hash-chained or blockchain-style logging solves a different problem:
   tamper-evidence, proof that nobody altered the record after the fact. This
   example demonstrates the layer above - invalid records were never
@@ -112,13 +119,31 @@ admission decision comes out the same.
 
 ## What this example forced
 
-Nothing - and that is the headline, not a footnote. Authority grant/revoke is
-the approval-controls example's shape; admission-time validity windows are
-the clinical-trial example's; standing granted by verification is verified
-revenue's; exact instants and durations are laytime's. Four shipped patterns
-met a statute, and the language did not move. The only new surface in this
-example's PR is read-side tooling (`morpholog inspect controls`), which
-derives from the parsed programme and adds no kernel primitive.
+**The language: nothing** - and that is still the headline. Authority
+grant/revoke is the approval-controls example's shape; admission-time
+validity windows are the clinical-trial example's; standing granted by
+verification is verified revenue's; exact instants and durations are
+laytime's. Shipped patterns met a statute, and the surface did not move.
+
+**The trust boundary: one thing.** Article 14(5) asks for two distinct
+people, and the rule here says so exactly. But every proposal arrives through
+some application that names its actor, and if one application may name
+anyone, one operator can be both verifiers and the rule passes while meaning
+nothing. Nothing in the language can fix that, because the question is not
+what the record says - it is who is allowed to say it. So the runtime learned
+to read two claims, `ActorAssertionRestricted` and `ActorAssertionAuthority`:
+a name, once armed, may only be asserted by an authorised database login.
+
+They are two claims rather than one for a reason worth reading the `.morph`
+for: if the grants did the arming, withdrawing someone's last grant - the
+thing you do the moment you suspect trouble - would hand their name back to
+everybody.
+
+The deployer is armed too, in the same act that puts the system on the record.
+That is not incidental. The enrolment acts all ask "are you the deployer?", so
+an unarmed deployer is a name anyone can wear to grant themselves every
+verifier - a lock on the door of an open room. The general rule travels: every
+actor allowed to hand out authority must itself be restricted.
 
 ## Running it
 

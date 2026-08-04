@@ -208,6 +208,12 @@ pub(crate) enum RowErrorKind {
     Kernel,
     /// The emitted intent collided on its idempotency key.
     DuplicateIntent,
+    /// The connecting login role may not propose as the named actor.
+    /// A receipt, not an abort: the request was well formed and the
+    /// session is healthy - the caller simply may not speak for that
+    /// actor. Deliberately NOT a business rejection, so it never
+    /// reaches the rejection log.
+    ActorAssertionUnauthorised,
     /// Infrastructure: a dead connection, a schema mismatch. Aborts
     /// the batch or the session; never a receipt.
     Operational,
@@ -240,6 +246,7 @@ fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
         PgError::SerializationFailure => RowErrorKind::Serialization,
         PgError::Kernel(_) => RowErrorKind::Kernel,
         PgError::DuplicateIntent => RowErrorKind::DuplicateIntent,
+        PgError::ActorAssertionUnauthorised { .. } => RowErrorKind::ActorAssertionUnauthorised,
         _ => RowErrorKind::Operational,
     };
     RowError::new(

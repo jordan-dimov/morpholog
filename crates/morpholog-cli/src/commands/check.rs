@@ -33,6 +33,14 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     let parsed = parse_or_exit(&args.file)?;
     let compiled = compile_or_exit(&parsed);
 
+    let policy = morpholog_postgres::validate_declarations(&parsed.program);
+    if !policy.is_empty() {
+        for finding in &policy {
+            eprintln!("error: {finding}");
+        }
+        std::process::exit(1);
+    }
+
     let lints = morpholog_core::lints(&compiled);
     if !lints.is_empty() {
         for lint in &lints {
@@ -198,6 +206,15 @@ fn run_json(args: &CheckArgs) -> anyhow::Result<()> {
                     }
                 }
                 Ok(compiled) => {
+                    for finding in &morpholog_postgres::validate_declarations(compiled.program()) {
+                        failed = true;
+                        findings.push(CheckDiagnostic::new(
+                            "error",
+                            finding.to_string(),
+                            None,
+                            &source,
+                        ));
+                    }
                     for lint in &morpholog_core::lints(&compiled) {
                         let severity = if args.strict { "error" } else { "hint" };
                         failed |= args.strict;

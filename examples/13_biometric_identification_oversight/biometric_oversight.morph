@@ -54,6 +54,37 @@ predicate DeployedSystem(system: Subject, deployer: Subject)
 predicate VersionInService(system: Subject, version: Subject, in_service_from: Timestamp, in_service_to: Timestamp)
     unique by (system, version)
 predicate OversightAssigned(person: Subject, system: Subject)
+-- Who may SPEAK as a verifier, as opposed to who is allowed to
+-- verify. Two different questions, and the rule below about two
+-- distinct people quietly assumes an answer to the first one.
+--
+-- Every proposal reaches the record through some application, and
+-- that application names the actor. The runtime records which
+-- database login vouched for the name, so the log reads honestly:
+-- "this gateway said Dr Chen did it". But if a single gateway may
+-- say ANY name, then one operator with one connection can sign as
+-- Chen and then as Okafor, and the two-person rule below is
+-- satisfied by one person typing twice. The rule would still pass.
+-- It would simply mean nothing.
+--
+-- These two claims close that. The first ARMS a verifier - once it
+-- is admitted, that name may no longer be asserted by just anyone.
+-- The second grants one database login the right to speak for one
+-- person. They are separate on purpose: if the grants alone did the
+-- arming, then withdrawing someone's last grant - the thing you do
+-- the moment you suspect trouble - would hand their name back to
+-- everybody. Withdrawing the last grant instead locks the name; to
+-- return it to the open, you retract the arming claim, and that is
+-- its own act on the record.
+--
+-- The runtime recognises these two by name and shape. What it can
+-- prove is narrow and worth saying plainly: that the proposal
+-- arrived over a connection authorised for that name. Not that the
+-- person was present, and not that a compromised application with
+-- the runtime's own database credentials could not write to the
+-- tables directly.
+predicate ActorAssertionRestricted(actor: Subject)
+predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
 predicate UseStarted(use: Subject, system: Subject, version: Subject, reference_db: Subject, started_at: Timestamp)
 predicate UseEnded(use: Subject, ended_at: Timestamp)
     unique by (use)
@@ -139,9 +170,33 @@ invariant decision_rests_on_two_distinct_prior_verifications:
 -- The only ways the record may change. Gates police the moment of
 -- each action; the records then stand on their own.
 
-transformation deploy_system(system, deployer):
+-- Putting the system on the record - and, in the same breath, closing
+-- the door behind it.
+--
+-- The deployer is the trust root here: the enrolment acts below all
+-- ask "are you the deployer?", so whoever can SAY they are the
+-- deployer can hand any name to any application. Arming the verifiers
+-- while leaving the deployer open would be a lock on the door of an
+-- open room. So the deployer is armed and granted its login in this
+-- same act, and it must be one act: arm first and grant later, and
+-- between the two nobody could act as the deployer at all - including
+-- to issue the grant.
+--
+-- This is the general rule, and it is worth carrying to any model
+-- that adopts these claims: EVERY actor allowed to hand out authority
+-- must itself be restricted, or the restriction underneath it is
+-- decoration.
+--
+-- One consequence to bootstrap carefully: the login named here is the
+-- only one that can act as this deployer afterwards. Name the wrong
+-- one and this system has no reachable enrolment authority - the
+-- remedy is a fresh deployment, which is the safe direction for a
+-- trust root to fail in.
+transformation deploy_system(system, deployer, deployer_login_role):
     require not DeployedSystem(system, _)
     admit DeployedSystem(system, deployer)
+    admit ActorAssertionRestricted(deployer)
+    admit ActorAssertionAuthority(deployer, deployer_login_role)
 
 -- A model version enters service for a window - the period its
 -- assessment covers. The window is the unit of accountability: every
@@ -165,6 +220,34 @@ transformation assign_oversight(person, system):
 transformation revoke_oversight(person, system):
     require OversightAssigned(person, system)
     retract OversightAssigned(person, system)
+
+-- Enrolment: binding a verifier's name to the logins that may speak
+-- it. Whoever performs these acts is the trust root - they decide
+-- whose name means whom - so the gate demands the deployer, the same
+-- authority that put the system on the record in the first place.
+--
+-- The arming claim is append only: a name, once tied to particular
+-- logins, cannot quietly drift back to open. Grants come and go
+-- around it as staff and services change.
+transformation restrict_verifier_identity(person, system):
+    require DeployedSystem(system, actor)
+    require not ActorAssertionRestricted(person)
+    admit ActorAssertionRestricted(person)
+
+transformation authorise_verifier_login(person, login_role, system):
+    require DeployedSystem(system, actor)
+    require ActorAssertionRestricted(person)
+    require not ActorAssertionAuthority(person, login_role)
+    admit ActorAssertionAuthority(person, login_role)
+
+-- Withdrawing a login's right to speak for someone. What this does
+-- NOT do is return the name to the open: with no grants left, the
+-- name simply cannot be asserted at all. That is the safe direction
+-- to fail in, and it is why the arming claim is separate.
+transformation withdraw_verifier_login(person, login_role, system):
+    require DeployedSystem(system, actor)
+    require ActorAssertionAuthority(person, login_role)
+    retract ActorAssertionAuthority(person, login_role)
 
 -- A use may start only under a version in service at that instant.
 -- An unassessed model cannot put anything on the record at all - not

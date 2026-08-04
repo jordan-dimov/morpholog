@@ -281,7 +281,11 @@ fn every_construct_the_index_names_is_in_the_canonical_table() {
         table.len()
     );
 
-    // Types and command names are not surface constructs and have no row.
+    // Types, command names, and predicate names the RUNTIME reserves
+    // are not surface constructs and have no row. The reserved names
+    // are ordinary predicates an operator declares and governs; only
+    // their recognition is built in, so the surface grammar has
+    // nothing to say about them.
     const NOT_IN_THE_TABLE: &[&str] = &[
         "Timestamp",
         "Duration",
@@ -289,6 +293,8 @@ fn every_construct_the_index_names_is_in_the_canonical_table() {
         "Decimal[USD]",
         "explain",
         "intent",
+        "ActorAssertionRestricted",
+        "ActorAssertionAuthority",
     ];
 
     let mut absent = Vec::new();

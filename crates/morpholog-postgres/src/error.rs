@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use morpholog_core::{EvalError, TransformationName};
+use morpholog_core::{EvalError, Subject, TransformationName};
 use uuid::Uuid;
 /// Errors returned by the PostgreSQL adapter.
 ///
@@ -131,6 +131,35 @@ pub enum PgError {
          sessions write morpholog.audit, or omit the assertion"
     )]
     WriterAssertionEmpty,
+    /// A programme declares one of the reserved actor-policy
+    /// predicates in a shape the runtime does not match.
+    ///
+    /// Refused rather than ignored because the failure is silent in the
+    /// dangerous direction: an unrecognised declaration simply never
+    /// arms, so a restriction the author believes is in force would
+    /// protect nothing. `morpholog check` reports it too, but nothing
+    /// obliges a caller to run `check`, so the durable paths refuse it
+    /// themselves.
+    #[error("actor-assertion policy declaration is unusable: {}", findings.join("; "))]
+    ActorPolicyDeclaration { findings: Vec<String> },
+    /// The connecting login role is not authorised to propose as the
+    /// named actor: an `ActorAssertionRestricted` claim arms the actor
+    /// and no `ActorAssertionAuthority` grants this role.
+    ///
+    /// Never a business rejection. An unauthorised assertion is not
+    /// "the actor proposed and was refused" - it is someone claiming to
+    /// be them - so nothing is evaluated, nothing is recorded, and the
+    /// rejection log stays a record of business refusals only.
+    /// Attribution before authorisation would let a caller manufacture
+    /// a history of apparent attempts by an actor they cannot speak
+    /// for.
+    #[error(
+        "login role `{login_role}` is not authorised to propose as actor \
+         `{actor}`; admit ActorAssertionAuthority({actor}, {login_role}) to \
+         grant it, or retract the ActorAssertionRestricted({actor}) claim to \
+         stop restricting the actor"
+    )]
+    ActorAssertionUnauthorised { actor: Subject, login_role: String },
     /// A [`morpholog_core::Transition`] named a transformation the compiled programme
     /// does not declare. Surfaced by the `propose_against_pg*` facade
     /// when it resolves `transition.transformation_name` against the

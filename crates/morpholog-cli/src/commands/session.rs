@@ -278,6 +278,7 @@ fn error_code(kind: RowErrorKind) -> SessionErrorCode {
         RowErrorKind::Serialization => SessionErrorCode::SerializationFailure,
         RowErrorKind::Kernel => SessionErrorCode::KernelError,
         RowErrorKind::DuplicateIntent => SessionErrorCode::DuplicateIntent,
+        RowErrorKind::ActorAssertionUnauthorised => SessionErrorCode::ActorAssertionUnauthorised,
         RowErrorKind::Operational => unreachable!("operational failures abort, never map"),
     }
 }

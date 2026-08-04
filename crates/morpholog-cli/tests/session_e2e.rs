@@ -311,3 +311,102 @@ async fn operational_failure_aborts_with_a_nonzero_exit_not_a_receipt() {
         "no receipt for an operational failure; got {leftover:?}"
     );
 }
+
+/// A programme whose actor policy is armed for one login only. The
+/// grant is a CLAIM compared against `session_user` as text, so this
+/// needs no role switching: granting some other login name is enough
+/// to make the connecting one unauthorised.
+const POLICY_FIXTURE: &str = "program policy_demo
+
+predicate ActorAssertionRestricted(actor: Subject)
+predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
+predicate Noted(id: Subject)
+
+transformation arm(person, login_role):
+    admit ActorAssertionRestricted(person)
+    admit ActorAssertionAuthority(person, login_role)
+
+transformation note(id):
+    admit Noted(id)
+";
+
+fn request(op: &str, transformation: &str, actor: &str, args: serde_json::Value) -> String {
+    serde_json::json!({
+        "op": op,
+        "transformation": transformation,
+        "actor": actor,
+        "args_named": args,
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn an_unauthorised_actor_is_a_coded_receipt_and_the_session_stays_usable() {
+    reset_db().await;
+    let fixture = common::write_fixture("session_policy", POLICY_FIXTURE);
+    let mut child = spawn_session(&fixture.path);
+    let mut stdin = child.stdin.take().unwrap();
+
+    // Arm `restricted_actor` for a login this connection is not.
+    writeln!(
+        stdin,
+        "{}",
+        request(
+            "propose",
+            "arm",
+            "bootstrap",
+            serde_json::json!({"person": "restricted_actor", "login_role": "somebody_else"}),
+        )
+    )
+    .unwrap();
+    // Refused: well-formed request, unauthorised assertion.
+    writeln!(
+        stdin,
+        "{}",
+        request(
+            "propose",
+            "note",
+            "restricted_actor",
+            serde_json::json!({"id": "n1"}),
+        )
+    )
+    .unwrap();
+    // The session must still be healthy afterwards - a refusal here is
+    // about the caller's authority, not a broken conversation.
+    writeln!(
+        stdin,
+        "{}",
+        request(
+            "propose",
+            "note",
+            "anyone_else",
+            serde_json::json!({"id": "n2"})
+        ),
+    )
+    .unwrap();
+    drop(stdin);
+
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 4, "ready plus one response each: {stdout}");
+
+    let armed: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(armed["status"], "committed", "{}", lines[1]);
+
+    let refused: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+    assert_eq!(refused["status"], "error", "{}", lines[2]);
+    assert_eq!(
+        refused["code"], "actor_assertion_unauthorised",
+        "the code is the stable surface a caller branches on: {}",
+        lines[2]
+    );
+
+    let after: serde_json::Value = serde_json::from_str(lines[3]).unwrap();
+    assert_eq!(
+        after["status"], "committed",
+        "the session must survive an unauthorised request: {}",
+        lines[3]
+    );
+    assert!(output.status.success(), "session should exit 0 on EOF");
+}

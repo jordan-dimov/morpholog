@@ -497,3 +497,53 @@ async fn process_one_outbox_row_returns_lease_lost_on_failed_branch_when_lease_e
          compensation must NOT have run when mark_outbox_failed was a no-op"
     );
 }
+
+/// Compensation is the one durable path that never passes through
+/// `resolve()`: it carries a decomposed transformation and no
+/// programme, so the facades' declaration check cannot see it. The
+/// fail-closed guarantee therefore lives at the authorisation seam and
+/// keys off the CLAIMS, which every path shares - an admitted policy
+/// claim whose shape the runtime cannot read stops the commit here too.
+#[tokio::test]
+async fn compensation_refuses_to_commit_under_an_unreadable_policy_claim() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let original_tid = commit_post_simple_entry(&pool, "entry_pol").await;
+    let spec = balanced_reversal_spec("entry_pol");
+
+    // A policy claim with the wrong arity - what a misshapen
+    // declaration admits. It looks like a restriction and protects
+    // nothing, so nothing durable may proceed while it stands.
+    sqlx::query(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         VALUES ('ActorAssertionRestricted',
+                 '[{\"type\":\"subject\",\"value\":\"a\"},
+                   {\"type\":\"subject\",\"value\":\"extra\"}]'::jsonb,
+                 $1)",
+    )
+    .bind(original_tid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let audit_before = list_audit_rows(&pool).await.unwrap().len();
+    let result = process_one_outbox_row(
+        &pool,
+        "worker_a",
+        INTENT_TYPE,
+        LEASE,
+        &AlwaysNonRetryable::new("counterparty rejected"),
+        Some(&spec),
+        Utc::now(),
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "compensation must not commit under an unreadable policy: {result:?}"
+    );
+    assert_eq!(
+        list_audit_rows(&pool).await.unwrap().len(),
+        audit_before,
+        "no compensating transition may have been written"
+    );
+}

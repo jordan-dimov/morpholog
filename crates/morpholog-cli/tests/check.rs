@@ -482,3 +482,79 @@ fn check_strict_on_a_clean_program_exits_zero() {
     assert!(out.stdout.is_empty());
     assert!(out.stderr.is_empty());
 }
+
+/// A programme declaring a reserved actor-policy name in a shape the
+/// runtime cannot match is refused, not merely hinted.
+///
+/// The direction of failure is why this is an error. `AuditSigningKey`
+/// declared wrongly fails loudly the moment someone signs; this fails
+/// SILENTLY - the restriction simply never arms, and the programme
+/// looks protected while protecting nothing.
+const MISSHAPEN_POLICY: &str = "program p
+predicate ActorAssertionRestricted(actor: Subject, note: Decimal)
+predicate Thing(id: Subject)
+transformation add(id):
+    admit Thing(id)
+";
+
+#[test]
+fn a_misshapen_actor_policy_declaration_is_refused_by_check() {
+    let f = temp_morph(MISSHAPEN_POLICY);
+    let out = Command::new(bin())
+        .args(["check", f.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "check must refuse it");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("ActorAssertionRestricted") && stderr.contains("reserved"),
+        "the refusal must name the predicate and why: {stderr}"
+    );
+}
+
+#[test]
+fn a_misshapen_actor_policy_declaration_is_refused_by_check_json() {
+    // `check --json` is a separate path; a gate wired into only the
+    // prose path would pass every machine-readable run.
+    let f = temp_morph(MISSHAPEN_POLICY);
+    let out = Command::new(bin())
+        .args(["check", "--json", f.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "check --json must refuse it");
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let found = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics array")
+        .iter()
+        .any(|d| {
+            d["severity"] == "error"
+                && d["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("ActorAssertionRestricted"))
+        });
+    assert!(found, "expected an error diagnostic naming it: {report}");
+}
+
+#[test]
+fn a_well_shaped_actor_policy_declaration_passes() {
+    // The acceptance side: the contract still admits what it promises.
+    let f = temp_morph(
+        "program p
+predicate ActorAssertionRestricted(actor: Subject)
+predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
+predicate Thing(id: Subject)
+transformation add(id):
+    admit Thing(id)
+",
+    );
+    let out = Command::new(bin())
+        .args(["check", f.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "the recognised shape must pass: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
