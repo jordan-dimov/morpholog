@@ -59,7 +59,7 @@ fn subj(s: &str) -> EvalValue {
 /// hold a session of its own and reach the governed tables, since it
 /// plays a real embedder connection.
 async fn recreate_gateway_roles(pool: &PgPool, roles: &[&str]) {
-    let setup: Vec<String> = roles
+    let statements: Vec<String> = roles
         .iter()
         .flat_map(|r| {
             [
@@ -69,8 +69,10 @@ async fn recreate_gateway_roles(pool: &PgPool, roles: &[&str]) {
             ]
         })
         .collect();
-    let setup: Vec<&str> = setup.iter().map(String::as_str).collect();
-    recreate_roles(pool, roles, &setup).await;
+    // Named apart from the owned Vec above: the slice borrows it, and
+    // one name for both invites a refactor that drops the storage.
+    let borrowed: Vec<&str> = statements.iter().map(String::as_str).collect();
+    recreate_roles(pool, roles, &borrowed).await;
 }
 
 /// A pool that presents itself as `role`: one simulated gateway.

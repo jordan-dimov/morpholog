@@ -324,16 +324,33 @@ pub async fn recreate_roles(pool: &PgPool, roles: &[&str], setup: &[&str]) {
 /// may run after a test failed partway.
 pub async fn drop_roles_if_present(pool: &PgPool, roles: &[&str]) {
     for role in roles {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "DO $$ BEGIN
-                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
-                    EXECUTE 'DROP OWNED BY {role}';
-                    EXECUTE 'DROP ROLE {role}';
-                END IF;
-             END $$"
-        )))
-        .execute(pool)
-        .await
-        .unwrap();
+        // A role name reaches DDL, which takes no bind parameters, so
+        // it is checked here rather than trusted and quoted when it
+        // gets there. Callers pass literals today; the first one to
+        // build a name from data should meet this assertion rather
+        // than a syntax error, or worse.
+        assert!(
+            !role.is_empty()
+                && role
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+            "test role names are plain identifiers: got `{role}`"
+        );
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)")
+                .bind(role)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        if exists {
+            // Audited: `role` is asserted above to be a plain
+            // identifier, and is quoted here regardless.
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                "DROP OWNED BY \"{role}\"; DROP ROLE \"{role}\""
+            )))
+            .execute(pool)
+            .await
+            .unwrap();
+        }
     }
 }
