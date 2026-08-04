@@ -412,8 +412,21 @@ connection tax when an embedder drives many operations
 steady-state session proposal runs a few times faster than a one-shot
 `propose` locally, and over a remote link it also removes a
 connection handshake per call). The generated Python client wraps it
-as `Session`, a context manager with the same method names the
-one-shot client carries.
+as a context manager with the same method names the one-shot client
+carries, opened through the generated `open_session`:
+
+```python
+from morpholog_client import open_session
+
+with open_session("model.morph", DATABASE_URL) as session:
+    receipt = session.propose("record_delivery", "meter_gateway", args)
+    rows = session.claims_named("DeliveredQty")
+```
+
+`open_session` pins the model hash the client package was generated
+against, so a binary serving other rules is refused at the handshake
+rather than part-way through a run. Constructing `Session` directly
+is the lower-level escape hatch for a deliberately unpinned open.
 
 **The protocol is lockstep.** One request line in, one response line
 out, strictly in order, no correlation ids. The first line out -
@@ -425,8 +438,9 @@ the file does not change a running session, and rolling out a new
 model means starting new sessions and draining old ones - the ready
 line tells a client what it got; it does not prevent an obsolete
 process from continuing to write. A deployment that must not run
-against the wrong model asserts the hash at open (the Python client's
-`expected_model_hash`).
+against the wrong model asserts the hash at open - which
+`open_session` does for you, and `Session(expected_model_hash=...)`
+does explicitly.
 
 **Requests.** One JSON object per line, an `op` field naming the
 operation, remaining fields exactly the generated client's

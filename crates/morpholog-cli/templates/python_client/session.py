@@ -34,6 +34,7 @@ import os
 import queue
 import subprocess
 import threading
+import time
 
 from . import envelopes
 from .adapter import MorphologError, _redact_argv
@@ -43,6 +44,69 @@ PROTOCOL = 1
 
 #: How many trailing stderr lines are kept for error messages.
 _STDERR_TAIL = 50
+
+#: The whole reaping sequence - graceful exit, terminate, kill, drain
+#: joins - shares this many seconds. Staged under one deadline so a
+#: child that ignores every signal cannot stack one wait on the next.
+_SHUTDOWN_BUDGET = 5.0
+
+
+class _ResponseContract(Exception):
+    """A response that broke its pinned shape, raised by a decoder
+    while the exchange lock is still held. The exchange poisons the
+    session and re-raises it as the caller's error, so no decision
+    about a response is ever made after the lock has been released."""
+
+    def __init__(self, poison: str, detail: str) -> None:
+        super().__init__(detail)
+        self.poison = poison
+        self.detail = detail
+
+
+def _decode_receipt(payload: object, expected_row: int) -> object:
+    """The propose decoder: parse the receipt, match it to the row
+    THIS caller sent, and refuse an uncoded error. Every check reads
+    the local expected row - never the session's shared counter,
+    which a concurrent caller may already have advanced."""
+    try:
+        receipt = envelopes.BatchReceipt.from_json(payload)
+    except envelopes.EnvelopeError as exc:
+        raise _ResponseContract(
+            "a propose response did not match the receipt contract",
+            f"unparseable propose receipt: {exc}",
+        ) from None
+    if receipt.row != expected_row:
+        raise _ResponseContract(
+            "response row does not match the request",
+            f"session answered row {receipt.row} to request {expected_row}",
+        )
+    if isinstance(receipt.outcome, envelopes.BatchError):
+        raise _ResponseContract(
+            "a propose response carried an uncoded error",
+            f"uncoded session error: {receipt.outcome.error}",
+        )
+    return receipt.outcome
+
+
+def _decode_rows(cls: type):
+    """The read decoder: the pinned array shape, then every row
+    against its envelope contract."""
+
+    def decode(payload: object, _expected_row: int) -> list[object]:
+        if not isinstance(payload, list):
+            raise _ResponseContract(
+                "a read response was not the pinned array shape",
+                f"malformed read response: {payload!r}",
+            )
+        try:
+            return [cls.from_json(r) for r in payload]
+        except envelopes.EnvelopeError as exc:
+            raise _ResponseContract(
+                "a read row did not match the pinned contract",
+                f"malformed read row: {exc}",
+            ) from None
+
+    return decode
 
 
 class MorphologRequestError(MorphologError):
@@ -71,8 +135,16 @@ class Session:
     Opening spawns the child, waits for its ready line, and - when
     ``expected_model_hash`` is given - refuses to open against a
     programme whose canonical hash is not the one this deployment
-    expects. ``timeout`` bounds each request in seconds (and the
-    ready handshake); ``None`` waits indefinitely.
+    expects. Prefer the generated ``open_session``, which pins the
+    hash this package was built against; construct ``Session``
+    directly to open deliberately unpinned.
+
+    ``timeout`` bounds how long each request waits for its RESPONSE in
+    seconds (and the ready handshake); ``None`` waits indefinitely. It
+    does not bound the call as a whole: a request that times out then
+    reaps the child, which is capped separately at ``_SHUTDOWN_BUDGET``
+    seconds, so the worst case a caller sees is roughly the two added
+    together.
 
     The programme is pinned by the child at startup: editing the file
     does not change a running session, and rolling out a new model
@@ -117,6 +189,10 @@ class Session:
         # child. ``None`` in the queue means the child closed stdout.
         self._responses: queue.Queue[str | None] = queue.Queue()
         self._stderr_tail: collections.deque[str] = collections.deque(maxlen=_STDERR_TAIL)
+        # The tail is written by the drain thread and read by error
+        # paths that already hold the operation lock, so the ordering
+        # is always operation lock then stderr lock, never the reverse.
+        self._stderr_lock = threading.Lock()
         self._drains = [
             threading.Thread(target=self._drain_stdout, daemon=True),
             threading.Thread(target=self._drain_stderr, daemon=True),
@@ -169,24 +245,33 @@ class Session:
             self._shutdown()
 
     def _shutdown(self) -> None:
+        deadline = time.monotonic() + _SHUTDOWN_BUDGET
+
+        def budget(share: float) -> float:
+            # A share of what is LEFT, so an unresponsive stage cannot
+            # spend the next one's time: the whole sequence stays
+            # inside one ceiling instead of stacking waits.
+            return max(0.0, (deadline - time.monotonic()) * share)
+
         if self._child.stdin is not None:
             try:
                 self._child.stdin.close()
             except OSError:
                 pass
         try:
-            self._child.wait(timeout=5)
+            self._child.wait(timeout=budget(0.5))
         except subprocess.TimeoutExpired:
             self._child.terminate()
             try:
-                self._child.wait(timeout=5)
+                self._child.wait(timeout=budget(0.5))
             except subprocess.TimeoutExpired:
+                # SIGKILL cannot be caught, so this wait returns.
                 self._child.kill()
                 self._child.wait()
         # The child is gone: let the drain threads hit EOF, then close
         # the parent-side pipe wrappers they were reading.
         for thread in self._drains:
-            thread.join(timeout=1)
+            thread.join(timeout=budget(0.5))
         for pipe in (self._child.stdout, self._child.stderr):
             if pipe is not None:
                 try:
@@ -223,12 +308,18 @@ class Session:
         assert stderr is not None
         try:
             for line in stderr:
-                self._stderr_tail.append(line.rstrip("\n"))
+                with self._stderr_lock:
+                    self._stderr_tail.append(line.rstrip("\n"))
         except (OSError, ValueError):
             pass
 
     def _stderr_text(self) -> str:
-        text = "\n".join(self._stderr_tail).strip()
+        # Snapshot under the lock: joining the deque while the drain
+        # thread appends raises, turning the diagnostic into a crash
+        # that hides the failure it was written to explain.
+        with self._stderr_lock:
+            lines = list(self._stderr_tail)
+        text = "\n".join(lines).strip()
         if self.database_url:
             text = text.replace(self.database_url, "<redacted>")
         return text
@@ -250,11 +341,17 @@ class Session:
     # The one exchange seam.
     # ------------------------------------------------------------
 
-    def _exchange(self, body: dict[str, object], *, commitful: bool) -> object:
-        """Write one request line, wait for its one response line, in
-        lockstep under the lock. Any break after the request has been
-        flushed poisons the session; for a commitful request it raises
-        outcome-unknown, because the database may have committed."""
+    def _exchange(self, body: dict[str, object], *, commitful: bool, decode) -> object:
+        """Write one request line, wait for its one response line, and
+        decode it - all in lockstep under the lock. Any break after the
+        request has been flushed poisons the session; for a commitful
+        request it raises outcome-unknown, because the database may
+        have committed.
+
+        ``decode(payload, expected_row)`` runs BEFORE the lock is
+        released, and that placement is the contract: a decoder that
+        ran afterwards would be judging this caller's response against
+        a session another caller has already moved on."""
         with self._lock:
             if self._poisoned is not None:
                 raise MorphologError(f"this session is unusable: {self._poisoned}")
@@ -304,7 +401,7 @@ class Session:
             if isinstance(payload, dict) and payload.get("status") == "error":
                 try:
                     receipt = envelopes.SessionErrorReceipt.from_json(payload)
-                except envelopes.EnvelopeError as exc:
+                except Exception as exc:
                     # An error without the stable code is drift, and a
                     # drifted stream cannot be trusted to stay in step.
                     self._poison("an error response did not match the receipt contract")
@@ -321,7 +418,27 @@ class Session:
                         raise MorphologOutcomeUnknown(message)
                     raise MorphologError(message)
                 raise MorphologRequestError(receipt.code, receipt.error, receipt.row)
-            return payload
+            try:
+                return decode(payload, expected_row)
+            except _ResponseContract as exc:
+                self._poison(exc.poison)
+                if commitful:
+                    raise MorphologOutcomeUnknown(exc.detail) from None
+                raise MorphologError(exc.detail) from None
+            except Exception as exc:
+                # A decoder reaches value codecs that raise their own
+                # types, so the contract cannot be recognised by one
+                # exception class. Anything a decoder throws means the
+                # response was not understood, and a submitted proposal
+                # whose response was not understood is UNDECIDED - the
+                # one thing this client must never report as an
+                # ordinary error. BaseException is deliberately not
+                # caught: an interrupt still means what it says.
+                self._poison("a response did not match the pinned client contract")
+                detail = f"response decoder failed: {exc}"
+                if commitful:
+                    raise MorphologOutcomeUnknown(detail) from None
+                raise MorphologError(detail) from None
 
     # ------------------------------------------------------------
     # The operations.
@@ -345,21 +462,7 @@ class Session:
         }
         if explain_on_reject:
             body["explain_on_reject"] = True
-        payload = self._exchange(body, commitful=True)
-        try:
-            receipt = envelopes.BatchReceipt.from_json(payload)
-        except envelopes.EnvelopeError as exc:
-            self._poison("a propose response did not match the receipt contract")
-            raise MorphologOutcomeUnknown(f"unparseable propose receipt: {exc}") from None
-        if receipt.row != self._row:
-            self._poison("response row does not match the request")
-            raise MorphologOutcomeUnknown(
-                f"session answered row {receipt.row} to request {self._row}"
-            )
-        if isinstance(receipt.outcome, envelopes.BatchError):
-            self._poison("a propose response carried an uncoded error")
-            raise MorphologOutcomeUnknown(f"uncoded session error: {receipt.outcome.error}")
-        return receipt.outcome
+        return self._exchange(body, commitful=True, decode=_decode_receipt)
 
     def submit(
         self, request: object, actor: str, explain_on_reject: bool = False
@@ -378,8 +481,8 @@ class Session:
     ) -> list[envelopes.ClaimInstance]:
         """The bare claims read, as on the one-shot client: the claims
         table is the authority, an unknown predicate matches nothing."""
-        rows = self._read_rows(self._claims_body(predicates, named=False, as_of=as_of))
-        return self._parse_rows(rows, envelopes.ClaimInstance)
+        body = self._claims_body(predicates, named=False, as_of=as_of)
+        return self._read_rows(body, envelopes.ClaimInstance)
 
     def claims_named(
         self,
@@ -393,14 +496,13 @@ class Session:
         body = self._claims_body(predicates, named=True, as_of=as_of)
         if where:
             body["where"] = dict(where)
-        rows = self._read_rows(body)
-        return self._parse_rows(rows, envelopes.NamedClaim)
+        return self._read_rows(body, envelopes.NamedClaim)
 
     def derived(self, name: str, *, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
         """Compute a read-side view through the session - always live,
         never the refresh cache, as on the one-shot client."""
-        rows = self._read_rows(self._derived_body(name, named=False, as_of=as_of))
-        return self._parse_rows(rows, envelopes.ClaimInstance)
+        body = self._derived_body(name, named=False, as_of=as_of)
+        return self._read_rows(body, envelopes.ClaimInstance)
 
     def derived_named(
         self, name: str, *, as_of: str | None = None, where: dict[str, str] | None = None
@@ -410,8 +512,7 @@ class Session:
         body = self._derived_body(name, named=True, as_of=as_of)
         if where:
             body["where"] = dict(where)
-        rows = self._read_rows(body)
-        return self._parse_rows(rows, envelopes.NamedClaim)
+        return self._read_rows(body, envelopes.NamedClaim)
 
     def _claims_body(
         self, predicates: tuple[str, ...], named: bool, as_of: str | None
@@ -433,20 +534,9 @@ class Session:
             body["as_of"] = as_of
         return body
 
-    def _read_rows(self, body: dict[str, object]) -> list[object]:
-        payload = self._exchange(body, commitful=False)
-        if not isinstance(payload, list):
-            self._poison("a read response was not the pinned array shape")
-            raise MorphologError(f"malformed read response: {payload!r}")
-        return payload
-
-    def _parse_rows(self, rows: list[object], cls: type) -> list[object]:
-        """Parse each row of a well-framed read array. A row that does
-        not match the pinned contract poisons the session: the framing
-        is intact, but a binary/client contract mismatch will not heal
-        on the next call."""
-        try:
-            return [cls.from_json(r) for r in rows]
-        except envelopes.EnvelopeError as exc:
-            self._poison("a read row did not match the pinned contract")
-            raise MorphologError(f"malformed read row: {exc}") from None
+    def _read_rows(self, body: dict[str, object], cls: type) -> list[object]:
+        """One read exchange, decoded into `cls` rows under the lock. A
+        row that does not match the pinned contract poisons the
+        session: the framing is intact, but a binary/client contract
+        mismatch will not heal on the next call."""
+        return self._exchange(body, commitful=False, decode=_decode_rows(cls))

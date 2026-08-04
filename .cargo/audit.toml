@@ -13,4 +13,11 @@ ignore = [
     # binaries' runtime use. No upstream fix is available; revisit
     # if/when sqlx-mysql drops rsa or rsa ships a patch.
     "RUSTSEC-2023-0071",
+    # rkyv 0.7.x out-of-bounds reads on archives containing Rc/Arc,
+    # reached only through rust_decimal's optional `rkyv` feature.
+    # We enable `serde-with-str` and nothing else: `cargo tree -e
+    # features -i rust_decimal` shows no edge to rkyv, so the crate
+    # is a lockfile entry that is never compiled. rust_decimal 1.42.1
+    # is current; revisit when it moves to rkyv 0.8.
+    "RUSTSEC-2026-0235",
 ]

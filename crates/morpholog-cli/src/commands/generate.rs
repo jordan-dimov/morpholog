@@ -570,6 +570,24 @@ fn render_init(program: &Program) -> String {
              MorphologOutcomeUnknown,\n    \
              MorphologRequestError,\n    \
              Session,\n)\n\n\
+         def open_session(\n    \
+             file: str,\n    \
+             database_url: str,\n    \
+             *,\n    \
+             binary: str | None = None,\n    \
+             timeout: float | None = None,\n\
+         ) -> Session:\n    \
+             \"\"\"Open a session pinned to the programme this package was\n    \
+             generated from: a binary serving any other rules is refused at\n    \
+             the handshake, before a single proposal is written. Construct\n    \
+             ``Session`` directly to open deliberately unpinned.\"\"\"\n    \
+             return Session(\n        \
+                 file,\n        \
+                 database_url,\n        \
+                 binary=binary,\n        \
+                 timeout=timeout,\n        \
+                 expected_model_hash=MODEL_HASH,\n    \
+             )\n\n\n\
          __all__ = [\n    \
              \"PROGRAM\",\n    \
              \"MODEL_HASH\",\n    \
@@ -580,6 +598,7 @@ fn render_init(program: &Program) -> String {
              \"MorphologOutcomeUnknown\",\n    \
              \"MorphologRequestError\",\n    \
              \"Session\",\n    \
+             \"open_session\",\n    \
              \"envelopes\",\n    \
              \"models\",\n    \
              \"values\",\n]\n",

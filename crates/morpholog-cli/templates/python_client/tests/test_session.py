@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import threading
 import unittest
 from pathlib import Path
@@ -37,6 +38,11 @@ import json, os, sys, time
 
 mode = os.environ.get("SESSION_STUB_MODE", "transcript")
 record = os.environ.get("SESSION_STUB_RECORD")
+
+if mode == "ignore_eof_and_sigterm":
+    import signal
+
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
 
 def note(line):
@@ -116,6 +122,24 @@ for request in sys.stdin:
         say(json.dumps({"code": "kernel_error", "error": "x", "row": 99, "status": "error"}))
     elif mode == "bogus_rows":
         say(json.dumps([{"bogus": True}]))
+    elif mode == "bad_tag_in_receipt":
+        say(
+            json.dumps(
+                {
+                    "actor": {"type": "unknown-new-tag", "value": "a"},
+                    "asserted_claims": [],
+                    "emitted_intents": [],
+                    "retracted_claims": [],
+                    "row": n,
+                    "status": "committed",
+                    "transition_id": "00000000-0000-0000-0000-000000000000",
+                }
+            )
+        )
+    elif mode == "bad_tag_in_row":
+        say(json.dumps([{"args": [{"type": "unknown-new-tag", "value": "a"}], "predicate": "P"}]))
+    elif mode == "bad_row_in_error":
+        say(json.dumps({"code": "kernel_error", "error": "x", "row": "not-an-int", "status": "error"}))
     elif mode == "binary_garbage":
         sys.stdout.buffer.write(b"\xff\xfe\n")
         sys.stdout.buffer.flush()
@@ -126,9 +150,28 @@ for request in sys.stdin:
     elif mode == "slow_echo":
         time.sleep(0.2)
         say("[]")
+    elif mode == "row_echo":
+        # Answers each request with ITS row, so concurrent proposers
+        # can be told apart - the default reply is always row 1.
+        time.sleep(0.05)
+        say(
+            json.dumps(
+                {
+                    "actor": {"type": "subject", "value": "a"},
+                    "asserted_claims": [],
+                    "emitted_intents": [],
+                    "retracted_claims": [],
+                    "row": n,
+                    "status": "committed",
+                    "transition_id": "00000000-0000-0000-0000-000000000000",
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
     else:
         say(committed)
-if mode == "ignore_eof":
+if mode in ("ignore_eof", "ignore_eof_and_sigterm"):
     time.sleep(60)
 '''
 
@@ -326,6 +369,133 @@ class Lifecycle(SessionHarness):
                 t.join()
             self.assertEqual(errors, [])
             self.assertEqual(results, [[], [], [], []])
+
+    def test_a_propose_receipt_is_decided_while_the_lock_is_held(self):
+        """The regression for the false-poisoning race. Whether a
+        receipt answers THIS request must be decided before the
+        exchange lock is released. Decided after, the comparison reads
+        a counter a concurrent proposer has already advanced: a
+        definitely-committed proposal is reported unknown, and the
+        poison kills the other caller's genuinely in-flight one.
+
+        Single-threaded and structural on purpose - a timing test can
+        pass thousands of runs without ever opening the window."""
+        with self.session(mode="row_echo") as s:
+            held = []
+            descriptor = envelopes.BatchReceipt.__dict__["from_json"]
+            original = envelopes.BatchReceipt.from_json
+
+            def watching(payload):
+                held.append(s._lock.locked())
+                return original(payload)
+
+            envelopes.BatchReceipt.from_json = staticmethod(watching)
+            self.addCleanup(setattr, envelopes.BatchReceipt, "from_json", descriptor)
+            s.propose("t", "a", {})
+            self.assertEqual(
+                held,
+                [True],
+                "the receipt was decoded after the exchange lock was released",
+            )
+
+    def test_concurrent_proposals_each_get_their_own_receipt(self):
+        """The race as a caller meets it: four proposers, each of whom
+        must see its own committed outcome and leave the session
+        healthy. The companion to the structural test above - real but
+        not the proof, since a passing run does not mean the window is
+        shut."""
+        with self.session(mode="row_echo") as s:
+            outcomes, errors = [], []
+
+            def propose():
+                try:
+                    outcomes.append(s.propose("t", "a", {}))
+                except Exception as exc:  # noqa: BLE001 - the test collects
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=propose) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(errors, [])
+            self.assertEqual(len(outcomes), 4)
+            self.assertTrue(all(isinstance(o, envelopes.Committed) for o in outcomes))
+            self.assertIsNone(s._poisoned)
+
+    def test_the_stderr_tail_is_read_under_its_own_lock(self):
+        """The tail is appended by the drain thread and read by error
+        paths. Read without the lock, the join can hit a deque the
+        drain thread is mutating and raise - so the crash replaces the
+        diagnostic it was written to carry, exactly when something has
+        already gone wrong."""
+        s = self.session(mode="stderr_flood")
+        self.addCleanup(s.close)
+        taken = []
+        real = s._stderr_lock
+
+        class Watching:
+            def __enter__(self):
+                taken.append(True)
+                return real.__enter__()
+
+            def __exit__(self, *exc_info):
+                return real.__exit__(*exc_info)
+
+        s._stderr_lock = Watching()
+        s._stderr_text()
+        self.assertTrue(taken, "_stderr_text read the tail without taking its lock")
+
+    def test_a_malformed_value_inside_a_committed_receipt_is_outcome_unknown(self):
+        """The receipt frames correctly but carries a value tag this
+        client does not know. The proposal was submitted, so the only
+        honest answer is UNDECIDED - and the contract has demonstrably
+        drifted, so the session must not serve another request. The
+        envelope parsers reach value codecs that raise their own
+        exception types, which is why the seam cannot recognise a
+        broken contract by one exception class."""
+        with self.session(mode="bad_tag_in_receipt") as s:
+            with self.assertRaises(MorphologOutcomeUnknown):
+                s.propose("t", "a", {})
+            self.assertIsNotNone(s._poisoned)
+
+    def test_a_malformed_value_inside_a_read_row_poisons_but_stays_operational(self):
+        """The same drift on a read: nothing was submitted, so it is a
+        plain operational failure - and still fatal to the session."""
+        with self.session(mode="bad_tag_in_row") as s:
+            with self.assertRaises(MorphologError) as caught:
+                s.claims()
+            self.assertNotIsInstance(caught.exception, MorphologOutcomeUnknown)
+            self.assertIsNotNone(s._poisoned)
+
+    def test_a_malformed_row_in_an_error_receipt_is_outcome_unknown(self):
+        """A coded error whose own fields do not parse is drift too,
+        and it arrives in answer to a submitted proposal."""
+        with self.session(mode="bad_row_in_error") as s:
+            with self.assertRaises(MorphologOutcomeUnknown):
+                s.propose("t", "a", {})
+            self.assertIsNotNone(s._poisoned)
+
+    @unittest.skipUnless(os.name == "posix", "needs POSIX signal semantics")
+    def test_reaping_a_child_that_ignores_eof_and_sigterm_stays_inside_its_budget(self):
+        """`timeout` bounds the response wait; shutdown has its own
+        ceiling. The child here ignores EOF and then SIGTERM, so only
+        the kill escalation ends it - the sequence that used to stack a
+        full wait per stage. Staged shares of one deadline keep the
+        whole reaping inside one budget. (Nothing can ignore SIGKILL,
+        so that is where the escalation stops.)"""
+        from python_client.session import _SHUTDOWN_BUDGET
+
+        s = self.session(mode="ignore_eof_and_sigterm")
+        started = time.monotonic()
+        s.close()
+        elapsed = time.monotonic() - started
+        self.assertIsNotNone(s._child.poll())
+        self.assertLess(
+            elapsed,
+            _SHUTDOWN_BUDGET + 2.0,
+            f"shutdown took {elapsed:.1f}s against a {_SHUTDOWN_BUDGET}s budget",
+        )
 
     def test_close_sends_eof_and_reaps_the_child(self):
         s = self.session()

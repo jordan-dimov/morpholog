@@ -157,6 +157,53 @@ fn the_model_hash_stamp_matches_morpholog_hash() {
     );
 }
 
+/// The pinned open is the easy one: `open_session` supplies the model
+/// hash this package was generated against, so an embedder reaching
+/// for the obvious call cannot silently open against other rules.
+/// Constructing `Session` stays available for a deliberately
+/// unpinned open.
+#[test]
+fn the_emitted_factory_pins_the_model_hash() {
+    let out = tempfile::tempdir().unwrap();
+    assert!(generate(&trade_lifecycle(), out.path()).status.success());
+    let init = std::fs::read_to_string(out.path().join("morpholog_client/__init__.py")).unwrap();
+    assert!(
+        init.contains("def open_session("),
+        "__init__.py should emit the pinned-session factory"
+    );
+    assert!(
+        init.contains("expected_model_hash=MODEL_HASH"),
+        "open_session should pin the generated model hash"
+    );
+    assert!(
+        init.contains("\"open_session\","),
+        "open_session should be exported"
+    );
+
+    // Textual emission is not the contract - forwarding is. Import the
+    // emitted package, stand in for `Session`, and check what the
+    // factory actually passes.
+    let probe = r#"
+import sys, types
+sys.path.insert(0, sys.argv[1])
+import morpholog_client as mc
+seen = {}
+mc.Session = lambda *a, **kw: seen.update(kw) or "session"
+assert mc.open_session("m.morph", "postgres:///x") == "session"
+assert seen["expected_model_hash"] == mc.MODEL_HASH, seen
+print("ok")
+"#;
+    let out_probe = Command::new("python3")
+        .args(["-c", probe, out.path().to_str().unwrap()])
+        .output()
+        .expect("python3 runs the emitted package");
+    assert!(
+        String::from_utf8_lossy(&out_probe.stdout).contains("ok"),
+        "open_session must forward MODEL_HASH: {}",
+        String::from_utf8_lossy(&out_probe.stderr)
+    );
+}
+
 fn refusal_fixture(source: &str) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("model.morph");
