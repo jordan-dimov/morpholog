@@ -44,6 +44,13 @@ jobs:
           # The ancestor-of-main check needs real history.
           fetch-depth: 0
 
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          # This job reads the workspace version with cargo, so it
+          # pins its toolchain too rather than trusting whatever the
+          # runner image happens to preinstall.
+          toolchain: "1.95.0"
+
       - name: The tag names the workspace version and sits on main
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -79,19 +86,30 @@ jobs:
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
             static: true
+            arch: x86-64
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
             static: true
+            arch: ARM aarch64
           - target: aarch64-apple-darwin
             runner: macos-latest
             static: false
+            arch: arm64
+            # Apple's current linker asserts on very long mangled
+            # symbol names, and the parser crate's combinator types
+            # monomorphise into some of the longest in the workspace.
+            # The classic linker has no such limit.
+            rustflags: "-C link-arg=-Wl,-ld_classic"
           - target: x86_64-apple-darwin
             runner: macos-13
             static: false
+            arch: x86_64
+            rustflags: "-C link-arg=-Wl,-ld_classic"
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: 0
       TARGET: ${{ matrix.target }}
+      RUSTFLAGS: ${{ matrix.rustflags }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -124,6 +142,14 @@ jobs:
           BIN="target/$TARGET/release/morpholog"
           strip "$BIN"
           file "$BIN"
+          # One asset per platform means the bytes must BE that
+          # platform: a toolchain misconfiguration that quietly built
+          # the host architecture would otherwise ship under the wrong
+          # name.
+          file "$BIN" | grep -q '${{ matrix.arch }}' || {
+            echo "the binary is not ${{ matrix.arch }}" >&2
+            exit 1
+          }
           if [ "${{ matrix.static }}" = "true" ]; then
             file "$BIN" | grep -Eq 'statically linked|static-pie' || {
               echo "the binary is not statically linked" >&2
@@ -156,8 +182,12 @@ jobs:
           mkdir "$NAME"
           cp "target/$TARGET/release/morpholog" LICENSE "$NAME/"
           tar czf "$NAME.tar.gz" "$NAME"
-          sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
-          sha256sum -c "$NAME.tar.gz.sha256"
+          # macOS images carry `shasum`, not `sha256sum`. Both emit the
+          # same "<hash>  <file>" line, so a consumer verifies either
+          # asset with whichever tool they have.
+          if command -v sha256sum >/dev/null; then SHA256="sha256sum"; else SHA256="shasum -a 256"; fi
+          $SHA256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+          $SHA256 -c "$NAME.tar.gz.sha256"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

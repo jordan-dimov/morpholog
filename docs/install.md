@@ -7,22 +7,19 @@ STOP if there is none (it deliberately does not `exit`, which would
 close an interactive shell):
 
 ```bash
-case "$(uname -s)/$(uname -m)" in
-  Linux/x86_64)          echo x86_64-unknown-linux-musl ;;
+TARGET=$(case "$(uname -s)/$(uname -m)" in
+  Linux/x86_64)              echo x86_64-unknown-linux-musl ;;
   Linux/aarch64|Linux/arm64) echo aarch64-unknown-linux-musl ;;
-  Darwin/arm64)          echo aarch64-apple-darwin ;;
-  Darwin/x86_64)         echo x86_64-apple-darwin ;;
-  *) echo "STOP: no prebuilt binary for $(uname -s)/$(uname -m) - build from source instead (README)" >&2 ;;
-esac
+  Darwin/arm64)              echo aarch64-apple-darwin ;;
+  Darwin/x86_64)             echo x86_64-apple-darwin ;;
+esac)
+[ -n "$TARGET" ] && echo "$TARGET" \
+  || echo "STOP: no prebuilt binary for $(uname -s)/$(uname -m) - build from source instead (README)" >&2
 ```
 
 If it says STOP, none of the download steps below apply to this
-machine; the README's source build is the path. Everything below uses
-`$TARGET` for what that line printed:
-
-```bash
-TARGET=<the line above>
-```
+machine; the README's source build is the path. Otherwise `$TARGET`
+now names your asset, and the steps below use it as they are.
 
 Morpholog runs against a system PostgreSQL, by design - no Docker in the
 blessed path (containerising the database is your own ops choice, not
