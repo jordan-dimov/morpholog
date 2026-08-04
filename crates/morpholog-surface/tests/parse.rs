@@ -1593,3 +1593,136 @@ fn a_sum_reached_through_many_definitions_keeps_its_unit() {
         "the empty sum should be the typed zero 0 t: {outcome:?}"
     );
 }
+
+/// Every builtin renders back to the source that produced it, and
+/// nesting a call inside arithmetic keeps the parenthesisation the
+/// author wrote. The example hashes prove the shipped programmes are
+/// unaffected; these prove the RENDERING rule itself, including forms
+/// no example happens to contain.
+#[test]
+fn every_builtin_round_trips_through_the_formatter() {
+    let cases = [
+        "abs(x)",
+        "abs(abs(x))",
+        "round(x, 0.01)",
+        "min(a, b)",
+        "max(a, b)",
+        "min(cap, max(floor, x))",
+        "period_index(@2000-04-01, span(P1Y), d)",
+        // A call inside arithmetic, and arithmetic inside a call: the
+        // call is self-delimiting, the operators are not.
+        "abs(a - b) + 1",
+        "round(a * b, 0.01)",
+        "min(a + b, c)",
+    ];
+    for case in cases {
+        let source = format!(
+            "program r\n\
+             predicate P(x: Decimal)\n\n\
+             transformation t(a, b, c, x, d, cap, floor):\n    \
+                 require {case} <= 100\n"
+        );
+        let program =
+            parse_program(&source).unwrap_or_else(|e| panic!("`{case}` should parse; got {e:?}"));
+        let rendered = morpholog_core::format::format_program(&program);
+        assert!(
+            rendered.contains(case),
+            "`{case}` should render back verbatim, got:\n{rendered}"
+        );
+        let reparsed = parse_program(&rendered)
+            .unwrap_or_else(|e| panic!("`{case}` should reparse; got {e:?}\n{rendered}"));
+        assert_eq!(reparsed, program, "`{case}` must round-trip losslessly");
+    }
+}
+
+/// `min`/`max` are defined over the kinds the language ORDERS, which
+/// is a wider domain than the arithmetic matrix gave them. Taking the
+/// smaller of two values asks the comparator's question and keeps the
+/// answer instead of the verdict, so wherever `on_or_before` is lawful
+/// so is `min` - dates and instants included. What stays out is what
+/// has no ordering to take a minimum over.
+#[test]
+fn min_and_max_are_defined_over_the_ordered_kinds() {
+    // Dates order, so the earlier of two is a question with an answer.
+    let over_dates = "program p
+predicate Booked(id: Subject, on: Date)
+predicate Out(v: Date)
+transformation t(a, b):
+    bind Booked(a, d1)
+    bind Booked(b, d2)
+    let earliest = min(d1, d2)
+    admit Out(earliest)
+";
+    let program = parse_program(over_dates).expect("parses");
+    assert!(
+        program.validate().is_ok(),
+        "dates order, so min over them is lawful: {:?}",
+        program.validate()
+    );
+
+    // Subjects have no ordering, so there is no minimum to take.
+    let over_subjects = "program p
+predicate Holder(id: Subject, who: Subject)
+predicate Out(v: Subject)
+transformation t(a, b):
+    bind Holder(a, p1)
+    bind Holder(b, p2)
+    let first = min(p1, p2)
+    admit Out(first)
+";
+    let program = parse_program(over_subjects).expect("parses");
+    let errors = program
+        .validate()
+        .expect_err("subjects have no order to minimise over");
+    assert!(
+        errors
+            .iter()
+            .any(|e| format!("{e}").contains("min is defined on ordered values")),
+        "expected the ordered-domain refusal, got {errors:?}"
+    );
+}
+
+/// Calendar spans compare only for equality: months and days have no
+/// common measure until a date lands them, so P1M against P30D has no
+/// truth. An ordering here would have to invent one.
+#[test]
+fn min_refuses_calendar_spans_which_do_not_order() {
+    let source = "program p
+predicate Out(v: Decimal)
+transformation t():
+    let shorter = min(span(P1M), span(P30D))
+    admit Out(shorter)
+";
+    let program = parse_program(source).expect("parses");
+    assert!(
+        program.validate().is_err(),
+        "spans do not order, so min over them must be refused"
+    );
+}
+
+/// One known operand refines the other, as the operand path does
+/// everywhere else - so a parameter used only inside `min` still
+/// reaches the generated schema with a kind.
+#[test]
+fn a_known_min_operand_refines_its_counterpart() {
+    let source = "program p
+predicate Out(v: Decimal)
+transformation t(x):
+    let capped = min(x, 100)
+    admit Out(capped)
+";
+    let program = parse_program(source).expect("parses");
+    let validated = program.validated().expect("validates");
+    let kinds =
+        morpholog_core::transformation_param_kinds(&validated, &"t".into()).expect("kinds resolve");
+    let x = kinds
+        .iter()
+        .find(|(v, _)| v.as_str() == "x")
+        .map(|(_, k)| k.clone())
+        .expect("x is a parameter");
+    assert_eq!(
+        x,
+        morpholog_core::ParamKind::Concrete(morpholog_core::PredicateArgKind::Decimal),
+        "the literal counterpart should have refined `x`"
+    );
+}

@@ -29,9 +29,9 @@
 //!   `Term::Actor` and `Term::Wildcard`.
 
 use crate::{
-    ArgDecl, ArithOp, Claim, CompareOp, Definition, DerivedClaim, Discipline, Intent, IntentDecl,
-    Invariant, InvariantOrigin, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop,
-    Stmt, Subject, SumSeed, Term, Transformation, Value, ValueExpr, Var,
+    ArgDecl, ArithOp, Builtin, Claim, CompareOp, Definition, DerivedClaim, Discipline, Intent,
+    IntentDecl, Invariant, InvariantOrigin, OrderedDomain, PredicateArgKind, PredicateDecl,
+    Program, Prop, Stmt, Subject, SumSeed, Term, Transformation, Value, ValueExpr, Var,
 };
 
 /// Build a [`Prop::Compare`] for the comparator constructors below.
@@ -267,18 +267,20 @@ pub fn div(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
 /// `abs(x)` - the magnitude of a signed value (decimal, quantity, or
 /// duration), preserving its kind.
 pub fn abs(operand: ValueExpr) -> ValueExpr {
-    ValueExpr::Abs(Box::new(operand))
+    call(Builtin::Abs, vec![operand])
+}
+
+/// A strict call to a builtin. The named helpers below are the ones
+/// worth spelling; this is the general form.
+pub fn call(builtin: Builtin, args: Vec<ValueExpr>) -> ValueExpr {
+    ValueExpr::Call { builtin, args }
 }
 
 /// `period_index(anchor, span, at)` - which anniversary-anchored
 /// period `at` falls in, as an integer-valued decimal; negative
 /// before the anchor.
 pub fn period_index(anchor: ValueExpr, span: ValueExpr, at: ValueExpr) -> ValueExpr {
-    ValueExpr::PeriodIndex {
-        anchor: Box::new(anchor),
-        span: Box::new(span),
-        at: Box::new(at),
-    }
+    call(Builtin::PeriodIndex, vec![anchor, span, at])
 }
 
 /// `if(when, then, otherwise)` - the value selected by whether the
@@ -295,10 +297,7 @@ pub fn cond(when: Prop, then: ValueExpr, otherwise: ValueExpr) -> ValueExpr {
 /// `round(x, quantum)` - the multiple of `quantum` nearest to `x`,
 /// exact halves away from zero. Decimal-only.
 pub fn round(value: ValueExpr, quantum: ValueExpr) -> ValueExpr {
-    ValueExpr::Round {
-        value: Box::new(value),
-        quantum: Box::new(quantum),
-    }
+    call(Builtin::Round, vec![value, quantum])
 }
 
 // `modulo`, not `mod`: the latter is a Rust keyword.
@@ -307,11 +306,11 @@ pub fn modulo(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
 }
 
 pub fn min(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
-    arith(ArithOp::Min, lhs, rhs)
+    call(Builtin::Min, vec![lhs, rhs])
 }
 
 pub fn max(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
-    arith(ArithOp::Max, lhs, rhs)
+    call(Builtin::Max, vec![lhs, rhs])
 }
 
 pub fn sum(value: Term, body: Prop) -> ValueExpr {

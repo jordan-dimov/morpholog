@@ -67,8 +67,6 @@ pub(crate) fn arith_token(op: ArithOp) -> &'static str {
         ArithOp::Mul => "*",
         ArithOp::Div => "/",
         ArithOp::Mod => "%",
-        ArithOp::Min => "min",
-        ArithOp::Max => "max",
     }
 }
 
@@ -437,7 +435,7 @@ fn value_primary(e: &ValueExpr) -> String {
         // Infix arithmetic is the only ambiguous form: parenthesise it so
         // the surface text reparses to the same tree. Everything else is
         // self-delimiting (a keyword or function with its own parens).
-        ValueExpr::Arith { op, .. } if op.is_infix() => {
+        ValueExpr::Arith { .. } => {
             format!("({})", format_value_inline(e))
         }
         _ => format_value_inline(e),
@@ -478,28 +476,22 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
             }
         }
         ValueExpr::Arith { op, left, right } => {
-            let token = arith_token(*op);
-            if op.is_infix() {
-                format!("{} {token} {}", value_primary(left), value_primary(right))
-            } else {
-                format!(
-                    "{token}({}, {})",
-                    format_value_inline(left),
-                    format_value_inline(right)
-                )
-            }
+            format!(
+                "{} {} {}",
+                value_primary(left),
+                arith_token(*op),
+                value_primary(right)
+            )
         }
-        ValueExpr::PeriodIndex { anchor, span, at } => format!(
-            "period_index({}, {}, {})",
-            format_value_inline(anchor),
-            format_value_inline(span),
-            format_value_inline(at)
-        ),
-        ValueExpr::Abs(operand) => format!("abs({})", format_value_inline(operand)),
-        ValueExpr::Round { value, quantum } => format!(
-            "round({}, {})",
-            format_value_inline(value),
-            format_value_inline(quantum)
+        // Every builtin renders the same way: its surface name and
+        // its arguments. Self-delimiting, so no precedence decision.
+        ValueExpr::Call { builtin, args } => format!(
+            "{}({})",
+            builtin.name(),
+            args.iter()
+                .map(format_value_inline)
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         // Function-shaped and self-delimiting, like round: no
         // parenthesisation decisions, no precedence tier.

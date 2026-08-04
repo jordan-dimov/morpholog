@@ -374,3 +374,72 @@ fn the_extractor_round_trips_through_the_formatter() {
         "{rendered}"
     );
 }
+
+/// Arity belongs to the builtin and is total. The surface fixes the
+/// count per call form, so only hand-built IR can get it wrong -
+/// validation refuses it by name, and the evaluator keeps its own
+/// backstop for IR that never went through validation.
+///
+/// The evaluator half checks arity BEFORE evaluating arguments, so a
+/// misshapen call is reported as misshapen. Evaluating first would
+/// answer with whatever the surplus argument happened to be wrong
+/// about, which tells a reader nothing about the real mistake.
+#[test]
+fn a_builtin_called_with_the_wrong_arity_is_refused_at_both_tiers() {
+    use morpholog_core::Builtin;
+    use morpholog_core::ir_builder::{call, invariant, program, var};
+
+    let p = program("bad_arity")
+        .invariants(vec![invariant(
+            "k",
+            eq(call(Builtin::Round, vec![term(dec("1"))]), term(dec("0"))),
+        )])
+        .build();
+    let errs = p.validate().expect_err("one argument is not two");
+    assert!(
+        errs.iter()
+            .any(|e| format!("{e}").contains("round takes 2 argument(s), got 1")),
+        "got: {errs:?}"
+    );
+
+    // Through the real evaluation route, with a surplus argument that
+    // would itself error: the arity refusal must still be what
+    // surfaces, or the diagnostic blames the wrong thing.
+    let t = transformation(
+        "probe",
+        params(&[]),
+        vec![require(eq(
+            call(Builtin::Abs, vec![term(dec("1")), term(var("never_bound"))]),
+            term(dec("1")),
+        ))],
+    );
+    let err = propose_with_test_actor(&t, vec![], &State::default(), &[], &[])
+        .expect_err("two arguments is not one");
+    let text = format!("{err}");
+    assert!(
+        text.contains("abs takes 1 argument(s), got 2"),
+        "the arity error must dominate the unbound operand: {text}"
+    );
+}
+
+/// `min`/`max` over the ordered kinds, evaluated - not merely accepted.
+/// The trap this guards is a static domain wider than the evaluator's:
+/// a programme that validates and then fails at runtime is worse than
+/// one refused at authoring time.
+#[test]
+fn min_and_max_compute_over_every_ordered_kind() {
+    use morpholog_core::ir_builder::{max, min};
+
+    // Dates: the earlier and later of two.
+    holds(eq(
+        min(term(date("2026-04-01")), term(date("2026-03-31"))),
+        term(date("2026-03-31")),
+    ));
+    holds(eq(
+        max(term(date("2026-04-01")), term(date("2026-03-31"))),
+        term(date("2026-04-01")),
+    ));
+    // Decimals keep working, both directions.
+    holds(eq(min(term(dec("5")), term(dec("3"))), term(dec("3"))));
+    holds(eq(max(term(dec("5")), term(dec("3"))), term(dec("5"))));
+}

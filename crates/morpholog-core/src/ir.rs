@@ -423,29 +423,6 @@ pub enum ValueExpr {
         args: Vec<Term>,
         default: Option<Box<ValueExpr>>,
     },
-    /// The magnitude of a signed value: `abs(x)`. Unary and
-    /// unit-preserving (`abs` of a `Decimal[USD]` is a `Decimal[USD]`),
-    /// defined on decimals, quantities, and durations. A dedicated node,
-    /// not `max(x, 0 - x)`, so the operand is evaluated once and the form
-    /// round-trips as `abs`.
-    Abs(Box<ValueExpr>),
-    /// `round(x, quantum)`: the multiple of `quantum` nearest to `x`,
-    /// exact halves rounding AWAY FROM ZERO (2.345 to a 0.01 quantum is
-    /// 2.35; -2.345 is -2.35). One mode only - a second rounding policy
-    /// joins as a parameter when a real domain forces it, not before.
-    /// Decimal-only in v0: both operands are bare decimals and the
-    /// result is a bare decimal (money convention: currency lives in
-    /// field names). A non-positive quantum is refused by name at
-    /// validation when written literally and raises
-    /// [`crate::EvalError::RoundQuantumNotPositive`] at evaluation
-    /// otherwise. A dedicated node for the `abs` reasons: the operand
-    /// evaluates once, the form round-trips as `round`, and the
-    /// sign-branched shift-and-remainder spelling it replaces can never
-    /// be mistaken for user arithmetic.
-    Round {
-        value: Box<ValueExpr>,
-        quantum: Box<ValueExpr>,
-    },
     /// `if(when, then, otherwise)`: the value selected by whether a
     /// proposition holds. The test is exists-style - at least one
     /// witness selects `then`, none selects `otherwise` - and the
@@ -466,26 +443,12 @@ pub enum ValueExpr {
         then: Box<ValueExpr>,
         otherwise: Box<ValueExpr>,
     },
-    /// `period_index(anchor, span, at)`: which anniversary-anchored
-    /// period `at` falls in - the greatest integer n (as an
-    /// integer-valued decimal) whose nth boundary is at or before
-    /// `at`. Boundary n is the anchor shifted by the span's
-    /// components multiplied by n ONCE and applied with the standard
-    /// clamped walk - never n repeated clamped hops, which the
-    /// calendar's non-associativity would let drift. Representable
-    /// boundaries form half-open periods; a boundary beyond either
-    /// end of the representable calendar acts as an infinity, so the
-    /// outermost periods are clipped and the extractor is total,
-    /// with negative indexes before the anchor. The operator itself
-    /// reads no state (its children are ordinary value expressions,
-    /// walked as such), so a fully-literal use is lawful in a
-    /// `const`. A non-positive span is refused by name at validation
-    /// when written literally and at evaluation otherwise (the round
-    /// quantum pattern).
-    PeriodIndex {
-        anchor: Box<ValueExpr>,
-        span: Box<ValueExpr>,
-        at: Box<ValueExpr>,
+    /// A strict call to a [`Builtin`]: arguments evaluated in order,
+    /// then a context-free operation over the resulting values. The
+    /// arity is the builtin's, checked at validation.
+    Call {
+        builtin: Builtin,
+        args: Vec<ValueExpr>,
     },
 }
 
@@ -503,10 +466,12 @@ pub enum CompareOp {
 
 /// Which end of the ordering an [`ValueExpr::Extremum`] takes.
 ///
-/// Distinct from [`ArithOp::Min`] / [`ArithOp::Max`], which cap one value
-/// against another. This picks from a set the body defines, so the two
-/// never appear in the same position and the surface tells them apart by
-/// the `|` that introduces a body.
+/// Distinct from [`Builtin::Min`] / [`Builtin::Max`], which cap one value
+/// against another and are strict calls. This picks from a set the body
+/// defines - it binds a variable and ranges over state, which is what
+/// makes it a construct rather than a builtin. The two never appear in
+/// the same position, and the surface tells them apart by the `|` that
+/// introduces a body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtremumOp {
     Max,
@@ -523,35 +488,108 @@ impl ExtremumOp {
     }
 }
 
+/// A strict function over already-evaluated values.
+///
+/// The line against a [`ValueExpr`] variant is evaluation topology: a
+/// CONSTRUCT decides how its children are evaluated - lazily, or
+/// repeatedly under bindings it produces, or against a proposition -
+/// while a BUILTIN is handed finished values and returns one. Every
+/// builtin obeys the same contract, and a candidate that cannot is
+/// promoted to a variant instead:
+///
+/// - every argument is a `ValueExpr`, evaluated exactly once, in order;
+/// - it sees only those values - never state, bindings, actor,
+///   definitions, or the AST;
+/// - it binds nothing and exports nothing;
+/// - its predicate footprint is exactly the union of its arguments';
+/// - it yields one value or a named refusal.
+///
+/// Kept closed, and every semantic authority matches it exhaustively -
+/// surface name, arity, kind inference, static refusal, evaluation -
+/// so a new builtin still has to declare its behaviour to the
+/// compiler. What it no longer does is redden a dozen walkers whose
+/// only answer was "recurse through the arguments".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Builtin {
+    /// The magnitude of a signed value: `abs(x)`. Unary and
+    /// unit-preserving (`abs` of a `Decimal[USD]` is a `Decimal[USD]`),
+    /// defined on decimals, quantities, and durations - never
+    /// `max(x, 0 - x)`, so the operand evaluates once and the form
+    /// round-trips as `abs`.
+    Abs,
+    /// `round(x, quantum)`: the multiple of `quantum` nearest to `x`,
+    /// exact halves rounding AWAY FROM ZERO (2.345 to a 0.01 quantum
+    /// is 2.35; -2.345 is -2.35). One mode only - a second rounding
+    /// policy joins as a parameter when a real domain forces it, not
+    /// before. Decimal-only in v0: both operands are bare decimals and
+    /// the result is a bare decimal (money convention: currency lives
+    /// in field names). A non-positive quantum is refused by name at
+    /// validation when written literally and raises
+    /// [`crate::EvalError::RoundQuantumNotPositive`] at evaluation
+    /// otherwise.
+    Round,
+    /// `period_index(anchor, span, at)`: which anniversary-anchored
+    /// period `at` falls in - the greatest integer n (as an
+    /// integer-valued decimal) whose nth boundary is at or before
+    /// `at`. Boundary n is the anchor shifted by the span's
+    /// components multiplied by n ONCE and applied with the standard
+    /// clamped walk - never n repeated clamped hops, which the
+    /// calendar's non-associativity would let drift. Representable
+    /// boundaries form half-open periods; a boundary beyond either
+    /// end of the representable calendar acts as an infinity, so the
+    /// outermost periods are clipped and the extractor is total,
+    /// with negative indexes before the anchor. The operator itself
+    /// reads no state (its children are ordinary value expressions,
+    /// walked as such), so a fully-literal use is lawful in a
+    /// `const`. A non-positive span is refused by name at validation
+    /// when written literally and at evaluation otherwise (the round
+    /// quantum pattern).
+    PeriodIndex,
+    /// `min(a, b)` / `max(a, b)`: the smaller or larger of two values.
+    /// Spelled like the calls they are - the aggregate forms over a
+    /// proposition are [`ValueExpr::Extremum`], a construct.
+    Min,
+    Max,
+}
+
+impl Builtin {
+    /// How the surface spells it, and how the formatter renders it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Builtin::Abs => "abs",
+            Builtin::Round => "round",
+            Builtin::PeriodIndex => "period_index",
+            Builtin::Min => "min",
+            Builtin::Max => "max",
+        }
+    }
+
+    /// How many arguments it takes.
+    pub fn arity(self) -> usize {
+        match self {
+            Builtin::Abs => 1,
+            Builtin::Round | Builtin::Min | Builtin::Max => 2,
+            Builtin::PeriodIndex => 3,
+        }
+    }
+}
+
 /// A binary decimal arithmetic operator. Carried by [`ValueExpr::Arith`];
 /// the value-sort analogue of [`CompareOp`], replacing what would be a flat
 /// variant per operator. A new operator is one row here, not a fresh
 /// `ValueExpr` variant rippled across every match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Infix only, by construction: `min`/`max` read as calls and live in
+/// [`Builtin`], so nothing here needs an is-it-infix predicate.
 pub enum ArithOp {
     Add,
     Sub,
     Mul,
     Div,
-    Min,
-    Max,
     /// Decimal remainder (`%`). Like `Div`, a zero divisor surfaces
     /// [`crate::EvalError::DivisionByZero`]. Expresses parity and cyclic
     /// rules - `(file + rank) % 2` for a chess square's colour.
     Mod,
-}
-
-impl ArithOp {
-    /// Infix operators (`+` `-` `*` `/` `%`) render `left <op> right` and
-    /// parenthesise inside another arithmetic operand; the function-form
-    /// operators (`min` / `max`) render `op(left, right)` and are
-    /// self-delimiting, needing no parens.
-    pub fn is_infix(self) -> bool {
-        matches!(
-            self,
-            ArithOp::Add | ArithOp::Sub | ArithOp::Mul | ArithOp::Div | ArithOp::Mod
-        )
-    }
 }
 
 /// The ordered domain an [`Prop::Compare`] compares over. Explicit in the
@@ -625,9 +663,7 @@ pub(crate) fn arith_result_kind(
         // needs a time zone, which the kernel refuses to guess).
         (ArithOp::Add | ArithOp::Sub, Date, CalendarSpan) => Some(Date),
         (ArithOp::Sub, Date, Date) => Some(Decimal),
-        (ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max, Duration, Duration) => {
-            Some(Duration)
-        }
+        (ArithOp::Add | ArithOp::Sub, Duration, Duration) => Some(Duration),
         // The ratio of two spans is a dimensionless decimal - how many
         // days of demurrage, how many turn-times in the gap. Exact for
         // terminating ratios; see the evaluator's arm for the precision
@@ -638,9 +674,7 @@ pub(crate) fn arith_result_kind(
         // a bare decimal; a bare decimal scales a quantity. Nothing
         // here produces a unit that was not already written down - no
         // compound units, no unit-producing multiplication.
-        (ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max, Quantity(u), Quantity(v))
-            if u == v =>
-        {
+        (ArithOp::Add | ArithOp::Sub, Quantity(u), Quantity(v)) if u == v => {
             Some(Quantity(u.clone()))
         }
         (ArithOp::Div, Quantity(u), Quantity(v)) if u == v => Some(Decimal),

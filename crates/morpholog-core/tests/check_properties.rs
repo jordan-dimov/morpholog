@@ -85,8 +85,6 @@ fn arb_arith_op() -> impl Strategy<Value = ArithOp> {
         Just(ArithOp::Sub),
         Just(ArithOp::Mul),
         Just(ArithOp::Div),
-        Just(ArithOp::Min),
-        Just(ArithOp::Max),
     ]
 }
 

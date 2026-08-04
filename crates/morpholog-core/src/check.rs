@@ -34,8 +34,8 @@ use std::collections::{HashMap, HashSet};
 use crate::fold;
 use crate::format::{arith_token, compare_token};
 use crate::ir::{
-    ArithOp, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, RuleName, Stmt, Term,
-    Value, ValueExpr, Var, arith_result_kind, arith_unique_counterpart,
+    ArithOp, Builtin, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, RuleName,
+    Stmt, Term, Value, ValueExpr, Var, arith_result_kind, arith_unique_counterpart,
 };
 use crate::validate::{ValidationContext, ValidationError, VocabularyKind};
 
@@ -830,18 +830,28 @@ impl CheckCtx<'_> {
         expected: &PredicateArgKind,
         scope: &mut Scope,
     ) {
-        if !matches!(operand, ValueExpr::Abs(_))
-            || !matches!(
-                expected,
-                PredicateArgKind::Decimal
-                    | PredicateArgKind::Quantity(_)
-                    | PredicateArgKind::Duration
-            )
-        {
+        if !matches!(
+            operand,
+            ValueExpr::Call {
+                builtin: Builtin::Abs,
+                ..
+            }
+        ) || !matches!(
+            expected,
+            PredicateArgKind::Decimal | PredicateArgKind::Quantity(_) | PredicateArgKind::Duration
+        ) {
             return;
         }
+        // Peel nested `abs(abs(x))` down to the variable underneath:
+        // every layer preserves the kind, so the expectation reaches
+        // the operand unchanged.
         let mut cur = operand;
-        while let ValueExpr::Abs(inner) = cur {
+        while let ValueExpr::Call {
+            builtin: Builtin::Abs,
+            args,
+        } = cur
+            && let [inner] = args.as_slice()
+        {
             cur = inner;
         }
         if let ValueExpr::Term(Term::Var(name)) = cur {
@@ -1240,7 +1250,47 @@ impl CheckCtx<'_> {
                 }
                 result_kind
             }
-            ValueExpr::Abs(inner) => match self.infer_value(inner, scope) {
+            // One arm for every builtin; which builtin decides the
+            // rule, so the decision is an exhaustive match rather than
+            // a table row that could go unfilled. Arity is settled
+            // first: a wrong count is refused by name before any
+            // operand is judged, so the author reads one clear error
+            // instead of a cascade about kinds.
+            ValueExpr::Call { builtin, args } => {
+                if args.len() != builtin.arity() {
+                    let context = self.context.clone();
+                    self.errors.push(ValidationError::BuiltinArity {
+                        builtin: builtin.name(),
+                        expected: builtin.arity(),
+                        found: args.len(),
+                        context,
+                    });
+                    for a in args {
+                        let _ = self.infer_value(a, scope);
+                    }
+                    return InferredKind::UnknownOrAny;
+                }
+                self.infer_builtin(*builtin, args, scope)
+            }
+        }
+    }
+
+    /// The static semantics of each builtin: what its arguments must
+    /// be, what it yields, and any refusal a literal argument earns
+    /// here rather than at runtime.
+    ///
+    /// Exhaustive over [`Builtin`] with no wildcard - `abs` preserves
+    /// its operand's kind while `round` and `period_index` impose
+    /// fixed ones, which is a real difference and has to be written
+    /// down per builtin, not defaulted.
+    fn infer_builtin(
+        &mut self,
+        builtin: Builtin,
+        args: &[ValueExpr],
+        scope: &mut Scope,
+    ) -> InferredKind {
+        match builtin {
+            Builtin::Abs => match self.infer_value(&args[0], scope) {
                 // abs preserves the kind of a signed value; any other
                 // known kind is an authoring-time error.
                 InferredKind::Known(
@@ -1255,16 +1305,16 @@ impl CheckCtx<'_> {
                 }
                 InferredKind::UnknownOrAny => InferredKind::UnknownOrAny,
             },
-            ValueExpr::Round { value, quantum } => {
+            Builtin::Round => {
                 // The established operand path: refines a bare variable
                 // to Decimal, accepts Any (unconstrained kinds refine at
                 // a later concrete use), reports incompatible concrete
                 // kinds as OperandKindMismatch.
-                self.check_operand_kind(value, PredicateArgKind::Decimal, "round", scope);
-                self.check_operand_kind(quantum, PredicateArgKind::Decimal, "round", scope);
+                self.check_operand_kind(&args[0], PredicateArgKind::Decimal, "round", scope);
+                self.check_operand_kind(&args[1], PredicateArgKind::Decimal, "round", scope);
                 // A literal quantum must be positive; a variable quantum
                 // is the runtime backstop's job.
-                if let ValueExpr::Term(Term::Literal(Value::Decimal(s))) = quantum.as_ref()
+                if let ValueExpr::Term(Term::Literal(Value::Decimal(s))) = &args[1]
                     && s.parse::<rust_decimal::Decimal>()
                         .is_ok_and(|d| d <= rust_decimal::Decimal::ZERO)
                 {
@@ -1276,19 +1326,19 @@ impl CheckCtx<'_> {
                 }
                 InferredKind::Known(PredicateArgKind::Decimal)
             }
-            ValueExpr::PeriodIndex { anchor, span, at } => {
-                self.check_operand_kind(anchor, PredicateArgKind::Date, "period_index", scope);
+            Builtin::PeriodIndex => {
+                self.check_operand_kind(&args[0], PredicateArgKind::Date, "period_index", scope);
                 self.check_operand_kind(
-                    span,
+                    &args[1],
                     PredicateArgKind::CalendarSpan,
                     "period_index",
                     scope,
                 );
-                self.check_operand_kind(at, PredicateArgKind::Date, "period_index", scope);
+                self.check_operand_kind(&args[2], PredicateArgKind::Date, "period_index", scope);
                 // A literal zero span must be refused here; a span
                 // arriving through a defined-call parameter is the
                 // runtime backstop's job (the round quantum pattern).
-                if let ValueExpr::Term(Term::Literal(Value::CalendarSpan(text))) = span.as_ref()
+                if let ValueExpr::Term(Term::Literal(Value::CalendarSpan(text))) = &args[1]
                     && let Ok(parsed) = crate::calendar::parse_calendar_span(text)
                     && parsed.months == 0
                     && parsed.days == 0
@@ -1301,7 +1351,85 @@ impl CheckCtx<'_> {
                 }
                 InferredKind::Known(PredicateArgKind::Decimal)
             }
+            // Same-kind and kind-preserving, over the SAME domain the
+            // evaluator supports: decimals, durations, and quantities
+            // that agree on their unit. These rows lived in the
+            // arithmetic matrix before `min`/`max` became builtins, and
+            // the restriction has to move with them - two dates share a
+            // kind but have no midpoint, and accepting them here would
+            // only defer the refusal to runtime.
+            Builtin::Min | Builtin::Max => {
+                let name = builtin.name();
+                let left = self.infer_value(&args[0], scope);
+                let right = self.infer_value(&args[1], scope);
+                match (left, right) {
+                    (InferredKind::Known(a), InferredKind::Known(b)) if a == b => {
+                        self.ordered_domain(name, a)
+                    }
+                    (InferredKind::Known(a), InferredKind::Known(b)) => {
+                        let context = self.context.clone();
+                        self.errors.push(ValidationError::OperandKindMismatch {
+                            operator: name,
+                            expected: a,
+                            actual: b,
+                            context,
+                        });
+                        InferredKind::UnknownOrAny
+                    }
+                    // One side known: the other must agree, so push the
+                    // known kind into it. That refines a bare variable
+                    // exactly as the operand path does elsewhere -
+                    // `min(x, 1.0)` still tells the schema `x` is a
+                    // decimal.
+                    (InferredKind::Known(k), InferredKind::UnknownOrAny) => {
+                        let resolved = self.ordered_domain(name, k);
+                        if let InferredKind::Known(k) = &resolved {
+                            self.check_operand_kind(&args[1], k.clone(), name, scope);
+                        }
+                        resolved
+                    }
+                    (InferredKind::UnknownOrAny, InferredKind::Known(k)) => {
+                        let resolved = self.ordered_domain(name, k);
+                        if let InferredKind::Known(k) = &resolved {
+                            self.check_operand_kind(&args[0], k.clone(), name, scope);
+                        }
+                        resolved
+                    }
+                    _ => InferredKind::UnknownOrAny,
+                }
+            }
         }
+    }
+
+    /// The kinds `min`/`max` are defined over: those the language
+    /// already orders, since taking a smaller of two is asking the
+    /// comparator's question and keeping the answer instead of the
+    /// verdict. Dates and timestamps are in for exactly that reason -
+    /// `d1 on_or_before d2` is lawful, so "the earlier of the two" is
+    /// a question with an answer.
+    ///
+    /// Calendar spans are deliberately OUT. They carry months and days
+    /// that no common measure reconciles - P1M against P30D has no
+    /// truth without a date to land on - so they compare only for
+    /// equality, and an ordering here would have to invent one.
+    fn ordered_domain(&mut self, builtin: &'static str, kind: PredicateArgKind) -> InferredKind {
+        if matches!(
+            kind,
+            PredicateArgKind::Decimal
+                | PredicateArgKind::Quantity(_)
+                | PredicateArgKind::Duration
+                | PredicateArgKind::Date
+                | PredicateArgKind::Timestamp
+        ) {
+            return InferredKind::Known(kind);
+        }
+        let context = self.context.clone();
+        self.errors.push(ValidationError::BuiltinKind {
+            builtin,
+            kind,
+            context,
+        });
+        InferredKind::UnknownOrAny
     }
 
     /// A variable used where a bound value is required. Flags

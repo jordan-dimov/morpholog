@@ -71,11 +71,11 @@ pub use explain::{
 };
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use ir::{
-    ArgDecl, ArithOp, Claim, CompareOp, Definition, DefinitionName, DefinitionOrigin, DerivedClaim,
-    DerivedValue, Discipline, ExtremumOp, Intent, IntentDecl, IntentName, Invariant, InvariantName,
-    InvariantOrigin, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop,
-    RuleName, Stmt, Subject, SumSeed, Term, Transformation, TransformationName, Unit, Value,
-    ValueExpr, Var,
+    ArgDecl, ArithOp, Builtin, Claim, CompareOp, Definition, DefinitionName, DefinitionOrigin,
+    DerivedClaim, DerivedValue, Discipline, ExtremumOp, Intent, IntentDecl, IntentName, Invariant,
+    InvariantName, InvariantOrigin, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName,
+    Program, Prop, RuleName, Stmt, Subject, SumSeed, Term, Transformation, TransformationName,
+    Unit, Value, ValueExpr, Var,
 };
 pub use lint::{Lint, lints};
 pub use propose::{

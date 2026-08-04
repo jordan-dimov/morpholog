@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::definitions::DefinitionTable;
 use crate::ir::{
-    ArgDecl, ArithOp, CompareOp, Definition, DefinitionName, DerivedClaim, OrderedDomain,
+    ArgDecl, ArithOp, Builtin, CompareOp, Definition, DefinitionName, DerivedClaim, OrderedDomain,
     PredicateArgKind, PredicateName, Program, Prop, Stmt, Term, TransformationName, ValueExpr, Var,
 };
 use crate::validate::ValidatedProgram;
@@ -160,17 +160,14 @@ fn value_refs(
             value_refs(then, definitions, seen, out);
             value_refs(otherwise, definitions, seen, out);
         }
-        // Pure arithmetic over its three children: no predicate of
-        // its own, but a lookup nested in a child still counts.
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            value_refs(anchor, definitions, seen, out);
-            value_refs(span, definitions, seen, out);
-            value_refs(at, definitions, seen, out);
-        }
-        ValueExpr::Abs(operand) => value_refs(operand, definitions, seen, out),
-        ValueExpr::Round { value, quantum } => {
-            value_refs(value, definitions, seen, out);
-            value_refs(quantum, definitions, seen, out);
+        // A builtin has no predicate of its own - its footprint IS
+        // the union of its arguments', which is part of what makes it
+        // a builtin rather than a construct. A lookup nested in a
+        // child still counts.
+        ValueExpr::Call { args, .. } => {
+            for a in args {
+                value_refs(a, definitions, seen, out);
+            }
         }
         ValueExpr::Term(_) => {
             // No predicate references; operates on a Term only.
@@ -1443,14 +1440,9 @@ impl<'a> ParamCollector<'a> {
                     self.walk_value(d, expected);
                 }
             }
-            // abs preserves its operand's kind, so the operand carries
-            // the same expected kind as the abs itself.
-            ValueExpr::Abs(operand) => self.walk_value(operand, expected),
-            // Decimal-only in v0: both positions force Decimal.
-            ValueExpr::Round { value, quantum } => {
-                self.walk_value(value, Some(PredicateArgKind::Decimal));
-                self.walk_value(quantum, Some(PredicateArgKind::Decimal));
-            }
+            // Which builtin decides what each argument slot expects,
+            // so this is exhaustive too rather than a shared recursion.
+            ValueExpr::Call { builtin, args } => self.walk_builtin(*builtin, args, expected),
             // The condition pins nothing on the conditional's own
             // kind; both branches carry the expected kind. The flat
             // env unions their observations, so a parameter seen at
@@ -1465,12 +1457,58 @@ impl<'a> ParamCollector<'a> {
                 self.walk_value(then, expected.clone());
                 self.walk_value(otherwise, expected);
             }
+        }
+    }
+
+    /// What each builtin expects of its arguments, for kind
+    /// observation. Exhaustive over [`Builtin`]: `abs` and the
+    /// extrema pass the surrounding expectation down (they preserve
+    /// kind), while the rest pin their slots.
+    fn walk_builtin(
+        &mut self,
+        builtin: Builtin,
+        args: &[ValueExpr],
+        expected: Option<PredicateArgKind>,
+    ) {
+        match builtin {
+            // Kind-preserving, so the operand carries the same
+            // expectation as the call itself.
+            Builtin::Abs => {
+                for a in args {
+                    self.walk_value(a, expected.clone());
+                }
+            }
+            // Both operands share one kind, so a determinable side
+            // forces its counterpart - the same one-side-known
+            // refinement the arithmetic matrix runs, and the reason
+            // `min(x, 100)` still tells the schema `x` is a decimal.
+            Builtin::Min | Builtin::Max => {
+                let left_known = self.shallow_value_kind(&args[0]);
+                let right_known = self.shallow_value_kind(&args[1]);
+                let (left_expected, right_expected) = match (left_known, right_known) {
+                    (Some(k), None) => (expected.clone(), Some(k)),
+                    (None, Some(k)) => (Some(k), expected.clone()),
+                    _ => (expected.clone(), expected),
+                };
+                self.walk_value(&args[0], left_expected);
+                self.walk_value(&args[1], right_expected);
+            }
+            // Decimal-only in v0: both positions force Decimal.
+            Builtin::Round => {
+                for a in args {
+                    self.walk_value(a, Some(PredicateArgKind::Decimal));
+                }
+            }
             // Each slot pins its own kind; the result is Decimal
             // regardless of `expected`.
-            ValueExpr::PeriodIndex { anchor, span, at } => {
-                self.walk_value(anchor, Some(PredicateArgKind::Date));
-                self.walk_value(span, Some(PredicateArgKind::CalendarSpan));
-                self.walk_value(at, Some(PredicateArgKind::Date));
+            Builtin::PeriodIndex => {
+                for (a, kind) in args.iter().zip([
+                    PredicateArgKind::Date,
+                    PredicateArgKind::CalendarSpan,
+                    PredicateArgKind::Date,
+                ]) {
+                    self.walk_value(a, Some(kind));
+                }
             }
         }
     }

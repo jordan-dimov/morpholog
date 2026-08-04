@@ -30,6 +30,22 @@ fn cmp(op: CompareOp, domain: OrderedDomain, l: ValueExpr, r: ValueExpr) -> Prop
 
 /// Build a `ValueExpr::Arith` for the assertions below (the per-operator
 /// arithmetic variants were collapsed into one `Arith { op, .. }`).
+fn call(builtin: morpholog_core::Builtin, args: Vec<ValueExpr>) -> ValueExpr {
+    ValueExpr::Call { builtin, args }
+}
+
+fn abs(x: ValueExpr) -> ValueExpr {
+    call(morpholog_core::Builtin::Abs, vec![x])
+}
+
+fn min(a: ValueExpr, b: ValueExpr) -> ValueExpr {
+    call(morpholog_core::Builtin::Min, vec![a, b])
+}
+
+fn max(a: ValueExpr, b: ValueExpr) -> ValueExpr {
+    call(morpholog_core::Builtin::Max, vec![a, b])
+}
+
 fn arith(op: ArithOp, l: ValueExpr, r: ValueExpr) -> ValueExpr {
     ValueExpr::Arith {
         op,
@@ -247,17 +263,12 @@ value_ok!(
         arith(ArithOp::Mod, var_value("b"), var_value("c"))
     )
 );
-value_ok!(
-    parses_min,
-    "min(a, b)",
-    arith(ArithOp::Min, var_value("a"), var_value("b"))
-);
+value_ok!(parses_min, "min(a, b)", min(var_value("a"), var_value("b")));
 // `max(0, a - b)` - the second arg is a full value expression.
 value_ok!(
     parses_max_with_arithmetic_arg,
     "max(0, a - b)",
-    arith(
-        ArithOp::Max,
+    max(
         dec_value("0"),
         arith(ArithOp::Sub, var_value("a"), var_value("b"))
     )
@@ -266,27 +277,23 @@ value_ok!(
 value_ok!(
     parses_nested_min_max,
     "min(cap, max(floor, x))",
-    arith(
-        ArithOp::Min,
-        var_value("cap"),
-        arith(ArithOp::Max, var_value("floor"), var_value("x"))
-    )
+    min(var_value("cap"), max(var_value("floor"), var_value("x")))
 );
-value_ok!(
-    parses_abs,
-    "abs(x)",
-    ValueExpr::Abs(Box::new(var_value("x")))
-);
+value_ok!(parses_abs, "abs(x)", abs(var_value("x")));
 
 #[test]
 fn parses_abs_of_a_sum() {
     // `abs(sum(q | P(q)))` - the two-sided-bound shape: the operand is a
     // full value expression, evaluated once.
     let got = parse_value_expr("abs(sum(q | Position(q)))").unwrap();
-    let ValueExpr::Abs(operand) = got else {
+    let ValueExpr::Call {
+        builtin: morpholog_core::Builtin::Abs,
+        args,
+    } = got
+    else {
         panic!("expected abs, got {got:?}");
     };
-    assert!(matches!(*operand, ValueExpr::Sum { .. }));
+    assert!(matches!(args.as_slice(), [ValueExpr::Sum { .. }]));
 }
 
 // ---- Comparators ----
