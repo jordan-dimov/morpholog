@@ -528,16 +528,13 @@ fn refuse_open_initialiser(
                 walk(left, c, const_names, errors);
                 walk(right, c, const_names, errors);
             }
-            ValueExpr::Abs(operand) => walk(operand, c, const_names, errors),
-            // Pure arithmetic over literals: const-lawful, recurse.
-            ValueExpr::PeriodIndex { anchor, span, at } => {
-                walk(anchor, c, const_names, errors);
-                walk(span, c, const_names, errors);
-                walk(at, c, const_names, errors);
-            }
-            ValueExpr::Round { value, quantum } => {
-                walk(value, c, const_names, errors);
-                walk(quantum, c, const_names, errors);
+            // A builtin is a pure function of its arguments, so a
+            // call over literals and earlier consts is itself const:
+            // recurse and let the arguments answer.
+            ValueExpr::Call { args, .. } => {
+                for a in args {
+                    walk(a, c, const_names, errors);
+                }
             }
             // `if` evaluates a proposition, which is deliberately
             // outside the constant-expression subset - a const is
@@ -670,17 +667,10 @@ fn refuse_pattern_positions_in_value(
                 refuse_pattern_positions_in_value(d, const_names, decl_span, errors);
             }
         }
-        ValueExpr::Abs(operand) => {
-            refuse_pattern_positions_in_value(operand, const_names, decl_span, errors);
-        }
-        ValueExpr::Round { value, quantum } => {
-            refuse_pattern_positions_in_value(value, const_names, decl_span, errors);
-            refuse_pattern_positions_in_value(quantum, const_names, decl_span, errors);
-        }
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            refuse_pattern_positions_in_value(anchor, const_names, decl_span, errors);
-            refuse_pattern_positions_in_value(span, const_names, decl_span, errors);
-            refuse_pattern_positions_in_value(at, const_names, decl_span, errors);
+        ValueExpr::Call { args, .. } => {
+            for a in args {
+                refuse_pattern_positions_in_value(a, const_names, decl_span, errors);
+            }
         }
         ValueExpr::Cond {
             when,

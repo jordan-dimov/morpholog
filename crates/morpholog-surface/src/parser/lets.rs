@@ -291,10 +291,8 @@ fn substitutable_term(value: &ValueExpr) -> Option<Term> {
         | ValueExpr::Sum { .. }
         | ValueExpr::Extremum { .. }
         | ValueExpr::ValueOf { .. }
-        | ValueExpr::Abs(_)
-        | ValueExpr::Round { .. }
-        | ValueExpr::Cond { .. }
-        | ValueExpr::PeriodIndex { .. } => None,
+        | ValueExpr::Call { .. }
+        | ValueExpr::Cond { .. } => None,
     }
 }
 
@@ -425,11 +423,6 @@ pub(super) fn substitute_in_value(
             substitute_in_value(then, name, value, binding, errors);
             substitute_in_value(otherwise, name, value, binding, errors);
         }
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            substitute_in_value(anchor, name, value, binding, errors);
-            substitute_in_value(span, name, value, binding, errors);
-            substitute_in_value(at, name, value, binding, errors);
-        }
         ValueExpr::ValueOf {
             predicate,
             args,
@@ -443,10 +436,12 @@ pub(super) fn substitute_in_value(
                 substitute_in_value(d, name, value, binding, errors);
             }
         }
-        ValueExpr::Abs(operand) => substitute_in_value(operand, name, value, binding, errors),
-        ValueExpr::Round { value: v, quantum } => {
-            substitute_in_value(v, name, value, binding, errors);
-            substitute_in_value(quantum, name, value, binding, errors);
+        // Builtin arguments are ordinary value positions: a computed
+        // let inlines whole, no term-slot restriction.
+        ValueExpr::Call { args, .. } => {
+            for a in args {
+                substitute_in_value(a, name, value, binding, errors);
+            }
         }
     }
 }
@@ -513,10 +508,10 @@ pub(super) fn collect_binders_in_value(expr: &ValueExpr, out: &mut BTreeSet<Stri
             collect_binders_in_value(then, out);
             collect_binders_in_value(otherwise, out);
         }
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            collect_binders_in_value(anchor, out);
-            collect_binders_in_value(span, out);
-            collect_binders_in_value(at, out);
+        ValueExpr::Call { args, .. } => {
+            for a in args {
+                collect_binders_in_value(a, out);
+            }
         }
         ValueExpr::Arith { left, right, .. } => {
             collect_binders_in_value(left, out);
@@ -526,11 +521,6 @@ pub(super) fn collect_binders_in_value(expr: &ValueExpr, out: &mut BTreeSet<Stri
             if let Some(d) = default {
                 collect_binders_in_value(d, out);
             }
-        }
-        ValueExpr::Abs(operand) => collect_binders_in_value(operand, out),
-        ValueExpr::Round { value, quantum } => {
-            collect_binders_in_value(value, out);
-            collect_binders_in_value(quantum, out);
         }
         ValueExpr::Term(_) => {}
     }
@@ -618,15 +608,10 @@ pub(super) fn vars_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
             vars_in_value(then, out);
             vars_in_value(otherwise, out);
         }
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            vars_in_value(anchor, out);
-            vars_in_value(span, out);
-            vars_in_value(at, out);
-        }
-        ValueExpr::Abs(operand) => vars_in_value(operand, out),
-        ValueExpr::Round { value, quantum } => {
-            vars_in_value(value, out);
-            vars_in_value(quantum, out);
+        ValueExpr::Call { args, .. } => {
+            for a in args {
+                vars_in_value(a, out);
+            }
         }
     }
 }
@@ -670,18 +655,12 @@ fn count_value(expr: &ValueExpr, name: &Var) -> usize {
             args.iter().map(|a| count_term(a, name)).sum::<usize>()
                 + default.as_ref().map_or(0, |d| count_value(d, name))
         }
-        ValueExpr::Abs(operand) => count_value(operand, name),
-        ValueExpr::Round { value, quantum } => {
-            count_value(value, name) + count_value(quantum, name)
-        }
+        ValueExpr::Call { args, .. } => args.iter().map(|a| count_value(a, name)).sum(),
         ValueExpr::Cond {
             when,
             then,
             otherwise,
         } => count_prop(when, name) + count_value(then, name) + count_value(otherwise, name),
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            count_value(anchor, name) + count_value(span, name) + count_value(at, name)
-        }
     }
 }
 
@@ -724,10 +703,7 @@ fn count_growth_value(expr: &ValueExpr, name: &Var) -> usize {
         ValueExpr::ValueOf { default, .. } => {
             default.as_ref().map_or(0, |d| count_growth_value(d, name))
         }
-        ValueExpr::Abs(operand) => count_growth_value(operand, name),
-        ValueExpr::Round { value, quantum } => {
-            count_growth_value(value, name) + count_growth_value(quantum, name)
-        }
+        ValueExpr::Call { args, .. } => args.iter().map(|a| count_growth_value(a, name)).sum(),
         ValueExpr::Cond {
             when,
             then,
@@ -736,11 +712,6 @@ fn count_growth_value(expr: &ValueExpr, name: &Var) -> usize {
             count_growth_prop(when, name)
                 + count_growth_value(then, name)
                 + count_growth_value(otherwise, name)
-        }
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            count_growth_value(anchor, name)
-                + count_growth_value(span, name)
-                + count_growth_value(at, name)
         }
     }
 }
@@ -768,15 +739,11 @@ pub(super) fn value_nodes(expr: &ValueExpr) -> usize {
         ValueExpr::ValueOf { args, default, .. } => {
             args.len() + default.as_ref().map_or(0, |d| value_nodes(d))
         }
-        ValueExpr::Abs(operand) => value_nodes(operand),
-        ValueExpr::Round { value, quantum } => value_nodes(value) + value_nodes(quantum),
+        ValueExpr::Call { args, .. } => args.iter().map(value_nodes).sum(),
         ValueExpr::Cond {
             when,
             then,
             otherwise,
         } => prop_nodes(when) + value_nodes(then) + value_nodes(otherwise),
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            value_nodes(anchor) + value_nodes(span) + value_nodes(at)
-        }
     }
 }

@@ -613,17 +613,10 @@ fn positive_value_claims(
         // children are ordinary value expressions (a lookup or a
         // conditional can sit in any slot), so the ordinary walk
         // recurses into each.
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            positive_value_claims(anchor, positive, definitions, seen, out);
-            positive_value_claims(span, positive, definitions, seen, out);
-            positive_value_claims(at, positive, definitions, seen, out);
-        }
-        // abs reads its operand, so it requires whatever the operand does.
-        ValueExpr::Abs(operand) => positive_value_claims(operand, positive, definitions, seen, out),
-        // round reads both operands, so it requires whatever they do.
-        ValueExpr::Round { value, quantum } => {
-            positive_value_claims(value, positive, definitions, seen, out);
-            positive_value_claims(quantum, positive, definitions, seen, out);
+        ValueExpr::Call { args, .. } => {
+            for a in args {
+                positive_value_claims(a, positive, definitions, seen, out);
+            }
         }
         // A sum tolerates zero matches; its body does not REQUIRE the
         // claims, so it contributes nothing.

@@ -1593,3 +1593,44 @@ fn a_sum_reached_through_many_definitions_keeps_its_unit() {
         "the empty sum should be the typed zero 0 t: {outcome:?}"
     );
 }
+
+/// Every builtin renders back to the source that produced it, and
+/// nesting a call inside arithmetic keeps the parenthesisation the
+/// author wrote. The example hashes prove the shipped programmes are
+/// unaffected; these prove the RENDERING rule itself, including forms
+/// no example happens to contain.
+#[test]
+fn every_builtin_round_trips_through_the_formatter() {
+    let cases = [
+        "abs(x)",
+        "abs(abs(x))",
+        "round(x, 0.01)",
+        "min(a, b)",
+        "max(a, b)",
+        "min(cap, max(floor, x))",
+        "period_index(@2000-04-01, span(P1Y), d)",
+        // A call inside arithmetic, and arithmetic inside a call: the
+        // call is self-delimiting, the operators are not.
+        "abs(a - b) + 1",
+        "round(a * b, 0.01)",
+        "min(a + b, c)",
+    ];
+    for case in cases {
+        let source = format!(
+            "program r\n\
+             predicate P(x: Decimal)\n\n\
+             transformation t(a, b, c, x, d, cap, floor):\n    \
+                 require {case} <= 100\n"
+        );
+        let program =
+            parse_program(&source).unwrap_or_else(|e| panic!("`{case}` should parse; got {e:?}"));
+        let rendered = morpholog_core::format::format_program(&program);
+        assert!(
+            rendered.contains(case),
+            "`{case}` should render back verbatim, got:\n{rendered}"
+        );
+        let reparsed = parse_program(&rendered)
+            .unwrap_or_else(|e| panic!("`{case}` should reparse; got {e:?}\n{rendered}"));
+        assert_eq!(reparsed, program, "`{case}` must round-trip losslessly");
+    }
+}

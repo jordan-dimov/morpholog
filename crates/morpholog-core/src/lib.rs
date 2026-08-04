@@ -70,12 +70,23 @@ pub use explain::{
     Rejection, TransitionRef, Verdict, explain,
 };
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
+/// The builtin evaluator, exposed for tests that must reach the
+/// arity backstop directly: a validated programme cannot carry a
+/// wrong-arity call, so nothing else can exercise it.
+#[doc(hidden)]
+pub fn eval_builtin_for_test(
+    builtin: ir::Builtin,
+    args: &[EvalValue],
+) -> Result<EvalValue, EvalError> {
+    eval::eval_builtin(builtin, args)
+}
+
 pub use ir::{
-    ArgDecl, ArithOp, Claim, CompareOp, Definition, DefinitionName, DefinitionOrigin, DerivedClaim,
-    DerivedValue, Discipline, ExtremumOp, Intent, IntentDecl, IntentName, Invariant, InvariantName,
-    InvariantOrigin, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop,
-    RuleName, Stmt, Subject, SumSeed, Term, Transformation, TransformationName, Unit, Value,
-    ValueExpr, Var,
+    ArgDecl, ArithOp, Builtin, Claim, CompareOp, Definition, DefinitionName, DefinitionOrigin,
+    DerivedClaim, DerivedValue, Discipline, ExtremumOp, Intent, IntentDecl, IntentName, Invariant,
+    InvariantName, InvariantOrigin, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName,
+    Program, Prop, RuleName, Stmt, Subject, SumSeed, Term, Transformation, TransformationName,
+    Unit, Value, ValueExpr, Var,
 };
 pub use lint::{Lint, lints};
 pub use propose::{

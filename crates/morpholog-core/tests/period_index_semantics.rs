@@ -374,3 +374,37 @@ fn the_extractor_round_trips_through_the_formatter() {
         "{rendered}"
     );
 }
+
+/// Arity belongs to the builtin and is total. The surface fixes the
+/// count per call form, so only hand-built IR can get it wrong -
+/// validation refuses it by name, and the evaluator keeps its own
+/// backstop for IR that never went through validation.
+#[test]
+fn a_builtin_called_with_the_wrong_arity_is_refused_at_both_tiers() {
+    use morpholog_core::ir_builder::{call, invariant, program};
+    use morpholog_core::{Builtin, EvalValue};
+
+    let p = program("bad_arity")
+        .invariants(vec![invariant(
+            "k",
+            eq(call(Builtin::Round, vec![term(dec("1"))]), term(dec("0"))),
+        )])
+        .build();
+    let errs = p.validate().expect_err("one argument is not two");
+    assert!(
+        errs.iter()
+            .any(|e| format!("{e}").contains("round takes 2 argument(s), got 1")),
+        "got: {errs:?}"
+    );
+
+    // The evaluator's own guard, for IR that skipped validation.
+    let err = morpholog_core::eval_builtin_for_test(
+        Builtin::PeriodIndex,
+        &[EvalValue::Decimal(1.into())],
+    )
+    .expect_err("three arguments are required");
+    assert!(
+        format!("{err}").contains("period_index takes 3 argument(s), got 1"),
+        "got: {err}"
+    );
+}

@@ -15,7 +15,8 @@
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
 use morpholog_core::{
-    ArithOp, CompareOp, ExtremumOp, OrderedDomain, Prop, SumSeed, Term, Unit, Value, ValueExpr,
+    ArithOp, Builtin, CompareOp, ExtremumOp, OrderedDomain, Prop, SumSeed, Term, Unit, Value,
+    ValueExpr,
 };
 
 /// Build a `Prop::Compare` from a factored operator and domain. The
@@ -777,13 +778,14 @@ where
                     body: Box::new(body),
                 }
             }
-            MinMaxShape::Binary((lhs, rhs)) => ValueExpr::Arith {
-                op: match op {
-                    ExtremumOp::Min => ArithOp::Min,
-                    ExtremumOp::Max => ArithOp::Max,
+            // Two values is a call, not an aggregate: the same token
+            // spells both, and which one it is depends on what follows.
+            MinMaxShape::Binary((lhs, rhs)) => ValueExpr::Call {
+                builtin: match op {
+                    ExtremumOp::Min => Builtin::Min,
+                    ExtremumOp::Max => Builtin::Max,
                 },
-                left: Box::new(lhs),
-                right: Box::new(rhs),
+                args: vec![lhs, rhs],
             },
         });
 
@@ -795,7 +797,10 @@ where
                     .clone()
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
-            .map(|operand| ValueExpr::Abs(Box::new(operand)));
+            .map(|operand| ValueExpr::Call {
+                builtin: Builtin::Abs,
+                args: vec![operand],
+            });
 
         // round function: `round ( <value> , <value> )`. Nearest
         // multiple of the quantum, exact halves away from zero; the
@@ -808,9 +813,9 @@ where
                     .then(value.clone())
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
-            .map(|(v, quantum)| ValueExpr::Round {
-                value: Box::new(v),
-                quantum: Box::new(quantum),
+            .map(|(v, quantum)| ValueExpr::Call {
+                builtin: Builtin::Round,
+                args: vec![v, quantum],
             });
 
         // The conditional: `if ( <prop> , <value> , <value> )`. The
@@ -848,10 +853,9 @@ where
                     .then(value.clone())
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
-            .map(|((anchor, span), at)| ValueExpr::PeriodIndex {
-                anchor: Box::new(anchor),
-                span: Box::new(span),
-                at: Box::new(at),
+            .map(|((anchor, span), at)| ValueExpr::Call {
+                builtin: Builtin::PeriodIndex,
+                args: vec![anchor, span, at],
             });
 
         let primary = choice((

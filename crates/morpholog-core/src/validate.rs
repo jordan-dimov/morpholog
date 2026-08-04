@@ -377,6 +377,17 @@ pub enum ValidationError {
     /// periods at once. Refused at authoring time when literal; a
     /// span arriving through a defined-call parameter is the runtime
     /// backstop `EvalError::PeriodSpanNotPositive`.
+    /// A builtin called with the wrong number of arguments. Arity is
+    /// the builtin's own and total; hand-built IR is the only way to
+    /// get here, since the surface parser fixes the count per call
+    /// form.
+    #[error("{builtin} takes {expected} argument(s), got {found} in {context}")]
+    BuiltinArity {
+        builtin: &'static str,
+        expected: usize,
+        found: usize,
+        context: ValidationContext,
+    },
     #[error("period_index needs a positive span; got {span} in {context}")]
     PeriodSpanNotPositive {
         span: String,
@@ -745,9 +756,13 @@ fn value_depth_capped(
             Some(d) => value_depth_capped(d, inner, depths)?,
             None => 0,
         },
-        ValueExpr::Abs(operand) => value_depth_capped(operand, inner, depths)?,
-        ValueExpr::Round { value, quantum } => value_depth_capped(value, inner, depths)?
-            .max(value_depth_capped(quantum, inner, depths)?),
+        ValueExpr::Call { args, .. } => {
+            let mut deepest = 0;
+            for a in args {
+                deepest = deepest.max(value_depth_capped(a, inner, depths)?);
+            }
+            deepest
+        }
         ValueExpr::Cond {
             when,
             then,
@@ -755,9 +770,6 @@ fn value_depth_capped(
         } => prop_depth_capped(when, inner, depths)?
             .max(value_depth_capped(then, inner, depths)?)
             .max(value_depth_capped(otherwise, inner, depths)?),
-        ValueExpr::PeriodIndex { anchor, span, at } => value_depth_capped(anchor, inner, depths)?
-            .max(value_depth_capped(span, inner, depths)?)
-            .max(value_depth_capped(at, inner, depths)?),
     };
     let total = below + 1;
     (total <= budget).then_some(total)
@@ -884,11 +896,7 @@ fn value_exceeds_depth(
         ValueExpr::ValueOf { default, .. } => default
             .as_deref()
             .is_some_and(|d| value_exceeds_depth(d, budget, depths)),
-        ValueExpr::Abs(operand) => value_exceeds_depth(operand, budget, depths),
-        ValueExpr::Round { value, quantum } => {
-            value_exceeds_depth(value, budget, depths)
-                || value_exceeds_depth(quantum, budget, depths)
-        }
+        ValueExpr::Call { args, .. } => args.iter().any(|a| value_exceeds_depth(a, budget, depths)),
         ValueExpr::Cond {
             when,
             then,
@@ -897,11 +905,6 @@ fn value_exceeds_depth(
             prop_exceeds_depth(when, budget, depths)
                 || value_exceeds_depth(then, budget, depths)
                 || value_exceeds_depth(otherwise, budget, depths)
-        }
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            value_exceeds_depth(anchor, budget, depths)
-                || value_exceeds_depth(span, budget, depths)
-                || value_exceeds_depth(at, budget, depths)
         }
     }
 }

@@ -21,8 +21,8 @@ use std::str::FromStr;
 
 use crate::definitions::DefinitionTable;
 use crate::ir::{
-    ArithOp, CompareOp, Definition, DefinitionName, OrderedDomain, PredicateName, Prop, Subject,
-    Term, Value, ValueExpr, Var,
+    ArithOp, Builtin, CompareOp, Definition, DefinitionName, OrderedDomain, PredicateName, Prop,
+    Subject, Term, Value, ValueExpr, Var,
 };
 use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 
@@ -1017,37 +1017,18 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
         // evaluates, so an error in the untaken branch cannot
         // surface; an error in the condition itself propagates -
         // an undecidable condition never silently selects.
-        ValueExpr::PeriodIndex { anchor, span, at } => {
-            let anchor = match eval_value(anchor, ctx)? {
-                EvalValue::Date(d) => d,
-                other => {
-                    return Err(EvalError::TypeMismatch(format!(
-                        "period_index anchor must be a date, got {}",
-                        runtime_kind_label(&other)
-                    )));
-                }
-            };
-            let span = match eval_value(span, ctx)? {
-                EvalValue::CalendarSpan(s) => s,
-                other => {
-                    return Err(EvalError::TypeMismatch(format!(
-                        "period_index span must be a calendar span, got {}",
-                        runtime_kind_label(&other)
-                    )));
-                }
-            };
-            let at = match eval_value(at, ctx)? {
-                EvalValue::Date(d) => d,
-                other => {
-                    return Err(EvalError::TypeMismatch(format!(
-                        "period_index position must be a date, got {}",
-                        runtime_kind_label(&other)
-                    )));
-                }
-            };
-            Ok(EvalValue::Decimal(Decimal::from(period_index_of(
-                anchor, span, at,
-            )?)))
+        // Every builtin is strict: arguments evaluate left to right,
+        // exactly once, and the FIRST one to fail is the error the
+        // caller sees - so a diagnostic still points at the operand a
+        // reader would blame. Nothing about the call reaches state,
+        // bindings, or the actor; `eval_builtin` sees finished values
+        // only, which is what makes the contract checkable.
+        ValueExpr::Call { builtin, args } => {
+            let mut values = Vec::with_capacity(args.len());
+            for a in args {
+                values.push(eval_value(a, ctx)?);
+            }
+            eval_builtin(*builtin, &values)
         }
         ValueExpr::Cond {
             when,
@@ -1132,12 +1113,10 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                     ))),
                 },
                 (EvalValue::Duration(a), EvalValue::Duration(b)) => match op {
-                    ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max => {
+                    ArithOp::Add | ArithOp::Sub => {
                         let result = match op {
                             ArithOp::Add => a.checked_add(b),
                             ArithOp::Sub => a.checked_sub(b),
-                            ArithOp::Min => Some(a.min(b)),
-                            ArithOp::Max => Some(a.max(b)),
                             _ => unreachable!("outer match restricts the op"),
                         };
                         result.map(EvalValue::Duration).ok_or_else(|| {
@@ -1186,12 +1165,10 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         )));
                     }
                     match op {
-                        ArithOp::Add | ArithOp::Sub | ArithOp::Min | ArithOp::Max => {
-                            Ok(EvalValue::Quantity {
-                                amount: checked_decimal_op(*op, a, b)?,
-                                unit: u,
-                            })
-                        }
+                        ArithOp::Add | ArithOp::Sub => Ok(EvalValue::Quantity {
+                            amount: checked_decimal_op(*op, a, b)?,
+                            unit: u,
+                        }),
                         ArithOp::Div => Ok(EvalValue::Decimal(checked_decimal_op(*op, a, b)?)),
                         ArithOp::Mul | ArithOp::Mod => Err(EvalError::TypeMismatch(format!(
                             "{op:?} is not defined for Decimal[{u}] and Decimal[{u}]: \
@@ -1410,35 +1387,75 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 },
             }
         }
-        ValueExpr::Abs(inner) => match eval_value(inner, ctx)? {
+    }
+}
+
+/// Apply a builtin to its evaluated arguments.
+///
+/// Exhaustive over [`Builtin`] with no wildcard: a new builtin cannot
+/// reach here without an author deciding what it computes. The arity
+/// check ahead of the match is a backstop for hand-built IR that never
+/// went through validation - a validated programme cannot arrive with
+/// the wrong count.
+pub(crate) fn eval_builtin(builtin: Builtin, args: &[EvalValue]) -> Result<EvalValue, EvalError> {
+    if args.len() != builtin.arity() {
+        return Err(EvalError::TypeMismatch(format!(
+            "{} takes {} argument(s), got {}",
+            builtin.name(),
+            builtin.arity(),
+            args.len()
+        )));
+    }
+    match builtin {
+        Builtin::Abs => match &args[0] {
             EvalValue::Decimal(d) => Ok(EvalValue::Decimal(d.abs())),
             EvalValue::Quantity { amount, unit } => Ok(EvalValue::Quantity {
                 amount: amount.abs(),
-                unit,
+                unit: unit.clone(),
             }),
             EvalValue::Duration(d) => Ok(EvalValue::Duration(d.abs())),
             other => Err(EvalError::TypeMismatch(format!(
                 "abs is defined on decimals, quantities, and durations, not {}",
-                runtime_kind_label(&other)
+                runtime_kind_label(other)
             ))),
         },
-        ValueExpr::Round { value, quantum } => {
-            let v = eval_value(value, ctx)?;
-            let q = eval_value(quantum, ctx)?;
-            match (v, q) {
-                (EvalValue::Decimal(v), EvalValue::Decimal(q)) => {
-                    if q <= Decimal::ZERO {
-                        return Err(EvalError::RoundQuantumNotPositive(q.to_string()));
-                    }
-                    round_decimal(v, q).map(EvalValue::Decimal)
+        Builtin::Round => match (&args[0], &args[1]) {
+            (EvalValue::Decimal(v), EvalValue::Decimal(q)) => {
+                if *q <= Decimal::ZERO {
+                    return Err(EvalError::RoundQuantumNotPositive(q.to_string()));
                 }
-                (v, q) => Err(EvalError::TypeMismatch(format!(
-                    "round is defined on decimals (value and quantum), not {} and {}",
-                    runtime_kind_label(&v),
-                    runtime_kind_label(&q)
-                ))),
+                round_decimal(*v, *q).map(EvalValue::Decimal)
             }
+            (v, q) => Err(EvalError::TypeMismatch(format!(
+                "round is defined on decimals (value and quantum), not {} and {}",
+                runtime_kind_label(v),
+                runtime_kind_label(q)
+            ))),
+        },
+        Builtin::PeriodIndex => {
+            let EvalValue::Date(anchor) = &args[0] else {
+                return Err(EvalError::TypeMismatch(format!(
+                    "period_index anchor must be a date, got {}",
+                    runtime_kind_label(&args[0])
+                )));
+            };
+            let EvalValue::CalendarSpan(span) = &args[1] else {
+                return Err(EvalError::TypeMismatch(format!(
+                    "period_index span must be a calendar span, got {}",
+                    runtime_kind_label(&args[1])
+                )));
+            };
+            let EvalValue::Date(at) = &args[2] else {
+                return Err(EvalError::TypeMismatch(format!(
+                    "period_index position must be a date, got {}",
+                    runtime_kind_label(&args[2])
+                )));
+            };
+            Ok(EvalValue::Decimal(Decimal::from(period_index_of(
+                *anchor, *span, *at,
+            )?)))
         }
+        Builtin::Min | Builtin::Max => extremum_of(builtin, &args[0], &args[1]),
     }
 }
 
@@ -1505,6 +1522,48 @@ fn nanos_to_duration(total: i128) -> Option<jiff::SignedDuration> {
     Some(jiff::SignedDuration::new(s, (nanos - NANOS) as i32))
 }
 
+/// `min(a, b)` / `max(a, b)` over two finished values.
+///
+/// The same-kind rule the arithmetic matrix uses, for the same reason:
+/// comparing a length against a weight is a category error, and two
+/// amounts compare only under the same unit label. The aggregate forms
+/// over a proposition are [`ValueExpr::Extremum`] - a construct,
+/// because they bind a variable and range over state.
+fn extremum_of(builtin: Builtin, a: &EvalValue, b: &EvalValue) -> Result<EvalValue, EvalError> {
+    let take_min = builtin == Builtin::Min;
+    match (a, b) {
+        (EvalValue::Decimal(x), EvalValue::Decimal(y)) => Ok(EvalValue::Decimal(if take_min {
+            *x.min(y)
+        } else {
+            *x.max(y)
+        })),
+        (EvalValue::Duration(x), EvalValue::Duration(y)) => Ok(EvalValue::Duration(if take_min {
+            *x.min(y)
+        } else {
+            *x.max(y)
+        })),
+        (
+            EvalValue::Quantity {
+                amount: x,
+                unit: ux,
+            },
+            EvalValue::Quantity {
+                amount: y,
+                unit: uy,
+            },
+        ) if ux == uy => Ok(EvalValue::Quantity {
+            amount: if take_min { *x.min(y) } else { *x.max(y) },
+            unit: ux.clone(),
+        }),
+        (x, y) => Err(EvalError::TypeMismatch(format!(
+            "{} is defined on two values of the same kind, not {} and {}",
+            builtin.name(),
+            runtime_kind_label(x),
+            runtime_kind_label(y)
+        ))),
+    }
+}
+
 /// The one place raw decimal arithmetic happens: checked throughout,
 /// so an out-of-range result is a named refusal, never a panic - the
 /// plain rust_decimal operators panic on overflow, including division
@@ -1527,8 +1586,6 @@ fn checked_decimal_op(op: ArithOp, a: Decimal, b: Decimal) -> Result<Decimal, Ev
             }
             a.checked_rem(b)
         }
-        ArithOp::Min => Some(a.min(b)),
-        ArithOp::Max => Some(a.max(b)),
     };
     result.ok_or_else(|| {
         EvalError::ArithOutOfRange(format!("{a} {op:?} {b} exceeds the exact decimal range"))
