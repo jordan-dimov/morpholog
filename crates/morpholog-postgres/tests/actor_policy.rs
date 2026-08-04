@@ -25,7 +25,10 @@
 
 mod common;
 
-use common::{compiled, expect_committed, propose_pg_as, reset_db, test_pool};
+use common::{
+    compiled, drop_roles_if_present, expect_committed, propose_pg_as, recreate_roles, reset_db,
+    session_is_superuser, test_pool,
+};
 use morpholog_core::{CompiledProgram, EvalValue, Subject, Transformation, Transition};
 use morpholog_postgres::{
     PgError, PgPool, PgProposalOutcome, Proposal, propose_against_pg, propose_against_pg_with_trace,
@@ -52,67 +55,24 @@ fn subj(s: &str) -> EvalValue {
     EvalValue::Subject(Subject::from(s))
 }
 
-async fn is_superuser(pool: &PgPool) -> bool {
-    let (rolsuper,): (bool,) =
-        sqlx::query_as("SELECT rolsuper FROM pg_roles WHERE rolname = session_user")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-    rolsuper
-}
-
-/// Roles are cluster-global and survive `reset_db`, so each run drops
-/// and recreates its own.
-async fn recreate_roles(pool: &PgPool, roles: &[&str]) {
-    for role in roles {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "DO $$ BEGIN
-                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
-                    EXECUTE 'DROP OWNED BY {role}';
-                    EXECUTE 'DROP ROLE {role}';
-                END IF;
-             END $$"
-        )))
-        .execute(pool)
-        .await
-        .unwrap();
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE ROLE {role} LOGIN")))
-            .execute(pool)
-            .await
-            .unwrap();
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "GRANT ALL ON ALL TABLES IN SCHEMA morpholog TO {role}"
-        )))
-        .execute(pool)
-        .await
-        .unwrap();
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "GRANT USAGE ON SCHEMA morpholog TO {role}"
-        )))
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-}
-
-/// Roles are cluster-global, so every test drops its own on the way
-/// out. A leaked role that can write `morpholog.audit` is not inert:
-/// it joins the writer-role census and fails an assertion in another
-/// suite entirely.
-async fn drop_roles(pool: &PgPool, roles: &[&str]) {
-    for role in roles {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "DO $$ BEGIN
-                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
-                    EXECUTE 'DROP OWNED BY {role}';
-                    EXECUTE 'DROP ROLE {role}';
-                END IF;
-             END $$"
-        )))
-        .execute(pool)
-        .await
-        .unwrap();
-    }
+/// The logins standing in for gateway processes: each must be able to
+/// hold a session of its own and reach the governed tables, since it
+/// plays a real embedder connection.
+async fn recreate_gateway_roles(pool: &PgPool, roles: &[&str]) {
+    let statements: Vec<String> = roles
+        .iter()
+        .flat_map(|r| {
+            [
+                format!("CREATE ROLE {r} LOGIN"),
+                format!("GRANT USAGE ON SCHEMA morpholog TO {r}"),
+                format!("GRANT ALL ON ALL TABLES IN SCHEMA morpholog TO {r}"),
+            ]
+        })
+        .collect();
+    // Named apart from the owned Vec above: the slice borrows it, and
+    // one name for both invites a refactor that drops the storage.
+    let borrowed: Vec<&str> = statements.iter().map(String::as_str).collect();
+    recreate_roles(pool, roles, &borrowed).await;
 }
 
 /// A pool that presents itself as `role`: one simulated gateway.
@@ -218,12 +178,12 @@ fn oversight_of(person: &str) -> (Transformation, Vec<EvalValue>) {
 async fn an_unarmed_actor_is_asserted_by_anyone_exactly_as_before() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    if !is_superuser(&pool).await {
+    if !session_is_superuser(&pool).await {
         eprintln!("skipping: needs a superuser test role");
         return;
     }
     let dep = deployer_login("a");
-    recreate_roles(&pool, &[&dep, "mtest_gw_a"]).await;
+    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_a"]).await;
     let deployer = gateway_pool(dep.clone()).await;
     deploy(&deployer, &dep).await;
 
@@ -236,19 +196,19 @@ async fn an_unarmed_actor_is_asserted_by_anyone_exactly_as_before() {
         .expect("an unarmed actor stays assertable by any role");
     assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    drop_roles(&pool, &[&dep, "mtest_gw_a"]).await;
+    drop_roles_if_present(&pool, &[&dep, "mtest_gw_a"]).await;
 }
 
 #[tokio::test]
 async fn an_armed_actor_is_refused_to_an_unauthorised_role_and_records_nothing() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    if !is_superuser(&pool).await {
+    if !session_is_superuser(&pool).await {
         eprintln!("skipping: needs a superuser test role");
         return;
     }
     let dep = deployer_login("chen");
-    recreate_roles(&pool, &[&dep, "mtest_gw_chen", "mtest_gw_rogue"]).await;
+    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_chen", "mtest_gw_rogue"]).await;
     let deployer = gateway_pool(dep.clone()).await;
     deploy(&deployer, &dep).await;
     arm(&deployer, CHEN).await;
@@ -279,19 +239,19 @@ async fn an_armed_actor_is_refused_to_an_unauthorised_role_and_records_nothing()
     );
     assert_eq!(outbox_count(&pool).await, outbox_before, "outbox grew");
 
-    drop_roles(&pool, &[&dep, "mtest_gw_chen", "mtest_gw_rogue"]).await;
+    drop_roles_if_present(&pool, &[&dep, "mtest_gw_chen", "mtest_gw_rogue"]).await;
 }
 
 #[tokio::test]
 async fn the_authorised_role_proceeds() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    if !is_superuser(&pool).await {
+    if !session_is_superuser(&pool).await {
         eprintln!("skipping: needs a superuser test role");
         return;
     }
     let dep = deployer_login("chen2");
-    recreate_roles(&pool, &[&dep, "mtest_gw_chen2"]).await;
+    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_chen2"]).await;
     let deployer = gateway_pool(dep.clone()).await;
     deploy(&deployer, &dep).await;
     arm(&deployer, CHEN).await;
@@ -304,7 +264,7 @@ async fn the_authorised_role_proceeds() {
         .expect("the granted role speaks for its actor");
     assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    drop_roles(&pool, &[&dep, "mtest_gw_chen2"]).await;
+    drop_roles_if_present(&pool, &[&dep, "mtest_gw_chen2"]).await;
 }
 
 #[tokio::test]
@@ -314,12 +274,12 @@ async fn asking_for_a_trace_does_not_get_round_the_policy() {
     // gate you walk around by adding --trace.
     let pool = test_pool().await;
     reset_db(&pool).await;
-    if !is_superuser(&pool).await {
+    if !session_is_superuser(&pool).await {
         eprintln!("skipping: needs a superuser test role");
         return;
     }
     let dep = deployer_login("trace");
-    recreate_roles(&pool, &[&dep, "mtest_gw_trace"]).await;
+    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_trace"]).await;
     let deployer = gateway_pool(dep.clone()).await;
     deploy(&deployer, &dep).await;
     arm(&deployer, CHEN).await;
@@ -334,7 +294,7 @@ async fn asking_for_a_trace_does_not_get_round_the_policy() {
         "{err:?}"
     );
 
-    drop_roles(&pool, &[&dep, "mtest_gw_trace"]).await;
+    drop_roles_if_present(&pool, &[&dep, "mtest_gw_trace"]).await;
 }
 
 #[tokio::test]
@@ -344,12 +304,12 @@ async fn withdrawing_the_last_grant_locks_the_actor_out_rather_than_freeing_it()
     // back to every gateway at the moment of revocation.
     let pool = test_pool().await;
     reset_db(&pool).await;
-    if !is_superuser(&pool).await {
+    if !session_is_superuser(&pool).await {
         eprintln!("skipping: needs a superuser test role");
         return;
     }
     let dep = deployer_login("last");
-    recreate_roles(&pool, &[&dep, "mtest_gw_last", "mtest_gw_other"]).await;
+    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_last", "mtest_gw_other"]).await;
     let deployer = gateway_pool(dep.clone()).await;
     deploy(&deployer, &dep).await;
     arm(&deployer, CHEN).await;
@@ -393,7 +353,7 @@ async fn withdrawing_the_last_grant_locks_the_actor_out_rather_than_freeing_it()
         "withdrawing the last grant must LOCK the actor, never free it"
     );
 
-    drop_roles(&pool, &[&dep, "mtest_gw_last", "mtest_gw_other"]).await;
+    drop_roles_if_present(&pool, &[&dep, "mtest_gw_last", "mtest_gw_other"]).await;
 }
 
 #[tokio::test]
@@ -402,12 +362,12 @@ async fn set_role_does_not_change_who_the_policy_thinks_you_are() {
     // cannot touch it.
     let pool = test_pool().await;
     reset_db(&pool).await;
-    if !is_superuser(&pool).await {
+    if !session_is_superuser(&pool).await {
         eprintln!("skipping: needs a superuser test role");
         return;
     }
     let dep = deployer_login("setrole");
-    recreate_roles(&pool, &[&dep, "mtest_gw_real", "mtest_gw_borrowed"]).await;
+    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_real", "mtest_gw_borrowed"]).await;
     let deployer = gateway_pool(dep.clone()).await;
     deploy(&deployer, &dep).await;
     arm(&deployer, CHEN).await;
@@ -451,7 +411,7 @@ async fn set_role_does_not_change_who_the_policy_thinks_you_are() {
         "the policy must judge the authenticated login, not the assumed role: {err:?}"
     );
 
-    drop_roles(&pool, &[&dep, "mtest_gw_real", "mtest_gw_borrowed"]).await;
+    drop_roles_if_present(&pool, &[&dep, "mtest_gw_real", "mtest_gw_borrowed"]).await;
 }
 
 #[tokio::test]
@@ -461,12 +421,12 @@ async fn two_verifiers_through_one_gateway_cannot_both_be_asserted() {
     // must not be able to be both of them.
     let pool = test_pool().await;
     reset_db(&pool).await;
-    if !is_superuser(&pool).await {
+    if !session_is_superuser(&pool).await {
         eprintln!("skipping: needs a superuser test role");
         return;
     }
     let dep = deployer_login("one");
-    recreate_roles(&pool, &[&dep, "mtest_gw_one", "mtest_gw_two"]).await;
+    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_one", "mtest_gw_two"]).await;
     let deployer = gateway_pool(dep.clone()).await;
     deploy(&deployer, &dep).await;
     arm(&deployer, CHEN).await;
@@ -501,7 +461,7 @@ async fn two_verifiers_through_one_gateway_cannot_both_be_asserted() {
             .expect("Okafor's own gateway speaks for Okafor"),
     );
 
-    drop_roles(&pool, &[&dep, "mtest_gw_one", "mtest_gw_two"]).await;
+    drop_roles_if_present(&pool, &[&dep, "mtest_gw_one", "mtest_gw_two"]).await;
 }
 
 async fn audit_count(pool: &PgPool) -> i64 {
@@ -529,12 +489,12 @@ async fn outbox_count(pool: &PgPool) -> i64 {
 async fn a_rogue_gateway_cannot_escalate_through_an_unrestricted_deployer() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    if !is_superuser(&pool).await {
+    if !session_is_superuser(&pool).await {
         eprintln!("skipping");
         return;
     }
     let dep = deployer_login("esc");
-    recreate_roles(&pool, &[&dep, "mtest_gw_esc"]).await;
+    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_esc"]).await;
     let deployer = gateway_pool(dep.clone()).await;
     deploy(&deployer, &dep).await;
     arm(&deployer, CHEN).await;
@@ -560,5 +520,5 @@ async fn a_rogue_gateway_cannot_escalate_through_an_unrestricted_deployer() {
             "granting authority through an unrestricted deployer must be refused, got {r:?}"
         );
     }
-    drop_roles(&pool, &[&dep, "mtest_gw_esc"]).await;
+    drop_roles_if_present(&pool, &[&dep, "mtest_gw_esc"]).await;
 }

@@ -61,10 +61,10 @@ fine - it is the part that pays off at the end of this guide.
 ## Setup
 
 Morpholog runs on PostgreSQL 18+ and ships as a single CLI. The quickest
-path is the prebuilt binary (static linux x86_64) - the full
-fresh-machine walkthrough, PostgreSQL included, is
-[`install.md`](install.md). On other Unix-like platforms and
-architectures, build from a clone instead:
+path is the prebuilt binary - static for linux x86_64 and arm64, plus
+Apple Silicon - and the full fresh-machine walkthrough, PostgreSQL
+included, is [`install.md`](install.md). On other Unix-like platforms
+and architectures, build from a clone instead:
 
 ```bash
 git clone https://github.com/jordan-dimov/morpholog.git

@@ -9,7 +9,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
-use common::{reset_db, test_pool};
+use common::{drop_roles_if_present, recreate_roles, reset_db, session_is_superuser, test_pool};
 
 use chrono::{DateTime, Utc};
 use common::{dec, subj};
@@ -181,52 +181,6 @@ async fn the_watermark_withholds_an_in_flight_writers_row_instead_of_losing_it()
 // managed deployment is that path's acceptance test.
 // ============================================================
 
-async fn session_is_superuser(pool: &PgPool) -> bool {
-    let (rolsuper,): (bool,) =
-        sqlx::query_as("SELECT rolsuper FROM pg_roles WHERE rolname = session_user")
-            .fetch_one(pool)
-            .await
-            .unwrap();
-    rolsuper
-}
-
-/// Roles are cluster-global and survive `reset_db`, so each test
-/// drops-then-creates its own uniquely named roles (privileges first:
-/// a role with a table grant refuses a bare DROP ROLE).
-async fn recreate_roles(pool: &PgPool, roles: &[&str], setup: &[&str]) {
-    for role in roles {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "DO $$ BEGIN
-                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
-                    EXECUTE 'DROP OWNED BY {role}';
-                    EXECUTE 'DROP ROLE {role}';
-                END IF;
-            END $$"
-        )))
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-    for statement in setup {
-        // Audited: `setup` is a literal slice each caller writes inline.
-        sqlx::raw_sql(sqlx::AssertSqlSafe(statement.to_string()))
-            .execute(pool)
-            .await
-            .unwrap();
-    }
-}
-
-async fn drop_roles(pool: &PgPool, roles: &[&str]) {
-    for role in roles {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "DROP OWNED BY {role}; DROP ROLE {role}"
-        )))
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-}
-
 #[tokio::test]
 async fn an_unknown_asserted_role_is_refused_as_a_probable_typo() {
     let pool = test_pool().await;
@@ -323,7 +277,7 @@ async fn the_census_names_every_unasserted_writer_and_a_complete_assertion_passe
         .await
         .expect("a duplicated assertion behaves identically");
 
-    drop_roles(&pool, &roles).await;
+    drop_roles_if_present(&pool, &roles).await;
 }
 
 #[tokio::test]
@@ -360,7 +314,7 @@ async fn the_asserted_horizon_ignores_sessions_outside_the_assertion() {
     );
     writer.rollback().await.unwrap();
 
-    drop_roles(&pool, &roles).await;
+    drop_roles_if_present(&pool, &roles).await;
 }
 
 // The race test, replayed through the assertion: sessions OF the
