@@ -12,7 +12,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::definitions::DefinitionIndex;
+use crate::definitions::DefinitionTable;
 use crate::eval::{EvalContext, EvalError, eval_value, find_matches};
 use crate::ir::{Definition, DerivedClaim, Invariant};
 use crate::propose::WitnessBinding;
@@ -102,7 +102,7 @@ fn in_invariant_context<T>(
         pre_state,
         &bindings,
         None,
-        DefinitionIndex::new(definitions),
+        DefinitionTable::new(definitions),
     );
     body(&ctx)
 }
@@ -140,7 +140,7 @@ pub fn enumerate_derived(
     // `Prop::Pre` surfaces as `EvalError::PreStateUnavailable` (derived
     // claims are a function of one state).
     let empty_bindings = Bindings::new();
-    let index = DefinitionIndex::new(definitions);
+    let index = DefinitionTable::new(definitions);
     let domain_ctx = EvalContext::new(state, None, &empty_bindings, None, index);
     let raw_bindings = find_matches(&derived.domain, &domain_ctx)?;
 

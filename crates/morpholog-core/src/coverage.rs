@@ -66,7 +66,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::definitions::DefinitionIndex;
+use crate::definitions::DefinitionTable;
 use crate::eval::{EvalContext, EvalError, definition_call_frame, find_matches};
 use crate::fold::mentions_pre;
 use crate::ir::{Definition, InvariantOrigin, PredicateName, Program, Prop};
@@ -263,7 +263,7 @@ impl<'p> CoverageTracker<'p> {
                 collect_implications(
                     &inv.body,
                     true,
-                    DefinitionIndex::new(&program.definitions),
+                    DefinitionTable::new(&program.definitions),
                     &mut BTreeSet::new(),
                     &mut Vec::new(),
                     &mut implications,
@@ -428,7 +428,7 @@ impl<'p> CoverageTracker<'p> {
             if !uses_pre && footprint.intersection(delta).next().is_none() {
                 continue;
             }
-            let index = DefinitionIndex::new(self.definitions);
+            let index = DefinitionTable::new(self.definitions);
             let mut fired = false;
             for antecedent in antecedents {
                 // Replay the antecedent's call chain through the

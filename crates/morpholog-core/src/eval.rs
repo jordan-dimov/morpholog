@@ -19,7 +19,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use crate::definitions::DefinitionIndex;
+use crate::definitions::DefinitionTable;
 use crate::ir::{
     ArithOp, CompareOp, Definition, DefinitionName, OrderedDomain, PredicateName, Prop, Subject,
     Term, Value, ValueExpr, Var,
@@ -151,7 +151,7 @@ pub(crate) struct EvalContext<'a> {
     /// `Term::Actor` reached with `actor: None` surfaces `UnboundActor`.
     pub(crate) actor: Option<&'a Subject>,
     /// The programme's definitions, for resolving `Prop::Defined` calls.
-    pub(crate) definitions: DefinitionIndex<'a>,
+    pub(crate) definitions: DefinitionTable<'a>,
 }
 
 impl<'a> EvalContext<'a> {
@@ -160,7 +160,7 @@ impl<'a> EvalContext<'a> {
         pre_state: Option<&'a State>,
         bindings: &'a Bindings,
         actor: Option<&'a Subject>,
-        definitions: DefinitionIndex<'a>,
+        definitions: DefinitionTable<'a>,
     ) -> Self {
         Self {
             state,
@@ -2027,7 +2027,7 @@ mod tests {
                 None,
                 &bindings,
                 None,
-                crate::definitions::DefinitionIndex::new(&[]),
+                crate::definitions::DefinitionTable::new(&[]),
             );
             assert_eq!(
                 eval_value(&aggregate(ExtremumOp::Max), &ctx).expect("max"),
@@ -2080,7 +2080,7 @@ mod tests {
                     None,
                     &bindings,
                     None,
-                    crate::definitions::DefinitionIndex::new(&[]),
+                    crate::definitions::DefinitionTable::new(&[]),
                 );
                 let expr = ValueExpr::Extremum {
                     op: ExtremumOp::Max,
@@ -2172,7 +2172,7 @@ mod tests {
                 None,
                 &bindings,
                 None,
-                crate::definitions::DefinitionIndex::new(&[]),
+                crate::definitions::DefinitionTable::new(&[]),
             );
             let expr = ValueExpr::Extremum {
                 op: ExtremumOp::Max,
@@ -2204,7 +2204,7 @@ mod tests {
             None,
             &bindings,
             None,
-            crate::definitions::DefinitionIndex::new(&[]),
+            crate::definitions::DefinitionTable::new(&[]),
         );
         let expr = ValueExpr::Extremum {
             op: ExtremumOp::Max,
@@ -2269,7 +2269,7 @@ mod tests {
             None,
             &bindings,
             None,
-            crate::definitions::DefinitionIndex::new(&[]),
+            crate::definitions::DefinitionTable::new(&[]),
         );
         eval_value(e, &ctx)
     }
@@ -2386,7 +2386,7 @@ mod tests {
             None,
             &bindings,
             actor,
-            crate::definitions::DefinitionIndex::new(&[]),
+            crate::definitions::DefinitionTable::new(&[]),
         );
         eval_value(e, &ctx)
     }
@@ -2483,7 +2483,7 @@ mod tests {
             None,
             &bindings,
             None,
-            crate::definitions::DefinitionIndex::new(&[]),
+            crate::definitions::DefinitionTable::new(&[]),
         );
         matching_claims(&"Price".into(), &args, &ctx).expect("matching_claims")
     }
@@ -2528,7 +2528,7 @@ mod tests {
             None,
             &bindings,
             None,
-            crate::definitions::DefinitionIndex::new(&[]),
+            crate::definitions::DefinitionTable::new(&[]),
         );
         assert_eq!(
             matching_claims(&"Price".into(), &[Term::Actor, wildcard()], &ctx),

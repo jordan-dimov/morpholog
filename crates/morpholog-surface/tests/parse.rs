@@ -1544,3 +1544,52 @@ invariant twice_capped:
     };
     assert_eq!(*seed, SumSeed::Decimal);
 }
+
+#[test]
+fn a_sum_reached_through_many_definitions_keeps_its_unit() {
+    // The user-visible half of the seed fix, through the real path:
+    // source -> parse -> validate -> evaluate. A chain longer than the
+    // old 16-deep cap used to leave the empty sum a bare decimal, so
+    // comparing it against `0 t` failed on kinds. The chain here is
+    // acyclic and well inside what validation permits, so it must
+    // resolve to the typed zero.
+    const LAYERS: usize = 24;
+    let mut source = String::from(
+        "program deep_chain\n\
+         predicate Delivered(load: Subject, qty: Decimal[t])\n\n",
+    );
+    for i in 0..LAYERS {
+        let body = if i + 1 == LAYERS {
+            "Delivered(_, x)".to_string()
+        } else {
+            format!("d{}(x)", i + 1)
+        };
+        source.push_str(&format!("define d{i}(x): {body}\n"));
+    }
+    source.push_str(
+        "\ntransformation check_total():\n    \
+             require sum(v | d0(v)) = 0 t\n",
+    );
+
+    let program = parse_program(&source).expect("the chain should parse");
+    let compiled = morpholog_core::CompiledProgram::new(program).expect("and validate");
+    let transformation = compiled
+        .transformation(&"check_total".into())
+        .expect("the transformation is declared");
+    let outcome = morpholog_core::propose(
+        transformation,
+        &morpholog_core::Transition {
+            transformation_name: "check_total".into(),
+            args: vec![],
+            actor: morpholog_core::Subject::from("tester"),
+        },
+        &morpholog_core::State::default(),
+        &[],
+        compiled.program().definitions.as_slice(),
+    )
+    .expect("an empty sum through the chain must evaluate, not raise on kinds");
+    assert!(
+        matches!(outcome, morpholog_core::Outcome::Accepted { .. }),
+        "the empty sum should be the typed zero 0 t: {outcome:?}"
+    );
+}
