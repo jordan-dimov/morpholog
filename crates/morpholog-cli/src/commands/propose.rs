@@ -18,20 +18,21 @@ use morpholog_postgres::{
 use crate::ProposeArgs;
 use crate::commands::args::{CliArgs, decode_args};
 use crate::commands::{
-    ParsedSource, compile_or_exit, connect, lookup_transformation, parse_or_exit, print_json,
+    AlreadyReported, ParsedSource, compile_or_report, connect, lookup_transformation,
+    parse_or_report, print_json,
 };
 use morpholog_cli::envelopes;
 
 pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     // 1. Parse the source file. Exits on parse failure with rendered
     //    diagnostics (same path `check` and `parse` use).
-    let parsed = parse_or_exit(&args.file)?;
+    let parsed = parse_or_report(&args.file)?;
 
-    // 2. Validate. Same error shape as `check`; exits non-zero on
-    //    validation failure so a malformed programme never reaches
-    //    the proposal path. The returned `ValidatedProgram` handle
+    // 2. Validate. Same error shape as `check`; returns a reported
+    //    failure so a malformed programme never reaches the proposal
+    //    path. The returned `ValidatedProgram` handle
     //    threads through to the codec so it does not re-validate.
-    let compiled = compile_or_exit(&parsed);
+    let compiled = compile_or_report(&parsed)?;
 
     if let Some(batch_path) = &args.batch {
         return run_batch(&args, &compiled, batch_path).await;
@@ -88,7 +89,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                     trace: &trace,
                 })?;
                 if let PgProposalOutcome::Rejected { reason, .. } = &outcome {
-                    exit_rejected(reason, &parsed);
+                    return report_rejection(reason, &parsed);
                 }
             }
             PgTracedOutcome::KernelErrored { error, trace } => {
@@ -96,7 +97,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                     result: envelopes::TracedError::new(format!("{error}")),
                     trace: &trace,
                 })?;
-                std::process::exit(1);
+                return Err(AlreadyReported.into());
             }
         }
     } else if args.explain_on_reject {
@@ -131,7 +132,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                     witness,
                     explanation,
                 ))?;
-                exit_rejected(reason, &parsed);
+                return report_rejection(reason, &parsed);
             }
             _ => print_json(&outcome)?,
         }
@@ -141,17 +142,24 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             .context("the proposal could not be decided")?;
         print_json(&outcome)?;
         if let PgProposalOutcome::Rejected { reason, .. } = &outcome {
-            exit_rejected(reason, &parsed);
+            return report_rejection(reason, &parsed);
         }
     }
     Ok(())
 }
 
 /// A decided rejection on a single-proposal path: locate the rule on
-/// stderr, then exit 1 (the envelope is already on stdout).
-fn exit_rejected(reason: &str, parsed: &ParsedSource) -> ! {
+/// stderr and carry the exit code out (the envelope is already on
+/// stdout, so nothing further is printed).
+///
+/// Returns `Result` rather than a bare `anyhow::Error` so the compiler
+/// enforces what a caller must do with it. An earlier draft of this
+/// refactor handed back the error, a caller built it and dropped it,
+/// and a decided refusal started exiting 0 - reported as success.
+/// `Result` is `#[must_use]`; a bare error is not.
+fn report_rejection(reason: &str, parsed: &ParsedSource) -> anyhow::Result<()> {
     print_rule_location(reason, parsed);
-    std::process::exit(1);
+    Err(AlreadyReported.into())
 }
 
 /// On a single-run rejection, point stderr at the rule: take the

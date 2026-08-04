@@ -18,11 +18,11 @@ use std::io::Write as _;
 use morpholog_postgres::render_views;
 
 use crate::GenerateViewsArgs;
-use crate::commands::{parse_or_exit, validate_or_exit};
+use crate::commands::{AlreadyReported, parse_or_report, validate_or_report};
 
 pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
-    let parsed = parse_or_exit(&args.file)?;
-    let validated = validate_or_exit(&parsed);
+    let parsed = parse_or_report(&args.file)?;
+    let validated = validate_or_report(&parsed)?;
     let hash = crate::commands::hash::canonical_hash(&parsed.program);
 
     let rendered = match render_views(validated, &args.schema, &hash) {
@@ -35,7 +35,7 @@ pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
                 "generate views refused: {} finding(s); nothing was written",
                 refusals.len()
             );
-            std::process::exit(1);
+            return Err(AlreadyReported.into());
         }
     };
 

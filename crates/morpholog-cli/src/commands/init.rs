@@ -17,7 +17,7 @@ use morpholog_postgres::{
 };
 
 use crate::InitArgs;
-use crate::commands::{connect, print_json};
+use crate::commands::{AlreadyReported, connect, print_json};
 use morpholog_cli::envelopes::{InitReport, LeastPrivilegeReport};
 
 pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
@@ -56,7 +56,7 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
                  init provisions once and never drops or migrates; if this is a \
                  deployment entrypoint that may re-run, pass --skip-if-exists."
             );
-            std::process::exit(1);
+            return Err(AlreadyReported.into());
         }
     };
     let least_privilege = if args.least_privilege {

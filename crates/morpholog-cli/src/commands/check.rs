@@ -1,7 +1,9 @@
 //! `morpholog check` - parse + validate + lint a `.morph` source file.
 
 use crate::CheckArgs;
-use crate::commands::{ParsedSource, compile_or_exit, parse_or_exit, print_json};
+use crate::commands::{
+    AlreadyReported, ParsedSource, compile_or_report, parse_or_report, print_json,
+};
 use morpholog_cli::envelopes::{CheckDiagnostic, CheckReport};
 use morpholog_core::{CompiledProgram, Program};
 use morpholog_surface::{Diagnostic, parse_program_with_sources};
@@ -30,15 +32,15 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
         return run_json(&args);
     }
 
-    let parsed = parse_or_exit(&args.file)?;
-    let compiled = compile_or_exit(&parsed);
+    let parsed = parse_or_report(&args.file)?;
+    let compiled = compile_or_report(&parsed)?;
 
     let policy = morpholog_postgres::validate_declarations(&parsed.program);
     if !policy.is_empty() {
         for finding in &policy {
             eprintln!("error: {finding}");
         }
-        std::process::exit(1);
+        return Err(AlreadyReported.into());
     }
 
     let lints = morpholog_core::lints(&compiled);
@@ -47,7 +49,7 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
             render_lint(lint, args.strict, &parsed);
         }
         if args.strict {
-            std::process::exit(1);
+            return Err(AlreadyReported.into());
         }
     }
 
@@ -236,7 +238,7 @@ fn run_json(args: &CheckArgs) -> anyhow::Result<()> {
     };
     println!("{}", serde_json::to_string_pretty(&payload)?);
     if failed {
-        std::process::exit(1);
+        return Err(AlreadyReported.into());
     }
     Ok(())
 }

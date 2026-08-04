@@ -13,8 +13,8 @@
 //!
 //! No `--json` flag: a JSON Schema is JSON by definition. Errors
 //! follow the existing diagnostic style - parse and validation
-//! failures via ariadne caret blocks (handled by [`parse_or_exit`]
-//! and [`validate_or_exit`]), unknown transformation / intent as a
+//! failures via ariadne caret blocks (handled by [`parse_or_report`]
+//! and [`validate_or_report`]), unknown transformation / intent as a
 //! single `error:` line.
 //!
 //! Exits zero on success; non-zero on any error path. The schema
@@ -23,7 +23,7 @@
 //! to discriminate at parse time.
 
 use crate::SchemaArgs;
-use crate::commands::{parse_or_exit, print_json, validate_or_exit};
+use crate::commands::{AlreadyReported, parse_or_report, print_json, validate_or_report};
 use anyhow::Context;
 use morpholog_core::{
     AnalysisError, IntentName, TransformationName, intent_arg_schema, transformation_arg_schema,
@@ -48,8 +48,8 @@ pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
         // panic path in the binary.
         anyhow::bail!("a .morph file is required for every mode except --result");
     };
-    let parsed = parse_or_exit(file)?;
-    let validated = validate_or_exit(&parsed);
+    let parsed = parse_or_report(file)?;
+    let validated = validate_or_report(&parsed)?;
     let program = &parsed.program;
 
     // Clap enforces exactly-one-of `transformation` / `--intent` /
@@ -105,7 +105,7 @@ pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
             Some(schema) => print_json(&schema),
             None => {
                 eprintln!("error: unknown intent `{intent}`");
-                std::process::exit(1);
+                Err(AlreadyReported.into())
             }
         }
     } else if let Some(transformation) = &args.transformation {
@@ -114,7 +114,7 @@ pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
             Ok(schema) => print_json(&schema),
             Err(AnalysisError::UnknownTransformation { name }) => {
                 eprintln!("error: unknown transformation `{name}`");
-                std::process::exit(1);
+                Err(AlreadyReported.into())
             }
         }
     } else {

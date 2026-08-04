@@ -15,7 +15,7 @@
 //! validation is not a ruleset anyone should be versioning against.
 
 use crate::SourceFileArgs;
-use crate::commands::{parse_or_exit, print_json, validate_or_exit};
+use crate::commands::{parse_or_report, print_json, validate_or_report};
 
 /// The canonical content hash: `sha256:<hex>` over the formatter's
 /// canonical rendering. Rules identity, shared with the scorer's
@@ -23,10 +23,10 @@ use crate::commands::{parse_or_exit, print_json, validate_or_exit};
 pub(crate) use morpholog_core::format::canonical_hash;
 
 pub(crate) fn run(args: SourceFileArgs) -> anyhow::Result<()> {
-    let parsed = parse_or_exit(&args.file)?;
+    let parsed = parse_or_report(&args.file)?;
     // Validation is the gate, not an input: only a valid programme
     // gets an authoritative hash.
-    validate_or_exit(&parsed);
+    validate_or_report(&parsed)?;
     print_json(&morpholog_cli::envelopes::HashReport {
         hash: canonical_hash(&parsed.program),
         program: parsed.program.name.clone(),

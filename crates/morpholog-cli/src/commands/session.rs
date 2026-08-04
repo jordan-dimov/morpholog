@@ -26,7 +26,7 @@ use crate::SessionArgs;
 use crate::commands::filter::FieldFilter;
 use crate::commands::inspect::{claims_rows, decode_claims_named, derived_rows, resolve_as_of};
 use crate::commands::propose::{BatchRow, RowErrorKind, propose_row_outcome};
-use crate::commands::{compile_or_exit, parse_or_exit};
+use crate::commands::{compile_or_report, parse_or_report};
 use morpholog_cli::envelopes::{SessionErrorCode, SessionErrorReceipt, SessionReady};
 use morpholog_core::CompiledProgram;
 use morpholog_postgres::PgPool;
@@ -57,8 +57,8 @@ impl SessionFailure {
 pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
     // Startup failures keep the one-shot exit shape: nothing has been
     // promised on stdout yet, so diagnostics + exit is the contract.
-    let parsed = parse_or_exit(&args.file)?;
-    let compiled = compile_or_exit(&parsed);
+    let parsed = parse_or_report(&args.file)?;
+    let compiled = compile_or_report(&parsed)?;
 
     // One connection: a lockstep protocol cannot use more, and the
     // cap bounds database connection load when many application

@@ -15,11 +15,11 @@ use morpholog_postgres::{
 };
 
 use crate::EvaluateArgs;
-use crate::commands::{connect, parse_or_exit, print_json, validate_or_exit};
+use crate::commands::{AlreadyReported, connect, parse_or_report, print_json, validate_or_report};
 
 pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
-    let parsed = parse_or_exit(&args.file)?;
-    validate_or_exit(&parsed);
+    let parsed = parse_or_report(&args.file)?;
+    validate_or_report(&parsed)?;
 
     // Fail fast in every mode, before any database or pack work: v1 scores
     // state invariants only, so a transition-relational candidate is
@@ -31,7 +31,7 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
              these use pre(...) (transition-relational, deferred): {}",
             pre.join(", ")
         );
-        std::process::exit(1);
+        return Err(AlreadyReported.into());
     }
 
     let split = args

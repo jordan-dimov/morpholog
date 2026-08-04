@@ -14,7 +14,7 @@ use morpholog_postgres::{
 
 use anyhow::Context;
 
-use crate::commands::{connect, print_json};
+use crate::commands::{AlreadyReported, connect, print_json};
 use crate::{EvidenceExportArgs, EvidenceVerifyArgs};
 
 /// `audit export`: a complete-prefix pack by default, a window between
@@ -125,7 +125,7 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     };
 
     if !intact {
-        std::process::exit(1);
+        return Err(AlreadyReported.into());
     }
     Ok(())
 }

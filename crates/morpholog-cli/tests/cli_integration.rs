@@ -3160,3 +3160,57 @@ async fn batch_gives_an_unauthorised_row_a_coded_receipt_and_keeps_going() {
         "every row produced a receipt, so exit 0; {stderr}"
     );
 }
+
+// ============================================================
+// What `main` prints, now that it owns the rendering.
+// ============================================================
+
+/// An ordinary failure keeps the shape `Result`'s own `Termination`
+/// used to print, because `main` took that job over when it started
+/// returning `ExitCode`. Nothing pinned it before, so the claim of
+/// byte-identical output rested on having read the std source once.
+#[tokio::test(flavor = "current_thread")]
+async fn an_ordinary_error_keeps_the_termination_rendering() {
+    let (status, stdout, stderr) =
+        run_cli_no_db(&["check", "/nonexistent/definitely-not-here.morph"]);
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert!(stdout.is_empty(), "stdout stays script-silent: {stdout}");
+    assert!(
+        stderr.starts_with("Error: "),
+        "the prefix std printed: {stderr}"
+    );
+    assert!(
+        stderr.contains("read source file"),
+        "the context the command attached: {stderr}"
+    );
+    assert!(
+        stderr.contains("Caused by:"),
+        "and the cause chain beneath it: {stderr}"
+    );
+}
+
+/// The other half of that contract: a failure the command already
+/// rendered gets NO second line from `main`. Saying it twice, once in
+/// the command's voice and once in std's, is what the sentinel exists
+/// to prevent.
+#[tokio::test(flavor = "current_thread")]
+async fn an_already_reported_failure_gets_no_second_message() {
+    let fixture = common::write_fixture(
+        "already_reported",
+        "program p\npredicate P(x: Subject)\ntransformation t(x):\n    admit Q(x)\n",
+    );
+    let (status, _stdout, stderr) = run_cli_no_db(&["check", fixture.path.to_str().unwrap()]);
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("undeclared predicate"),
+        "the command's own diagnostic is what the user reads: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Error: "),
+        "main must add nothing on top of a rendered diagnostic: {stderr}"
+    );
+    assert!(
+        !stderr.contains("reported its own diagnostics"),
+        "the sentinel's Display is an implementation detail, never output: {stderr}"
+    );
+}

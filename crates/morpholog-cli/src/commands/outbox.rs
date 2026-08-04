@@ -33,7 +33,7 @@ use morpholog_postgres::{
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::commands::{connect, print_json};
+use crate::commands::{AlreadyReported, connect, print_json};
 use crate::{OutboxClaimArgs, OutboxCompleteArgs, OutboxCompleteOutcome, OutboxReleaseArgs};
 
 /// `morpholog outbox claim` - acquire the next pending outbox row of
@@ -70,7 +70,8 @@ pub(crate) async fn claim(args: OutboxClaimArgs) -> anyhow::Result<()> {
 /// All three paths are lease-gated: if the worker no longer holds
 /// the lease (because it expired and another worker reclaimed the
 /// row), the underlying helper returns `Applied = false` and the
-/// CLI emits `{"status": "lease_lost"}` then exits 1.
+/// CLI emits `{"status": "lease_lost"}` and returns a reported
+/// failure (exit 1).
 pub(crate) async fn complete(args: OutboxCompleteArgs) -> anyhow::Result<()> {
     // Reject contradictory flag combinations up front so the
     // caller's mistake is visible without a database round trip.
@@ -130,7 +131,7 @@ pub(crate) async fn complete(args: OutboxCompleteArgs) -> anyhow::Result<()> {
         .await
         .context("mark_outbox_failed failed")?,
     };
-    emit_update_and_exit(&update)
+    emit_update_outcome(&update)
 }
 
 /// `morpholog outbox release` - abandon the lease on a row,
@@ -142,20 +143,20 @@ pub(crate) async fn release(args: OutboxReleaseArgs) -> anyhow::Result<()> {
     let update = release_outbox_claim(&pool, args.intent_id, &args.worker_id)
         .await
         .context("release_outbox_claim failed")?;
-    emit_update_and_exit(&update)
+    emit_update_outcome(&update)
 }
 
 /// Emit the `OutboxUpdate` as `{"status": "applied"}` or
 /// `{"status": "lease_lost"}` and translate the variant into an
-/// exit code. `Applied` is the happy path (exit 0); `LeaseLost`
-/// is exit 1 - not a bug in the CLI, but the caller's lease was
-/// stolen and the state change did not apply.
+/// outcome. `Applied` is the happy path; `LeaseLost` returns a
+/// reported failure (exit 1) - not a bug in the CLI, but the caller's
+/// lease was stolen and the state change did not apply.
 ///
 /// Snake-case `status` value follows the existing CLI JSON
 /// convention (e.g. `{"status":"committed"}` from `propose`). The
 /// wrapping object lets scripts consistently read `result["status"]`
 /// rather than parsing bare enum strings.
-fn emit_update_and_exit(update: &OutboxUpdate) -> anyhow::Result<()> {
+fn emit_update_outcome(update: &OutboxUpdate) -> anyhow::Result<()> {
     let status = match update {
         OutboxUpdate::Applied => "applied",
         OutboxUpdate::LeaseLost => "lease_lost",
@@ -163,6 +164,6 @@ fn emit_update_and_exit(update: &OutboxUpdate) -> anyhow::Result<()> {
     print_json(&serde_json::json!({ "status": status }))?;
     match update {
         OutboxUpdate::Applied => Ok(()),
-        OutboxUpdate::LeaseLost => std::process::exit(1),
+        OutboxUpdate::LeaseLost => Err(AlreadyReported.into()),
     }
 }
