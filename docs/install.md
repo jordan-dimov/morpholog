@@ -1,16 +1,25 @@
 # Installing Morpholog from a release
 
-Fresh Ubuntu machine to a running worked example, no Rust toolchain. The
-prebuilt binary is static linux x86_64 only - check before downloading
-anything (the line prints `ok` or a STOP; it deliberately does not
-`exit`, which would close an interactive shell):
+Fresh machine to a running worked example, no Rust toolchain. Prebuilt
+binaries exist for linux (x86_64 and arm64) and macOS (Apple Silicon).
+Intel Macs build from source - the free Intel CI runner is gone, and
+an Intel Mac cannot run an Apple Silicon binary. This prints the asset name for the machine you are on, or a
+STOP if there is none (it deliberately does not `exit`, which would
+close an interactive shell):
 
 ```bash
-[ "$(uname -m)" = x86_64 ] && echo ok || echo "STOP: no prebuilt binary for $(uname -m) - build from source instead (README)" >&2
+TARGET=$(case "$(uname -s)/$(uname -m)" in
+  Linux/x86_64)              echo x86_64-unknown-linux-musl ;;
+  Linux/aarch64|Linux/arm64) echo aarch64-unknown-linux-musl ;;
+  Darwin/arm64)              echo aarch64-apple-darwin ;;
+esac)
+[ -n "$TARGET" ] && echo "$TARGET" \
+  || echo "STOP: no prebuilt binary for $(uname -s)/$(uname -m) - build from source instead (README)" >&2
 ```
 
 If it says STOP, none of the download steps below apply to this
-machine; the README's source build is the path.
+machine; the README's source build is the path. Otherwise `$TARGET`
+now names your asset, and the steps below use it as they are.
 
 Morpholog runs against a system PostgreSQL, by design - no Docker in the
 blessed path (containerising the database is your own ops choice, not
@@ -43,9 +52,10 @@ From the [releases page](https://github.com/jordan-dimov/morpholog/releases),
 download the tarball and its checksum, then:
 
 ```bash
-sha256sum -c morpholog-*-x86_64-unknown-linux-musl.tar.gz.sha256
-tar xzf morpholog-*-x86_64-unknown-linux-musl.tar.gz
-install -D morpholog-*-x86_64-unknown-linux-musl/morpholog ~/.local/bin/morpholog
+sha256sum -c morpholog-*-"$TARGET".tar.gz.sha256   # macOS: shasum -a 256 -c
+tar xzf morpholog-*-"$TARGET".tar.gz
+mkdir -p ~/.local/bin                              # install -D is GNU-only
+install morpholog-*-"$TARGET"/morpholog ~/.local/bin/morpholog
 export PATH="$HOME/.local/bin:$PATH"   # add to ~/.bashrc or ~/.profile to keep it
 morpholog --version
 ```
@@ -68,7 +78,7 @@ release - it is the identical coordinate).
 
 **Tracking unreleased work instead?** Every merge to main recreates
 the rolling `main-latest` prerelease (stable URL:
-`releases/download/main-latest/morpholog-main-x86_64-unknown-linux-musl.tar.gz`).
+`releases/download/main-latest/morpholog-main-$TARGET.tar.gz`).
 Its binary reports the last tagged workspace version regardless of
 later commits, so the recipe above does NOT apply - take the commit
 SHA from the `main-latest` release notes and clone at it instead:
