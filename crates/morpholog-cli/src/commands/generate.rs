@@ -571,12 +571,12 @@ fn render_init(program: &Program) -> String {
              MorphologRequestError,\n    \
              Session,\n)\n\n\
          def open_session(\n    \
-             file,\n    \
-             database_url,\n    \
+             file: str,\n    \
+             database_url: str,\n    \
              *,\n    \
-             binary=None,\n    \
-             timeout=None,\n\
-         ):\n    \
+             binary: str | None = None,\n    \
+             timeout: float | None = None,\n\
+         ) -> Session:\n    \
              \"\"\"Open a session pinned to the programme this package was\n    \
              generated from: a binary serving any other rules is refused at\n    \
              the handshake, before a single proposal is written. Construct\n    \

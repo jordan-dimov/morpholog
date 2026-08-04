@@ -39,6 +39,11 @@ import json, os, sys, time
 mode = os.environ.get("SESSION_STUB_MODE", "transcript")
 record = os.environ.get("SESSION_STUB_RECORD")
 
+if mode == "ignore_eof_and_sigterm":
+    import signal
+
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
 
 def note(line):
     if record:
@@ -117,6 +122,24 @@ for request in sys.stdin:
         say(json.dumps({"code": "kernel_error", "error": "x", "row": 99, "status": "error"}))
     elif mode == "bogus_rows":
         say(json.dumps([{"bogus": True}]))
+    elif mode == "bad_tag_in_receipt":
+        say(
+            json.dumps(
+                {
+                    "actor": {"type": "unknown-new-tag", "value": "a"},
+                    "asserted_claims": [],
+                    "emitted_intents": [],
+                    "retracted_claims": [],
+                    "row": n,
+                    "status": "committed",
+                    "transition_id": "00000000-0000-0000-0000-000000000000",
+                }
+            )
+        )
+    elif mode == "bad_tag_in_row":
+        say(json.dumps([{"args": [{"type": "unknown-new-tag", "value": "a"}], "predicate": "P"}]))
+    elif mode == "bad_row_in_error":
+        say(json.dumps({"code": "kernel_error", "error": "x", "row": "not-an-int", "status": "error"}))
     elif mode == "binary_garbage":
         sys.stdout.buffer.write(b"\xff\xfe\n")
         sys.stdout.buffer.flush()
@@ -148,7 +171,7 @@ for request in sys.stdin:
         )
     else:
         say(committed)
-if mode == "ignore_eof":
+if mode in ("ignore_eof", "ignore_eof_and_sigterm"):
     time.sleep(60)
 '''
 
@@ -423,14 +446,47 @@ class Lifecycle(SessionHarness):
         s._stderr_text()
         self.assertTrue(taken, "_stderr_text read the tail without taking its lock")
 
-    def test_reaping_a_child_that_ignores_every_signal_stays_inside_its_budget(self):
+    def test_a_malformed_value_inside_a_committed_receipt_is_outcome_unknown(self):
+        """The receipt frames correctly but carries a value tag this
+        client does not know. The proposal was submitted, so the only
+        honest answer is UNDECIDED - and the contract has demonstrably
+        drifted, so the session must not serve another request. The
+        envelope parsers reach value codecs that raise their own
+        exception types, which is why the seam cannot recognise a
+        broken contract by one exception class."""
+        with self.session(mode="bad_tag_in_receipt") as s:
+            with self.assertRaises(MorphologOutcomeUnknown):
+                s.propose("t", "a", {})
+            self.assertIsNotNone(s._poisoned)
+
+    def test_a_malformed_value_inside_a_read_row_poisons_but_stays_operational(self):
+        """The same drift on a read: nothing was submitted, so it is a
+        plain operational failure - and still fatal to the session."""
+        with self.session(mode="bad_tag_in_row") as s:
+            with self.assertRaises(MorphologError) as caught:
+                s.claims()
+            self.assertNotIsInstance(caught.exception, MorphologOutcomeUnknown)
+            self.assertIsNotNone(s._poisoned)
+
+    def test_a_malformed_row_in_an_error_receipt_is_outcome_unknown(self):
+        """A coded error whose own fields do not parse is drift too,
+        and it arrives in answer to a submitted proposal."""
+        with self.session(mode="bad_row_in_error") as s:
+            with self.assertRaises(MorphologOutcomeUnknown):
+                s.propose("t", "a", {})
+            self.assertIsNotNone(s._poisoned)
+
+    @unittest.skipUnless(os.name == "posix", "needs POSIX signal semantics")
+    def test_reaping_a_child_that_ignores_eof_and_sigterm_stays_inside_its_budget(self):
         """`timeout` bounds the response wait; shutdown has its own
-        ceiling. Staged shares of one deadline, so a child that
-        ignores EOF and then SIGTERM cannot make a caller wait for one
-        full timeout per stage."""
+        ceiling. The child here ignores EOF and then SIGTERM, so only
+        the kill escalation ends it - the sequence that used to stack a
+        full wait per stage. Staged shares of one deadline keep the
+        whole reaping inside one budget. (Nothing can ignore SIGKILL,
+        so that is where the escalation stops.)"""
         from python_client.session import _SHUTDOWN_BUDGET
 
-        s = self.session(mode="ignore_eof")
+        s = self.session(mode="ignore_eof_and_sigterm")
         started = time.monotonic()
         s.close()
         elapsed = time.monotonic() - started

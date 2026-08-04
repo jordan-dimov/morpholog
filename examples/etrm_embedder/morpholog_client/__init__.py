@@ -28,12 +28,12 @@ from .session import (  # noqa: E402
 )
 
 def open_session(
-    file,
-    database_url,
+    file: str,
+    database_url: str,
     *,
-    binary=None,
-    timeout=None,
-):
+    binary: str | None = None,
+    timeout: float | None = None,
+) -> Session:
     """Open a session pinned to the programme this package was
     generated from: a binary serving any other rules is refused at
     the handshake, before a single proposal is written. Construct
