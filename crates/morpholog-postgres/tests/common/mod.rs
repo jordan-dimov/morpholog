@@ -287,3 +287,70 @@ pub async fn insert_in_flight_audit_row(conn: &mut sqlx::PgConnection, transitio
     .await
     .unwrap();
 }
+
+/// Whether the connecting role is a superuser. Two suites gate on it:
+/// the tests that need a role identity of their own can only get one
+/// by assuming it, and only a superuser may.
+pub async fn session_is_superuser(pool: &PgPool) -> bool {
+    let (rolsuper,): (bool,) =
+        sqlx::query_as("SELECT rolsuper FROM pg_roles WHERE rolname = session_user")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    rolsuper
+}
+
+/// Drop, then recreate, the named roles with the caller's own setup
+/// statements.
+///
+/// Roles are cluster-global: they outlive `reset_db`, outlive the test
+/// binary, and are visible to every other suite. One left behind that
+/// can write `morpholog.audit` joins the writer-role census and fails
+/// an assertion somewhere else entirely, so every test names roles of
+/// its own and drops them on the way out.
+pub async fn recreate_roles(pool: &PgPool, roles: &[&str], setup: &[&str]) {
+    drop_roles_if_present(pool, roles).await;
+    for statement in setup {
+        // Audited: `setup` is a literal slice each caller writes inline.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(statement.to_string()))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+}
+
+/// Drop roles that exist, leaving absent ones alone - the entry half
+/// of [`recreate_roles`], and the safe form for a cleanup path that
+/// may run after a test failed partway.
+pub async fn drop_roles_if_present(pool: &PgPool, roles: &[&str]) {
+    for role in roles {
+        // A role name reaches DDL, which takes no bind parameters, so
+        // it is checked here rather than trusted and quoted when it
+        // gets there. Callers pass literals today; the first one to
+        // build a name from data should meet this assertion rather
+        // than a syntax error, or worse.
+        assert!(
+            !role.is_empty()
+                && role
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+            "test role names are plain identifiers: got `{role}`"
+        );
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)")
+                .bind(role)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        if exists {
+            // Audited: `role` is asserted above to be a plain
+            // identifier, and is quoted here regardless.
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                "DROP OWNED BY \"{role}\"; DROP ROLE \"{role}\""
+            )))
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+}

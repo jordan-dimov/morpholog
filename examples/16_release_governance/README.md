@@ -51,14 +51,21 @@ One release, kept in the register end to end (a disposable database;
 
 ```
 morpholog init --database-url $DB
-morpholog propose $MORPH declare_platform --actor releaser \
-    --args-named '{"platform": "linux_x86_64"}' --database-url $DB
+# One declaration per platform the release channel builds for. The
+# announce gate below demands an asset for every one of them, so this
+# is the step that decides what "complete" means for this release.
+for p in linux_x86_64 linux_arm64 macos_arm64; do
+  morpholog propose $MORPH declare_platform --actor releaser \
+      --args-named "{\"platform\": \"$p\"}" --database-url $DB
+done
 morpholog propose $MORPH record_gate --actor releaser \
     --args-named '{"version": "v0_0_8", "commit": "commit_abc"}' --database-url $DB
 morpholog propose $MORPH tag_release --actor releaser \
     --args-named '{"version": "v0_0_8", "commit": "commit_abc"}' --database-url $DB
-morpholog propose $MORPH publish_asset --actor releaser \
-    --args-named '{"version": "v0_0_8", "platform": "linux_x86_64"}' --database-url $DB
+for p in linux_x86_64 linux_arm64 macos_arm64; do
+  morpholog propose $MORPH publish_asset --actor releaser \
+      --args-named "{\"version\": \"v0_0_8\", \"platform\": \"$p\"}" --database-url $DB
+done
 morpholog propose $MORPH record_changelog --actor releaser \
     --args-named '{"version": "v0_0_8"}' --database-url $DB
 morpholog propose $MORPH announce --actor releaser \
@@ -70,7 +77,9 @@ morpholog inspect outbox --database-url $DB
 
 Propose any step out of order and the refusal names the gate that
 turned it away; propose `announce` twice and the replay guard refuses
-the second.
+the second. Leave one platform's `publish_asset` out and `announce`
+refuses too - which is the rule doing the work it was written for, now
+that the channel builds for more than one platform.
 
 ## Deliberately not covered
 
