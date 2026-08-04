@@ -138,7 +138,7 @@ fn schema_unknown_transformation_errors_to_stderr_and_exits_nonzero() {
 fn schema_parse_error_renders_diagnostic_and_exits_nonzero() {
     // Parser-level rejection: `Money` is not a declared
     // `PredicateArgKind`, so the parser refuses the predicate
-    // declaration. Triggers the same `parse_or_exit` path every
+    // declaration. Triggers the same `parse_or_report` path every
     // other subcommand uses, so we confirm the schema subcommand
     // wires it in.
     let path = write_fixture("bad", "program demo\npredicate Foo(amount: Money)\n");

@@ -136,7 +136,8 @@ The list below is by domain. If you arrived with a question rather than a domain
 
 ## Try it yourself
 
-No Rust toolchain needed: grab the prebuilt linux x86_64 binary from the
+No Rust toolchain needed: grab the prebuilt binary for linux (x86_64 or
+arm64) or macOS (Apple Silicon) from the
 [releases page](https://github.com/jordan-dimov/morpholog/releases) -
 [`docs/install.md`](docs/install.md) is the fresh-machine walkthrough,
 PostgreSQL included. Or from source:

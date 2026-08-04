@@ -287,3 +287,53 @@ pub async fn insert_in_flight_audit_row(conn: &mut sqlx::PgConnection, transitio
     .await
     .unwrap();
 }
+
+/// Whether the connecting role is a superuser. Two suites gate on it:
+/// the tests that need a role identity of their own can only get one
+/// by assuming it, and only a superuser may.
+pub async fn session_is_superuser(pool: &PgPool) -> bool {
+    let (rolsuper,): (bool,) =
+        sqlx::query_as("SELECT rolsuper FROM pg_roles WHERE rolname = session_user")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    rolsuper
+}
+
+/// Drop, then recreate, the named roles with the caller's own setup
+/// statements.
+///
+/// Roles are cluster-global: they outlive `reset_db`, outlive the test
+/// binary, and are visible to every other suite. One left behind that
+/// can write `morpholog.audit` joins the writer-role census and fails
+/// an assertion somewhere else entirely, so every test names roles of
+/// its own and drops them on the way out.
+pub async fn recreate_roles(pool: &PgPool, roles: &[&str], setup: &[&str]) {
+    drop_roles_if_present(pool, roles).await;
+    for statement in setup {
+        // Audited: `setup` is a literal slice each caller writes inline.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(statement.to_string()))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+}
+
+/// Drop roles that exist, leaving absent ones alone - the entry half
+/// of [`recreate_roles`], and the safe form for a cleanup path that
+/// may run after a test failed partway.
+pub async fn drop_roles_if_present(pool: &PgPool, roles: &[&str]) {
+    for role in roles {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "DO $$ BEGIN
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
+                    EXECUTE 'DROP OWNED BY {role}';
+                    EXECUTE 'DROP ROLE {role}';
+                END IF;
+             END $$"
+        )))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+}
