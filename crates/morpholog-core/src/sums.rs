@@ -112,18 +112,8 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
         ValueExpr::Extremum { body, .. } => lower_in_prop(body, ctx),
         ValueExpr::Sum { value, body, seed } => {
             lower_in_prop(body, ctx);
-            let resolved = match value {
-                // A variable's kind comes from the claim position that
-                // binds it; a literal target carries its kind itself
-                // (`sum(1 t | ...)` counts in tonnes, empty or not).
-                Term::Var(v) => var_seed(v, body, ctx, &mut BTreeSet::new()),
-                Term::Literal(Value::Quantity { unit, .. }) => {
-                    Some(SumSeed::Quantity(unit.clone()))
-                }
-                Term::Literal(Value::Duration(_)) => Some(SumSeed::Duration),
-                _ => None,
-            };
-            if let Some(resolved) = resolved {
+            lower_in_value(value, ctx);
+            if let Some(resolved) = value_seed(value, body, ctx) {
                 *seed = resolved;
             }
         }
@@ -160,6 +150,51 @@ fn lower_in_stmt(stmt: &mut Stmt, ctx: &SeedContext<'_>) {
                 lower_in_stmt(inner, ctx);
             }
         }
+    }
+}
+
+/// The seed for an expression target: a variable resolves from the
+/// claim position that binds it, a literal carries its kind itself
+/// (`sum(1 t | ...)` counts in tonnes, empty or not), and arithmetic
+/// resolves through the rule matrix over its operands' seeds - with
+/// one side unresolved, the matrix's unique-counterpart rule still
+/// pins the result where only one rule fits (`qty * factor` is a
+/// quantity of `qty`'s unit whatever `factor` turns out to be).
+/// Anything else - a lookup, a conditional, a nested aggregate, an
+/// outer-bound operand - leaves the decimal default standing.
+fn value_seed(value: &ValueExpr, body: &Prop, ctx: &SeedContext<'_>) -> Option<SumSeed> {
+    let kind = match value {
+        ValueExpr::Term(Term::Var(v)) => return var_seed(v, body, ctx, &mut BTreeSet::new()),
+        ValueExpr::Term(Term::Literal(Value::Quantity { unit, .. })) => {
+            return Some(SumSeed::Quantity(unit.clone()));
+        }
+        ValueExpr::Term(Term::Literal(Value::Duration(_))) => return Some(SumSeed::Duration),
+        ValueExpr::Term(Term::Literal(Value::Decimal(_))) => return Some(SumSeed::Decimal),
+        ValueExpr::Arith { op, left, right } => {
+            let l = value_seed(left, body, ctx).map(seed_kind);
+            let r = value_seed(right, body, ctx).map(seed_kind);
+            match (l, r) {
+                (Some(l), Some(r)) => crate::ir::arith_result_kind(*op, &l, &r)?,
+                (Some(k), None) => crate::ir::arith_unique_counterpart(*op, &k, true)?.1,
+                (None, Some(k)) => crate::ir::arith_unique_counterpart(*op, &k, false)?.1,
+                (None, None) => return None,
+            }
+        }
+        _ => return None,
+    };
+    match kind {
+        PredicateArgKind::Decimal => Some(SumSeed::Decimal),
+        PredicateArgKind::Duration => Some(SumSeed::Duration),
+        PredicateArgKind::Quantity(u) => Some(SumSeed::Quantity(u)),
+        _ => None,
+    }
+}
+
+fn seed_kind(seed: SumSeed) -> PredicateArgKind {
+    match seed {
+        SumSeed::Decimal => PredicateArgKind::Decimal,
+        SumSeed::Duration => PredicateArgKind::Duration,
+        SumSeed::Quantity(u) => PredicateArgKind::Quantity(u),
     }
 }
 

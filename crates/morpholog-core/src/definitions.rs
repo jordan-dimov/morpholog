@@ -106,9 +106,11 @@ fn resolve_in_value(value: &mut ValueExpr, names: &BTreeSet<String>) {
             resolve_in_value(left, names);
             resolve_in_value(right, names);
         }
-        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
-            resolve_in_prop(body, names)
+        ValueExpr::Sum { value, body, .. } => {
+            resolve_in_value(value, names);
+            resolve_in_prop(body, names);
         }
+        ValueExpr::Extremum { body, .. } => resolve_in_prop(body, names),
         ValueExpr::Cond {
             when,
             then,
@@ -244,9 +246,11 @@ pub(crate) fn defined_calls_in_value(value: &ValueExpr, out: &mut BTreeSet<Defin
             defined_calls_in_value(left, out);
             defined_calls_in_value(right, out);
         }
-        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
-            defined_calls_in_prop(body, out)
+        ValueExpr::Sum { value, body, .. } => {
+            defined_calls_in_value(value, out);
+            defined_calls_in_prop(body, out);
         }
+        ValueExpr::Extremum { body, .. } => defined_calls_in_prop(body, out),
         ValueExpr::Cond {
             when,
             then,

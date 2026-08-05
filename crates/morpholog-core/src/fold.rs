@@ -38,7 +38,12 @@ pub(crate) fn any_prop_node_in_value(expr: &ValueExpr, f: &impl Fn(&Prop) -> boo
         ValueExpr::ValueOf { default, .. } => default
             .as_ref()
             .is_some_and(|d| any_prop_node_in_value(d, f)),
-        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => any_prop_node(body, f),
+        ValueExpr::Sum {
+            value,
+            body,
+            seed: _,
+        } => any_prop_node_in_value(value, f) || any_prop_node(body, f),
+        ValueExpr::Extremum { body, .. } => any_prop_node(body, f),
         ValueExpr::Cond {
             when,
             then,
@@ -131,8 +136,8 @@ fn any_term_value_scoped<'p>(
             value,
             body,
             seed: _,
-        }
-        | ValueExpr::Extremum { value, body, .. } => {
+        } => any_term_value_scoped(value, f, scope) || any_term_prop_scoped(body, f, scope),
+        ValueExpr::Extremum { value, body, .. } => {
             f(value, scope) || any_term_prop_scoped(body, f, scope)
         }
         ValueExpr::Cond {
@@ -190,7 +195,7 @@ mod tests {
             Box::new(ValueExpr::Arith {
                 op: crate::ArithOp::Add,
                 left: Box::new(ValueExpr::Sum {
-                    value: Term::Literal(Value::Decimal("1".into())),
+                    value: Box::new(Term::Literal(Value::Decimal("1".into())).into()),
                     body: Box::new(Prop::Pre(Box::new(claim("P")))),
                     seed: SumSeed::Decimal,
                 }),
@@ -215,7 +220,7 @@ mod tests {
 
         // Sum: the term is the TARGET only, body clean.
         let sum = ValueExpr::Sum {
-            value: var_term("x"),
+            value: Box::new(var_term("x").into()),
             body: Box::new(claim("P")),
             seed: SumSeed::Decimal,
         };

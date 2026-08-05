@@ -658,7 +658,11 @@ fn refuse_pattern_positions_in_value(
         }
         // The sum TARGET never binds (consumed against the body's
         // bindings) - only the body's patterns are scanned.
-        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
+        ValueExpr::Sum { value, body, .. } => {
+            refuse_pattern_positions_in_value(value, const_names, decl_span, errors);
+            refuse_pattern_positions_in_prop(body, const_names, decl_span, errors);
+        }
+        ValueExpr::Extremum { body, .. } => {
             refuse_pattern_positions_in_prop(body, const_names, decl_span, errors);
         }
         // ValueOf keys are ground lookups - they never bind.

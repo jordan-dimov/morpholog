@@ -420,19 +420,18 @@ transformation certify_decision_value(experiment_id, coalition_id, gain):
 -- is built from.
 -- ---------------------------------------------------------------------
 
--- One row per certified coalition: its risk, and the gain recomputed
--- against the baseline's certified risk rather than read from the
--- stored DecisionValue - a summary that cannot disagree with the
--- arithmetic it summarises.
+-- One row per fully certified coalition: its risk beside its gain.
+-- The gain is read from the certified DecisionValue, and reading it
+-- is safe precisely because the rules above pin it to the recompute
+-- - a claim the invariants govern cannot drift from the arithmetic.
 predicate InformationSummary(experiment: Subject, coalition: Subject,
                              risk: Decimal, gain: Decimal)
 
 derived InformationSummary(experiment, coalition, risk):
   over (Coalition(experiment, coalition)
         and BayesRisk(experiment, coalition, risk)
-        and Experiment(experiment, baseline)
-        and BayesRisk(experiment, baseline, baseline_risk))
-  value gain = baseline_risk - risk
+        and DecisionValue(experiment, coalition, _))
+  value gain = value DecisionValue(experiment, coalition, _)
 
 -- The headline: how far the pair's joint value exceeds the sum of its
 -- members' values. For the parity data this is the whole story - both
@@ -440,18 +439,21 @@ derived InformationSummary(experiment, coalition, risk):
 -- excess is the joint value itself. An additive excess witness, not a
 -- full decomposition of who contributed what.
 --
--- The three certified values sit in the domain, not in lookups: until
--- all three exist this view simply has no row, which is the honest
--- reading of a half-certified experiment - not an error to handle.
+-- The three certified values guard the domain, so until all three
+-- exist this view simply has no row - the honest reading of a
+-- half-certified experiment, not an error to handle. The excess then
+-- subtracts the certified values the domain just proved present.
 predicate PairSynergy(experiment: Subject, left: Subject,
                       right: Subject, joint: Subject, excess: Decimal)
 
 derived PairSynergy(experiment, left, right, joint):
   over (CoalitionPair(experiment, left, right, joint)
-        and DecisionValue(experiment, left, left_gain)
-        and DecisionValue(experiment, right, right_gain)
-        and DecisionValue(experiment, joint, joint_gain))
-  value excess = joint_gain - left_gain - right_gain
+        and DecisionValue(experiment, left, _)
+        and DecisionValue(experiment, right, _)
+        and DecisionValue(experiment, joint, _))
+  value excess = (value DecisionValue(experiment, joint, _)
+                  - value DecisionValue(experiment, left, _)
+                  - value DecisionValue(experiment, right, _))
 
 
 -- ---------------------------------------------------------------------

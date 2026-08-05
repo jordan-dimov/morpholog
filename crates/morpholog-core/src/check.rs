@@ -1191,13 +1191,13 @@ impl CheckCtx<'_> {
                 // bound names (the iteration binding, plus any
                 // others the body introduces) do not leak into the
                 // surrounding expression. Outer bindings stay
-                // visible via the clone. Sum's result is Decimal.
+                // visible via the clone. The target is a full value
+                // expression inferred in that scope, so an arith rule
+                // violation or unbound variable inside it is reported
+                // with the body's bindings in force.
                 let mut scoped = scope.clone();
                 self.walk_prop(body, &mut scoped);
-                if let Term::Var(name) = value {
-                    self.use_var(&scoped, name);
-                }
-                let resolved = resolved_term_kind(value, &scoped.kinds);
+                let resolved = self.infer_value(value, &mut scoped);
                 // A sum of durations is the laytime-counting shape; a
                 // sum of decimals is every aggregate before it. Any
                 // other known kind is an authoring-time error.

@@ -362,7 +362,7 @@ mod tests {
         // A value expression that plants one predicate name (a `Sum`
         // whose body is a claim), to reach the comparator-operand path.
         let value_with = |p: &str| ValueExpr::Sum {
-            value: Term::Var("v".into()),
+            value: Box::new(Term::Var("v".into()).into()),
             body: Box::new(claim(p)),
             seed: SumSeed::default(),
         };
@@ -457,7 +457,7 @@ mod tests {
             left: Box::new(ValueExpr::Arith {
                 op: ArithOp::Sub,
                 left: Box::new(ValueExpr::Sum {
-                    value: Term::Var("v".into()),
+                    value: Box::new(Term::Var("v".into()).into()),
                     body: Box::new(claim("P_sum_body")),
                     seed: SumSeed::default(),
                 }),

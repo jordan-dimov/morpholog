@@ -1268,7 +1268,9 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             let matches = find_matches(body, ctx)?;
             let mut total = SumTotal::Empty;
             for m in matches {
-                let next = resolve_term(value, &m, ctx.actor)?;
+                // The target is a full value expression consuming this
+                // witness's bindings, evaluated exactly once per match.
+                let next = eval_value(value, &ctx.with_bindings(&m))?;
                 total = match (total, next) {
                     (SumTotal::Empty, EvalValue::Decimal(d)) => SumTotal::Decimal(BigSum::new(d)),
                     (SumTotal::Empty, EvalValue::Duration(d)) => SumTotal::Duration(d.as_nanos()),

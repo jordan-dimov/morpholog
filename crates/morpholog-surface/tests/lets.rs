@@ -268,12 +268,6 @@ fn transitively_dead_let_chain_is_refused_whole() {
 fn computed_let_is_refused_in_every_term_only_position() {
     let cases: &[(&str, &str)] = &[
         (
-            "sum target",
-            "define f(a, total):\n    \
-                 let net = ((a) + 1)\n    \
-                 total = (sum(net | Reading(m, kwh)))",
-        ),
-        (
             "claim argument",
             "define f(a):\n    \
                  let net = ((a) + 1)\n    \
@@ -310,6 +304,20 @@ fn computed_let_is_refused_in_every_term_only_position() {
             errs.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
     }
+}
+
+#[test]
+fn computed_let_substitutes_into_a_sum_target() {
+    // The sum target is a full value expression, so a computed let
+    // flowing into it is ordinary substitution, identical to writing
+    // the arithmetic in place.
+    assert_equivalent(
+        "define f(a, total):\n    \
+             let net = ((a) + 1)\n    \
+             total = (sum(net | Reading(m, kwh)))",
+        "define f(a, total):\n    \
+             total = (sum((a) + 1 | Reading(m, kwh)))",
+    );
 }
 
 #[test]

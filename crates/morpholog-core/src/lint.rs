@@ -618,8 +618,9 @@ fn positive_value_claims(
                 positive_value_claims(a, positive, definitions, seen, out);
             }
         }
-        // A sum tolerates zero matches; its body does not REQUIRE the
-        // claims, so it contributes nothing.
+        // A sum tolerates zero matches; neither its body nor its target
+        // (evaluated only when the body matches) REQUIRES the claims,
+        // so it contributes nothing.
         ValueExpr::Sum { .. } => {}
         // An extremum is the opposite, which is why it cannot share the
         // arm above: zero matches is an error, so its body IS required.

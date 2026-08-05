@@ -454,7 +454,11 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
             body,
             seed: _,
         } => {
-            format!("sum({} | {})", format_term(value), format_prop_inline(body))
+            format!(
+                "sum({} | {})",
+                format_value_inline(value),
+                format_prop_inline(body)
+            )
         }
         ValueExpr::Extremum { op, value, body } => {
             format!(

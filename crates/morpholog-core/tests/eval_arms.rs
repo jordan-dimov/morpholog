@@ -701,3 +701,111 @@ fn a_lookup_excludes_a_bucket_mate_the_pattern_rules_out() {
         "the pattern rules out the bucket mate: {outcome:?}"
     );
 }
+
+/// The claims three sensors share one level over.
+fn three_equal_readings() -> State {
+    let p = program("readings")
+        .predicates(vec![
+            predicate("Reading")
+                .subject("sensor")
+                .decimal("level")
+                .build(),
+        ])
+        .transformations(vec![transformation(
+            "seed",
+            params(&[]),
+            ["s1", "s2", "s3"]
+                .into_iter()
+                .map(|s| {
+                    assert_(
+                        "Reading",
+                        vec![
+                            morpholog_core::ir_builder::subj(s),
+                            morpholog_core::ir_builder::dec("1"),
+                        ],
+                    )
+                })
+                .collect(),
+        )])
+        .build();
+    let Outcome::Accepted {
+        candidate_state, ..
+    } = propose_with_test_actor(&p.transformations[0], vec![], &State::default(), &[], &[])
+        .unwrap()
+    else {
+        panic!("seed accepted");
+    };
+    candidate_state
+}
+
+#[test]
+fn an_expression_target_evaluates_once_per_witness() {
+    // Three witnesses share the level 1, so `level * 2` is added three
+    // times: the answer is a property of the witness SET, and equal
+    // target values are never collapsed.
+    let probe = transformation(
+        "probe",
+        params(&[]),
+        vec![require(eq(
+            sum(
+                mul(
+                    term(var("level")),
+                    term(morpholog_core::ir_builder::dec("2")),
+                ),
+                claim("Reading", vec![Term::Wildcard, var("level")]),
+            ),
+            term(morpholog_core::ir_builder::dec("6")),
+        ))],
+    );
+    let outcome =
+        propose_with_test_actor(&probe, vec![], &three_equal_readings(), &[], &[]).unwrap();
+    assert!(matches!(outcome, Outcome::Accepted { .. }), "{outcome:?}");
+}
+
+#[test]
+fn a_failing_expression_target_fails_the_whole_sum() {
+    // One witness dividing by zero is not skipped, zeroed, or summed
+    // around: the sum surfaces the error.
+    let probe = transformation(
+        "probe",
+        params(&[]),
+        vec![require(eq(
+            sum(
+                div(
+                    term(morpholog_core::ir_builder::dec("1")),
+                    term(var("level")),
+                ),
+                claim("Reading", vec![Term::Wildcard, var("level")]),
+            ),
+            term(morpholog_core::ir_builder::dec("0")),
+        ))],
+    );
+    let p = program("zeroed")
+        .predicates(vec![
+            predicate("Reading")
+                .subject("sensor")
+                .decimal("level")
+                .build(),
+        ])
+        .transformations(vec![transformation(
+            "seed",
+            params(&[]),
+            vec![assert_(
+                "Reading",
+                vec![
+                    morpholog_core::ir_builder::subj("s1"),
+                    morpholog_core::ir_builder::dec("0"),
+                ],
+            )],
+        )])
+        .build();
+    let Outcome::Accepted {
+        candidate_state, ..
+    } = propose_with_test_actor(&p.transformations[0], vec![], &State::default(), &[], &[])
+        .unwrap()
+    else {
+        panic!("seed accepted");
+    };
+    let err = propose_with_test_actor(&probe, vec![], &candidate_state, &[], &[]).unwrap_err();
+    assert!(matches!(err, EvalError::DivisionByZero), "{err:?}");
+}
