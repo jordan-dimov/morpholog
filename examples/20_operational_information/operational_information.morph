@@ -61,8 +61,9 @@ program operational_information
 -- An experiment names the game being priced and the BASELINE
 -- coalition: the one that observes nothing, whose best risk is the
 -- floor every other coalition is measured against. The baseline is an
--- ordinary coalition - it maps every case to the same observation, and
--- every rule below treats it like any other. No special case.
+-- ordinary coalition mapping every case to the same observation - and
+-- that blindness is a rule below (`baseline_observes_nothing`), not a
+-- promise in prose.
 --
 -- `unique by (experiment)` says the key determines the whole claim:
 -- one experiment, one baseline. The runtime refuses a second,
@@ -131,9 +132,11 @@ predicate DecisionValue(experiment: Subject, coalition: Subject,
                         gain: Decimal)
   unique by (experiment, coalition)
 
--- The pair under study: two member coalitions and their join. The
--- synergy read at the bottom of the file subtracts the members' values
--- from the joint value over exactly this claim.
+-- The pair under study: two member coalitions and their join. Naming
+-- a coalition `joint` earns nothing by itself - two rules below hold
+-- its observations to being exactly what the members see together,
+-- so the synergy read at the bottom of the file is a property of the
+-- record, not an assertion by the harness.
 predicate CoalitionPair(experiment: Subject, left: Subject,
                         right: Subject, joint: Subject)
   unique by (experiment)
@@ -170,6 +173,15 @@ invariant sealed_losses_price_every_outcome:
    and Action(experiment, action))
   implies Loss(experiment, world, action, _)
 
+-- A game with no moves cannot be priced. Without this rule an empty
+-- action menu would slip through the rule above vacuously - losses
+-- "priced over every action" when there are none - and the sealed
+-- experiment would be frozen forever, unable to certify a single
+-- choice. No companion is needed for cases: probabilities that are
+-- never negative cannot sum to one over an empty case set.
+invariant sealed_experiment_has_an_action:
+  Sealed(experiment) implies Action(experiment, _)
+
 -- The referential floor: a mapping or a price may only name parts the
 -- experiment has declared. These hold always, not just at the seal,
 -- so construction proceeds declare-first.
@@ -181,6 +193,51 @@ invariant observations_map_declared_parts:
 invariant losses_price_declared_parts:
   Loss(experiment, world, action, _)
   implies (Case(experiment, _, world, _) and Action(experiment, action))
+
+-- The baseline is blind, by law. Every decision value below is
+-- measured against the baseline's risk, so a baseline that could see
+-- anything would quietly change what "value" means everywhere in the
+-- record - improvement over an informed reference instead of over
+-- acting blind. Any two of the baseline's mappings must agree on the
+-- observation; with the totality rule at the seal, every case then
+-- shares that single observation.
+invariant baseline_observes_nothing:
+  (Experiment(experiment, baseline)
+   and ObservedAs(experiment, baseline, case_a, observation_a)
+   and ObservedAs(experiment, baseline, case_b, observation_b))
+  implies observation_a = observation_b
+
+-- What makes the nominated join a JOIN. Its observations must carry
+-- exactly what the two members carry together: no more, no less.
+-- First, no invention - two cases that neither member can tell apart
+-- (same left observation, same right observation, by the repeated
+-- variables) the joint cannot tell apart either. A joint that
+-- distinguishes them is consulting an oracle the pair does not have,
+-- and its "synergy" would be smuggled-in information.
+invariant joint_does_not_invent_information:
+  (CoalitionPair(experiment, left, right, joint)
+   and ObservedAs(experiment, left, case_a, left_observation)
+   and ObservedAs(experiment, right, case_a, right_observation)
+   and ObservedAs(experiment, joint, case_a, joint_a)
+   and ObservedAs(experiment, left, case_b, left_observation)
+   and ObservedAs(experiment, right, case_b, right_observation)
+   and ObservedAs(experiment, joint, case_b, joint_b))
+  implies joint_a = joint_b
+
+-- And second, no forgetting - two cases the joint lumps together
+-- must be ones neither member could separate. Together the two rules
+-- pin the joint's observation to the pair of the members'
+-- observations, up to renaming: consulted together means exactly
+-- that, as a checked property of the mappings.
+invariant joint_preserves_member_information:
+  (CoalitionPair(experiment, left, right, joint)
+   and ObservedAs(experiment, joint, case_a, joint_observation)
+   and ObservedAs(experiment, joint, case_b, joint_observation)
+   and ObservedAs(experiment, left, case_a, left_a)
+   and ObservedAs(experiment, left, case_b, left_b)
+   and ObservedAs(experiment, right, case_a, right_a)
+   and ObservedAs(experiment, right, case_b, right_b))
+  implies (left_a = left_b and right_a = right_b)
 
 
 -- ---------------------------------------------------------------------
@@ -309,8 +366,13 @@ transformation declare_loss(experiment_id, world_id, action_id, loss):
   require not Sealed(experiment_id)
   admit Loss(experiment_id, world_id, action_id, loss)
 
+-- The pair is part of the experimental design, so it is declared
+-- before the seal like everything else. Nominating the join after
+-- the certificates are in would invite choosing the question to fit
+-- the answer.
 transformation declare_pair(experiment_id, left_id, right_id, joint_id):
   require Experiment(experiment_id, _)
+  require not Sealed(experiment_id)
   admit CoalitionPair(experiment_id, left_id, right_id, joint_id)
 
 -- The seal itself. The gate asks only that the experiment exists and
@@ -377,14 +439,19 @@ derived InformationSummary(experiment, coalition, risk):
 -- members are worth nothing, the pair is worth everything, and the
 -- excess is the joint value itself. An additive excess witness, not a
 -- full decomposition of who contributed what.
+--
+-- The three certified values sit in the domain, not in lookups: until
+-- all three exist this view simply has no row, which is the honest
+-- reading of a half-certified experiment - not an error to handle.
 predicate PairSynergy(experiment: Subject, left: Subject,
                       right: Subject, joint: Subject, excess: Decimal)
 
 derived PairSynergy(experiment, left, right, joint):
-  over CoalitionPair(experiment, left, right, joint)
-  value excess = (value DecisionValue(experiment, joint, _)
-                  - value DecisionValue(experiment, left, _)
-                  - value DecisionValue(experiment, right, _))
+  over (CoalitionPair(experiment, left, right, joint)
+        and DecisionValue(experiment, left, left_gain)
+        and DecisionValue(experiment, right, right_gain)
+        and DecisionValue(experiment, joint, joint_gain))
+  value excess = joint_gain - left_gain - right_gain
 
 
 -- ---------------------------------------------------------------------
