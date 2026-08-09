@@ -35,7 +35,7 @@ use crate::fold;
 use crate::format::{arith_token, compare_token};
 use crate::ir::{
     ArithOp, Builtin, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, RuleName,
-    Stmt, Term, Value, ValueExpr, Var, arith_result_kind, arith_unique_counterpart,
+    Stmt, SumSeed, Term, Value, ValueExpr, Var, arith_result_kind, arith_unique_counterpart,
 };
 use crate::validate::{ValidationContext, ValidationError, VocabularyKind};
 
@@ -1037,6 +1037,21 @@ impl CheckCtx<'_> {
                 if let Term::Var(name) = term {
                     self.use_var(scope, name);
                 }
+                // A wildcard never carries a value. Claim patterns and
+                // `value` lookups hold their wildcards as bare `Term`s,
+                // so anything reaching this arm is a value position.
+                // Deduplicated per context: operand-checking paths can
+                // infer the same node twice, and one wildcard is one
+                // finding.
+                if matches!(term, Term::Wildcard) {
+                    let error = ValidationError::WildcardAsValue {
+                        context: self.context.clone(),
+                    };
+                    if !self.errors.contains(&error) {
+                        self.errors.push(error);
+                    }
+                    return InferredKind::UnknownOrAny;
+                }
                 resolved_term_kind(term, &scope.kinds)
             }
             // The condition walks under a cloned scope (its bindings
@@ -1182,11 +1197,7 @@ impl CheckCtx<'_> {
                 }
                 InferredKind::UnknownOrAny
             }
-            ValueExpr::Sum {
-                value,
-                body,
-                seed: _,
-            } => {
+            ValueExpr::Sum { value, body, seed } => {
                 // Body-first inference on a cloned scope so body-
                 // bound names (the iteration binding, plus any
                 // others the body introduces) do not leak into the
@@ -1205,6 +1216,25 @@ impl CheckCtx<'_> {
                     k @ (PredicateArgKind::Duration | PredicateArgKind::Quantity(_)),
                 ) = resolved
                 {
+                    // The seed pass sees less than this scope does (an
+                    // outer-bound variable, a builtin call), so the two
+                    // authorities can disagree - and the stored seed is
+                    // what an empty sum evaluates to. A mismatch is a
+                    // guaranteed runtime type error on the first empty
+                    // book; refuse it here instead.
+                    let seed_kind = match seed {
+                        SumSeed::Decimal => PredicateArgKind::Decimal,
+                        SumSeed::Duration => PredicateArgKind::Duration,
+                        SumSeed::Quantity(u) => PredicateArgKind::Quantity(u.clone()),
+                    };
+                    if seed_kind != k {
+                        let context = self.context.clone();
+                        self.errors.push(ValidationError::EmptySumUntyped {
+                            target: k.clone(),
+                            seed: seed_kind,
+                            context,
+                        });
+                    }
                     return InferredKind::Known(k);
                 }
                 if let InferredKind::Known(actual) = resolved

@@ -305,6 +305,33 @@ pub enum ValidationError {
         actual: PredicateArgKind,
         context: ValidationContext,
     },
+    /// A wildcard stood where a value must be produced - an arithmetic
+    /// operand, a conditional branch, a sum target. `_` marks an unread
+    /// position in a claim pattern; it never carries a value, so the
+    /// kernel would raise `EvalError::TypeMismatch` the first time the
+    /// expression is evaluated.
+    #[error(
+        "`_` is not a value in {context}: a wildcard marks an unread claim-pattern \
+         position; name the variable this expression reads"
+    )]
+    WildcardAsValue { context: ValidationContext },
+    /// A sum's target reads as a duration or quantity, but the
+    /// statically resolved empty-case seed disagrees - so the first
+    /// empty book would evaluate to a bare-decimal zero no duration or
+    /// quantity comparison accepts, a kernel error at runtime. Refused
+    /// here instead: bind the summed value inside the sum's own body,
+    /// or pair the target with an operand that carries the kind, so
+    /// the seed pass can type the empty sum.
+    #[error(
+        "the empty case of this sum cannot be typed in {context}: the target reads as \
+         {target}, but the empty sum would evaluate to {seed}; bind the summed value \
+         in the sum's own body, or give the target an operand of the expected kind"
+    )]
+    EmptySumUntyped {
+        target: PredicateArgKind,
+        seed: PredicateArgKind,
+        context: ValidationContext,
+    },
     /// An operator (comparator, arithmetic, `sum`, `for`, `in`,
     /// `value default`) received an operand of the wrong kind.
     /// `Le(date, decimal)`, `Add(subject, decimal)`,

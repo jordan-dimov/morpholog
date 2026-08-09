@@ -1247,7 +1247,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             // a sum of durations is a duration (counted laytime is the
             // forcing case), a sum of same-unit quantities is a quantity
             // of that unit. The empty sum is the lowered `seed` - the
-            // typed zero of the summed variable's declared kind, so an
+            // typed zero of the summed expression's declared kind, so an
             // empty cargo book is `0 t` and an empty time book `PT0S`,
             // with no zero-valued seed claim needed to open either.
             // Mixing kinds, or units within the quantity kind, is an

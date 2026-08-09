@@ -493,7 +493,7 @@ pub(super) fn collect_binders_in_value(expr: &ValueExpr, out: &mut BTreeSet<Stri
     match expr {
         // The sum target is CONSUMED against the bindings the sum body
         // supplies - it introduces nothing, so it is not a binder. A
-        // let flowing into it is an ordinary term-slot substitution.
+        // let flowing into it is ordinary value substitution.
         ValueExpr::Sum { value, body, .. } => {
             collect_binders_in_value(value, out);
             collect_binders_in_prop(body, out);

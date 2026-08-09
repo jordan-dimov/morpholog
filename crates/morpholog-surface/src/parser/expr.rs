@@ -694,10 +694,11 @@ where
         // The target is a full value expression consuming the body's
         // bindings: a variable (`sum(amount | ...)`), a decimal literal
         // counting matches (`sum(1 | ...)`), or a computed quantity
-        // (`sum(probability * loss | ...)`). The value grammar never
-        // uses `|`, so the separator stays unambiguous. A bare `actor`
-        // target is still rejected here: the actor is a subject, not a
-        // summable value.
+        // (`sum(probability * loss | ...)`). The only `|` the value
+        // grammar carries sits inside an aggregate's own parentheses
+        // (`min(x | ...)`), so the separator stays unambiguous. A bare
+        // `actor` target is still rejected here: the actor is a
+        // subject, not a summable value.
         let sum_expr = just(Token::KwSum)
             .ignore_then(
                 value

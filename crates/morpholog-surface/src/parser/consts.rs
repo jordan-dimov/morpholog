@@ -656,8 +656,9 @@ fn refuse_pattern_positions_in_value(
             refuse_pattern_positions_in_value(left, const_names, decl_span, errors);
             refuse_pattern_positions_in_value(right, const_names, decl_span, errors);
         }
-        // The sum TARGET never binds (consumed against the body's
-        // bindings) - only the body's patterns are scanned.
+        // The sum target never binds (it is consumed against the
+        // body's bindings), but constructs nested inside it can carry
+        // their own pattern positions, so both sides are scanned.
         ValueExpr::Sum { value, body, .. } => {
             refuse_pattern_positions_in_value(value, const_names, decl_span, errors);
             refuse_pattern_positions_in_prop(body, const_names, decl_span, errors);

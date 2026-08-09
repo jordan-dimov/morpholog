@@ -11,7 +11,9 @@
 //! Runs in `parse_program` after `resolve_defined_calls` (the kind of a
 //! variable bound inside a definition call is found by descending into
 //! the definition's body). Idempotent; hand-built IR that skips it
-//! keeps the decimal default, which is the pre-pass behaviour.
+//! keeps the decimal default, and validation refuses the programme
+//! (`EmptySumUntyped`) wherever that default disagrees with a duration
+//! or quantity target the checker can see.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -153,15 +155,22 @@ fn lower_in_stmt(stmt: &mut Stmt, ctx: &SeedContext<'_>) {
     }
 }
 
-/// The seed for an expression target: a variable resolves from the
-/// claim position that binds it, a literal carries its kind itself
-/// (`sum(1 t | ...)` counts in tonnes, empty or not), and arithmetic
-/// resolves through the rule matrix over its operands' seeds - with
+/// The seed for an expression target. Each shape resolves from static
+/// knowledge of its own: a variable from the claim position that binds
+/// it, a literal from its own kind (`sum(1 t | ...)` counts in tonnes,
+/// empty or not), a `value` lookup from the declared kind of the
+/// position it extracts, a conditional from its branches where their
+/// seeds agree, a nested sum from its own already-resolved seed, and
+/// arithmetic through the rule matrix over its operands' seeds - with
 /// one side unresolved, the matrix's unique-counterpart rule still
 /// pins the result where only one rule fits (`qty * factor` is a
 /// quantity of `qty`'s unit whatever `factor` turns out to be).
-/// Anything else - a lookup, a conditional, a nested aggregate, an
-/// outer-bound operand - leaves the decimal default standing.
+///
+/// What remains unresolved - an outer-bound variable, a builtin call,
+/// an operand no rule pins - leaves the decimal default standing; when
+/// the checker's richer scope reads a duration or quantity there, the
+/// disagreement is refused at authoring time (`EmptySumUntyped`), so
+/// the default is never a wrong zero in a committed programme.
 fn value_seed(value: &ValueExpr, body: &Prop, ctx: &SeedContext<'_>) -> Option<SumSeed> {
     let kind = match value {
         ValueExpr::Term(Term::Var(v)) => return var_seed(v, body, ctx, &mut BTreeSet::new()),
@@ -180,6 +189,31 @@ fn value_seed(value: &ValueExpr, body: &Prop, ctx: &SeedContext<'_>) -> Option<S
                 (None, None) => return None,
             }
         }
+        // The lookup's kind is the declaration's, at the position the
+        // wildcard extracts - the same authority `value_of_result_kind`
+        // consults in the checker.
+        ValueExpr::ValueOf {
+            predicate, args, ..
+        } => {
+            let kinds = ctx.kinds.get(predicate.as_str())?;
+            let position = args.iter().position(|a| matches!(a, Term::Wildcard))?;
+            kinds.get(position)?.clone()
+        }
+        // A conditional is typed only when both branches agree; the
+        // sum's body supplies the bindings either branch would consume.
+        ValueExpr::Cond {
+            then, otherwise, ..
+        } => {
+            let t = value_seed(then, body, ctx)?;
+            let o = value_seed(otherwise, body, ctx)?;
+            if t != o {
+                return None;
+            }
+            return Some(t);
+        }
+        // A nested sum's own seed was resolved by the recursion just
+        // above this call; it IS the nested sum's empty-case kind.
+        ValueExpr::Sum { seed, .. } => return Some(seed.clone()),
         _ => return None,
     };
     match kind {

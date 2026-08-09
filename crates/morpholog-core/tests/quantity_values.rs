@@ -58,9 +58,10 @@ fn must_error_naming(
 /// The miniature: a vessel's capacity caps the summed cargo parcels
 /// (tonnes); a daily demurrage amount (USD) scaled by the days of
 /// excess caps the summed settlements. Setting the rate seeds a
-/// zero-amount settlement, the same pattern a duration aggregate
-/// uses - the empty sum is decimal, so a unitful aggregate seeds its
-/// own zero (see `unseeded_quantity_aggregate_errors_at_evaluation`).
+/// zero-amount settlement, the pre-`lower_sum_seeds` ritual - kept
+/// deliberately UN-lowered here, so the evaluation-tier landmine that
+/// pass exists for stays reachable (see
+/// `unseeded_quantity_aggregate_errors_at_evaluation`).
 fn mini_demurrage() -> Program {
     program("mini_demurrage")
         .predicates(vec![
@@ -179,9 +180,25 @@ fn mini_demurrage() -> Program {
 }
 
 #[test]
-fn mini_demurrage_programme_validates() {
+fn unlowered_quantity_sums_are_refused_and_lowering_restores_validity() {
+    // Un-lowered, each quantity aggregate carries the decimal default
+    // seed while the checker reads a quantity - the empty book would
+    // be a kernel type error, so validation refuses the disagreement
+    // by name instead of letting it wait for runtime.
     let p = mini_demurrage();
-    assert!(p.validate().is_ok(), "{:?}", p.validate());
+    let errors = p.validate().expect_err("un-lowered quantity sums refuse");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::EmptySumUntyped { .. })),
+        "expected EmptySumUntyped, got {errors:?}"
+    );
+
+    // The same programme through the seed pass is exactly lawful: the
+    // summed variables' declared kinds type every empty sum.
+    let mut lowered = mini_demurrage();
+    morpholog_core::lower_sum_seeds(&mut lowered);
+    assert!(lowered.validate().is_ok(), "{:?}", lowered.validate());
 }
 
 #[test]

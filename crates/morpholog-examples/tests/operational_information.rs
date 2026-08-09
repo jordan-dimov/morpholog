@@ -48,9 +48,10 @@ fn gate_rejected(outcome: &Result<Outcome, EvalError>) -> bool {
     )
 }
 
-/// The four uniform cases of `W = A xor B`, worlds `w0`/`w1`, with
-/// every observation mapping and every loss declared - stopping just
-/// short of the seal so refusal tests can perturb the construction.
+/// The uniform cases of `W = A xor B` (one per bit pair), worlds
+/// `w0`/`w1`, with every observation mapping and every loss declared -
+/// stopping just short of the seal so refusal tests can perturb the
+/// construction.
 fn xor_unsealed() -> State {
     let mut s = State::default();
     s = accept(s, &op::create_experiment(), vec![subj("exp"), subj("none")]);

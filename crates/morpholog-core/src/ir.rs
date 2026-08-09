@@ -380,7 +380,9 @@ pub enum ValueExpr {
     /// by [`crate::lower_sum_seeds`] from the summed expression's
     /// declared kinds - so an empty sum over a `Decimal[t]` position is
     /// `0 t`, not a bare decimal that no quantity comparison could
-    /// accept. Un-lowered hand-built IR keeps the decimal default.
+    /// accept. Un-lowered hand-built IR keeps the decimal default, and
+    /// validation refuses it (`EmptySumUntyped`) wherever the checker
+    /// reads a duration or quantity target that default would betray.
     Sum {
         value: Box<ValueExpr>,
         body: Box<Prop>,
