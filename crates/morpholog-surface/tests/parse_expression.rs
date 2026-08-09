@@ -911,7 +911,7 @@ fn parses_sum() {
     else {
         panic!("expected Sum");
     };
-    assert_eq!(value, Term::Var("amount".into()));
+    assert_eq!(*value, ValueExpr::Term(Term::Var("amount".into())));
     assert!(matches!(*body, Prop::Claim { .. }));
 }
 
@@ -936,7 +936,10 @@ fn sum_target_can_be_a_decimal_literal_for_counting() {
     let ValueExpr::Sum { value, .. } = got else {
         panic!("expected Sum, got {got:?}");
     };
-    assert_eq!(value, Term::Literal(Value::Decimal("1".to_string())));
+    assert_eq!(
+        *value,
+        ValueExpr::Term(Term::Literal(Value::Decimal("1".to_string())))
+    );
 }
 
 value_err!(sum_target_must_be_variable_not_wildcard, "sum(_ | Foo())");

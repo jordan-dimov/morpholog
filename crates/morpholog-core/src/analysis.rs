@@ -144,7 +144,11 @@ fn value_refs(
             value_refs(left, definitions, seen, out);
             value_refs(right, definitions, seen, out);
         }
-        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
+        ValueExpr::Sum { value, body, .. } => {
+            value_refs(value, definitions, seen, out);
+            prop_refs(body, definitions, seen, out);
+        }
+        ValueExpr::Extremum { body, .. } => {
             prop_refs(body, definitions, seen, out);
         }
         // The footprint is the conservative union of the condition
@@ -1422,11 +1426,18 @@ impl<'a> ParamCollector<'a> {
                 value,
                 body,
                 seed: _,
+            } => {
+                self.walk_prop(body);
+                // No expectation on the target: its kind is decided by
+                // the body's bindings, not the sum's position. Walked
+                // for what sits inside it (a lookup's claim reference,
+                // an operand a literal pins).
+                self.walk_value(value, None);
             }
             // An extremum yields one of the members it ranged over, so
             // like a sum its kind is observed inside the body and the
             // aggregate itself pins nothing.
-            | ValueExpr::Extremum { value, body, .. } => {
+            ValueExpr::Extremum { value, body, .. } => {
                 let _ = value;
                 self.walk_prop(body);
             }

@@ -691,32 +691,39 @@ where
 
         // sum aggregator: `sum ( <target> | <body-prop> )`
         //
-        // The target is either a variable bound by the body (the usual
-        // `sum(amount | ...)`) or a decimal literal, which turns the sum
-        // into a count of matches (`sum(1 | ...)`). `actor` lexes as a
-        // plain identifier, so it must be rejected here.
-        let sum_target = choice((
-            ident.map(|name| Term::Var(name.into())),
-            decimal_or_quantity_term(),
-        ));
+        // The target is a full value expression consuming the body's
+        // bindings: a variable (`sum(amount | ...)`), a decimal literal
+        // counting matches (`sum(1 | ...)`), or a computed quantity
+        // (`sum(probability * loss | ...)`). The only `|` the value
+        // grammar carries sits inside an aggregate's own parentheses
+        // (`min(x | ...)`), so the separator stays unambiguous. A bare
+        // `actor` target is still rejected here: the actor is a
+        // subject, not a summable value.
         let sum_expr = just(Token::KwSum)
             .ignore_then(
-                sum_target
+                value
                     .clone()
                     .then_ignore(just(Token::Pipe))
                     .then(prop.clone())
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
-            .validate(|(target, body): (Term, Prop), e, emitter| {
-                if matches!(&target, Term::Var(n) if n.as_str() == "actor") {
+            .validate(|(target, body): (ValueExpr, Prop), e, emitter| {
+                if matches!(&target, ValueExpr::Term(Term::Actor)) {
                     let span: SimpleSpan = e.span();
                     emitter.emit(Rich::custom(
                         span,
                         "`actor` cannot be a sum target: `actor` is reserved as the special term that resolves to the proposing transition's actor, not a regular variable",
                     ));
                 }
+                if matches!(&target, ValueExpr::Term(Term::Wildcard)) {
+                    let span: SimpleSpan = e.span();
+                    emitter.emit(Rich::custom(
+                        span,
+                        "`_` cannot be a sum target: name the value the sum adds up",
+                    ));
+                }
                 ValueExpr::Sum {
-                    value: target,
+                    value: Box::new(target),
                     body: Box::new(body),
                     seed: SumSeed::default(),
                 }
@@ -745,8 +752,14 @@ where
         // over the bindings a body defines. The keyword is consumed once
         // and the inner shape decides, so neither form has to unwind a
         // half-parsed call to try the other.
-        let extremum_body = sum_target
-            .clone()
+        // The extremum target stays a variable or literal: no worked
+        // example has forced a computed target here, and the sum
+        // generalisation deliberately does not ride along.
+        let extremum_target = choice((
+            ident.map(|name| Term::Var(name.into())),
+            decimal_or_quantity_term(),
+        ));
+        let extremum_body = extremum_target
             .then_ignore(just(Token::Pipe))
             .then(prop.clone())
             .map(MinMaxShape::Aggregate);

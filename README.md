@@ -132,6 +132,7 @@ The list below is by domain. If you arrived with a question rather than a domain
 - [**Covenant reporting**](examples/17_covenant_reporting/) - a loan's reporting calendar as law: test dates rolling exactly three calendar months (clamped at month ends), and an overdue notice refused unless its day count is the record's own.
 - [**Scoped charges**](examples/18_scoped_charges/) - the record picks a figure's source: metered charges take the meter's own reading, caller-sourced ones the proposal, and a line wearing the wrong source's figure cannot commit.
 - [**Charging years**](examples/19_charging_years/) - a billing period may not straddle the 1 April anniversary: the charging year is a computed coordinate, the gate compares both ends' years, and the run records the year the rules computed.
+- [**Operational information**](examples/20_operational_information/) - what two sources are worth only together: an untrusted optimiser files exact expected-loss certificates, the record recomputes every figure and refuses any beaten action, and a pair's synergy is read off the certified values.
 - [**Worked embedder**](examples/etrm_embedder/) - the same trade lifecycle driven from Python through the generated client, including post-commit delivery.
 
 ## Try it yourself

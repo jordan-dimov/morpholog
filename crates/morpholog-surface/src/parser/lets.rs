@@ -393,7 +393,7 @@ pub(super) fn substitute_in_value(
             body,
             ..
         } => {
-            substitute_term_slot(target, name, value, binding, "as a sum target", errors);
+            substitute_in_value(target, name, value, binding, errors);
             substitute_in_prop(body, name, value, binding, errors);
         }
         ValueExpr::Extremum {
@@ -493,10 +493,12 @@ pub(super) fn collect_binders_in_value(expr: &ValueExpr, out: &mut BTreeSet<Stri
     match expr {
         // The sum target is CONSUMED against the bindings the sum body
         // supplies - it introduces nothing, so it is not a binder. A
-        // let flowing into it is an ordinary term-slot substitution.
-        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
-            collect_binders_in_prop(body, out)
+        // let flowing into it is ordinary value substitution.
+        ValueExpr::Sum { value, body, .. } => {
+            collect_binders_in_value(value, out);
+            collect_binders_in_prop(body, out);
         }
+        ValueExpr::Extremum { body, .. } => collect_binders_in_prop(body, out),
         // The condition's quantifier binders count for collision
         // detection like a sum body's; the branches recurse.
         ValueExpr::Cond {
@@ -582,8 +584,11 @@ pub(super) fn vars_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
             value: target,
             body,
             ..
+        } => {
+            vars_in_value(target, out);
+            vars_in_prop(body, out);
         }
-        | ValueExpr::Extremum {
+        ValueExpr::Extremum {
             value: target,
             body,
             ..
@@ -645,8 +650,8 @@ fn count_value(expr: &ValueExpr, name: &Var) -> usize {
             value: target,
             body,
             ..
-        }
-        | ValueExpr::Extremum {
+        } => count_value(target, name) + count_prop(body, name),
+        ValueExpr::Extremum {
             value: target,
             body,
             ..
@@ -697,9 +702,10 @@ fn count_growth_value(expr: &ValueExpr, name: &Var) -> usize {
         ValueExpr::Arith { left, right, .. } => {
             count_growth_value(left, name) + count_growth_value(right, name)
         }
-        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
-            count_growth_prop(body, name)
+        ValueExpr::Sum { value, body, .. } => {
+            count_growth_value(value, name) + count_growth_prop(body, name)
         }
+        ValueExpr::Extremum { body, .. } => count_growth_prop(body, name),
         ValueExpr::ValueOf { default, .. } => {
             default.as_ref().map_or(0, |d| count_growth_value(d, name))
         }
@@ -735,7 +741,8 @@ pub(super) fn value_nodes(expr: &ValueExpr) -> usize {
     1 + match expr {
         ValueExpr::Term(_) => 0,
         ValueExpr::Arith { left, right, .. } => value_nodes(left) + value_nodes(right),
-        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => 1 + prop_nodes(body),
+        ValueExpr::Sum { value, body, .. } => value_nodes(value) + prop_nodes(body),
+        ValueExpr::Extremum { body, .. } => 1 + prop_nodes(body),
         ValueExpr::ValueOf { args, default, .. } => {
             args.len() + default.as_ref().map_or(0, |d| value_nodes(d))
         }

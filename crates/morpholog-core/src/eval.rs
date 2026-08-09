@@ -1247,7 +1247,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             // a sum of durations is a duration (counted laytime is the
             // forcing case), a sum of same-unit quantities is a quantity
             // of that unit. The empty sum is the lowered `seed` - the
-            // typed zero of the summed variable's declared kind, so an
+            // typed zero of the summed expression's declared kind, so an
             // empty cargo book is `0 t` and an empty time book `PT0S`,
             // with no zero-valued seed claim needed to open either.
             // Mixing kinds, or units within the quantity kind, is an
@@ -1268,7 +1268,9 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             let matches = find_matches(body, ctx)?;
             let mut total = SumTotal::Empty;
             for m in matches {
-                let next = resolve_term(value, &m, ctx.actor)?;
+                // The target is a full value expression consuming this
+                // witness's bindings, evaluated exactly once per match.
+                let next = eval_value(value, &ctx.with_bindings(&m))?;
                 total = match (total, next) {
                     (SumTotal::Empty, EvalValue::Decimal(d)) => SumTotal::Decimal(BigSum::new(d)),
                     (SumTotal::Empty, EvalValue::Duration(d)) => SumTotal::Duration(d.as_nanos()),

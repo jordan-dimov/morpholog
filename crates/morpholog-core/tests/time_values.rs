@@ -39,8 +39,10 @@ fn must_reject(
 /// The miniature: NOR is tendered at an instant; commencement is NOR
 /// shifted by a six-hour turn time; counting intervals accumulate
 /// against an allowed laytime, seeded at zero when the allowance is
-/// set (the empty sum is decimal, so a duration aggregate seeds its
-/// own zero - see `unseeded_duration_aggregate_errors_at_evaluation`).
+/// set - the pre-`lower_sum_seeds` ritual, kept deliberately
+/// UN-lowered here so the evaluation-tier landmine that pass exists
+/// for stays reachable (see
+/// `unseeded_duration_aggregate_errors_at_evaluation`).
 fn mini_laytime() -> Program {
     program("mini_laytime")
         .predicates(vec![
@@ -143,9 +145,24 @@ fn mini_laytime() -> Program {
 }
 
 #[test]
-fn mini_laytime_programme_validates() {
+fn unlowered_duration_sums_are_refused_and_lowering_restores_validity() {
+    // Un-lowered, the counted-laytime aggregate carries the decimal
+    // default seed while the checker reads a duration - the empty
+    // book would be a kernel type error, so validation refuses the
+    // disagreement by name instead of letting it wait for runtime.
     let p = mini_laytime();
-    assert!(p.validate().is_ok(), "{:?}", p.validate());
+    let errors = p.validate().expect_err("un-lowered duration sums refuse");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::EmptySumUntyped { .. })),
+        "expected EmptySumUntyped, got {errors:?}"
+    );
+
+    // The same programme through the seed pass is exactly lawful.
+    let mut lowered = mini_laytime();
+    morpholog_core::lower_sum_seeds(&mut lowered);
+    assert!(lowered.validate().is_ok(), "{:?}", lowered.validate());
 }
 
 #[test]

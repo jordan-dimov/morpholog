@@ -111,7 +111,7 @@ fn arb_value_expr() -> impl Strategy<Value = ValueExpr> {
                 }
             }),
             (arb_term(), arb_prop_leaf()).prop_map(|(value, body)| ValueExpr::Sum {
-                value,
+                value: Box::new(ValueExpr::Term(value)),
                 body: Box::new(body),
                 seed: SumSeed::default(),
             }),

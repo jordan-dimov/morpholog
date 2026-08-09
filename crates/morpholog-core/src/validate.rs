@@ -305,6 +305,33 @@ pub enum ValidationError {
         actual: PredicateArgKind,
         context: ValidationContext,
     },
+    /// A wildcard stood where a value must be produced - an arithmetic
+    /// operand, a conditional branch, a sum target. `_` marks an unread
+    /// position in a claim pattern; it never carries a value, so the
+    /// kernel would raise `EvalError::TypeMismatch` the first time the
+    /// expression is evaluated.
+    #[error(
+        "`_` is not a value in {context}: a wildcard marks an unread claim-pattern \
+         position; name the variable this expression reads"
+    )]
+    WildcardAsValue { context: ValidationContext },
+    /// A sum's target reads as a duration or quantity, but the
+    /// statically resolved empty-case seed disagrees - so the first
+    /// empty book would evaluate to a bare-decimal zero no duration or
+    /// quantity comparison accepts, a kernel error at runtime. Refused
+    /// here instead: bind the summed value inside the sum's own body,
+    /// or pair the target with an operand that carries the kind, so
+    /// the seed pass can type the empty sum.
+    #[error(
+        "the empty case of this sum cannot be typed in {context}: the target reads as \
+         {target}, but the empty sum would evaluate to {seed}; bind the summed value \
+         in the sum's own body, or give the target an operand of the expected kind"
+    )]
+    EmptySumUntyped {
+        target: PredicateArgKind,
+        seed: PredicateArgKind,
+        context: ValidationContext,
+    },
     /// An operator (comparator, arithmetic, `sum`, `for`, `in`,
     /// `value default`) received an operand of the wrong kind.
     /// `Le(date, decimal)`, `Add(subject, decimal)`,
@@ -761,33 +788,33 @@ fn value_depth_capped(
     depths: &HashMap<DefinitionName, usize>,
 ) -> Option<usize> {
     let inner = budget.checked_sub(1)?;
-    let below = match expr {
-        ValueExpr::Term(_) => 0,
-        ValueExpr::Arith { left, right, .. } => {
-            value_depth_capped(left, inner, depths)?.max(value_depth_capped(right, inner, depths)?)
-        }
-        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
-            prop_depth_capped(body, inner, depths)?
-        }
-        ValueExpr::ValueOf { default, .. } => match default.as_deref() {
-            Some(d) => value_depth_capped(d, inner, depths)?,
-            None => 0,
-        },
-        ValueExpr::Call { args, .. } => {
-            let mut deepest = 0;
-            for a in args {
-                deepest = deepest.max(value_depth_capped(a, inner, depths)?);
+    let below =
+        match expr {
+            ValueExpr::Term(_) => 0,
+            ValueExpr::Arith { left, right, .. } => value_depth_capped(left, inner, depths)?
+                .max(value_depth_capped(right, inner, depths)?),
+            ValueExpr::Sum { value, body, .. } => value_depth_capped(value, inner, depths)?
+                .max(prop_depth_capped(body, inner, depths)?),
+            ValueExpr::Extremum { body, .. } => prop_depth_capped(body, inner, depths)?,
+            ValueExpr::ValueOf { default, .. } => match default.as_deref() {
+                Some(d) => value_depth_capped(d, inner, depths)?,
+                None => 0,
+            },
+            ValueExpr::Call { args, .. } => {
+                let mut deepest = 0;
+                for a in args {
+                    deepest = deepest.max(value_depth_capped(a, inner, depths)?);
+                }
+                deepest
             }
-            deepest
-        }
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => prop_depth_capped(when, inner, depths)?
-            .max(value_depth_capped(then, inner, depths)?)
-            .max(value_depth_capped(otherwise, inner, depths)?),
-    };
+            ValueExpr::Cond {
+                when,
+                then,
+                otherwise,
+            } => prop_depth_capped(when, inner, depths)?
+                .max(value_depth_capped(then, inner, depths)?)
+                .max(value_depth_capped(otherwise, inner, depths)?),
+        };
     let total = below + 1;
     (total <= budget).then_some(total)
 }
@@ -907,9 +934,10 @@ fn value_exceeds_depth(
         ValueExpr::Arith { left, right, .. } => {
             value_exceeds_depth(left, budget, depths) || value_exceeds_depth(right, budget, depths)
         }
-        ValueExpr::Sum { body, .. } | ValueExpr::Extremum { body, .. } => {
-            prop_exceeds_depth(body, budget, depths)
+        ValueExpr::Sum { value, body, .. } => {
+            value_exceeds_depth(value, budget, depths) || prop_exceeds_depth(body, budget, depths)
         }
+        ValueExpr::Extremum { body, .. } => prop_exceeds_depth(body, budget, depths),
         ValueExpr::ValueOf { default, .. } => default
             .as_deref()
             .is_some_and(|d| value_exceeds_depth(d, budget, depths)),

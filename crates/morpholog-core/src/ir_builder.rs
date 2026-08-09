@@ -313,9 +313,9 @@ pub fn max(lhs: ValueExpr, rhs: ValueExpr) -> ValueExpr {
     call(Builtin::Max, vec![lhs, rhs])
 }
 
-pub fn sum(value: Term, body: Prop) -> ValueExpr {
+pub fn sum(value: impl Into<ValueExpr>, body: Prop) -> ValueExpr {
     ValueExpr::Sum {
-        value,
+        value: Box::new(value.into()),
         body: Box::new(body),
         seed: SumSeed::default(),
     }

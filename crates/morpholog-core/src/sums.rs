@@ -11,7 +11,9 @@
 //! Runs in `parse_program` after `resolve_defined_calls` (the kind of a
 //! variable bound inside a definition call is found by descending into
 //! the definition's body). Idempotent; hand-built IR that skips it
-//! keeps the decimal default, which is the pre-pass behaviour.
+//! keeps the decimal default, and validation refuses the programme
+//! (`EmptySumUntyped`) wherever that default disagrees with a duration
+//! or quantity target the checker can see.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -112,18 +114,8 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
         ValueExpr::Extremum { body, .. } => lower_in_prop(body, ctx),
         ValueExpr::Sum { value, body, seed } => {
             lower_in_prop(body, ctx);
-            let resolved = match value {
-                // A variable's kind comes from the claim position that
-                // binds it; a literal target carries its kind itself
-                // (`sum(1 t | ...)` counts in tonnes, empty or not).
-                Term::Var(v) => var_seed(v, body, ctx, &mut BTreeSet::new()),
-                Term::Literal(Value::Quantity { unit, .. }) => {
-                    Some(SumSeed::Quantity(unit.clone()))
-                }
-                Term::Literal(Value::Duration(_)) => Some(SumSeed::Duration),
-                _ => None,
-            };
-            if let Some(resolved) = resolved {
+            lower_in_value(value, ctx);
+            if let Some(resolved) = value_seed(value, body, ctx) {
                 *seed = resolved;
             }
         }
@@ -160,6 +152,83 @@ fn lower_in_stmt(stmt: &mut Stmt, ctx: &SeedContext<'_>) {
                 lower_in_stmt(inner, ctx);
             }
         }
+    }
+}
+
+/// The seed for an expression target. Each shape resolves from static
+/// knowledge of its own: a variable from the claim position that binds
+/// it, a literal from its own kind (`sum(1 t | ...)` counts in tonnes,
+/// empty or not), a `value` lookup from the declared kind of the
+/// position it extracts, a conditional from its branches where their
+/// seeds agree, a nested sum from its own already-resolved seed, and
+/// arithmetic through the rule matrix over its operands' seeds - with
+/// one side unresolved, the matrix's unique-counterpart rule still
+/// pins the result where only one rule fits (`qty * factor` is a
+/// quantity of `qty`'s unit whatever `factor` turns out to be).
+///
+/// What remains unresolved - an outer-bound variable, a builtin call,
+/// an operand no rule pins - leaves the decimal default standing; when
+/// the checker's richer scope reads a duration or quantity there, the
+/// disagreement is refused at authoring time (`EmptySumUntyped`), so
+/// the default is never a wrong zero in a committed programme.
+fn value_seed(value: &ValueExpr, body: &Prop, ctx: &SeedContext<'_>) -> Option<SumSeed> {
+    let kind = match value {
+        ValueExpr::Term(Term::Var(v)) => return var_seed(v, body, ctx, &mut BTreeSet::new()),
+        ValueExpr::Term(Term::Literal(Value::Quantity { unit, .. })) => {
+            return Some(SumSeed::Quantity(unit.clone()));
+        }
+        ValueExpr::Term(Term::Literal(Value::Duration(_))) => return Some(SumSeed::Duration),
+        ValueExpr::Term(Term::Literal(Value::Decimal(_))) => return Some(SumSeed::Decimal),
+        ValueExpr::Arith { op, left, right } => {
+            let l = value_seed(left, body, ctx).map(seed_kind);
+            let r = value_seed(right, body, ctx).map(seed_kind);
+            match (l, r) {
+                (Some(l), Some(r)) => crate::ir::arith_result_kind(*op, &l, &r)?,
+                (Some(k), None) => crate::ir::arith_unique_counterpart(*op, &k, true)?.1,
+                (None, Some(k)) => crate::ir::arith_unique_counterpart(*op, &k, false)?.1,
+                (None, None) => return None,
+            }
+        }
+        // The lookup's kind is the declaration's, at the position the
+        // wildcard extracts - the same authority `value_of_result_kind`
+        // consults in the checker.
+        ValueExpr::ValueOf {
+            predicate, args, ..
+        } => {
+            let kinds = ctx.kinds.get(predicate.as_str())?;
+            let position = args.iter().position(|a| matches!(a, Term::Wildcard))?;
+            kinds.get(position)?.clone()
+        }
+        // A conditional is typed only when both branches agree; the
+        // sum's body supplies the bindings either branch would consume.
+        ValueExpr::Cond {
+            then, otherwise, ..
+        } => {
+            let t = value_seed(then, body, ctx)?;
+            let o = value_seed(otherwise, body, ctx)?;
+            if t != o {
+                return None;
+            }
+            return Some(t);
+        }
+        // A nested sum's own seed was resolved by the recursion just
+        // above this call; it IS the nested sum's empty-case kind.
+        ValueExpr::Sum { seed, .. } => return Some(seed.clone()),
+        _ => return None,
+    };
+    match kind {
+        PredicateArgKind::Decimal => Some(SumSeed::Decimal),
+        PredicateArgKind::Duration => Some(SumSeed::Duration),
+        PredicateArgKind::Quantity(u) => Some(SumSeed::Quantity(u)),
+        _ => None,
+    }
+}
+
+fn seed_kind(seed: SumSeed) -> PredicateArgKind {
+    match seed {
+        SumSeed::Decimal => PredicateArgKind::Decimal,
+        SumSeed::Duration => PredicateArgKind::Duration,
+        SumSeed::Quantity(u) => PredicateArgKind::Quantity(u),
     }
 }
 

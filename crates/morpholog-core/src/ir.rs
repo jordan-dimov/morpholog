@@ -370,17 +370,21 @@ pub enum ValueExpr {
         right: Box<ValueExpr>,
     },
     /// Sums `value` over every binding the `body` produces. `value` is
-    /// usually a variable bound by the body (`sum(amount | ...)`); a
-    /// decimal-literal `value` turns the sum into a count of matches
-    /// (`sum(1 | ...)`).
+    /// any value expression consuming the body's bindings, evaluated
+    /// exactly once per witness: a variable (`sum(amount | ...)`), a
+    /// decimal literal counting matches (`sum(1 | ...)`), or a computed
+    /// quantity (`sum(probability * loss | ...)` - the expected-loss
+    /// recompute that forced the generalisation).
     ///
     /// `seed` is the zero an empty sum evaluates to, resolved statically
-    /// by [`crate::lower_sum_seeds`] from the summed variable's declared
-    /// kind - so an empty sum over a `Decimal[t]` position is `0 t`, not
-    /// a bare decimal that no quantity comparison could accept. Un-lowered
-    /// hand-built IR keeps the decimal default.
+    /// by [`crate::lower_sum_seeds`] from the summed expression's
+    /// declared kinds - so an empty sum over a `Decimal[t]` position is
+    /// `0 t`, not a bare decimal that no quantity comparison could
+    /// accept. Un-lowered hand-built IR keeps the decimal default, and
+    /// validation refuses it (`EmptySumUntyped`) wherever the checker
+    /// reads a duration or quantity target that default would betray.
     Sum {
-        value: Term,
+        value: Box<ValueExpr>,
         body: Box<Prop>,
         seed: SumSeed,
     },
@@ -450,6 +454,12 @@ pub enum ValueExpr {
         builtin: Builtin,
         args: Vec<ValueExpr>,
     },
+}
+
+impl From<Term> for ValueExpr {
+    fn from(t: Term) -> Self {
+        ValueExpr::Term(t)
+    }
 }
 
 /// A comparison operator, independent of operand domain. Carried by

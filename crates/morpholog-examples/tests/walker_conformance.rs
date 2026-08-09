@@ -280,6 +280,30 @@ transformation waive(r):
     admit Waived(r)
 ";
 
+/// An expression-valued sum target in adversarial position: the
+/// target multiplies a body-bound quantity by a factor read through a
+/// `value` lookup whose predicate appears NOWHERE else, and the sum
+/// sits in a let-sugared consequent. A walker that still treats the
+/// target as a leaf loses the lookup's predicate from the footprint;
+/// a seed pass that stops at arithmetic loses the tonnes.
+const EXPRESSION_TARGET_SUM: &str = "\
+program expression_target_sum
+predicate Holding(h: Subject, qty: Decimal[t])
+predicate Haircut(factor: Decimal)
+predicate Limit(cap: Decimal[t])
+invariant weighted_book_within_limit:
+    let weighted = (sum(qty * (value Haircut(_)) | Holding(_, qty)))
+    Limit(cap) implies weighted <= cap
+transformation set_haircut(factor):
+    admit Haircut(factor)
+transformation set_limit(cap):
+    require Haircut(_)
+    admit Limit(cap)
+transformation hold(h, qty):
+    require Limit(_)
+    admit Holding(h, qty)
+";
+
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         ("sum_through_defined_chain", SUM_THROUGH_DEFINED_CHAIN),
@@ -296,6 +320,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("span_in_date_arithmetic", SPAN_IN_DATE_ARITHMETIC),
         ("cond_across_children", COND_ACROSS_CHILDREN),
         ("period_index_across_contexts", PERIOD_INDEX_ACROSS_CONTEXTS),
+        ("expression_target_sum", EXPRESSION_TARGET_SUM),
     ]
 }
 
@@ -477,6 +502,45 @@ fn the_sum_seed_resolves_through_the_defined_chain() {
         *seed,
         SumSeed::Quantity("t".into()),
         "the summed variable's kind is two call frames away"
+    );
+}
+
+#[test]
+fn the_expression_target_keeps_its_lookup_in_the_footprint() {
+    // `Haircut` is read ONLY inside the sum's target expression; a
+    // footprint walker that treats the target as a leaf would let
+    // scoped loading omit its claims.
+    let program = parsed("expression_target_sum", EXPRESSION_TARGET_SUM);
+    let inv = &program.invariants[0];
+    let mut footprint = std::collections::BTreeSet::new();
+    predicates_referenced_by_prop(&inv.body, &program.definitions, &mut footprint);
+    assert!(
+        footprint.contains(&PredicateName::from("Haircut")),
+        "the lookup inside the target is in the footprint: {footprint:?}"
+    );
+}
+
+#[test]
+fn the_expression_target_seed_resolves_through_the_arithmetic() {
+    // `qty * (value Haircut(_))`: the left side is `Decimal[t]`, the
+    // right side statically unknown - the matrix's unique-counterpart
+    // rule still pins the result, so the empty book is `0 t`, not a
+    // bare decimal no quantity comparison could accept.
+    use morpholog_core::{Prop, SumSeed, ValueExpr};
+    let program = parsed("expression_target_sum", EXPRESSION_TARGET_SUM);
+    let Prop::Implies { right, .. } = &program.invariants[0].body else {
+        panic!("implication expected");
+    };
+    let Prop::Compare { left, .. } = right.as_ref() else {
+        panic!("comparison expected");
+    };
+    let ValueExpr::Sum { seed, .. } = left.as_ref() else {
+        panic!("sum expected");
+    };
+    assert_eq!(
+        *seed,
+        SumSeed::Quantity("t".into()),
+        "the seed resolves through the arithmetic target"
     );
 }
 

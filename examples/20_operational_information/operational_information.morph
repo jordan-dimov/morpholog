@@ -1,0 +1,471 @@
+program operational_information
+
+-- =====================================================================
+-- Operational information: what two sources know that neither knows
+-- alone.
+--
+-- The story, for a reader who has never opened an information theory
+-- book.
+--
+-- A hidden outcome is about to be revealed - call it the WORLD. You
+-- must act before the reveal: pick one action from a fixed menu, and
+-- pay a known loss that depends on which world turns up and which
+-- action you picked. Before choosing you may consult sources. A
+-- SOURCE is anything that narrows the possibilities: a sensor, a
+-- report, a data feed. A COALITION is a set of sources consulted
+-- together; what a coalition tells you about one concrete situation
+-- is its OBSERVATION.
+--
+-- How much is a coalition worth? Not what it "contains" in the
+-- abstract - what it saves you. Play the game blind and there is some
+-- smallest expected loss you cannot beat, however cleverly you
+-- choose. Play it with the coalition's observation in hand and there
+-- is a new, usually smaller, smallest expected loss. The drop is the
+-- coalition's DECISION VALUE. Information, measured operationally: the
+-- expected loss it lets you avoid.
+--
+-- The reason this needs governing at all is the phenomenon the worked
+-- data demonstrates. Take a secret bit computed from two others - the
+-- exclusive-or, the parity, of A and B. Source A alone tells you
+-- nothing about the secret: whatever A shows, the secret is still
+-- fifty-fifty. Source B alone, the same. Consulted together they
+-- determine the secret exactly. Each source is worthless; the pair is
+-- decisive. The information exists only in the combination - so any
+-- accounting that values sources one at a time and adds the figures
+-- up gets this case exactly wrong. Whether a real portfolio of
+-- sources behaves this way is a question of record, and this
+-- programme is the record.
+--
+-- Who computes what. Searching for the best action is optimisation,
+-- and optimisation stays outside: an external engine enumerates,
+-- searches, does whatever it likes. But it cannot simply announce "the
+-- best achievable risk is 0.5". It must file a CERTIFICATE: the
+-- action it chooses at every observation, with each choice's exact
+-- contribution to expected loss. The runtime recomputes every figure
+-- from the admitted cases and refuses a certificate that is wrong by
+-- any amount, or an action that any declared alternative beats. The
+-- engine proposes; the record cross-examines. Nothing here trusts a
+-- solver's word.
+--
+-- A note on words. The runtime never stores "facts". It stores CLAIMS
+-- - statements someone has proposed and the rules have admitted. An
+-- INVARIANT is a rule the runtime will not let any change break. A
+-- `require` is a gate on a single action: a yes/no question asked
+-- before that action may proceed.
+-- =====================================================================
+
+
+-- ---------------------------------------------------------------------
+-- The experiment and its parts.
+--
+-- An experiment names the game being priced and the BASELINE
+-- coalition: the one that observes nothing, whose best risk is the
+-- floor every other coalition is measured against. The baseline is an
+-- ordinary coalition mapping every case to the same observation - and
+-- that blindness is a rule below (`baseline_observes_nothing`), not a
+-- promise in prose.
+--
+-- `unique by (experiment)` says the key determines the whole claim:
+-- one experiment, one baseline. The runtime refuses a second,
+-- contradicting declaration - the disciplines on every predicate below
+-- read the same way.
+-- ---------------------------------------------------------------------
+
+predicate Experiment(experiment: Subject, baseline: Subject)
+  unique by (experiment)
+
+predicate Coalition(experiment: Subject, coalition: Subject)
+
+predicate Action(experiment: Subject, action: Subject)
+
+-- One possible situation: which world it holds and how likely it is.
+-- The probabilities are exact decimals proposed by the harness, and
+-- the rules below hold them to account: never negative here, summing
+-- to exactly one by the time the experiment seals.
+predicate Case(experiment: Subject, case: Subject, world: Subject,
+               probability: Decimal)
+  unique by (experiment, case)
+
+-- What a coalition sees in each case. Two cases mapped to the same
+-- observation are indistinguishable to that coalition - that is the
+-- whole notion of "knowing less". One observation per case per
+-- coalition, by discipline.
+predicate ObservedAs(experiment: Subject, coalition: Subject,
+                     case: Subject, observation: Subject)
+  unique by (experiment, coalition, case)
+
+-- The price of ending up in `world` having chosen `action`.
+predicate Loss(experiment: Subject, world: Subject, action: Subject,
+               loss: Decimal)
+  unique by (experiment, world, action)
+
+-- Sealing closes construction. Before the seal the experiment is
+-- being assembled; after it, cases, mappings, actions, and losses are
+-- frozen, and certificates may begin. The completeness rules below
+-- are conditioned on this claim, so sealing is the moment the whole
+-- construction is judged at once.
+predicate Sealed(experiment: Subject)
+
+-- The certificate, in three layers.
+--
+-- A BayesChoice is one commitment: at this observation, this
+-- coalition acts thus, and the choice contributes `weighted_risk` to
+-- the coalition's total expected loss. The figure is the
+-- probability-weighted loss summed over the cases behind the
+-- observation - deliberately NOT divided by the observation's
+-- probability. The division would change nothing (every action at the
+-- observation shares the same denominator, so the same action wins)
+-- and the undivided contributions add up directly to the total.
+predicate BayesChoice(experiment: Subject, coalition: Subject,
+                      observation: Subject, action: Subject,
+                      weighted_risk: Decimal)
+  unique by (experiment, coalition, observation)
+
+-- A coalition's certified total: its Bayes risk, the smallest
+-- expected loss it cannot beat.
+predicate BayesRisk(experiment: Subject, coalition: Subject,
+                    risk: Decimal)
+  unique by (experiment, coalition)
+
+-- And what the coalition is worth: the baseline's risk minus its own.
+predicate DecisionValue(experiment: Subject, coalition: Subject,
+                        gain: Decimal)
+  unique by (experiment, coalition)
+
+-- The pair under study: two member coalitions and their join. Naming
+-- a coalition `joint` earns nothing by itself - two rules below hold
+-- its observations to being exactly what the members see together,
+-- so the synergy read at the bottom of the file is a property of the
+-- record, not an assertion by the harness.
+predicate CoalitionPair(experiment: Subject, left: Subject,
+                        right: Subject, joint: Subject)
+  unique by (experiment)
+
+
+-- ---------------------------------------------------------------------
+-- Construction rules: the experiment must be whole before it seals.
+-- ---------------------------------------------------------------------
+
+-- A probability is never negative, from the moment it is proposed.
+invariant probabilities_are_never_negative:
+  Case(_, _, _, probability) implies 0 <= probability
+
+-- At the seal, the case probabilities are a distribution: they sum to
+-- exactly one. Not "close to one" - the comparison is exact, and a
+-- harness that proposes 0.24 where 0.25 belongs finds the seal
+-- refused.
+invariant sealed_experiment_has_unit_probability:
+  Sealed(experiment)
+  implies sum(probability | Case(experiment, _, _, probability)) = 1
+
+-- At the seal, every coalition accounts for every case. A case no
+-- coalition observed is a hole in the game; the seal is refused until
+-- the mapping is total.
+invariant sealed_coalitions_observe_every_case:
+  (Sealed(experiment) and Coalition(experiment, coalition)
+   and Case(experiment, case, _, _))
+  implies ObservedAs(experiment, coalition, case, _)
+
+-- At the seal, every world that can turn up has a price for every
+-- action on the menu. No un-priced outcome survives sealing.
+invariant sealed_losses_price_every_outcome:
+  (Sealed(experiment) and Case(experiment, _, world, _)
+   and Action(experiment, action))
+  implies Loss(experiment, world, action, _)
+
+-- A game with no moves cannot be priced. Without this rule an empty
+-- action menu would slip through the rule above vacuously - losses
+-- "priced over every action" when there are none - and the sealed
+-- experiment would be frozen forever, unable to certify a single
+-- choice. No companion is needed for cases: probabilities that are
+-- never negative cannot sum to one over an empty case set.
+invariant sealed_experiment_has_an_action:
+  Sealed(experiment) implies Action(experiment, _)
+
+-- The referential floor: a mapping or a price may only name parts the
+-- experiment has declared. These hold always, not just at the seal,
+-- so construction proceeds declare-first.
+invariant observations_map_declared_parts:
+  ObservedAs(experiment, coalition, case, _)
+  implies (Coalition(experiment, coalition)
+           and Case(experiment, case, _, _))
+
+invariant losses_price_declared_parts:
+  Loss(experiment, world, action, _)
+  implies (Case(experiment, _, world, _) and Action(experiment, action))
+
+-- The baseline is blind, by law. Every decision value below is
+-- measured against the baseline's risk, so a baseline that could see
+-- anything would quietly change what "value" means everywhere in the
+-- record - improvement over an informed reference instead of over
+-- acting blind. Any two of the baseline's mappings must agree on the
+-- observation; with the totality rule at the seal, every case then
+-- shares that single observation.
+invariant baseline_observes_nothing:
+  (Experiment(experiment, baseline)
+   and ObservedAs(experiment, baseline, case_a, observation_a)
+   and ObservedAs(experiment, baseline, case_b, observation_b))
+  implies observation_a = observation_b
+
+-- What makes the nominated join a JOIN. Its observations must carry
+-- exactly what the two members carry together: no more, no less.
+-- First, no invention - two cases that neither member can tell apart
+-- (same left observation, same right observation, by the repeated
+-- variables) the joint cannot tell apart either. A joint that
+-- distinguishes them is consulting an oracle the pair does not have,
+-- and its "synergy" would be smuggled-in information.
+invariant joint_does_not_invent_information:
+  (CoalitionPair(experiment, left, right, joint)
+   and ObservedAs(experiment, left, case_a, left_observation)
+   and ObservedAs(experiment, right, case_a, right_observation)
+   and ObservedAs(experiment, joint, case_a, joint_a)
+   and ObservedAs(experiment, left, case_b, left_observation)
+   and ObservedAs(experiment, right, case_b, right_observation)
+   and ObservedAs(experiment, joint, case_b, joint_b))
+  implies joint_a = joint_b
+
+-- And second, no forgetting - two cases the joint lumps together
+-- must be ones neither member could separate. Together the two rules
+-- pin the joint's observation to the pair of the members'
+-- observations, up to renaming: consulted together means exactly
+-- that, as a checked property of the mappings.
+invariant joint_preserves_member_information:
+  (CoalitionPair(experiment, left, right, joint)
+   and ObservedAs(experiment, joint, case_a, joint_observation)
+   and ObservedAs(experiment, joint, case_b, joint_observation)
+   and ObservedAs(experiment, left, case_a, left_a)
+   and ObservedAs(experiment, left, case_b, left_b)
+   and ObservedAs(experiment, right, case_a, right_a)
+   and ObservedAs(experiment, right, case_b, right_b))
+  implies (left_a = left_b and right_a = right_b)
+
+
+-- ---------------------------------------------------------------------
+-- Certificate rules: every figure is the record's own recompute.
+--
+-- These two rules are the heart of the example. The engine computed
+-- its figures however it computed them; the record recomputes each
+-- one from the admitted cases and refuses disagreement. Computation
+-- and enforcement in different hands.
+-- ---------------------------------------------------------------------
+
+-- A choice may only certify an observation the coalition can actually
+-- see, with an action actually on the menu.
+invariant choices_certify_declared_observations:
+  BayesChoice(experiment, coalition, observation, action, _)
+  implies (ObservedAs(experiment, coalition, _, observation)
+           and Action(experiment, action))
+
+-- The submitted contribution IS the recompute: probability times
+-- loss, summed over exactly the cases this coalition maps to this
+-- observation. The sum's target is the product itself - the quantity
+-- expected loss is made of - and each matching case contributes its
+-- own probability-times-loss exactly once.
+invariant choice_risk_is_the_exact_recompute:
+  let recomputed = (sum(probability * loss
+    | Case(experiment, case, world, probability)
+      and ObservedAs(experiment, coalition, case, observation)
+      and Loss(experiment, world, action, loss)))
+  BayesChoice(experiment, coalition, observation, action, weighted_risk)
+  implies weighted_risk = recomputed
+
+-- And the chosen action is unbeaten: for every declared action, the
+-- same recompute with that action's losses does no better. Ties are
+-- lawful - two equally good actions are both defensible - but a
+-- strictly better alternative anywhere refuses the choice. This is
+-- optimality as a checkable property of the record, not a solver's
+-- status string.
+invariant chosen_action_is_bayes_optimal:
+  let alternative_risk = (sum(probability * loss
+    | Case(experiment, case, world, probability)
+      and ObservedAs(experiment, coalition, case, observation)
+      and Loss(experiment, world, alternative, loss)))
+  (BayesChoice(experiment, coalition, observation, _, weighted_risk)
+   and Action(experiment, alternative))
+  implies weighted_risk <= alternative_risk
+
+-- A certified total is the sum of its parts: the coalition's risk is
+-- exactly the sum of its choices' contributions, nothing added,
+-- nothing dropped.
+invariant coalition_risk_is_the_sum_of_its_choices:
+  BayesRisk(experiment, coalition, risk)
+  implies risk = sum(weighted_risk
+    | BayesChoice(experiment, coalition, _, _, weighted_risk))
+
+-- A risk certificate belongs to a declared coalition of a declared
+-- experiment.
+invariant risks_certify_declared_coalitions:
+  BayesRisk(experiment, coalition, _)
+  implies (Experiment(experiment, _) and Coalition(experiment, coalition))
+
+-- A decision value is the risk given up: the baseline's certified
+-- risk minus the coalition's own. The engine proposes the figure; the
+-- record checks the subtraction.
+invariant decision_value_is_the_risk_given_up:
+  (DecisionValue(experiment, coalition, gain)
+   and Experiment(experiment, baseline)
+   and BayesRisk(experiment, baseline, baseline_risk)
+   and BayesRisk(experiment, coalition, coalition_risk))
+  implies gain = baseline_risk - coalition_risk
+
+-- ... and its companions. The rule above compares against the
+-- baseline's certified risk WHERE ONE EXISTS - a comparison rule goes
+-- quiet when the claim it compares against is missing. These two
+-- guarantee the claims exist, so the rule above can never pass
+-- emptily. Rules that select a governing claim only govern as a pair
+-- with the rule that guarantees the claim.
+invariant decision_values_rest_on_a_certified_risk:
+  DecisionValue(experiment, coalition, _)
+  implies BayesRisk(experiment, coalition, _)
+
+invariant decision_values_rest_on_a_certified_baseline:
+  (DecisionValue(experiment, _, _) and Experiment(experiment, baseline))
+  implies BayesRisk(experiment, baseline, _)
+
+-- The pair under study names declared coalitions.
+invariant pairs_name_declared_coalitions:
+  CoalitionPair(experiment, left, right, joint)
+  implies (Coalition(experiment, left) and Coalition(experiment, right)
+           and Coalition(experiment, joint))
+
+
+-- ---------------------------------------------------------------------
+-- The only ways state may change.
+--
+-- Construction first: each declaration passes its gates while the
+-- experiment is open, and none is possible after the seal. There is
+-- no transformation that retracts a case or a price - an experiment
+-- is assembled, sealed, and priced; it is never quietly edited.
+-- ---------------------------------------------------------------------
+
+transformation create_experiment(experiment_id, baseline_id):
+  require not Experiment(experiment_id, _)
+  admit Experiment(experiment_id, baseline_id)
+  admit Coalition(experiment_id, baseline_id)
+
+transformation declare_coalition(experiment_id, coalition_id):
+  require Experiment(experiment_id, _)
+  require not Sealed(experiment_id)
+  admit Coalition(experiment_id, coalition_id)
+
+transformation declare_action(experiment_id, action_id):
+  require Experiment(experiment_id, _)
+  require not Sealed(experiment_id)
+  admit Action(experiment_id, action_id)
+
+transformation declare_case(experiment_id, case_id, world_id, probability):
+  require Experiment(experiment_id, _)
+  require not Sealed(experiment_id)
+  admit Case(experiment_id, case_id, world_id, probability)
+
+transformation map_observation(experiment_id, coalition_id, case_id, observation_id):
+  require not Sealed(experiment_id)
+  admit ObservedAs(experiment_id, coalition_id, case_id, observation_id)
+
+transformation declare_loss(experiment_id, world_id, action_id, loss):
+  require not Sealed(experiment_id)
+  admit Loss(experiment_id, world_id, action_id, loss)
+
+-- The pair is part of the experimental design, so it is declared
+-- before the seal like everything else. Nominating the join after
+-- the certificates are in would invite choosing the question to fit
+-- the answer.
+transformation declare_pair(experiment_id, left_id, right_id, joint_id):
+  require Experiment(experiment_id, _)
+  require not Sealed(experiment_id)
+  admit CoalitionPair(experiment_id, left_id, right_id, joint_id)
+
+-- The seal itself. The gate asks only that the experiment exists and
+-- is not already sealed; the hard questions - unit probability, total
+-- observation, total pricing - are the sealed-conditioned invariants
+-- above, all judged at this commit. An incomplete experiment does not
+-- seal, and the refusal names the rule that caught it.
+transformation seal_experiment(experiment_id):
+  require Experiment(experiment_id, _)
+  require not Sealed(experiment_id)
+  admit Sealed(experiment_id)
+
+-- Certification: only a sealed experiment is priced, so the cases a
+-- certificate is recomputed from can no longer shift under it.
+transformation submit_choice(experiment_id, coalition_id, observation_id,
+                             action_id, weighted_risk):
+  require Sealed(experiment_id)
+  admit BayesChoice(experiment_id, coalition_id, observation_id,
+                    action_id, weighted_risk)
+
+-- A coalition's total may only be certified once every observation
+-- the coalition can see has a certified choice. The gate is the
+-- completeness question, margin-call shaped: is there any observation
+-- of this coalition still missing its choice? One missing observation
+-- refuses the total.
+transformation certify_coalition_risk(experiment_id, coalition_id, risk):
+  require Sealed(experiment_id)
+  require not (exists observation:
+    ObservedAs(experiment_id, coalition_id, _, observation)
+    and not BayesChoice(experiment_id, coalition_id, observation, _, _))
+  admit BayesRisk(experiment_id, coalition_id, risk)
+
+transformation certify_decision_value(experiment_id, coalition_id, gain):
+  bind Experiment(experiment_id, baseline)
+  require BayesRisk(experiment_id, baseline, _)
+  require BayesRisk(experiment_id, coalition_id, _)
+  admit DecisionValue(experiment_id, coalition_id, gain)
+
+
+-- ---------------------------------------------------------------------
+-- The read side.
+--
+-- Two views, recomputed from the certificates whenever someone asks,
+-- never stored on the side - so neither can drift from the claims it
+-- is built from.
+-- ---------------------------------------------------------------------
+
+-- One row per fully certified coalition: its risk beside its gain.
+-- The gain is read from the certified DecisionValue, and reading it
+-- is safe precisely because the rules above pin it to the recompute
+-- - a claim the invariants govern cannot drift from the arithmetic.
+predicate InformationSummary(experiment: Subject, coalition: Subject,
+                             risk: Decimal, gain: Decimal)
+
+derived InformationSummary(experiment, coalition, risk):
+  over (Coalition(experiment, coalition)
+        and BayesRisk(experiment, coalition, risk)
+        and DecisionValue(experiment, coalition, _))
+  value gain = value DecisionValue(experiment, coalition, _)
+
+-- The headline: how far the pair's joint value exceeds the sum of its
+-- members' values. For the parity data this is the whole story - both
+-- members are worth nothing, the pair is worth everything, and the
+-- excess is the joint value itself. An additive excess witness, not a
+-- full decomposition of who contributed what.
+--
+-- The three certified values guard the domain, so until all three
+-- exist this view simply has no row - the honest reading of a
+-- half-certified experiment, not an error to handle. The excess then
+-- subtracts the certified values the domain just proved present.
+predicate PairSynergy(experiment: Subject, left: Subject,
+                      right: Subject, joint: Subject, excess: Decimal)
+
+derived PairSynergy(experiment, left, right, joint):
+  over (CoalitionPair(experiment, left, right, joint)
+        and DecisionValue(experiment, left, _)
+        and DecisionValue(experiment, right, _)
+        and DecisionValue(experiment, joint, _))
+  value excess = (value DecisionValue(experiment, joint, _)
+                  - value DecisionValue(experiment, left, _)
+                  - value DecisionValue(experiment, right, _))
+
+
+-- ---------------------------------------------------------------------
+-- What this example deliberately does not cover.
+--
+-- Correcting a certificate after admission (supersession, as the
+-- verified-revenue example models it); entropy, logarithms, or any
+-- information measure beyond decision loss; and optimisation itself -
+-- the search for good actions stays outside, because a record that
+-- searched would have opinions, and the whole design is that it only
+-- ever checks. It certifies finite expected-loss arithmetic over a
+-- governed case corpus; it proves no general theorem about
+-- information. What it does guarantee: no certified figure in this
+-- record can disagree with the cases it was computed from.
+-- ---------------------------------------------------------------------
