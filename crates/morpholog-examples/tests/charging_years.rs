@@ -3,7 +3,7 @@
 //! gates refuse a straddling period and an unpublished year at the
 //! act, the invariants refuse both against any other act, the
 //! recorded year is the record's own computation, and the year's
-//! number and its sheet's start date are provably one fact.
+//! number and its sheet's start date provably name the same period.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

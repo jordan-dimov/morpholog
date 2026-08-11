@@ -1231,7 +1231,8 @@ transformation open_run(r, starts_on):
     admit Run(r, starts_on, year)
 ";
     let program = parse_program(source).expect("period_start_of should parse");
-    assert!(program.validate().is_ok(), "{:?}", program.validate());
+    let validated = program.validate();
+    assert!(validated.is_ok(), "{validated:?}");
     let formatted = morpholog_core::format::format_program(&program);
     let reparsed = parse_program(&formatted)
         .unwrap_or_else(|e| panic!("formatted source should reparse; got {e:?}\n{formatted}"));
