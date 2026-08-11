@@ -332,6 +332,38 @@ fn a_parameter_refined_by_the_span_slot_cannot_escape_the_expression() {
 }
 
 #[test]
+fn the_round_trip_refuses_in_the_clipped_lowermost_period() {
+    // period_index answers for EVERY representable date - its
+    // lowermost period is clipped, so this date sits in a period
+    // whose own starting boundary is unrepresentable. Composing back
+    // therefore refuses rather than returning some wrong date: the
+    // anniversary round-trip test is total only where the period's
+    // starting boundary is representable.
+    let t = transformation(
+        "probe",
+        params(&[]),
+        vec![require(eq(
+            period_start_of(
+                term(date("0000-04-01")),
+                term(span("P1Y")),
+                period_index(
+                    term(date("0000-04-01")),
+                    term(span("P1Y")),
+                    term(date("-009999-01-01")),
+                ),
+            ),
+            term(date("-009999-01-01")),
+        ))],
+    );
+    let err = propose_with_test_actor(&t, vec![], &State::default(), &[], &[])
+        .expect_err("the clipped period's boundary is unrepresentable");
+    assert!(
+        format!("{err}").contains("outside the representable calendar"),
+        "got: {err}"
+    );
+}
+
+#[test]
 fn the_boundary_form_round_trips_through_the_formatter() {
     use morpholog_core::ir_builder::{invariant, program};
     let p = program("fmt")

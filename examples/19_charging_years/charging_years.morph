@@ -33,44 +33,49 @@ program charging_years
 const charging_epoch = (@2000-04-01)
 const charging_epoch_year = (2000)
 
--- One billing run: the period it covers and the charging year it
--- resolved - computed by the rules, on the record, so a band-rate
--- lookup can name its year. The period is INCLUSIVE at both ends:
--- it covers starts_on through ends_on as billed days, so a full
--- charging year runs 1 April through 31 March. Runs are history:
--- one record per run, never rewritten.
-predicate BillingRun(run: Subject, starts_on: Date, ends_on: Date, charging_year: Decimal)
+-- One billing run: the period it covers, the charging year it
+-- resolved - computed by the rules, on the record - and WHICH rate
+-- sheet it priced from. The last is the caller's honest input: only
+-- the billing engine knows which file it read, so it must say, and
+-- the rules refuse a sheet that is not the run's own year's. The
+-- period is INCLUSIVE at both ends: it covers starts_on through
+-- ends_on as billed days, so a full charging year runs 1 April
+-- through 31 March. Runs are history: one record per run, never
+-- rewritten.
+predicate BillingRun(run: Subject, starts_on: Date, ends_on: Date, charging_year: Decimal, rate_sheet: Subject)
     unique by (run)
     append only
 
--- The regulator publishes each year's band rates as one dated sheet,
--- and the sheet's own name for its year is the DAY IT BEGINS - "the
+-- The regulator publishes each year's band rates as one sheet, and
+-- the sheet's own name for its year is the DAY IT BEGINS - "the
 -- rates from 1 April 2026". The run above records the year as a
 -- NUMBER. Two spellings of the same period, kept honest below: the
 -- rules can turn a date into its year's index (period_index) and the
 -- index back into the year's first day (period_start_of), so neither
--- spelling is ever taken on trust.
-predicate RatesPublished(year_starts_on: Date)
+-- spelling is ever taken on trust. Each sheet is its own subject -
+-- an identity a run can name - and one sheet starts one year.
+predicate RateSheet(sheet: Subject, year_starts_on: Date)
+    unique by (sheet)
 
 -- Publishing is guarded by the round trip: take the date's year
 -- index, compute that year's first day back, and demand it is the
 -- same date. Only a true anniversary survives - a sheet claiming to
 -- start on 3 April is refused, because year 26's first day is
 -- 1 April 2026 and no other.
-transformation publish_rates(year_starts_on):
+transformation publish_rates(sheet, year_starts_on):
     require the_date_is_an_anniversary: year_starts_on = period_start_of(charging_epoch, span(P1Y), period_index(charging_epoch, span(P1Y), year_starts_on))
-    admit RatesPublished(year_starts_on)
+    admit RateSheet(sheet, year_starts_on)
 
 -- A period runs forwards.
 invariant runs_run_forwards:
-    BillingRun(_, starts_on, ends_on, _) implies starts_on on_or_before ends_on
+    BillingRun(_, starts_on, ends_on, _, _) implies starts_on on_or_before ends_on
 
 -- The regulation's rule, over every committed run: both ends of the
 -- period sit in the same 1-April-anchored year. The coordinate is
 -- computed inside the rule, each time - there is no stored boundary
 -- date anyone maintains, and no prevalidation to skip.
 invariant runs_stay_inside_one_charging_year:
-    BillingRun(_, starts_on, ends_on, _)
+    BillingRun(_, starts_on, ends_on, _, _)
     implies period_index(charging_epoch, span(P1Y), starts_on) = period_index(charging_epoch, span(P1Y), ends_on)
 
 -- The recorded year is the record's own computation - the same
@@ -78,30 +83,30 @@ invariant runs_stay_inside_one_charging_year:
 -- caller never chooses the figure, and a figure that disagrees by
 -- one cannot commit.
 invariant runs_record_their_own_charging_year:
-    BillingRun(_, starts_on, _, charging_year)
+    BillingRun(_, starts_on, _, charging_year, _)
     implies charging_year = charging_epoch_year + period_index(charging_epoch, span(P1Y), starts_on)
 
--- A run may only price from rates that exist: its year's sheet must
--- be on the record. The rule reaches the sheet by computing the
--- year's first day from the recorded NUMBER - subtract the epoch's
--- year back off, ask for that period's start - so a run whose number
--- disagreed with the sheet it priced from could never commit. This
--- closes the gap the gate alone leaves open: the gate checks the
--- proposal in front of it, the invariant holds over every committed
--- run whatever order the record was built in.
-invariant runs_price_from_a_published_year:
-    BillingRun(_, _, _, charging_year)
-    implies (exists year_starts_on: RatesPublished(year_starts_on) and year_starts_on = period_start_of(charging_epoch, span(P1Y), charging_year - charging_epoch_year))
+-- The rule this example exists for: the sheet a run RECORDS must be
+-- the sheet OF ITS YEAR. The rule computes the year's first day back
+-- from the recorded number - subtract the epoch's year off, ask for
+-- that period's start - and demands the named sheet start exactly
+-- there. A run that read last year's file cannot commit, however
+-- ordinary its period looks; the file choice left the loader's head
+-- and became record law. The gate below refuses it at the act, this
+-- invariant against any path that skirts the gate.
+invariant runs_price_from_their_years_sheet:
+    BillingRun(_, _, _, charging_year, rate_sheet)
+    implies (exists year_starts_on: RateSheet(rate_sheet, year_starts_on) and year_starts_on = period_start_of(charging_epoch, span(P1Y), charging_year - charging_epoch_year))
 
--- The billing act. The gates refuse a straddling period and an
--- unpublished year before anything is admitted; the lets compute the
--- coordinate the run will carry and the year's first day to look the
--- rates up by. Note what the caller does NOT supply: the charging
--- year is not a parameter at all.
-transformation open_run(run, starts_on, ends_on):
+-- The billing act. The caller names the sheet it priced from; the
+-- gates refuse a straddling period and a sheet that is not the
+-- run's own year's before anything is admitted. Note what the
+-- caller does NOT supply: the charging year is not a parameter at
+-- all, and naming the right year's sheet is the only way through.
+transformation open_run(run, starts_on, ends_on, rate_sheet):
     require the_period_runs_forwards: starts_on on_or_before ends_on
     require the_period_stays_inside_one_charging_year: period_index(charging_epoch, span(P1Y), starts_on) = period_index(charging_epoch, span(P1Y), ends_on)
     let year_starts_on = period_start_of(charging_epoch, span(P1Y), period_index(charging_epoch, span(P1Y), starts_on))
-    require the_years_rates_are_published: RatesPublished(year_starts_on)
+    require the_sheet_is_the_years_sheet: RateSheet(rate_sheet, year_starts_on)
     let charging_year = charging_epoch_year + period_index(charging_epoch, span(P1Y), starts_on)
-    admit BillingRun(run, starts_on, ends_on, charging_year)
+    admit BillingRun(run, starts_on, ends_on, charging_year, rate_sheet)
