@@ -41,6 +41,8 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
+pub mod differential;
+
 use jiff::civil::Date;
 use morpholog_core::{
     ClaimInstance, Definition, EvalError, EvalValue, IntentInstance, Invariant, Outcome, Program,

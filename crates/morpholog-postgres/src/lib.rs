@@ -30,6 +30,8 @@ mod pack;
 mod propose;
 mod provision;
 mod rejections;
+#[cfg(test)]
+mod scope_differential;
 mod score;
 mod signing;
 mod sql_quote;
