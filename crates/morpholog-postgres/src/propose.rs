@@ -436,7 +436,13 @@ pub(crate) async fn load_state(
 /// set: the assert stages a new claim rather than reading existing
 /// ones. An invariant that also references it is picked up via the
 /// invariant walker.
-pub(crate) fn compute_load_scope(
+///
+/// Public because it is a semantic promise, not a private tuning: the
+/// scope-differential harness proves that a proposal against a state
+/// projected to this scope is observationally equivalent to one
+/// against full state, and an embedder debugging a load can ask the
+/// same question.
+pub fn compute_load_scope(
     transformation: &Transformation,
     invariants: &[Invariant],
     definitions: &[Definition],

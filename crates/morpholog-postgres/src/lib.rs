@@ -76,8 +76,8 @@ pub use pack::{
 };
 pub use propose::{
     AuditedInvariantCheck, PgProposalOutcome, PgTracedOutcome, RejectionStateOutcome,
-    compute_idempotency_key, propose_against_pg, propose_against_pg_with_rejection_state,
-    propose_against_pg_with_trace,
+    compute_idempotency_key, compute_load_scope, propose_against_pg,
+    propose_against_pg_with_rejection_state, propose_against_pg_with_trace,
 };
 pub(crate) use provision::least_privilege_roles_exist;
 pub use provision::{
