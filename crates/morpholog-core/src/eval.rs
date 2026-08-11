@@ -82,14 +82,22 @@ pub enum EvalError {
     /// backstop for a quantum that arrives through a variable.
     #[error("round quantum must be positive, got {0}")]
     RoundQuantumNotPositive(String),
-    /// A `period_index(anchor, span, at)` whose span is zero: a
-    /// period needs a positive span, or every date would sit in
-    /// infinitely many periods at once. `Program::validate` catches a
+    /// A period builtin (`period_index`, `period_start_of`) whose span
+    /// is zero: a period needs a positive span, or every date would sit
+    /// in infinitely many periods at once. `Program::validate` catches a
     /// literal zero span at authoring time; this is the runtime
     /// backstop for a span that arrives through a defined-call
     /// parameter.
-    #[error("period_index needs a positive span; got {0}")]
-    PeriodSpanNotPositive(String),
+    #[error("{builtin} needs a positive span; got {span}")]
+    PeriodSpanNotPositive { builtin: &'static str, span: String },
+    /// A `period_start_of(anchor, span, index)` whose index is not a
+    /// whole number: period coordinates are integers, so a fractional
+    /// index is a computation error in the rule, not a period between
+    /// periods. `Program::validate` catches a literal fraction at
+    /// authoring time; this is the runtime backstop for an index that
+    /// arrives computed.
+    #[error("period_start_of needs a whole-number index; got {0}")]
+    PeriodIndexNotWhole(String),
     /// A `round(x, quantum)` whose exact answer cannot be represented:
     /// the nearest multiple of the quantum lies outside the decimal
     /// range (or the operands' scales exceed what exact remainder
@@ -585,16 +593,8 @@ fn period_index_of(
     span: crate::calendar::CalendarSpan,
     at: Date,
 ) -> Result<i64, EvalError> {
-    if span.months < 0 || span.days < 0 || (span.months == 0 && span.days == 0) {
-        return Err(EvalError::PeriodSpanNotPositive(span.to_string()));
-    }
-    let boundary = |n: i64| -> Option<Date> {
-        shift_date(
-            anchor,
-            n.checked_mul(i64::from(span.months))?,
-            n.checked_mul(i64::from(span.days))?,
-        )
-    };
+    require_positive_span("period_index", span)?;
+    let boundary = |n: i64| period_boundary(anchor, span, n);
     // A boundary at or before `at`? Out-of-range candidates count as
     // "no" above the calendar and "yes" below it.
     let at_or_before = |n: i64| -> bool {
@@ -636,6 +636,62 @@ fn period_index_of(
         }
     }
     Ok(lo)
+}
+
+/// Boundary n of an anniversary-anchored schedule: the anchor shifted
+/// by the span's components multiplied by n ONCE, one clamped walk -
+/// never n repeated clamped hops, which the calendar's
+/// non-associativity would let drift. `None` when the boundary leaves
+/// the representable calendar. The one boundary definition both
+/// `period_index` (which clips) and `period_start_of` (which refuses)
+/// answer from.
+fn period_boundary(anchor: Date, span: crate::calendar::CalendarSpan, n: i64) -> Option<Date> {
+    shift_date(
+        anchor,
+        n.checked_mul(i64::from(span.months))?,
+        n.checked_mul(i64::from(span.days))?,
+    )
+}
+
+/// The shared span rule of the period builtins: positive, or every
+/// date would sit in infinitely many periods at once.
+fn require_positive_span(
+    builtin: &'static str,
+    span: crate::calendar::CalendarSpan,
+) -> Result<(), EvalError> {
+    if span.months < 0 || span.days < 0 || (span.months == 0 && span.days == 0) {
+        return Err(EvalError::PeriodSpanNotPositive {
+            builtin,
+            span: span.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// The boundary date back from the coordinate: period `index`'s first
+/// day, the exact inverse of [`period_index_of`] wherever the boundary
+/// is representable. Where `period_index` clips its outermost periods
+/// (a date outside every representable boundary still belongs to some
+/// period), an index whose boundary leaves the calendar has no honest
+/// date to return, so it refuses - the same refusal a
+/// calendar-escaping `date + span` earns.
+fn period_start_of_date(
+    anchor: Date,
+    span: crate::calendar::CalendarSpan,
+    index: Decimal,
+) -> Result<Date, EvalError> {
+    require_positive_span("period_start_of", span)?;
+    if !index.is_integer() {
+        return Err(EvalError::PeriodIndexNotWhole(index.to_string()));
+    }
+    i64::try_from(index)
+        .ok()
+        .and_then(|n| period_boundary(anchor, span, n))
+        .ok_or_else(|| {
+            EvalError::ArithOutOfRange(format!(
+                "period_start_of: period {index}'s boundary is outside the representable calendar"
+            ))
+        })
 }
 
 /// The signed count of civil days from `from` to `to` (positive when
@@ -1472,6 +1528,27 @@ pub(crate) fn eval_builtin(builtin: Builtin, args: &[EvalValue]) -> Result<EvalV
             Ok(EvalValue::Decimal(Decimal::from(period_index_of(
                 *anchor, *span, *at,
             )?)))
+        }
+        Builtin::PeriodStartOf => {
+            let EvalValue::Date(anchor) = &args[0] else {
+                return Err(EvalError::TypeMismatch(format!(
+                    "period_start_of anchor must be a date, got {}",
+                    runtime_kind_label(&args[0])
+                )));
+            };
+            let EvalValue::CalendarSpan(span) = &args[1] else {
+                return Err(EvalError::TypeMismatch(format!(
+                    "period_start_of span must be a calendar span, got {}",
+                    runtime_kind_label(&args[1])
+                )));
+            };
+            let EvalValue::Decimal(index) = &args[2] else {
+                return Err(EvalError::TypeMismatch(format!(
+                    "period_start_of index must be a decimal, got {}",
+                    runtime_kind_label(&args[2])
+                )));
+            };
+            period_start_of_date(*anchor, *span, *index).map(EvalValue::Date)
         }
         Builtin::Min | Builtin::Max => extremum_of(builtin, &args[0], &args[1]),
     }

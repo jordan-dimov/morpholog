@@ -412,11 +412,6 @@ pub enum ValidationError {
         place: String,
         context: ValidationContext,
     },
-    /// A `period_index` whose span is a literal zero: a period needs
-    /// a positive span, or every date would sit in infinitely many
-    /// periods at once. Refused at authoring time when literal; a
-    /// span arriving through a defined-call parameter is the runtime
-    /// backstop `EvalError::PeriodSpanNotPositive`.
     /// A builtin called with the wrong number of arguments. Arity is
     /// the builtin's own and total; hand-built IR is the only way to
     /// get here, since the surface parser fixes the count per call
@@ -428,13 +423,25 @@ pub enum ValidationError {
         found: usize,
         context: ValidationContext,
     },
-    /// `period_index` was given a span of zero length, written
-    /// literally. Every period would begin where the last one did, so
-    /// there is no partition to index into. A span arriving through a
-    /// variable is the evaluator's backstop instead.
-    #[error("period_index needs a positive span; got {span} in {context}")]
+    /// A period builtin (`period_index`, `period_start_of`) was given
+    /// a span of zero length, written literally. Every period would
+    /// begin where the last one did, so there is no partition to index
+    /// into. A span arriving through a variable is the evaluator's
+    /// backstop instead.
+    #[error("{builtin} needs a positive span; got {span} in {context}")]
     PeriodSpanNotPositive {
+        builtin: &'static str,
         span: String,
+        context: ValidationContext,
+    },
+    /// A `period_start_of` whose index is a literal fractional
+    /// decimal. Period coordinates are integers - there is no period
+    /// between periods - so a fraction is a computation error in the
+    /// rule, refused at authoring time when literal; an index arriving
+    /// computed is the evaluator's backstop instead.
+    #[error("period_start_of needs a whole-number index; got {index} in {context}")]
+    PeriodIndexNotWhole {
+        index: String,
         context: ValidationContext,
     },
     /// A conditional's two branches carry distinct, incompatible

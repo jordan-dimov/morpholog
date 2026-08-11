@@ -1215,6 +1215,80 @@ transformation t(v):
 }
 
 #[test]
+fn period_start_of_parses_in_gates_lets_and_invariants_and_round_trips() {
+    let source = "program periods
+const anchor = (@2000-04-01)
+predicate Rates(starts_on: Date)
+predicate Run(r: Subject, starts_on: Date, year: Decimal)
+
+invariant runs_price_from_a_published_year:
+    Run(_, _, year) implies (exists starts_on: Rates(starts_on) and starts_on = period_start_of(anchor, span(P1Y), year))
+
+transformation open_run(r, starts_on):
+    let year = period_index(anchor, span(P1Y), starts_on)
+    let year_starts_on = period_start_of(anchor, span(P1Y), year)
+    require Rates(year_starts_on)
+    admit Run(r, starts_on, year)
+";
+    let program = parse_program(source).expect("period_start_of should parse");
+    assert!(program.validate().is_ok(), "{:?}", program.validate());
+    let formatted = morpholog_core::format::format_program(&program);
+    let reparsed = parse_program(&formatted)
+        .unwrap_or_else(|e| panic!("formatted source should reparse; got {e:?}\n{formatted}"));
+    assert_eq!(reparsed, program, "round-trip must be lossless");
+}
+
+#[test]
+fn period_start_of_is_lawful_inside_a_const_initialiser() {
+    let via_const = "program epoch
+const year_two_starts = (period_start_of(@2000-04-01, span(P1Y), 2))
+predicate Rates(starts_on: Date)
+transformation publish(ignored):
+    let d = year_two_starts
+    admit Rates(d)
+";
+    let inlined = "program epoch
+predicate Rates(starts_on: Date)
+transformation publish(ignored):
+    let d = period_start_of(@2000-04-01, span(P1Y), 2)
+    admit Rates(d)
+";
+    let a = parse_program(via_const).expect("the const initialiser should parse");
+    assert!(a.validate().is_ok(), "{:?}", a.validate());
+    let b = parse_program(inlined).expect("the inlined form should parse");
+    assert_eq!(
+        morpholog_core::format::format_program(&a),
+        morpholog_core::format::format_program(&b),
+        "const substitution and hand-inlining must canonicalise identically"
+    );
+}
+
+#[test]
+fn period_start_of_stays_usable_as_a_variable_name() {
+    let source = "program ctx
+predicate Holds(period_start_of: Decimal)
+transformation t(period_start_of):
+    require period_start_of + 1 <= 10
+    admit Holds(period_start_of)
+";
+    let program = parse_program(source).expect("`period_start_of` as a name should parse");
+    assert!(program.validate().is_ok());
+}
+
+#[test]
+fn a_two_argument_period_start_of_is_a_parse_error() {
+    let source = "program bad
+predicate P(d: Date)
+transformation t(v):
+    let x = period_start_of(@2000-04-01, span(P1Y))
+    admit P(x)
+";
+    parse_program(source)
+        .map(|_| ())
+        .expect_err("the boundary form takes anchor, span, and index");
+}
+
+#[test]
 fn if_stays_usable_as_a_variable_name() {
     // Contextual: a constructor only when followed by `(`. As a bare
     // identifier - even in arithmetic - it is an ordinary variable.
@@ -1609,6 +1683,7 @@ fn every_builtin_round_trips_through_the_formatter() {
         "max(a, b)",
         "min(cap, max(floor, x))",
         "period_index(@2000-04-01, span(P1Y), d)",
+        "period_start_of(@2000-04-01, span(P1Y), c)",
         // A call inside arithmetic, and arithmetic inside a call: the
         // call is self-delimiting, the operators are not.
         "abs(a - b) + 1",

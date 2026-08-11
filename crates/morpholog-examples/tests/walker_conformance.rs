@@ -280,6 +280,26 @@ transformation waive(r):
     admit Waived(r)
 ";
 
+/// `period_start_of` with EACH SLOT carrying a predicate the other
+/// slots lack (an anchor lookup, an `if` over a mode claim in the
+/// span slot, an index lookup in the third slot), its Date result
+/// compared against a claim-bound date inside a let-sugared
+/// consequent: an omitted per-slot walker arm reddens the targeted
+/// footprint assertion, not just the generic sweep.
+const PERIOD_START_OF_ACROSS_CONTEXTS: &str = "\
+program period_start_of_across_contexts
+predicate AnchorDate(d: Date)
+predicate AnnualMode(m: Subject)
+predicate RecordedIndex(r: Subject, i: Decimal)
+predicate Sheet(r: Subject, starts_on: Date)
+invariant sheets_start_on_their_periods_boundary:
+    let boundary = (period_start_of(value AnchorDate(_), if(AnnualMode(#on), span(P1Y), span(P1M)), value RecordedIndex(r, _)))
+    Sheet(r, starts_on) implies starts_on = boundary
+transformation record_sheet(r, starts_on, i):
+    admit RecordedIndex(r, i)
+    admit Sheet(r, starts_on)
+";
+
 /// An expression-valued sum target in adversarial position: the
 /// target multiplies a body-bound quantity by a factor read through a
 /// `value` lookup whose predicate appears NOWHERE else, and the sum
@@ -320,6 +340,10 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("span_in_date_arithmetic", SPAN_IN_DATE_ARITHMETIC),
         ("cond_across_children", COND_ACROSS_CHILDREN),
         ("period_index_across_contexts", PERIOD_INDEX_ACROSS_CONTEXTS),
+        (
+            "period_start_of_across_contexts",
+            PERIOD_START_OF_ACROSS_CONTEXTS,
+        ),
         ("expression_target_sum", EXPRESSION_TARGET_SUM),
     ]
 }
@@ -338,6 +362,30 @@ fn the_period_index_footprint_carries_all_three_slots() {
     let mut refs = std::collections::BTreeSet::new();
     morpholog_core::predicates_referenced_by_prop(&invariant.body, &program.definitions, &mut refs);
     for expected in ["AnchorDate", "AnnualMode", "ObservationDate"] {
+        assert!(
+            refs.iter().any(|p| p.as_str() == expected),
+            "`{expected}` must be in the footprint (slot-specific); got {refs:?}"
+        );
+    }
+}
+
+/// The boundary form's three slots each carry a predicate the others
+/// do not; a per-slot walker omission fails here, where the generic
+/// sweep's non-empty check would still pass.
+#[test]
+fn the_period_start_of_footprint_carries_all_three_slots() {
+    let program = parsed(
+        "period_start_of_across_contexts",
+        PERIOD_START_OF_ACROSS_CONTEXTS,
+    );
+    let invariant = program
+        .invariants
+        .iter()
+        .find(|i| i.name.as_str() == "sheets_start_on_their_periods_boundary")
+        .expect("the fragment's invariant");
+    let mut refs = std::collections::BTreeSet::new();
+    morpholog_core::predicates_referenced_by_prop(&invariant.body, &program.definitions, &mut refs);
+    for expected in ["AnchorDate", "AnnualMode", "RecordedIndex"] {
         assert!(
             refs.iter().any(|p| p.as_str() == expected),
             "`{expected}` must be in the footprint (slot-specific); got {refs:?}"

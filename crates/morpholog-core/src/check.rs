@@ -1310,7 +1310,7 @@ impl CheckCtx<'_> {
     /// here rather than at runtime.
     ///
     /// Exhaustive over [`Builtin`] with no wildcard - `abs` preserves
-    /// its operand's kind while `round` and `period_index` impose
+    /// its operand's kind while `round` and the period builtins impose
     /// fixed ones, which is a real difference and has to be written
     /// down per builtin, not defaulted.
     fn infer_builtin(
@@ -1368,18 +1368,37 @@ impl CheckCtx<'_> {
                 // A literal zero span must be refused here; a span
                 // arriving through a defined-call parameter is the
                 // runtime backstop's job (the round quantum pattern).
-                if let ValueExpr::Term(Term::Literal(Value::CalendarSpan(text))) = &args[1]
-                    && let Ok(parsed) = crate::calendar::parse_calendar_span(text)
-                    && parsed.months == 0
-                    && parsed.days == 0
+                self.refuse_literal_zero_span(&args[1], "period_index");
+                InferredKind::Known(PredicateArgKind::Decimal)
+            }
+            Builtin::PeriodStartOf => {
+                self.check_operand_kind(&args[0], PredicateArgKind::Date, "period_start_of", scope);
+                self.check_operand_kind(
+                    &args[1],
+                    PredicateArgKind::CalendarSpan,
+                    "period_start_of",
+                    scope,
+                );
+                self.check_operand_kind(
+                    &args[2],
+                    PredicateArgKind::Decimal,
+                    "period_start_of",
+                    scope,
+                );
+                self.refuse_literal_zero_span(&args[1], "period_start_of");
+                // A literal fractional index must be refused here; an
+                // index arriving computed is the runtime backstop's job.
+                if let ValueExpr::Term(Term::Literal(Value::Decimal(s))) = &args[2]
+                    && s.parse::<rust_decimal::Decimal>()
+                        .is_ok_and(|d| !d.is_integer())
                 {
                     let context = self.context.clone();
-                    self.errors.push(ValidationError::PeriodSpanNotPositive {
-                        span: parsed.to_string(),
+                    self.errors.push(ValidationError::PeriodIndexNotWhole {
+                        index: s.clone(),
                         context,
                     });
                 }
-                InferredKind::Known(PredicateArgKind::Decimal)
+                InferredKind::Known(PredicateArgKind::Date)
             }
             // Same-kind and kind-preserving, over the SAME domain the
             // evaluator supports: decimals, durations, and quantities
@@ -1428,6 +1447,25 @@ impl CheckCtx<'_> {
                     _ => InferredKind::UnknownOrAny,
                 }
             }
+        }
+    }
+
+    /// The shared span rule of the period builtins, at the static
+    /// tier: a literal zero span is refused here by name; a span
+    /// arriving through a defined-call parameter is the runtime
+    /// backstop's job (the round quantum pattern).
+    fn refuse_literal_zero_span(&mut self, span_arg: &ValueExpr, builtin: &'static str) {
+        if let ValueExpr::Term(Term::Literal(Value::CalendarSpan(text))) = span_arg
+            && let Ok(parsed) = crate::calendar::parse_calendar_span(text)
+            && parsed.months == 0
+            && parsed.days == 0
+        {
+            let context = self.context.clone();
+            self.errors.push(ValidationError::PeriodSpanNotPositive {
+                builtin,
+                span: parsed.to_string(),
+                context,
+            });
         }
     }
 

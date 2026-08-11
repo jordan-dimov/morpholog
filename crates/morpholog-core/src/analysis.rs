@@ -1521,6 +1521,17 @@ impl<'a> ParamCollector<'a> {
                     self.walk_value(a, Some(kind));
                 }
             }
+            // Each slot pins its own kind; the result is Date
+            // regardless of `expected`.
+            Builtin::PeriodStartOf => {
+                for (a, kind) in args.iter().zip([
+                    PredicateArgKind::Date,
+                    PredicateArgKind::CalendarSpan,
+                    PredicateArgKind::Decimal,
+                ]) {
+                    self.walk_value(a, Some(kind));
+                }
+            }
         }
     }
 

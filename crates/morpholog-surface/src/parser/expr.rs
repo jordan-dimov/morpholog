@@ -852,24 +852,30 @@ where
                 otherwise: Box::new(otherwise),
             });
 
-        // The period extractor: `period_index ( <value> , <value> ,
-        // <value> )` - anchor date, calendar span, position date.
-        // Contextual like `if` and `duration`, function-shaped like
-        // `round`: self-delimiting, no precedence tier.
-        let period_index_expr = select! { Token::Ident(s) if s == "period_index" => () }
-            .ignore_then(
-                value
-                    .clone()
-                    .then_ignore(just(Token::Comma))
-                    .then(value.clone())
-                    .then_ignore(just(Token::Comma))
-                    .then(value.clone())
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
-            .map(|((anchor, span), at)| ValueExpr::Call {
-                builtin: Builtin::PeriodIndex,
-                args: vec![anchor, span, at],
-            });
+        // The period builtins: `period_index ( <value> , <value> ,
+        // <value> )` - anchor date, calendar span, position date - and
+        // `period_start_of ( <value> , <value> , <value> )` - anchor
+        // date, calendar span, period index. One call shape, inverse
+        // directions. Contextual like `if` and `duration`,
+        // function-shaped like `round`: self-delimiting, no
+        // precedence tier.
+        let period_builtin_expr = select! {
+            Token::Ident(s) if s == "period_index" => Builtin::PeriodIndex,
+            Token::Ident(s) if s == "period_start_of" => Builtin::PeriodStartOf,
+        }
+        .then(
+            value
+                .clone()
+                .then_ignore(just(Token::Comma))
+                .then(value.clone())
+                .then_ignore(just(Token::Comma))
+                .then(value.clone())
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .map(|(builtin, ((first, second), third))| ValueExpr::Call {
+            builtin,
+            args: vec![first, second, third],
+        });
 
         let primary = choice((
             sum_expr,
@@ -877,7 +883,7 @@ where
             abs_expr,
             round_expr,
             if_expr,
-            period_index_expr,
+            period_builtin_expr,
             value_lookup,
             parenthesised,
             decimal_as_value,

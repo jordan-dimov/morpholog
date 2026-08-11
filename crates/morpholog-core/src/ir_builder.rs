@@ -283,6 +283,13 @@ pub fn period_index(anchor: ValueExpr, span: ValueExpr, at: ValueExpr) -> ValueE
     call(Builtin::PeriodIndex, vec![anchor, span, at])
 }
 
+/// `period_start_of(anchor, span, index)` - period `index`'s first
+/// day, the boundary date back from the coordinate; refuses an index
+/// whose boundary leaves the calendar.
+pub fn period_start_of(anchor: ValueExpr, span: ValueExpr, index: ValueExpr) -> ValueExpr {
+    call(Builtin::PeriodStartOf, vec![anchor, span, index])
+}
+
 /// `if(when, then, otherwise)` - the value selected by whether the
 /// proposition holds; witnesses discarded, only the selected branch
 /// evaluates.

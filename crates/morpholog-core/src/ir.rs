@@ -555,6 +555,27 @@ pub enum Builtin {
     /// when written literally and at evaluation otherwise (the round
     /// quantum pattern).
     PeriodIndex,
+    /// `period_start_of(anchor, span, index)`: the first day of period
+    /// `index` - boundary n computed exactly as [`Builtin::PeriodIndex`]
+    /// defines it (span components multiplied by n ONCE, one clamped
+    /// walk from the anchor), so the two are inverse spellings of one
+    /// boundary: `period_index(a, s, period_start_of(a, s, n)) = n`
+    /// wherever the boundary is representable. Where `period_index`
+    /// clips (a date outside the representable boundaries still belongs
+    /// to an outermost period), this refuses: an index whose boundary
+    /// leaves the calendar has no honest date to return and raises
+    /// [`crate::EvalError::ArithOutOfRange`], the same refusal a
+    /// calendar-escaping `date + span` earns. The index must be a
+    /// whole-number decimal - a literal fraction is refused by name at
+    /// validation, anything else at evaluation - and negative indexes
+    /// name the periods before the anchor, mirroring `period_index`'s
+    /// negative results. Deliberately NOT span arithmetic: spans still
+    /// do not combine, and `anchor + n * span` stays inexpressible -
+    /// only the boundary computation `period_index` already owns is
+    /// exposed. Reads no state, so a fully-literal use is lawful in a
+    /// `const`; the span rules (positive, refused two-tier) are shared
+    /// with `period_index`.
+    PeriodStartOf,
     /// `min(a, b)` / `max(a, b)`: the smaller or larger of two values.
     /// Spelled like the calls they are - the aggregate forms over a
     /// proposition are [`ValueExpr::Extremum`], a construct.
@@ -569,6 +590,7 @@ impl Builtin {
             Builtin::Abs => "abs",
             Builtin::Round => "round",
             Builtin::PeriodIndex => "period_index",
+            Builtin::PeriodStartOf => "period_start_of",
             Builtin::Min => "min",
             Builtin::Max => "max",
         }
@@ -579,7 +601,7 @@ impl Builtin {
         match self {
             Builtin::Abs => 1,
             Builtin::Round | Builtin::Min | Builtin::Max => 2,
-            Builtin::PeriodIndex => 3,
+            Builtin::PeriodIndex | Builtin::PeriodStartOf => 3,
         }
     }
 }
