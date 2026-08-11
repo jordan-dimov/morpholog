@@ -207,8 +207,14 @@ pub async fn commit_entry(pool: &PgPool, id: &str) -> Uuid {
 /// a checkpoint or tail taken now can otherwise cover none of this
 /// test's own rows - withhold-never-lose working as designed, against
 /// a transaction the test cannot see.
+///
+/// On expiry this PANICS with a census of the offending sessions.
+/// Proceeding silently instead is how the watermark flake reached CI
+/// as "signing key is not authorised ... as of tree_size 0" - a
+/// misleading downstream symptom; the straggler's pid and query are
+/// the actual diagnosis.
 pub async fn drain_open_transactions(pool: &PgPool) {
-    for _ in 0..200 {
+    for _ in 0..300 {
         let open: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM pg_stat_activity
              WHERE datname = current_database()
@@ -219,10 +225,27 @@ pub async fn drain_open_transactions(pool: &PgPool) {
         .await
         .expect("failed to count open transactions");
         if open == 0 {
-            break;
+            return;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
+    let census: Vec<(i32, String, String)> = sqlx::query_as(
+        "SELECT pid, coalesce(state, '?'),
+                left(coalesce(query, ''), 120) || ' [open ' ||
+                round(extract(epoch FROM now() - xact_start))::text || 's]'
+         FROM pg_stat_activity
+         WHERE datname = current_database()
+           AND pid != pg_backend_pid()
+           AND xact_start IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("failed to census open transactions");
+    panic!(
+        "foreign open transaction(s) on the test database did not drain; \
+         they lower the audit watermark and any checkpoint/tail this test \
+         takes will see an empty tree. Offenders: {census:?}"
+    );
 }
 
 /// Unwrap a created checkpoint; a no-new-rows outcome is a fixture
