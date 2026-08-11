@@ -43,6 +43,24 @@ predicate BillingRun(run: Subject, starts_on: Date, ends_on: Date, charging_year
     unique by (run)
     append only
 
+-- The regulator publishes each year's band rates as one dated sheet,
+-- and the sheet's own name for its year is the DAY IT BEGINS - "the
+-- rates from 1 April 2026". The run above records the year as a
+-- NUMBER. Two spellings of the same period, kept honest below: the
+-- rules can turn a date into its year's index (period_index) and the
+-- index back into the year's first day (period_start_of), so neither
+-- spelling is ever taken on trust.
+predicate RatesPublished(year_starts_on: Date)
+
+-- Publishing is guarded by the round trip: take the date's year
+-- index, compute that year's first day back, and demand it is the
+-- same date. Only a true anniversary survives - a sheet claiming to
+-- start on 3 April is refused, because year 26's first day is
+-- 1 April 2026 and no other.
+transformation publish_rates(year_starts_on):
+    require the_date_is_an_anniversary: year_starts_on = period_start_of(charging_epoch, span(P1Y), period_index(charging_epoch, span(P1Y), year_starts_on))
+    admit RatesPublished(year_starts_on)
+
 -- A period runs forwards.
 invariant runs_run_forwards:
     BillingRun(_, starts_on, ends_on, _) implies starts_on on_or_before ends_on
@@ -63,12 +81,27 @@ invariant runs_record_their_own_charging_year:
     BillingRun(_, starts_on, _, charging_year)
     implies charging_year = charging_epoch_year + period_index(charging_epoch, span(P1Y), starts_on)
 
--- The one act. The gate refuses a straddling period before anything
--- is admitted; the let computes the coordinate the run will carry.
--- Note what the caller does NOT supply: the charging year is not a
--- parameter at all.
+-- A run may only price from rates that exist: its year's sheet must
+-- be on the record. The rule reaches the sheet by computing the
+-- year's first day from the recorded NUMBER - subtract the epoch's
+-- year back off, ask for that period's start - so a run whose number
+-- disagreed with the sheet it priced from could never commit. This
+-- closes the gap the gate alone leaves open: the gate checks the
+-- proposal in front of it, the invariant holds over every committed
+-- run whatever order the record was built in.
+invariant runs_price_from_a_published_year:
+    BillingRun(_, _, _, charging_year)
+    implies (exists year_starts_on: RatesPublished(year_starts_on) and year_starts_on = period_start_of(charging_epoch, span(P1Y), charging_year - charging_epoch_year))
+
+-- The billing act. The gates refuse a straddling period and an
+-- unpublished year before anything is admitted; the lets compute the
+-- coordinate the run will carry and the year's first day to look the
+-- rates up by. Note what the caller does NOT supply: the charging
+-- year is not a parameter at all.
 transformation open_run(run, starts_on, ends_on):
     require the_period_runs_forwards: starts_on on_or_before ends_on
     require the_period_stays_inside_one_charging_year: period_index(charging_epoch, span(P1Y), starts_on) = period_index(charging_epoch, span(P1Y), ends_on)
+    let year_starts_on = period_start_of(charging_epoch, span(P1Y), period_index(charging_epoch, span(P1Y), starts_on))
+    require the_years_rates_are_published: RatesPublished(year_starts_on)
     let charging_year = charging_epoch_year + period_index(charging_epoch, span(P1Y), starts_on)
     admit BillingRun(run, starts_on, ends_on, charging_year)
