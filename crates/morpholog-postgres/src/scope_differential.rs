@@ -4,22 +4,27 @@
 //! state. This is the end-to-end law behind predicate-scoped
 //! loading: if a walker ever omits a predicate an evaluation path
 //! can read (a `value` default, one arm of `if`, an expression-valued
-//! sum target, a defined-call chain), this test reddens without
-//! knowing which walker, or which AST node, was at fault.
+//! sum target, a defined-call chain, a `pre`-only read), this test
+//! reddens without knowing which walker, or which AST node, was at
+//! fault.
 //!
-//! Pure kernel + the real `compute_load_scope`; no database. Cases
-//! are the whole worked-example gallery plus hostile fragments whose
-//! predicates hide in exactly the awkward positions, each against
-//! deterministic generated states and arguments (over-loading is
-//! invisible here - the law proves nothing was DROPPED, not that the
-//! scope is tight).
-
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+//! Pure kernel; no database. Cases are the whole worked-example
+//! gallery plus hostile fragments whose predicates hide in exactly
+//! the awkward positions, each against deterministic generated
+//! states and arguments (over-loading is invisible here - the law
+//! proves nothing was DROPPED, not that the scope is tight).
+//!
+//! In-crate rather than an integration test on purpose: the public
+//! promise is the EQUIVALENCE, not the scope set itself -
+//! `compute_load_scope` stays `pub(crate)` so the loading mechanism
+//! can change (a compiled-to-SQL checker loads state differently)
+//! without a public API having promised today's answer.
 
 use morpholog_core::{Program, State};
-use morpholog_postgres::compute_load_scope;
 use morpholog_test_support::differential::{observable, sample_args, sample_state};
 use morpholog_test_support::propose_with_test_actor;
+
+use crate::propose::compute_load_scope;
 
 /// Hostile fragments: each hides a predicate somewhere a lazy or
 /// forgetful walker would lose it. Kept small and self-describing;
@@ -73,15 +78,20 @@ transformation note(x):
     admit Out(x)
 ",
     ),
+    // `Ledger` is reachable ONLY through the invariant's `pre(...)`:
+    // the transformation never touches it, so no statement walker can
+    // smuggle it into the scope. (An earlier version of this fixture
+    // also retracted `Ledger`, which put it in the read set through
+    // `Stmt::Retract` and proved nothing about descending `pre` - the
+    // review caught the fixture testing less than its name claimed.)
     (
         "pre_only_read",
         "program pre_only_read
 predicate Ledger(x: Subject)
 predicate Out(x: Subject)
-invariant ledger_never_shrinks:
-    pre(Ledger(x)) implies Ledger(x)
-transformation retract_one(x):
-    retract Ledger(x)
+invariant there_was_no_ledger_before:
+    not pre(Ledger(_))
+transformation touch(x):
     admit Out(x)
 ",
     ),

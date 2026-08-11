@@ -17,21 +17,49 @@
 
 mod common;
 
-use morpholog_core::{TracedProposal, propose_with_trace};
+use morpholog_core::{Stmt, TraceEntry, TracedProposal, propose_with_trace};
 use morpholog_test_support::differential::{observable, sample_args, sample_state};
 use morpholog_test_support::{propose_with_test_actor, test_transition};
+
+/// Whether the transformation loops. `for` is the only statement
+/// with a nested body, so any nested loop's outermost ancestor is
+/// itself a top-level `for` - a flat scan is total.
+fn contains_for(body: &[Stmt]) -> bool {
+    body.iter().any(|s| matches!(s, Stmt::For { .. }))
+}
+
+/// Count `For` trace entries, descending into iteration traces so a
+/// nested loop still registers.
+fn count_for_entries(entries: &[TraceEntry]) -> usize {
+    entries
+        .iter()
+        .map(|e| match e {
+            TraceEntry::For { iterations, .. } => {
+                1 + iterations
+                    .iter()
+                    .map(|i| count_for_entries(&i.trace))
+                    .sum::<usize>()
+            }
+            _ => 0,
+        })
+        .sum()
+}
 
 #[test]
 fn traced_and_untraced_execution_are_equivalent() {
     let mut cases = 0usize;
     let mut skipped = 0usize;
+    let mut for_entries_seen = 0usize;
+    let mut for_transformations_skipped: Vec<String> = Vec::new();
     for program in morpholog_examples::all_programs() {
         for t in &program.transformations {
+            let mut ran_any = false;
             for salt in 0..3u64 {
                 let Some(args) = sample_args(&program, t, salt) else {
                     skipped += 1;
                     continue;
                 };
+                ran_any = true;
                 let state = sample_state(&program, 2, salt);
 
                 let untraced = propose_with_test_actor(
@@ -50,8 +78,14 @@ fn traced_and_untraced_execution_are_equivalent() {
                     &program.definitions,
                 );
                 let traced_as_result = match traced {
-                    TracedProposal::Completed { outcome, .. } => Ok(outcome),
-                    TracedProposal::Errored { error, .. } => Err(error),
+                    TracedProposal::Completed { outcome, trace } => {
+                        for_entries_seen += count_for_entries(&trace);
+                        Ok(outcome)
+                    }
+                    TracedProposal::Errored { error, trace } => {
+                        for_entries_seen += count_for_entries(&trace);
+                        Err(error)
+                    }
                 };
                 assert_eq!(
                     observable(&untraced),
@@ -63,6 +97,9 @@ fn traced_and_untraced_execution_are_equivalent() {
                 );
                 cases += 1;
             }
+            if contains_for(&t.body) && !ran_any {
+                for_transformations_skipped.push(format!("{}::{}", program.name, t.name));
+            }
         }
     }
     // No silent caps: a generator regression that skips most of the
@@ -70,6 +107,21 @@ fn traced_and_untraced_execution_are_equivalent() {
     assert!(
         cases >= 100,
         "generator collapse: only {cases} cases ran ({skipped} skipped)"
+    );
+    // The duplicated traced/untraced machinery this differential
+    // exists for is `Stmt::For`'s. A floor on total cases cannot see
+    // that seam disappear from coverage, so pin it directly: every
+    // loop-bearing transformation must produce at least one case, and
+    // at least one execution must actually enter a loop.
+    assert!(
+        for_transformations_skipped.is_empty(),
+        "loop-bearing transformations produced no cases: \
+         {for_transformations_skipped:?}"
+    );
+    assert!(
+        for_entries_seen > 0,
+        "no generated case executed a `for` body - the differential's \
+         principal seam is uncovered"
     );
 }
 

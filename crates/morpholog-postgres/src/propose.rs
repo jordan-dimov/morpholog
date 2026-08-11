@@ -437,12 +437,13 @@ pub(crate) async fn load_state(
 /// ones. An invariant that also references it is picked up via the
 /// invariant walker.
 ///
-/// Public because it is a semantic promise, not a private tuning: the
-/// scope-differential harness proves that a proposal against a state
-/// projected to this scope is observationally equivalent to one
-/// against full state, and an embedder debugging a load can ask the
-/// same question.
-pub fn compute_load_scope(
+/// Deliberately `pub(crate)`: the semantic promise is the
+/// EQUIVALENCE (a proposal against a state projected to this scope is
+/// observationally equivalent to one against full state - pinned by
+/// the in-crate scope differential), not the particular set this
+/// interpreter loads. Keeping the set private lets the loading
+/// mechanism change without a public API having promised it.
+pub(crate) fn compute_load_scope(
     transformation: &Transformation,
     invariants: &[Invariant],
     definitions: &[Definition],

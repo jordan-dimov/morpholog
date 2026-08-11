@@ -106,6 +106,12 @@ fn sample_param(kind: &ParamKind, salt: u64) -> Option<EvalValue> {
 /// reason or error text - with `candidate_state` deliberately
 /// excluded (it lawfully differs between a full and a projected run)
 /// and fresh subjects alpha-normalised (see [`normalize_uuids`]).
+///
+/// The rejection arm renders the STRUCTURAL reason (`{:?}`), not its
+/// `Display`: the pinned wire string deliberately omits the invariant
+/// version and the witness bindings, and a differential that compared
+/// it would bless a run that rejects the same rule on a DIFFERENT
+/// witness - exactly the divergence a dropped predicate produces.
 pub fn observable(result: &Result<Outcome, EvalError>) -> String {
     let raw = match result {
         Ok(Outcome::Accepted {
@@ -117,7 +123,7 @@ pub fn observable(result: &Result<Outcome, EvalError>) -> String {
             "accepted asserted={asserted_claims:?} retracted={retracted_claims:?} \
              emitted={emitted_intents:?}"
         ),
-        Ok(Outcome::Rejected { reason }) => format!("rejected {reason}"),
+        Ok(Outcome::Rejected { reason }) => format!("rejected {reason:?}"),
         Err(e) => format!("error {e}"),
     };
     normalize_uuids(&raw)
