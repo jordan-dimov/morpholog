@@ -7,8 +7,6 @@
 //! salt, never from a clock or an RNG - so a differential failure
 //! replays exactly from its printed case.
 
-use std::collections::BTreeSet;
-
 use morpholog_core::{
     ClaimInstance, EvalError, EvalValue, Outcome, ParamKind, PredicateArgKind, Program, State,
     Transformation, transformation_param_kinds,
@@ -166,20 +164,4 @@ fn is_uuid(s: &str) -> bool {
             8 | 13 | 18 | 23 => *c == b'-',
             _ => c.is_ascii_hexdigit(),
         })
-}
-
-/// The subjects a generated case starts from (state plus arguments):
-/// everything else appearing in an outcome was minted by execution.
-pub fn known_subjects(state: &State, args: &[EvalValue]) -> BTreeSet<String> {
-    let mut known = BTreeSet::new();
-    let mut add = |v: &EvalValue| {
-        if let EvalValue::Subject(s) = v {
-            known.insert(s.to_string());
-        }
-    };
-    for claim in state.claims() {
-        claim.args.iter().for_each(&mut add);
-    }
-    args.iter().for_each(&mut add);
-    known
 }
