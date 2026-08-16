@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"committed_beyond_horizon!\"\n           FROM morpholog.audit WHERE committed_at >= $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "committed_beyond_horizon!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b720248d11c1cbd77cc1c31274abea6da3c9fe3d46806fa6979bfdc3fcfb6daa"
+}

@@ -233,8 +233,6 @@ async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Check
     }))
 }
 
-/// Record a checkpoint over the current watermark-stable prefix of the
-/// audit log. The heavy root computation runs under `SERIALIZABLE READ
 /// Attest a tree head with the signer's key for the audit-checkpoint
 /// purpose. The signature is deterministic (Ed25519), so re-signing the
 /// same head with the same key yields the same bytes.
@@ -248,6 +246,8 @@ fn make_signature(signer: &CheckpointSigner, head: &signing::TreeHead<'_>) -> Tr
     }
 }
 
+/// Record a checkpoint over the current watermark-stable prefix of the
+/// audit log. The heavy root computation runs under `SERIALIZABLE READ
 /// ONLY DEFERRABLE` (zero SSI footprint); the short append takes a
 /// transaction advisory lock and re-reads the chain head, so concurrent
 /// runs cannot fork it. When the stable prefix has not grown it records
@@ -267,32 +267,27 @@ pub async fn create_checkpoint(
     let (leaves, last) = collect_leaves(&mut read_tx, Some(horizon), None).await?;
     let tree_size = leaves.len() as i64;
     // When signing, fold the same prefix to resolve authority - within the
-    // one deferrable snapshot, so the check and the leaves agree.
-    let signer_rows = match signer {
-        Some(_) => Some(load_audit_rows(&mut read_tx, tree_size).await?),
+    // one deferrable snapshot, so the check and the leaves agree. On
+    // failure the withheld-row count is taken in the same snapshot too
+    // (so it cannot contradict tree_size); a run whose key is authorised
+    // pays no extra query. The verdict is held, not returned: it judges
+    // this snapshot's prefix, and whether that is the head being signed
+    // is only known once the chain head is read under the lock below.
+    let candidate_refusal = match signer {
+        Some(s) => {
+            let rows = load_audit_rows(&mut read_tx, tree_size).await?;
+            match signer_authority_violation(s, &rows, tree_size) {
+                Some(refusal) => {
+                    Some(with_horizon_diagnosis(refusal, &mut read_tx, horizon).await?)
+                }
+                None => None,
+            }
+        }
         None => None,
     };
     read_tx.commit().await.map_err(classify)?;
 
     let root_hash = render_hash(&merkle_root(&leaves));
-
-    // Refuse to sign with a key the ledger has not authorised as of this
-    // prefix - signing must not produce a checkpoint that verification
-    // would then reject as `UnauthorizedKey`. (The no-new-rows path signs
-    // the existing head, whose tree_size equals this prefix's.)
-    if let (Some(s), Some(rows)) = (signer, &signer_rows) {
-        let triple = (
-            s.key_id.clone(),
-            AUDIT_CHECKPOINT_PURPOSE.to_string(),
-            signing::render_public_key(&s.key.verifying_key()),
-        );
-        if !crate::keys::authorized_keys_as_of(rows, tree_size).contains(&triple) {
-            return Err(PgError::InvalidState(format!(
-                "signing key is not authorised as AuditSigningKey({}, {}, {}) as of tree_size {}",
-                triple.0, triple.1, triple.2, tree_size
-            )));
-        }
-    }
 
     let mut tx = pool.begin().await.map_err(classify)?;
     sqlx::query!("SELECT pg_advisory_xact_lock($1)", CHECKPOINT_LOCK_KEY)
@@ -311,6 +306,24 @@ pub async fn create_checkpoint(
         // is de-duplicated.
         let outcome = match signer {
             Some(s) => {
+                // Authority is resolved against the head that actually
+                // receives the signature, never the snapshot's own
+                // prefix: when a concurrent run has advanced the head
+                // (or this run's horizon was dragged back), the two
+                // differ, and a key revoked in between must not sign
+                // the newer head. The head's rows are stable - its own
+                // checkpoint already covered them - so the re-read
+                // under the lock cannot shift.
+                if p.tree_size == tree_size {
+                    if let Some(refusal) = candidate_refusal {
+                        return Err(refusal);
+                    }
+                } else {
+                    let rows = load_audit_rows(&mut tx, p.tree_size).await?;
+                    if let Some(refusal) = signer_authority_violation(s, &rows, p.tree_size) {
+                        return Err(refusal);
+                    }
+                }
                 let head = signing::TreeHead {
                     tree_size: p.tree_size,
                     root_hash: &p.root_hash,
@@ -349,6 +362,12 @@ pub async fn create_checkpoint(
         return Ok(CheckpointOutcome::NoNewRows(outcome));
     }
 
+    // Creating a new checkpoint at this snapshot's prefix, so the
+    // candidate verdict IS the head's verdict.
+    if let Some(refusal) = candidate_refusal {
+        return Err(refusal);
+    }
+
     let prev_hash = prev.as_ref().map(|p| p.checkpoint_hash.clone());
     let cp_hash = checkpoint_hash(tree_size, &root_hash, prev_hash.as_deref());
     let (last_tid, last_at) = match last {
@@ -356,9 +375,9 @@ pub async fn create_checkpoint(
         None => (None, None),
     };
 
-    // Sign the new tree head if a key was supplied - the signer's
-    // authority as of this prefix was already checked above, so an
-    // unauthorised key never reaches this attestation.
+    // Sign the new tree head if a key was supplied - the refusal above
+    // already judged this exact prefix, so an unauthorised key never
+    // reaches this attestation.
     let signatures: Vec<TreeHeadSignature> = match signer {
         Some(s) => {
             let head = signing::TreeHead {
@@ -402,12 +421,78 @@ pub async fn create_checkpoint(
     }))
 }
 
-/// Verify the audit tree against its checkpoints. Reads under
-/// `SERIALIZABLE READ ONLY DEFERRABLE`. Checks, strongest last: every
-/// checkpoint's root recomputes from the current log; the checkpoint
-/// chain is internally consistent (hash + `prev` links); and, if `anchor`
-/// is supplied, the stored checkpoint at the anchor's size matches the
-/// externally held copy.
+/// Judge the signer against the `AuditSigningKey` claims in force as of
+/// `tree_size`, returning the plain refusal when it is not authorised.
+fn signer_authority_violation(
+    signer: &CheckpointSigner,
+    rows: &[AuditRow],
+    tree_size: i64,
+) -> Option<PgError> {
+    let triple = (
+        signer.key_id.clone(),
+        AUDIT_CHECKPOINT_PURPOSE.to_string(),
+        signing::render_public_key(&signer.key.verifying_key()),
+    );
+    if crate::keys::authorized_keys_as_of(rows, tree_size).contains(&triple) {
+        None
+    } else {
+        Some(PgError::SigningKeyUnauthorised {
+            key_id: triple.0,
+            purpose: triple.1,
+            public_key: triple.2,
+            tree_size,
+        })
+    }
+}
+
+/// Upgrade a plain authority refusal to the truncated-prefix diagnosis
+/// when committed rows sit at or above the horizon: the authorisation
+/// may be in one of them, and the operator should suspect the workload
+/// before the key.
+async fn with_horizon_diagnosis(
+    refusal: PgError,
+    conn: &mut sqlx::PgConnection,
+    horizon: DateTime<Utc>,
+) -> Result<PgError, PgError> {
+    let PgError::SigningKeyUnauthorised {
+        key_id,
+        purpose,
+        public_key,
+        tree_size,
+    } = refusal
+    else {
+        return Ok(refusal);
+    };
+    // `>=` mirrors the pager's strict `<` clamp: a row at the horizon is
+    // withheld. count(*) is never NULL, so the override is sound.
+    let committed_beyond_horizon = sqlx::query!(
+        r#"SELECT count(*) AS "committed_beyond_horizon!"
+           FROM morpholog.audit WHERE committed_at >= $1"#,
+        horizon,
+    )
+    .fetch_one(conn)
+    .await
+    .map_err(classify_checked_query)?
+    .committed_beyond_horizon;
+    Ok(if committed_beyond_horizon > 0 {
+        PgError::SigningKeyUnauthorisedAtTruncatedPrefix {
+            key_id,
+            purpose,
+            public_key,
+            tree_size,
+            committed_beyond_horizon,
+            horizon,
+        }
+    } else {
+        PgError::SigningKeyUnauthorised {
+            key_id,
+            purpose,
+            public_key,
+            tree_size,
+        }
+    })
+}
+
 /// Load the whole checkpoint chain, ascending by size - the read shared by
 /// the live verifier and pack export.
 pub(crate) async fn load_checkpoint_chain(
@@ -434,6 +519,12 @@ pub(crate) async fn load_checkpoint_chain(
         .collect())
 }
 
+/// Verify the audit tree against its checkpoints. Reads under
+/// `SERIALIZABLE READ ONLY DEFERRABLE`. Checks, strongest last: every
+/// checkpoint's root recomputes from the current log; the checkpoint
+/// chain is internally consistent (hash + `prev` links); and, if `anchor`
+/// is supplied, the stored checkpoint at the anchor's size matches the
+/// externally held copy.
 pub async fn verify_audit_tree(
     pool: &PgPool,
     anchor: Option<Checkpoint>,

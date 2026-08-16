@@ -182,6 +182,50 @@ pub enum PgError {
          the stored start has diverged from the anchor you hold"
     )]
     AnchorDivergedFromStart { tree_size: i64 },
+    /// The signing key is not authorised by an `AuditSigningKey` claim in
+    /// force as of the prefix of the head being signed, and nothing was
+    /// withheld by the resume horizon - the refusal is about the key.
+    /// Signing refuses rather than producing a checkpoint that
+    /// verification would then judge `unauthorized_key`.
+    #[error(
+        "signing key is not authorised as AuditSigningKey({key_id}, {purpose}, \
+         {public_key}) as of tree_size {tree_size}; propose an AuditSigningKey \
+         admission for it, or sign with a key the ledger has authorised"
+    )]
+    SigningKeyUnauthorised {
+        key_id: String,
+        purpose: String,
+        public_key: String,
+        tree_size: i64,
+    },
+    /// The signing key is not authorised in the stable prefix, AND
+    /// committed audit rows sit at or above the resume horizon, outside
+    /// that prefix - so a recent authorisation may be temporarily
+    /// invisible to this checkpoint. Distinct from
+    /// [`PgError::SigningKeyUnauthorised`] because the remedy differs:
+    /// the condition is potentially transient (the horizon advances once
+    /// the older open transactions end), and the plain refusal would send
+    /// an operator to investigate the key instead of the workload. The
+    /// count is of committed rows the snapshot could see but the horizon
+    /// excluded; rows of transactions still in flight are not visible to
+    /// count, so it is a floor.
+    #[error(
+        "signing key is not authorised as AuditSigningKey({key_id}, {purpose}, \
+         {public_key}) as of tree_size {tree_size}, and \
+         {committed_beyond_horizon} committed audit row(s) at or above the \
+         resume horizon ({horizon}) are outside this stable prefix; if the \
+         key was authorised in one of those rows the condition is transient - \
+         retry after the horizon advances (it is held back while older \
+         transactions stay open)"
+    )]
+    SigningKeyUnauthorisedAtTruncatedPrefix {
+        key_id: String,
+        purpose: String,
+        public_key: String,
+        tree_size: i64,
+        committed_beyond_horizon: i64,
+        horizon: DateTime<Utc>,
+    },
 }
 /// Is this SQLSTATE the PostgreSQL serialization-failure code
 /// (`40001`) returned by SSI when a SERIALIZABLE transaction cannot be

@@ -148,6 +148,39 @@ pub async fn authorize_signing_key(pool: &PgPool, key_id: &str, purpose: &str, p
     expect_committed(outcome);
 }
 
+/// Retract an `AuditSigningKey(...)` claim - the revocation half of the
+/// keys-as-claims lifecycle, for tests that pin authority as-of a prefix.
+pub async fn retract_signing_key(pool: &PgPool, key_id: &str, purpose: &str, public_key: &str) {
+    use morpholog_core::ir_builder::{params, predicate, program, retract, transformation, var};
+    let t = transformation(
+        "retract_signing_key",
+        params(&["key_id", "purpose", "public_key"]),
+        vec![retract(
+            "AuditSigningKey",
+            vec![var("key_id"), var("purpose"), var("public_key")],
+        )],
+    );
+    let prog = program("key_governance")
+        .predicates(vec![
+            predicate("AuditSigningKey")
+                .subject("key_id")
+                .subject("purpose")
+                .subject("public_key")
+                .build(),
+        ])
+        .transformations(vec![t.clone()])
+        .build();
+    let outcome = propose_pg_with_test_actor(
+        pool,
+        &compiled(prog),
+        &t,
+        vec![subj(key_id), subj(purpose), subj(public_key)],
+    )
+    .await
+    .unwrap();
+    expect_committed(outcome);
+}
+
 /// `propose_pg_with_test_actor` plus structured trace. Uses the shared
 /// `test_actor()` for tests that don't model authority.
 pub async fn propose_pg_with_trace_using_test_actor(
