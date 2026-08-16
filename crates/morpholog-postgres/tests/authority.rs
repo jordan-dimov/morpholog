@@ -243,6 +243,92 @@ async fn attaching_a_signature_resolves_authority_as_of_the_head_actually_signed
     drop_roles_if_present(&pool, &roles).await;
 }
 
+// The mirror image of the race above: the key IS authorised, but in a
+// committed row beyond the existing head that the dragged-back horizon
+// keeps uncheckpointable. Refusing with the plain "fix the key" message
+// here is the #303 misdiagnosis reappearing on the head-ahead path -
+// the honest answer is the withheld-horizon diagnosis.
+#[tokio::test]
+async fn an_authorisation_beyond_the_head_is_diagnosed_as_withheld_not_missing() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    if !session_is_superuser(&pool).await {
+        eprintln!("skipping: needs a superuser test role");
+        return;
+    }
+    let roles = ["mtest305_idle"];
+    recreate_roles(&pool, &roles, &["CREATE ROLE mtest305_idle LOGIN"]).await;
+
+    // An older transaction opens; an unrelated row commits above its
+    // start; a checkpoint under the asserted horizon (ignoring the
+    // interferer) makes that row the head; THEN the key is authorised.
+    let mut interferer = pool.begin().await.unwrap();
+    sqlx::query("SELECT transaction_timestamp()")
+        .execute(&mut *interferer)
+        .await
+        .unwrap();
+    common::commit_entry(&pool, "e1").await;
+    let head = match create_checkpoint(&pool, None, Some(&["mtest305_idle".to_string()]))
+        .await
+        .unwrap()
+    {
+        CheckpointOutcome::Created(c) => c,
+        other @ CheckpointOutcome::NoNewRows(_) => {
+            panic!("expected a created checkpoint: {other:?}")
+        }
+    };
+    assert_eq!(head.tree_size, 1, "the unrelated row is the head");
+
+    let key = generate_signing_key();
+    authorize_signing_key(
+        &pool,
+        "k1",
+        PURPOSE,
+        &render_public_key(&key.verifying_key()),
+    )
+    .await;
+
+    // Sign without the assertion: the horizon trails the interferer, the
+    // candidate prefix is empty, and the head (tree_size 1) predates the
+    // authorisation - but the authorisation exists, committed, one row
+    // beyond the head. The refusal must say so, not impugn the key.
+    let signer = CheckpointSigner {
+        key_id: "k1".into(),
+        key,
+    };
+    let err = create_checkpoint(&pool, Some(&signer), None)
+        .await
+        .expect_err("the head predates the authorisation, so signing must refuse");
+    match &err {
+        PgError::SigningKeyUnauthorisedAtTruncatedPrefix {
+            tree_size,
+            committed_beyond_horizon,
+            ..
+        } => {
+            assert_eq!(*tree_size, 1, "judged as of the head actually signable");
+            assert_eq!(
+                *committed_beyond_horizon, 1,
+                "exactly the authorisation row lies beyond the head"
+            );
+        }
+        other => panic!("expected the truncated-prefix diagnosis, got: {other}"),
+    }
+
+    // The remedy is true: the interferer ends, the horizon advances, and
+    // the same signer checkpoints the suffix that authorises it.
+    interferer.rollback().await.unwrap();
+    match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
+        CheckpointOutcome::Created(c) => {
+            assert_eq!(c.tree_size, 2);
+            assert_eq!(c.signatures.len(), 1);
+        }
+        other @ CheckpointOutcome::NoNewRows(_) => {
+            panic!("expected a created signed checkpoint: {other:?}")
+        }
+    }
+    drop_roles_if_present(&pool, &roles).await;
+}
+
 #[tokio::test]
 async fn a_genuine_signature_by_an_unauthorized_key_is_unauthorized_key() {
     let pool = test_pool().await;

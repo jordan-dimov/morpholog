@@ -269,10 +269,11 @@ pub async fn create_checkpoint(
     // When signing, fold the same prefix to resolve authority - within the
     // one deferrable snapshot, so the check and the leaves agree. On
     // failure the withheld-row count is taken in the same snapshot too
-    // (so it cannot contradict tree_size); a run whose key is authorised
-    // pays no extra query. The verdict is held, not returned: it judges
-    // this snapshot's prefix, and whether that is the head being signed
-    // is only known once the chain head is read under the lock below.
+    // (so it cannot contradict tree_size); a signer already authorised in
+    // the candidate prefix pays no diagnostic query. The verdict is held,
+    // not returned: it judges this snapshot's prefix, and whether that is
+    // the head being signed is only known once the chain head is read
+    // under the lock below.
     let candidate_refusal = match signer {
         Some(s) => {
             let rows = load_audit_rows(&mut read_tx, tree_size).await?;
@@ -321,7 +322,28 @@ pub async fn create_checkpoint(
                 } else {
                     let rows = load_audit_rows(&mut tx, p.tree_size).await?;
                     if let Some(refusal) = signer_authority_violation(s, &rows, p.tree_size) {
-                        return Err(refusal);
+                        // Two separate questions: the key is not
+                        // authorised at the head this run can sign - and
+                        // is there a committed suffix beyond that head
+                        // the horizon keeps uncheckpointable? Rows
+                        // between this snapshot's prefix and the head
+                        // cannot help (the head already incorporates
+                        // them); rows beyond the head could carry an
+                        // authorisation a future checkpoint would
+                        // honour, so the refusal must name the
+                        // withholding, not impugn the key.
+                        let total =
+                            sqlx::query!(r#"SELECT count(*) AS "count!" FROM morpholog.audit"#)
+                                .fetch_one(&mut *tx)
+                                .await
+                                .map_err(classify_checked_query)?
+                                .count;
+                        let beyond_head = total - p.tree_size;
+                        return Err(if beyond_head > 0 {
+                            truncated_prefix_diagnosis(refusal, beyond_head, horizon)
+                        } else {
+                            refusal
+                        });
                     }
                 }
                 let head = signing::TreeHead {
@@ -445,24 +467,41 @@ fn signer_authority_violation(
     }
 }
 
-/// Upgrade a plain authority refusal to the truncated-prefix diagnosis
-/// when committed rows sit at or above the horizon: the authorisation
-/// may be in one of them, and the operator should suspect the workload
-/// before the key.
+/// Upgrade a plain authority refusal to the truncated-prefix diagnosis:
+/// the judged prefix is not the whole committed log, so a later
+/// authorisation may sit in the withheld suffix and the operator should
+/// suspect the workload before the key. Leaves any other error alone.
+fn truncated_prefix_diagnosis(
+    refusal: PgError,
+    committed_beyond_horizon: i64,
+    horizon: DateTime<Utc>,
+) -> PgError {
+    match refusal {
+        PgError::SigningKeyUnauthorised {
+            key_id,
+            purpose,
+            public_key,
+            tree_size,
+        } => PgError::SigningKeyUnauthorisedAtTruncatedPrefix {
+            key_id,
+            purpose,
+            public_key,
+            tree_size,
+            committed_beyond_horizon,
+            horizon,
+        },
+        other => other,
+    }
+}
+
+/// The candidate-prefix arm of the diagnosis: count the committed rows
+/// the horizon withheld from this snapshot, and upgrade the refusal
+/// when there are any.
 async fn with_horizon_diagnosis(
     refusal: PgError,
     conn: &mut sqlx::PgConnection,
     horizon: DateTime<Utc>,
 ) -> Result<PgError, PgError> {
-    let PgError::SigningKeyUnauthorised {
-        key_id,
-        purpose,
-        public_key,
-        tree_size,
-    } = refusal
-    else {
-        return Ok(refusal);
-    };
     // `>=` mirrors the pager's strict `<` clamp: a row at the horizon is
     // withheld. count(*) is never NULL, so the override is sound.
     let committed_beyond_horizon = sqlx::query!(
@@ -475,21 +514,9 @@ async fn with_horizon_diagnosis(
     .map_err(classify_checked_query)?
     .committed_beyond_horizon;
     Ok(if committed_beyond_horizon > 0 {
-        PgError::SigningKeyUnauthorisedAtTruncatedPrefix {
-            key_id,
-            purpose,
-            public_key,
-            tree_size,
-            committed_beyond_horizon,
-            horizon,
-        }
+        truncated_prefix_diagnosis(refusal, committed_beyond_horizon, horizon)
     } else {
-        PgError::SigningKeyUnauthorised {
-            key_id,
-            purpose,
-            public_key,
-            tree_size,
-        }
+        refusal
     })
 }
 

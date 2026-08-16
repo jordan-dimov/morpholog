@@ -183,10 +183,11 @@ pub enum PgError {
     )]
     AnchorDivergedFromStart { tree_size: i64 },
     /// The signing key is not authorised by an `AuditSigningKey` claim in
-    /// force as of the prefix of the head being signed, and nothing was
-    /// withheld by the resume horizon - the refusal is about the key.
-    /// Signing refuses rather than producing a checkpoint that
-    /// verification would then judge `unauthorized_key`.
+    /// force as of the prefix of the head being signed, and no committed
+    /// suffix beyond that prefix is being withheld by the resume horizon -
+    /// the refusal is about the key (never authorised, or revoked within
+    /// the judged prefix). Signing refuses rather than producing a
+    /// checkpoint that verification would then judge `unauthorized_key`.
     #[error(
         "signing key is not authorised as AuditSigningKey({key_id}, {purpose}, \
          {public_key}) as of tree_size {tree_size}; propose an AuditSigningKey \
