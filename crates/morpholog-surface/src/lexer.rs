@@ -227,6 +227,9 @@ pub enum Token {
     RBracket,
     Colon,
     Comma,
+    /// `..` - the rest-marker in a named-field claim pattern
+    /// (`Pred(field: x, ..)`): the unmentioned fields are wildcards.
+    DotDot,
 
     // ---- Operators ----
     /// `=` (Eq).
@@ -309,6 +312,7 @@ impl fmt::Display for Token {
             Token::RBracket => write!(f, "`]`"),
             Token::Colon => write!(f, "`:`"),
             Token::Comma => write!(f, "`,`"),
+            Token::DotDot => write!(f, "`..`"),
             Token::Eq => write!(f, "`=`"),
             Token::Neq => write!(f, "`!=`"),
             Token::Le => write!(f, "`<=`"),
@@ -522,6 +526,10 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         just(']').to(Token::RBracket),
         just(':').to(Token::Colon),
         just(',').to(Token::Comma),
+        // `..` before nothing it could prefix: a lone `.` stays a lex
+        // error, and a decimal's own fraction dot is consumed inside
+        // `decimal_lit`, which never reaches a second consecutive dot.
+        just("..").to(Token::DotDot),
     ));
 
     // Order matters: try the more-specific patterns (multi-char
@@ -566,4 +574,26 @@ pub fn token_stream(
             .map(|(t, s)| (t.clone(), SimpleSpan::from(s.clone()))),
     )
     .map(SimpleSpan::from(end..end), |(t, s)| (t, s))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Token, lex};
+
+    #[test]
+    fn a_decimal_followed_by_the_rest_marker_lexes_as_two_tokens() {
+        // The decimal's own fraction rule must rewind its consumed `.`
+        // when no digits follow, leaving `..` whole for the rest-marker.
+        let tokens = lex("1..").expect("lexes");
+        let kinds: Vec<&Token> = tokens.iter().map(|(t, _)| t).collect();
+        assert!(
+            matches!(kinds.as_slice(), [Token::DecimalLit(d), Token::DotDot] if d == "1"),
+            "got {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn a_lone_dot_stays_a_lex_error() {
+        assert!(lex("Foo(a, .)").is_err(), "a single `.` is not a token");
+    }
 }

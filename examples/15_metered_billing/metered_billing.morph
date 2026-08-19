@@ -49,7 +49,11 @@ predicate VatRate(rate_id: Subject, rate: Decimal)
 -- and VAT amounts the engine computed. The names carry the units -
 -- pence per kWh in, pounds out - which is the bare-decimal money
 -- convention: the numbers are exact decimals, and the field name
--- says what they denominate.
+-- says what they denominate. With seven fields, the rules below
+-- match lines by NAMING the fields they read - ChargeLine(invoice:
+-- invoice, net_gbp: n, ..) - and the `..` leaves the rest
+-- unmatched, so no one counts underscores and a rule survives the
+-- line growing a field.
 predicate ChargeLine(
     line: Subject,
     invoice: Subject,
@@ -92,7 +96,7 @@ invariant line_net_is_the_rounded_recompute:
 -- sailing through because the comparison never happened. Rules that
 -- select a governing claim go quiet when none exists.
 invariant line_vat_is_the_rounded_recompute:
-    (ChargeLine(_, _, _, _, net_gbp, vat_rate_id, vat_gbp) and VatRate(vat_rate_id, rate))
+    (ChargeLine(net_gbp: net_gbp, vat_rate_id: vat_rate_id, vat_gbp: vat_gbp, ..) and VatRate(vat_rate_id, rate))
     implies vat_gbp = round(net_gbp * rate, penny)
 
 -- ... which is why this companion exists: every line MUST name a
@@ -101,7 +105,7 @@ invariant line_vat_is_the_rounded_recompute:
 -- the rate exists. Drop this rule and the one above becomes a
 -- promise that holds only on the happy path.
 invariant every_line_names_a_declared_rate:
-    ChargeLine(_, _, _, _, _, vat_rate_id, _) implies VatRate(vat_rate_id, _)
+    ChargeLine(vat_rate_id: vat_rate_id, ..) implies VatRate(vat_rate_id, _)
 
 -- The inputs live in their lawful ranges: a VAT rate is a fraction
 -- of the net, and a metered volume or tariff rate is never negative
@@ -115,7 +119,7 @@ invariant vat_rate_is_a_fraction:
     VatRate(_, rate) implies 0 <= rate <= 1
 
 invariant charge_inputs_are_non_negative:
-    ChargeLine(_, _, rate_p_per_kwh, volume_kwh, _, _, _)
+    ChargeLine(rate_p_per_kwh: rate_p_per_kwh, volume_kwh: volume_kwh, ..)
     implies (0 <= rate_p_per_kwh and 0 <= volume_kwh)
 
 -- A sealed total is the sum of its rounded lines - net plus VAT,
@@ -127,8 +131,8 @@ invariant charge_inputs_are_non_negative:
 -- contracts. This ledger's contract is per-line, and a total
 -- computed the other way is refused, one penny of drift and all.
 invariant sealed_total_is_the_sum_of_its_lines:
-    let net_total = (sum(n | ChargeLine(_, invoice, _, _, n, _, _)))
-    let vat_total = (sum(v | ChargeLine(_, invoice, _, _, _, _, v)))
+    let net_total = (sum(n | ChargeLine(invoice: invoice, net_gbp: n, ..)))
+    let vat_total = (sum(v | ChargeLine(invoice: invoice, vat_gbp: v, ..)))
     InvoiceSealed(invoice, total_gbp) implies total_gbp = net_total + vat_total
 
 -- The only ways state may change.
@@ -152,7 +156,7 @@ transformation add_charge_line(line, invoice, rate_p_per_kwh, volume_kwh, net_gb
 -- one line; the invariant above demands the total be exactly the sum
 -- of the rounded lines.
 transformation seal_invoice(invoice, total_gbp):
-    require ChargeLine(_, invoice, _, _, _, _, _)
+    require ChargeLine(invoice: invoice, ..)
     require not InvoiceSealed(invoice, _)
     admit InvoiceSealed(invoice, total_gbp)
 
