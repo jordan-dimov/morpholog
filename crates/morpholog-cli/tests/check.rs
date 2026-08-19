@@ -252,6 +252,33 @@ fn check_date_le_with_decimal_literal_reports_operand_kind_diagnostic() {
 }
 
 #[test]
+fn check_le_over_date_variables_refuses_and_names_the_date_comparator() {
+    // The #306 repro: `<=` over Date-bound operands used to pass check
+    // and refuse only at evaluation. It is refused at authoring now,
+    // and the diagnostic names the comparator that DOES order dates.
+    let tmp = temp_morph(
+        "program demo\n\
+         predicate Window(w: Subject, opens_on: Date)\n\
+         transformation act(w, asked_on):\n\
+         \x20   bind Window(w, opens_on)\n\
+         \x20   require asked_on <= opens_on\n\
+         \x20   admit Window(w, asked_on)\n",
+    );
+
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("<=") && stderr.contains("Date") && stderr.contains("use `on_or_before`"),
+        "expected the decimal comparator to refuse Date operands and suggest on_or_before; got:\n{stderr}"
+    );
+}
+
+#[test]
 fn developer_intro_complete_program_checks() {
     // The developer introduction embeds a complete `revenue.morph` and
     // promises every shown artefact is real. Extract that block
