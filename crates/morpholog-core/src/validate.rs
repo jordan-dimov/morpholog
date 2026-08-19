@@ -121,7 +121,7 @@ fn unbound_variable_hint(context: &ValidationContext) -> &'static str {
 }
 
 /// The optional "; if these are Date operands, use `on_or_before`" tail
-/// of an [`ValidationError::OperandKindMismatch`]. Conditional wording on
+/// of a [`ValidationError::OperandKindMismatch`]. Conditional wording on
 /// purpose: the other operand may be wrong too, so the hint never
 /// promises that swapping the operator alone fixes the expression.
 fn suggestion_suffix(suggestion: &Option<&'static str>, actual: &PredicateArgKind) -> String {
