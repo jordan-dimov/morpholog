@@ -632,9 +632,12 @@ fn agreeing_non_decimal_pairs_under_decimal_comparators_are_refused_at_authoring
 
 #[test]
 fn a_refused_comparison_contributes_no_inference_to_its_other_operand() {
-    // Without a pair-wide stop, the healthy operand would refine toward
-    // the decimal default and its later Date use would conflict - a
-    // second, spurious diagnostic for one misuse.
+    // What this pins: within the require's own walk, the pair stop
+    // keeps the degraded date operand from being re-refined toward the
+    // decimal default (a second, spurious diagnostic for one misuse).
+    // The cross-STATEMENT half cannot leak here regardless - require
+    // walks a scoped clone - so the live-scope property is pinned by
+    // the invariant-conjunction tests below.
     let t = transformation(
         "act",
         params(&["x"]),
@@ -753,20 +756,23 @@ fn decimal_comparators_still_accept_their_lawful_operands() {
 #[test]
 fn a_date_comparator_still_refines_a_free_parameter_to_date() {
     // The named codec's Date resolution rides this refinement: a free
-    // parameter used only under `on_or_before` must infer Date.
+    // parameter used ONLY under `on_or_before` - it flows into no Date
+    // claim slot, so the comparator observation is the sole source of
+    // its kind - must infer Date.
     let t = transformation(
         "act",
         params(&["asked_on"]),
         vec![
             bind_one(claim("Window", vec![var("w"), var("opens_on")])),
             require(date_le(term(var("asked_on")), term(var("opens_on")))),
-            assert_("Window", vec![var("w"), var("asked_on")]),
+            assert_("Probed", vec![var("w")]),
         ],
     );
     let name = t.name.clone();
     let p = program("window")
         .predicates(vec![
             predicate("Window").subject("w").date("opens_on").build(),
+            predicate("Probed").subject("w").build(),
         ])
         .transformations(vec![t])
         .build();
@@ -779,5 +785,90 @@ fn a_date_comparator_still_refines_a_free_parameter_to_date() {
         kinds.iter().any(|(v, k)| v.as_str() == "asked_on"
             && matches!(k, ParamKind::Concrete(PredicateArgKind::Date))),
         "asked_on must infer Date through on_or_before: {kinds:?}"
+    );
+}
+
+#[test]
+fn a_refused_temporal_comparison_contributes_no_inference_in_a_live_conjunction() {
+    // Invariant conjuncts share one live scope, so this is the path a
+    // refused temporal comparison could leak inference through: `d`
+    // (Decimal) under `on_or_before` is refused, and `x` must NOT be
+    // refined to Date by the same broken comparison - its later
+    // Decimal use would otherwise conflict spuriously.
+    let p = program("temporal_no_cascade")
+        .predicates(vec![
+            predicate("AnyBox").any("x").build(),
+            predicate("DecimalBox").decimal("d").build(),
+            predicate("DecimalSink").decimal("x").build(),
+        ])
+        .invariants(vec![invariant(
+            "bad",
+            and(vec![
+                claim("AnyBox", vec![var("x")]),
+                claim("DecimalBox", vec![var("d")]),
+                date_le(term(var("d")), term(var("x"))),
+                claim("DecimalSink", vec![var("x")]),
+            ]),
+        )])
+        .build();
+    let errs = p
+        .validate()
+        .expect_err("the decimal operand under on_or_before must be refused");
+    assert_eq!(
+        errs.iter()
+            .filter(|e| matches!(
+                e,
+                ValidationError::OperandKindMismatch {
+                    suggestion: Some("<="),
+                    ..
+                }
+            ))
+            .count(),
+        1,
+        "exactly the decimal operand offends, suggesting `<=`: {errs:?}"
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| matches!(e, ValidationError::VariableKindConflict { .. })),
+        "the refused comparison must not refine `x` toward Date: {errs:?}"
+    );
+}
+
+#[test]
+fn a_refused_decimal_comparison_does_not_re_refine_its_degraded_operand() {
+    // The decimal pair stop, pinned in a live conjunction: `d` (Date)
+    // under `<=` is refused and degrades; without the stop, the
+    // healthy Decimal side would refine the degraded operand back
+    // toward Decimal and conflict with its true Date kind.
+    let p = program("decimal_no_cascade")
+        .predicates(vec![
+            predicate("Amount").decimal("y").build(),
+            predicate("DateBox").date("d").build(),
+        ])
+        .invariants(vec![invariant(
+            "bad",
+            and(vec![
+                claim("Amount", vec![var("y")]),
+                claim("DateBox", vec![var("d")]),
+                le(term(var("y")), term(var("d"))),
+            ]),
+        )])
+        .build();
+    let errs = p
+        .validate()
+        .expect_err("the date operand under <= must be refused");
+    assert_eq!(
+        errs.iter()
+            .filter(|e| matches!(e, ValidationError::OperandKindMismatch { .. }))
+            .count(),
+        1,
+        "exactly the date operand offends: {errs:?}"
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| matches!(e, ValidationError::VariableKindConflict { .. })),
+        "the healthy side must not re-refine the degraded operand: {errs:?}"
     );
 }

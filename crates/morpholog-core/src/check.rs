@@ -669,8 +669,7 @@ impl CheckCtx<'_> {
                         self.check_decimal_domain_operands(left, right, *op, scope);
                     }
                     OrderedDomain::Date | OrderedDomain::Timestamp | OrderedDomain::Duration => {
-                        self.check_ordered_operand_kind(left, *op, *domain, scope);
-                        self.check_ordered_operand_kind(right, *op, *domain, scope);
+                        self.check_temporal_domain_operands(left, right, *op, *domain, scope);
                     }
                 }
             }
@@ -818,24 +817,29 @@ impl CheckCtx<'_> {
         }
     }
 
-    /// A temporal-domain (`Date`/`Timestamp`/`Duration`) comparator
-    /// operand. Unlike the generic [`Self::check_operand_kind`] (which
-    /// also serves `for`, arithmetic, `round`, and the period builtins,
-    /// and must keep its diagnostics), a comparator knows its whole
-    /// domain: a bare variable already known to a kind the domain does
-    /// not order is refused here as an operand mismatch naming the
-    /// comparator that WOULD order it - never funnelled into a
-    /// variable-kind conflict - and contributes no further inference.
-    /// Unknown variables still refine toward the domain's kind (how
-    /// `on_or_before` pins a free parameter to Date).
-    fn check_ordered_operand_kind(
+    /// Both operands of a temporal-domain (`Date`/`Timestamp`/
+    /// `Duration`) comparison, under the same pair discipline as the
+    /// decimal domain: an ordered comparison may infer operand kinds
+    /// only after BOTH operands are admissible to the domain it names.
+    /// Judging comes first; a refused comparison then contributes no
+    /// inference at all, because refining the healthy side out of a
+    /// comparison already known to be ill-typed would push a spurious
+    /// conflict onto its later uses. Unlike the generic
+    /// [`Self::check_operand_kind`] (which also serves `for`,
+    /// arithmetic, `round`, and the period builtins, and must keep its
+    /// diagnostics), a refused bare variable is an operand mismatch
+    /// naming the comparator that WOULD order it, never a
+    /// variable-kind conflict. Unknown operands of a clean pair refine
+    /// toward the domain's kind (how `on_or_before` pins a free
+    /// parameter to Date).
+    fn check_temporal_domain_operands(
         &mut self,
-        operand: &ValueExpr,
+        left: &ValueExpr,
+        right: &ValueExpr,
         op: CompareOp,
         domain: OrderedDomain,
         scope: &mut Scope,
     ) {
-        let operator = compare_token(op, domain);
         let expected = match domain {
             // Never called with Decimal (the two-flavour pair rule owns
             // it); the total mapping keeps this helper panic-free.
@@ -844,42 +848,56 @@ impl CheckCtx<'_> {
             OrderedDomain::Timestamp => PredicateArgKind::Timestamp,
             OrderedDomain::Duration => PredicateArgKind::Duration,
         };
-        if let ValueExpr::Term(Term::Var(name)) = operand {
-            self.use_var(scope, name);
-            if let InferredKind::Known(actual) = scope.kinds.lookup(name)
-                && !domain.admits(&actual)
-            {
-                let context = self.context.clone();
-                let suggestion = comparator_suggestion(op, &actual);
-                self.errors.push(ValidationError::OperandKindMismatch {
-                    operator,
-                    expected,
-                    actual,
-                    suggestion,
-                    context,
-                });
-                // Reported; no refinement toward or away from the bad
-                // kind, so one misuse stays one error.
-                return;
-            }
-            self.observe_or_report(scope, name, InferredKind::Known(expected));
+        let l_refused = self.judge_ordered_operand(left, op, domain, &expected, scope);
+        let r_refused = self.judge_ordered_operand(right, op, domain, &expected, scope);
+        if l_refused || r_refused {
             return;
         }
-        self.refine_through_abs(operand, &expected, scope);
-        let inferred = self.infer_value(operand, scope);
+        for operand in [left, right] {
+            if let ValueExpr::Term(Term::Var(name)) = operand {
+                self.observe_or_report(scope, name, InferredKind::Known(expected.clone()));
+            } else {
+                // A variable inside `abs(...)` refines too, so
+                // `abs(gap) no_longer_than allowed` pins `gap` to
+                // Duration.
+                self.refine_through_abs(operand, &expected, scope);
+            }
+        }
+    }
+
+    /// One temporal-domain operand: report a KNOWN kind the domain does
+    /// not order, naming the comparator that would, and say whether it
+    /// was refused. Judgment only - refinement is the pair's decision,
+    /// made after both verdicts.
+    fn judge_ordered_operand(
+        &mut self,
+        operand: &ValueExpr,
+        op: CompareOp,
+        domain: OrderedDomain,
+        expected: &PredicateArgKind,
+        scope: &mut Scope,
+    ) -> bool {
+        let inferred = if let ValueExpr::Term(Term::Var(name)) = operand {
+            self.use_var(scope, name);
+            scope.kinds.lookup(name)
+        } else {
+            self.infer_value(operand, scope)
+        };
         if let InferredKind::Known(actual) = inferred
             && !domain.admits(&actual)
         {
             let context = self.context.clone();
             let suggestion = comparator_suggestion(op, &actual);
             self.errors.push(ValidationError::OperandKindMismatch {
-                operator,
-                expected,
+                operator: compare_token(op, domain),
+                expected: expected.clone(),
                 actual,
                 suggestion,
                 context,
             });
+            return true;
         }
+        false
     }
 
     /// Refine the variable inside an `abs(...)` operand toward `expected`,
