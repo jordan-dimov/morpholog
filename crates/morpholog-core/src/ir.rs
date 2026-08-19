@@ -637,6 +637,51 @@ pub enum OrderedDomain {
     Duration,
 }
 
+impl OrderedDomain {
+    /// Whether an operand of this kind may appear under this domain's
+    /// comparators. The membership authority shared by the check tier's
+    /// operand rules; the runtime match in `eval` is its executable
+    /// twin. `Any` (the declaration-time escape hatch) is admitted
+    /// everywhere; the decimal domain's two flavours (bare decimal,
+    /// unit-tagged quantity) agree with each other per the pair rule,
+    /// not here.
+    pub fn admits(self, kind: &PredicateArgKind) -> bool {
+        matches!(
+            (self, kind),
+            (_, PredicateArgKind::Any)
+                | (
+                    OrderedDomain::Decimal,
+                    PredicateArgKind::Decimal | PredicateArgKind::Quantity(_)
+                )
+                | (OrderedDomain::Date, PredicateArgKind::Date)
+                | (OrderedDomain::Timestamp, PredicateArgKind::Timestamp)
+                | (OrderedDomain::Duration, PredicateArgKind::Duration)
+        )
+    }
+
+    /// The domain that orders a CONCRETE kind - the diagnostic reverse
+    /// lookup ("this operand is a Date; date ordering is spelled
+    /// `on_or_before`"). Deliberately not the inverse of [`Self::admits`]:
+    /// `Any` belongs to every domain and so names none, and the kinds
+    /// nothing orders (subjects, bools, collections, calendar spans)
+    /// return `None`.
+    pub fn for_concrete_kind(kind: &PredicateArgKind) -> Option<OrderedDomain> {
+        match kind {
+            PredicateArgKind::Decimal | PredicateArgKind::Quantity(_) => {
+                Some(OrderedDomain::Decimal)
+            }
+            PredicateArgKind::Date => Some(OrderedDomain::Date),
+            PredicateArgKind::Timestamp => Some(OrderedDomain::Timestamp),
+            PredicateArgKind::Duration => Some(OrderedDomain::Duration),
+            PredicateArgKind::Subject
+            | PredicateArgKind::Bool
+            | PredicateArgKind::Collection
+            | PredicateArgKind::CalendarSpan
+            | PredicateArgKind::Any => None,
+        }
+    }
+}
+
 /// Given one known operand of an additive/cap operator, the kind the
 /// other operand must have - if exactly one rule in the matrix fits.
 /// `known_is_left` says which side the known kind sits on (the matrix

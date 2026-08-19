@@ -120,6 +120,17 @@ fn unbound_variable_hint(context: &ValidationContext) -> &'static str {
     }
 }
 
+/// The optional "; if these are Date operands, use `on_or_before`" tail
+/// of an [`ValidationError::OperandKindMismatch`]. Conditional wording on
+/// purpose: the other operand may be wrong too, so the hint never
+/// promises that swapping the operator alone fixes the expression.
+fn suggestion_suffix(suggestion: &Option<&'static str>, actual: &PredicateArgKind) -> String {
+    match suggestion {
+        Some(token) => format!("; if these are {actual} operands, use `{token}`"),
+        None => String::new(),
+    }
+}
+
 /// A single failure surfaced by [`Program::validate`]. The validator
 /// collects every error rather than failing fast, so a programme
 /// migration that adds declarations sees the full work list rather
@@ -338,11 +349,17 @@ pub enum ValidationError {
     /// `For` over a Decimal value - the kernel raises these as
     /// `EvalError::TypeMismatch` at runtime; this validator
     /// surfaces them at authoring time.
-    #[error("{operator} expects {expected} operand(s) but received {actual} in {context}")]
+    #[error(
+        "{operator} expects {expected} operand(s) but received {actual}{} in {context}",
+        suggestion_suffix(suggestion, actual)
+    )]
     OperandKindMismatch {
         operator: &'static str,
         expected: PredicateArgKind,
         actual: PredicateArgKind,
+        /// The comparator that DOES order the received kind, when one
+        /// exists - `on_or_before` for a Date operand under `<=`.
+        suggestion: Option<&'static str>,
         context: ValidationContext,
     },
     /// An arithmetic operator was applied to a pair of known kinds for

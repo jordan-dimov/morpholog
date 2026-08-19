@@ -86,6 +86,23 @@ transformation install(s):
     admit Sensor(s)
 ";
 
+/// A chained DATE comparison: the temporal comparators in the chain
+/// sugar, with the free parameter's kind arriving only through
+/// `on_or_before` - the lawful shape whose decimal-spelled sibling
+/// the check tier refuses by name.
+const DATE_CHAIN: &str = "\
+program date_chain
+predicate Window(w: Subject, opens_on: Date, closes_on: Date)
+invariant windows_are_ordered:
+    Window(w, opens_on, closes_on) implies opens_on on_or_before closes_on
+transformation open_window(w, opens_on, closes_on):
+    admit Window(w, opens_on, closes_on)
+transformation probe(w, asked_on):
+    bind Window(w, opens_on, closes_on)
+    require opens_on on_or_before asked_on on_or_before closes_on
+    admit Window(w, asked_on, closes_on)
+";
+
 /// `xor` with claim branches nested as an `implies` consequent: the
 /// polarity-aware walkers meet the one construct the property
 /// generators never emit.
@@ -329,6 +346,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("sum_through_defined_chain", SUM_THROUGH_DEFINED_CHAIN),
         ("pre_around_defined", PRE_AROUND_DEFINED),
         ("chain_in_forall_and_defined", CHAIN_IN_FORALL_AND_DEFINED),
+        ("date_chain", DATE_CHAIN),
         ("xor_in_implies", XOR_IN_IMPLIES),
         ("qty_chain_in_and", QTY_CHAIN_IN_AND),
         ("valueof_sum_default", VALUEOF_SUM_DEFAULT),

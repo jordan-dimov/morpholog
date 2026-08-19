@@ -34,8 +34,9 @@ use std::collections::{HashMap, HashSet};
 use crate::fold;
 use crate::format::{arith_token, compare_token};
 use crate::ir::{
-    ArithOp, Builtin, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop, RuleName,
-    Stmt, SumSeed, Term, Value, ValueExpr, Var, arith_result_kind, arith_unique_counterpart,
+    ArithOp, Builtin, CompareOp, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop,
+    RuleName, Stmt, SumSeed, Term, Value, ValueExpr, Var, arith_result_kind,
+    arith_unique_counterpart,
 };
 use crate::validate::{ValidationContext, ValidationError, VocabularyKind};
 
@@ -91,6 +92,13 @@ impl InferredKind {
 /// strict equality is required.
 fn kinds_compatible(a: &PredicateArgKind, b: &PredicateArgKind) -> bool {
     *a == PredicateArgKind::Any || *b == PredicateArgKind::Any || a == b
+}
+
+/// The comparator that DOES order `actual`, spelled for the same
+/// comparison sense - `on_or_before` for a Date under `<=`, `before`
+/// for a Date under `<`. `None` when nothing orders the kind.
+fn comparator_suggestion(op: CompareOp, actual: &PredicateArgKind) -> Option<&'static str> {
+    OrderedDomain::for_concrete_kind(actual).map(|domain| compare_token(op, domain))
 }
 
 /// Scope-local map from variable name to inferred kind. Mutable
@@ -652,26 +660,17 @@ impl CheckCtx<'_> {
                 left,
                 right,
             } => {
-                let token = compare_token(*op, *domain);
                 match domain {
                     // The decimal ordered domain admits two flavours: bare
                     // decimals and unit-tagged quantities (a `Decimal[U]`
                     // IS a decimal, under a contract label the comparison
                     // must respect). Both operands must share one flavour.
                     OrderedDomain::Decimal => {
-                        self.check_decimal_domain_operands(left, right, token, scope);
+                        self.check_decimal_domain_operands(left, right, *op, scope);
                     }
-                    OrderedDomain::Date => {
-                        self.check_operand_kind(left, PredicateArgKind::Date, token, scope);
-                        self.check_operand_kind(right, PredicateArgKind::Date, token, scope);
-                    }
-                    OrderedDomain::Timestamp => {
-                        self.check_operand_kind(left, PredicateArgKind::Timestamp, token, scope);
-                        self.check_operand_kind(right, PredicateArgKind::Timestamp, token, scope);
-                    }
-                    OrderedDomain::Duration => {
-                        self.check_operand_kind(left, PredicateArgKind::Duration, token, scope);
-                        self.check_operand_kind(right, PredicateArgKind::Duration, token, scope);
+                    OrderedDomain::Date | OrderedDomain::Timestamp | OrderedDomain::Duration => {
+                        self.check_ordered_operand_kind(left, *op, *domain, scope);
+                        self.check_ordered_operand_kind(right, *op, *domain, scope);
                     }
                 }
             }
@@ -711,6 +710,7 @@ impl CheckCtx<'_> {
                                 operator: "in",
                                 expected: PredicateArgKind::Collection,
                                 actual,
+                                suggestion: None,
                                 context,
                             });
                         }
@@ -812,6 +812,71 @@ impl CheckCtx<'_> {
                 operator,
                 expected,
                 actual,
+                suggestion: None,
+                context,
+            });
+        }
+    }
+
+    /// A temporal-domain (`Date`/`Timestamp`/`Duration`) comparator
+    /// operand. Unlike the generic [`Self::check_operand_kind`] (which
+    /// also serves `for`, arithmetic, `round`, and the period builtins,
+    /// and must keep its diagnostics), a comparator knows its whole
+    /// domain: a bare variable already known to a kind the domain does
+    /// not order is refused here as an operand mismatch naming the
+    /// comparator that WOULD order it - never funnelled into a
+    /// variable-kind conflict - and contributes no further inference.
+    /// Unknown variables still refine toward the domain's kind (how
+    /// `on_or_before` pins a free parameter to Date).
+    fn check_ordered_operand_kind(
+        &mut self,
+        operand: &ValueExpr,
+        op: CompareOp,
+        domain: OrderedDomain,
+        scope: &mut Scope,
+    ) {
+        let operator = compare_token(op, domain);
+        let expected = match domain {
+            // Never called with Decimal (the two-flavour pair rule owns
+            // it); the total mapping keeps this helper panic-free.
+            OrderedDomain::Decimal => PredicateArgKind::Decimal,
+            OrderedDomain::Date => PredicateArgKind::Date,
+            OrderedDomain::Timestamp => PredicateArgKind::Timestamp,
+            OrderedDomain::Duration => PredicateArgKind::Duration,
+        };
+        if let ValueExpr::Term(Term::Var(name)) = operand {
+            self.use_var(scope, name);
+            if let InferredKind::Known(actual) = scope.kinds.lookup(name)
+                && !domain.admits(&actual)
+            {
+                let context = self.context.clone();
+                let suggestion = comparator_suggestion(op, &actual);
+                self.errors.push(ValidationError::OperandKindMismatch {
+                    operator,
+                    expected,
+                    actual,
+                    suggestion,
+                    context,
+                });
+                // Reported; no refinement toward or away from the bad
+                // kind, so one misuse stays one error.
+                return;
+            }
+            self.observe_or_report(scope, name, InferredKind::Known(expected));
+            return;
+        }
+        self.refine_through_abs(operand, &expected, scope);
+        let inferred = self.infer_value(operand, scope);
+        if let InferredKind::Known(actual) = inferred
+            && !domain.admits(&actual)
+        {
+            let context = self.context.clone();
+            let suggestion = comparator_suggestion(op, &actual);
+            self.errors.push(ValidationError::OperandKindMismatch {
+                operator,
+                expected,
+                actual,
+                suggestion,
                 context,
             });
         }
@@ -859,42 +924,40 @@ impl CheckCtx<'_> {
         }
     }
 
-    /// One operand of a decimal-domain comparison. A bare variable is
-    /// a use whose kind is left to the cross-refinement step (the
-    /// other operand decides the flavour); anything else infers, and
-    /// a known kind outside the domain's two flavours (bare decimal,
-    /// unit-tagged quantity) is reported against the bare-decimal
-    /// expectation.
+    /// One operand of a decimal-domain comparison, plus whether it was
+    /// refused. A bare variable of unknown kind is a use whose flavour
+    /// the cross-refinement step decides (the other operand); a KNOWN
+    /// kind - variable or not - outside the domain's two flavours (bare
+    /// decimal, unit-tagged quantity) is reported against the
+    /// bare-decimal expectation and degrades to unknown, so it is
+    /// neither reported twice nor refined toward the bad kind.
     fn infer_decimal_domain_operand(
         &mut self,
         operand: &ValueExpr,
-        operator: &'static str,
+        op: CompareOp,
         scope: &mut Scope,
-    ) -> InferredKind {
-        if let ValueExpr::Term(Term::Var(name)) = operand {
+    ) -> (InferredKind, bool) {
+        let inferred = if let ValueExpr::Term(Term::Var(name)) = operand {
             self.use_var(scope, name);
-            return scope.kinds.lookup(name);
-        }
-        let inferred = self.infer_value(operand, scope);
+            scope.kinds.lookup(name)
+        } else {
+            self.infer_value(operand, scope)
+        };
         if let InferredKind::Known(actual) = &inferred
-            && !matches!(
-                actual,
-                PredicateArgKind::Decimal | PredicateArgKind::Quantity(_) | PredicateArgKind::Any
-            )
+            && !OrderedDomain::Decimal.admits(actual)
         {
             let context = self.context.clone();
+            let suggestion = comparator_suggestion(op, actual);
             self.errors.push(ValidationError::OperandKindMismatch {
-                operator,
+                operator: compare_token(op, OrderedDomain::Decimal),
                 expected: PredicateArgKind::Decimal,
                 actual: actual.clone(),
+                suggestion,
                 context,
             });
-            // Already reported; degrade to unknown so the pair check
-            // neither reports the same operand twice nor refines a
-            // variable toward the bad kind.
-            return InferredKind::UnknownOrAny;
+            return (InferredKind::UnknownOrAny, true);
         }
-        inferred
+        (inferred, false)
     }
 
     /// Both operands of a decimal-domain comparison: each must be a
@@ -908,11 +971,19 @@ impl CheckCtx<'_> {
         &mut self,
         left: &ValueExpr,
         right: &ValueExpr,
-        operator: &'static str,
+        op: CompareOp,
         scope: &mut Scope,
     ) {
-        let l = self.infer_decimal_domain_operand(left, operator, scope);
-        let r = self.infer_decimal_domain_operand(right, operator, scope);
+        let operator = compare_token(op, OrderedDomain::Decimal);
+        let (l, l_refused) = self.infer_decimal_domain_operand(left, op, scope);
+        let (r, r_refused) = self.infer_decimal_domain_operand(right, op, scope);
+        // A comparison already outside its domain contributes no
+        // cross-operand inference: refining the healthy side toward the
+        // decimal default would push a second, spurious conflict onto
+        // every later use of that variable.
+        if l_refused || r_refused {
+            return;
+        }
         let refine =
             |this: &mut Self, operand: &ValueExpr, kind: PredicateArgKind, scope: &mut Scope| {
                 if let ValueExpr::Term(Term::Var(name)) = operand {
@@ -938,6 +1009,7 @@ impl CheckCtx<'_> {
                         operator,
                         expected: a,
                         actual: b,
+                        suggestion: None,
                         context,
                     });
                 }
@@ -1245,6 +1317,7 @@ impl CheckCtx<'_> {
                         operator: "sum",
                         expected: PredicateArgKind::Decimal,
                         actual,
+                        suggestion: None,
                         context,
                     });
                 }
@@ -1274,6 +1347,7 @@ impl CheckCtx<'_> {
                             operator: "value default",
                             expected,
                             actual,
+                            suggestion: None,
                             context,
                         });
                     }
@@ -1421,6 +1495,7 @@ impl CheckCtx<'_> {
                             operator: name,
                             expected: a,
                             actual: b,
+                            suggestion: None,
                             context,
                         });
                         InferredKind::UnknownOrAny

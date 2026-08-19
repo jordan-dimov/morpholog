@@ -12,11 +12,13 @@
 use morpholog_core::EvalValue;
 use morpholog_core::Outcome;
 use morpholog_core::ir_builder::{
-    add, and, assert_, bind_one, claim, duration, duration_le, implies, invariant, let_, params,
-    predicate, program, sub, sum, term, timestamp_le, transformation, var,
+    add, and, assert_, bind_one, claim, date_le, dec, duration, duration_le, implies, invariant,
+    le, let_, params, predicate, program, require, round, sub, sum, term, timestamp_le,
+    transformation, var,
 };
 use morpholog_core::{
-    Definition, EvalError, Invariant, Program, State, Transformation, ValidationError,
+    CompareOp, Definition, EvalError, Invariant, OrderedDomain, ParamKind, PredicateArgKind,
+    Program, Prop, State, Transformation, ValidationError, transformation_param_kinds,
 };
 use morpholog_test_support::{dur, must_accept, propose_with_test_actor, subj, ts};
 
@@ -517,5 +519,265 @@ fn a_reversed_instant_difference_is_a_negative_span() {
         state.claims().iter().any(|c| c.args[1] == dur("-PT2H")),
         "reversed difference is negative: {:?}",
         state.claims()
+    );
+}
+
+// ============================================================
+// The enforced-twice contract's authoring half (#306): eval refuses
+// the decimal comparators over non-decimal operands, so check must
+// refuse them first - including operands whose kind arrives through a
+// bare variable, the path that let `asked_on <= opens_on` over dates
+// reach evaluation.
+// ============================================================
+
+#[test]
+fn agreeing_non_decimal_pairs_under_decimal_comparators_are_refused_at_authoring_time() {
+    struct Case {
+        kind: &'static str,
+        op: CompareOp,
+        operator: &'static str,
+        suggestion: Option<&'static str>,
+    }
+    let cases = [
+        Case {
+            kind: "date",
+            op: CompareOp::Le,
+            operator: "<=",
+            suggestion: Some("on_or_before"),
+        },
+        Case {
+            kind: "date",
+            op: CompareOp::Lt,
+            operator: "<",
+            suggestion: Some("before"),
+        },
+        Case {
+            kind: "timestamp",
+            op: CompareOp::Le,
+            operator: "<=",
+            suggestion: Some("at_or_before"),
+        },
+        Case {
+            kind: "duration",
+            op: CompareOp::Le,
+            operator: "<=",
+            suggestion: Some("no_longer_than"),
+        },
+        Case {
+            kind: "subject",
+            op: CompareOp::Le,
+            operator: "<=",
+            suggestion: None,
+        },
+    ];
+    for case in cases {
+        let decl = match case.kind {
+            "date" => predicate("E").subject("v").date("a").date("b"),
+            "timestamp" => predicate("E").subject("v").timestamp("a").timestamp("b"),
+            "duration" => predicate("E").subject("v").duration("a").duration("b"),
+            _ => predicate("E").subject("v").subject("a").subject("b"),
+        };
+        let p = program("bad_compare")
+            .predicates(vec![decl.build()])
+            .invariants(vec![invariant(
+                "nonsense",
+                implies(
+                    claim("E", vec![var("v"), var("a"), var("b")]),
+                    Prop::Compare {
+                        op: case.op,
+                        domain: OrderedDomain::Decimal,
+                        left: Box::new(term(var("a"))),
+                        right: Box::new(term(var("b"))),
+                    },
+                ),
+            )])
+            .build();
+        let errs = p
+            .validate()
+            .expect_err("a non-decimal pair under a decimal comparator must be refused");
+        let mismatches: Vec<_> = errs
+            .iter()
+            .filter(|e| matches!(e, ValidationError::OperandKindMismatch { .. }))
+            .collect();
+        assert_eq!(
+            mismatches.len(),
+            2,
+            "both {} operands offend individually: {errs:?}",
+            case.kind
+        );
+        for e in &mismatches {
+            assert!(
+                matches!(
+                    e,
+                    ValidationError::OperandKindMismatch {
+                        operator,
+                        expected: PredicateArgKind::Decimal,
+                        suggestion,
+                        ..
+                    } if *operator == case.operator && *suggestion == case.suggestion
+                ),
+                "expected {} with suggestion {:?}, got {e:?}",
+                case.operator,
+                case.suggestion
+            );
+        }
+        assert!(
+            !errs
+                .iter()
+                .any(|e| matches!(e, ValidationError::VariableKindConflict { .. })),
+            "a refused comparison must not also conflict the variables: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn a_refused_comparison_contributes_no_inference_to_its_other_operand() {
+    // Without a pair-wide stop, the healthy operand would refine toward
+    // the decimal default and its later Date use would conflict - a
+    // second, spurious diagnostic for one misuse.
+    let t = transformation(
+        "act",
+        params(&["x"]),
+        vec![
+            bind_one(claim("DateBox", vec![var("d")])),
+            require(le(term(var("x")), term(var("d")))),
+            assert_("DateSink", vec![var("x")]),
+        ],
+    );
+    let p = program("no_cascade")
+        .predicates(vec![
+            predicate("DateBox").date("d").build(),
+            predicate("DateSink").date("x").build(),
+        ])
+        .transformations(vec![t])
+        .build();
+    let errs = p
+        .validate()
+        .expect_err("the date operand under <= must be refused");
+    assert_eq!(
+        errs.iter()
+            .filter(|e| matches!(e, ValidationError::OperandKindMismatch { .. }))
+            .count(),
+        1,
+        "exactly the bound date operand offends: {errs:?}"
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| matches!(e, ValidationError::VariableKindConflict { .. })),
+        "the refused comparison must not refine `x` toward Decimal: {errs:?}"
+    );
+}
+
+#[test]
+fn a_chain_through_a_date_variable_reports_each_link_without_conflict() {
+    // `0 <= d <= 100` lowers to two pairwise compares; each link
+    // misuses `d` and says so once - never a follow-on kind conflict.
+    let p = program("chain")
+        .predicates(vec![predicate("DateBox").date("d").build()])
+        .invariants(vec![invariant(
+            "bad_chain",
+            implies(
+                claim("DateBox", vec![var("d")]),
+                and(vec![
+                    le(term(dec("0")), term(var("d"))),
+                    le(term(var("d")), term(dec("100"))),
+                ]),
+            ),
+        )])
+        .build();
+    let errs = p.validate().expect_err("both chain links misuse the date");
+    assert_eq!(
+        errs.iter()
+            .filter(|e| matches!(e, ValidationError::OperandKindMismatch { .. }))
+            .count(),
+        2,
+        "one report per offending link: {errs:?}"
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| matches!(e, ValidationError::VariableKindConflict { .. })),
+        "no follow-on conflict from a refused link: {errs:?}"
+    );
+}
+
+#[test]
+fn a_known_date_variable_under_round_keeps_its_existing_diagnostic_path() {
+    // The comparator fix is comparator-specific: generic operand
+    // checking (round, for, arithmetic) still funnels a known-kind
+    // mismatch through the variable-kind conflict it always used.
+    let p = program("round_path")
+        .predicates(vec![predicate("DateBox").date("d").build()])
+        .invariants(vec![invariant(
+            "bad_round",
+            implies(
+                claim("DateBox", vec![var("d")]),
+                le(round(term(var("d")), term(dec("1"))), term(dec("5"))),
+            ),
+        )])
+        .build();
+    let errs = p.validate().expect_err("round over a date must be refused");
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e, ValidationError::VariableKindConflict { .. })),
+        "generic operand checking is unchanged by the comparator fix: {errs:?}"
+    );
+}
+
+#[test]
+fn decimal_comparators_still_accept_their_lawful_operands() {
+    // Tightening must not close the accepted paths: an Any-slot
+    // variable, and a free parameter pair defaulting to Decimal.
+    let t = transformation(
+        "act",
+        params(&["x", "y"]),
+        vec![
+            bind_one(claim("AnyBox", vec![var("a")])),
+            require(le(term(var("a")), term(dec("5")))),
+            require(le(term(var("x")), term(var("y")))),
+            assert_("Out", vec![var("x")]),
+        ],
+    );
+    let p = program("lawful")
+        .predicates(vec![
+            predicate("AnyBox").any("a").build(),
+            predicate("Out").decimal("x").build(),
+        ])
+        .transformations(vec![t])
+        .build();
+    p.validate()
+        .expect("Any-slot and unknown-pair operands stay lawful under <=");
+}
+
+#[test]
+fn a_date_comparator_still_refines_a_free_parameter_to_date() {
+    // The named codec's Date resolution rides this refinement: a free
+    // parameter used only under `on_or_before` must infer Date.
+    let t = transformation(
+        "act",
+        params(&["asked_on"]),
+        vec![
+            bind_one(claim("Window", vec![var("w"), var("opens_on")])),
+            require(date_le(term(var("asked_on")), term(var("opens_on")))),
+            assert_("Window", vec![var("w"), var("asked_on")]),
+        ],
+    );
+    let name = t.name.clone();
+    let p = program("window")
+        .predicates(vec![
+            predicate("Window").subject("w").date("opens_on").build(),
+        ])
+        .transformations(vec![t])
+        .build();
+    let validated = p
+        .validated()
+        .expect("the date comparator programme is lawful");
+    let kinds =
+        transformation_param_kinds(&validated, &name).expect("parameter kinds are inferable");
+    assert!(
+        kinds.iter().any(|(v, k)| v.as_str() == "asked_on"
+            && matches!(k, ParamKind::Concrete(PredicateArgKind::Date))),
+        "asked_on must infer Date through on_or_before: {kinds:?}"
     );
 }

@@ -949,7 +949,8 @@ enum CmpOp {
     /// An ordered comparison with its domain picked by surface
     /// keyword (`<=` decimal, `on_or_before` date, `at_or_before`
     /// timestamp, `no_longer_than` duration...), never by operand
-    /// kind. Operand kinds are checked at runtime against the domain.
+    /// kind. Operand kinds are enforced against the domain twice:
+    /// refused by name at authoring, `TypeMismatch` at evaluation.
     Compare(CompareOp, OrderedDomain),
     /// Membership comparator (`x in xs`) -> `Prop::In(Term, Term)`,
     /// term-only on both sides (the IR's `In` operates on terms).
