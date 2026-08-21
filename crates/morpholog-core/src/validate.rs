@@ -607,6 +607,19 @@ pub enum ValidationError {
         definition: String,
         parameter: String,
     },
+    /// A predicate or intent declaration repeats an argument name. A
+    /// field names one position - named claim patterns address
+    /// positions by field name, and every other field-name consumer
+    /// (views, schemas, the named codec) is ambiguous under a repeat.
+    #[error(
+        "{vocabulary} `{name}` declares argument `{field}` more than once; \
+         each field names one position"
+    )]
+    DuplicateArgName {
+        vocabulary: VocabularyKind,
+        name: String,
+        field: String,
+    },
     /// `pre(...)` was used inside a definition body. Definitions are
     /// context-free so a call means the same thing in a gate as in an
     /// invariant; a body that read pre-state would break that. Wrap the
@@ -1113,6 +1126,37 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
         }
     }
 
+    // Predicate and intent argument names must be duplicate-free for
+    // the same reason: a field names one position.
+    for (vocabulary, name, args) in p
+        .predicates
+        .iter()
+        .map(|d| (VocabularyKind::Predicate, d.name.to_string(), &d.args))
+        .chain(
+            p.intents
+                .iter()
+                .map(|d| (VocabularyKind::Intent, d.name.to_string(), &d.args)),
+        )
+    {
+        let mut seen = HashMap::<&str, usize>::new();
+        for arg in args {
+            *seen.entry(arg.name.as_str()).or_insert(0) += 1;
+        }
+        let mut dups: Vec<&str> = seen
+            .iter()
+            .filter(|(_, count)| **count > 1)
+            .map(|(field, _)| *field)
+            .collect();
+        dups.sort_unstable();
+        for field in dups {
+            errors.push(ValidationError::DuplicateArgName {
+                vocabulary,
+                name: name.clone(),
+                field: field.to_string(),
+            });
+        }
+    }
+
     // Definitions and predicates share the claim-shaped reference
     // namespace (`name(args)` in a body resolves to exactly one of
     // them), so a name in both vocabularies is a collision, not two
@@ -1354,6 +1398,26 @@ mod tests {
 
     fn empty_program() -> Program {
         program("t").build()
+    }
+
+    #[test]
+    fn a_declaration_repeating_an_argument_name_is_refused() {
+        // A field names one position; named claim patterns (and every
+        // other field-name consumer) are undefined over a repeat.
+        let p = program("dup")
+            .predicates(vec![predicate("P").decimal("x").decimal("x").build()])
+            .build();
+        let errs = p.validate().expect_err("duplicate field names refuse");
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::DuplicateArgName {
+                    vocabulary: VocabularyKind::Predicate,
+                    ..
+                }
+            )),
+            "expected DuplicateArgName, got {errs:?}"
+        );
     }
 
     #[test]

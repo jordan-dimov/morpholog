@@ -70,15 +70,23 @@ pub(crate) fn arith_token(op: ArithOp) -> &'static str {
     }
 }
 
-/// The canonical content hash of a programme: `sha256:<hex>` over the
-/// formatter's canonical rendering. The round-trip property makes that
-/// rendering a canonical form, so formatting-only edits and comments do
-/// not change the hash - this is rules identity, not file identity. The
-/// `sha256:` prefix keeps it self-describing if the algorithm changes.
+/// The canonical content hash of a programme: `sha256:<hex>` over a
+/// STABLE positional rendering of the parsed IR - deliberately not
+/// [`format_program`], whose human-facing canonical form may evolve
+/// (it prints named claim patterns). The round-trip property makes the
+/// hashed rendering canonical, so formatting-only edits, comments, and
+/// equivalent surface sugar (a named pattern and its positional twin)
+/// do not change the hash - this is rules identity, not file identity.
+/// The `sha256:` prefix keeps it self-describing if the algorithm
+/// changes.
 pub fn canonical_hash(p: &Program) -> String {
     use sha2::{Digest, Sha256};
     use std::fmt::Write;
-    let digest = Sha256::digest(format_program(p).as_bytes());
+    // The stable positional rendering, NOT the named canonical form:
+    // rules identity must not move because the formatter learned a
+    // kinder spelling, and positional and named sources lowering to the
+    // same IR must share one hash.
+    let digest = Sha256::digest(render_program(p, None).as_bytes());
     let mut out = String::with_capacity(7 + digest.len() * 2);
     out.push_str("sha256:");
     for b in digest {
@@ -88,10 +96,59 @@ pub fn canonical_hash(p: &Program) -> String {
     out
 }
 
+/// The declaration table the named canonical form resolves field names
+/// from, when the caller holds a whole programme. `None` renders
+/// positionally - the decl-free public helpers and every kernel
+/// diagnostic path (rejection reasons, witnesses) quote the IR as it
+/// is, which keeps their output independent of any declaration table.
+type Naming<'a> = Option<&'a std::collections::HashMap<&'a str, &'a PredicateDecl>>;
+
+/// The field-name table for the named canonical form. A name declared
+/// more than once, or a declaration whose field names repeat, cannot be
+/// addressed by name and is left out - those programmes do not
+/// validate, but the formatter must not emit text that misresolves.
+fn claim_naming(p: &Program) -> std::collections::HashMap<&str, &PredicateDecl> {
+    let mut counts = std::collections::HashMap::new();
+    for d in &p.predicates {
+        *counts.entry(d.name.as_str()).or_insert(0usize) += 1;
+    }
+    p.predicates
+        .iter()
+        .filter(|d| counts[d.name.as_str()] == 1)
+        .filter(|d| {
+            let mut seen = std::collections::HashSet::new();
+            d.args.iter().all(|a| seen.insert(a.name.as_str()))
+        })
+        .map(|d| (d.name.as_str(), d))
+        .collect()
+}
+
+/// The longest run of consecutive wildcards - the named canonical
+/// form's trigger. One wildcard is legible where it stands; two in a
+/// row start the wall.
+fn max_wildcard_run(args: &[Term]) -> usize {
+    let mut best = 0;
+    let mut run = 0;
+    for t in args {
+        if matches!(t, Term::Wildcard) {
+            run += 1;
+            best = best.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    best
+}
+
 /// Top-level entry. Returns a multi-line string terminated by a
 /// final `\n`, so callers can write directly to a stream or append
 /// to an existing buffer.
 pub fn format_program(p: &Program) -> String {
+    let naming = claim_naming(p);
+    render_program(p, Some(&naming))
+}
+
+fn render_program(p: &Program, naming: Naming) -> String {
     let mut out = String::new();
     out.push_str(&format!("program {}\n", p.name));
 
@@ -123,7 +180,7 @@ pub fn format_program(p: &Program) -> String {
             continue;
         }
         out.push('\n');
-        out.push_str(&format_definition(def));
+        out.push_str(&format_definition(def, naming));
     }
 
     for inv in &p.invariants {
@@ -134,17 +191,17 @@ pub fn format_program(p: &Program) -> String {
             continue;
         }
         out.push('\n');
-        out.push_str(&format_invariant(inv));
+        out.push_str(&format_invariant(inv, naming));
     }
 
     for t in &p.transformations {
         out.push('\n');
-        out.push_str(&format_transformation(t));
+        out.push_str(&format_transformation(t, naming));
     }
 
     for d in &p.derived_claims {
         out.push('\n');
-        out.push_str(&format_derived_claim(d));
+        out.push_str(&format_derived_claim(d, naming));
     }
 
     out
@@ -191,17 +248,17 @@ pub(crate) fn format_intent_decl(decl: &crate::IntentDecl) -> String {
 
 /// Render a [`Definition`] in the invariant block shape:
 /// `define name(params):` with the body indented.
-pub(crate) fn format_definition(def: &Definition) -> String {
+pub(crate) fn format_definition(def: &Definition, naming: Naming) -> String {
     let params: Vec<String> = def.parameters.iter().map(ToString::to_string).collect();
     let mut out = String::new();
     out.push_str(&format!("define {}({}):\n", def.name, params.join(", ")));
     out.push_str(&indent(1));
-    out.push_str(&format_prop_inline(&def.body));
+    out.push_str(&fmt_prop(&def.body, naming));
     out.push('\n');
     out
 }
 
-pub(crate) fn format_invariant(inv: &Invariant) -> String {
+pub(crate) fn format_invariant(inv: &Invariant, naming: Naming) -> String {
     let mut out = String::new();
     // Surface has no version syntax in v0; the IR's `version` field
     // defaults to 1 and the formatter omits it.
@@ -212,12 +269,12 @@ pub(crate) fn format_invariant(inv: &Invariant) -> String {
         None => out.push_str(&format!("invariant {}:\n", inv.name)),
     }
     out.push_str(&indent(1));
-    out.push_str(&format_prop_inline(&inv.body));
+    out.push_str(&fmt_prop(&inv.body, naming));
     out.push('\n');
     out
 }
 
-pub(crate) fn format_transformation(t: &Transformation) -> String {
+pub(crate) fn format_transformation(t: &Transformation, naming: Naming) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "transformation {}({}):\n",
@@ -229,13 +286,13 @@ pub(crate) fn format_transformation(t: &Transformation) -> String {
             .join(", ")
     ));
     for stmt in &t.body {
-        out.push_str(&format_stmt(stmt, 1));
+        out.push_str(&fmt_stmt(stmt, 1, naming));
         out.push('\n');
     }
     out
 }
 
-pub(crate) fn format_derived_claim(d: &DerivedClaim) -> String {
+pub(crate) fn format_derived_claim(d: &DerivedClaim, naming: Naming) -> String {
     // The surface grammar requires at least one `value` clause; an
     // empty `values` Vec would format to text the parser refuses.
     // The kernel doesn't enforce this today, so panic with a clear
@@ -256,13 +313,13 @@ pub(crate) fn format_derived_claim(d: &DerivedClaim) -> String {
             .join(", ")
     ));
     out.push_str(&indent(1));
-    out.push_str(&format!("over {}\n", format_prop_inline(&d.domain)));
+    out.push_str(&format!("over {}\n", fmt_prop(&d.domain, naming)));
     for v in &d.values {
         out.push_str(&indent(1));
         out.push_str(&format!(
             "value {} = {}\n",
             v.name,
-            format_value_inline(&v.expr)
+            fmt_value(&v.expr, naming)
         ));
     }
     out
@@ -279,10 +336,14 @@ fn rule_label(name: &Option<crate::ir::RuleName>) -> String {
 }
 
 pub fn format_stmt(s: &Stmt, depth: usize) -> String {
+    fmt_stmt(s, depth, None)
+}
+
+fn fmt_stmt(s: &Stmt, depth: usize, naming: Naming) -> String {
     let pad = indent(depth);
     match s {
         Stmt::Require { prop: p, name } => {
-            format!("{pad}require {}{}", rule_label(name), format_prop_inline(p))
+            format!("{pad}require {}{}", rule_label(name), fmt_prop(p, naming))
         }
         Stmt::BindOne { prop: p, name } => {
             // A claim pattern, or a call to a definition - which is what a
@@ -297,10 +358,10 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
                 matches!(p, Prop::Claim { .. } | Prop::Defined { .. }),
                 "format_stmt: bind takes a claim or a defined call; got {p:?}",
             );
-            format!("{pad}bind {}{}", rule_label(name), format_prop_inline(p))
+            format!("{pad}bind {}{}", rule_label(name), fmt_prop(p, naming))
         }
         Stmt::Let { name, value } => {
-            format!("{pad}let {name} = {}", format_value_inline(value))
+            format!("{pad}let {name} = {}", fmt_value(value, naming))
         }
         Stmt::LetNewSubject { name } => {
             format!("{pad}let {name} = new Subject()")
@@ -309,7 +370,7 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
         Stmt::Retract { predicate, args } => {
             format!(
                 "{pad}retract {}",
-                format_predicate_call(predicate.as_str(), args)
+                fmt_predicate_call(predicate.as_str(), args, naming)
             )
         }
         Stmt::Emit(i) => format!("{pad}emit {}", format_intent(i)),
@@ -318,12 +379,9 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
             collection,
             body,
         } => {
-            let mut out = format!(
-                "{pad}for {binding} in {}:\n",
-                format_value_inline(collection)
-            );
+            let mut out = format!("{pad}for {binding} in {}:\n", fmt_value(collection, naming));
             for (i, inner) in body.iter().enumerate() {
-                out.push_str(&format_stmt(inner, depth + 1));
+                out.push_str(&fmt_stmt(inner, depth + 1, naming));
                 if i + 1 < body.len() {
                     out.push('\n');
                 }
@@ -343,29 +401,41 @@ pub fn format_stmt(s: &Stmt, depth: usize) -> String {
 /// errors). Its value-operand renderer is [`format_value_inline`]; the
 /// two compose because the sorts are mutually recursive.
 pub fn format_prop_inline(p: &Prop) -> String {
+    fmt_prop(p, None)
+}
+
+fn fmt_prop(p: &Prop, naming: Naming) -> String {
     // Composite sub-propositions are wrapped in parens unconditionally;
     // verbose but unambiguous and round-trips through `parse_expression`
     // (or `parse_program` once embedded in a programme body). The surface
     // comparator precedence (arithmetic > comparators > not > and >
     // implies) makes the parens a no-op for the parser.
-    fn prop_primary(p: &Prop) -> String {
+    fn prop_primary(p: &Prop, naming: Naming) -> String {
         match p {
-            Prop::Claim { predicate, args } => format_predicate_call(predicate.as_str(), args),
-            Prop::Defined { name, args } => format_predicate_call(name.as_str(), args),
+            Prop::Claim { predicate, args } => fmt_predicate_call(predicate.as_str(), args, naming),
+            // A defined call has parameters, not declared fields, so it
+            // never takes the named form - and it must branch by
+            // VARIANT: a definition may share its name with a predicate.
+            Prop::Defined { name, args } => fmt_predicate_call(name.as_str(), args, None),
             // `pre(...)` is function-call-shape; no outer parens needed.
-            Prop::Pre(inner) => format!("pre({})", format_prop_inline(inner)),
-            _ => format!("({})", format_prop_inline(p)),
+            Prop::Pre(inner) => format!("pre({})", fmt_prop(inner, naming)),
+            _ => format!("({})", fmt_prop(p, naming)),
         }
     }
 
     match p {
-        Prop::Claim { predicate, args } => format_predicate_call(predicate.as_str(), args),
-        // A definition call renders exactly like a claim reference; the
-        // parser re-resolves it by name, so round-trip holds.
-        Prop::Defined { name, args } => format_predicate_call(name.as_str(), args),
+        Prop::Claim { predicate, args } => fmt_predicate_call(predicate.as_str(), args, naming),
+        // A definition call renders like a claim reference (the parser
+        // re-resolves it by name) but never in named form - see
+        // `prop_primary`.
+        Prop::Defined { name, args } => fmt_predicate_call(name.as_str(), args, None),
 
         // Comparators relate two value expressions.
-        Prop::Eq(l, r) => format!("{} = {}", value_primary(l), value_primary(r)),
+        Prop::Eq(l, r) => format!(
+            "{} = {}",
+            value_primary(l, naming),
+            value_primary(r, naming)
+        ),
         Prop::Compare {
             op,
             domain,
@@ -373,35 +443,47 @@ pub fn format_prop_inline(p: &Prop) -> String {
             right,
         } => format!(
             "{} {} {}",
-            value_primary(left),
+            value_primary(left, naming),
             compare_token(*op, *domain),
-            value_primary(right)
+            value_primary(right, naming)
         ),
-        Prop::Neq(lhs, rhs) => format!("{} != {}", value_primary(lhs), value_primary(rhs)),
+        Prop::Neq(lhs, rhs) => format!(
+            "{} != {}",
+            value_primary(lhs, naming),
+            value_primary(rhs, naming)
+        ),
         Prop::In(elem, coll) => format!("{} in {}", format_term(elem), format_term(coll)),
 
         // Boolean composition: prefix `not`, infix `and`/`or`/`implies`.
-        Prop::Pre(inner) => format!("pre({})", format_prop_inline(inner)),
-        Prop::Not(inner) => format!("not {}", prop_primary(inner)),
+        Prop::Pre(inner) => format!("pre({})", fmt_prop(inner, naming)),
+        Prop::Not(inner) => format!("not {}", prop_primary(inner, naming)),
         Prop::And(props) => {
-            let inner: Vec<String> = props.iter().map(prop_primary).collect();
+            let inner: Vec<String> = props.iter().map(|p| prop_primary(p, naming)).collect();
             inner.join(" and ")
         }
         Prop::Or(props) => {
-            let inner: Vec<String> = props.iter().map(prop_primary).collect();
+            let inner: Vec<String> = props.iter().map(|p| prop_primary(p, naming)).collect();
             inner.join(" or ")
         }
         Prop::Xor(left, right) => {
-            format!("{} xor {}", prop_primary(left), prop_primary(right))
+            format!(
+                "{} xor {}",
+                prop_primary(left, naming),
+                prop_primary(right, naming)
+            )
         }
         Prop::Implies { left, right } => {
-            format!("{} implies {}", prop_primary(left), prop_primary(right))
+            format!(
+                "{} implies {}",
+                prop_primary(left, naming),
+                prop_primary(right, naming)
+            )
         }
 
         // Quantifiers: colon-block form. Source for `forall` is a
         // primary proposition (typically a Claim or a lifted `In`).
         Prop::Exists { binding, body } => {
-            format!("exists {binding}: {}", format_prop_inline(body))
+            format!("exists {binding}: {}", fmt_prop(body, naming))
         }
         Prop::Forall {
             binding,
@@ -415,11 +497,11 @@ pub fn format_prop_inline(p: &Prop) -> String {
             // whatever primary proposition the source is.
             let source_text = match source.as_ref() {
                 Prop::In(Term::Var(b), coll) if b == binding => format_term(coll),
-                _ => prop_primary(source),
+                _ => prop_primary(source, naming),
             };
             format!(
                 "forall {binding} in {source_text}: {}",
-                format_prop_inline(body)
+                fmt_prop(body, naming)
             )
         }
     }
@@ -429,16 +511,16 @@ pub fn format_prop_inline(p: &Prop) -> String {
 /// composite arithmetic subtree in parens so the surface text reparses
 /// to the same tree. `Term`, `Sum`, and `ValueOf` are already primary-
 /// shaped; `Add`/`Sub` are parenthesised.
-fn value_primary(e: &ValueExpr) -> String {
+fn value_primary(e: &ValueExpr, naming: Naming) -> String {
     match e {
         ValueExpr::Term(t) => format_term(t),
         // Infix arithmetic is the only ambiguous form: parenthesise it so
         // the surface text reparses to the same tree. Everything else is
         // self-delimiting (a keyword or function with its own parens).
         ValueExpr::Arith { .. } => {
-            format!("({})", format_value_inline(e))
+            format!("({})", fmt_value(e, naming))
         }
-        _ => format_value_inline(e),
+        _ => fmt_value(e, naming),
     }
 }
 
@@ -447,6 +529,10 @@ fn value_primary(e: &ValueExpr) -> String {
 /// value expressions. Its proposition renderer (for a `sum` body) is
 /// [`format_prop_inline`].
 pub fn format_value_inline(e: &ValueExpr) -> String {
+    fmt_value(e, None)
+}
+
+fn fmt_value(e: &ValueExpr, naming: Naming) -> String {
     match e {
         ValueExpr::Term(t) => format_term(t),
         ValueExpr::Sum {
@@ -456,8 +542,8 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
         } => {
             format!(
                 "sum({} | {})",
-                format_value_inline(value),
-                format_prop_inline(body)
+                fmt_value(value, naming),
+                fmt_prop(body, naming)
             )
         }
         ValueExpr::Extremum { op, value, body } => {
@@ -465,7 +551,7 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
                 "{}({} | {})",
                 op.as_str(),
                 format_term(value),
-                format_prop_inline(body)
+                fmt_prop(body, naming)
             )
         }
         ValueExpr::ValueOf {
@@ -473,18 +559,23 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
             args,
             default,
         } => {
-            let base = format!("value {}", format_predicate_call(predicate.as_str(), args));
+            // A `value` lookup's wildcard is the extraction hole, not a
+            // don't-care: no named form, whatever the run length.
+            let base = format!(
+                "value {}",
+                fmt_predicate_call(predicate.as_str(), args, None)
+            );
             match default {
-                Some(d) => format!("{base} default {}", format_value_inline(d)),
+                Some(d) => format!("{base} default {}", fmt_value(d, naming)),
                 None => base,
             }
         }
         ValueExpr::Arith { op, left, right } => {
             format!(
                 "{} {} {}",
-                value_primary(left),
+                value_primary(left, naming),
                 arith_token(*op),
-                value_primary(right)
+                value_primary(right, naming)
             )
         }
         // Every builtin renders the same way: its surface name and
@@ -493,7 +584,7 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
             "{}({})",
             builtin.name(),
             args.iter()
-                .map(format_value_inline)
+                .map(|a| fmt_value(a, naming))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -505,9 +596,9 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
             otherwise,
         } => format!(
             "if({}, {}, {})",
-            format_prop_inline(when),
-            format_value_inline(then),
-            format_value_inline(otherwise)
+            fmt_prop(when, naming),
+            fmt_value(then, naming),
+            fmt_value(otherwise, naming)
         ),
     }
 }
@@ -516,17 +607,38 @@ pub fn format_value_inline(e: &ValueExpr) -> String {
 // Leaf formatting
 // ============================================================
 
-fn format_predicate_call(predicate: &str, args: &[Term]) -> String {
+fn fmt_predicate_call(predicate: &str, args: &[Term], naming: Naming) -> String {
+    // The named canonical form: two wildcards in a row read as a wall,
+    // so mentioned fields are named (in declaration order) and the rest
+    // is `..`. A single wildcard is legible where it stands and stays
+    // positional; an all-wildcard pattern collapses to `Pred(..)`.
+    if let Some(map) = naming
+        && let Some(decl) = map.get(predicate)
+        && decl.args.len() == args.len()
+        && max_wildcard_run(args) >= 2
+    {
+        let mut parts: Vec<String> = decl
+            .args
+            .iter()
+            .zip(args)
+            .filter(|(_, term)| !matches!(term, Term::Wildcard))
+            .map(|(field, term)| format!("{}: {}", field.name, format_term(term)))
+            .collect();
+        parts.push("..".to_string());
+        return format!("{predicate}({})", parts.join(", "));
+    }
     let formatted: Vec<String> = args.iter().map(format_term).collect();
     format!("{predicate}({})", formatted.join(", "))
 }
 
 fn format_claim(c: &Claim) -> String {
-    format_predicate_call(c.predicate.as_str(), &c.args)
+    // `admit` supplies every field, so a wildcard run can never occur
+    // here; positional is both correct and canonical.
+    fmt_predicate_call(c.predicate.as_str(), &c.args, None)
 }
 
 fn format_intent(i: &Intent) -> String {
-    format_predicate_call(i.name.as_str(), &i.args)
+    fmt_predicate_call(i.name.as_str(), &i.args, None)
 }
 
 fn format_term(t: &Term) -> String {
@@ -615,7 +727,7 @@ mod tests {
                 emit("TrialOpened", vec![var("trial_id")]),
             ],
         );
-        let s = format_transformation(&t);
+        let s = format_transformation(&t, None);
         assert!(s.contains("transformation open_trial(trial_id):"));
         assert!(s.contains("  admit Trial(trial_id)"));
         assert!(s.contains("  emit TrialOpened(trial_id)"));

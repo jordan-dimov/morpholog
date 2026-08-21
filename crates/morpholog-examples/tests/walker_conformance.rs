@@ -86,6 +86,24 @@ transformation install(s):
     admit Sensor(s)
 ";
 
+/// Named-field claim patterns in every position that takes them: the
+/// sugar lowers to positional IR at parse time, and the wall-carrying
+/// invariant pins the formatter's named canonical form through this
+/// battery's round-trip leg.
+const NAMED_PATTERNS: &str = "\
+program named_patterns
+predicate Line(id: Subject, invoice: Subject, rate: Decimal, volume: Decimal, net: Decimal)
+invariant nets_positive:
+    Line(invoice: inv, net: n, ..) implies 0 <= n
+invariant some_line:
+    Line(..) implies Line(..)
+transformation add(id, inv, r, v, n):
+    require not Line(id: id, ..)
+    admit Line(id: id, invoice: inv, rate: r, volume: v, net: n)
+transformation drop(inv):
+    retract Line(invoice: inv, ..)
+";
+
 /// A chained DATE comparison: the temporal comparators in the chain
 /// sugar, with the free parameter's kind arriving only through
 /// `on_or_before` - the lawful shape whose decimal-spelled sibling
@@ -346,6 +364,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("sum_through_defined_chain", SUM_THROUGH_DEFINED_CHAIN),
         ("pre_around_defined", PRE_AROUND_DEFINED),
         ("chain_in_forall_and_defined", CHAIN_IN_FORALL_AND_DEFINED),
+        ("named_patterns", NAMED_PATTERNS),
         ("date_chain", DATE_CHAIN),
         ("xor_in_implies", XOR_IN_IMPLIES),
         ("qty_chain_in_and", QTY_CHAIN_IN_AND),

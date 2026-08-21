@@ -1,12 +1,15 @@
 //! `morpholog hash` - a stable content hash of a programme's rules.
 //!
-//! The hash is SHA-256 over the *canonical source*: the formatter's
-//! rendering of the parsed programme. The formatter/parser round-trip
-//! property makes that rendering a canonical form, so formatting-only
-//! edits do not change the hash, and the hashed artefact is a `.morph`
-//! file a human can print and inspect - not internal IR bytes coupled
-//! to struct layouts. Comments do not survive canonicalisation, so
-//! this is **rules-identity, not file-identity**: editing the teaching
+//! The hash is SHA-256 over a *stable positional canonicalisation* of
+//! the parsed programme - a fixed rendering the round-trip property
+//! makes canonical, deliberately separate from `format_program`'s
+//! evolving human-facing form (which prints named claim patterns). So
+//! formatting-only edits do not change the hash, equivalent surface
+//! sugar does not either (a named pattern and its positional twin
+//! share one hash), and the hashed artefact is still a `.morph` text a
+//! human can print and inspect - not internal IR bytes coupled to
+//! struct layouts. Comments do not survive canonicalisation, so this
+//! is **rules-identity, not file-identity**: editing the teaching
 //! prose leaves the hash alone, editing a rule does not. That is the
 //! correct semantics for a `ruleset_version` recorded in deployment
 //! metadata and evidence packs.
@@ -17,9 +20,10 @@
 use crate::SourceFileArgs;
 use crate::commands::{parse_or_report, print_json, validate_or_report};
 
-/// The canonical content hash: `sha256:<hex>` over the formatter's
-/// canonical rendering. Rules identity, shared with the scorer's
-/// `program_hash` and the model hash in `schema`/`generate`.
+/// The canonical content hash: `sha256:<hex>` over the stable
+/// positional canonicalisation (not `format_program`'s evolving human
+/// form). Rules identity, shared with the scorer's `program_hash` and
+/// the model hash in `schema`/`generate`.
 pub(crate) use morpholog_core::format::canonical_hash;
 
 pub(crate) fn run(args: SourceFileArgs) -> anyhow::Result<()> {

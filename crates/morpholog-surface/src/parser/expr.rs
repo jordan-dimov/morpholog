@@ -19,6 +19,8 @@ use morpholog_core::{
     ValueExpr,
 };
 
+use super::field_table::{FieldTable, Vocabulary, resolve_named};
+
 /// Build a `Prop::Compare` from a factored operator and domain. The
 /// parser's flat `CmpOp` (op-and-domain in one token) maps onto the IR's
 /// factored shape here; the inverse mapping is `format::compare_token`.
@@ -102,8 +104,11 @@ use crate::lexer::{Token, lex, token_stream};
 /// invariant and `require` bodies are propositions.
 pub fn parse_expression(source: &str) -> Result<Prop, Vec<Diagnostic>> {
     let tokens = lex_or_diagnostics(source)?;
+    // No programme in hand, so no declared fields: a named pattern here
+    // refuses with the undeclared-head message.
+    let table = FieldTable::empty();
     let stream = token_stream(&tokens);
-    let (parsed, errs) = expression_parser()
+    let (parsed, errs) = expression_parser(&table)
         .then_ignore(end())
         .parse(stream)
         .into_output_errors();
@@ -115,8 +120,9 @@ pub fn parse_expression(source: &str) -> Result<Prop, Vec<Diagnostic>> {
 /// Morpholog body on its own, only nested.
 pub fn parse_value_expr(source: &str) -> Result<ValueExpr, Vec<Diagnostic>> {
     let tokens = lex_or_diagnostics(source)?;
+    let table = FieldTable::empty();
     let stream = token_stream(&tokens);
-    let (parsed, errs) = value_expr_parser()
+    let (parsed, errs) = value_expr_parser(&table)
         .then_ignore(end())
         .parse(stream)
         .into_output_errors();
@@ -213,18 +219,136 @@ where
     ))
 }
 
-/// Comma-separated terms with an optional trailing comma - the
-/// argument list shape shared by claim calls, claim patterns, and
-/// `value` lookups.
-pub(super) fn term_list_parser<'a, I>()
--> impl Parser<'a, I, Vec<Term>, extra::Err<Rich<'a, Token>>> + Clone
+/// One item of a claim-pattern argument list: a positional term, a
+/// named `field: term` entry, or the `..` rest-marker.
+enum PatternItem {
+    Pos(Term),
+    Named(SimpleSpan, String, Term),
+    Rest(SimpleSpan),
+}
+
+/// The two lawful pattern-argument shapes. The shape rules (no mixing,
+/// no duplicate field, `..` last) are refused here because they need no
+/// declarations; resolving a named shape to positions happens at the
+/// enclosing site, which knows its vocabulary (predicate or intent).
+pub(super) enum PatternArgs {
+    Positional(Vec<Term>),
+    Named {
+        entries: Vec<(SimpleSpan, String, Term)>,
+        rest: bool,
+    },
+}
+
+/// An argument list that is either positional terms or named
+/// `field: term` entries with an optional final `..`.
+pub(super) fn pattern_args_parser<'a, I>()
+-> impl Parser<'a, I, PatternArgs, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
-    term_parser()
+    let ident = select! { Token::Ident(s) => s };
+    let named_entry = ident
+        .map_with(|name, e| (e.span(), name))
+        .then_ignore(just(Token::Colon))
+        .then(term_parser())
+        .map(|((span, name), term)| PatternItem::Named(span, name, term));
+    let rest = just(Token::DotDot).map_with(|_, e| PatternItem::Rest(e.span()));
+    choice((named_entry, rest, term_parser().map(PatternItem::Pos)))
         .separated_by(just(Token::Comma))
         .allow_trailing()
-        .collect::<Vec<Term>>()
+        .collect::<Vec<PatternItem>>()
+        .validate(|items, e, emitter| {
+            classify_pattern_items(items, e.span(), &mut |span, message| {
+                emitter.emit(Rich::custom(span, message));
+            })
+        })
+}
+
+/// Sort collected pattern items into one of the two lawful shapes,
+/// refusing the shapes that are neither.
+fn classify_pattern_items(
+    items: Vec<PatternItem>,
+    call_span: SimpleSpan,
+    refuse: &mut dyn FnMut(SimpleSpan, String),
+) -> PatternArgs {
+    let has_named = items.iter().any(|i| matches!(i, PatternItem::Named(..)));
+    let has_rest = items.iter().any(|i| matches!(i, PatternItem::Rest(_)));
+    if !has_named && !has_rest {
+        return PatternArgs::Positional(
+            items
+                .into_iter()
+                .filter_map(|i| match i {
+                    PatternItem::Pos(t) => Some(t),
+                    _ => None,
+                })
+                .collect(),
+        );
+    }
+    let last = items.len().saturating_sub(1);
+    let mut entries: Vec<(SimpleSpan, String, Term)> = Vec::new();
+    let mut rest = false;
+    let mut mixed = false;
+    for (i, item) in items.into_iter().enumerate() {
+        match item {
+            PatternItem::Named(span, name, term) => {
+                if entries.iter().any(|(_, n, _)| *n == name) {
+                    refuse(
+                        span,
+                        format!("field `{name}` is named twice in this pattern"),
+                    );
+                } else {
+                    entries.push((span, name, term));
+                }
+            }
+            PatternItem::Rest(span) => {
+                if rest {
+                    refuse(span, "one `..` is enough".to_string());
+                } else if i != last {
+                    refuse(span, "`..` closes a named pattern; put it last".to_string());
+                }
+                rest = true;
+            }
+            PatternItem::Pos(_) => mixed = true,
+        }
+    }
+    if mixed {
+        let message = if has_named {
+            "a pattern is all-named or all-positional, never mixed"
+        } else {
+            "`..` belongs to a named pattern; name the fields you match"
+        };
+        refuse(call_span, message.to_string());
+    }
+    PatternArgs::Named { entries, rest }
+}
+
+/// Resolve pattern arguments to the positional vector at an enclosing
+/// site: positional passes through; named resolves against the site's
+/// vocabulary, emitting any refusals and falling back to the entries'
+/// terms in written order (the parse is already failing - the filler
+/// only keeps downstream shape).
+pub(super) fn resolve_pattern(
+    head: &str,
+    args: PatternArgs,
+    vocabulary: Vocabulary,
+    table: &FieldTable,
+    call_span: SimpleSpan,
+    refuse: &mut dyn FnMut(SimpleSpan, String),
+) -> Vec<Term> {
+    match args {
+        PatternArgs::Positional(terms) => terms,
+        PatternArgs::Named { entries, rest } => {
+            match resolve_named(head, &entries, rest, vocabulary, table, call_span) {
+                Ok(terms) => terms,
+                Err(refusals) => {
+                    for (span, message) in refusals {
+                        refuse(span, message);
+                    }
+                    entries.into_iter().map(|(_, _, term)| term).collect()
+                }
+            }
+        }
+    }
 }
 
 /// Build the recursive proposition parser. Increasing precedence:
@@ -233,21 +357,21 @@ where
 /// grammar is built inside this closure (also `recursive`) and the two
 /// reference each other - a `sum` target's body is a proposition, a
 /// comparator operand is a value expression.
-pub(super) fn expression_parser<'a, I>()
--> impl Parser<'a, I, Prop, extra::Err<Rich<'a, Token>>> + Clone
+pub(super) fn expression_parser<'a, I>(
+    table: &'a FieldTable,
+) -> impl Parser<'a, I, Prop, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
-    recursive(|expression| {
+    recursive(move |expression| {
         let ident = select! { Token::Ident(s) => s };
-        let term_list = term_list_parser();
 
         // The value-expression grammar. Built here, inside the
         // proposition closure, so a `sum` body can reference the
         // proposition parser (`expression`) and a comparator operand
         // (below) can reference this. `arith` is the value-expression
         // entry point used everywhere a value is required.
-        let arith = value_arith_parser(expression.clone(), term_list.clone());
+        let arith = value_arith_parser(expression.clone());
 
         // A prop-only atom: a claim call (with parens) or `pre(...)`.
         // These are the propositions that are not value expressions, so
@@ -255,14 +379,20 @@ where
         // bare `Ident` (no parens) is a value `Term::Var`, not a claim,
         // and a parenthesised proposition is handled separately.
         let claim_call = ident
-            .then(
-                term_list
-                    .clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
-            .map(|(name, args)| Prop::Claim {
-                predicate: name.into(),
-                args,
+            .then(pattern_args_parser().delimited_by(just(Token::LParen), just(Token::RParen)))
+            .validate(move |(name, args), e, emitter| {
+                let args = resolve_pattern(
+                    &name,
+                    args,
+                    Vocabulary::ClaimShaped,
+                    table,
+                    e.span(),
+                    &mut |span, message| emitter.emit(Rich::custom(span, message)),
+                );
+                Prop::Claim {
+                    predicate: name.into(),
+                    args,
+                }
             });
 
         // pre wrapper: `pre ( <prop> )`. Flips the wrapped subtree's
@@ -565,8 +695,7 @@ where
         // `ForallSource` transient distinguishes the two before the
         // lift, so the source need not be re-inspected as a Prop.
         let forall_bare_source = ident.then(
-            term_list
-                .clone()
+            pattern_args_parser()
                 .delimited_by(just(Token::LParen), just(Token::RParen))
                 .or_not(),
         );
@@ -575,11 +704,21 @@ where
                 .clone()
                 .delimited_by(just(Token::LParen), just(Token::RParen))
                 .map(ForallSource::Prop),
-            forall_bare_source.map(|(name, args)| match args {
-                Some(args) => ForallSource::Prop(Prop::Claim {
-                    predicate: name.into(),
-                    args,
-                }),
+            forall_bare_source.validate(move |(name, args), e, emitter| match args {
+                Some(args) => {
+                    let args = resolve_pattern(
+                        &name,
+                        args,
+                        Vocabulary::ClaimShaped,
+                        table,
+                        e.span(),
+                        &mut |span, message| emitter.emit(Rich::custom(span, message)),
+                    );
+                    ForallSource::Prop(Prop::Claim {
+                        predicate: name.into(),
+                        args,
+                    })
+                }
                 None => ForallSource::BareTerm(if name == "actor" {
                     Term::Actor
                 } else {
@@ -632,12 +771,13 @@ enum ForallSource {
 /// entry point (`parse_value_expr`). Mirrors the value grammar nested
 /// inside [`expression_parser`], but builds its own proposition parser
 /// for `sum` bodies via `expression_parser()`.
-pub(super) fn value_expr_parser<'a, I>()
--> impl Parser<'a, I, ValueExpr, extra::Err<Rich<'a, Token>>> + Clone
+pub(super) fn value_expr_parser<'a, I>(
+    table: &'a FieldTable,
+) -> impl Parser<'a, I, ValueExpr, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
-    value_arith_parser(expression_parser(), term_list_parser())
+    value_arith_parser(expression_parser(table))
 }
 
 /// Build the value-expression arithmetic chain: `primary (("+" | "-")
@@ -649,7 +789,6 @@ where
 /// [`value_expr_parser`].
 fn value_arith_parser<'a, I, P>(
     prop: P,
-    term_list: impl Parser<'a, I, Vec<Term>, extra::Err<Rich<'a, Token>>> + Clone + 'a,
 ) -> impl Parser<'a, I, ValueExpr, extra::Err<Rich<'a, Token>>> + Clone + 'a
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
@@ -734,16 +873,28 @@ where
         // value position the IR extracts.
         let value_lookup = just(Token::KwValue)
             .ignore_then(ident)
-            .then(
-                term_list
-                    .clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
+            .then(pattern_args_parser().delimited_by(just(Token::LParen), just(Token::RParen)))
             .then(just(Token::KwDefault).ignore_then(value.clone()).or_not())
-            .map(|((predicate, args), default)| ValueExpr::ValueOf {
-                predicate: predicate.into(),
-                args,
-                default: default.map(Box::new),
+            .validate(|((predicate, args), default), e, emitter| {
+                let args = match args {
+                    PatternArgs::Positional(terms) => terms,
+                    // A `value` lookup's wildcard is not a don't-care:
+                    // the first `_` marks the value to extract, so the
+                    // named form has no spelling for it.
+                    PatternArgs::Named { entries, .. } => {
+                        emitter.emit(Rich::custom(
+                            e.span(),
+                            "`value` takes the positional form only: the first `_` \
+                             marks the value to extract",
+                        ));
+                        entries.into_iter().map(|(_, _, term)| term).collect()
+                    }
+                };
+                ValueExpr::ValueOf {
+                    predicate: predicate.into(),
+                    args,
+                    default: default.map(Box::new),
+                }
             });
 
         // `min` and `max` open two different things, told apart by what

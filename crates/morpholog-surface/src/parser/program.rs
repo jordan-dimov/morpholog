@@ -40,6 +40,11 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
 pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), Vec<Diagnostic>> {
     let raw_tokens = lex(source).map_err(super::lex_error_diagnostics)?;
 
+    // The declared-field table named claim patterns resolve against,
+    // scanned from the raw tokens because declarations may follow their
+    // uses. Fail-closed and lexical; see `field_table`.
+    let field_table = super::field_table::scan(&raw_tokens);
+
     if raw_tokens.is_empty() {
         // Span 0..1 (or 0..0 for a zero-length source) is the
         // closest we can point at "the start"; the empty-file case
@@ -59,7 +64,9 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
     let tokens = crate::layout::apply_layout(source, raw_tokens)?;
 
     let stream = token_stream(&tokens);
-    let (parsed, errs) = program_parser().parse(stream).into_output_errors();
+    let (parsed, errs) = program_parser(&field_table)
+        .parse(stream)
+        .into_output_errors();
 
     let mut diagnostics = super::parse_error_diagnostics(errs);
 
@@ -87,6 +94,24 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
         "intent",
         raw.intents.iter().map(|(d, s)| (d.name.as_str(), s)),
     );
+    for (decl, span) in &raw.predicates {
+        report_duplicate_fields(
+            &mut diagnostics,
+            "predicate",
+            decl.name.as_str(),
+            decl.args.iter().map(|a| a.name.as_str()),
+            span,
+        );
+    }
+    for (decl, span) in &raw.intents {
+        report_duplicate_fields(
+            &mut diagnostics,
+            "intent",
+            decl.name.as_str(),
+            decl.args.iter().map(|a| a.name.as_str()),
+            span,
+        );
+    }
     report_duplicates(
         &mut diagnostics,
         "definition",
@@ -289,6 +314,36 @@ fn report_duplicates<'a>(
     }
 }
 
+/// Report a declaration that repeats an argument name: a field names
+/// one position, so named patterns and every other field-name consumer
+/// (views, schemas, the named codec) would be ambiguous under a repeat.
+/// `Program::validate` refuses it too; this check carries the
+/// declaration's span.
+fn report_duplicate_fields<'a>(
+    diagnostics: &mut Vec<Diagnostic>,
+    what: &str,
+    name: &str,
+    fields: impl Iterator<Item = &'a str>,
+    span: &Span,
+) {
+    let mut seen = std::collections::HashSet::new();
+    let mut dups: Vec<&str> = Vec::new();
+    for field in fields {
+        if !seen.insert(field) && !dups.contains(&field) {
+            dups.push(field);
+        }
+    }
+    for field in dups {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "{what} `{name}` declares argument `{field}` more than once; \
+                 each field names one position"
+            ),
+            span.clone(),
+        ));
+    }
+}
+
 /// Intermediate parse result. Carries spans alongside the parsed
 /// values so the post-pass (duplicate detection) can produce
 /// span-rich diagnostics and the [`SourceMap`] can keep them. The
@@ -327,7 +382,9 @@ enum TopLevelDecl {
     Const(super::lets::LetBinding),
 }
 
-fn program_parser<'a, I>() -> impl Parser<'a, I, RawProgram, extra::Err<Rich<'a, Token>>>
+fn program_parser<'a, I>(
+    table: &'a super::field_table::FieldTable,
+) -> impl Parser<'a, I, RawProgram, extra::Err<Rich<'a, Token>>>
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
@@ -521,7 +578,7 @@ where
     let let_line = just(Token::KwLet)
         .ignore_then(ident)
         .then_ignore(just(Token::Eq))
-        .then(value_expr_parser().delimited_by(just(Token::LParen), just(Token::RParen)))
+        .then(value_expr_parser(table).delimited_by(just(Token::LParen), just(Token::RParen)))
         .map_with(|(name, value), e| {
             let span: SimpleSpan = e.span();
             super::lets::LetBinding {
@@ -534,9 +591,9 @@ where
     let body_with_lets = choice((
         just(Token::Indent)
             .ignore_then(let_line.repeated().collect::<Vec<_>>())
-            .then(expression_parser())
+            .then(expression_parser(table))
             .then_ignore(just(Token::Dedent)),
-        expression_parser().map(|body| (Vec::new(), body)),
+        expression_parser(table).map(|body| (Vec::new(), body)),
     ));
     // invariant_decl ::= "invariant" Ident ("total" "over" Ident)? ":" body
     //
@@ -623,7 +680,7 @@ where
     let const_decl = just(Token::KwConst)
         .ignore_then(ident)
         .then_ignore(just(Token::Eq))
-        .then(value_expr_parser().delimited_by(just(Token::LParen), just(Token::RParen)))
+        .then(value_expr_parser(table).delimited_by(just(Token::LParen), just(Token::RParen)))
         .map_with(|(name, value), e| {
             let span: SimpleSpan = e.span();
             TopLevelDecl::Const(super::lets::LetBinding {
@@ -650,7 +707,7 @@ where
     // covered by the enclosing statement's span.
     let transformation_body = just(Token::Indent)
         .ignore_then(
-            statement_parser()
+            statement_parser(table)
                 .map_with(|stmt, e| {
                     let span: SimpleSpan = e.span();
                     (stmt, span.start()..span.end())
@@ -692,11 +749,11 @@ where
         .separated_by(just(Token::Comma))
         .allow_trailing()
         .collect::<Vec<String>>();
-    let over_clause = just(Token::KwOver).ignore_then(expression_parser());
+    let over_clause = just(Token::KwOver).ignore_then(expression_parser(table));
     let value_clause = just(Token::KwValue)
         .ignore_then(ident)
         .then_ignore(just(Token::Eq))
-        .then(value_expr_parser())
+        .then(value_expr_parser(table))
         .map(|(name, expr)| DerivedValue { name, expr });
     let derived_body = just(Token::Indent)
         .ignore_then(over_clause)

@@ -280,7 +280,7 @@ transformation record_match(match, use, input_ref, candidate, matched_at):
     emit MatchAwaitingVerification(match)
 
 transformation end_use(use, ended_at):
-    bind UseStarted(use, _, _, _, started_at)
+    bind UseStarted(use: use, started_at: started_at, ..)
     require started_at at_or_before ended_at
     require not UseEnded(use, _)
     admit UseEnded(use, ended_at)
@@ -292,7 +292,7 @@ transformation end_use(use, ended_at):
 -- authority stays a valid record even after today's revocation.
 transformation verify_match(match, verified_at):
     bind MatchRecorded(match, use, _, _, matched_at)
-    bind UseStarted(use, system, _, _, _)
+    bind UseStarted(use: use, system: system, ..)
     require OversightAssigned(actor, system)
     require not MatchVerified(match, actor, _)
     require matched_at at_or_before verified_at
@@ -310,7 +310,7 @@ transformation verify_match(match, verified_at):
 -- the statute's own terms.
 transformation decide_on_identification(decision, match, outcome, decided_at):
     bind MatchRecorded(match, use, _, _, _)
-    bind UseStarted(use, system, _, _, _)
+    bind UseStarted(use: use, system: system, ..)
     require OversightAssigned(actor, system)
     require two_distinct_prior_verifications(match, decided_at)
     require not IdentificationDecision(_, match, _, _, _)

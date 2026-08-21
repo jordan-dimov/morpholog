@@ -59,6 +59,7 @@
 
 mod consts;
 mod expr;
+mod field_table;
 mod lets;
 mod program;
 mod stmt;

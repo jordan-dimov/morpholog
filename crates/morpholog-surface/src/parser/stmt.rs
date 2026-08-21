@@ -56,7 +56,10 @@ use morpholog_core::{Claim, Intent, PredicateArgKind, Prop, Stmt, Term, ValueExp
 
 use crate::lexer::Token;
 
-use super::expr::{expression_parser, term_list_parser, value_expr_parser};
+use super::expr::{
+    PatternArgs, expression_parser, pattern_args_parser, resolve_pattern, value_expr_parser,
+};
+use super::field_table::{FieldTable, Vocabulary};
 
 /// Build a parser for a single statement.
 ///
@@ -64,27 +67,29 @@ use super::expr::{expression_parser, term_list_parser, value_expr_parser};
 /// itself (so `for` blocks can nest other statements, including
 /// other `for` blocks). The recursion is bounded by the layout
 /// pass's matched `Indent` / `Dedent` token pairs.
-pub(super) fn statement_parser<'a, I>() -> impl Parser<'a, I, Stmt, extra::Err<Rich<'a, Token>>>
+pub(super) fn statement_parser<'a, I>(
+    table: &'a FieldTable,
+) -> impl Parser<'a, I, Stmt, extra::Err<Rich<'a, Token>>>
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
     // `require` bodies are propositions; `let` values and `for`
     // collections are value expressions. The two sorts have separate
     // parsers, used in their respective statement positions below.
-    let proposition = expression_parser();
-    let value_expr = value_expr_parser();
+    let proposition = expression_parser(table);
+    let value_expr = value_expr_parser(table);
 
-    recursive(|statement| {
+    recursive(move |statement| {
         let ident = select! { Token::Ident(s) => s };
-        let term_list = term_list_parser();
 
-        // claim_pattern ::= Ident "(" term_list ")"
+        // claim_pattern ::= Ident "(" pattern_args ")"
         //
-        // Returns a (predicate, args) tuple. Each statement verb
-        // wraps the tuple in its own IR shape - see the module
-        // doc for the mapping.
-        let claim_pattern =
-            ident.then(term_list.delimited_by(just(Token::LParen), just(Token::RParen)));
+        // Returns a (name, PatternArgs) pair. Each statement verb
+        // resolves the pattern against its own vocabulary and wraps
+        // the result in its IR shape - see the module doc for the
+        // mapping.
+        let claim_pattern = ident
+            .then(pattern_args_parser().delimited_by(just(Token::LParen), just(Token::RParen)));
 
         // An optional `<name>:` prefix on a refusing statement. Unambiguous
         // because every proposition that can open a body starts with a
@@ -104,12 +109,22 @@ where
         let bind_stmt = just(Token::KwBind)
             .ignore_then(rule_name)
             .then(claim_pattern.clone())
-            .map(|(name, (predicate, args))| Stmt::BindOne {
-                prop: Prop::Claim {
-                    predicate: predicate.into(),
+            .validate(move |(name, (predicate, args)), e, emitter| {
+                let args = resolve_pattern(
+                    &predicate,
                     args,
-                },
-                name: name.map(Into::into),
+                    Vocabulary::ClaimShaped,
+                    table,
+                    e.span(),
+                    &mut |span, message| emitter.emit(Rich::custom(span, message)),
+                );
+                Stmt::BindOne {
+                    prop: Prop::Claim {
+                        predicate: predicate.into(),
+                        args,
+                    },
+                    name: name.map(Into::into),
+                }
             });
 
         // admit <claim_pattern>
@@ -123,9 +138,30 @@ where
         // statement's span.
         let admit_stmt = just(Token::KwAdmit)
             .ignore_then(claim_pattern.clone())
-            .validate(|(predicate, args), e, emitter| {
+            .validate(move |(predicate, args), e, emitter| {
                 let span: SimpleSpan = e.span();
-                if args.iter().any(|t| matches!(t, Term::Wildcard)) {
+                // `..` would mean "leave fields unfilled" - the same
+                // hole the wildcard ban below closes - so it is refused
+                // by name before resolution fills the wildcards in, and
+                // the ban then stays quiet about those synthetic `_`s:
+                // one authored mistake, one diagnostic.
+                let rest_refused = matches!(&args, PatternArgs::Named { rest: true, .. });
+                if rest_refused {
+                    emitter.emit(Rich::custom(
+                        span,
+                        "`..` is not allowed in `admit`: admitting a claim supplies every \
+                         field, so a named pattern here names them all",
+                    ));
+                }
+                let args = resolve_pattern(
+                    &predicate,
+                    args,
+                    Vocabulary::PredicateOnly,
+                    table,
+                    span,
+                    &mut |span, message| emitter.emit(Rich::custom(span, message)),
+                );
+                if !rest_refused && args.iter().any(|t| matches!(t, Term::Wildcard)) {
                     emitter.emit(Rich::custom(
                         span,
                         "wildcard `_` is not allowed in `admit`: admitting a claim requires every argument to be concrete; the kernel rejects wildcard-admits as `wildcard not allowed in assert`",
@@ -145,9 +181,19 @@ where
         // second). No surface-level wildcard restriction.
         let retract_stmt = just(Token::KwRetract)
             .ignore_then(claim_pattern.clone())
-            .map(|(predicate, args)| Stmt::Retract {
-                predicate: predicate.into(),
-                args,
+            .validate(move |(predicate, args), e, emitter| {
+                let args = resolve_pattern(
+                    &predicate,
+                    args,
+                    Vocabulary::PredicateOnly,
+                    table,
+                    e.span(),
+                    &mut |span, message| emitter.emit(Rich::custom(span, message)),
+                );
+                Stmt::Retract {
+                    predicate: predicate.into(),
+                    args,
+                }
             });
 
         // emit <claim_pattern>
@@ -162,9 +208,25 @@ where
         // emit" for any wildcard arg in an intent.
         let emit_stmt = just(Token::KwEmit)
             .ignore_then(claim_pattern.clone())
-            .validate(|(name, args), e, emitter| {
+            .validate(move |(name, args), e, emitter| {
                 let span: SimpleSpan = e.span();
-                if args.iter().any(|t| matches!(t, Term::Wildcard)) {
+                let rest_refused = matches!(&args, PatternArgs::Named { rest: true, .. });
+                if rest_refused {
+                    emitter.emit(Rich::custom(
+                        span,
+                        "`..` is not allowed in `emit`: an intent's arguments are all \
+                         supplied, so a named pattern here names every field",
+                    ));
+                }
+                let args = resolve_pattern(
+                    &name,
+                    args,
+                    Vocabulary::Intent,
+                    table,
+                    span,
+                    &mut |span, message| emitter.emit(Rich::custom(span, message)),
+                );
+                if !rest_refused && args.iter().any(|t| matches!(t, Term::Wildcard)) {
                     emitter.emit(Rich::custom(
                         span,
                         "wildcard `_` is not allowed in `emit`: an intent's arguments must all be concrete values; the kernel rejects wildcard-emits as `wildcard not allowed in emit`",

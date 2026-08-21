@@ -136,6 +136,15 @@ impl SourceMap {
             | ValidationError::DuplicateParameter { definition, .. } => {
                 self.decl_span(DeclKind::Definition, definition)
             }
+            ValidationError::DuplicateArgName {
+                vocabulary, name, ..
+            } => {
+                let kind = match vocabulary {
+                    VocabularyKind::Intent => DeclKind::Intent,
+                    _ => DeclKind::Predicate,
+                };
+                self.decl_span(kind, name)
+            }
             // Anchored on the declaration, with its discipline siblings:
             // the clause the author wrote is there, not in the invariant
             // the lowering would have generated.
