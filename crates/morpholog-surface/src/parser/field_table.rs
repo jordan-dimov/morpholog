@@ -53,7 +53,7 @@ impl FieldTable {
 /// Scan the raw (pre-layout) token stream for `predicate` / `intent` /
 /// `define` declarations. Tolerant and fail-closed: a declaration whose
 /// shape the scan cannot follow is simply absent from the table.
-pub(super) fn scan(tokens: &[(Token, impl Sized)]) -> FieldTable {
+pub(super) fn scan<S>(tokens: &[(Token, S)]) -> FieldTable {
     let mut table = FieldTable::default();
     let mut i = 0;
     while i < tokens.len() {
@@ -91,7 +91,7 @@ pub(super) fn scan(tokens: &[(Token, impl Sized)]) -> FieldTable {
 /// everything from the `:` to the next depth-1 `,` (the kind, however
 /// its grammar grows) is skipped. Returns `(name, fields, index past
 /// the closing paren)`, or `None` when the shape does not hold.
-fn scan_decl(tokens: &[(Token, impl Sized)], start: usize) -> Option<(String, Vec<String>, usize)> {
+fn scan_decl<S>(tokens: &[(Token, S)], start: usize) -> Option<(String, Vec<String>, usize)> {
     let Token::Ident(name) = &tokens.get(start)?.0 else {
         return None;
     };
