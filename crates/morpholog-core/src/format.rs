@@ -70,11 +70,15 @@ pub(crate) fn arith_token(op: ArithOp) -> &'static str {
     }
 }
 
-/// The canonical content hash of a programme: `sha256:<hex>` over the
-/// formatter's canonical rendering. The round-trip property makes that
-/// rendering a canonical form, so formatting-only edits and comments do
-/// not change the hash - this is rules identity, not file identity. The
-/// `sha256:` prefix keeps it self-describing if the algorithm changes.
+/// The canonical content hash of a programme: `sha256:<hex>` over a
+/// STABLE positional rendering of the parsed IR - deliberately not
+/// [`format_program`], whose human-facing canonical form may evolve
+/// (it prints named claim patterns). The round-trip property makes the
+/// hashed rendering canonical, so formatting-only edits, comments, and
+/// equivalent surface sugar (a named pattern and its positional twin)
+/// do not change the hash - this is rules identity, not file identity.
+/// The `sha256:` prefix keeps it self-describing if the algorithm
+/// changes.
 pub fn canonical_hash(p: &Program) -> String {
     use sha2::{Digest, Sha256};
     use std::fmt::Write;
@@ -592,9 +596,9 @@ fn fmt_value(e: &ValueExpr, naming: Naming) -> String {
             otherwise,
         } => format!(
             "if({}, {}, {})",
-            format_prop_inline(when),
-            format_value_inline(then),
-            format_value_inline(otherwise)
+            fmt_prop(when, naming),
+            fmt_value(then, naming),
+            fmt_value(otherwise, naming)
         ),
     }
 }

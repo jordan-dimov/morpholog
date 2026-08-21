@@ -347,3 +347,68 @@ fn a_declaration_repeating_a_field_name_is_refused_at_parse() {
         "declares argument `x` more than once",
     );
 }
+
+#[test]
+fn the_naming_context_reaches_inside_if() {
+    // The one formatter arm that escaped the recursive context in the
+    // first landing: a wall in an if(...) condition, and another under
+    // a branch, must both take the named canonical form.
+    let src = "\
+program cond
+predicate Line(id: Subject, invoice: Subject, rate: Decimal, volume: Decimal, net: Decimal)
+predicate Out(invoice: Subject, x: Decimal)
+transformation act(inv):
+    let x = if(Line(_, inv, _, _, _), sum(n | Line(_, inv, _, _, n)), 0)
+    admit Out(inv, x)
+";
+    let p = parse_program(src).unwrap();
+    let formatted = format_program(&p);
+    assert!(
+        formatted.contains("if(Line(invoice: inv, ..)"),
+        "the condition's wall renders named; got:\n{formatted}"
+    );
+    assert!(
+        formatted.contains("sum(n | Line(invoice: inv, net: n, ..))"),
+        "the branch's wall renders named; got:\n{formatted}"
+    );
+    assert_eq!(parse_program(&formatted).unwrap(), p);
+}
+
+#[test]
+fn admit_and_retract_name_the_definition_without_a_false_repair() {
+    // "use the positional form" is a true repair in claim positions and
+    // bind; on retract/admit a definition is not lawful at all, so the
+    // refusal says what it is instead.
+    let src = "\
+program defs
+predicate Reading(r: Subject, level: Decimal)
+define in_band(level):
+    Reading(_, level) and 0 <= level
+transformation bad(l):
+    retract in_band(level: l)
+";
+    refuses(src, "is a definition, not a predicate");
+}
+
+#[test]
+fn a_refused_rest_on_admit_yields_one_diagnostic_not_two() {
+    // The `..` refusal must not cascade into a second complaint about
+    // the wildcards resolution synthesised to keep the parse alive.
+    let errs = parse_program(&format!(
+        "{DECLS}transformation bad(id):\n    admit Line(id: id, ..)\n"
+    ))
+    .expect_err("`..` on admit refuses");
+    assert!(
+        errs.iter()
+            .any(|d| d.message.contains("`..` is not allowed in `admit`")),
+        "got {:?}",
+        errs.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|d| d.message.contains("wildcard `_` is not allowed")),
+        "one authored mistake, one diagnostic: {:?}",
+        errs.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}

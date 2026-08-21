@@ -179,10 +179,9 @@ impl LeastPrivilegeReport {
             next_steps: vec![
                 format!("GRANT {writer} TO <the runtime's login role>;"),
                 format!("GRANT {reader} TO <each reporting or projection login role>;"),
-                format!(
-                    "GRANT pg_read_all_stats TO <each role that tails the audit>; \
-                     -- the resume watermark reads pg_stat_activity"
-                ),
+                "GRANT pg_read_all_stats TO <each role that tails the audit>; \
+                 -- the resume watermark reads pg_stat_activity"
+                    .to_string(),
             ],
             reader_role: reader,
             writer_role: writer,

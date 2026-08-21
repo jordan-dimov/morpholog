@@ -133,12 +133,19 @@ fn scan_decl<S>(tokens: &[(Token, S)], start: usize) -> Option<(String, Vec<Stri
 }
 
 /// Which declaration vocabulary a named pattern resolves against - the
-/// enclosing site decides (`emit` speaks intents; every claim-shaped
-/// site speaks predicates). One name may be both, with different
-/// fields.
+/// enclosing site decides. One name may be a predicate AND an intent,
+/// with different fields; the claim-shaped/predicate-only split exists
+/// because the repair text differs: a definition call is lawful in a
+/// proposition or `bind` (positionally), but `admit`/`retract` take
+/// predicates only, so "use the positional form" would be a false
+/// repair there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Vocabulary {
-    Predicate,
+    /// Proposition positions and `bind`: predicates, where a positional
+    /// DEFINITION call is also lawful.
+    ClaimShaped,
+    /// `admit`/`retract`: predicates only.
+    PredicateOnly,
     Intent,
 }
 
@@ -157,7 +164,7 @@ pub(super) fn resolve_named(
 ) -> Result<Vec<morpholog_core::Term>, Vec<(chumsky::span::SimpleSpan, String)>> {
     use morpholog_core::Term;
     let map = match vocabulary {
-        Vocabulary::Predicate => &table.predicates,
+        Vocabulary::ClaimShaped | Vocabulary::PredicateOnly => &table.predicates,
         Vocabulary::Intent => &table.intents,
     };
     let fields = match map.get(head) {
@@ -169,19 +176,24 @@ pub(super) fn resolve_named(
             )]);
         }
         None => {
-            let message = if vocabulary == Vocabulary::Predicate
-                && table.authored_definitions.contains(head)
-            {
-                format!(
+            let is_definition =
+                vocabulary != Vocabulary::Intent && table.authored_definitions.contains(head);
+            let message = match (vocabulary, is_definition) {
+                (Vocabulary::ClaimShaped, true) => format!(
                     "`{head}` is a definition; definitions have parameters, not declared \
                      fields - use the positional form"
-                )
-            } else {
-                let noun = match vocabulary {
-                    Vocabulary::Predicate => "predicate",
-                    Vocabulary::Intent => "intent",
-                };
-                format!("named fields need a declared {noun}; `{head}` is not one")
+                ),
+                // A positional definition call is not lawful here
+                // either, so offering it would be a false repair.
+                (Vocabulary::PredicateOnly, true) => {
+                    format!("`{head}` is a definition, not a predicate")
+                }
+                (Vocabulary::Intent, _) => {
+                    format!("named fields need a declared intent; `{head}` is not one")
+                }
+                (_, false) => {
+                    format!("named fields need a declared predicate; `{head}` is not one")
+                }
             };
             return Err(vec![(call_span, message)]);
         }
@@ -257,41 +269,53 @@ mod tests {
                 let tokens = lex(&src).expect("gallery sources lex");
                 let table = scan(&tokens);
                 let program = crate::parser::parse_program(&src).expect("gallery sources parse");
-                for decl in &program.predicates {
-                    let scanned = table.predicates.get(decl.name.as_str());
-                    let fields: Vec<String> =
-                        decl.args.iter().map(|a| a.name.to_string()).collect();
-                    assert_eq!(
-                        scanned,
-                        Some(&DeclFields::Usable(fields)),
-                        "predicate {} in {}",
-                        decl.name,
-                        path.display()
-                    );
-                }
-                for decl in &program.intents {
-                    let scanned = table.intents.get(decl.name.as_str());
-                    let fields: Vec<String> =
-                        decl.args.iter().map(|a| a.name.to_string()).collect();
-                    assert_eq!(
-                        scanned,
-                        Some(&DeclFields::Usable(fields)),
-                        "intent {} in {}",
-                        decl.name,
-                        path.display()
-                    );
-                }
-                for def in &program.definitions {
-                    if def.origin == morpholog_core::DefinitionOrigin::Discipline {
-                        continue;
-                    }
-                    assert!(
-                        table.authored_definitions.contains(def.name.as_str()),
-                        "definition {} in {}",
-                        def.name,
-                        path.display()
-                    );
-                }
+                // Whole-structure equality, both directions: every
+                // parsed declaration is scanned correctly AND the scan
+                // invented nothing the parser does not know.
+                let expected_predicates: std::collections::HashMap<String, DeclFields> = program
+                    .predicates
+                    .iter()
+                    .map(|d| {
+                        (
+                            d.name.to_string(),
+                            DeclFields::Usable(d.args.iter().map(|a| a.name.to_string()).collect()),
+                        )
+                    })
+                    .collect();
+                assert_eq!(
+                    table.predicates,
+                    expected_predicates,
+                    "predicate tables diverge in {}",
+                    path.display()
+                );
+                let expected_intents: std::collections::HashMap<String, DeclFields> = program
+                    .intents
+                    .iter()
+                    .map(|d| {
+                        (
+                            d.name.to_string(),
+                            DeclFields::Usable(d.args.iter().map(|a| a.name.to_string()).collect()),
+                        )
+                    })
+                    .collect();
+                assert_eq!(
+                    table.intents,
+                    expected_intents,
+                    "intent tables diverge in {}",
+                    path.display()
+                );
+                let expected_definitions: std::collections::HashSet<String> = program
+                    .definitions
+                    .iter()
+                    .filter(|d| d.origin != morpholog_core::DefinitionOrigin::Discipline)
+                    .map(|d| d.name.to_string())
+                    .collect();
+                assert_eq!(
+                    table.authored_definitions,
+                    expected_definitions,
+                    "definition sets diverge in {}",
+                    path.display()
+                );
                 checked += 1;
             }
         }

@@ -198,7 +198,7 @@ With the flag, a business rejection's envelope carries an `explanation` field: t
 
 ### `morpholog hash`
 
-A stable content hash of the programme's rules: SHA-256 over the *canonical source* - the formatter's rendering of the parsed programme - emitted as `{"program": "<name>", "hash": "sha256:<hex>"}`. Because the formatter/parser round-trip makes that rendering canonical, formatting-only edits do not change the hash; and because comments do not survive canonicalisation, this is **rules-identity, not file-identity** - editing teaching prose leaves the hash alone, editing a rule does not. Record it as a `ruleset_version` in deployment metadata, generated-code headers, and evidence packs ("built against model hash X"). Only a valid programme hashes; parse or validation failures exit non-zero.
+A stable content hash of the programme's rules: SHA-256 over a *stable positional canonicalisation* of the parsed programme (deliberately separate from the formatter's evolving human-facing form, so equivalent surface sugar - a named claim pattern and its positional twin - shares one hash) - emitted as `{"program": "<name>", "hash": "sha256:<hex>"}`. Because the formatter/parser round-trip makes that rendering canonical, formatting-only edits do not change the hash; and because comments do not survive canonicalisation, this is **rules-identity, not file-identity** - editing teaching prose leaves the hash alone, editing a rule does not. Record it as a `ruleset_version` in deployment metadata, generated-code headers, and evidence packs ("built against model hash X"). Only a valid programme hashes; parse or validation failures exit non-zero.
 
 ### `morpholog schema --all`
 

@@ -113,7 +113,7 @@ where
                 let args = resolve_pattern(
                     &predicate,
                     args,
-                    Vocabulary::Predicate,
+                    Vocabulary::ClaimShaped,
                     table,
                     e.span(),
                     &mut |span, message| emitter.emit(Rich::custom(span, message)),
@@ -142,8 +142,11 @@ where
                 let span: SimpleSpan = e.span();
                 // `..` would mean "leave fields unfilled" - the same
                 // hole the wildcard ban below closes - so it is refused
-                // by name before resolution fills the wildcards in.
-                if let PatternArgs::Named { rest: true, .. } = &args {
+                // by name before resolution fills the wildcards in, and
+                // the ban then stays quiet about those synthetic `_`s:
+                // one authored mistake, one diagnostic.
+                let rest_refused = matches!(&args, PatternArgs::Named { rest: true, .. });
+                if rest_refused {
                     emitter.emit(Rich::custom(
                         span,
                         "`..` is not allowed in `admit`: admitting a claim supplies every \
@@ -153,12 +156,12 @@ where
                 let args = resolve_pattern(
                     &predicate,
                     args,
-                    Vocabulary::Predicate,
+                    Vocabulary::PredicateOnly,
                     table,
                     span,
                     &mut |span, message| emitter.emit(Rich::custom(span, message)),
                 );
-                if args.iter().any(|t| matches!(t, Term::Wildcard)) {
+                if !rest_refused && args.iter().any(|t| matches!(t, Term::Wildcard)) {
                     emitter.emit(Rich::custom(
                         span,
                         "wildcard `_` is not allowed in `admit`: admitting a claim requires every argument to be concrete; the kernel rejects wildcard-admits as `wildcard not allowed in assert`",
@@ -182,7 +185,7 @@ where
                 let args = resolve_pattern(
                     &predicate,
                     args,
-                    Vocabulary::Predicate,
+                    Vocabulary::PredicateOnly,
                     table,
                     e.span(),
                     &mut |span, message| emitter.emit(Rich::custom(span, message)),
@@ -207,7 +210,8 @@ where
             .ignore_then(claim_pattern.clone())
             .validate(move |(name, args), e, emitter| {
                 let span: SimpleSpan = e.span();
-                if let PatternArgs::Named { rest: true, .. } = &args {
+                let rest_refused = matches!(&args, PatternArgs::Named { rest: true, .. });
+                if rest_refused {
                     emitter.emit(Rich::custom(
                         span,
                         "`..` is not allowed in `emit`: an intent's arguments are all \
@@ -222,7 +226,7 @@ where
                     span,
                     &mut |span, message| emitter.emit(Rich::custom(span, message)),
                 );
-                if args.iter().any(|t| matches!(t, Term::Wildcard)) {
+                if !rest_refused && args.iter().any(|t| matches!(t, Term::Wildcard)) {
                     emitter.emit(Rich::custom(
                         span,
                         "wildcard `_` is not allowed in `emit`: an intent's arguments must all be concrete values; the kernel rejects wildcard-emits as `wildcard not allowed in emit`",

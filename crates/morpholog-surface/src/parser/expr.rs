@@ -384,7 +384,7 @@ where
                 let args = resolve_pattern(
                     &name,
                     args,
-                    Vocabulary::Predicate,
+                    Vocabulary::ClaimShaped,
                     table,
                     e.span(),
                     &mut |span, message| emitter.emit(Rich::custom(span, message)),
@@ -709,7 +709,7 @@ where
                     let args = resolve_pattern(
                         &name,
                         args,
-                        Vocabulary::Predicate,
+                        Vocabulary::ClaimShaped,
                         table,
                         e.span(),
                         &mut |span, message| emitter.emit(Rich::custom(span, message)),
