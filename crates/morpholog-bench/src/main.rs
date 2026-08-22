@@ -2037,7 +2037,10 @@ fn suite_plan(ladder: Ladder) -> Vec<CaseSpec> {
     // without doubling every curve. The two scaling curves above are
     // NOT comparable to each other (different workloads); these are the
     // rows each one compares against.
-    let max_workers = *workers_ladder.last().expect("workers ladder is non-empty");
+    // The ladders above are static and non-empty; the fallback can
+    // never fire and exists only to keep the kernel-grade no-panic
+    // lint honest.
+    let max_workers = workers_ladder.last().copied().unwrap_or(1);
     plan.push(CaseSpec {
         // Ledger, value-partitioned: same workload as /shared, one
         // period per worker. The law's negative half: this row should
