@@ -326,6 +326,21 @@ pub enum ValidationError {
          position; name the variable this expression reads"
     )]
     WildcardAsValue { context: ValidationContext },
+    /// A `value` lookup's extraction index does not point at a
+    /// wildcard in its own argument list. The surface parsers make
+    /// this unrepresentable (positional takes the first wildcard,
+    /// named takes the one `_`-valued field), so it reaches here only
+    /// through hand-built IR; the kernel would refuse the same shape
+    /// at evaluation.
+    #[error(
+        "value lookup on `{predicate}` extracts position {extract}, which is not a \
+         wildcard hole in its argument list, in {context}"
+    )]
+    InvalidValueExtraction {
+        predicate: String,
+        extract: usize,
+        context: ValidationContext,
+    },
     /// A sum's target reads as a duration or quantity, but the
     /// statically resolved empty-case seed disagrees - so the first
     /// empty book would evaluate to a bare-decimal zero no duration or
@@ -530,6 +545,21 @@ pub enum ValidationError {
         unbound_variable_hint(context)
     )]
     UnboundVariable {
+        variable: String,
+        context: ValidationContext,
+    },
+    /// A derived claim's value expression names a variable its domain
+    /// binds but its head does not carry. Values run once per distinct
+    /// head-key tuple, after witnesses collapse, so a non-key variable
+    /// has no single value there - the runtime raises
+    /// `EvalError::UnboundVariable`. Refused at authoring with both
+    /// remedies named.
+    #[error(
+        "variable `{variable}` is bound by the domain of {context} but is not a head \
+         key, so it is not available while computing values; add `{variable}` to the \
+         head, or bind the coordinate inside a `value` lookup by field name"
+    )]
+    DerivedValueNotAKey {
         variable: String,
         context: ValidationContext,
     },

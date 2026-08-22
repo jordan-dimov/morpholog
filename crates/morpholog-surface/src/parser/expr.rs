@@ -890,9 +890,14 @@ where
                         entries.into_iter().map(|(_, _, term)| term).collect()
                     }
                 };
+                let extract = args
+                    .iter()
+                    .position(|t| matches!(t, Term::Wildcard))
+                    .unwrap_or(args.len());
                 ValueExpr::ValueOf {
                     predicate: predicate.into(),
                     args,
+                    extract,
                     default: default.map(Box::new),
                 }
             });

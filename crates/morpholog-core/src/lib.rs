@@ -449,6 +449,7 @@ mod tests {
         let value_of = |p: &str, default: Option<ValueExpr>| ValueExpr::ValueOf {
             predicate: p.into(),
             args: vec![Term::Wildcard],
+            extract: 0,
             default: default.map(Box::new),
         };
 

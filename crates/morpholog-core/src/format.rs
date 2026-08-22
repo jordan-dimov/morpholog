@@ -557,6 +557,7 @@ fn fmt_value(e: &ValueExpr, naming: Naming) -> String {
         ValueExpr::ValueOf {
             predicate,
             args,
+            extract: _,
             default,
         } => {
             // A `value` lookup's wildcard is the extraction hole, not a

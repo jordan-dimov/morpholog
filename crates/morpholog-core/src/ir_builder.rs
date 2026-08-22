@@ -340,9 +340,11 @@ pub fn sum(value: impl Into<ValueExpr>, body: Prop) -> ValueExpr {
 /// positions (arithmetic, comparisons, `Sum`, `Let`, or a
 /// `DerivedClaim` value expression) where a statement form does not fit.
 pub fn value_of(predicate: &str, args: Vec<Term>) -> ValueExpr {
+    let extract = first_wildcard(&args);
     ValueExpr::ValueOf {
         predicate: predicate.into(),
         args,
+        extract,
         default: None,
     }
 }
@@ -350,10 +352,33 @@ pub fn value_of(predicate: &str, args: Vec<Term>) -> ValueExpr {
 /// `value_of` with a fallback expression evaluated when zero matches.
 /// Multiple matches still error.
 pub fn value_of_with_default(predicate: &str, args: Vec<Term>, default: ValueExpr) -> ValueExpr {
+    let extract = first_wildcard(&args);
     ValueExpr::ValueOf {
         predicate: predicate.into(),
         args,
+        extract,
         default: Some(Box::new(default)),
+    }
+}
+
+/// The positional extraction rule: the first wildcard is the hole. An
+/// argument list with no wildcard yields an out-of-range index, which
+/// validation refuses - the builder stays infallible.
+fn first_wildcard(args: &[Term]) -> usize {
+    args.iter()
+        .position(|t| matches!(t, Term::Wildcard))
+        .unwrap_or(args.len())
+}
+
+/// `value_of` with an explicit extraction hole - the named surface
+/// form's shape, where the hole need not be the first wildcard.
+/// `args[extract]` must be a wildcard or validation refuses.
+pub fn value_of_extracting(predicate: &str, args: Vec<Term>, extract: usize) -> ValueExpr {
+    ValueExpr::ValueOf {
+        predicate: predicate.into(),
+        args,
+        extract,
+        default: None,
     }
 }
 

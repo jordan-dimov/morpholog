@@ -426,6 +426,7 @@ pub(super) fn substitute_in_value(
         ValueExpr::ValueOf {
             predicate,
             args,
+            extract: _,
             default,
         } => {
             for (i, arg) in args.iter_mut().enumerate() {

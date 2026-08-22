@@ -75,6 +75,15 @@ fn arb_args() -> impl Strategy<Value = Vec<Term>> {
     prop::collection::vec(arb_term(), 0..4)
 }
 
+/// The positional extraction rule, mirrored from `ir_builder`: first
+/// wildcard, or out-of-range when there is none (validation refuses
+/// that shape without panicking - part of the property under test).
+fn first_wildcard(args: &[Term]) -> usize {
+    args.iter()
+        .position(|t| matches!(t, Term::Wildcard))
+        .unwrap_or(args.len())
+}
+
 // ---------- value-expression generator ----------
 
 /// Every arithmetic operator, so the value generator exercises the whole
@@ -95,10 +104,14 @@ fn arb_arith_op() -> impl Strategy<Value = ArithOp> {
 fn arb_value_expr() -> impl Strategy<Value = ValueExpr> {
     let leaf = prop_oneof![
         arb_term().prop_map(ValueExpr::Term),
-        (arb_pred_name(), arb_args()).prop_map(|(predicate, args)| ValueExpr::ValueOf {
-            predicate,
-            args,
-            default: None,
+        (arb_pred_name(), arb_args()).prop_map(|(predicate, args)| {
+            let extract = first_wildcard(&args);
+            ValueExpr::ValueOf {
+                predicate,
+                args,
+                extract,
+                default: None,
+            }
         }),
     ];
     leaf.prop_recursive(4, 32, 4, |inner| {
@@ -116,9 +129,11 @@ fn arb_value_expr() -> impl Strategy<Value = ValueExpr> {
                 seed: SumSeed::default(),
             }),
             (arb_pred_name(), arb_args(), inner).prop_map(|(predicate, args, default)| {
+                let extract = first_wildcard(&args);
                 ValueExpr::ValueOf {
                     predicate,
                     args,
+                    extract,
                     default: Some(Box::new(default)),
                 }
             }),
@@ -428,6 +443,7 @@ fn nest_value(node: usize, depth: usize) -> Prop {
             _ => ValueExpr::ValueOf {
                 predicate: "P".into(),
                 args: vec![],
+                extract: 0,
                 default: Some(Box::new(e)),
             },
         };

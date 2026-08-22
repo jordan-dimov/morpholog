@@ -214,6 +214,7 @@ mod tests {
         let lookup = ValueExpr::ValueOf {
             predicate: "P".into(),
             args: vec![var_term("x"), Term::Wildcard],
+            extract: 1,
             default: Some(Box::new(ValueExpr::Term(var_term("other")))),
         };
         assert!(any_term_in_value(&lookup, &is_x));
