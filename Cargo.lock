@@ -1195,6 +1195,8 @@ dependencies = [
  "morpholog-examples",
  "morpholog-postgres",
  "rust_decimal",
+ "serde",
+ "serde_json",
  "sqlx",
  "tokio",
  "uuid",
