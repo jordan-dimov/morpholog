@@ -513,7 +513,12 @@ impl Metric {
             return None;
         }
         rest.sort_by(f64::total_cmp);
-        Some(rest[rest.len() / 2])
+        let mid = rest.len() / 2;
+        Some(if rest.len() % 2 == 1 {
+            rest[mid]
+        } else {
+            (rest[mid - 1] + rest[mid]) / 2.0
+        })
     }
 }
 
@@ -1290,6 +1295,11 @@ async fn measure_import(pool: &PgPool, case: &str, n: usize, repeat: usize) -> R
     let mut last_decile = Vec::with_capacity(repeat);
     for r in 0..repeat {
         reset_db(pool).await?;
+        // The empty book is this scenario's fixture; refresh stats so
+        // the first commits are not planned against the previous
+        // case's leftovers.
+        analyze_claims(pool).await?;
+        analyze_audit(pool).await?;
         let mut per_commit = Vec::with_capacity(n);
         let journey = Instant::now();
         for i in 0..n {
@@ -2047,6 +2057,11 @@ async fn run_case(pool: &PgPool, spec: &CaseSpec, repeat: usize) -> Result<CaseR
             periods,
             disjoint,
         } => {
+            // 1000, not the standalone default of 100: the canonical
+            // rows must be CLEAN, and a real embedder's retry budget
+            // is not 100 - the retry RATE is the measurement, and an
+            // exhaustion at an arbitrary cap is a config artifact (the
+            // first full-ladder run lost 1 op in 200 to exactly that).
             measure_contend(
                 pool,
                 spec.case,
@@ -2055,7 +2070,7 @@ async fn run_case(pool: &PgPool, spec: &CaseSpec, repeat: usize) -> Result<CaseR
                 *prepopulate,
                 *periods,
                 *disjoint,
-                100,
+                1000,
                 repeat.min(3),
                 true,
             )
@@ -2398,9 +2413,9 @@ mod smoke {
         assert!(
             rendered.contains("| case | axis | point | metric | first | steady median | unit |")
         );
-        // first = samples[0]; steady median over the rest of [2.0, 3.0]
-        // is 3.0 (upper median).
-        assert!(rendered.contains("| write/base | n | 100 | propose_one | 5.00 | 3.00 | ms |"));
+        // first = samples[0]; the steady median over the even-count
+        // rest [2.0, 3.0] averages the two middles.
+        assert!(rendered.contains("| write/base | n | 100 | propose_one | 5.00 | 2.50 | ms |"));
         // A single-sample metric has no steady median.
         assert!(rendered.contains("| write/base | n | 100 | scoped_claims | 300.00 | - | count |"));
         assert!(!rendered.contains("benchmark-grade=false"));
