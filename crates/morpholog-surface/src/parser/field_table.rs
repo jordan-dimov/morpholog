@@ -242,6 +242,69 @@ pub(super) fn resolve_named(
         .collect())
 }
 
+/// Resolve a named `value` lookup to `(args, extract)` in one pass over
+/// one field-order authority. The entry written `field: _` is the
+/// extraction hole - exactly one is lawful - and its declared position
+/// becomes `extract`; fields elided by `..` are unconstrained wildcards,
+/// never holes. Built on [`resolve_named`], so the argument vector and
+/// the index come from the same declared field order.
+pub(super) fn resolve_named_value(
+    head: &str,
+    entries: &[(chumsky::span::SimpleSpan, String, morpholog_core::Term)],
+    rest: bool,
+    table: &FieldTable,
+    call_span: chumsky::span::SimpleSpan,
+) -> Result<(Vec<morpholog_core::Term>, usize), Vec<(chumsky::span::SimpleSpan, String)>> {
+    use morpholog_core::Term;
+    let args = resolve_named(
+        head,
+        entries,
+        rest,
+        Vocabulary::PredicateOnly,
+        table,
+        call_span,
+    )?;
+    let holes: Vec<&(chumsky::span::SimpleSpan, String, Term)> = entries
+        .iter()
+        .filter(|(_, _, term)| matches!(term, Term::Wildcard))
+        .collect();
+    match holes.as_slice() {
+        [(_, hole_field, _)] => {
+            // resolve_named validated every entry against the declared
+            // fields, so the hole's position is its field's position.
+            let fields = match table.predicates.get(head) {
+                Some(DeclFields::Usable(fields)) => fields,
+                _ => unreachable!("resolve_named succeeded against this head"),
+            };
+            let extract = fields
+                .iter()
+                .position(|f| f == hole_field)
+                .unwrap_or_else(|| unreachable!("resolve_named validated the entry fields"));
+            Ok((args, extract))
+        }
+        [] => Err(vec![(
+            call_span,
+            format!(
+                "a named `value` lookup on `{head}` marks the value to extract with \
+                 `field: _`; no field is marked"
+            ),
+        )]),
+        many => Err(many
+            .iter()
+            .skip(1)
+            .map(|(span, name, _)| {
+                (
+                    *span,
+                    format!(
+                        "`{name}: _` marks a second extraction hole; a `value` lookup \
+                         extracts exactly one field (leave the others to `..`)"
+                    ),
+                )
+            })
+            .collect()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{DeclFields, scan};
