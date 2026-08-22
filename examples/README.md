@@ -35,6 +35,8 @@ if you want to read one end to end.
 | hold a ratio, a rate or an advance limit | [11_borrowing_base](11_borrowing_base/) | multiplication and division, cross-multiplied for exactness |
 | compute a read-side view from admitted claims | [03_double_entry_ledger](03_double_entry_ledger/) | `derived ... over ... value ...` |
 | project several coordinates of a join into one view | [10_trade_lifecycle](10_trade_lifecycle/) | a `derived` head binding more than the key |
+| key a view by what identifies it, dropping the coordinates it joins through | [11_borrowing_base](11_borrowing_base/) | a `derived` head keeping fewer variables than its `over` domain binds |
+| extract a figure by naming its field, wherever it sits in the declaration | [11_borrowing_base](11_borrowing_base/) | the named extraction hole `collateral_value: _` in a `value` lookup |
 | record evidence *about* a claim, and refuse a claim without it | [09_carbon_credit_provenance](09_carbon_credit_provenance/) | claims whose subjects are other claims |
 | expire a check, and re-flag when the world changes | [08_kyc_sanctions_screening](08_kyc_sanctions_screening/) | currentness with an expiry date |
 | hand work to the outside world after a commit | [08_kyc_sanctions_screening](08_kyc_sanctions_screening/) | `intent` plus `emit` |

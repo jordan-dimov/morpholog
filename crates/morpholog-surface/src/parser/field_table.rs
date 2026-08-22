@@ -242,6 +242,12 @@ pub(super) fn resolve_named(
         .collect())
 }
 
+/// One written `field: term` entry, as the pattern parser collects it.
+type NamedEntry = (chumsky::span::SimpleSpan, String, morpholog_core::Term);
+
+/// Spanned refusal messages for the call site's emitter.
+type Refusals = Vec<(chumsky::span::SimpleSpan, String)>;
+
 /// Resolve a named `value` lookup to `(args, extract)` in one pass over
 /// one field-order authority. The entry written `field: _` is the
 /// extraction hole - exactly one is lawful - and its declared position
@@ -250,11 +256,11 @@ pub(super) fn resolve_named(
 /// the index come from the same declared field order.
 pub(super) fn resolve_named_value(
     head: &str,
-    entries: &[(chumsky::span::SimpleSpan, String, morpholog_core::Term)],
+    entries: &[NamedEntry],
     rest: bool,
     table: &FieldTable,
     call_span: chumsky::span::SimpleSpan,
-) -> Result<(Vec<morpholog_core::Term>, usize), Vec<(chumsky::span::SimpleSpan, String)>> {
+) -> Result<(Vec<morpholog_core::Term>, usize), Refusals> {
     use morpholog_core::Term;
     let args = resolve_named(
         head,
@@ -264,7 +270,7 @@ pub(super) fn resolve_named_value(
         table,
         call_span,
     )?;
-    let holes: Vec<&(chumsky::span::SimpleSpan, String, Term)> = entries
+    let holes: Vec<&NamedEntry> = entries
         .iter()
         .filter(|(_, _, term)| matches!(term, Term::Wildcard))
         .collect();
@@ -272,9 +278,8 @@ pub(super) fn resolve_named_value(
         [(_, hole_field, _)] => {
             // resolve_named validated every entry against the declared
             // fields, so the hole's position is its field's position.
-            let fields = match table.predicates.get(head) {
-                Some(DeclFields::Usable(fields)) => fields,
-                _ => unreachable!("resolve_named succeeded against this head"),
+            let Some(DeclFields::Usable(fields)) = table.predicates.get(head) else {
+                unreachable!("resolve_named succeeded against this head")
             };
             let extract = fields
                 .iter()

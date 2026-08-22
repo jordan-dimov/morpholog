@@ -60,9 +60,10 @@ See [`borrowing_base.morph`](borrowing_base.morph) for the surface form.
 | Predicate | Role |
 | --- | --- |
 | `Facility(facility, advance_rate)` | The facility and its advance rate (a fraction such as `0.80`), set when it opens. |
-| `EligibleCollateral(facility, asset, collateral_value)` | One pledged asset and its value. |
+| `EligibleCollateral(facility, asset, collateral_value)` | One pledged asset and its value. One pledge per asset (`unique by`), so an asset-keyed question has one answer. |
 | `Drawdown(facility, draw_id, amount)` | One advance of money drawn against the facility. |
 | `FacilityUtilisation(facility, utilisation)` | A read-only reporting view (the derived claim below), not admitted operational state. |
+| `AssetValue(asset, figure)` | The collateral register by asset - a read-only view keyed by the asset alone. |
 
 ### Invariants
 
@@ -87,6 +88,7 @@ See [`borrowing_base.morph`](borrowing_base.morph) for the surface form.
 | Derived | Definition |
 | --- | --- |
 | `FacilityUtilisation(facility, utilisation)` | `drawn / pledged collateral` per facility, over facilities that have collateral - every value of which is positive by invariant, so the divisor is never zero. The one use of division. |
+| `AssetValue(asset, figure)` | The collateral register keyed by the asset alone: the facility each pledge names is projected out of the head, and the figure is read by naming its field (`collateral_value: _`) with the facility left unstated. |
 
 ## How to run it
 
@@ -96,7 +98,8 @@ cargo test -p morpholog-examples --test borrowing_base
 
 The tests cover a within-limit draw (inclusive at the limit), an
 over-limit draw rejected by the invariant, the cumulative-sum limit across
-two draws, and the utilisation ratio.
+two draws, the utilisation ratio, and the asset register - one row per
+asset across facilities, with a re-pledge at a different value refused.
 
 ## What this example deliberately does not cover
 
