@@ -19,7 +19,7 @@ use morpholog_core::{
     ValueExpr,
 };
 
-use super::field_table::{FieldTable, Vocabulary, resolve_named};
+use super::field_table::{FieldTable, Vocabulary, resolve_named, resolve_named_value};
 
 /// Build a `Prop::Compare` from a factored operator and domain. The
 /// parser's flat `CmpOp` (op-and-domain in one token) maps onto the IR's
@@ -371,7 +371,7 @@ where
         // proposition parser (`expression`) and a comparator operand
         // (below) can reference this. `arith` is the value-expression
         // entry point used everywhere a value is required.
-        let arith = value_arith_parser(expression.clone());
+        let arith = value_arith_parser(expression.clone(), table);
 
         // A prop-only atom: a claim call (with parens) or `pre(...)`.
         // These are the propositions that are not value expressions, so
@@ -777,7 +777,7 @@ pub(super) fn value_expr_parser<'a, I>(
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
-    value_arith_parser(expression_parser(table))
+    value_arith_parser(expression_parser(table), table)
 }
 
 /// Build the value-expression arithmetic chain: `primary (("+" | "-")
@@ -789,6 +789,7 @@ where
 /// [`value_expr_parser`].
 fn value_arith_parser<'a, I, P>(
     prop: P,
+    table: &'a FieldTable,
 ) -> impl Parser<'a, I, ValueExpr, extra::Err<Rich<'a, Token>>> + Clone + 'a
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
@@ -868,31 +869,49 @@ where
                 }
             });
 
-        // value lookup: `value <Ident> ( <term-list> )` with optional
-        // `default <value>` suffix. The wildcard in the args marks the
-        // value position the IR extracts.
+        // value lookup: `value <Ident> ( <args> )` with optional
+        // `default <value>` suffix. Positional extracts the first
+        // wildcard; the named form marks the hole with `field: _`
+        // (exactly one), so the extracted field need not come first,
+        // and `..` elides the unconstrained coordinates.
         let value_lookup = just(Token::KwValue)
             .ignore_then(ident)
             .then(pattern_args_parser().delimited_by(just(Token::LParen), just(Token::RParen)))
             .then(just(Token::KwDefault).ignore_then(value.clone()).or_not())
-            .validate(|((predicate, args), default), e, emitter| {
-                let args = match args {
-                    PatternArgs::Positional(terms) => terms,
-                    // A `value` lookup's wildcard is not a don't-care:
-                    // the first `_` marks the value to extract, so the
-                    // named form has no spelling for it.
-                    PatternArgs::Named { entries, .. } => {
-                        emitter.emit(Rich::custom(
-                            e.span(),
-                            "`value` takes the positional form only: the first `_` \
-                             marks the value to extract",
-                        ));
-                        entries.into_iter().map(|(_, _, term)| term).collect()
+            .validate(move |((predicate, args), default), e, emitter| {
+                let (args, extract) = match args {
+                    PatternArgs::Positional(terms) => {
+                        let extract = terms
+                            .iter()
+                            .position(|t| matches!(t, Term::Wildcard))
+                            .unwrap_or(terms.len());
+                        (terms, extract)
+                    }
+                    PatternArgs::Named { entries, rest } => {
+                        match resolve_named_value(&predicate, &entries, rest, table, e.span()) {
+                            Ok(resolved) => resolved,
+                            Err(refusals) => {
+                                for (span, message) in refusals {
+                                    emitter.emit(Rich::custom(span, message));
+                                }
+                                // The parse is already failing; keep
+                                // the written terms so diagnostics
+                                // downstream have a shape to hold.
+                                let terms: Vec<Term> =
+                                    entries.into_iter().map(|(_, _, term)| term).collect();
+                                let extract = terms
+                                    .iter()
+                                    .position(|t| matches!(t, Term::Wildcard))
+                                    .unwrap_or(terms.len());
+                                (terms, extract)
+                            }
+                        }
                     }
                 };
                 ValueExpr::ValueOf {
                     predicate: predicate.into(),
                     args,
+                    extract,
                     default: default.map(Box::new),
                 }
             });

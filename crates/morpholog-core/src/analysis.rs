@@ -1444,6 +1444,7 @@ impl<'a> ParamCollector<'a> {
             ValueExpr::ValueOf {
                 predicate,
                 args,
+                extract: _,
                 default,
             } => {
                 self.observe_claim_args(predicate.as_str(), args);

@@ -412,10 +412,16 @@ pub enum ValueExpr {
         value: Term,
         body: Box<Prop>,
     },
-    /// Reads exactly one matching claim and yields its value-position
-    /// binding; wildcards in `args` mark the value position(s). Zero
-    /// matches errors unless `default` is supplied; multiple matches
-    /// always errors.
+    /// Reads exactly one matching claim and yields the argument at
+    /// `extract`; wildcards in `args` are unconstrained positions, and
+    /// `args[extract]` must be one of them (validation refuses
+    /// otherwise). Zero matches errors unless `default` is supplied;
+    /// multiple matches always errors.
+    ///
+    /// The positional surface form always extracts the FIRST wildcard;
+    /// the named form (`value P(field: x, hole: _, ..)`) can place the
+    /// hole at any declared field, which is why the index is explicit
+    /// IR rather than recomputed from the argument list.
     ///
     /// Prefer [`Stmt::BindOne`] in transformation bodies (it rejects
     /// lawfully on zero matches, where `ValueOf` raises a kernel error).
@@ -425,6 +431,7 @@ pub enum ValueExpr {
     ValueOf {
         predicate: PredicateName,
         args: Vec<Term>,
+        extract: usize,
         default: Option<Box<ValueExpr>>,
     },
     /// `if(when, then, otherwise)`: the value selected by whether a

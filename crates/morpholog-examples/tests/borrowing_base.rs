@@ -105,6 +105,57 @@ fn facility_utilisation_reports_drawn_over_collateral() {
 }
 
 #[test]
+fn the_asset_register_is_keyed_by_the_asset_alone() {
+    // Two assets across two facilities. The register carries one row
+    // per asset - the facility each pledge names is projected away -
+    // and each row's figure is the pledge's own value, read by naming
+    // the `collateral_value` field with the facility left unstated.
+    let pre = facility_with_collateral(100);
+    let pre = ex().must_accept(
+        &borrowing_base::open_facility(),
+        vec![subj("f2"), dec_str("0.5")],
+        pre,
+    );
+    let state = ex().must_accept(
+        &borrowing_base::pledge_collateral(),
+        vec![subj("f2"), subj("asset_2"), dec(40)],
+        pre,
+    );
+    let rows = enumerate_derived(
+        &borrowing_base::asset_value(),
+        &state,
+        &borrowing_base::definitions(),
+    )
+    .expect("enumerate_derived should not error");
+    assert_eq!(
+        rows,
+        vec![
+            claim_instance("AssetValue", &[subj("asset_1"), dec(100)]),
+            claim_instance("AssetValue", &[subj("asset_2"), dec(40)]),
+        ],
+        "one row per asset, whichever facility the pledge backs"
+    );
+}
+
+#[test]
+fn an_asset_backs_one_facility_at_one_value() {
+    // Re-pledging asset_1 at a different value (even to another
+    // facility) contradicts the one-pledge-per-asset declaration, so
+    // the register's per-asset lookup always has one record to read.
+    let pre = facility_with_collateral(100);
+    let pre = ex().must_accept(
+        &borrowing_base::open_facility(),
+        vec![subj("f2"), dec_str("0.5")],
+        pre,
+    );
+    ex().must_reject(
+        &borrowing_base::pledge_collateral(),
+        vec![subj("f2"), subj("asset_1"), dec(70)],
+        &pre,
+    );
+}
+
+#[test]
 fn zero_value_collateral_pledge_is_rejected() {
     // collateral_value_is_positive rejects a zero pledge - which is what
     // keeps the utilisation view's divisor non-zero under all admitted

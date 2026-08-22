@@ -1038,6 +1038,7 @@ fn parses_value_without_default() {
     let ValueExpr::ValueOf {
         predicate,
         args,
+        extract,
         default,
     } = got
     else {
@@ -1047,6 +1048,10 @@ fn parses_value_without_default() {
     assert_eq!(args.len(), 2);
     assert_eq!(args[0], Term::Var("policy_id".into()));
     assert_eq!(args[1], Term::Wildcard);
+    assert_eq!(
+        extract, 1,
+        "the positional form extracts the first wildcard"
+    );
     assert!(default.is_none());
 }
 

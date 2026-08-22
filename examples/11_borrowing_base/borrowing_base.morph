@@ -46,14 +46,19 @@ program borrowing_base
 -- facility opens. `EligibleCollateral` is one pledged asset and its
 -- value. `Drawdown` is one advance of money against the facility.
 -- One facility per id: the id determines the advance rate, so the
--- advance-limit rule below always reads one unambiguous rate.
+-- advance-limit rule below always reads one unambiguous rate. And one
+-- pledge per asset: an asset backs exactly one facility at one value,
+-- so a question about an asset always has one answer.
 predicate Facility(facility: Subject, advance_rate: Decimal)
     unique by (facility)
 predicate EligibleCollateral(facility: Subject, asset: Subject, collateral_value: Decimal)
+    unique by (asset)
 predicate Drawdown(facility: Subject, draw_id: Subject, amount: Decimal)
--- A read-only reporting view (see the derived claim at the bottom of the
--- file): each facility's drawn-to-collateral utilisation.
+-- Read-only reporting views (see the derived claims at the bottom of
+-- the file): each facility's drawn-to-collateral utilisation, and the
+-- collateral register by asset.
 predicate FacilityUtilisation(facility: Subject, utilisation: Decimal)
+predicate AssetValue(asset: Subject, figure: Decimal)
 
 -- Intents are messages the system sends to the outside world after a
 -- change commits. The drawdown intent is how a downstream treasury system
@@ -136,3 +141,17 @@ transformation draw(facility, draw_id, amount):
 derived FacilityUtilisation(facility):
     over EligibleCollateral(facility, _, _)
     value utilisation = sum(d | Drawdown(facility, _, d)) / sum(v | EligibleCollateral(facility, _, v))
+
+-- The collateral register, by asset. An examiner's question is "what is
+-- this asset on the books for?" - the asset identifies the row, and the
+-- facility it happens to back is a detail the row does not need to
+-- carry. So the view is keyed by the asset alone, even though the
+-- records behind it also name a facility: a row is keyed by what
+-- identifies it, not by everything it joins through. The figure is
+-- picked out of the pledge record by NAMING the field wanted -
+-- `collateral_value: _` marks it - with `..` leaving the facility
+-- unstated. One pledge per asset (declared above) is what makes "the
+-- pledge record for this asset" a single record to read.
+derived AssetValue(asset):
+    over EligibleCollateral(facility, asset, _)
+    value figure = value EligibleCollateral(asset: asset, collateral_value: _, ..)

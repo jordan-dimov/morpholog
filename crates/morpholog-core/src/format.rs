@@ -3,7 +3,12 @@
 //! The IR derives `Debug`, which is unreadable past a few claims deep.
 //! This module renders the same IR in structured indented form for test
 //! `panic!` messages, CLI inspection, and kernel diagnostic strings.
-//! The output round-trips through `parse_program`.
+//! Two contracts live here, told apart by signature: renderers that
+//! take a [`Program`] (or build one's declaration table) -
+//! `format_program`, `canonical_hash`, the `*_source` helpers - emit
+//! source that round-trips through `parse_program`; the decl-free
+//! inline helpers emit diagnostic display text, which is never
+//! reparsed and may not be reparseable.
 //!
 //! Output style:
 //!
@@ -85,8 +90,20 @@ pub fn canonical_hash(p: &Program) -> String {
     // The stable positional rendering, NOT the named canonical form:
     // rules identity must not move because the formatter learned a
     // kinder spelling, and positional and named sources lowering to the
-    // same IR must share one hash.
-    let digest = Sha256::digest(render_program(p, None).as_bytes());
+    // same IR must share one hash. The declaration table still rides
+    // along for the one forced case (a non-first extraction hole has
+    // no positional spelling); everything else renders positionally.
+    let naming = claim_naming(p);
+    let digest = Sha256::digest(
+        render_program(
+            p,
+            FormatContext {
+                predicates: Some(&naming),
+                named_canonical: false,
+            },
+        )
+        .as_bytes(),
+    );
     let mut out = String::with_capacity(7 + digest.len() * 2);
     out.push_str("sha256:");
     for b in digest {
@@ -96,12 +113,34 @@ pub fn canonical_hash(p: &Program) -> String {
     out
 }
 
-/// The declaration table the named canonical form resolves field names
-/// from, when the caller holds a whole programme. `None` renders
-/// positionally - the decl-free public helpers and every kernel
-/// diagnostic path (rejection reasons, witnesses) quote the IR as it
-/// is, which keeps their output independent of any declaration table.
+/// The declaration table the named forms resolve field names from,
+/// when the caller holds a whole programme.
 type Naming<'a> = Option<&'a std::collections::HashMap<&'a str, &'a PredicateDecl>>;
+
+/// What every formatting call carries. `predicates` is the field-name
+/// authority (`None` for the decl-free public helpers and every kernel
+/// diagnostic path - rejection reasons, witnesses - whose output is
+/// display text, never reparseable source, and stays independent of
+/// any declaration table). `named_canonical` selects the evolving
+/// human-facing canonical form (wildcard runs print named); off, the
+/// rendering is the stable positional one the canonical hash is built
+/// on. In EITHER mode, a `value` lookup whose extraction hole is not
+/// its first wildcard renders named when the table allows - positional
+/// text would reparse to different IR, so the named spelling is the
+/// only faithful one, not a style choice.
+#[derive(Clone, Copy)]
+pub(crate) struct FormatContext<'a> {
+    predicates: Naming<'a>,
+    named_canonical: bool,
+}
+
+impl FormatContext<'_> {
+    /// Decl-free positional rendering: diagnostics and inline helpers.
+    pub(crate) const DIAGNOSTIC: FormatContext<'static> = FormatContext {
+        predicates: None,
+        named_canonical: false,
+    };
+}
 
 /// The field-name table for the named canonical form. A name declared
 /// more than once, or a declaration whose field names repeat, cannot be
@@ -145,10 +184,16 @@ fn max_wildcard_run(args: &[Term]) -> usize {
 /// to an existing buffer.
 pub fn format_program(p: &Program) -> String {
     let naming = claim_naming(p);
-    render_program(p, Some(&naming))
+    render_program(
+        p,
+        FormatContext {
+            predicates: Some(&naming),
+            named_canonical: true,
+        },
+    )
 }
 
-fn render_program(p: &Program, naming: Naming) -> String {
+fn render_program(p: &Program, ctx: FormatContext) -> String {
     let mut out = String::new();
     out.push_str(&format!("program {}\n", p.name));
 
@@ -180,7 +225,7 @@ fn render_program(p: &Program, naming: Naming) -> String {
             continue;
         }
         out.push('\n');
-        out.push_str(&format_definition(def, naming));
+        out.push_str(&format_definition(def, ctx));
     }
 
     for inv in &p.invariants {
@@ -191,17 +236,17 @@ fn render_program(p: &Program, naming: Naming) -> String {
             continue;
         }
         out.push('\n');
-        out.push_str(&format_invariant(inv, naming));
+        out.push_str(&format_invariant(inv, ctx));
     }
 
     for t in &p.transformations {
         out.push('\n');
-        out.push_str(&format_transformation(t, naming));
+        out.push_str(&format_transformation(t, ctx));
     }
 
     for d in &p.derived_claims {
         out.push('\n');
-        out.push_str(&format_derived_claim(d, naming));
+        out.push_str(&format_derived_claim(d, ctx));
     }
 
     out
@@ -248,17 +293,17 @@ pub(crate) fn format_intent_decl(decl: &crate::IntentDecl) -> String {
 
 /// Render a [`Definition`] in the invariant block shape:
 /// `define name(params):` with the body indented.
-pub(crate) fn format_definition(def: &Definition, naming: Naming) -> String {
+pub(crate) fn format_definition(def: &Definition, ctx: FormatContext) -> String {
     let params: Vec<String> = def.parameters.iter().map(ToString::to_string).collect();
     let mut out = String::new();
     out.push_str(&format!("define {}({}):\n", def.name, params.join(", ")));
     out.push_str(&indent(1));
-    out.push_str(&fmt_prop(&def.body, naming));
+    out.push_str(&fmt_prop(&def.body, ctx));
     out.push('\n');
     out
 }
 
-pub(crate) fn format_invariant(inv: &Invariant, naming: Naming) -> String {
+pub(crate) fn format_invariant(inv: &Invariant, ctx: FormatContext) -> String {
     let mut out = String::new();
     // Surface has no version syntax in v0; the IR's `version` field
     // defaults to 1 and the formatter omits it.
@@ -269,12 +314,12 @@ pub(crate) fn format_invariant(inv: &Invariant, naming: Naming) -> String {
         None => out.push_str(&format!("invariant {}:\n", inv.name)),
     }
     out.push_str(&indent(1));
-    out.push_str(&fmt_prop(&inv.body, naming));
+    out.push_str(&fmt_prop(&inv.body, ctx));
     out.push('\n');
     out
 }
 
-pub(crate) fn format_transformation(t: &Transformation, naming: Naming) -> String {
+pub(crate) fn format_transformation(t: &Transformation, ctx: FormatContext) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "transformation {}({}):\n",
@@ -286,13 +331,13 @@ pub(crate) fn format_transformation(t: &Transformation, naming: Naming) -> Strin
             .join(", ")
     ));
     for stmt in &t.body {
-        out.push_str(&fmt_stmt(stmt, 1, naming));
+        out.push_str(&fmt_stmt(stmt, 1, ctx));
         out.push('\n');
     }
     out
 }
 
-pub(crate) fn format_derived_claim(d: &DerivedClaim, naming: Naming) -> String {
+pub(crate) fn format_derived_claim(d: &DerivedClaim, ctx: FormatContext) -> String {
     // The surface grammar requires at least one `value` clause; an
     // empty `values` Vec would format to text the parser refuses.
     // The kernel doesn't enforce this today, so panic with a clear
@@ -313,14 +358,10 @@ pub(crate) fn format_derived_claim(d: &DerivedClaim, naming: Naming) -> String {
             .join(", ")
     ));
     out.push_str(&indent(1));
-    out.push_str(&format!("over {}\n", fmt_prop(&d.domain, naming)));
+    out.push_str(&format!("over {}\n", fmt_prop(&d.domain, ctx)));
     for v in &d.values {
         out.push_str(&indent(1));
-        out.push_str(&format!(
-            "value {} = {}\n",
-            v.name,
-            fmt_value(&v.expr, naming)
-        ));
+        out.push_str(&format!("value {} = {}\n", v.name, fmt_value(&v.expr, ctx)));
     }
     out
 }
@@ -335,15 +376,11 @@ fn rule_label(name: &Option<crate::ir::RuleName>) -> String {
     name.as_ref().map_or_else(String::new, |n| format!("{n}: "))
 }
 
-pub fn format_stmt(s: &Stmt, depth: usize) -> String {
-    fmt_stmt(s, depth, None)
-}
-
-fn fmt_stmt(s: &Stmt, depth: usize, naming: Naming) -> String {
+fn fmt_stmt(s: &Stmt, depth: usize, ctx: FormatContext) -> String {
     let pad = indent(depth);
     match s {
         Stmt::Require { prop: p, name } => {
-            format!("{pad}require {}{}", rule_label(name), fmt_prop(p, naming))
+            format!("{pad}require {}{}", rule_label(name), fmt_prop(p, ctx))
         }
         Stmt::BindOne { prop: p, name } => {
             // A claim pattern, or a call to a definition - which is what a
@@ -358,10 +395,10 @@ fn fmt_stmt(s: &Stmt, depth: usize, naming: Naming) -> String {
                 matches!(p, Prop::Claim { .. } | Prop::Defined { .. }),
                 "format_stmt: bind takes a claim or a defined call; got {p:?}",
             );
-            format!("{pad}bind {}{}", rule_label(name), fmt_prop(p, naming))
+            format!("{pad}bind {}{}", rule_label(name), fmt_prop(p, ctx))
         }
         Stmt::Let { name, value } => {
-            format!("{pad}let {name} = {}", fmt_value(value, naming))
+            format!("{pad}let {name} = {}", fmt_value(value, ctx))
         }
         Stmt::LetNewSubject { name } => {
             format!("{pad}let {name} = new Subject()")
@@ -370,7 +407,7 @@ fn fmt_stmt(s: &Stmt, depth: usize, naming: Naming) -> String {
         Stmt::Retract { predicate, args } => {
             format!(
                 "{pad}retract {}",
-                fmt_predicate_call(predicate.as_str(), args, naming)
+                fmt_predicate_call(predicate.as_str(), args, ctx)
             )
         }
         Stmt::Emit(i) => format!("{pad}emit {}", format_intent(i)),
@@ -379,9 +416,9 @@ fn fmt_stmt(s: &Stmt, depth: usize, naming: Naming) -> String {
             collection,
             body,
         } => {
-            let mut out = format!("{pad}for {binding} in {}:\n", fmt_value(collection, naming));
+            let mut out = format!("{pad}for {binding} in {}:\n", fmt_value(collection, ctx));
             for (i, inner) in body.iter().enumerate() {
-                out.push_str(&fmt_stmt(inner, depth + 1, naming));
+                out.push_str(&fmt_stmt(inner, depth + 1, ctx));
                 if i + 1 < body.len() {
                     out.push('\n');
                 }
@@ -396,46 +433,53 @@ fn fmt_stmt(s: &Stmt, depth: usize, naming: Naming) -> String {
 // ============================================================
 
 /// One-line rendering of a [`Prop`], the proposition printer in the
-/// kernel. Used in `require`/`bind`, invariant bodies, derived-claim
-/// domains, and kernel diagnostic paths (rejection reasons, multi-match
-/// errors). Its value-operand renderer is [`format_value_inline`]; the
-/// two compose because the sorts are mutually recursive.
+/// kernel. Used in kernel diagnostic paths (rejection reasons,
+/// multi-match errors) and read-side prose (`inspect controls`,
+/// `guarantees`). Its value operands render through the same context;
+/// the two compose because the sorts are mutually recursive.
+///
+/// **Diagnostic display only, not source serialization.** It carries no
+/// declaration table, so a `value` lookup whose extraction hole is not
+/// its first wildcard renders positionally - text that would reparse
+/// with a different hole. Anything emitting source-like output goes
+/// through [`format_prop_source`] and its siblings, which are the
+/// source-faithful API.
 pub fn format_prop_inline(p: &Prop) -> String {
-    fmt_prop(p, None)
+    fmt_prop(p, FormatContext::DIAGNOSTIC)
 }
 
-fn fmt_prop(p: &Prop, naming: Naming) -> String {
+fn fmt_prop(p: &Prop, ctx: FormatContext) -> String {
     // Composite sub-propositions are wrapped in parens unconditionally;
     // verbose but unambiguous and round-trips through `parse_expression`
     // (or `parse_program` once embedded in a programme body). The surface
     // comparator precedence (arithmetic > comparators > not > and >
     // implies) makes the parens a no-op for the parser.
-    fn prop_primary(p: &Prop, naming: Naming) -> String {
+    fn prop_primary(p: &Prop, ctx: FormatContext) -> String {
         match p {
-            Prop::Claim { predicate, args } => fmt_predicate_call(predicate.as_str(), args, naming),
+            Prop::Claim { predicate, args } => fmt_predicate_call(predicate.as_str(), args, ctx),
             // A defined call has parameters, not declared fields, so it
             // never takes the named form - and it must branch by
             // VARIANT: a definition may share its name with a predicate.
-            Prop::Defined { name, args } => fmt_predicate_call(name.as_str(), args, None),
+            Prop::Defined { name, args } => {
+                fmt_predicate_call(name.as_str(), args, FormatContext::DIAGNOSTIC)
+            }
             // `pre(...)` is function-call-shape; no outer parens needed.
-            Prop::Pre(inner) => format!("pre({})", fmt_prop(inner, naming)),
-            _ => format!("({})", fmt_prop(p, naming)),
+            Prop::Pre(inner) => format!("pre({})", fmt_prop(inner, ctx)),
+            _ => format!("({})", fmt_prop(p, ctx)),
         }
     }
 
     match p {
-        Prop::Claim { predicate, args } => fmt_predicate_call(predicate.as_str(), args, naming),
+        Prop::Claim { predicate, args } => fmt_predicate_call(predicate.as_str(), args, ctx),
         // A definition call renders like a claim reference (the parser
         // re-resolves it by name) but never in named form - see
         // `prop_primary`.
-        Prop::Defined { name, args } => fmt_predicate_call(name.as_str(), args, None),
+        Prop::Defined { name, args } => {
+            fmt_predicate_call(name.as_str(), args, FormatContext::DIAGNOSTIC)
+        }
 
         // Comparators relate two value expressions.
-        Prop::Eq(l, r) => format!(
-            "{} = {}",
-            value_primary(l, naming),
-            value_primary(r, naming)
-        ),
+        Prop::Eq(l, r) => format!("{} = {}", value_primary(l, ctx), value_primary(r, ctx)),
         Prop::Compare {
             op,
             domain,
@@ -443,47 +487,45 @@ fn fmt_prop(p: &Prop, naming: Naming) -> String {
             right,
         } => format!(
             "{} {} {}",
-            value_primary(left, naming),
+            value_primary(left, ctx),
             compare_token(*op, *domain),
-            value_primary(right, naming)
+            value_primary(right, ctx)
         ),
-        Prop::Neq(lhs, rhs) => format!(
-            "{} != {}",
-            value_primary(lhs, naming),
-            value_primary(rhs, naming)
-        ),
+        Prop::Neq(lhs, rhs) => {
+            format!("{} != {}", value_primary(lhs, ctx), value_primary(rhs, ctx))
+        }
         Prop::In(elem, coll) => format!("{} in {}", format_term(elem), format_term(coll)),
 
         // Boolean composition: prefix `not`, infix `and`/`or`/`implies`.
-        Prop::Pre(inner) => format!("pre({})", fmt_prop(inner, naming)),
-        Prop::Not(inner) => format!("not {}", prop_primary(inner, naming)),
+        Prop::Pre(inner) => format!("pre({})", fmt_prop(inner, ctx)),
+        Prop::Not(inner) => format!("not {}", prop_primary(inner, ctx)),
         Prop::And(props) => {
-            let inner: Vec<String> = props.iter().map(|p| prop_primary(p, naming)).collect();
+            let inner: Vec<String> = props.iter().map(|p| prop_primary(p, ctx)).collect();
             inner.join(" and ")
         }
         Prop::Or(props) => {
-            let inner: Vec<String> = props.iter().map(|p| prop_primary(p, naming)).collect();
+            let inner: Vec<String> = props.iter().map(|p| prop_primary(p, ctx)).collect();
             inner.join(" or ")
         }
         Prop::Xor(left, right) => {
             format!(
                 "{} xor {}",
-                prop_primary(left, naming),
-                prop_primary(right, naming)
+                prop_primary(left, ctx),
+                prop_primary(right, ctx)
             )
         }
         Prop::Implies { left, right } => {
             format!(
                 "{} implies {}",
-                prop_primary(left, naming),
-                prop_primary(right, naming)
+                prop_primary(left, ctx),
+                prop_primary(right, ctx)
             )
         }
 
         // Quantifiers: colon-block form. Source for `forall` is a
         // primary proposition (typically a Claim or a lifted `In`).
         Prop::Exists { binding, body } => {
-            format!("exists {binding}: {}", fmt_prop(body, naming))
+            format!("exists {binding}: {}", fmt_prop(body, ctx))
         }
         Prop::Forall {
             binding,
@@ -497,12 +539,9 @@ fn fmt_prop(p: &Prop, naming: Naming) -> String {
             // whatever primary proposition the source is.
             let source_text = match source.as_ref() {
                 Prop::In(Term::Var(b), coll) if b == binding => format_term(coll),
-                _ => prop_primary(source, naming),
+                _ => prop_primary(source, ctx),
             };
-            format!(
-                "forall {binding} in {source_text}: {}",
-                fmt_prop(body, naming)
-            )
+            format!("forall {binding} in {source_text}: {}", fmt_prop(body, ctx))
         }
     }
 }
@@ -511,28 +550,62 @@ fn fmt_prop(p: &Prop, naming: Naming) -> String {
 /// composite arithmetic subtree in parens so the surface text reparses
 /// to the same tree. `Term`, `Sum`, and `ValueOf` are already primary-
 /// shaped; `Add`/`Sub` are parenthesised.
-fn value_primary(e: &ValueExpr, naming: Naming) -> String {
+fn value_primary(e: &ValueExpr, ctx: FormatContext) -> String {
     match e {
         ValueExpr::Term(t) => format_term(t),
         // Infix arithmetic is the only ambiguous form: parenthesise it so
         // the surface text reparses to the same tree. Everything else is
         // self-delimiting (a keyword or function with its own parens).
         ValueExpr::Arith { .. } => {
-            format!("({})", fmt_value(e, naming))
+            format!("({})", fmt_value(e, ctx))
         }
-        _ => fmt_value(e, naming),
+        _ => fmt_value(e, ctx),
     }
 }
 
-/// One-line rendering of a [`ValueExpr`], the value-expression printer
-/// in the kernel. Used in `let`/`for` collections and derived-claim
-/// value expressions. Its proposition renderer (for a `sum` body) is
-/// [`format_prop_inline`].
-pub fn format_value_inline(e: &ValueExpr) -> String {
-    fmt_value(e, None)
+/// The source-faithful inline renderers: like the `_inline` helpers,
+/// but carrying the programme's declaration table so a `value` lookup
+/// whose extraction hole is not its first wildcard prints in the named
+/// form that reparses to the same IR. Every surface that emits
+/// source-like output (`check --ir`) renders through these; the
+/// decl-free `_inline` helpers remain for diagnostic display text.
+pub fn format_prop_source(p: &Program, prop: &Prop) -> String {
+    let naming = claim_naming(p);
+    fmt_prop(
+        prop,
+        FormatContext {
+            predicates: Some(&naming),
+            named_canonical: false,
+        },
+    )
 }
 
-fn fmt_value(e: &ValueExpr, naming: Naming) -> String {
+/// See [`format_prop_source`].
+pub fn format_value_source(p: &Program, e: &ValueExpr) -> String {
+    let naming = claim_naming(p);
+    fmt_value(
+        e,
+        FormatContext {
+            predicates: Some(&naming),
+            named_canonical: false,
+        },
+    )
+}
+
+/// See [`format_prop_source`].
+pub fn format_stmt_source(p: &Program, s: &Stmt, depth: usize) -> String {
+    let naming = claim_naming(p);
+    fmt_stmt(
+        s,
+        depth,
+        FormatContext {
+            predicates: Some(&naming),
+            named_canonical: false,
+        },
+    )
+}
+
+fn fmt_value(e: &ValueExpr, ctx: FormatContext) -> String {
     match e {
         ValueExpr::Term(t) => format_term(t),
         ValueExpr::Sum {
@@ -540,42 +613,55 @@ fn fmt_value(e: &ValueExpr, naming: Naming) -> String {
             body,
             seed: _,
         } => {
-            format!(
-                "sum({} | {})",
-                fmt_value(value, naming),
-                fmt_prop(body, naming)
-            )
+            format!("sum({} | {})", fmt_value(value, ctx), fmt_prop(body, ctx))
         }
         ValueExpr::Extremum { op, value, body } => {
             format!(
                 "{}({} | {})",
                 op.as_str(),
                 format_term(value),
-                fmt_prop(body, naming)
+                fmt_prop(body, ctx)
             )
         }
         ValueExpr::ValueOf {
             predicate,
             args,
+            extract,
             default,
         } => {
-            // A `value` lookup's wildcard is the extraction hole, not a
-            // don't-care: no named form, whatever the run length.
-            let base = format!(
-                "value {}",
-                fmt_predicate_call(predicate.as_str(), args, None)
-            );
+            // The rendering is forced, never a style choice. When the
+            // hole is the first wildcard, positional reparses to this
+            // exact IR, so it stays positional in every mode (a
+            // wildcard here is the extraction hole, not a don't-care -
+            // the run-length named form never applies). When the hole
+            // is NOT first, positional text would reparse with the
+            // wrong hole, so the named spelling is the only faithful
+            // one; without a declaration table (invalid IR only - the
+            // parsers cannot build this shape unresolved) positional
+            // is the honest remainder.
+            let first_wildcard = args.iter().position(|t| matches!(t, Term::Wildcard));
+            let base = if first_wildcard == Some(*extract) || first_wildcard.is_none() {
+                format!(
+                    "value {}",
+                    fmt_predicate_call(predicate.as_str(), args, FormatContext::DIAGNOSTIC)
+                )
+            } else {
+                format!(
+                    "value {}",
+                    named_value_lookup(predicate.as_str(), args, *extract, ctx)
+                )
+            };
             match default {
-                Some(d) => format!("{base} default {}", fmt_value(d, naming)),
+                Some(d) => format!("{base} default {}", fmt_value(d, ctx)),
                 None => base,
             }
         }
         ValueExpr::Arith { op, left, right } => {
             format!(
                 "{} {} {}",
-                value_primary(left, naming),
+                value_primary(left, ctx),
                 arith_token(*op),
-                value_primary(right, naming)
+                value_primary(right, ctx)
             )
         }
         // Every builtin renders the same way: its surface name and
@@ -584,7 +670,7 @@ fn fmt_value(e: &ValueExpr, naming: Naming) -> String {
             "{}({})",
             builtin.name(),
             args.iter()
-                .map(|a| fmt_value(a, naming))
+                .map(|a| fmt_value(a, ctx))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -596,9 +682,9 @@ fn fmt_value(e: &ValueExpr, naming: Naming) -> String {
             otherwise,
         } => format!(
             "if({}, {}, {})",
-            fmt_prop(when, naming),
-            fmt_value(then, naming),
-            fmt_value(otherwise, naming)
+            fmt_prop(when, ctx),
+            fmt_value(then, ctx),
+            fmt_value(otherwise, ctx)
         ),
     }
 }
@@ -607,12 +693,49 @@ fn fmt_value(e: &ValueExpr, naming: Naming) -> String {
 // Leaf formatting
 // ============================================================
 
-fn fmt_predicate_call(predicate: &str, args: &[Term], naming: Naming) -> String {
+/// The named spelling of a `value` lookup whose extraction hole is not
+/// its first wildcard: the hole field written `field: _`, constrained
+/// fields written in declaration order, unconstrained ones elided
+/// behind `..`. Falls back to positional when the table cannot resolve
+/// the head - reachable only through hand-built IR that validation
+/// refuses (`InvalidValueExtraction` or an undeclared predicate).
+fn named_value_lookup(
+    predicate: &str,
+    args: &[Term],
+    extract: usize,
+    ctx: FormatContext,
+) -> String {
+    if let Some(map) = ctx.predicates
+        && let Some(decl) = map.get(predicate)
+        && decl.args.len() == args.len()
+        && matches!(args.get(extract), Some(Term::Wildcard))
+    {
+        let mut elided = false;
+        let mut parts: Vec<String> = Vec::with_capacity(args.len());
+        for (position, (field, term)) in decl.args.iter().zip(args).enumerate() {
+            if position == extract {
+                parts.push(format!("{}: _", field.name));
+            } else if matches!(term, Term::Wildcard) {
+                elided = true;
+            } else {
+                parts.push(format!("{}: {}", field.name, format_term(term)));
+            }
+        }
+        if elided {
+            parts.push("..".to_string());
+        }
+        return format!("{predicate}({})", parts.join(", "));
+    }
+    fmt_predicate_call(predicate, args, FormatContext::DIAGNOSTIC)
+}
+
+fn fmt_predicate_call(predicate: &str, args: &[Term], ctx: FormatContext) -> String {
     // The named canonical form: two wildcards in a row read as a wall,
     // so mentioned fields are named (in declaration order) and the rest
     // is `..`. A single wildcard is legible where it stands and stays
     // positional; an all-wildcard pattern collapses to `Pred(..)`.
-    if let Some(map) = naming
+    if ctx.named_canonical
+        && let Some(map) = ctx.predicates
         && let Some(decl) = map.get(predicate)
         && decl.args.len() == args.len()
         && max_wildcard_run(args) >= 2
@@ -634,11 +757,11 @@ fn fmt_predicate_call(predicate: &str, args: &[Term], naming: Naming) -> String 
 fn format_claim(c: &Claim) -> String {
     // `admit` supplies every field, so a wildcard run can never occur
     // here; positional is both correct and canonical.
-    fmt_predicate_call(c.predicate.as_str(), &c.args, None)
+    fmt_predicate_call(c.predicate.as_str(), &c.args, FormatContext::DIAGNOSTIC)
 }
 
 fn format_intent(i: &Intent) -> String {
-    fmt_predicate_call(i.name.as_str(), &i.args, None)
+    fmt_predicate_call(i.name.as_str(), &i.args, FormatContext::DIAGNOSTIC)
 }
 
 fn format_term(t: &Term) -> String {
@@ -710,6 +833,15 @@ mod tests {
     use crate::ir_builder::*;
     use crate::{PredicateArgKind, Value};
 
+    /// The decl-free diagnostic renderings, for the shape pins below.
+    fn fmt_value_diag(e: &ValueExpr) -> String {
+        fmt_value(e, FormatContext::DIAGNOSTIC)
+    }
+
+    fn fmt_stmt_diag(s: &Stmt, depth: usize) -> String {
+        fmt_stmt(s, depth, FormatContext::DIAGNOSTIC)
+    }
+
     #[test]
     fn format_program_starts_with_program_header() {
         let p = program("demo").build();
@@ -727,7 +859,7 @@ mod tests {
                 emit("TrialOpened", vec![var("trial_id")]),
             ],
         );
-        let s = format_transformation(&t, None);
+        let s = format_transformation(&t, FormatContext::DIAGNOSTIC);
         assert!(s.contains("transformation open_trial(trial_id):"));
         assert!(s.contains("  admit Trial(trial_id)"));
         assert!(s.contains("  emit TrialOpened(trial_id)"));
@@ -739,7 +871,7 @@ mod tests {
     /// transformation body.
     #[test]
     fn format_stmt_renders_bind_one_with_inline_expression() {
-        let s = format_stmt(
+        let s = fmt_stmt_diag(
             &bind_one(claim("Policy", vec![var("policy_id"), var("limit")])),
             1,
         );
@@ -847,12 +979,12 @@ mod tests {
             sub(term(var("p")), term(var("q"))),
             sum(var("v"), claim("W", vec![var("v")])),
         );
-        let s = format_value_inline(&e);
+        let s = fmt_value_diag(&e);
         assert!(s.contains("p - q"));
         assert!(s.contains("sum(v |"));
 
         let vo = value_of("X", vec![var("k"), wildcard()]);
-        assert!(format_value_inline(&vo).contains("value X(k, _)"));
+        assert!(fmt_value_diag(&vo).contains("value X(k, _)"));
 
         // Mul, Div, Min, Max - including the nested collar shape
         // `min(_, max(0, _))`; min/max are self-delimiting, so their
@@ -861,13 +993,13 @@ mod tests {
             mul(term(var("a")), term(var("b"))),
             max(term(dec("0")), div(term(var("c")), term(var("d")))),
         );
-        let printed = format_value_inline(&collar);
+        let printed = fmt_value_diag(&collar);
         assert_eq!(printed, "min(a * b, max(0, c / d))");
 
         // Mod renders infix `%` and parenthesises inside another operand,
         // like the other infix arithmetic: the chess parity shape.
         let parity = modulo(add(term(var("f")), term(var("r"))), term(dec("2")));
-        assert_eq!(format_value_inline(&parity), "(f + r) % 2");
+        assert_eq!(fmt_value_diag(&parity), "(f + r) % 2");
     }
 
     #[test]

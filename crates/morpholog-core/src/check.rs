@@ -475,16 +475,39 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             cx.errors
                 .push(ValidationError::ActorNotAvailable { context });
         }
-        // The domain binds the key variables (claim matches); the
-        // value expressions are inferred against the same scope, so
-        // they see those bindings.
+        // The domain binds its variables (claim matches), but values
+        // run once per distinct head-key tuple, after witnesses
+        // collapse - the runtime binds ONLY the head keys there. The
+        // checker mirrors that topology: values are inferred against a
+        // scope holding just the keys (kinds copied from the domain
+        // walk), and an unbound use that the domain DOES bind converts
+        // to the dedicated not-a-key refusal with both remedies.
         let mut scope = Scope::new();
         cx.walk_prop(&derived.domain, &mut scope);
+        let mut value_scope = Scope::new();
+        for key in &derived.keys {
+            if scope.bound.is_bound(key) {
+                value_scope.bound.bind(key);
+            }
+            let kind = scope.kinds.lookup(key);
+            let _ = value_scope.kinds.observe(key, kind);
+        }
+        let before_values = cx.errors.len();
         let value_kinds: Vec<InferredKind> = derived
             .values
             .iter()
-            .map(|v| cx.infer_value(&v.expr, &mut scope))
+            .map(|v| cx.infer_value(&v.expr, &mut value_scope))
             .collect();
+        for error in &mut cx.errors[before_values..] {
+            if let ValidationError::UnboundVariable { variable, context } = error
+                && scope.bound.is_bound(&Var::from(variable.as_str()))
+            {
+                *error = ValidationError::DerivedValueNotAKey {
+                    variable: std::mem::take(variable),
+                    context: context.clone(),
+                };
+            }
+        }
         // A derived output is a governed read-side value; a span is
         // not one, whatever the output declaration says.
         for (i, kind) in value_kinds.iter().enumerate() {
@@ -526,7 +549,11 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         let n = output_arity.min(decl.args.len());
         for position in 0..n {
             let actual = if position < derived.keys.len() {
-                scope.kinds.lookup(&derived.keys[position])
+                // The value scope seeded each key's kind from the
+                // domain walk and value inference may have refined it
+                // since (a lookup consuming the key pins its declared
+                // kind), so it is the more informed environment here.
+                value_scope.kinds.lookup(&derived.keys[position])
             } else {
                 value_kinds[position - derived.keys.len()].clone()
             };
@@ -1344,12 +1371,22 @@ impl CheckCtx<'_> {
             ValueExpr::ValueOf {
                 predicate,
                 args,
+                extract,
                 default,
             } => {
                 // A lookup consumes its key arguments (the wildcard
                 // marks the extracted value, not a binding).
                 self.check_predicate_ref(predicate.as_str(), args, RefMode::Use, scope);
-                let result_kind = value_of_result_kind(predicate.as_str(), args, &self.predicates);
+                if !matches!(args.get(*extract), Some(Term::Wildcard)) {
+                    let context = self.context.clone();
+                    self.errors.push(ValidationError::InvalidValueExtraction {
+                        predicate: predicate.to_string(),
+                        extract: *extract,
+                        context,
+                    });
+                }
+                let result_kind =
+                    value_of_result_kind(predicate.as_str(), *extract, &self.predicates);
                 if let Some(default_expr) = default {
                     let default_kind = self.infer_value(default_expr, scope);
                     // The runtime returns either the looked-up value
@@ -1921,21 +1958,20 @@ fn more_specific(a: PredicateArgKind, b: PredicateArgKind) -> PredicateArgKind {
     }
 }
 
-/// Look up the kind of the value position in a `ValueOf` lookup.
-/// The first wildcard position in `args` marks the value slot;
-/// returns its declared kind, or UnknownOrAny when the predicate
-/// is undeclared or has no wildcard.
+/// Look up the kind of the value position in a `ValueOf` lookup:
+/// the declared kind at the lookup's `extract` index, or UnknownOrAny
+/// when the predicate is undeclared or the index is out of range
+/// (`InvalidValueExtraction` reports that shape separately).
 fn value_of_result_kind(
     predicate: &str,
-    args: &[Term],
+    extract: usize,
     predicates: &HashMap<&str, &PredicateDecl>,
 ) -> InferredKind {
     let Some(decl) = predicates.get(predicate) else {
         return InferredKind::UnknownOrAny;
     };
-    args.iter()
-        .position(|a| matches!(a, Term::Wildcard))
-        .and_then(|p| decl.args.get(p))
+    decl.args
+        .get(extract)
         .map(|a| InferredKind::Known(a.kind.clone()))
         .unwrap_or(InferredKind::UnknownOrAny)
 }

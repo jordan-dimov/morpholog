@@ -193,11 +193,10 @@ fn value_seed(value: &ValueExpr, body: &Prop, ctx: &SeedContext<'_>) -> Option<S
         // wildcard extracts - the same authority `value_of_result_kind`
         // consults in the checker.
         ValueExpr::ValueOf {
-            predicate, args, ..
+            predicate, extract, ..
         } => {
             let kinds = ctx.kinds.get(predicate.as_str())?;
-            let position = args.iter().position(|a| matches!(a, Term::Wildcard))?;
-            kinds.get(position)?.clone()
+            kinds.get(*extract)?.clone()
         }
         // A conditional is typed only when both branches agree; the
         // sum's body supplies the bindings either branch would consume.

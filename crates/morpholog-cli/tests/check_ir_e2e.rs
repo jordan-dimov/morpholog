@@ -139,3 +139,34 @@ fn check_ir_missing_file_errors_via_anyhow() {
         "stderr should explain the read failure: {stderr}"
     );
 }
+
+#[test]
+fn check_ir_renders_a_non_first_hole_lookup_in_its_named_form() {
+    // The carrier example's asset register reads a figure past an
+    // elided coordinate. Positional text would reparse with the wrong
+    // hole, so the IR view must emit the named spelling - the same
+    // faithfulness rule the formatter and the canonical hash follow.
+    let path = common::repo_root().join("examples/11_borrowing_base/borrowing_base.morph");
+    let out = Command::new(bin())
+        .args(["check", path.to_str().unwrap(), "--ir"])
+        .output()
+        .expect("run morpholog check --ir");
+    assert!(
+        out.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(out.stdout).unwrap()).expect("stdout is JSON");
+    let derived = parsed["derived_claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["predicate"] == "AssetValue")
+        .expect("the asset register is in the IR view");
+    let expr = derived["values"][0]["expr"].as_str().unwrap();
+    assert_eq!(
+        expr, "value EligibleCollateral(asset: asset, collateral_value: _, ..)",
+        "the named spelling is the only faithful rendering"
+    );
+}

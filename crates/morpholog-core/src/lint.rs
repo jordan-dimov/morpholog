@@ -734,6 +734,7 @@ mod tests {
                 Box::new(ValueExpr::ValueOf {
                     predicate: "Looked".into(),
                     args: vec![Term::Wildcard],
+                    extract: 0,
                     default,
                 }),
                 Box::new(ValueExpr::Term(Term::Wildcard)),

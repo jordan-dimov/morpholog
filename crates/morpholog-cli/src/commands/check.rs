@@ -80,7 +80,7 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
             serde_json::json!({
                 "name": &inv.name,
                 "version": inv.version,
-                "body": morpholog_core::format::format_prop_inline(&inv.body),
+                "body": morpholog_core::format::format_prop_source(program, &inv.body),
             })
         })
         .collect();
@@ -92,7 +92,7 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
             serde_json::json!({
                 "name": &d.name,
                 "parameters": &d.parameters,
-                "body": morpholog_core::format::format_prop_inline(&d.body),
+                "body": morpholog_core::format::format_prop_source(program, &d.body),
             })
         })
         .collect();
@@ -104,7 +104,7 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
             let body_lines: Vec<String> = t
                 .body
                 .iter()
-                .map(|s| morpholog_core::format::format_stmt(s, 0))
+                .map(|s| morpholog_core::format::format_stmt_source(program, s, 0))
                 .collect();
             serde_json::json!({
                 "name": &t.name,
@@ -124,14 +124,14 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
                 .map(|v| {
                     serde_json::json!({
                         "name": &v.name,
-                        "expr": morpholog_core::format::format_value_inline(&v.expr),
+                        "expr": morpholog_core::format::format_value_source(program, &v.expr),
                     })
                 })
                 .collect();
             serde_json::json!({
                 "predicate": &d.predicate,
                 "keys": &d.keys,
-                "over": morpholog_core::format::format_prop_inline(&d.domain),
+                "over": morpholog_core::format::format_prop_source(program, &d.domain),
                 "values": values,
             })
         })

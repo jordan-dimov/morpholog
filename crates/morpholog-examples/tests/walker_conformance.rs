@@ -359,6 +359,25 @@ transformation hold(h, qty):
     admit Holding(h, qty)
 ";
 
+/// A subset-head derived (the domain binds more than the head carries)
+/// whose value reaches a coordinate through a named `value` lookup with
+/// a NON-FIRST extraction hole, nested inside a sum's arithmetic: the
+/// key-only value scope, the explicit extract index, and the forced
+/// named rendering all have to hold at once, two constructs deep.
+const PROJECTED_DERIVED_NAMED_HOLE: &str = "\
+program projected_derived_named_hole
+predicate Reading(meter: Subject, read_on: Date, figure: Decimal)
+predicate Tariff(period_end: Date, meter: Subject, rate: Decimal)
+predicate MeterBill(meter: Subject, billed: Decimal)
+derived MeterBill(meter):
+    over Reading(meter, read_on, figure)
+    value billed = sum(f * (value Tariff(meter: meter, rate: _, ..)) | Reading(meter, _, f))
+transformation record(meter, read_on, figure):
+    admit Reading(meter, read_on, figure)
+transformation set_tariff(period_end, meter, rate):
+    admit Tariff(period_end, meter, rate)
+";
+
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         ("sum_through_defined_chain", SUM_THROUGH_DEFINED_CHAIN),
@@ -382,6 +401,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
             PERIOD_START_OF_ACROSS_CONTEXTS,
         ),
         ("expression_target_sum", EXPRESSION_TARGET_SUM),
+        ("projected_derived_named_hole", PROJECTED_DERIVED_NAMED_HOLE),
     ]
 }
 

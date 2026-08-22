@@ -252,13 +252,109 @@ invariant bad:
     refuses(src, "declared more than once");
 }
 
+// ---- named value lookups: `field: _` is the extraction hole ----
+
+/// Pull the lone invariant's comparison LHS out as the `ValueOf` under
+/// test.
+fn lookup_in(src: &str) -> morpholog_core::ValueExpr {
+    let program = parse_program(src).unwrap();
+    let morpholog_core::Prop::Compare { left, .. } = &program.invariants[0].body else {
+        panic!(
+            "expected a comparison body, got {:?}",
+            program.invariants[0].body
+        );
+    };
+    (**left).clone()
+}
+
 #[test]
-fn value_lookups_stay_positional() {
+fn a_named_value_lookup_with_a_first_wildcard_hole_equals_its_positional_twin() {
+    let named = format!(
+        "{DECLS}invariant capped:\n    \
+         value Line(id: i, invoice: inv, rate: r, volume: v, net: _) <= 100\n"
+    );
+    let positional = format!("{DECLS}invariant capped:\n    value Line(i, inv, r, v, _) <= 100\n");
+    assert_eq!(
+        parse_program(&named).unwrap(),
+        parse_program(&positional).unwrap(),
+        "when the hole is the first wildcard, the named form is sugar for the positional one"
+    );
+}
+
+#[test]
+fn a_named_value_lookup_extracts_a_non_first_field() {
+    // `id` is elided by `..`, so the resolved argument list has a
+    // wildcard BEFORE the hole - the IR no positional spelling reaches.
+    let src =
+        format!("{DECLS}invariant capped:\n    value Line(invoice: inv, rate: _, ..) <= 100\n");
+    let morpholog_core::ValueExpr::ValueOf { args, extract, .. } = lookup_in(&src) else {
+        panic!("expected a value lookup");
+    };
+    assert_eq!(
+        args,
+        vec![
+            morpholog_core::Term::Wildcard,
+            morpholog_core::Term::Var("inv".into()),
+            morpholog_core::Term::Wildcard,
+            morpholog_core::Term::Wildcard,
+            morpholog_core::Term::Wildcard,
+        ]
+    );
+    assert_eq!(extract, 2, "the hole is `rate`, not the first wildcard");
+}
+
+#[test]
+fn a_named_value_lookup_marks_exactly_one_hole() {
+    refuses(
+        &format!("{DECLS}invariant bad:\n    value Line(invoice: inv, ..) <= 100\n"),
+        "no field is marked",
+    );
+    refuses(
+        &format!("{DECLS}invariant bad:\n    value Line(rate: _, net: _, ..) <= 100\n"),
+        "a second extraction hole",
+    );
+}
+
+#[test]
+fn a_named_value_lookup_still_checks_its_fields() {
+    refuses(
+        &format!("{DECLS}invariant bad:\n    value Line(nope: x, net: _, ..) <= 100\n"),
+        "declares no field `nope`",
+    );
+    refuses(
+        &format!("{DECLS}invariant bad:\n    value Line(net: _) <= 100\n"),
+        "names every field",
+    );
+}
+
+#[test]
+fn a_named_value_lookup_on_a_definition_is_refused() {
     refuses(
         &format!(
-            "{DECLS}invariant bad:\n    Line(invoice: inv, ..) implies 0 <= value Line(net: _, ..) default 0\n"
+            "{DECLS}define billed(inv):\n    Line(invoice: inv, ..)\n\n\
+             invariant bad:\n    value billed(inv: _, ..) <= 100\n"
         ),
-        "`value` takes the positional form only",
+        "is a definition, not a predicate",
+    );
+}
+
+#[test]
+fn a_non_first_hole_lookup_round_trips_through_the_formatter() {
+    let src =
+        format!("{DECLS}invariant capped:\n    value Line(invoice: inv, rate: _, ..) <= 100\n");
+    let program = parse_program(&src).unwrap();
+    let formatted = format_program(&program);
+    assert!(
+        formatted.contains("value Line(invoice: inv, rate: _, ..)"),
+        "positional text would reparse to a different hole, so the named \
+         spelling is forced; got:\n{formatted}"
+    );
+    let reparsed = parse_program(&formatted).unwrap();
+    assert_eq!(program, reparsed, "the forced rendering must be faithful");
+    assert_eq!(
+        canonical_hash(&program),
+        canonical_hash(&reparsed),
+        "and rules identity must survive the round trip"
     );
 }
 

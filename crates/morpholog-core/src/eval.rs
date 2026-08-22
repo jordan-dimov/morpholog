@@ -1402,17 +1402,22 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
         ValueExpr::ValueOf {
             predicate,
             args,
+            extract,
             default,
         } => {
-            // The wildcard position is the value to extract. A single
+            // `extract` is the value to extract; validation guarantees
+            // it indexes a wildcard, and hand-built IR that skipped
+            // validation is refused here rather than misread. A single
             // indexed pass over the narrowed candidates finds the
             // matching claim and reads that position - the same match
             // semantics as `find_claim_matches`, but keeping the claim
             // instead of re-locating it with a second, unindexed scan.
-            let pos = args
-                .iter()
-                .position(|t| matches!(t, Term::Wildcard))
-                .ok_or_else(|| EvalError::TypeMismatch("ValueOf requires a wildcard arg".into()))?;
+            let pos = *extract;
+            if !matches!(args.get(pos), Some(Term::Wildcard)) {
+                return Err(EvalError::TypeMismatch(
+                    "ValueOf extraction position must be a wildcard arg".into(),
+                ));
+            }
 
             let mut matched: Option<&EvalValue> = None;
             let mut multiple = false;
