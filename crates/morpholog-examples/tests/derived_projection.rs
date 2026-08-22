@@ -121,7 +121,7 @@ fn non_key_value_reference_refuses_at_both_tiers() {
         .collect::<Vec<_>>()
         .join("; ");
     assert!(
-        msg.contains("line") && msg.contains("head") && msg.contains("field name"),
+        msg.contains("line") && msg.contains("head") && msg.contains("field: _"),
         "the refusal names the variable and both remedies, got: {msg}"
     );
 
@@ -155,5 +155,44 @@ fn positional_lookup_extracts_the_first_wildcard_only() {
         vec![claim_instance("SheetPeriod", &[subj("s1"), subj("march")])],
         "the first wildcard is the hole: position 0 (period_end) is extracted, \
          never the rate behind it"
+    );
+}
+
+#[test]
+fn a_kind_learned_inside_a_value_expression_still_reaches_the_output_check() {
+    // The domain says only `id: Any`; the value lookup refines `id` to
+    // Date; the output declaration says Subject. The refinement happens
+    // while inferring values under the key-only scope, and the output
+    // key check must read THAT scope - reading the domain scope alone
+    // would see Any and let the inconsistency through to refresh.
+    let derived = morpholog_core::DerivedClaim {
+        predicate: "Output".into(),
+        keys: vec!["id".into()],
+        values: vec![morpholog_core::DerivedValue {
+            name: "amount".to_string(),
+            expr: b::value_of("Dated", vec![b::var("id"), b::wildcard()]),
+        }],
+        domain: b::claim("Source", vec![b::var("id")]),
+    };
+    let program = b::program("probe")
+        .predicates(vec![
+            b::predicate("Source").any("id").build(),
+            b::predicate("Dated").date("id").decimal("amount").build(),
+            b::predicate("Output")
+                .subject("id")
+                .decimal("amount")
+                .build(),
+        ])
+        .derived_claims(vec![derived])
+        .build();
+    let errs = program
+        .validate()
+        .expect_err("Date-refined `id` cannot fill a Subject output key");
+    assert!(
+        errs.iter().any(|e| matches!(
+            e,
+            morpholog_core::ValidationError::ArgKindMismatch { position: 0, .. }
+        )),
+        "expected an output-key kind mismatch at position 0; got {errs:?}"
     );
 }

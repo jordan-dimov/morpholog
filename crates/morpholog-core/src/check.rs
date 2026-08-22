@@ -549,7 +549,11 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         let n = output_arity.min(decl.args.len());
         for position in 0..n {
             let actual = if position < derived.keys.len() {
-                scope.kinds.lookup(&derived.keys[position])
+                // The value scope seeded each key's kind from the
+                // domain walk and value inference may have refined it
+                // since (a lookup consuming the key pins its declared
+                // kind), so it is the more informed environment here.
+                value_scope.kinds.lookup(&derived.keys[position])
             } else {
                 value_kinds[position - derived.keys.len()].clone()
             };

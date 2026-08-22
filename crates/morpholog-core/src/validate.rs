@@ -557,7 +557,8 @@ pub enum ValidationError {
     #[error(
         "variable `{variable}` is bound by the domain of {context} but is not a head \
          key, so it is not available while computing values; add `{variable}` to the \
-         head, or bind the coordinate inside a `value` lookup by field name"
+         head if the value depends on it, or, if it only positions a lookup, drop it \
+         and name the extracted field (`field: _`), eliding unused coordinates with `..`"
     )]
     DerivedValueNotAKey {
         variable: String,

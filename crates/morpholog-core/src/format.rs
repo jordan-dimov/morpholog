@@ -3,7 +3,12 @@
 //! The IR derives `Debug`, which is unreadable past a few claims deep.
 //! This module renders the same IR in structured indented form for test
 //! `panic!` messages, CLI inspection, and kernel diagnostic strings.
-//! The output round-trips through `parse_program`.
+//! Two contracts live here, told apart by signature: renderers that
+//! take a [`Program`] (or build one's declaration table) -
+//! `format_program`, `canonical_hash`, the `*_source` helpers - emit
+//! source that round-trips through `parse_program`; the decl-free
+//! inline helpers emit diagnostic display text, which is never
+//! reparsed and may not be reparseable.
 //!
 //! Output style:
 //!
@@ -371,10 +376,6 @@ fn rule_label(name: &Option<crate::ir::RuleName>) -> String {
     name.as_ref().map_or_else(String::new, |n| format!("{n}: "))
 }
 
-pub fn format_stmt(s: &Stmt, depth: usize) -> String {
-    fmt_stmt(s, depth, FormatContext::DIAGNOSTIC)
-}
-
 fn fmt_stmt(s: &Stmt, depth: usize, ctx: FormatContext) -> String {
     let pad = indent(depth);
     match s {
@@ -432,10 +433,17 @@ fn fmt_stmt(s: &Stmt, depth: usize, ctx: FormatContext) -> String {
 // ============================================================
 
 /// One-line rendering of a [`Prop`], the proposition printer in the
-/// kernel. Used in `require`/`bind`, invariant bodies, derived-claim
-/// domains, and kernel diagnostic paths (rejection reasons, multi-match
-/// errors). Its value-operand renderer is [`format_value_inline`]; the
-/// two compose because the sorts are mutually recursive.
+/// kernel. Used in kernel diagnostic paths (rejection reasons,
+/// multi-match errors) and read-side prose (`inspect controls`,
+/// `guarantees`). Its value operands render through the same context;
+/// the two compose because the sorts are mutually recursive.
+///
+/// **Diagnostic display only, not source serialization.** It carries no
+/// declaration table, so a `value` lookup whose extraction hole is not
+/// its first wildcard renders positionally - text that would reparse
+/// with a different hole. Anything emitting source-like output goes
+/// through [`format_prop_source`] and its siblings, which are the
+/// source-faithful API.
 pub fn format_prop_inline(p: &Prop) -> String {
     fmt_prop(p, FormatContext::DIAGNOSTIC)
 }
@@ -553,14 +561,6 @@ fn value_primary(e: &ValueExpr, ctx: FormatContext) -> String {
         }
         _ => fmt_value(e, ctx),
     }
-}
-
-/// One-line rendering of a [`ValueExpr`], the value-expression printer
-/// in the kernel. Used in `let`/`for` collections and derived-claim
-/// value expressions. Its proposition renderer (for a `sum` body) is
-/// [`format_prop_inline`].
-pub fn format_value_inline(e: &ValueExpr) -> String {
-    fmt_value(e, FormatContext::DIAGNOSTIC)
 }
 
 /// The source-faithful inline renderers: like the `_inline` helpers,
@@ -833,6 +833,15 @@ mod tests {
     use crate::ir_builder::*;
     use crate::{PredicateArgKind, Value};
 
+    /// The decl-free diagnostic renderings, for the shape pins below.
+    fn fmt_value_diag(e: &ValueExpr) -> String {
+        fmt_value(e, FormatContext::DIAGNOSTIC)
+    }
+
+    fn fmt_stmt_diag(s: &Stmt, depth: usize) -> String {
+        fmt_stmt(s, depth, FormatContext::DIAGNOSTIC)
+    }
+
     #[test]
     fn format_program_starts_with_program_header() {
         let p = program("demo").build();
@@ -862,7 +871,7 @@ mod tests {
     /// transformation body.
     #[test]
     fn format_stmt_renders_bind_one_with_inline_expression() {
-        let s = format_stmt(
+        let s = fmt_stmt_diag(
             &bind_one(claim("Policy", vec![var("policy_id"), var("limit")])),
             1,
         );
@@ -970,12 +979,12 @@ mod tests {
             sub(term(var("p")), term(var("q"))),
             sum(var("v"), claim("W", vec![var("v")])),
         );
-        let s = format_value_inline(&e);
+        let s = fmt_value_diag(&e);
         assert!(s.contains("p - q"));
         assert!(s.contains("sum(v |"));
 
         let vo = value_of("X", vec![var("k"), wildcard()]);
-        assert!(format_value_inline(&vo).contains("value X(k, _)"));
+        assert!(fmt_value_diag(&vo).contains("value X(k, _)"));
 
         // Mul, Div, Min, Max - including the nested collar shape
         // `min(_, max(0, _))`; min/max are self-delimiting, so their
@@ -984,13 +993,13 @@ mod tests {
             mul(term(var("a")), term(var("b"))),
             max(term(dec("0")), div(term(var("c")), term(var("d")))),
         );
-        let printed = format_value_inline(&collar);
+        let printed = fmt_value_diag(&collar);
         assert_eq!(printed, "min(a * b, max(0, c / d))");
 
         // Mod renders infix `%` and parenthesises inside another operand,
         // like the other infix arithmetic: the chess parity shape.
         let parity = modulo(add(term(var("f")), term(var("r"))), term(dec("2")));
-        assert_eq!(format_value_inline(&parity), "(f + r) % 2");
+        assert_eq!(fmt_value_diag(&parity), "(f + r) % 2");
     }
 
     #[test]
