@@ -1,12 +1,12 @@
 # morpholog-bench
 
-Synthetic scale-pressure benchmark for the Morpholog runtime. Every scenario targets the double-entry ledger example, the first programme with both non-trivial write-side invariants and a read-side derived claim.
+Synthetic scale-pressure benchmark for the Morpholog runtime. Most scenarios target the double-entry ledger example, the first programme with both non-trivial write-side invariants and a read-side derived claim; `wide` synthesises its own predicate because the gallery has nothing at the arity it measures. This README is the instrument manual and holds the current readings; the measurement DISCIPLINE - the frozen suite contract, bench-first rule, and what a performance PR must carry - lives in [`docs/benchmarking.md`](../../docs/benchmarking.md).
 
 ## Status
 
 Exploratory. The numbers this binary prints are not regression assertions and are not checked into the repo as expected values. The intent is to surface bottlenecks ahead of speculative optimisation, per the project's design-history discipline.
 
-A minimal-size compatibility smoke test (`cargo test -p morpholog-bench`, gated on `DATABASE_URL`) runs every scenario once at N=1 and asserts only that it completes - never a timing. It catches schema or API drift in the bench's hand-written SQL on the next PG-backed test run, rather than the next time someone runs the scale bench by hand. It is wired into CI and `scripts/precommit.sh` alongside the other PG-backed suites.
+A minimal-size compatibility smoke test (`cargo test -p morpholog-bench`, gated on `DATABASE_URL`) runs every scenario once at trivial size (plus the suite plumbing over a private tiny plan, and a pure renderer test) and asserts only that each completes - never a timing. It catches schema or API drift in the bench's hand-written SQL on the next PG-backed test run, rather than the next time someone runs the scale bench by hand. It is wired into CI and `scripts/precommit.sh` alongside the other PG-backed suites.
 
 ## What it measures
 
@@ -48,9 +48,24 @@ DATABASE_URL=postgres:///morpholog_bench \
 DATABASE_URL=postgres:///morpholog_bench \
   cargo run -p morpholog-bench --release -- contend --workers 16 --ops-per-worker 20 --disjoint --periods 16 --reset
 
+# cumulative core-import curve (small N - the journey is ~quadratic):
+DATABASE_URL=postgres:///morpholog_bench \
+  cargo run -p morpholog-bench --release -- import 1000 --repeat 3 --reset
+
+# the argument-count axis (default arity 13):
+DATABASE_URL=postgres:///morpholog_bench \
+  cargo run -p morpholog-bench --release -- wide 10000 --arity 13 --repeat 5 --reset
+
+# the frozen canonical matrix, one table (quick ~15s; full takes tens
+# of minutes on the interpreted runtime):
+DATABASE_URL=postgres:///morpholog_bench \
+  cargo run -p morpholog-bench --release -- suite --ladder quick --repeat 5 --reset
+
 # end-to-end CLI latency a subprocess embedder pays (not in-process):
 DATABASE_URL=postgres:///morpholog_bench ./scripts/embedder_latency.sh 50
 ```
+
+Every scenario takes `--repeat R`: repeats start from the same logical pre-state (mutating scenarios rebuild their fixture, which is excluded from the timed sample), the first sample reports as `first`, the median over the rest as `steady median`. Planner statistics are refreshed (`ANALYZE`) after every fixture build.
 
 `--release` matters; debug builds add an order of magnitude that obscures the algorithmic signal.
 
@@ -143,4 +158,4 @@ So the fixed per-call tax a subprocess embedder pays is **single-digit milliseco
 
 ### History
 
-The write path was once structurally quadratic (~31 s per propose at N=10 000); the predicate-and-argument-position indexed `State` brought it down ~200x. The as-of `reconstruct_inner` had its own asserts-only quadratic, fixed by the `ReplaySet` (Vec + HashMap + live bits) that turned replay linear. The PRs: the bench's introduction; indexed `State`; the `--accounts K` axis + read-path phase split; predicate-scoped read loading; the `as-of` scenario and its replay quadratic; the `ReplaySet` fix; the scenario set that added the retraction axis, concurrency, and the smoke test (plus the `as-of` fabricator's overdue `actor` column); the `--periods` partition axis that measured value-level partitioning as no help against SSI contention; and the `--disjoint` predicate-partition mode plus the `scripts/embedder_latency.sh` CLI harness, which proved the positive half of the law (predicate-disjoint footprints scale) and put a single-digit-millisecond number on the subprocess embedder's per-call tax.
+The write path was once structurally quadratic (~31 s per propose at N=10 000); the predicate-and-argument-position indexed `State` brought it down ~200x. The as-of `reconstruct_inner` had its own asserts-only quadratic, fixed by the `ReplaySet` (Vec + HashMap + live bits) that turned replay linear. The PRs: the bench's introduction; indexed `State`; the `--accounts K` axis + read-path phase split; predicate-scoped read loading; the `as-of` scenario and its replay quadratic; the `ReplaySet` fix; the scenario set that added the retraction axis, concurrency, and the smoke test (plus the `as-of` fabricator's overdue `actor` column); the `--periods` partition axis that measured value-level partitioning as no help against SSI contention; and the `--disjoint` predicate-partition mode plus the `scripts/embedder_latency.sh` CLI harness, which proved the positive half of the law (predicate-disjoint footprints scale) and put a single-digit-millisecond number on the subprocess embedder's per-call tax. The suite-discipline PR then turned the instrument itself benchmark-grade ahead of the compiled-checking arc: `--repeat` with first/steady-median reporting, `ANALYZE` after fixtures, sub-millisecond resolution, the frozen `suite` case matrix with per-case provenance and a machine-readable JSON mode, and the consumer-derived `import` (cumulative core-import curve) and `wide` (argument-count axis) scenarios.

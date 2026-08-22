@@ -23,6 +23,21 @@
 //!   loop a real embedder owns. Measures throughput and the
 //!   serialization-conflict retry rate as `--workers` grows - the
 //!   axis the single-propose scenarios cannot see.
+//! - `import` commits N entries sequentially from an empty book - the
+//!   cumulative core-import curve `write` cannot see, and the
+//!   in-process core of the embedder import/replay workload.
+//! - `wide` proposes against, and reads back, a synthetic wide
+//!   predicate (default arity 13, the widest consumer-reported claim
+//!   shape) - the argument-count axis.
+//! - `suite` runs the frozen canonical case matrix across per-case
+//!   ladders and prints one table with provenance - the whole-suite
+//!   evidence a performance PR carries (docs/benchmarking.md owns the
+//!   discipline).
+//!
+//! Every scenario takes `--repeat`: repeats start from the same
+//! logical pre-state (mutating scenarios rebuild their fixture), the
+//! first sample reports as `first`, the median over the rest as
+//! `steady median`.
 //!
 //! The `write` / `read` fixture distributes lines across `K`
 //! accounts via modular arithmetic; the `as-of` fixture is uniform
@@ -88,6 +103,29 @@ enum Command {
     /// serialization-conflict retry rate under concurrency - the axis
     /// the single-propose scenarios cannot see.
     Contend(ContendArgs),
+
+    /// From an empty book, commit N entries sequentially through the
+    /// kernel - the cumulative 0->N CORE import curve `write` cannot
+    /// see (`write` times one proposal AT size N; `import` times the
+    /// whole journey). The in-process core of the workload that forced
+    /// `propose --batch` (an embedder's seed/replay path); the real
+    /// batch adds NDJSON parsing, argument decoding, and receipt
+    /// serialisation around each of these commits.
+    Import(ImportArgs),
+
+    /// Propose against, and read back, a synthetic WIDE predicate
+    /// (default arity 13 - the widest consumer-reported claim shape).
+    /// The gallery's widest predicate is 7-ary, so this is the carrier
+    /// for how argument count moves write and read cost.
+    Wide(WideArgs),
+
+    /// Run the frozen canonical case matrix across per-case ladders and
+    /// print one table (markdown by default; `--format json` for
+    /// machine comparison). This is the whole-suite evidence a
+    /// performance PR carries; see docs/benchmarking.md for the
+    /// discipline. Sequential and destructive; the full ladder takes
+    /// tens of minutes on today's interpreted runtime.
+    Suite(SuiteArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -144,6 +182,13 @@ struct ScenarioArgs {
     /// shell already points at a non-benchmark database.
     #[arg(long)]
     reset: bool,
+
+    /// Timed repetitions. Every repeat starts from the same logical
+    /// pre-state (mutating scenarios rebuild their fixture); the first
+    /// sample reports as `first`, the median over the rest as `steady
+    /// median`. Default 1 preserves the single-shot behaviour.
+    #[arg(long, default_value_t = 1)]
+    repeat: usize,
 }
 
 /// Arguments for the `as-of` scenario. Distinct from `ScenarioArgs`
@@ -191,6 +236,11 @@ struct AsOfArgs {
     /// other scenarios.
     #[arg(long)]
     reset: bool,
+
+    /// Timed repetitions over the immutable fabricated log; `first` +
+    /// `steady median` reporting, same contract as the other scenarios.
+    #[arg(long, default_value_t = 1)]
+    repeat: usize,
 }
 
 /// Arguments for the `contend` scenario. Concurrency is the axis the
@@ -253,6 +303,107 @@ struct ContendArgs {
     /// other scenarios.
     #[arg(long)]
     reset: bool,
+
+    /// Timed repetitions; each repeat rebuilds the prepopulated fixture
+    /// so every burst races over the same logical pre-state.
+    #[arg(long, default_value_t = 1)]
+    repeat: usize,
+}
+
+/// Arguments for the `import` scenario.
+#[derive(clap::Args, Debug)]
+struct ImportArgs {
+    /// Number of entries to commit sequentially from an empty book.
+    /// The per-commit cost grows with the book on today's interpreted
+    /// runtime, so the whole journey is roughly quadratic in N - keep
+    /// N modest (the canonical suite tops out at 3000).
+    n: usize,
+
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    /// The target database is truncated before each run.
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
+
+    /// Required: acknowledge the TRUNCATE, same contract as the other
+    /// scenarios.
+    #[arg(long)]
+    reset: bool,
+
+    /// Timed repetitions; each repeat re-truncates so every journey
+    /// starts from the same empty book.
+    #[arg(long, default_value_t = 1)]
+    repeat: usize,
+}
+
+/// Arguments for the `wide` scenario.
+#[derive(clap::Args, Debug)]
+struct WideArgs {
+    /// Number of pre-existing wide rows before the measured proposal
+    /// and read.
+    n: usize,
+
+    /// Argument count of the synthetic predicate (minimum 3: a line
+    /// key, a group, an amount; the rest is subject padding). Default
+    /// 13, the widest consumer-reported claim shape.
+    #[arg(long, default_value_t = 13)]
+    arity: usize,
+
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    /// The target database is truncated before each run.
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
+
+    /// Required: acknowledge the TRUNCATE, same contract as the other
+    /// scenarios.
+    #[arg(long)]
+    reset: bool,
+
+    /// Timed repetitions; each repeat rebuilds the fixture so the
+    /// proposal always lands on the same logical pre-state.
+    #[arg(long, default_value_t = 1)]
+    repeat: usize,
+}
+
+/// Arguments for the `suite` runner.
+#[derive(clap::Args, Debug)]
+struct SuiteArgs {
+    /// Ladder size: `quick` is a fast local pass and the whole-suite
+    /// complement table for performance PRs; `full` is the published
+    /// curve set and takes tens of minutes on the interpreted runtime.
+    #[arg(long, default_value = "quick")]
+    ladder: Ladder,
+
+    /// Timed repetitions per case point (import and contend cases cap
+    /// themselves lower; see docs/benchmarking.md).
+    #[arg(long, default_value_t = 5)]
+    repeat: usize,
+
+    /// Output format: `markdown` is the PR-body table; `json` is the
+    /// machine seam for same-host baseline/candidate comparison.
+    #[arg(long, default_value = "markdown")]
+    format: OutputFormat,
+
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    /// The target database is truncated repeatedly across the run.
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
+
+    /// Required: acknowledge the TRUNCATEs, same contract as the other
+    /// scenarios.
+    #[arg(long)]
+    reset: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Ladder {
+    Quick,
+    Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum OutputFormat {
+    Markdown,
+    Json,
 }
 
 /// Refuses to proceed unless `--reset` was explicitly passed. The
@@ -303,149 +454,418 @@ async fn main() -> Result<()> {
         Command::Read(args) => run_read(args).await,
         Command::AsOf(args) => run_as_of(args).await,
         Command::Contend(args) => run_contend(args).await,
+        Command::Import(args) => run_import(args).await,
+        Command::Wide(args) => run_wide(args).await,
+        Command::Suite(args) => run_suite(args).await,
     }
+}
+
+// ============================================================
+// Measurement layer
+// ============================================================
+
+/// The implementation column of every result row. #277's compiled
+/// engine will add its own value; the table contract does not change.
+const IMPLEMENTATION: &str = "interpreted";
+
+/// Bumped only when benchmark semantics change (cases, fixtures,
+/// ladders, aggregation) - never by an implementation being measured.
+/// The distinction between changing the machine and changing the
+/// ruler; see docs/benchmarking.md.
+const SUITE_CONTRACT: u32 = 1;
+
+/// One measured metric of one case: named, unit-tagged samples in
+/// repeat order. `samples[0]` is the `first` reading - deliberately
+/// not called "cold": the fixture insert has just warmed the buffers,
+/// so all the instrument can defend is "first timed invocation after
+/// fixture construction". The steady median is over the rest.
+#[derive(Debug, Clone, serde::Serialize)]
+struct Metric {
+    name: &'static str,
+    unit: &'static str,
+    samples: Vec<f64>,
+}
+
+impl Metric {
+    fn ms(name: &'static str, samples: &[Duration]) -> Self {
+        Metric {
+            name,
+            unit: "ms",
+            samples: samples.iter().map(|d| d.as_secs_f64() * 1000.0).collect(),
+        }
+    }
+
+    fn series(name: &'static str, unit: &'static str, samples: Vec<f64>) -> Self {
+        Metric {
+            name,
+            unit,
+            samples,
+        }
+    }
+
+    fn first(&self) -> Option<f64> {
+        self.samples.first().copied()
+    }
+
+    fn steady_median(&self) -> Option<f64> {
+        let mut rest: Vec<f64> = self.samples.get(1..).unwrap_or(&[]).to_vec();
+        if rest.is_empty() {
+            return None;
+        }
+        rest.sort_by(f64::total_cmp);
+        let mid = rest.len() / 2;
+        Some(if rest.len() % 2 == 1 {
+            rest[mid]
+        } else {
+            (rest[mid - 1] + rest[mid]) / 2.0
+        })
+    }
+}
+
+/// One canonical case at one ladder point - what the suite table
+/// renders, what `--format json` serialises, and what the single
+/// scenario commands print human-readably.
+#[derive(Debug, Clone, serde::Serialize)]
+struct CaseResult {
+    case: String,
+    implementation: &'static str,
+    axis: &'static str,
+    point: u64,
+    metrics: Vec<Metric>,
+}
+
+fn print_case_human(result: &CaseResult) {
+    for m in &result.metrics {
+        let first = m.first().unwrap_or(f64::NAN);
+        match m.steady_median() {
+            Some(steady) => println!(
+                "  {:<18} first {:>10.2} {:<14} steady median {:>10.2} {} (over {})",
+                m.name,
+                first,
+                m.unit,
+                steady,
+                m.unit,
+                m.samples.len() - 1
+            ),
+            None => println!("  {:<18} {:>10.2} {}", m.name, first, m.unit),
+        }
+    }
+}
+
+/// Refresh planner statistics after a fixture lands, so the first
+/// measured query is not also the query that pays for stale stats -
+/// the spike's lesson, carried over. A closed table set, so the SQL
+/// stays static.
+async fn analyze_claims(pool: &PgPool) -> Result<()> {
+    sqlx::query("ANALYZE morpholog.claims")
+        .execute(pool)
+        .await
+        .context("ANALYZE morpholog.claims")?;
+    Ok(())
+}
+
+async fn analyze_audit(pool: &PgPool) -> Result<()> {
+    sqlx::query("ANALYZE morpholog.audit")
+        .execute(pool)
+        .await
+        .context("ANALYZE morpholog.audit")?;
+    Ok(())
+}
+
+fn require_positive_repeat(repeat: usize) -> Result<()> {
+    if repeat == 0 {
+        return Err(anyhow!("--repeat must be at least 1"));
+    }
+    Ok(())
+}
+
+/// The write case: every repeat rebuilds the same logical pre-state
+/// (N entries, K accounts, the noise rows), then times one fresh
+/// proposal on top of it.
+async fn measure_write(
+    pool: &PgPool,
+    case: &str,
+    n: usize,
+    accounts: usize,
+    noise_claims: usize,
+    repeat: usize,
+) -> Result<CaseResult> {
+    let transformation = double_entry_ledger::post_simple_entry();
+    let compiled = CompiledProgram::new(double_entry_ledger::program())
+        .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+    let mut fixture = Vec::with_capacity(repeat);
+    let mut propose = Vec::with_capacity(repeat);
+    for r in 0..repeat {
+        let t = Instant::now();
+        reset_db(pool).await?;
+        insert_n_entries(pool, n, accounts).await?;
+        insert_noise_claims(pool, noise_claims).await?;
+        fixture.push(t.elapsed());
+        analyze_claims(pool).await?;
+
+        let transition = Transition {
+            transformation_name: transformation.name.clone(),
+            args: vec![
+                subj(&format!("entry_bench_target_{r}")),
+                subj("d_2026_05_17"),
+                subj("p_bench"),
+                subj("account_cash"),
+                subj("account_revenue"),
+                dec(42),
+            ],
+            actor: Subject::from("bench"),
+        };
+        let t = Instant::now();
+        let outcome = propose_against_pg(pool, &compiled, &Proposal::gateway(&transition))
+            .await
+            .context("propose_against_pg")?;
+        propose.push(t.elapsed());
+        if !matches!(outcome, PgProposalOutcome::Committed { .. }) {
+            return Err(anyhow!(
+                "expected the target propose to commit ({}); bench fixture or \
+                 kernel behaviour has changed",
+                outcome_summary(&outcome)
+            ));
+        }
+    }
+    Ok(CaseResult {
+        case: case.to_string(),
+        implementation: IMPLEMENTATION,
+        axis: "n",
+        point: n as u64,
+        metrics: vec![
+            Metric::ms("fixture_build", &fixture),
+            Metric::ms("propose_one", &propose),
+        ],
+    })
 }
 
 async fn run_write(args: ScenarioArgs) -> Result<()> {
     require_reset_ack(&args)?;
     require_positive_k(&args)?;
+    require_positive_repeat(args.repeat)?;
     let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
         .await
         .context("connect to PostgreSQL")?;
     println!(
-        "scenario=write n={} accounts={} noise_claims={}",
-        args.n, args.accounts, args.noise_claims
+        "scenario=write n={} accounts={} noise_claims={} repeat={}",
+        args.n, args.accounts, args.noise_claims, args.repeat
     );
-
-    let t = Instant::now();
-    reset_db(&pool).await?;
-    insert_n_entries(&pool, args.n, args.accounts).await?;
-    insert_noise_claims(&pool, args.noise_claims).await?;
-    println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
-
-    let t = Instant::now();
-    let transformation = double_entry_ledger::post_simple_entry();
-    let transition = Transition {
-        transformation_name: transformation.name.clone(),
-        args: vec![
-            subj("entry_bench_target"),
-            subj("d_2026_05_17"),
-            subj("p_bench"),
-            subj("account_cash"),
-            subj("account_revenue"),
-            dec(42),
-        ],
-        actor: Subject::from("bench"),
-    };
-    let compiled = CompiledProgram::new(double_entry_ledger::program())
-        .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
-    let outcome = propose_against_pg(&pool, &compiled, &Proposal::gateway(&transition))
-        .await
-        .context("propose_against_pg")?;
-    println!("  propose_one:    {:>8} ms", t.elapsed().as_millis());
-    println!("  outcome:        {}", outcome_summary(&outcome));
-
-    if !matches!(outcome, PgProposalOutcome::Committed { .. }) {
-        return Err(anyhow!(
-            "expected the target propose to commit; bench fixture or kernel \
-             behaviour has changed"
-        ));
-    }
+    let result = measure_write(
+        &pool,
+        "write",
+        args.n,
+        args.accounts,
+        args.noise_claims,
+        args.repeat,
+    )
+    .await?;
+    print_case_human(&result);
     Ok(())
 }
 
-async fn run_read(args: ScenarioArgs) -> Result<()> {
-    require_reset_ack(&args)?;
-    require_positive_k(&args)?;
-    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
-        .await
-        .context("connect to PostgreSQL")?;
-    println!(
-        "scenario=read n={} accounts={} noise_claims={}",
-        args.n, args.accounts, args.noise_claims
-    );
-
+/// The read case: one immutable fixture, reused across repeats (the
+/// pre-state never mutates, so re-reading it IS the same workload);
+/// the three phases of the read path timed separately, semantics
+/// identical to `list_derived` (the split is diagnostic).
+async fn measure_read(
+    pool: &PgPool,
+    case: &str,
+    n: usize,
+    accounts: usize,
+    noise_claims: usize,
+    repeat: usize,
+) -> Result<CaseResult> {
     let t = Instant::now();
-    reset_db(&pool).await?;
-    insert_n_entries(&pool, args.n, args.accounts).await?;
-    insert_noise_claims(&pool, args.noise_claims).await?;
-    println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
+    reset_db(pool).await?;
+    insert_n_entries(pool, n, accounts).await?;
+    insert_noise_claims(pool, noise_claims).await?;
+    let fixture = t.elapsed();
+    analyze_claims(pool).await?;
 
-    // The read scenario bypasses `list_derived` and runs the three
-    // phases inline so each can be timed separately. The kernel
-    // semantics are identical to what `list_derived` does:
-    // compute the derived claim's predicate footprint, load only
-    // claims of those predicates via `list_claims_for_predicates`,
-    // wrap in `State`, call `enumerate_derived`. The split is
-    // purely diagnostic and lets us see which layer dominates as N
-    // and K grow.
     let derived = double_entry_ledger::trial_balance_row();
     let footprint: Vec<String> = predicates_referenced_by_derived(&derived, &[])
         .into_iter()
         .map(|p| p.to_string())
         .collect();
 
-    let t = Instant::now();
-    let claims = list_claims_for_predicates(&pool, &footprint)
-        .await
-        .context("list_claims_for_predicates")?;
-    let n_claims = claims.len();
-    println!(
-        "  list_scoped:    {:>8} ms  ({} claims, predicates={:?})",
-        t.elapsed().as_millis(),
-        n_claims,
-        footprint
-    );
+    let mut list_scoped = Vec::with_capacity(repeat);
+    let mut build_state = Vec::with_capacity(repeat);
+    let mut enumerate = Vec::with_capacity(repeat);
+    let mut n_claims = 0usize;
+    let mut n_rows = 0usize;
+    for _ in 0..repeat {
+        let t = Instant::now();
+        let claims = list_claims_for_predicates(pool, &footprint)
+            .await
+            .context("list_claims_for_predicates")?;
+        list_scoped.push(t.elapsed());
+        n_claims = claims.len();
 
-    let t = Instant::now();
-    let state = State::from_claims(claims);
-    println!("  build_state:    {:>8} ms", t.elapsed().as_millis());
+        let t = Instant::now();
+        let state = State::from_claims(claims);
+        build_state.push(t.elapsed());
 
-    let t = Instant::now();
-    let rows = enumerate_derived(&derived, &state, &[]).context("enumerate_derived")?;
-    println!(
-        "  enumerate:      {:>8} ms  ({} derived rows)",
-        t.elapsed().as_millis(),
-        rows.len()
-    );
+        let t = Instant::now();
+        let rows = enumerate_derived(&derived, &state, &[]).context("enumerate_derived")?;
+        enumerate.push(t.elapsed());
+        n_rows = rows.len();
 
-    // Bounds on the derived-row count given the fixture shape:
-    // - n=0: no JournalLine claims, so 0 rows.
-    // - n>0: each entry contributes lines on two distinct accounts.
-    //   The exact count is `min(k, distinct accounts actually
-    //   touched)`, which is `k` when `n` is large enough to wrap
-    //   around the K-account modular cycle and a bit less when not.
-    //   Assert the loose `0 < rows <= k` bound rather than pin an
-    //   exact count, so the bench accepts any well-formed (n, k).
-    if args.n == 0 {
-        if !rows.is_empty() {
+        // Bounds on the derived-row count given the fixture shape:
+        // 0 rows iff n=0, otherwise `0 < rows <= k` (the K-account
+        // modular cycle caps the distinct accounts touched).
+        if n == 0 {
+            if !rows.is_empty() {
+                return Err(anyhow!(
+                    "expected 0 derived rows for n=0, got {}",
+                    rows.len()
+                ));
+            }
+        } else if rows.is_empty() {
             return Err(anyhow!(
-                "expected 0 derived rows for n=0, got {}",
+                "expected at least one derived row for n={n} k={accounts}, got none"
+            ));
+        } else if rows.len() > accounts {
+            return Err(anyhow!(
+                "derived rows ({}) exceeded the K-account ceiling ({accounts}); \
+                 fixture distribution is broken",
                 rows.len()
             ));
         }
-        return Ok(());
     }
-    if rows.is_empty() {
-        return Err(anyhow!(
-            "expected at least one derived row for n={} k={}, got none",
-            args.n,
-            args.accounts
-        ));
-    }
-    if rows.len() > args.accounts {
-        return Err(anyhow!(
-            "derived rows ({}) exceeded the K-account ceiling ({}); \
-             fixture distribution is broken",
-            rows.len(),
-            args.accounts
-        ));
-    }
+    Ok(CaseResult {
+        case: case.to_string(),
+        implementation: IMPLEMENTATION,
+        axis: "n",
+        point: n as u64,
+        metrics: vec![
+            Metric::ms("fixture_build", &[fixture]),
+            Metric::ms("list_scoped", &list_scoped),
+            Metric::ms("build_state", &build_state),
+            Metric::ms("enumerate", &enumerate),
+            Metric::series("scoped_claims", "count", vec![n_claims as f64]),
+            Metric::series("derived_rows", "count", vec![n_rows as f64]),
+        ],
+    })
+}
+
+async fn run_read(args: ScenarioArgs) -> Result<()> {
+    require_reset_ack(&args)?;
+    require_positive_k(&args)?;
+    require_positive_repeat(args.repeat)?;
+    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
+        .await
+        .context("connect to PostgreSQL")?;
+    println!(
+        "scenario=read n={} accounts={} noise_claims={} repeat={}",
+        args.n, args.accounts, args.noise_claims, args.repeat
+    );
+    let result = measure_read(
+        &pool,
+        "read",
+        args.n,
+        args.accounts,
+        args.noise_claims,
+        args.repeat,
+    )
+    .await?;
+    print_case_human(&result);
     Ok(())
+}
+
+/// Interleave a retract every `stride` transitions; floored at 2 so a
+/// retract always targets the still-live entry asserted immediately
+/// before it. `0` disables retracts.
+fn retract_stride_for(retract_fraction: usize) -> i64 {
+    if retract_fraction == 0 {
+        0
+    } else {
+        ((100.0 / retract_fraction as f64).round() as i64).max(2)
+    }
+}
+
+/// The as-of case: one immutable fabricated log, reused across
+/// repeats; one `reconstruct_state_at` plus one `list_derived_at` per
+/// repeat against the `--at`-selected target.
+async fn measure_as_of(
+    pool: &PgPool,
+    case: &str,
+    n: usize,
+    at: f64,
+    retract_fraction: usize,
+    repeat: usize,
+) -> Result<CaseResult> {
+    let retract_stride = retract_stride_for(retract_fraction);
+    let retract_count = if retract_stride == 0 {
+        0
+    } else {
+        n as i64 / retract_stride
+    };
+
+    let t = Instant::now();
+    reset_db(pool).await?;
+    fabricate_audit_rows(pool, n, retract_stride).await?;
+    let fixture = t.elapsed();
+    analyze_audit(pool).await?;
+
+    // Pick the target transition by causal offset; clamp so
+    // floating-point edges do not push past the end.
+    let offset: i64 = {
+        let raw = ((n as f64) * at).floor() as i64;
+        raw.clamp(0, (n as i64) - 1)
+    };
+    let (target_tid,): (Uuid,) = sqlx::query_as(
+        "SELECT transition_id FROM morpholog.audit
+         ORDER BY committed_at, transition_id LIMIT 1 OFFSET $1",
+    )
+    .bind(offset)
+    .fetch_one(pool)
+    .await
+    .context("resolve target transition_id")?;
+
+    let mut reconstruct = Vec::with_capacity(repeat);
+    let mut list_at = Vec::with_capacity(repeat);
+    let mut state_claims = 0usize;
+    let mut derived_rows = 0usize;
+    for _ in 0..repeat {
+        let t = Instant::now();
+        let state = reconstruct_state_at(pool, target_tid)
+            .await
+            .context("reconstruct_state_at")?;
+        reconstruct.push(t.elapsed());
+        state_claims = state.len();
+
+        let t = Instant::now();
+        let rows = list_derived_at(
+            pool,
+            &double_entry_ledger::trial_balance_row(),
+            &double_entry_ledger::definitions(),
+            target_tid,
+        )
+        .await
+        .context("list_derived_at")?;
+        list_at.push(t.elapsed());
+        derived_rows = rows.len();
+    }
+    Ok(CaseResult {
+        case: case.to_string(),
+        implementation: IMPLEMENTATION,
+        axis: "n",
+        point: n as u64,
+        metrics: vec![
+            Metric::ms("fixture_build", &[fixture]),
+            Metric::ms("reconstruct", &reconstruct),
+            Metric::ms("list_derived_at", &list_at),
+            Metric::series("state_claims", "count", vec![state_claims as f64]),
+            Metric::series("derived_rows", "count", vec![derived_rows as f64]),
+            Metric::series("retracts", "count", vec![retract_count as f64]),
+        ],
+    })
 }
 
 async fn run_as_of(args: AsOfArgs) -> Result<()> {
     require_reset_ack_as_of(&args)?;
+    require_positive_repeat(args.repeat)?;
     if args.n == 0 {
         return Err(anyhow!(
             "as-of bench requires n >= 1; there must be at least one fabricated \
@@ -465,82 +885,179 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
             args.retract_fraction
         ));
     }
-
-    // Interleave a retract every `stride` transitions. Floored at 2 so
-    // the retract at position `i` always targets the live entry
-    // asserted at `i - 1` (a stride of 1 would make every transition a
-    // retract, with nothing to remove). `0` disables retracts.
-    let retract_stride: i64 = if args.retract_fraction == 0 {
-        0
-    } else {
-        ((100.0 / args.retract_fraction as f64).round() as i64).max(2)
-    };
-    let retract_count = if retract_stride == 0 {
-        0
-    } else {
-        args.n as i64 / retract_stride
-    };
-
     let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
         .await
         .context("connect to PostgreSQL")?;
     println!(
-        "scenario=as-of n={} at={} retract_fraction={} (retracts={})",
-        args.n, args.at, args.retract_fraction, retract_count
+        "scenario=as-of n={} at={} retract_fraction={} repeat={}",
+        args.n, args.at, args.retract_fraction, args.repeat
     );
-
-    let t = Instant::now();
-    reset_db(&pool).await?;
-    fabricate_audit_rows(&pool, args.n, retract_stride).await?;
-    println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
-
-    // Pick the target transition by causal offset. `at = 1.0` lands
-    // on the last fabricated row (full replay); `at = 0.0` on the
-    // first; `at = 0.5` on the middle. Clamp the resulting offset to
-    // `[0, n-1]` so floating-point edges do not push us off the end.
-    let offset: i64 = {
-        let raw = ((args.n as f64) * args.at).floor() as i64;
-        raw.clamp(0, (args.n as i64) - 1)
-    };
-    let (target_tid,): (Uuid,) = sqlx::query_as(
-        "SELECT transition_id FROM morpholog.audit
-         ORDER BY committed_at, transition_id LIMIT 1 OFFSET $1",
-    )
-    .bind(offset)
-    .fetch_one(&pool)
-    .await
-    .context("resolve target transition_id")?;
-    println!("  target_tid:     {target_tid}");
-
-    let t = Instant::now();
-    let state = reconstruct_state_at(&pool, target_tid)
-        .await
-        .context("reconstruct_state_at")?;
-    println!(
-        "  reconstruct:    {:>8} ms  ({} claims)",
-        t.elapsed().as_millis(),
-        state.len()
-    );
-
-    let t = Instant::now();
-    let rows = list_derived_at(
+    let result = measure_as_of(
         &pool,
-        &double_entry_ledger::trial_balance_row(),
-        &double_entry_ledger::definitions(),
-        target_tid,
+        "asof",
+        args.n,
+        args.at,
+        args.retract_fraction,
+        args.repeat,
     )
-    .await
-    .context("list_derived_at")?;
-    println!(
-        "  list_derived_at:{:>8} ms  ({} derived rows)",
-        t.elapsed().as_millis(),
-        rows.len()
-    );
+    .await?;
+    print_case_human(&result);
     Ok(())
+}
+
+/// One concurrent burst: W workers, `ops` operations each, against a
+/// freshly-built pre-state. Returns the summed tally and the elapsed
+/// wall time of the concurrent phase.
+async fn contend_burst(
+    pool: &PgPool,
+    workers: usize,
+    ops_per_worker: usize,
+    max_retries: usize,
+    periods: usize,
+    disjoint: bool,
+    round: usize,
+) -> Result<(Tally, Duration)> {
+    let t = Instant::now();
+    let mut handles = Vec::with_capacity(workers);
+    for w in 0..workers {
+        let pool = pool.clone();
+        handles.push(tokio::spawn(async move {
+            contend_worker(
+                pool,
+                w,
+                ops_per_worker,
+                max_retries,
+                periods,
+                disjoint,
+                round,
+            )
+            .await
+        }));
+    }
+    let mut total = Tally::default();
+    for h in handles {
+        // First `?`: the task panicked / was cancelled. Second `?`: the
+        // worker hit an unexpected (non-40001) adapter error.
+        let tally = h.await.context("join contend worker")??;
+        total.committed += tally.committed;
+        total.rejected += tally.rejected;
+        total.retries += tally.retries;
+        total.failed += tally.failed;
+    }
+    Ok((total, t.elapsed()))
+}
+
+/// The contend case: every repeat rebuilds the prepopulated pre-state
+/// and races the same burst over it. `require_clean` is the canonical
+/// suite's validity rule: a row with failed (or rejected) operations
+/// is not a comparable measurement - an optimiser must not look
+/// faster because work stopped succeeding - so the case errors
+/// instead of reporting.
+#[allow(clippy::too_many_arguments)]
+async fn measure_contend(
+    pool: &PgPool,
+    case: &str,
+    workers: usize,
+    ops_per_worker: usize,
+    prepopulate: usize,
+    periods: usize,
+    disjoint: bool,
+    max_retries: usize,
+    repeat: usize,
+    require_clean: bool,
+) -> Result<CaseResult> {
+    let total_ops = (workers * ops_per_worker) as u64;
+    let mut fixture = Vec::with_capacity(repeat);
+    let mut elapsed_s = Vec::with_capacity(repeat);
+    let mut throughput_s = Vec::with_capacity(repeat);
+    let mut retry_rate_s = Vec::with_capacity(repeat);
+    let mut committed_s = Vec::with_capacity(repeat);
+    let mut rejected_s = Vec::with_capacity(repeat);
+    let mut failed_s = Vec::with_capacity(repeat);
+    for round in 0..repeat {
+        let t = Instant::now();
+        reset_db(pool).await?;
+        insert_n_entries(pool, prepopulate, 2).await?;
+        fixture.push(t.elapsed());
+        analyze_claims(pool).await?;
+
+        let (total, elapsed) = contend_burst(
+            pool,
+            workers,
+            ops_per_worker,
+            max_retries,
+            periods,
+            disjoint,
+            round,
+        )
+        .await?;
+
+        // Every op terminates as exactly one of committed / rejected /
+        // failed; a drift here means a worker leaked an outcome.
+        let accounted = total.committed + total.rejected + total.failed;
+        if accounted != total_ops {
+            return Err(anyhow!(
+                "accounting mismatch: committed+rejected+failed ({accounted}) != total_ops ({total_ops})"
+            ));
+        }
+        // A contention bench that commits nothing is degenerate: either
+        // the scenario is broken (every op rejected) or it is
+        // mis-parameterised (every op exhausted its retries).
+        if total.committed == 0 {
+            return Err(anyhow!(
+                "contend committed nothing (rejected={} failed={} of {total_ops}); \
+                 scenario is broken or mis-parameterised",
+                total.rejected,
+                total.failed
+            ));
+        }
+        if require_clean && (total.failed > 0 || total.rejected > 0) {
+            return Err(anyhow!(
+                "canonical contend case is not clean (committed={} rejected={} \
+                 failed={} of {total_ops}); a row with lost work is not a \
+                 comparable measurement",
+                total.committed,
+                total.rejected,
+                total.failed
+            ));
+        }
+
+        let secs = elapsed.as_secs_f64();
+        elapsed_s.push(elapsed);
+        throughput_s.push(if secs > 0.0 {
+            total.committed as f64 / secs
+        } else {
+            0.0
+        });
+        retry_rate_s.push(if total.committed > 0 {
+            total.retries as f64 / total.committed as f64
+        } else {
+            0.0
+        });
+        committed_s.push(total.committed as f64);
+        rejected_s.push(total.rejected as f64);
+        failed_s.push(total.failed as f64);
+    }
+    Ok(CaseResult {
+        case: case.to_string(),
+        implementation: IMPLEMENTATION,
+        axis: "workers",
+        point: workers as u64,
+        metrics: vec![
+            Metric::ms("fixture_build", &fixture),
+            Metric::ms("concurrent", &elapsed_s),
+            Metric::series("throughput", "commits/s", throughput_s),
+            Metric::series("retry_rate", "retries/commit", retry_rate_s),
+            Metric::series("committed", "count", committed_s),
+            Metric::series("rejected", "count", rejected_s),
+            Metric::series("failed", "count", failed_s),
+        ],
+    })
 }
 
 async fn run_contend(args: ContendArgs) -> Result<()> {
     check_reset_ack(args.reset, &args.database_url)?;
+    require_positive_repeat(args.repeat)?;
     if args.workers == 0 {
         return Err(anyhow!("--workers must be at least 1"));
     }
@@ -561,88 +1078,29 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
         .await
         .context("connect to PostgreSQL")?;
     println!(
-        "scenario=contend workers={} ops_per_worker={} prepopulate={} periods={} disjoint={} max_retries={}",
+        "scenario=contend workers={} ops_per_worker={} prepopulate={} periods={} disjoint={} max_retries={} repeat={}",
         args.workers,
         args.ops_per_worker,
         args.prepopulate,
         args.periods,
         args.disjoint,
-        args.max_retries
+        args.max_retries,
+        args.repeat
     );
-
-    let t = Instant::now();
-    reset_db(&pool).await?;
-    insert_n_entries(&pool, args.prepopulate, 2).await?;
-    println!("  fixture_build:  {:>8} ms", t.elapsed().as_millis());
-
-    // Fan out: every worker shares the pool and posts uniquely-keyed
-    // entries concurrently, into period `w mod periods`.
-    let t = Instant::now();
-    let mut handles = Vec::with_capacity(args.workers);
-    for w in 0..args.workers {
-        let pool = pool.clone();
-        let ops = args.ops_per_worker;
-        let max_retries = args.max_retries;
-        let periods = args.periods;
-        let disjoint = args.disjoint;
-        handles.push(tokio::spawn(async move {
-            contend_worker(pool, w, ops, max_retries, periods, disjoint).await
-        }));
-    }
-
-    let mut total = Tally::default();
-    for h in handles {
-        // First `?`: the task panicked / was cancelled. Second `?`: the
-        // worker hit an unexpected (non-40001) adapter error.
-        let tally = h.await.context("join contend worker")??;
-        total.committed += tally.committed;
-        total.rejected += tally.rejected;
-        total.retries += tally.retries;
-        total.failed += tally.failed;
-    }
-    let elapsed = t.elapsed();
-
-    let total_ops = (args.workers * args.ops_per_worker) as u64;
-    let secs = elapsed.as_secs_f64();
-    let throughput = if secs > 0.0 {
-        total.committed as f64 / secs
-    } else {
-        0.0
-    };
-    let retry_rate = if total.committed > 0 {
-        total.retries as f64 / total.committed as f64
-    } else {
-        0.0
-    };
-    println!("  concurrent:     {:>8} ms", elapsed.as_millis());
-    println!("  total_ops:      {total_ops}");
-    println!("  committed:      {}", total.committed);
-    println!("  rejected:       {}", total.rejected);
-    println!("  retries(40001): {}", total.retries);
-    println!("  failed:         {}", total.failed);
-    println!("  throughput:     {throughput:>8.1} commits/s");
-    println!("  retry_rate:     {retry_rate:>8.3} retries/commit");
-
-    // Every op terminates as exactly one of committed / rejected /
-    // failed; a drift here means a worker leaked an outcome.
-    let accounted = total.committed + total.rejected + total.failed;
-    if accounted != total_ops {
-        return Err(anyhow!(
-            "accounting mismatch: committed+rejected+failed ({accounted}) != total_ops ({total_ops})"
-        ));
-    }
-    // A contention bench that commits nothing is degenerate: either the
-    // scenario is broken (every op rejected) or it is mis-parameterised
-    // (every op exhausted its retries). Either way it is not a usable
-    // measurement, and it is the signal the smoke test relies on.
-    if total.committed == 0 {
-        return Err(anyhow!(
-            "contend committed nothing (rejected={} failed={} of {total_ops}); \
-             scenario is broken or mis-parameterised",
-            total.rejected,
-            total.failed
-        ));
-    }
+    let result = measure_contend(
+        &pool,
+        "contend",
+        args.workers,
+        args.ops_per_worker,
+        args.prepopulate,
+        args.periods,
+        args.disjoint,
+        args.max_retries,
+        args.repeat,
+        false,
+    )
+    .await?;
+    print_case_human(&result);
     Ok(())
 }
 
@@ -673,6 +1131,7 @@ async fn contend_worker(
     max_retries: usize,
     periods: usize,
     disjoint: bool,
+    round: usize,
 ) -> Result<Tally> {
     let mut tally = Tally::default();
     if disjoint {
@@ -688,7 +1147,7 @@ async fn contend_worker(
         for op in 0..ops {
             let transition = Transition {
                 transformation_name: transformation.name.clone(),
-                args: vec![subj(&format!("item_w{worker_id}_op{op}"))],
+                args: vec![subj(&format!("item_r{round}_w{worker_id}_op{op}"))],
                 actor: Subject::from("bench"),
             };
             let label = format!("disjoint worker {worker_id} op {op}");
@@ -711,7 +1170,7 @@ async fn contend_worker(
             let transition = Transition {
                 transformation_name: transformation.name.clone(),
                 args: vec![
-                    subj(&format!("entry_w{worker_id}_op{op}")),
+                    subj(&format!("entry_r{round}_w{worker_id}_op{op}")),
                     subj("d_2026_05_17"),
                     subj(&period),
                     subj("account_cash"),
@@ -804,6 +1263,316 @@ fn synthetic_program(predicate: &str) -> morpholog_core::Program {
         .predicates(vec![b::predicate(predicate).subject("item").build()])
         .transformations(vec![synthetic_bump(predicate)])
         .build()
+}
+
+// ============================================================
+// import: the cumulative core-import curve
+// ============================================================
+
+/// The import case. Provenance: the external embedder's import path
+/// that forced `propose --batch` (design-history: "the first
+/// throughput lever the bench's contend axis names"), Redline's
+/// 130-act WAN seed, and grid-mysteries' CI replay. This is the
+/// in-process CORE of that workload - each commit here is what the
+/// real batch wraps in NDJSON parsing, argument decoding, and receipt
+/// serialisation.
+///
+/// From an empty book, N sequential kernel commits. Per-commit cost
+/// grows with the book on the interpreted runtime, so the journey is
+/// roughly quadratic in N - the decile split (mean of the first vs
+/// last tenth of per-commit latencies) is the growth signal. Every
+/// repeat re-truncates: the whole 0->N journey IS the sample.
+async fn measure_import(pool: &PgPool, case: &str, n: usize, repeat: usize) -> Result<CaseResult> {
+    if n == 0 {
+        return Err(anyhow!("import requires n >= 1"));
+    }
+    let transformation = double_entry_ledger::post_simple_entry();
+    let compiled = CompiledProgram::new(double_entry_ledger::program())
+        .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+    let mut total_s = Vec::with_capacity(repeat);
+    let mut rows_per_s = Vec::with_capacity(repeat);
+    let mut first_decile = Vec::with_capacity(repeat);
+    let mut last_decile = Vec::with_capacity(repeat);
+    for r in 0..repeat {
+        reset_db(pool).await?;
+        // The empty book is this scenario's fixture; refresh stats so
+        // the first commits are not planned against the previous
+        // case's leftovers.
+        analyze_claims(pool).await?;
+        analyze_audit(pool).await?;
+        let mut per_commit = Vec::with_capacity(n);
+        let journey = Instant::now();
+        for i in 0..n {
+            let transition = Transition {
+                transformation_name: transformation.name.clone(),
+                args: vec![
+                    subj(&format!("entry_import_r{r}_{i}")),
+                    subj("d_2026_05_17"),
+                    subj("p_import"),
+                    subj("account_cash"),
+                    subj("account_revenue"),
+                    dec(42),
+                ],
+                actor: Subject::from("bench"),
+            };
+            let t = Instant::now();
+            let outcome = propose_against_pg(pool, &compiled, &Proposal::gateway(&transition))
+                .await
+                .context("import propose")?;
+            per_commit.push(t.elapsed());
+            if !matches!(outcome, PgProposalOutcome::Committed { .. }) {
+                return Err(anyhow!(
+                    "import commit {i} did not commit ({}); fixture or kernel \
+                     behaviour has changed",
+                    outcome_summary(&outcome)
+                ));
+            }
+        }
+        let total = journey.elapsed();
+        let decile = (n / 10).max(1);
+        let mean_ms = |window: &[Duration]| {
+            window.iter().map(|d| d.as_secs_f64() * 1000.0).sum::<f64>() / window.len() as f64
+        };
+        total_s.push(total);
+        rows_per_s.push(n as f64 / total.as_secs_f64().max(f64::EPSILON));
+        first_decile.push(mean_ms(&per_commit[..decile]));
+        last_decile.push(mean_ms(&per_commit[n - decile..]));
+    }
+    Ok(CaseResult {
+        case: case.to_string(),
+        implementation: IMPLEMENTATION,
+        axis: "n",
+        point: n as u64,
+        metrics: vec![
+            Metric::ms("journey", &total_s),
+            Metric::series("throughput", "rows/s", rows_per_s),
+            Metric::series("first_decile_commit", "ms", first_decile),
+            Metric::series("last_decile_commit", "ms", last_decile),
+        ],
+    })
+}
+
+async fn run_import(args: ImportArgs) -> Result<()> {
+    check_reset_ack(args.reset, &args.database_url)?;
+    require_positive_repeat(args.repeat)?;
+    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
+        .await
+        .context("connect to PostgreSQL")?;
+    println!("scenario=import n={} repeat={}", args.n, args.repeat);
+    let result = measure_import(&pool, "import", args.n, args.repeat).await?;
+    print_case_human(&result);
+    Ok(())
+}
+
+// ============================================================
+// wide: the argument-count axis
+// ============================================================
+
+/// The wide-predicate programme. Provenance: the billing embedder's
+/// 13-ary `InvoiceLine` (whose positional `rate_uni` typo was the
+/// live near-miss that forced named-field patterns) and
+/// grid-mysteries' `EvidenceMetric`; the gallery tops out at 7-ary,
+/// so this synthetic carrier owns the axis. Shape: a line key, a
+/// group, an amount, and subject padding to `arity`; a grouped-sum
+/// invariant so the write path pays realistic invariant work over
+/// the wide rows.
+fn wide_program(arity: usize) -> morpholog_core::Program {
+    use morpholog_core::ir_builder as b;
+    let mut decl = b::predicate("WideLine")
+        .subject("line")
+        .subject("grp")
+        .decimal("amount");
+    for i in 3..arity {
+        decl = decl.subject(&format!("pad_{i}"));
+    }
+    // `unique by (line)`: the generated invariant must establish that
+    // two rows agreeing on the key agree on the WHOLE claim, so
+    // raising the arity widens the invariant being checked, not just
+    // the stored row - exactly the load the compiled-checking arc
+    // will optimise. The `require not` gate below is the write-path
+    // read; this is the invariant-machinery half.
+    decl = decl.disciplines(vec![morpholog_core::Discipline::UniqueBy {
+        fields: vec!["line".to_string()],
+    }]);
+
+    let param_names: Vec<String> = wide_field_names(arity);
+    let param_refs: Vec<&str> = param_names.iter().map(String::as_str).collect();
+    let all_vars: Vec<morpholog_core::Term> = param_names.iter().map(|p| b::var(p)).collect();
+    let mut require_pattern: Vec<morpholog_core::Term> = vec![b::var("line")];
+    require_pattern.extend((1..arity).map(|_| b::wildcard()));
+
+    // sum(amount | WideLine(_, grp, amount, _...)) per group.
+    let mut sum_pattern: Vec<morpholog_core::Term> =
+        vec![b::wildcard(), b::var("grp"), b::var("amount")];
+    sum_pattern.extend((3..arity).map(|_| b::wildcard()));
+    let mut head_pattern: Vec<morpholog_core::Term> = vec![b::wildcard(), b::var("grp")];
+    head_pattern.extend((2..arity).map(|_| b::wildcard()));
+
+    let mut program = b::program("wide_bench")
+        .predicates(vec![decl.build()])
+        .invariants(vec![b::invariant(
+            "grouped_total_capped",
+            b::implies(
+                b::claim("WideLine", head_pattern),
+                b::le(
+                    b::sum(b::var("amount"), b::claim("WideLine", sum_pattern)),
+                    b::term(b::dec("1000000000000")),
+                ),
+            ),
+        )])
+        .transformations(vec![b::transformation(
+            "add_wide",
+            b::params(&param_refs),
+            vec![
+                b::require(b::not(b::claim("WideLine", require_pattern))),
+                b::assert_("WideLine", all_vars),
+            ],
+        )])
+        .build();
+    // Hand-built IR must lower its disciplines (the parser does this
+    // in parse_program); without it validation refuses the programme.
+    morpholog_core::lower_disciplines(&mut program);
+    program
+}
+
+fn wide_field_names(arity: usize) -> Vec<String> {
+    let mut names = vec!["line".to_string(), "grp".to_string(), "amount".to_string()];
+    names.extend((3..arity).map(|i| format!("pad_{i}")));
+    names
+}
+
+/// Insert `n` wide rows directly. The SQL is assembled from the arity
+/// (a bench-internal integer, never external input), hence the
+/// explicit `AssertSqlSafe`.
+async fn insert_wide_rows(pool: &PgPool, n: usize, arity: usize) -> Result<()> {
+    if n == 0 {
+        return Ok(());
+    }
+    let n_i: i64 = n
+        .try_into()
+        .map_err(|_| anyhow!("n={n} too large for i64"))?;
+    let mut elements = vec![
+        "jsonb_build_object('type','subject','value','wide_' || i)".to_string(),
+        "jsonb_build_object('type','subject','value','g_' || (i % 16))".to_string(),
+        "jsonb_build_object('type','decimal','value','1')".to_string(),
+    ];
+    elements.extend(
+        (3..arity).map(|p| format!("jsonb_build_object('type','subject','value','pad_{p}')")),
+    );
+    let sql = format!(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'WideLine', jsonb_build_array({}), $1
+         FROM generate_series(1, $2) AS i",
+        elements.join(", ")
+    );
+    sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(Uuid::nil())
+        .bind(n_i)
+        .execute(pool)
+        .await
+        .context("insert wide fixture rows")?;
+    Ok(())
+}
+
+/// The wide case: every repeat rebuilds N wide rows, times the scoped
+/// read (list + build_state - no derived claim; the predicate itself
+/// is the payload), then one proposal through the grouped-sum
+/// invariant.
+async fn measure_wide(
+    pool: &PgPool,
+    case: &str,
+    axis: &'static str,
+    n: usize,
+    arity: usize,
+    repeat: usize,
+) -> Result<CaseResult> {
+    if arity < 3 {
+        return Err(anyhow!(
+            "--arity must be at least 3 (a line key, a group, an amount); got {arity}"
+        ));
+    }
+    let program = wide_program(arity);
+    let compiled =
+        CompiledProgram::new(program).map_err(|e| anyhow!("invalid wide programme: {e:?}"))?;
+    let footprint = vec!["WideLine".to_string()];
+
+    let mut fixture = Vec::with_capacity(repeat);
+    let mut list_scoped = Vec::with_capacity(repeat);
+    let mut build_state = Vec::with_capacity(repeat);
+    let mut propose = Vec::with_capacity(repeat);
+    for r in 0..repeat {
+        let t = Instant::now();
+        reset_db(pool).await?;
+        insert_wide_rows(pool, n, arity).await?;
+        fixture.push(t.elapsed());
+        analyze_claims(pool).await?;
+
+        let t = Instant::now();
+        let claims = list_claims_for_predicates(pool, &footprint)
+            .await
+            .context("list wide claims")?;
+        list_scoped.push(t.elapsed());
+        if claims.len() != n {
+            return Err(anyhow!(
+                "expected {n} wide claims, found {}; fixture is broken",
+                claims.len()
+            ));
+        }
+        let t = Instant::now();
+        let _state = State::from_claims(claims);
+        build_state.push(t.elapsed());
+
+        let mut args: Vec<EvalValue> = vec![subj(&format!("wide_target_{r}")), subj("g_0"), dec(1)];
+        args.extend((3..arity).map(|p| subj(&format!("pad_{p}"))));
+        let transition = Transition {
+            transformation_name: "add_wide".into(),
+            args,
+            actor: Subject::from("bench"),
+        };
+        let t = Instant::now();
+        let outcome = propose_against_pg(pool, &compiled, &Proposal::gateway(&transition))
+            .await
+            .context("wide propose")?;
+        propose.push(t.elapsed());
+        if !matches!(outcome, PgProposalOutcome::Committed { .. }) {
+            return Err(anyhow!(
+                "wide propose did not commit ({}); fixture or kernel behaviour \
+                 has changed",
+                outcome_summary(&outcome)
+            ));
+        }
+    }
+    Ok(CaseResult {
+        case: case.to_string(),
+        implementation: IMPLEMENTATION,
+        axis,
+        point: if axis == "arity" {
+            arity as u64
+        } else {
+            n as u64
+        },
+        metrics: vec![
+            Metric::ms("fixture_build", &fixture),
+            Metric::ms("list_scoped", &list_scoped),
+            Metric::ms("build_state", &build_state),
+            Metric::ms("propose_one", &propose),
+        ],
+    })
+}
+
+async fn run_wide(args: WideArgs) -> Result<()> {
+    check_reset_ack(args.reset, &args.database_url)?;
+    require_positive_repeat(args.repeat)?;
+    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
+        .await
+        .context("connect to PostgreSQL")?;
+    println!(
+        "scenario=wide n={} arity={} repeat={}",
+        args.n, args.arity, args.repeat
+    );
+    let result = measure_wide(&pool, "wide", "n", args.n, args.arity, args.repeat).await?;
+    print_case_human(&result);
+    Ok(())
 }
 
 /// Fabricate `n` audit rows via direct SQL. Each row carries a
@@ -1065,6 +1834,440 @@ fn outcome_summary(outcome: &PgProposalOutcome) -> String {
     }
 }
 
+// ============================================================
+// suite: the frozen canonical case matrix
+// ============================================================
+
+/// One canonical case family's provenance - the consumer workload or
+/// mechanism that forced it. Rendered as a mapping block above the
+/// table so the table's anchor travels with it.
+const CASE_PROVENANCE: &[(&str, &str)] = &[
+    (
+        "write",
+        "single-proposal latency as governed state grows; /noise is the \
+         predicate-scoping control (forced predicate-scoped load_state)",
+    ),
+    (
+        "read",
+        "the read path's three phases; /grouped stresses derived grouping \
+         across 100 accounts",
+    ),
+    (
+        "asof",
+        "audit-log replay; /retract is the ReplaySet retract-path control \
+         (the asserts-only default is best-case)",
+    ),
+    (
+        "contend",
+        "the SSI concurrency law, as same-workload A/Bs: /shared vs \
+         /value-partitioned (ledger) = value sharding does not relieve 40001 \
+         pressure; /predicate-shared vs /disjoint (synthetic) = footprint \
+         partitioning does. The two scaling curves use different workloads \
+         and never compare to each other; workers=1 is the non-contention \
+         baseline",
+    ),
+    (
+        "import",
+        "the in-process CORE of the embedder import/replay path that forced \
+         propose --batch (Redline's 130-act WAN seed; grid-mysteries' CI \
+         replay); the real batch adds NDJSON/decode/receipt cost per row",
+    ),
+    (
+        "wide",
+        "the billing embedder's 13-ary InvoiceLine shape (the gallery tops \
+         out at 7-ary); /size sweeps rows at arity 13, /arity sweeps the \
+         argument count itself",
+    ),
+];
+
+#[derive(Debug, Clone)]
+enum CaseKind {
+    Write {
+        n: usize,
+        accounts: usize,
+        noise: usize,
+    },
+    Read {
+        n: usize,
+        accounts: usize,
+        noise: usize,
+    },
+    AsOf {
+        n: usize,
+        retract_fraction: usize,
+    },
+    Contend {
+        workers: usize,
+        ops: usize,
+        prepopulate: usize,
+        periods: usize,
+        disjoint: bool,
+    },
+    Import {
+        n: usize,
+    },
+    Wide {
+        axis: &'static str,
+        n: usize,
+        arity: usize,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct CaseSpec {
+    case: &'static str,
+    kind: CaseKind,
+}
+
+/// The frozen matrix. Complements are deliberate anti-overfit
+/// controls, not defaults: changing anything here (cases, sizes,
+/// parameters) is changing the ruler and bumps [`SUITE_CONTRACT`] in
+/// its own reviewed commit - never inside a performance PR.
+fn suite_plan(ladder: Ladder) -> Vec<CaseSpec> {
+    let n_ladder: &[usize] = match ladder {
+        Ladder::Quick => &[100, 1_000],
+        Ladder::Full => &[1_000, 10_000, 100_000],
+    };
+    // Import's per-commit cost grows with the book, so the journey is
+    // roughly quadratic in N on the interpreted runtime - its ladder
+    // is deliberately small (0->100k would be ~22h per repeat).
+    let import_ladder: &[usize] = match ladder {
+        Ladder::Quick => &[100, 500],
+        Ladder::Full => &[100, 1_000, 3_000],
+    };
+    let workers_ladder: &[usize] = match ladder {
+        Ladder::Quick => &[1, 4],
+        Ladder::Full => &[1, 2, 4, 8, 16],
+    };
+    let contend_ops = match ladder {
+        Ladder::Quick => 10,
+        Ladder::Full => 25,
+    };
+    let contend_prepopulate = match ladder {
+        Ladder::Quick => 100,
+        Ladder::Full => 2_000,
+    };
+    let wide_arities: &[usize] = &[4, 7, 13];
+    let wide_fixed_n = match ladder {
+        Ladder::Quick => 1_000,
+        Ladder::Full => 10_000,
+    };
+
+    let mut plan = Vec::new();
+    for &n in n_ladder {
+        plan.push(CaseSpec {
+            case: "write/base",
+            kind: CaseKind::Write {
+                n,
+                accounts: 2,
+                noise: 0,
+            },
+        });
+        plan.push(CaseSpec {
+            case: "write/noise",
+            kind: CaseKind::Write {
+                n,
+                accounts: 2,
+                noise: 3 * n,
+            },
+        });
+        plan.push(CaseSpec {
+            case: "read/base",
+            kind: CaseKind::Read {
+                n,
+                accounts: 2,
+                noise: 0,
+            },
+        });
+        plan.push(CaseSpec {
+            case: "read/grouped",
+            kind: CaseKind::Read {
+                n,
+                accounts: 100,
+                noise: 0,
+            },
+        });
+        plan.push(CaseSpec {
+            case: "asof/assert",
+            kind: CaseKind::AsOf {
+                n,
+                retract_fraction: 0,
+            },
+        });
+        plan.push(CaseSpec {
+            case: "asof/retract",
+            kind: CaseKind::AsOf {
+                n,
+                retract_fraction: 50,
+            },
+        });
+        plan.push(CaseSpec {
+            case: "wide/size",
+            kind: CaseKind::Wide {
+                axis: "n",
+                n,
+                arity: 13,
+            },
+        });
+    }
+    for &workers in workers_ladder {
+        plan.push(CaseSpec {
+            case: "contend/shared",
+            kind: CaseKind::Contend {
+                workers,
+                ops: contend_ops,
+                prepopulate: contend_prepopulate,
+                periods: 1,
+                disjoint: false,
+            },
+        });
+        plan.push(CaseSpec {
+            case: "contend/disjoint",
+            kind: CaseKind::Contend {
+                workers,
+                ops: contend_ops,
+                prepopulate: 0,
+                periods: workers,
+                disjoint: true,
+            },
+        });
+    }
+    // The same-workload A/B controls that established the concurrency
+    // law - at the maximum worker point only, so the law stays testable
+    // without doubling every curve. The two scaling curves above are
+    // NOT comparable to each other (different workloads); these are the
+    // rows each one compares against.
+    // The ladders above are static and non-empty; the fallback can
+    // never fire and exists only to keep the kernel-grade no-panic
+    // lint honest.
+    let max_workers = workers_ladder.last().copied().unwrap_or(1);
+    plan.push(CaseSpec {
+        // Ledger, value-partitioned: same workload as /shared, one
+        // period per worker. The law's negative half: this row should
+        // NOT improve on /shared at the same worker count.
+        case: "contend/value-partitioned",
+        kind: CaseKind::Contend {
+            workers: max_workers,
+            ops: contend_ops,
+            prepopulate: contend_prepopulate,
+            periods: max_workers,
+            disjoint: false,
+        },
+    });
+    plan.push(CaseSpec {
+        // Synthetic, predicate-SHARED: same workload as /disjoint, all
+        // workers on one predicate. The law's positive half: /disjoint
+        // should improve on this row at the same worker count.
+        case: "contend/predicate-shared",
+        kind: CaseKind::Contend {
+            workers: max_workers,
+            ops: contend_ops,
+            prepopulate: 0,
+            periods: 1,
+            disjoint: true,
+        },
+    });
+    for &n in import_ladder {
+        plan.push(CaseSpec {
+            case: "import/core",
+            kind: CaseKind::Import { n },
+        });
+    }
+    for &arity in wide_arities {
+        plan.push(CaseSpec {
+            case: "wide/arity",
+            kind: CaseKind::Wide {
+                axis: "arity",
+                n: wide_fixed_n,
+                arity,
+            },
+        });
+    }
+    plan
+}
+
+/// Run one canonical case. Import and contend cap their repeats (the
+/// journeys are long and each rebuilds its pre-state); the canonical
+/// contend rows require a clean burst.
+async fn run_case(pool: &PgPool, spec: &CaseSpec, repeat: usize) -> Result<CaseResult> {
+    match &spec.kind {
+        CaseKind::Write { n, accounts, noise } => {
+            measure_write(pool, spec.case, *n, *accounts, *noise, repeat).await
+        }
+        CaseKind::Read { n, accounts, noise } => {
+            measure_read(pool, spec.case, *n, *accounts, *noise, repeat).await
+        }
+        CaseKind::AsOf {
+            n,
+            retract_fraction,
+        } => measure_as_of(pool, spec.case, *n, 1.0, *retract_fraction, repeat).await,
+        CaseKind::Contend {
+            workers,
+            ops,
+            prepopulate,
+            periods,
+            disjoint,
+        } => {
+            // 1000, not the standalone default of 100: the canonical
+            // rows must be CLEAN, and a real embedder's retry budget
+            // is not 100 - the retry RATE is the measurement, and an
+            // exhaustion at an arbitrary cap is a config artifact (the
+            // first full-ladder run lost 1 op in 200 to exactly that).
+            measure_contend(
+                pool,
+                spec.case,
+                *workers,
+                *ops,
+                *prepopulate,
+                *periods,
+                *disjoint,
+                1000,
+                repeat.min(3),
+                true,
+            )
+            .await
+        }
+        CaseKind::Import { n } => measure_import(pool, spec.case, *n, repeat.min(3)).await,
+        CaseKind::Wide { axis, n, arity } => {
+            measure_wide(pool, spec.case, axis, *n, *arity, repeat).await
+        }
+    }
+}
+
+async fn run_suite_specs(
+    pool: &PgPool,
+    specs: &[CaseSpec],
+    repeat: usize,
+) -> Result<Vec<CaseResult>> {
+    let mut results = Vec::with_capacity(specs.len());
+    for (i, spec) in specs.iter().enumerate() {
+        eprintln!("[{}/{}] {} ...", i + 1, specs.len(), spec.case);
+        let result = run_case(pool, spec, repeat)
+            .await
+            .with_context(|| format!("suite case {}", spec.case))?;
+        results.push(result);
+    }
+    Ok(results)
+}
+
+/// One planned case with its full parameterisation - the flags travel
+/// with the number (the spike's rule), so a table is self-describing
+/// without reading `suite_plan`.
+#[derive(Debug, serde::Serialize)]
+struct PlanEntry {
+    case: &'static str,
+    params: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct SuiteReport {
+    suite_contract: u32,
+    implementation: &'static str,
+    ladder: &'static str,
+    /// What the caller asked for; per-family caps mean the effective
+    /// count per row is the row's own `samples` column, never this.
+    requested_repeat: usize,
+    pg_version: String,
+    debug_assertions: bool,
+    plan: Vec<PlanEntry>,
+    cases: Vec<CaseResult>,
+}
+
+fn format_sample(value: Option<f64>) -> String {
+    match value {
+        Some(v) => format!("{v:.2}"),
+        None => "-".to_string(),
+    }
+}
+
+fn render_markdown(report: &SuiteReport) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "suite_contract={} implementation={} ladder={} requested_repeat={}\n",
+        report.suite_contract, report.implementation, report.ladder, report.requested_repeat
+    ));
+    out.push_str(&format!("pg=\"{}\"\n", report.pg_version));
+    if report.debug_assertions {
+        out.push_str("benchmark-grade=false: debug assertions enabled\n");
+    }
+    out.push('\n');
+    out.push_str("Provenance (what forced each case family):\n");
+    for (family, provenance) in CASE_PROVENANCE {
+        out.push_str(&format!("- `{family}`: {provenance}\n"));
+    }
+    out.push('\n');
+    out.push_str("Case definitions (the flags travel with the number):\n");
+    for entry in &report.plan {
+        out.push_str(&format!("- `{}` {}\n", entry.case, entry.params));
+    }
+    out.push('\n');
+    out.push_str("| case | axis | point | metric | first | steady median | samples | unit |\n");
+    out.push_str("|---|---|--:|---|--:|--:|--:|---|\n");
+    for case in &report.cases {
+        for m in &case.metrics {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
+                case.case,
+                case.axis,
+                case.point,
+                m.name,
+                format_sample(m.first()),
+                format_sample(m.steady_median()),
+                m.samples.len(),
+                m.unit
+            ));
+        }
+    }
+    out
+}
+
+async fn run_suite(args: SuiteArgs) -> Result<()> {
+    check_reset_ack(args.reset, &args.database_url)?;
+    require_positive_repeat(args.repeat)?;
+    // Sized for the widest contend case; every other case uses a
+    // handful of connections.
+    let pool = PgPoolOptions::new()
+        .max_connections(18)
+        .connect(&morpholog_postgres::with_default_user(&args.database_url))
+        .await
+        .context("connect to PostgreSQL")?;
+    let pg_version: String = sqlx::query_scalar("SELECT version()")
+        .fetch_one(&pool)
+        .await
+        .context("SELECT version()")?;
+
+    let specs = suite_plan(args.ladder);
+    let plan = specs
+        .iter()
+        .map(|spec| PlanEntry {
+            case: spec.case,
+            params: format!("{:?}", spec.kind),
+        })
+        .collect();
+    let cases = run_suite_specs(&pool, &specs, args.repeat).await?;
+    let report = SuiteReport {
+        suite_contract: SUITE_CONTRACT,
+        implementation: IMPLEMENTATION,
+        ladder: match args.ladder {
+            Ladder::Quick => "quick",
+            Ladder::Full => "full",
+        },
+        requested_repeat: args.repeat,
+        pg_version,
+        debug_assertions: cfg!(debug_assertions),
+        plan,
+        cases,
+    };
+    match args.format {
+        OutputFormat::Markdown => print!("{}", render_markdown(&report)),
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&report).context("serialise suite report")?
+        ),
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod smoke {
     //! Minimal-size compatibility smoke test: runs every scenario once
@@ -1102,6 +2305,7 @@ mod smoke {
             noise_claims: 1,
             database_url: url.clone(),
             reset: true,
+            repeat: 2,
         })
         .await
         .expect("write scenario smoke");
@@ -1112,6 +2316,7 @@ mod smoke {
             noise_claims: 1,
             database_url: url.clone(),
             reset: true,
+            repeat: 2,
         })
         .await
         .expect("read scenario smoke");
@@ -1122,6 +2327,7 @@ mod smoke {
             retract_fraction: 0,
             database_url: url.clone(),
             reset: true,
+            repeat: 2,
         })
         .await
         .expect("as-of scenario smoke (asserts only)");
@@ -1134,6 +2340,7 @@ mod smoke {
             retract_fraction: 50,
             database_url: url.clone(),
             reset: true,
+            repeat: 1,
         })
         .await
         .expect("as-of scenario smoke (retract-heavy)");
@@ -1147,6 +2354,7 @@ mod smoke {
             max_retries: 20,
             database_url: url.clone(),
             reset: true,
+            repeat: 2,
         })
         .await
         .expect("contend scenario smoke (ledger)");
@@ -1160,10 +2368,186 @@ mod smoke {
             periods: 2,
             disjoint: true,
             max_retries: 20,
-            database_url: url,
+            database_url: url.clone(),
             reset: true,
+            repeat: 1,
         })
         .await
         .expect("contend scenario smoke (disjoint)");
+
+        run_import(ImportArgs {
+            n: 2,
+            database_url: url.clone(),
+            reset: true,
+            repeat: 2,
+        })
+        .await
+        .expect("import scenario smoke");
+
+        run_wide(WideArgs {
+            n: 1,
+            arity: 13,
+            database_url: url.clone(),
+            reset: true,
+            repeat: 2,
+        })
+        .await
+        .expect("wide scenario smoke");
+
+        // Suite plumbing over a PRIVATE tiny plan - never the public
+        // quick ladder, which is a real measurement run and does not
+        // belong in CI. One case per scenario family keeps the
+        // dispatch, the collection, and the renderer covered.
+        let pool = PgPool::connect(&morpholog_postgres::with_default_user(&url))
+            .await
+            .expect("suite smoke pool");
+        let plan = vec![
+            CaseSpec {
+                case: "write/base",
+                kind: CaseKind::Write {
+                    n: 1,
+                    accounts: 2,
+                    noise: 0,
+                },
+            },
+            CaseSpec {
+                case: "asof/assert",
+                kind: CaseKind::AsOf {
+                    n: 2,
+                    retract_fraction: 0,
+                },
+            },
+            CaseSpec {
+                case: "contend/disjoint",
+                kind: CaseKind::Contend {
+                    workers: 1,
+                    ops: 1,
+                    prepopulate: 0,
+                    periods: 1,
+                    disjoint: true,
+                },
+            },
+            CaseSpec {
+                case: "import/core",
+                kind: CaseKind::Import { n: 2 },
+            },
+            CaseSpec {
+                case: "wide/size",
+                kind: CaseKind::Wide {
+                    axis: "n",
+                    n: 1,
+                    arity: 4,
+                },
+            },
+        ];
+        let cases = run_suite_specs(&pool, &plan, 2)
+            .await
+            .expect("suite smoke plan");
+        assert_eq!(cases.len(), plan.len(), "every smoke case reports");
+        let report = SuiteReport {
+            suite_contract: SUITE_CONTRACT,
+            implementation: IMPLEMENTATION,
+            ladder: "smoke",
+            requested_repeat: 2,
+            pg_version: "smoke".to_string(),
+            debug_assertions: cfg!(debug_assertions),
+            plan: plan
+                .iter()
+                .map(|spec| PlanEntry {
+                    case: spec.case,
+                    params: format!("{:?}", spec.kind),
+                })
+                .collect(),
+            cases,
+        };
+        let rendered = render_markdown(&report);
+        for spec in &plan {
+            assert!(
+                rendered.contains(spec.case),
+                "the rendered table names every case; missing {}:\n{rendered}",
+                spec.case
+            );
+        }
+    }
+
+    /// The renderer is pure, so its shape is pinned without a database:
+    /// header, provenance mapping, and one row per metric.
+    #[test]
+    fn markdown_renderer_shape() {
+        let report = SuiteReport {
+            suite_contract: SUITE_CONTRACT,
+            implementation: IMPLEMENTATION,
+            ladder: "unit",
+            requested_repeat: 3,
+            pg_version: "PostgreSQL test".to_string(),
+            debug_assertions: false,
+            plan: vec![PlanEntry {
+                case: "write/base",
+                params: "Write { n: 100, accounts: 2, noise: 0 }".to_string(),
+            }],
+            cases: vec![CaseResult {
+                case: "write/base".to_string(),
+                implementation: IMPLEMENTATION,
+                axis: "n",
+                point: 100,
+                metrics: vec![
+                    Metric::series("propose_one", "ms", vec![5.0, 2.0, 3.0]),
+                    Metric::series("scoped_claims", "count", vec![300.0]),
+                ],
+            }],
+        };
+        let rendered = render_markdown(&report);
+        assert!(rendered.contains("suite_contract=1"));
+        assert!(rendered.contains("requested_repeat=3"));
+        // The flags travel with the number.
+        assert!(rendered.contains("- `write/base` Write { n: 100, accounts: 2, noise: 0 }"));
+        assert!(
+            rendered.contains(
+                "| case | axis | point | metric | first | steady median | samples | unit |"
+            )
+        );
+        // first = samples[0]; the steady median over the even-count
+        // rest [2.0, 3.0] averages the two middles; the samples column
+        // is each row's own truth (per-family caps make the requested
+        // repeat a request, never a promise).
+        assert!(rendered.contains("| write/base | n | 100 | propose_one | 5.00 | 2.50 | 3 | ms |"));
+        // A single-sample metric has no steady median.
+        assert!(
+            rendered.contains("| write/base | n | 100 | scoped_claims | 300.00 | - | 1 | count |")
+        );
+        assert!(!rendered.contains("benchmark-grade=false"));
+    }
+
+    /// The frozen-matrix tripwire: `suite_contract=1` pins these
+    /// fingerprints of the canonical plans. Touching `suite_plan`
+    /// without bumping the contract (in its own reviewed commit) goes
+    /// red here - the ruler cannot change as one innocent parameter
+    /// buried in a diff.
+    #[test]
+    fn the_canonical_matrix_is_frozen_under_contract_1() {
+        use sha2::{Digest, Sha256};
+        let fingerprint = |ladder: Ladder| {
+            let canonical: String = suite_plan(ladder)
+                .iter()
+                .map(|spec| format!("{}|{:?}\n", spec.case, spec.kind))
+                .collect();
+            let digest = Sha256::digest(canonical.as_bytes());
+            digest.iter().fold(String::new(), |mut out, b| {
+                use std::fmt::Write;
+                let _ = write!(out, "{b:02x}");
+                out
+            })
+        };
+        assert_eq!(SUITE_CONTRACT, 1, "bumping the contract re-pins these");
+        assert_eq!(
+            fingerprint(Ladder::Quick),
+            "232c3844b052140fbbefab3a568cf148f1f46b2627fe5886a5a6e3fc09d45bfa",
+            "the quick matrix changed without a contract bump"
+        );
+        assert_eq!(
+            fingerprint(Ladder::Full),
+            "511cf3837651e1fdc8e5449d3462d4057e774bc87c45c84a687c1b754635b24e",
+            "the full matrix changed without a contract bump"
+        );
     }
 }
