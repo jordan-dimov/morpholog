@@ -1385,6 +1385,15 @@ fn wide_program(arity: usize) -> morpholog_core::Program {
     for i in 3..arity {
         decl = decl.subject(&format!("pad_{i}"));
     }
+    // `unique by (line)`: the generated invariant must establish that
+    // two rows agreeing on the key agree on the WHOLE claim, so
+    // raising the arity widens the invariant being checked, not just
+    // the stored row - exactly the load the compiled-checking arc
+    // will optimise. The `require not` gate below is the write-path
+    // read; this is the invariant-machinery half.
+    decl = decl.disciplines(vec![morpholog_core::Discipline::UniqueBy {
+        fields: vec!["line".to_string()],
+    }]);
 
     let param_names: Vec<String> = wide_field_names(arity);
     let param_refs: Vec<&str> = param_names.iter().map(String::as_str).collect();
@@ -1399,7 +1408,7 @@ fn wide_program(arity: usize) -> morpholog_core::Program {
     let mut head_pattern: Vec<morpholog_core::Term> = vec![b::wildcard(), b::var("grp")];
     head_pattern.extend((2..arity).map(|_| b::wildcard()));
 
-    b::program("wide_bench")
+    let mut program = b::program("wide_bench")
         .predicates(vec![decl.build()])
         .invariants(vec![b::invariant(
             "grouped_total_capped",
@@ -1419,7 +1428,11 @@ fn wide_program(arity: usize) -> morpholog_core::Program {
                 b::assert_("WideLine", all_vars),
             ],
         )])
-        .build()
+        .build();
+    // Hand-built IR must lower its disciplines (the parser does this
+    // in parse_program); without it validation refuses the programme.
+    morpholog_core::lower_disciplines(&mut program);
+    program
 }
 
 fn wide_field_names(arity: usize) -> Vec<String> {
@@ -1846,9 +1859,12 @@ const CASE_PROVENANCE: &[(&str, &str)] = &[
     ),
     (
         "contend",
-        "the SSI concurrency law: /shared shows value partitioning does not \
-         relieve 40001 pressure, /disjoint shows predicate partitioning does; \
-         workers=1 is the non-contention baseline",
+        "the SSI concurrency law, as same-workload A/Bs: /shared vs \
+         /value-partitioned (ledger) = value sharding does not relieve 40001 \
+         pressure; /predicate-shared vs /disjoint (synthetic) = footprint \
+         partitioning does. The two scaling curves use different workloads \
+         and never compare to each other; workers=1 is the non-contention \
+         baseline",
     ),
     (
         "import",
@@ -2016,6 +2032,38 @@ fn suite_plan(ladder: Ladder) -> Vec<CaseSpec> {
             },
         });
     }
+    // The same-workload A/B controls that established the concurrency
+    // law - at the maximum worker point only, so the law stays testable
+    // without doubling every curve. The two scaling curves above are
+    // NOT comparable to each other (different workloads); these are the
+    // rows each one compares against.
+    let max_workers = *workers_ladder.last().expect("workers ladder is non-empty");
+    plan.push(CaseSpec {
+        // Ledger, value-partitioned: same workload as /shared, one
+        // period per worker. The law's negative half: this row should
+        // NOT improve on /shared at the same worker count.
+        case: "contend/value-partitioned",
+        kind: CaseKind::Contend {
+            workers: max_workers,
+            ops: contend_ops,
+            prepopulate: contend_prepopulate,
+            periods: max_workers,
+            disjoint: false,
+        },
+    });
+    plan.push(CaseSpec {
+        // Synthetic, predicate-SHARED: same workload as /disjoint, all
+        // workers on one predicate. The law's positive half: /disjoint
+        // should improve on this row at the same worker count.
+        case: "contend/predicate-shared",
+        kind: CaseKind::Contend {
+            workers: max_workers,
+            ops: contend_ops,
+            prepopulate: 0,
+            periods: 1,
+            disjoint: true,
+        },
+    });
     for &n in import_ladder {
         plan.push(CaseSpec {
             case: "import/core",
@@ -2099,14 +2147,26 @@ async fn run_suite_specs(
     Ok(results)
 }
 
+/// One planned case with its full parameterisation - the flags travel
+/// with the number (the spike's rule), so a table is self-describing
+/// without reading `suite_plan`.
+#[derive(Debug, serde::Serialize)]
+struct PlanEntry {
+    case: &'static str,
+    params: String,
+}
+
 #[derive(Debug, serde::Serialize)]
 struct SuiteReport {
     suite_contract: u32,
     implementation: &'static str,
     ladder: &'static str,
-    repeat: usize,
+    /// What the caller asked for; per-family caps mean the effective
+    /// count per row is the row's own `samples` column, never this.
+    requested_repeat: usize,
     pg_version: String,
     debug_assertions: bool,
+    plan: Vec<PlanEntry>,
     cases: Vec<CaseResult>,
 }
 
@@ -2120,8 +2180,8 @@ fn format_sample(value: Option<f64>) -> String {
 fn render_markdown(report: &SuiteReport) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "suite_contract={} implementation={} ladder={} repeat={}\n",
-        report.suite_contract, report.implementation, report.ladder, report.repeat
+        "suite_contract={} implementation={} ladder={} requested_repeat={}\n",
+        report.suite_contract, report.implementation, report.ladder, report.requested_repeat
     ));
     out.push_str(&format!("pg=\"{}\"\n", report.pg_version));
     if report.debug_assertions {
@@ -2133,18 +2193,24 @@ fn render_markdown(report: &SuiteReport) -> String {
         out.push_str(&format!("- `{family}`: {provenance}\n"));
     }
     out.push('\n');
-    out.push_str("| case | axis | point | metric | first | steady median | unit |\n");
-    out.push_str("|---|---|--:|---|--:|--:|---|\n");
+    out.push_str("Case definitions (the flags travel with the number):\n");
+    for entry in &report.plan {
+        out.push_str(&format!("- `{}` {}\n", entry.case, entry.params));
+    }
+    out.push('\n');
+    out.push_str("| case | axis | point | metric | first | steady median | samples | unit |\n");
+    out.push_str("|---|---|--:|---|--:|--:|--:|---|\n");
     for case in &report.cases {
         for m in &case.metrics {
             out.push_str(&format!(
-                "| {} | {} | {} | {} | {} | {} | {} |\n",
+                "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
                 case.case,
                 case.axis,
                 case.point,
                 m.name,
                 format_sample(m.first()),
                 format_sample(m.steady_median()),
+                m.samples.len(),
                 m.unit
             ));
         }
@@ -2168,6 +2234,13 @@ async fn run_suite(args: SuiteArgs) -> Result<()> {
         .context("SELECT version()")?;
 
     let specs = suite_plan(args.ladder);
+    let plan = specs
+        .iter()
+        .map(|spec| PlanEntry {
+            case: spec.case,
+            params: format!("{:?}", spec.kind),
+        })
+        .collect();
     let cases = run_suite_specs(&pool, &specs, args.repeat).await?;
     let report = SuiteReport {
         suite_contract: SUITE_CONTRACT,
@@ -2176,9 +2249,10 @@ async fn run_suite(args: SuiteArgs) -> Result<()> {
             Ladder::Quick => "quick",
             Ladder::Full => "full",
         },
-        repeat: args.repeat,
+        requested_repeat: args.repeat,
         pg_version,
         debug_assertions: cfg!(debug_assertions),
+        plan,
         cases,
     };
     match args.format {
@@ -2371,9 +2445,16 @@ mod smoke {
             suite_contract: SUITE_CONTRACT,
             implementation: IMPLEMENTATION,
             ladder: "smoke",
-            repeat: 2,
+            requested_repeat: 2,
             pg_version: "smoke".to_string(),
             debug_assertions: cfg!(debug_assertions),
+            plan: plan
+                .iter()
+                .map(|spec| PlanEntry {
+                    case: spec.case,
+                    params: format!("{:?}", spec.kind),
+                })
+                .collect(),
             cases,
         };
         let rendered = render_markdown(&report);
@@ -2394,9 +2475,13 @@ mod smoke {
             suite_contract: SUITE_CONTRACT,
             implementation: IMPLEMENTATION,
             ladder: "unit",
-            repeat: 3,
+            requested_repeat: 3,
             pg_version: "PostgreSQL test".to_string(),
             debug_assertions: false,
+            plan: vec![PlanEntry {
+                case: "write/base",
+                params: "Write { n: 100, accounts: 2, noise: 0 }".to_string(),
+            }],
             cases: vec![CaseResult {
                 case: "write/base".to_string(),
                 implementation: IMPLEMENTATION,
@@ -2410,14 +2495,56 @@ mod smoke {
         };
         let rendered = render_markdown(&report);
         assert!(rendered.contains("suite_contract=1"));
+        assert!(rendered.contains("requested_repeat=3"));
+        // The flags travel with the number.
+        assert!(rendered.contains("- `write/base` Write { n: 100, accounts: 2, noise: 0 }"));
         assert!(
-            rendered.contains("| case | axis | point | metric | first | steady median | unit |")
+            rendered.contains(
+                "| case | axis | point | metric | first | steady median | samples | unit |"
+            )
         );
         // first = samples[0]; the steady median over the even-count
-        // rest [2.0, 3.0] averages the two middles.
-        assert!(rendered.contains("| write/base | n | 100 | propose_one | 5.00 | 2.50 | ms |"));
+        // rest [2.0, 3.0] averages the two middles; the samples column
+        // is each row's own truth (per-family caps make the requested
+        // repeat a request, never a promise).
+        assert!(rendered.contains("| write/base | n | 100 | propose_one | 5.00 | 2.50 | 3 | ms |"));
         // A single-sample metric has no steady median.
-        assert!(rendered.contains("| write/base | n | 100 | scoped_claims | 300.00 | - | count |"));
+        assert!(
+            rendered.contains("| write/base | n | 100 | scoped_claims | 300.00 | - | 1 | count |")
+        );
         assert!(!rendered.contains("benchmark-grade=false"));
+    }
+
+    /// The frozen-matrix tripwire: `suite_contract=1` pins these
+    /// fingerprints of the canonical plans. Touching `suite_plan`
+    /// without bumping the contract (in its own reviewed commit) goes
+    /// red here - the ruler cannot change as one innocent parameter
+    /// buried in a diff.
+    #[test]
+    fn the_canonical_matrix_is_frozen_under_contract_1() {
+        use sha2::{Digest, Sha256};
+        let fingerprint = |ladder: Ladder| {
+            let canonical: String = suite_plan(ladder)
+                .iter()
+                .map(|spec| format!("{}|{:?}\n", spec.case, spec.kind))
+                .collect();
+            let digest = Sha256::digest(canonical.as_bytes());
+            digest.iter().fold(String::new(), |mut out, b| {
+                use std::fmt::Write;
+                let _ = write!(out, "{b:02x}");
+                out
+            })
+        };
+        assert_eq!(SUITE_CONTRACT, 1, "bumping the contract re-pins these");
+        assert_eq!(
+            fingerprint(Ladder::Quick),
+            "232c3844b052140fbbefab3a568cf148f1f46b2627fe5886a5a6e3fc09d45bfa",
+            "the quick matrix changed without a contract bump"
+        );
+        assert_eq!(
+            fingerprint(Ladder::Full),
+            "511cf3837651e1fdc8e5449d3462d4057e774bc87c45c84a687c1b754635b24e",
+            "the full matrix changed without a contract bump"
+        );
     }
 }
