@@ -409,6 +409,72 @@ pub(crate) fn propose_inner(
     definitions: &[Definition],
     trace: &mut TraceSink<'_>,
 ) -> Result<Outcome, EvalError> {
+    let staged = stage_delta_inner(transformation, transition, pre_state, definitions, trace)?;
+    finish_staged_inner(staged, pre_state, invariants, definitions, trace)
+}
+
+/// A transformation body's outcome before any invariant has been
+/// consulted: either a statement-level rejection (a failed `require`, a
+/// `bind` with no match), or the staged delta - the claims the body
+/// would assert and retract and the intents it would emit. This is the
+/// seam an adapter needs to execute a body exactly once and then choose
+/// how the invariants over the resulting candidate are evaluated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StagedDelta {
+    Rejected {
+        reason: RejectionReason,
+    },
+    Staged {
+        asserted: Vec<ClaimInstance>,
+        retracted: Vec<ClaimInstance>,
+        emitted: Vec<IntentInstance>,
+    },
+}
+
+/// Execute only the transformation body against the pre-state - the
+/// same preflight checks and statement loop [`propose`] runs, stopped
+/// before invariant evaluation. [`finish_staged_delta`] is the other
+/// half; `propose` is exactly their composition.
+pub fn propose_stage_delta(
+    transformation: &Transformation,
+    transition: &Transition,
+    pre_state: &State,
+    definitions: &[Definition],
+) -> Result<StagedDelta, EvalError> {
+    stage_delta_inner(
+        transformation,
+        transition,
+        pre_state,
+        definitions,
+        &mut TraceSink::Off,
+    )
+}
+
+/// Evaluate the invariants over the candidate state a staged delta
+/// implies, completing what [`propose_stage_delta`] began. A staged
+/// rejection passes through unchanged.
+pub fn finish_staged_delta(
+    staged: StagedDelta,
+    pre_state: &State,
+    invariants: &[Invariant],
+    definitions: &[Definition],
+) -> Result<Outcome, EvalError> {
+    finish_staged_inner(
+        staged,
+        pre_state,
+        invariants,
+        definitions,
+        &mut TraceSink::Off,
+    )
+}
+
+pub(crate) fn stage_delta_inner(
+    transformation: &Transformation,
+    transition: &Transition,
+    pre_state: &State,
+    definitions: &[Definition],
+    trace: &mut TraceSink<'_>,
+) -> Result<StagedDelta, EvalError> {
     if transformation.name != transition.transformation_name {
         return Err(EvalError::TypeMismatch(format!(
             "transition names transformation `{}` but Transformation passed is `{}`",
@@ -467,9 +533,32 @@ pub(crate) fn propose_inner(
             trace,
         )? {
             StmtOutcome::Continue => {}
-            StmtOutcome::Rejected(reason) => return Ok(Outcome::Rejected { reason }),
+            StmtOutcome::Rejected(reason) => return Ok(StagedDelta::Rejected { reason }),
         }
     }
+
+    Ok(StagedDelta::Staged {
+        asserted,
+        retracted,
+        emitted,
+    })
+}
+
+pub(crate) fn finish_staged_inner(
+    staged: StagedDelta,
+    pre_state: &State,
+    invariants: &[Invariant],
+    definitions: &[Definition],
+    trace: &mut TraceSink<'_>,
+) -> Result<Outcome, EvalError> {
+    let (asserted, retracted, emitted) = match staged {
+        StagedDelta::Rejected { reason } => return Ok(Outcome::Rejected { reason }),
+        StagedDelta::Staged {
+            asserted,
+            retracted,
+            emitted,
+        } => (asserted, retracted, emitted),
+    };
 
     let candidate = build_candidate_state(pre_state, &asserted, &retracted);
 

@@ -560,17 +560,17 @@ pub(crate) async fn write_rejection(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn write_accepted(
+/// Apply an accepted delta to the claims table: retraction DELETEs,
+/// then assertion INSERTs. The claims half of [`write_accepted`],
+/// separated so a caller inside an open transaction can make the
+/// claims table the candidate state before deciding anything else
+/// (the compiled-invariant differential does exactly that, then
+/// rolls back).
+pub(crate) async fn write_claim_delta(
     tx: &mut Transaction<'_, Postgres>,
     transition_id: Uuid,
-    transformation: &Transformation,
-    transition: &Transition,
-    invariants: &[Invariant],
     asserted_claims: &[ClaimInstance],
     retracted_claims: &[ClaimInstance],
-    emitted_intents: &[IntentInstance],
-    login_role: &str,
 ) -> Result<(), PgError> {
     // Retractions: dedupe, then delete each distinct claim. Exactly
     // one row per distinct retraction is expected; zero rows means a
@@ -619,6 +619,23 @@ pub(crate) async fn write_accepted(
         .await
         .map_err(classify_checked_query)?;
     }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn write_accepted(
+    tx: &mut Transaction<'_, Postgres>,
+    transition_id: Uuid,
+    transformation: &Transformation,
+    transition: &Transition,
+    invariants: &[Invariant],
+    asserted_claims: &[ClaimInstance],
+    retracted_claims: &[ClaimInstance],
+    emitted_intents: &[IntentInstance],
+    login_role: &str,
+) -> Result<(), PgError> {
+    write_claim_delta(tx, transition_id, asserted_claims, retracted_claims).await?;
 
     // Audit row.
     let checked: Vec<AuditedInvariantCheck> = invariants
