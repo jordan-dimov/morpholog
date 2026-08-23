@@ -155,7 +155,6 @@ struct OccurrenceBinder {
 pub(crate) struct CompiledInvariant {
     pub(crate) name: InvariantName,
     pub(crate) version: u32,
-    pub(crate) footprint: BTreeSet<PredicateName>,
     /// Witness variables, sorted by name. Each violation row carries the
     /// full tagged value as `w_<var>`, decoded through `EvalValue`'s own
     /// serde - the one wire contract, no second kind decoder.
@@ -280,7 +279,6 @@ type RawOccurrence = (PredicateName, Vec<(usize, Value)>, Vec<(usize, Var)>);
 struct Ctx<'a> {
     decls: &'a BTreeMap<&'a str, &'a PredicateDecl>,
     counter: usize,
-    footprint: BTreeSet<PredicateName>,
     occurrences: Vec<RawOccurrence>,
 }
 
@@ -320,7 +318,6 @@ fn compile_invariant(
     let mut ctx = Ctx {
         decls,
         counter: 0,
-        footprint: BTreeSet::new(),
         occurrences: Vec::new(),
     };
 
@@ -370,7 +367,6 @@ fn compile_invariant(
     Ok(CompiledInvariant {
         name: inv.name.clone(),
         version: inv.version,
-        footprint: ctx.footprint,
         witness_vars,
         occurrences,
         case_cols,
@@ -698,7 +694,6 @@ fn render_claim(
             })?;
     let alias = format!("t{}", ctx.counter);
     ctx.counter += 1;
-    ctx.footprint.insert(predicate.clone());
 
     let mut where_ = vec![format!(
         "{alias}.predicate_name = {}",
