@@ -19,6 +19,13 @@ mod attestation;
 mod audit;
 mod checkpoints;
 mod claims;
+// Test-gated in rung 1 of the compiled-invariant arc: the compiler's
+// only consumer is the differential gate below, and no production path
+// changes until integration lands. Rung 2 drops the cfg.
+#[cfg(test)]
+mod compiled;
+#[cfg(test)]
+mod compiled_differential;
 mod derived;
 mod error;
 mod hex;
