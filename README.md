@@ -50,7 +50,7 @@ One word to know before reading further: Morpholog's own term for a record is a 
 
 ## Where it fits in your stack
 
-Morpholog is not a general-purpose programming language, and it does not replace your application. You build the product the way you already do - Python, TypeScript, whatever you like - and the screens, jobs, pipelines, and analytics stay in those tools. What moves into Morpholog is the governed core: the records that must be defensible, and the rules they must obey. Your code computes whatever it needs to, then *proposes* the result - through the typed Python client the binary generates from your own model, the CLI, or batch import - and Morpholog decides whether it may become a record. Reads come back the same way, at any past moment, or through the typed SQL views it generates for reporting. It is the small fraction of any system that, when it fails, makes the news - and Morpholog owns only that fraction.
+Morpholog is not a general-purpose language and does not replace your application. Screens, jobs, pipelines, and analytics stay in the tools you already use - Python, TypeScript, whatever you like. What moves into Morpholog is the governed core: the records that must be defensible, and the rules they must obey. Your code computes whatever it needs to, then *proposes* the result - through the typed Python client the binary generates from your own model, the CLI, or batch import - and Morpholog decides whether it may become a record. Reads come back the same way, at any past moment, or through generated typed SQL views. It owns only the small fraction of any system that, when it fails, makes the news.
 
 ## What every commit gives you
 
@@ -73,7 +73,7 @@ None of the underlying ideas is new - each has decades of theory behind it. What
 
 ## Anything can propose; only the rules admit
 
-More and more of what writes to business records is software you did not write and cannot audit line by line - optimisers, ML models, autonomous agents. Morpholog is built for exactly that. Nothing writes directly: a person, a script, or a model only ever *proposes* a change, and the runtime admits or refuses it. A refusal is not an error code - it is a structured, reproducible account of which rule failed and what evidence is missing, built from your own rule names, never free text. A machine can read the refusal, repair its proposal, and try again: **propose, refuse, repair**. Whatever finally commits satisfied the same rules a human change would have to. You do not have to trust the proposer, because the rules - not the proposer - decide what becomes real.
+More and more of what writes to business records is software you did not write and cannot audit line by line - optimisers, ML models, autonomous agents. Morpholog is built for exactly that. Nothing writes directly: a person, a script, or a model only ever *proposes*, and the runtime admits or refuses. A refusal is not an error code - it is a structured, reproducible account of which rule failed and what evidence is missing, in your own rule names, never free text. A machine can read it, repair its proposal, and try again: **propose, refuse, repair**. You do not have to trust the proposer, because the rules - not the proposer - decide what becomes real.
 
 ## A sixty-second tour
 
@@ -156,11 +156,11 @@ New to Morpholog? [The developer introduction](docs/developer-intro.md) is the h
 
 ## Status
 
-Active development, built in Rust on PostgreSQL 18+, no unsafe code anywhere. The kernel, PostgreSQL adapter, CLI, outbox worker, and every worked example are working and tested end to end. A governed commit is ~9ms at worked-example scale; writes and as-of replay both scale linearly from there (~1.6s per commit with 100,000 in-scope records).
+Active development, built in Rust on PostgreSQL 18+, no unsafe code anywhere. The kernel, PostgreSQL adapter, CLI, outbox worker, and every worked example are working and tested end to end. A governed commit is ~9ms at worked-example scale; writes and as-of replay both scale linearly from there (~1.5s per commit with 100,000 in-scope records, under a frozen benchmark suite that keeps such claims honest). A compiled-to-SQL checking path - measured flat at ~2ms across that same sweep - is landing in stages: the compiler and the differential holding it to agreement with the kernel are merged; production integration follows.
 
 Beyond the core: you can read a model's rules back before anything runs - what they make impossible (`inspect guarantees`), what each action requires (`inspect controls`), which rules have ever actually done work (`inspect coverage`) - and turn any rejection into a missing-evidence checklist (`explain`). A refusal names the values that caused it, not just the rule it broke - `invariant line_net_is_the_rounded_recompute violated` arrives with the line, the invoice, and the figures the rule was reading, so you can see the arithmetic without opening the database. The audit log is a tamper-evident Merkle tree: `audit verify` proves it intact rather than asserting it, and `audit export` produces a pack a third party verifies offline against a 32-byte anchor held outside the database - catching even a coordinated edit of the records and the log together. The integration surface is a pinned contract ([`docs/embedder-integration.md`](docs/embedder-integration.md)) with a **typed Python client generated by the binary itself**; an external open-source energy-trading system already drives a governed trade lifecycle through it.
 
-Not in the box yet: a worker supervisor and HTTP deliverer for the outbox, higher-order authority, governed materialised views. Each lands when a worked example forces its shape - the discipline that has kept the runtime small.
+Not in the box yet: a worker supervisor and HTTP deliverer for the outbox, higher-order authority, incremental maintenance for derived views. Each lands when a worked example forces its shape - the discipline that has kept the runtime small.
 
 ## Common questions
 
