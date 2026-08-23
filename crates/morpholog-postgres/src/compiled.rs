@@ -38,8 +38,10 @@
 //!
 //! The adopted witness contract (spike verdict): rule name, version, and
 //! the witness VARIABLE SET are strict across evaluators; witness values
-//! are observational (a symmetric self-join names the violating pair in a
-//! different order; a body minting `new Subject()` yields fresh ids).
+//! are observational - a symmetric self-join lawfully names the violating
+//! pair in a different order. (The spike had a second cause, bodies
+//! minting `new Subject()` twice; the same-candidate differential stages
+//! the body once, so that source of divergence no longer exists.)
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;

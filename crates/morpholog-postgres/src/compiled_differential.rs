@@ -419,8 +419,13 @@ async fn sweep(program: Program) {
 /// and (negative literals not being surface-spellable) the one place
 /// every operator pair meets its equality case. First-failure
 /// discriminator no other invariant can mask; the sum comparison
-/// rides a two-step chain to its exact boundary; the date join pins
-/// the tagged-jsonb equality tier in both directions.
+/// rides a two-step chain to its exact boundary; and every kind the
+/// compiler accepts a jsonb equality representation for (Bool, Date,
+/// Timestamp, Duration) carries its own join fragment, probed on both
+/// the matching and mismatching side. The rule the incident taught:
+/// probe count is not semantic coverage - every Ok(Repr) arm in
+/// `repr_for`, like every operator, needs a forcing discriminator
+/// here, not merely a unit test asserting emitted text.
 const HOSTILE: &[&str] = &[
     "program comparison_edges
 predicate LeBand(x: Subject, level: Decimal)
@@ -464,6 +469,36 @@ transformation open(x, on):
     admit Opened(x, on)
 transformation close(x, on):
     admit Closed(x, on)
+",
+    "program tagged_bool_join
+predicate LeftFlag(x: Subject, v: Bool)
+predicate RightFlag(x: Subject, v: Bool)
+invariant flags_agree:
+    LeftFlag(x, v) implies RightFlag(x, v)
+transformation set_right_flag(x, v):
+    admit RightFlag(x, v)
+transformation set_left_flag(x, v):
+    admit LeftFlag(x, v)
+",
+    "program tagged_timestamp_join
+predicate LeftAt(x: Subject, v: Timestamp)
+predicate RightAt(x: Subject, v: Timestamp)
+invariant instants_agree:
+    LeftAt(x, v) implies RightAt(x, v)
+transformation set_right_at(x, v):
+    admit RightAt(x, v)
+transformation set_left_at(x, v):
+    admit LeftAt(x, v)
+",
+    "program tagged_duration_join
+predicate LeftSpan(x: Subject, v: Duration)
+predicate RightSpan(x: Subject, v: Duration)
+invariant spans_agree:
+    LeftSpan(x, v) implies RightSpan(x, v)
+transformation set_right_span(x, v):
+    admit RightSpan(x, v)
+transformation set_left_span(x, v):
+    admit LeftSpan(x, v)
 ",
 ];
 
@@ -575,24 +610,12 @@ async fn dirty_history_diverges_only_in_the_pinned_direction() {
         ),
     };
 
-    // Full SQL stays verdict- and identity-equivalent to the kernel.
-    let Some(Outcome::Rejected {
-        reason: RejectionReason::Invariant {
-            name: kernel_rule, ..
-        },
-    }) = &obs.kernel
-    else {
-        panic!("the kernel must refuse a balanced entry over dirty history");
-    };
-    assert_eq!(kernel_rule.as_str(), "balanced_posted_entry");
-    let (s1_rule, _, _) = obs
-        .stage1
-        .as_ref()
-        .expect("the full check must refuse alongside the kernel");
-    assert_eq!(
-        s1_rule, kernel_rule,
-        "on dirty history the full check keeps the kernel's identity"
-    );
+    // Full SQL stays verdict- and identity-equivalent to the kernel:
+    // name, version, and witness variable set - the same strength the
+    // governed contract demands, because stage 1 is the
+    // semantics-equivalent compiler on EVERY history.
+    let kernel_rule = assert_stage1_keeps_kernel_identity(&obs);
+    assert_eq!(kernel_rule, "balanced_posted_entry");
 
     // The case-bound check lawfully ACCEPTS the non-worsening write -
     // the deliberate, pinned divergence direction.
@@ -620,18 +643,44 @@ async fn dirty_history_diverges_only_in_the_pinned_direction() {
     else {
         panic!("expected an observed probe for the worsening write")
     };
-    assert!(
-        matches!(obs.kernel, Some(Outcome::Rejected { .. })),
-        "the kernel refuses the worsening write"
-    );
-    assert!(
-        obs.stage1.is_some(),
-        "the full check refuses the worsening write"
-    );
+    assert_stage1_keeps_kernel_identity(&obs);
     assert!(
         obs.stage2.is_some(),
         "the case-bound check refuses the worsening write - divergence is one-directional"
     );
+}
+
+/// On any history, stage 1 keeps the kernel's full rejection identity:
+/// rule name, version, and witness variable set. Returns the rule name
+/// for the caller's own pin.
+fn assert_stage1_keeps_kernel_identity(obs: &ProbeObservation) -> String {
+    let Some(Outcome::Rejected {
+        reason:
+            RejectionReason::Invariant {
+                name,
+                version,
+                witness,
+            },
+    }) = &obs.kernel
+    else {
+        panic!("the kernel must refuse here");
+    };
+    let (s1_name, s1_version, s1_witness) = obs
+        .stage1
+        .as_ref()
+        .expect("the full check must refuse alongside the kernel");
+    assert_eq!(s1_name, name, "stage 1 keeps the kernel's rule name");
+    assert_eq!(
+        s1_version, version,
+        "stage 1 keeps the kernel's rule version"
+    );
+    let s1_vars: Vec<_> = s1_witness.iter().map(|w| &w.var).collect();
+    let k_vars: Vec<_> = witness.iter().map(|w| &w.var).collect();
+    assert_eq!(
+        s1_vars, k_vars,
+        "stage 1 keeps the kernel's witness variables"
+    );
+    name.to_string()
 }
 
 /// The compile-coverage census: reported, never pinned to a count

@@ -343,10 +343,12 @@ fn boundary_concrete(kind: &PredicateArgKind, _name: &str) -> Vec<Witness> {
             },
         ],
         // Instant and duration arithmetic has no zero-like boundary an
-        // argument can supply on its own.
-        PredicateArgKind::Timestamp | PredicateArgKind::Duration => {
-            vec![]
-        }
+        // argument can supply on its own; a second distinct value is
+        // still needed, or a generated pair of same-kind parameters
+        // could never DISAGREE - equality joins on these kinds would
+        // only ever probe the matching side.
+        PredicateArgKind::Timestamp => vec![ordinary(crate::ts("2026-07-02T09:30:00Z"))],
+        PredicateArgKind::Duration => vec![ordinary(crate::dur("PT2H30M"))],
         // Expression-only; unreachable as a parameter kind (see
         // `baseline_concrete`).
         PredicateArgKind::CalendarSpan => vec![],
