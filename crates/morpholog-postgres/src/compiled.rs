@@ -233,10 +233,15 @@ impl CompiledInvariant {
     }
 }
 
-/// An invariant name is an opaque string in hand-built IR; neutralise the
-/// sequences that could close or break the block comment it travels in.
+/// An invariant name is an opaque string in hand-built IR; neutralise
+/// every sequence that could break the block comment it travels in.
+/// PostgreSQL block comments NEST, so an embedded `/*` is as hostile
+/// as `*/`: it opens a level our single closer would then close,
+/// leaving the real comment open over the rest of the statement.
 fn comment_safe(name: &str) -> String {
-    name.replace(['\r', '\n'], " ").replace("*/", "* /")
+    name.replace(['\r', '\n'], " ")
+        .replace("*/", "* /")
+        .replace("/*", "/ *")
 }
 
 /// Compile every invariant of a validated programme, or report every
@@ -553,7 +558,10 @@ fn literal_sql(value: &Value) -> Result<(String, Repr), CompileReason> {
 }
 
 /// Stage-2 constant equality on an antecedent column, or None when the
-/// value kind cannot be rendered (widens to Unbounded).
+/// value kind cannot be rendered (widens to Unbounded). The tagged
+/// tier compares the whole value as jsonb against the delta value's
+/// own serialisation - the same serde every stored claim passed
+/// through, so the constant and the column speak one canonical form.
 fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
     match ev {
         EvalValue::Subject(s) => Some(format!(
@@ -566,6 +574,17 @@ fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
             col_sql(col, Repr::Numeric),
             quote_literal(&d.to_string())
         )),
+        EvalValue::Bool(_)
+        | EvalValue::Date(_)
+        | EvalValue::Timestamp(_)
+        | EvalValue::Duration(_) => {
+            let json = serde_json::to_string(ev).ok()?;
+            Some(format!(
+                "({}) = {}::jsonb",
+                col_sql(col, Repr::Jsonb),
+                quote_literal(&json)
+            ))
+        }
         _ => None,
     }
 }
@@ -1186,15 +1205,60 @@ invariant closed_on_the_open_date:
         let set = compile_invariants(program.validated().expect("validates"))
             .expect("in-fragment body compiles");
         let sql = set.invariants[0].violation_sql(None);
-        let comment_end = sql.find("*/\n").expect("comment closes once");
+        // The whole comment head: exactly one opener, exactly one
+        // closer, nothing nested. PostgreSQL block comments NEST, so
+        // an embedded `/*` left alone would swallow the statement -
+        // the first version of this test only inspected the text
+        // before the first closer and missed exactly that.
+        let head = sql.lines().next().expect("the comment head line");
+        assert_eq!(head.matches("/*").count(), 1, "one opener, got:\n{sql}");
+        assert_eq!(head.matches("*/").count(), 1, "one closer, got:\n{sql}");
         assert!(
-            !sql[..comment_end].contains("DROP TABLE") || sql[..comment_end].contains("* /"),
-            "the name's comment-closer must be neutralised"
+            head.ends_with("*/"),
+            "the closer ends the head line, got:\n{sql}"
         );
         assert!(
-            !sql[..comment_end].contains('\n') || sql.starts_with("/*"),
-            "no raw newline inside the comment head"
+            head.contains("* /") && head.contains("/ *"),
+            "both delimiters in the name are neutralised, got:\n{sql}"
         );
-        assert!(sql.contains("* /"), "escaped closer present, got:\n{sql}");
+    }
+
+    #[test]
+    fn a_date_keyed_delta_bounds_the_case_instead_of_widening() {
+        let source = "\
+program tagged_case
+
+predicate Opened(x: Subject, on: Date)
+predicate Closed(x: Subject, on: Date)
+
+invariant closed_on_the_open_date:
+    Closed(x, d) implies Opened(x, d)
+";
+        let program = morpholog_surface::parse_program(source).expect("parses");
+        let set = compiled(&program);
+        let asserted = vec![morpholog_core::ClaimInstance {
+            predicate: "Closed".into(),
+            args: vec![
+                morpholog_test_support::subj("s1"),
+                morpholog_test_support::date("2026-01-31"),
+            ],
+        }];
+        let CaseFilter::Bounded(filter) = set.invariants[0].case_filter(&asserted, &[]) else {
+            panic!("a date-keyed delta must bound, not widen");
+        };
+        assert!(
+            filter
+                .contains(r#"(t0.arguments -> 1) = '{"type":"date","value":"2026-01-31"}'::jsonb"#),
+            "the tagged constant equality, got: {filter}"
+        );
+    }
+
+    #[test]
+    fn comment_safe_leaves_no_delimiter_standing() {
+        let hostile = "a*/b/*c\r\nd*/*e/*/f";
+        let safe = comment_safe(hostile);
+        assert!(!safe.contains("*/"), "closer survived: {safe}");
+        assert!(!safe.contains("/*"), "opener survived: {safe}");
+        assert!(!safe.contains('\n') && !safe.contains('\r'));
     }
 }

@@ -19,13 +19,13 @@ uuid = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
-rust_decimal = { workspace = true }
 
 [dev-dependencies]
 morpholog-examples = { path = "../morpholog-examples" }
 morpholog-surface = { path = "../morpholog-surface" }
 morpholog-test-support = { path = "../morpholog-test-support" }
 jiff = { workspace = true }
+rust_decimal = { workspace = true }
 
 [lints]
 workspace = true
