@@ -37,16 +37,14 @@ and the runtime checks every invariant against the result. If anything would
 break, nothing happens, and the database is byte-for-byte what it was before.
 Morpholog calls that proposal a **transformation**. Inside your application
 there is no second door - no ORM path or forgotten service that writes its own
-way and skips the checks; every write goes through the gate. One honest caveat,
-because it is the first question a careful reader asks: the gate runs in the
-runtime, not the storage engine, so a direct `UPDATE` against the claims table
-by something holding raw write privilege would go around it. You close that the
-ordinary way - grant write on the `morpholog` schema to the runtime's role
-alone - and, unlike a `CHECK` constraint that is simply gone once dropped, a
-write that does slip around the gate is not silent: the claims table and the
-audit log are two records of one history, and `morpholog audit verify` catches any
-edit that leaves them disagreeing. ("Can someone bypass the rules with raw
-SQL?" in the README has the full answer.)
+way and skips the checks; every write goes through the gate. One honest
+caveat: the gate runs in the runtime, not the storage engine, so raw write
+privilege on the claims table could go around it. Close that the ordinary
+way - only the runtime's role writes the `morpholog` schema - and a write that
+slips through anyway is not silent: the claims table and the audit log are two
+records of one history, and `morpholog audit verify` catches any edit that
+leaves them disagreeing. (The README's "Can someone bypass the rules with raw
+SQL?" has the full answer.)
 
 The last idea is the one with no familiar name, so hold it lightly for now.
 Morpholog stores **claims**, not objects. There is no `Invoice` class, no row
@@ -263,12 +261,10 @@ morpholog check revenue.morph
 ```
 
 Silence and a zero exit means it parsed and validated - argument counts,
-unbound variables, expression shapes, the lot. This is your compiler, and it
-behaves like one: any mistake comes back with a caret pointing at the exact
-line and statement in your source, not just a description. (Tooling can ask
-for the same findings as data with `check --json`.) Success is quiet by
-design, because scripts depend on the empty output. When you want the
-reassurance, ask for it:
+unbound variables, expression shapes, the lot. Any mistake comes back with a
+caret on the exact line in your source (`check --json` gives tooling the same
+findings as data). Success is quiet because scripts depend on the empty
+output; for reassurance, ask:
 
 ```bash
 morpholog check -v revenue.morph
@@ -277,6 +273,7 @@ morpholog check -v revenue.morph
 ok: revenue.morph
 program: reported_revenue
   predicates: 4
+  definitions: 0
   invariants: 2
   transformations: 3
   intents: 3
@@ -352,21 +349,18 @@ JUNE=019e937d-0e98-7790-897e-30500c744711   # yours will differ - use your recei
 ```
 
 Every commit returns a `transition_id` - its exact coordinate in the audit
-log. It is an id rather than a date because a date is ambiguous: many things
-can commit in one day. The id names one precise moment - the state immediately
-after that particular commit. (When an instant is what you have, `--as-of`
-also accepts an RFC 3339 timestamp and resolves it to the last commit at or
-before it; the id remains the precise coordinate.)
+log: the state immediately after that particular commit, unambiguous where a
+date is not. (When an instant is what you have, `--as-of` also accepts an RFC
+3339 timestamp and resolves it to the last commit at or before it.)
 
-(In real life the bank lives in its own systems, of course. What we are
-modelling is the governed record on the asset's side: the bank's decision
-*enters as a claim*, proposed under the bank's authority - that is what
-`--actor` is recording. One Morpholog instance is one party's system of
-record, not a ledger shared between organisations. And `--actor` is recorded
-provenance, not authentication: verifying who is calling, before proposing in
-their name, is your service's job. When authority itself must be *enforced* -
-"only holders of this role may confirm" - that is a gate, and the
-approval-controls worked example is built around exactly that.)
+(In real life the bank lives in its own systems; what we model is the
+governed record on the asset's side, and the bank's decision *enters as a
+claim* under the bank's authority - that is what `--actor` records. One
+Morpholog instance is one party's system of record, not a ledger shared
+between organisations. `--actor` is recorded provenance, not authentication:
+verifying who is calling is your service's job, and when authority itself
+must be *enforced* - "only holders of this role may confirm" - that is a
+gate, built out in the approval-controls worked example.)
 
 ## The turn
 
@@ -436,9 +430,8 @@ has moved. The old figure is untouched.
 
 **Did the bank's June decision survive?** Ask Morpholog for the state exactly
 as it stood at the moment you stashed in `$JUNE`. The claims come back as a
-JSON array; to read along comfortably, here is a small shell helper that
-prints one claim per line. You do not need to read its insides - only its
-output - and we will reuse it for the rest of this guide:
+JSON array; this tiny helper prints one per line, and the rest of this guide
+reuses it:
 
 ```bash
 flat() { jq -r '.[] | "\(.predicate)(\([.args[].value] | join(", ")))"'; }
@@ -620,14 +613,12 @@ CurrentRevenue(battery_07, q1_2026, f1, 1000)
 That is last quarter's report, reproduced - not from a snapshot someone
 remembered to take, but recomputed from the audit log on demand.
 
-If you are now wondering what that costs: less than you would think, and not
-where you would think. Current state lives in an ordinary table, so everyday
-reads - the screens, the views you just saw - never replay anything. Only the
-*historical* question replays, the cost is linear in the length of the audit
-log, and the replay is scoped to the predicates the view actually touches
-(measured: about a second and a half through a hundred thousand commits).
-And consider what the alternative costs today: "what did the books say in
-June?" is usually a week of forensics, not a second and a half.
+The cost sits where you can afford it. Current state lives in an ordinary
+table, so everyday reads - the screens, the views you just saw - never replay
+anything. Only the *historical* question replays: linear in the audit log,
+scoped to the predicates the view touches (measured: about a second and a
+half through a hundred thousand commits). And the alternative costs more:
+"what did the books say in June?" is usually a week of forensics.
 
 ### Reading governed state as SQL
 
@@ -800,26 +791,35 @@ example shows one where the verification gate front-loads its standing
 invariant.)
 
 `inspect coverage` replays the whole audit log and reports which rules have
-ever actually done work. After the report and the correction you ran:
+ever actually done work. After everything you ran above (output trimmed of
+transition ids and the how-to-read footer):
 
 ```bash
 morpholog inspect coverage revenue.morph
 ```
 ```
+Rule coverage of `reported_revenue` over 3 committed transition(s) and 1 recorded rejection(s):
+
+invariants:
+
   one_figure_in_force_per_period - fired in 2 transition(s)
   correction_chain_never_forks - fired in 1 transition(s)
 
+transformations:
+
   report_revenue - 1 transition(s)
   correct_revenue - 1 transition(s)
-  run_covenant_test - never used
+  run_covenant_test - 1 transition(s)
+    refused: 1 proposal(s)
 ```
 
-`run_covenant_test` shows `never used` because you have not run a covenant
-test yet (that is the first poke below). A transformation or rule that has
-never done any work is dead text wearing a load-bearing name - and now it gets
-named, instead of sitting in the source looking enforced. (Replay reports what
-*has* happened, never what *could*: it cannot prove a rule will never fire,
-only that it has not.)
+That `refused: 1 proposal(s)` is the August attempt you watched bounce - a
+rule that has actually said no is the strongest evidence it is alive. The
+verdict to watch for is the opposite one: a transformation or rule showing
+`never` here is dead text wearing a load-bearing name, and now it gets named
+instead of sitting in the source looking enforced. (Replay reports what *has*
+happened, never what *could*: it cannot prove a rule will never fire, only
+that it has not.)
 
 ## Say the rules on the declarations
 
@@ -867,15 +867,17 @@ raises specifically:
 
 **"Are `Subject` and `Decimal` really the only types?"**
 No - this guide's example just never needed more. There are dates with date
-comparison (the clinical-trial example gates enrolment on validity windows),
-exact timestamps and durations with exact arithmetic (the laytime example
-computes deadlines by shifting an instant and sums interval lengths against an
-allowance), unit-tagged amounts (`Decimal[USD]`, `Decimal[t]` - the runtime
-refuses to add or compare across units, so money never meets tonnes by
-accident), booleans, enum-like domain symbols, and collections. Genuinely
-missing today: calendar arithmetic on civil dates, timezone-aware local time,
-and unit conversions - each planned to enter as admitted claims from an
-authority you choose, never as a hidden runtime lookup table.
+comparison and calendar arithmetic - shift a date by whole months with
+month-end clamping, count the exact days between two dates, place a date in
+an anniversary-anchored period (the covenant-reporting and charging-years
+examples run on these); exact timestamps and durations with exact arithmetic
+(the laytime example computes deadlines by shifting an instant); unit-tagged
+amounts (`Decimal[USD]`, `Decimal[t]` - the runtime refuses to add or compare
+across units, so money never meets tonnes by accident); contract-grade
+rounding; booleans, enum-like domain symbols, and collections. Genuinely
+missing today: timezone-aware local time and unit conversions - each planned
+to enter as admitted claims from an authority you choose, never as a hidden
+runtime lookup table.
 
 **"Does this scale beyond one small file?"**
 The programmes are deliberately small so far, and `.morph` has no imports or
@@ -899,13 +901,10 @@ that fired, with a caret on its line.
   cousins of what you just built.
 - [`runtime-semantics.md`](runtime-semantics.md) - what the kernel means, and the
   full surface-to-IR mapping if you want to know what every keyword lowers to.
-- [`embedder-integration.md`](embedder-integration.md) - when you are ready to
-  drive Morpholog from an application rather than a terminal: the pinned
-  contract this guide's `propose()` sketch was secretly following, batch
-  import for many transitions in one call, and
-  `morpholog generate python-client` - one command that emits a complete,
-  typed, dependency-free Python client for your own programme, so the
-  subprocess plumbing is generated rather than written.
+- [`embedder-integration.md`](embedder-integration.md) - driving Morpholog
+  from an application rather than a terminal: the pinned contract this
+  guide's `propose()` sketch was secretly following, batch import, and the
+  generated Python client.
 - The project [`README`](../README.md) - the wider pitch and the list of
   questions Morpholog is built to answer.
 - [`scope-and-ambition.md`](scope-and-ambition.md) and
