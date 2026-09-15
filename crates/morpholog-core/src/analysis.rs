@@ -319,6 +319,53 @@ pub(crate) fn declared_supplier_predicates(program: &Program) -> BTreeSet<Predic
     out
 }
 
+/// Every predicate a transformation's body writes - admits or retracts -
+/// descending into `for` bodies. A retraction is as much an authority
+/// over shared state as an admission, which is what sets this apart from
+/// the assert-only walker the control matrix uses.
+pub fn predicates_written_by(
+    transformation: &crate::ir::Transformation,
+) -> BTreeSet<PredicateName> {
+    let mut out = BTreeSet::new();
+    for stmt in &transformation.body {
+        collect_written(stmt, &mut out);
+    }
+    out
+}
+
+fn collect_written(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
+    match stmt {
+        Stmt::Assert(claim) => {
+            out.insert(claim.predicate.clone());
+        }
+        Stmt::Retract { predicate, .. } => {
+            out.insert(predicate.clone());
+        }
+        Stmt::For { body, .. } => {
+            for s in body {
+                collect_written(s, out);
+            }
+        }
+        Stmt::Require { .. }
+        | Stmt::BindOne { .. }
+        | Stmt::Let { .. }
+        | Stmt::LetNewSubject { .. }
+        | Stmt::Emit(_) => {}
+    }
+}
+
+/// Whether the transformation carries an admission gate: a top-level
+/// `require` or `bind`. A gate inside a `for` is an iteration condition
+/// on one item, not protection of the whole transformation - the line
+/// the controls surface draws, kept here so a cross-programme finding
+/// claims no more than the control matrix would.
+pub fn has_admission_gate(transformation: &crate::ir::Transformation) -> bool {
+    transformation
+        .body
+        .iter()
+        .any(|stmt| matches!(stmt, Stmt::Require { .. } | Stmt::BindOne { .. }))
+}
+
 /// Every predicate a transformation's body asserts (`admit`), descending
 /// into `for` bodies. Used by the control matrix to decide which
 /// invariants a transformation could trigger.

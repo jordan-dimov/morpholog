@@ -190,6 +190,19 @@ transformation ship_all(items):
 /// An invariant whose antecedent is a defined call over a predicate no
 /// transformation admits: the unsupplied-antecedent lint fires only if
 /// the lint walker descends into the definition body.
+const RETRACT_IN_NESTED_FOR: &str = "\
+program retract_in_nested_for
+predicate Held(item: Subject)
+predicate Batch(batch: Subject)
+transformation hold(item):
+    admit Held(item)
+transformation release_all(batches, items):
+    for batch in batches:
+        require Batch(batch)
+        for item in items:
+            retract Held(item)
+";
+
 const UNSUPPLIED_THROUGH_DEFINED: &str = "\
 program unsupplied_through_defined
 predicate Ghost(g: Subject)
@@ -389,6 +402,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("qty_chain_in_and", QTY_CHAIN_IN_AND),
         ("valueof_sum_default", VALUEOF_SUM_DEFAULT),
         ("for_with_defined_require", FOR_WITH_DEFINED_REQUIRE),
+        ("retract_in_nested_for", RETRACT_IN_NESTED_FOR),
         ("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED),
         ("let_sugared_define", LET_SUGARED_DEFINE),
         ("round_in_let_sugared_body", ROUND_IN_LET_SUGARED_BODY),
@@ -781,5 +795,31 @@ fn the_unsupplied_antecedent_lint_descends_the_definition() {
                     && missing.contains(&"Ghost".to_string())
         )),
         "the lint never descended into the definition: {findings:?}"
+    );
+}
+
+/// The write-set walker reaches a retraction two `for` bodies deep, and
+/// a gate inside a `for` is not an admission gate: the two facts the
+/// shared-writer lint stands on.
+#[test]
+fn write_set_reaches_a_nested_retraction_and_a_nested_gate_is_not_admission() {
+    let program = parsed("retract_in_nested_for", RETRACT_IN_NESTED_FOR);
+    let release_all = program
+        .transformations
+        .iter()
+        .find(|t| t.name.as_str() == "release_all")
+        .unwrap();
+    let written = morpholog_core::predicates_written_by(release_all);
+    assert!(
+        written.contains(&PredicateName::from("Held")),
+        "the write set stops short of the nested retraction: {written:?}"
+    );
+    assert!(
+        !written.contains(&PredicateName::from("Batch")),
+        "a required predicate is read, never written: {written:?}"
+    );
+    assert!(
+        !morpholog_core::has_admission_gate(release_all),
+        "a require inside a for is an iteration condition, not an admission gate"
     );
 }

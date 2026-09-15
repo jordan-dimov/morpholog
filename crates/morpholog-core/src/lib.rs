@@ -49,8 +49,9 @@ mod sums;
 mod validate;
 
 pub use analysis::{
-    AnalysisError, ParamKind, predicates_read_by_stmt, predicates_referenced_by_derived,
-    predicates_referenced_by_prop, transformation_param_kinds, transformations_asserting,
+    AnalysisError, ParamKind, has_admission_gate, predicates_read_by_stmt,
+    predicates_referenced_by_derived, predicates_referenced_by_prop, predicates_written_by,
+    transformation_param_kinds, transformations_asserting,
 };
 pub use compiled::CompiledProgram;
 pub use controls::{
@@ -77,7 +78,7 @@ pub use ir::{
     Program, Prop, RuleName, Stmt, Subject, SumSeed, Term, Transformation, TransformationName,
     Unit, Value, ValueExpr, Var,
 };
-pub use lint::{Lint, lints};
+pub use lint::{Lint, SharedWriterPeer, lints, shared_writer_lints};
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RejectionReason, RequireOutcome, StagedDelta,
     TraceEntry, TracedProposal, Transition, WitnessBinding, finish_staged_delta, propose,

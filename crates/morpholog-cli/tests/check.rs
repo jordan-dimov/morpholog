@@ -585,3 +585,131 @@ transformation add(id):
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+// ---------------------------------------------------------------
+// `--against`: shared writers across programmes.
+// ---------------------------------------------------------------
+
+const SECURE_MORPH: &str = r#"program secure
+predicate AuditSigningKey(key_id: Subject, purpose: Subject, public_key: Subject)
+predicate KeyAdmin(person: Subject)
+transformation register(key_id, purpose, public_key):
+    require KeyAdmin(actor)
+    admit AuditSigningKey(key_id, purpose, public_key)
+"#;
+
+const ROGUE_MORPH: &str = r#"program rogue
+predicate AuditSigningKey(key_id: Subject, purpose: Subject, public_key: Subject)
+transformation bring_own_key(key_id, purpose, public_key):
+    admit AuditSigningKey(key_id, purpose, public_key)
+"#;
+
+const READER_MORPH: &str = r#"program reader
+predicate AuditSigningKey(key_id: Subject, purpose: Subject, public_key: Subject)
+predicate Seen(key_id: Subject)
+transformation note(key_id):
+    require AuditSigningKey(key_id, _, _)
+    admit Seen(key_id)
+"#;
+
+fn check_against(
+    file: &std::path::Path,
+    against: &[&std::path::Path],
+    extra: &[&str],
+) -> std::process::Output {
+    let mut cmd = Command::new(bin());
+    cmd.arg("check").arg(file);
+    for a in against {
+        cmd.arg("--against").arg(a);
+    }
+    for e in extra {
+        cmd.arg(e);
+    }
+    cmd.output().expect("spawn morpholog")
+}
+
+#[test]
+fn against_reports_a_shared_writer_as_a_hint_on_the_local_transformation() {
+    let secure = temp_morph(SECURE_MORPH);
+    let rogue = temp_morph(ROGUE_MORPH);
+    let out = check_against(secure.path(), &[rogue.path()], &[]);
+    assert!(
+        out.status.success(),
+        "a hint keeps exit 0: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stdout.is_empty(), "stdout stays script-silent");
+    let stderr = strip_ansi(&String::from_utf8(out.stderr).unwrap());
+    assert!(
+        stderr.contains("hint:")
+            && stderr.contains(&format!("against {}", rogue.path().display()))
+            && stderr.contains("`bring_own_key`: ungated")
+            && stderr.contains("`register` here also writes it and has an admission gate")
+            && stderr.contains(":4:1"),
+        "the finding names the other file and its ungated writer, anchored on `register`: {stderr}"
+    );
+
+    let out = check_against(secure.path(), &[rogue.path()], &["--strict"]);
+    assert!(!out.status.success(), "--strict promotes the finding");
+    let stderr = strip_ansi(&String::from_utf8(out.stderr).unwrap());
+    assert!(stderr.contains("error:"), "{stderr}");
+}
+
+#[test]
+fn against_json_carries_the_finding_with_the_local_span_and_no_foreign_spans() {
+    let secure = temp_morph(SECURE_MORPH);
+    let rogue = temp_morph(ROGUE_MORPH);
+    let out = check_against(secure.path(), &[rogue.path()], &["--json"]);
+    assert!(out.status.success());
+    let payload: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let diagnostics = payload["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), 1, "{payload}");
+    assert_eq!(diagnostics[0]["severity"], "hint");
+    assert_eq!(
+        diagnostics[0]["line"], 4,
+        "anchored on `register`: {payload}"
+    );
+    assert!(
+        diagnostics[0]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("against {}: ", rogue.path().display())),
+        "{payload}"
+    );
+
+    // A broken --against file is an unanchored error naming the path:
+    // the report has one `file`, and a span into another would lie.
+    let broken = temp_morph("program broken\npredicate P(x: Subject)\ninvariant t: Nope(x)\n");
+    let out = check_against(secure.path(), &[broken.path()], &["--json"]);
+    assert!(!out.status.success());
+    let payload: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let d = &payload["diagnostics"].as_array().unwrap()[0];
+    assert_eq!(d["severity"], "error");
+    assert!(
+        d.get("line").is_none() && d.get("start").is_none(),
+        "{payload}"
+    );
+    assert!(
+        d["message"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("against {}: ", broken.path().display())),
+        "{payload}"
+    );
+}
+
+#[test]
+fn against_a_reader_is_silent_and_against_itself_is_refused() {
+    let secure = temp_morph(SECURE_MORPH);
+    let reader = temp_morph(READER_MORPH);
+    let out = check_against(secure.path(), &[reader.path()], &["--strict"]);
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "a reader is not a collision"
+    );
+
+    let out = check_against(secure.path(), &[secure.path()], &[]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("cannot collide with itself"), "{stderr}");
+}

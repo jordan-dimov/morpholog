@@ -28,7 +28,8 @@ fn unsupplied_missing(found: &[Lint]) -> Vec<&str> {
             }
             Lint::GateVsInvariant { .. }
             | Lint::GoverningSelectionWithoutTotality { .. }
-            | Lint::EffectiveWithoutDeclaredTotality { .. } => None,
+            | Lint::EffectiveWithoutDeclaredTotality { .. }
+            | Lint::SharedWriter { .. } => None,
         })
         .unwrap_or_default()
 }
@@ -46,7 +47,8 @@ fn governing_finding(found: &[Lint]) -> Option<(&str, Vec<&str>)> {
         )),
         Lint::GateVsInvariant { .. }
         | Lint::UnsuppliedAntecedent { .. }
-        | Lint::EffectiveWithoutDeclaredTotality { .. } => None,
+        | Lint::EffectiveWithoutDeclaredTotality { .. }
+        | Lint::SharedWriter { .. } => None,
     })
 }
 

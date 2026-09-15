@@ -190,6 +190,12 @@ impl SourceMap {
             Lint::EffectiveWithoutDeclaredTotality { predicate } => {
                 self.decl_span(DeclKind::Predicate, predicate)
             }
+            // Anchored on THIS programme's writing transformation - the
+            // declaration the author can act on; the other programme is
+            // named in the message, its file by the caller.
+            Lint::SharedWriter { transformation, .. } => {
+                self.decl_span(DeclKind::Transformation, transformation)
+            }
         }
     }
 
