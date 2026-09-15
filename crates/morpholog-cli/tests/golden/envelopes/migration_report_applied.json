@@ -7,10 +7,14 @@
     {
       "name": "schema_migrations",
       "version": 11
+    },
+    {
+      "name": "claims_hash_key",
+      "version": 12
     }
   ],
-  "binary_version": 11,
+  "binary_version": 12,
   "pending": [],
-  "recorded_version_after": 11,
+  "recorded_version_after": 12,
   "recorded_version_before": 9
 }

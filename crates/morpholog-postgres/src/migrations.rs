@@ -59,6 +59,7 @@ migrations![
     (9, "audit_attestation", "009_audit_attestation.sql"),
     (10, "rejections_witness", "010_rejections_witness.sql"),
     (11, "schema_migrations", "011_schema_migrations.sql"),
+    (12, "claims_hash_key", "012_claims_hash_key.sql"),
 ];
 
 /// The newest migration this binary carries.

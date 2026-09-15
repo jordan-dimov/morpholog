@@ -453,34 +453,35 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
     struct ClaimRow {
         predicate_name: String,
         arguments: serde_json::Value,
+        arguments_hash: Vec<u8>,
     }
     let mut rows: Vec<(String, serde_json::Value)> = Vec::new();
-    let mut claims_cursor: Option<(String, serde_json::Value)> = None;
+    let mut claims_cursor: Option<(String, Vec<u8>)> = None;
     loop {
         let page: Vec<ClaimRow> = match &claims_cursor {
             None => {
                 sqlx::query_as!(
                     ClaimRow,
-                    "SELECT predicate_name, arguments
+                    "SELECT predicate_name, arguments, arguments_hash
                      FROM morpholog.claims
-                     ORDER BY predicate_name, arguments
+                     ORDER BY predicate_name, arguments_hash
                      LIMIT $1",
                     REPLAY_CHUNK,
                 )
                 .fetch_all(&mut *tx)
                 .await
             }
-            Some((pred, args)) => {
+            Some((pred, hash)) => {
                 sqlx::query_as!(
                     ClaimRow,
-                    "SELECT predicate_name, arguments
+                    "SELECT predicate_name, arguments, arguments_hash
                      FROM morpholog.claims
-                     WHERE (predicate_name, arguments) > ($2, $3)
-                     ORDER BY predicate_name, arguments
+                     WHERE (predicate_name, arguments_hash) > ($2, $3)
+                     ORDER BY predicate_name, arguments_hash
                      LIMIT $1",
                     REPLAY_CHUNK,
                     pred,
-                    args,
+                    hash,
                 )
                 .fetch_all(&mut *tx)
                 .await
@@ -490,7 +491,7 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
         let Some(last) = page.last() else {
             break;
         };
-        claims_cursor = Some((last.predicate_name.clone(), last.arguments.clone()));
+        claims_cursor = Some((last.predicate_name.clone(), last.arguments_hash.clone()));
         let exhausted = (page.len() as i64) < REPLAY_CHUNK;
         rows.extend(page.into_iter().map(|r| (r.predicate_name, r.arguments)));
         if exhausted {

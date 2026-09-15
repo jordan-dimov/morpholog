@@ -66,6 +66,7 @@ pub enum VocabularyKind {
     Predicate,
     Intent,
     Definition,
+    Derived,
 }
 
 impl std::fmt::Display for VocabularyKind {
@@ -74,6 +75,7 @@ impl std::fmt::Display for VocabularyKind {
             VocabularyKind::Predicate => write!(f, "predicate"),
             VocabularyKind::Intent => write!(f, "intent"),
             VocabularyKind::Definition => write!(f, "definition"),
+            VocabularyKind::Derived => write!(f, "derived claim"),
         }
     }
 }
@@ -1130,6 +1132,26 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
     for name in dup_definitions {
         errors.push(ValidationError::DuplicateDecl {
             vocabulary: VocabularyKind::Definition,
+            name: name.to_string(),
+        });
+    }
+
+    // And for derived claims: two declarations of one head would publish
+    // two answers under one name, and the read cache that materialises
+    // them takes the kernel's output as a set.
+    let mut seen_derived = HashMap::<&str, usize>::new();
+    for decl in &p.derived_claims {
+        *seen_derived.entry(decl.predicate.as_str()).or_insert(0) += 1;
+    }
+    let mut dup_derived: Vec<&str> = seen_derived
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(name, _)| *name)
+        .collect();
+    dup_derived.sort_unstable();
+    for name in dup_derived {
+        errors.push(ValidationError::DuplicateDecl {
+            vocabulary: VocabularyKind::Derived,
             name: name.to_string(),
         });
     }

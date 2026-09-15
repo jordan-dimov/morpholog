@@ -156,13 +156,15 @@ ran.
 
 If an unapplied migration leaves a **column** this binary expects absent, its
 queries report the database as out of date and tell you to run `migrate`,
-rather than surfacing a raw database error. That is the shape this release's
-migration takes; it is not general schema-version detection, so a migration
-adding a table or an index would fail differently.
+rather than surfacing a raw database error. The migrations since the record
+existed take that shape; it is not general schema-version detection, so a
+migration adding a table or an index would fail differently.
 
-Worth knowing how the column case presents: **accepted proposals keep
-working**, and the first thing to break is a *refusal* - that is the path
-writing the new column - so the trouble surfaces well after the upgrade.
+Worth knowing where the column case presents. The claims-key migration is
+named by every write, so the first proposal that admits or retracts a claim
+reports it. The rejection-witness migration is named only by a *refusal*, so
+**accepted proposals keep working** and the trouble surfaces well after the
+upgrade.
 
 From here: the [developer introduction](developer-intro.md) builds a
 governed model from scratch; [`embedder-integration.md`](embedder-integration.md)

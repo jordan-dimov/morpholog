@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)\n             VALUES ($1, $2, $3)\n             ON CONFLICT (predicate_name, arguments_hash) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5efa2516479ec9f271cfb2e965318e026ba95146f66f2f659b620a2bd852766f"
+}
