@@ -799,8 +799,8 @@ fn the_unsupplied_antecedent_lint_descends_the_definition() {
 }
 
 /// The write-set walker reaches a retraction two `for` bodies deep, and
-/// a gate inside a `for` is not an admission gate: the two facts the
-/// shared-writer lint stands on.
+/// a gate inside a `for` is not an admission gate: the two properties
+/// the shared-writer lint stands on.
 #[test]
 fn write_set_reaches_a_nested_retraction_and_a_nested_gate_is_not_admission() {
     let program = parsed("retract_in_nested_for", RETRACT_IN_NESTED_FOR);

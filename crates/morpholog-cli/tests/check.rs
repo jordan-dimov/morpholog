@@ -712,4 +712,19 @@ fn against_a_reader_is_silent_and_against_itself_is_refused() {
     assert!(!out.status.success());
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(stderr.contains("cannot collide with itself"), "{stderr}");
+
+    // Under --json the refusal is still one object on stdout.
+    let out = check_against(secure.path(), &[secure.path()], &["--json"]);
+    assert!(!out.status.success());
+    let payload: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let d = &payload["diagnostics"].as_array().unwrap()[0];
+    assert_eq!(d["severity"], "error");
+    assert!(
+        d["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot collide with itself")
+            && d.get("line").is_none(),
+        "{payload}"
+    );
 }

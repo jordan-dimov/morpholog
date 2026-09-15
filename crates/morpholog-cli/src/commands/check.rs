@@ -292,7 +292,18 @@ fn run_json(args: &CheckArgs) -> anyhow::Result<()> {
                         ));
                     }
                     for path in &args.against {
-                        refuse_self_comparison(&args.file, path)?;
+                        // One object on stdout, whatever went wrong: the
+                        // self-comparison refusal is a finding here too.
+                        if let Err(e) = refuse_self_comparison(&args.file, path) {
+                            failed = true;
+                            findings.push(CheckDiagnostic::new(
+                                "error",
+                                e.to_string(),
+                                None,
+                                &source,
+                            ));
+                            continue;
+                        }
                         match load_against(path) {
                             Err(messages) => {
                                 failed = true;

@@ -1127,7 +1127,8 @@ pub(crate) struct CheckArgs {
     /// admits or retracts is reported as a hint on this file's
     /// writing transformation: two programmes writing one predicate
     /// each escape the other's gates. Repeatable; each file must
-    /// itself pass `check`.
+    /// itself parse and validate (its own lints are its own `check`'s
+    /// business).
     #[arg(long, value_name = "FILE")]
     pub(crate) against: Vec<PathBuf>,
 
