@@ -787,7 +787,155 @@ async fn the_claims_key_migration_brings_old_tables_to_the_head_shape() {
         "a drifted table must be refused by name, got {refused:?}"
     );
 
+    // The head key over a column that merely USES the helper: dependency
+    // present, expression wrong, every row unreachable by a retract that
+    // recomputes the plain digest. Refused, not declared current.
+    ddl(
+        &pool,
+        format!(
+            "ALTER TABLE {scratch}.claims DROP CONSTRAINT claims_pkey,
+             ADD COLUMN arguments_hash bytea NOT NULL GENERATED ALWAYS AS
+                 (morpholog.claim_digest(arguments) || '\\x00'::bytea) STORED,
+             ADD PRIMARY KEY (predicate_name, arguments_hash)"
+        ),
+    )
+    .await
+    .unwrap();
+    let refused = ddl(&pool, migration.clone()).await;
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|e| e.to_string().contains("refusing to guess")),
+        "a transformed digest expression must be refused, got {refused:?}"
+    );
+
     ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
         .await
         .unwrap();
+}
+
+/// Digests stored under another definition of the helper are refused,
+/// whether the foreign helper is still in place or has since been put
+/// back: replacing a function never recomputes the stored column values
+/// generated under it, so a row keyed by a foreign digest is unreachable
+/// by the retract that recomputes the real one.
+///
+/// On its own database, because it rewrites the shared helper.
+#[tokio::test]
+async fn digests_stored_under_a_foreign_helper_are_refused() {
+    let Ok(base) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let name = format!("morpholog_digest_probe_{}", std::process::id());
+    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
+    let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
+    ddl(
+        &admin_pool,
+        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    )
+    .await
+    .unwrap();
+    ddl(&admin_pool, format!("CREATE DATABASE {name}"))
+        .await
+        .unwrap();
+
+    let probe_url = morpholog_postgres::with_default_user(&with_database(&base, &name));
+    let outcome = foreign_helper_probe(&probe_url).await;
+
+    ddl(
+        &admin_pool,
+        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    )
+    .await
+    .unwrap();
+    outcome.expect("foreign digests must be refused, and the repaired table accepted");
+}
+
+async fn foreign_helper_probe(url: &str) -> Result<(), String> {
+    const REAL: &str = "CREATE OR REPLACE FUNCTION morpholog.claim_digest(args jsonb) RETURNS bytea
+        LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+        RETURN sha256(convert_to(args::text, 'UTF8'))";
+    const FOREIGN: &str =
+        "CREATE OR REPLACE FUNCTION morpholog.claim_digest(args jsonb) RETURNS bytea
+        LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+        RETURN sha256(convert_to(args::text || 'x', 'UTF8'))";
+    let pool = sqlx::PgPool::connect(url).await.expect("probe");
+    morpholog_postgres::initialise_schema(&pool)
+        .await
+        .expect("provision");
+    // A row keyed under a foreign helper, then the migration asked again.
+    ddl(&pool, FOREIGN.to_string()).await.unwrap();
+    ddl(
+        &pool,
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         VALUES ('Statement', '[{\"type\":\"subject\",\"value\":\"s\"}]'::jsonb, gen_random_uuid())"
+            .to_string(),
+    )
+    .await
+    .unwrap();
+    ddl(
+        &pool,
+        "DELETE FROM morpholog.schema_migrations WHERE version = 12".to_string(),
+    )
+    .await
+    .unwrap();
+
+    let with_foreign = morpholog_postgres::apply_migrations(&pool).await;
+    match with_foreign {
+        Err(e) if e.to_string().contains("another definition") => {}
+        other => {
+            return Err(format!(
+                "a foreign helper must be refused by name, got {other:?}"
+            ));
+        }
+    }
+
+    // The helper put back by hand: the definition is right, the stored
+    // digest is not.
+    ddl(&pool, REAL.to_string()).await.unwrap();
+    let with_stale = morpholog_postgres::apply_migrations(&pool).await;
+    match with_stale {
+        Err(e) if e.to_string().contains("disagree") => {}
+        other => {
+            return Err(format!(
+                "a stale stored digest must be refused, got {other:?}"
+            ));
+        }
+    }
+    let status = morpholog_postgres::migration_status(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    if status.is_current() {
+        return Err("a refused migration must not be recorded".to_string());
+    }
+
+    // The repair is a rebuild of the column, after which the row is
+    // reachable and the migration accepts the table.
+    ddl(
+        &pool,
+        "ALTER TABLE morpholog.claims DROP COLUMN arguments_hash,
+         ADD COLUMN arguments_hash bytea NOT NULL GENERATED ALWAYS AS
+             (morpholog.claim_digest(arguments)) STORED,
+         ADD PRIMARY KEY (predicate_name, arguments_hash)"
+            .to_string(),
+    )
+    .await
+    .unwrap();
+    morpholog_postgres::apply_migrations(&pool)
+        .await
+        .map_err(|e| format!("the repaired table must be accepted: {e}"))?;
+    let reachable: i64 = sqlx::query(
+        "SELECT count(*) FROM morpholog.claims
+         WHERE arguments_hash = morpholog.claim_digest(arguments)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+    .get(0);
+    if reachable != 1 {
+        return Err(format!(
+            "the repaired row must be keyed by the real digest, got {reachable}"
+        ));
+    }
+    Ok(())
 }
