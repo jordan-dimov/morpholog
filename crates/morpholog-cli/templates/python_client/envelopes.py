@@ -1466,6 +1466,22 @@ class TreeSignatureRequired:
         return cls(tree_size=data["tree_size"])
 
 
+@dataclass(frozen=True)
+class TreeSigningKeyRequired:
+    """`--require-signing-key` pinned a key and this checkpoint carries
+    no signature by it. Policy over an otherwise intact tree, whose
+    signatures are all genuine and authorised: the pin narrows which
+    authorised signer the verifier accepts."""
+
+    tree_size: int
+    public_key: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> TreeSigningKeyRequired:
+        data = _strict("signing-key-required tree", payload, {"status", "tree_size", "public_key"})
+        return cls(tree_size=data["tree_size"], public_key=str(data["public_key"]))
+
+
 TreeVerification = (
     TreeIntact
     | TreeTampered
@@ -1475,6 +1491,7 @@ TreeVerification = (
     | TreeSignatureInvalid
     | TreeUnauthorizedKey
     | TreeSignatureRequired
+    | TreeSigningKeyRequired
 )
 
 
@@ -1493,6 +1510,7 @@ def parse_tree_verification(payload: object) -> TreeVerification:
             "signature_invalid": TreeSignatureInvalid.from_json,
             "unauthorized_key": TreeUnauthorizedKey.from_json,
             "signature_required": TreeSignatureRequired.from_json,
+            "signing_key_required": TreeSigningKeyRequired.from_json,
         },
     )
 

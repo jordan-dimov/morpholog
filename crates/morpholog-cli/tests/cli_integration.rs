@@ -578,6 +578,88 @@ async fn verify_require_signatures_fails_an_unsigned_checkpoint() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn signature_policy_flags_compose_and_the_pin_is_refused_on_a_sparse_pack() {
+    reset_db().await;
+    post_balanced_entry("sp1", 100);
+    let (status, _, stderr) = run_cli(&["audit", "checkpoint"]);
+    assert!(status.success(), "{stderr}");
+    post_balanced_entry("sp2", 100);
+    let (status, _, stderr) = run_cli(&["audit", "checkpoint"]);
+    assert!(status.success(), "{stderr}");
+
+    // The two spellings of "require" do not stack.
+    let (status, _, stderr) = run_cli(&[
+        "audit",
+        "verify",
+        "--require-signatures",
+        "--require-signatures-from",
+        "2",
+    ]);
+    assert!(
+        !status.success() && stderr.contains("cannot be used with"),
+        "{stderr}"
+    );
+
+    // Honest unsigned history before the threshold passes; at it, fails.
+    let (status, stdout, _) = run_cli(&["audit", "verify", "--require-signatures-from", "3"]);
+    assert!(status.success(), "{stdout}");
+    let (status, stdout, _) = run_cli(&["audit", "verify", "--require-signatures-from", "2"]);
+    assert!(!status.success());
+    let tree = &serde_json::from_str::<Value>(&stdout).unwrap()["tree"];
+    assert_eq!(tree["status"], "signature_required", "{stdout}");
+    assert_eq!(tree["tree_size"], 2, "{stdout}");
+
+    // A pin implies requiring: on an unsigned chain the missing signature
+    // is what it reports, before any key question.
+    let mut keyfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(
+        &mut keyfile,
+        b"ed25519-pub:0000000000000000000000000000000000000000000000000000000000000000\n",
+    )
+    .unwrap();
+    let key_path = keyfile.path().to_str().unwrap();
+    let (status, stdout, _) = run_cli(&["audit", "verify", "--require-signing-key", key_path]);
+    assert!(!status.success());
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout).unwrap()["tree"]["status"],
+        "signature_required",
+        "{stdout}"
+    );
+
+    // A window pack cannot establish key authority, so the pin is refused
+    // outright rather than weakened to a cryptographic match.
+    let (status, pack_stdout, stderr) = run_cli(&["audit", "export", "--from-tree-size", "1"]);
+    assert!(status.success(), "{stderr}");
+    let mut packfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut packfile, pack_stdout.as_bytes()).unwrap();
+    let (status, stdout, stderr) = run_cli_no_db(&[
+        "audit",
+        "verify-pack",
+        packfile.path().to_str().unwrap(),
+        "--require-signing-key",
+        key_path,
+    ]);
+    assert!(!status.success(), "{stdout}");
+    assert!(
+        stdout.trim().is_empty(),
+        "a refusal is operational, nothing on stdout: {stdout}"
+    );
+    assert!(
+        stderr.contains("complete-prefix pack"),
+        "the refusal names the remedy: {stderr}"
+    );
+    // The threshold alone still applies to the window's end.
+    let (status, stdout, _) = run_cli_no_db(&[
+        "audit",
+        "verify-pack",
+        packfile.path().to_str().unwrap(),
+        "--require-signatures-from",
+        "3",
+    ]);
+    assert!(status.success(), "{stdout}");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn evidence_export_then_verify_offline() {
     reset_db().await;
     post_balanced_entry("ev1", 100);

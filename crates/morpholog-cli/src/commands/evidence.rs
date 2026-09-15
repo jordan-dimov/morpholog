@@ -7,13 +7,14 @@
 //! product promise.
 
 use morpholog_postgres::{
-    Checkpoint, EvidencePack, SelectiveEvidencePack, SelectiveVerification, TreeVerification,
-    WindowEvidencePack, WindowStart, WindowVerification, export_pack, export_selective,
-    export_window, verify_pack, verify_selective, verify_window,
+    Checkpoint, EvidencePack, SelectiveEvidencePack, SelectiveVerification, SignaturePolicy,
+    TreeVerification, WindowEvidencePack, WindowStart, WindowVerification, export_pack,
+    export_selective, export_window, verify_pack, verify_selective, verify_window,
 };
 
 use anyhow::Context;
 
+use crate::commands::verify::signature_policy;
 use crate::commands::{AlreadyReported, connect, print_json};
 use crate::{EvidenceExportArgs, EvidenceVerifyArgs};
 
@@ -94,15 +95,36 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     // FUTURE version is named as such rather than falling through to the
     // prefix path and reading as a malformed v1; a file that is not a pack
     // at all is still a decided verdict, not an operational error.
-    let intact = match pack_format_version(&bytes) {
+    let policy = signature_policy(
+        args.require_signatures,
+        args.require_signatures_from,
+        args.require_signing_key.as_deref(),
+    )?;
+    let version = pack_format_version(&bytes);
+    // A sparse pack checks signatures cryptographically only; it cannot
+    // say whether a key was authorised as of its prefix. A pin is an
+    // intersection with that authority, so here it would silently become
+    // "signed by this key" - a different claim. Refused, remedy named.
+    if matches!(version, Some(2 | 3))
+        && policy
+            .as_ref()
+            .is_some_and(|p| p.required_public_key.is_some())
+    {
+        anyhow::bail!(
+            "--require-signing-key needs a complete-prefix pack: a window or selective pack \
+             cannot establish signing-key authority, so the pin could only be checked \
+             cryptographically. Verify a full-prefix pack, or the live log with `audit verify`."
+        );
+    }
+    let intact = match version {
         Some(2) => {
-            let verdict = verify_window_pack(&bytes, anchor.as_ref(), args.require_signatures);
+            let verdict = verify_window_pack(&bytes, anchor.as_ref(), policy.as_ref());
             let intact = matches!(verdict, WindowVerification::Intact { .. });
             print_json(&verdict)?;
             intact
         }
         Some(3) => {
-            let verdict = verify_selective_pack(&bytes, anchor.as_ref(), args.require_signatures);
+            let verdict = verify_selective_pack(&bytes, anchor.as_ref(), policy.as_ref());
             let intact = matches!(verdict, SelectiveVerification::Intact { .. });
             print_json(&verdict)?;
             intact
@@ -117,7 +139,7 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
             false
         }
         _ => {
-            let verdict = verify_prefix_pack(&bytes, anchor.as_ref(), args.require_signatures);
+            let verdict = verify_prefix_pack(&bytes, anchor.as_ref(), policy.as_ref());
             let intact = matches!(verdict, TreeVerification::Intact { .. });
             print_json(&verdict)?;
             intact
@@ -144,7 +166,7 @@ fn pack_format_version(bytes: &[u8]) -> Option<u64> {
 fn verify_prefix_pack(
     bytes: &[u8],
     anchor: Option<&Checkpoint>,
-    require_signatures: bool,
+    policy: Option<&SignaturePolicy>,
 ) -> TreeVerification {
     let pack: EvidencePack = match serde_json::from_slice(bytes) {
         Ok(pack) => pack,
@@ -157,18 +179,14 @@ fn verify_prefix_pack(
     let verdict = verify_pack(&pack, anchor).unwrap_or_else(|e| TreeVerification::MalformedPack {
         detail: e.to_string(),
     });
-    // Compliance policy, offline from the pack's own checkpoints: with
-    // --require-signatures an unsigned checkpoint fails.
-    if require_signatures
+    // Verifier policy, offline from the pack's own checkpoints, over an
+    // intact tree only - every signature it inspects is already proven
+    // genuine and authorised by the pack's full prefix.
+    if let Some(policy) = policy
         && matches!(verdict, TreeVerification::Intact { .. })
-        && let Some(tree_size) = pack
-            .checkpoints
-            .iter()
-            .filter(|c| c.signatures.is_empty())
-            .map(|c| c.tree_size)
-            .min()
+        && let Some(violation) = policy.violation(&pack.checkpoints)
     {
-        return TreeVerification::SignatureRequired { tree_size };
+        return violation.into();
     }
     verdict
 }
@@ -176,7 +194,7 @@ fn verify_prefix_pack(
 fn verify_selective_pack(
     bytes: &[u8],
     anchor: Option<&Checkpoint>,
-    require_signatures: bool,
+    policy: Option<&SignaturePolicy>,
 ) -> SelectiveVerification {
     let pack: SelectiveEvidencePack = match serde_json::from_slice(bytes) {
         Ok(pack) => pack,
@@ -190,15 +208,13 @@ fn verify_selective_pack(
         verify_selective(&pack, anchor).unwrap_or_else(|e| SelectiveVerification::Malformed {
             detail: e.to_string(),
         });
-    // Compliance policy: --require-signatures fails an unsigned covering
-    // checkpoint. Crypto only - authority is a full-prefix property.
-    if require_signatures
+    // Policy over the one covering checkpoint: presence only, since a
+    // sparse pack cannot judge authority and so never carries a pin.
+    if let Some(policy) = policy
         && matches!(verdict, SelectiveVerification::Intact { .. })
-        && pack.checkpoint.signatures.is_empty()
+        && let Some(tree_size) = policy.unsigned_at_or_after([&pack.checkpoint])
     {
-        return SelectiveVerification::SignatureRequired {
-            tree_size: pack.checkpoint.tree_size,
-        };
+        return SelectiveVerification::SignatureRequired { tree_size };
     }
     verdict
 }
@@ -206,7 +222,7 @@ fn verify_selective_pack(
 fn verify_window_pack(
     bytes: &[u8],
     anchor: Option<&Checkpoint>,
-    require_signatures: bool,
+    policy: Option<&SignaturePolicy>,
 ) -> WindowVerification {
     let pack: WindowEvidencePack = match serde_json::from_slice(bytes) {
         Ok(pack) => pack,
@@ -219,15 +235,15 @@ fn verify_window_pack(
     let verdict = verify_window(&pack, anchor).unwrap_or_else(|e| WindowVerification::Malformed {
         detail: e.to_string(),
     });
-    // Compliance policy: REMIT attribution wants a signed window end, so
-    // --require-signatures fails an unsigned to-checkpoint.
-    if require_signatures
+    // Policy over the window's end only (REMIT attribution wants a signed
+    // window end; the trusted start is the anchor's business): presence
+    // only, since a sparse pack cannot judge authority and never carries
+    // a pin.
+    if let Some(policy) = policy
         && matches!(verdict, WindowVerification::Intact { .. })
-        && pack.to_checkpoint.signatures.is_empty()
+        && let Some(tree_size) = policy.unsigned_at_or_after([&pack.to_checkpoint])
     {
-        return WindowVerification::SignatureRequired {
-            tree_size: pack.to_checkpoint.tree_size,
-        };
+        return WindowVerification::SignatureRequired { tree_size };
     }
     verdict
 }

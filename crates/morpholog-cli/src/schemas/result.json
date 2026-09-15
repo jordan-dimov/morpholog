@@ -1162,6 +1162,16 @@
             "status": { "const": "signature_required" },
             "tree_size": { "type": "integer" }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "tree_size", "public_key"],
+          "properties": {
+            "status": { "const": "signing_key_required" },
+            "tree_size": { "type": "integer" },
+            "public_key": { "type": "string" }
+          }
         }
       ]
     },
