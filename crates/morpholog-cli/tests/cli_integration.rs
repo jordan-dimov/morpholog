@@ -2848,6 +2848,11 @@ async fn batch_rows_are_independent_and_every_row_gets_a_receipt() {
         statuses,
         vec!["committed", "committed", "error", "rejected", "committed"]
     );
+    assert_eq!(
+        receipts[2]["code"], "invalid_request",
+        "a malformed row's receipt carries the stable code: {}",
+        receipts[2]
+    );
     // `row` is the 1-based input line number, so receipts map back to
     // the file even with blank lines skipped.
     let rows_field: Vec<u64> = receipts
@@ -3141,11 +3146,13 @@ async fn batch_gives_an_unauthorised_row_a_coded_receipt_and_keeps_going() {
     assert_eq!(receipts[0]["status"], "committed", "{stdout}");
     assert_eq!(receipts[1]["status"], "error", "{stdout}");
     assert_eq!(receipts[1]["row"], 2, "{stdout}");
-    // The batch error receipt carries prose, not a code - batch has
-    // never had stable codes, for any error kind; the session grew
-    // them because a client there must decide whether to re-submit.
-    // What matters here is that the refusal is a per-row receipt at
-    // all rather than an abort, and that it names the two parties.
+    // The refusal is a per-row receipt rather than an abort, matchable
+    // by the same stable code the session answers with, and its prose
+    // names the two parties.
+    assert_eq!(
+        receipts[1]["code"], "actor_assertion_unauthorised",
+        "{stdout}"
+    );
     let reason = receipts[1]["error"].as_str().unwrap_or_default();
     assert!(
         reason.contains("restricted_actor") && reason.contains("not authorised"),

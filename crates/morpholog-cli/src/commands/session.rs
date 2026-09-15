@@ -27,7 +27,7 @@ use crate::commands::filter::FieldFilter;
 use crate::commands::inspect::{claims_rows, decode_claims_named, derived_rows, resolve_as_of};
 use crate::commands::propose::{BatchRow, RowErrorKind, propose_row_outcome};
 use crate::commands::{compile_or_report, parse_or_report};
-use morpholog_cli::envelopes::{SessionErrorCode, SessionErrorReceipt, SessionReady};
+use morpholog_cli::envelopes::{ErrorCode, ErrorReceipt, SessionReady};
 use morpholog_core::CompiledProgram;
 use morpholog_postgres::PgPool;
 
@@ -42,14 +42,14 @@ const MAX_REQUEST_LINE: usize = 64 * 1024 * 1024;
 /// like answered requests.
 enum SessionFailure {
     Request {
-        code: SessionErrorCode,
+        code: ErrorCode,
         reason: anyhow::Error,
     },
     Operational(anyhow::Error),
 }
 
 impl SessionFailure {
-    fn request(code: SessionErrorCode, reason: anyhow::Error) -> Self {
+    fn request(code: ErrorCode, reason: anyhow::Error) -> Self {
         SessionFailure::Request { code, reason }
     }
 }
@@ -89,7 +89,7 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
         match handle_line(&args, &compiled, &pool, line.trim(), row).await {
             Ok(response) => write_line(&mut out, &response)?,
             Err(SessionFailure::Request { code, reason }) => {
-                let receipt = SessionErrorReceipt::new(code, format!("{reason:#}"), row);
+                let receipt = ErrorReceipt::new(code, format!("{reason:#}"), row);
                 write_line(&mut out, &serde_json::to_value(&receipt)?)?;
             }
             Err(SessionFailure::Operational(reason)) => {
@@ -196,16 +196,16 @@ async fn handle_line(
     row: u64,
 ) -> Result<serde_json::Value, SessionFailure> {
     let mut value: serde_json::Value = serde_json::from_str(line)
-        .map_err(|e| SessionFailure::request(SessionErrorCode::InvalidRequest, e.into()))?;
+        .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
     let Some(body) = value.as_object_mut() else {
         return Err(SessionFailure::request(
-            SessionErrorCode::InvalidRequest,
+            ErrorCode::InvalidRequest,
             anyhow!("a request is a JSON object with an `op` field"),
         ));
     };
     let Some(serde_json::Value::String(op)) = body.remove("op") else {
         return Err(SessionFailure::request(
-            SessionErrorCode::InvalidRequest,
+            ErrorCode::InvalidRequest,
             anyhow!("a request names its operation in a string `op` field"),
         ));
     };
@@ -214,7 +214,7 @@ async fn handle_line(
         "claims" => handle_claims(args, compiled, pool, value).await,
         "derived" => handle_derived(args, compiled, pool, value).await,
         other => Err(SessionFailure::request(
-            SessionErrorCode::UnknownOperation,
+            ErrorCode::UnknownOperation,
             anyhow!("unknown operation `{other}`; this session answers propose, claims, derived"),
         )),
     }
@@ -243,7 +243,7 @@ async fn handle_propose(
     row: u64,
 ) -> Result<serde_json::Value, SessionFailure> {
     let body: ProposeBody = serde_json::from_value(body)
-        .map_err(|e| SessionFailure::request(SessionErrorCode::InvalidRequest, e.into()))?;
+        .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
     let batch_row = BatchRow {
         transformation: body.transformation,
         actor: body.actor,
@@ -260,27 +260,12 @@ async fn handle_propose(
     .await
     .map_err(|e| match e.kind {
         RowErrorKind::Operational => SessionFailure::Operational(e.reason),
-        kind => SessionFailure::request(error_code(kind), e.reason),
+        kind => SessionFailure::request(kind.code(), e.reason),
     })?;
     if let Some(receipt) = envelope.as_object_mut() {
         receipt.insert("row".to_string(), serde_json::json!(row));
     }
     Ok(envelope)
-}
-
-/// The stable code for a per-request propose failure. Operational is
-/// unreachable here - the caller aborts on it before mapping.
-fn error_code(kind: RowErrorKind) -> SessionErrorCode {
-    match kind {
-        RowErrorKind::MalformedRow => SessionErrorCode::InvalidRequest,
-        RowErrorKind::UnknownTransformation => SessionErrorCode::UnknownTransformation,
-        RowErrorKind::BadArgs => SessionErrorCode::InvalidArguments,
-        RowErrorKind::Serialization => SessionErrorCode::SerializationFailure,
-        RowErrorKind::Kernel => SessionErrorCode::KernelError,
-        RowErrorKind::DuplicateIntent => SessionErrorCode::DuplicateIntent,
-        RowErrorKind::ActorAssertionUnauthorised => SessionErrorCode::ActorAssertionUnauthorised,
-        RowErrorKind::Operational => unreachable!("operational failures abort, never map"),
-    }
 }
 
 /// The claims read body: the generated client's `claims`/
@@ -305,7 +290,7 @@ async fn handle_claims(
     body: serde_json::Value,
 ) -> Result<serde_json::Value, SessionFailure> {
     let body: ClaimsBody = serde_json::from_value(body)
-        .map_err(|e| SessionFailure::request(SessionErrorCode::InvalidRequest, e.into()))?;
+        .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
     let program = compiled.program();
     // The named read keeps its one-shot contract: the programme is
     // the authority, and a requested predicate it does not declare is
@@ -318,7 +303,7 @@ async fn handle_claims(
                 .any(|d| d.name.as_str() == requested.as_str())
             {
                 return Err(SessionFailure::request(
-                    SessionErrorCode::InvalidArguments,
+                    ErrorCode::InvalidArguments,
                     anyhow!("requested predicate `{requested}` is not declared in the programme"),
                 ));
             }
@@ -363,11 +348,11 @@ async fn handle_derived(
     body: serde_json::Value,
 ) -> Result<serde_json::Value, SessionFailure> {
     let body: DerivedBody = serde_json::from_value(body)
-        .map_err(|e| SessionFailure::request(SessionErrorCode::InvalidRequest, e.into()))?;
+        .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
     let program = compiled.program();
     let Some(derived) = program.derived_claim(&body.name) else {
         return Err(SessionFailure::request(
-            SessionErrorCode::InvalidArguments,
+            ErrorCode::InvalidArguments,
             anyhow!(
                 "derived claim `{}` is not declared in the programme",
                 body.name
@@ -380,7 +365,7 @@ async fn handle_derived(
         Some(map) => {
             let Some(decl) = program.predicate(&body.name) else {
                 return Err(SessionFailure::request(
-                    SessionErrorCode::InvalidArguments,
+                    ErrorCode::InvalidArguments,
                     anyhow!(
                         "`where` needs `{}` declared as a predicate to resolve field names",
                         body.name
@@ -389,7 +374,7 @@ async fn handle_derived(
             };
             let pairs: Vec<String> = map.iter().map(|(k, v)| format!("{k}={v}")).collect();
             crate::commands::filter::resolve(decl, &pairs)
-                .map_err(|e| SessionFailure::request(SessionErrorCode::InvalidArguments, e))?
+                .map_err(|e| SessionFailure::request(ErrorCode::InvalidArguments, e))?
         }
     };
     let as_of = parse_as_of(pool, &body.as_of).await?;
@@ -421,13 +406,13 @@ fn resolve_filters(
     };
     if !named {
         return Err(SessionFailure::request(
-            SessionErrorCode::InvalidArguments,
+            ErrorCode::InvalidArguments,
             anyhow!("`where` needs the named read: field names resolve against a declaration"),
         ));
     }
     let [predicate] = predicates else {
         return Err(SessionFailure::request(
-            SessionErrorCode::InvalidArguments,
+            ErrorCode::InvalidArguments,
             anyhow!(
                 "`where` needs exactly one predicate, because the field names belong \
                  to one claim shape; got {}",
@@ -437,19 +422,19 @@ fn resolve_filters(
     };
     let Some(decl) = compiled.program().predicate(predicate) else {
         return Err(SessionFailure::request(
-            SessionErrorCode::InvalidArguments,
+            ErrorCode::InvalidArguments,
             anyhow!("predicate `{predicate}` is not declared in the programme"),
         ));
     };
     let declared_arity = i32::try_from(decl.args.len()).map_err(|_| {
         SessionFailure::request(
-            SessionErrorCode::InvalidArguments,
+            ErrorCode::InvalidArguments,
             anyhow!("`{predicate}` declares too many arguments to filter"),
         )
     })?;
     let pairs: Vec<String> = map.iter().map(|(k, v)| format!("{k}={v}")).collect();
     let filters = crate::commands::filter::resolve(decl, &pairs)
-        .map_err(|e| SessionFailure::request(SessionErrorCode::InvalidArguments, e))?;
+        .map_err(|e| SessionFailure::request(ErrorCode::InvalidArguments, e))?;
     Ok((filters, declared_arity))
 }
 
@@ -461,9 +446,9 @@ async fn parse_as_of(
     as_of: &Option<String>,
 ) -> Result<Option<uuid::Uuid>, SessionFailure> {
     let Some(text) = as_of else { return Ok(None) };
-    let parsed: crate::AsOf = text.parse().map_err(|e: String| {
-        SessionFailure::request(SessionErrorCode::InvalidArguments, anyhow!(e))
-    })?;
+    let parsed: crate::AsOf = text
+        .parse()
+        .map_err(|e: String| SessionFailure::request(ErrorCode::InvalidArguments, anyhow!(e)))?;
     resolve_as_of(pool, Some(parsed))
         .await
         .map_err(SessionFailure::Operational)

@@ -664,6 +664,10 @@ class SessionErrorReceipt:
 
 @dataclass(frozen=True)
 class BatchError:
+    """A row that could not be proposed, with the same stable ``code``
+    set a session error receipt carries."""
+
+    code: str
     error: str
 
 
@@ -679,8 +683,8 @@ class BatchReceipt:
         row = payload["row"]
         body = {k: v for k, v in payload.items() if k != "row"}
         if body.get("status") == "error":
-            data = _strict("batch error receipt", body, {"status", "error"})
-            return cls(row=row, outcome=BatchError(error=data["error"]))
+            data = _strict("batch error receipt", body, {"status", "code", "error"})
+            return cls(row=row, outcome=BatchError(code=str(data["code"]), error=str(data["error"])))
         return cls(row=row, outcome=parse_run_outcome(body))
 
 

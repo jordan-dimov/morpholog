@@ -407,8 +407,11 @@ and produces one NDJSON receipt on stdout in input order: the
 single-proposal envelope above plus `"row"`, the 1-based input line number
 (blank lines skip silently, so receipts map back to the file). A
 malformed row (bad JSON, unknown transformation, undecodable args)
-yields `{"row": N, "status": "error", "error": "..."}` and processing
-continues. `--explain-on-reject` composes per row, exactly as in
+yields `{"row": N, "status": "error", "code": "...", "error": "..."}` and
+processing continues; `code` is the same stable set a session error
+receipt carries (`invalid_request`, `actor_assertion_unauthorised`,
+`serialization_failure`, ...), so a control test matches a refusal by
+code on every surface and never by prose. `--explain-on-reject` composes per row, exactly as in
 single proposals. A summary line lands on stderr.
 
 **Exit code contract - deliberately different from a single `propose`.**
