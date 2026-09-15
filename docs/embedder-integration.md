@@ -410,8 +410,10 @@ malformed row (bad JSON, unknown transformation, undecodable args)
 yields `{"row": N, "status": "error", "code": "...", "error": "..."}` and
 processing continues; `code` is the same stable set a session error
 receipt carries (`invalid_request`, `actor_assertion_unauthorised`,
-`serialization_failure`, ...), so a control test matches a refusal by
-code on every surface and never by prose. `--explain-on-reject` composes per row, exactly as in
+`serialization_failure`, ...) minus the session-only `unknown_operation`,
+so a control test matches a refusal by code through both batch and
+session, never by prose. A single `propose` still reports these as
+prose on stderr. `--explain-on-reject` composes per row, exactly as in
 single proposals. A summary line lands on stderr.
 
 **Exit code contract - deliberately different from a single `propose`.**

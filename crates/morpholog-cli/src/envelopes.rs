@@ -142,6 +142,23 @@ macro_rules! error_codes {
     };
 }
 
+impl ErrorCode {
+    /// The codes a proposal row can fail with, on the batch and the
+    /// session alike - the whole set minus the session's own
+    /// `unknown_operation`, which a batch row has no way to earn.
+    /// Published as its own schema enum so the batch contract admits
+    /// nothing the batch cannot produce; held to `RowErrorKind` by test.
+    pub const PROPOSE: &'static [ErrorCode] = &[
+        ErrorCode::ActorAssertionUnauthorised,
+        ErrorCode::DuplicateIntent,
+        ErrorCode::InvalidArguments,
+        ErrorCode::InvalidRequest,
+        ErrorCode::KernelError,
+        ErrorCode::SerializationFailure,
+        ErrorCode::UnknownTransformation,
+    ];
+}
+
 error_codes!(
     ActorAssertionUnauthorised,
     DuplicateIntent,

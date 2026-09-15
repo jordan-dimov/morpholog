@@ -65,7 +65,8 @@ class _ResponseContract(Exception):
 
 def _decode_receipt(payload: object, expected_row: int) -> object:
     """The propose decoder: parse the receipt, match it to the row
-    THIS caller sent, and refuse an uncoded error. Every check reads
+    THIS caller sent, and refuse an error receipt where an outcome
+    belongs (errors answer through the session's own path). Every check reads
     the local expected row - never the session's shared counter,
     which a concurrent caller may already have advanced."""
     try:
@@ -82,8 +83,9 @@ def _decode_receipt(payload: object, expected_row: int) -> object:
         )
     if isinstance(receipt.outcome, envelopes.BatchError):
         raise _ResponseContract(
-            "a propose response carried an uncoded error",
-            f"uncoded session error: {receipt.outcome.error}",
+            "a propose response carried an error receipt where an outcome belongs",
+            f"error receipt in an outcome position ({receipt.outcome.code}): "
+            f"{receipt.outcome.error}",
         )
     return receipt.outcome
 

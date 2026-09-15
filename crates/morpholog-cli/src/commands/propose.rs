@@ -451,3 +451,54 @@ pub(crate) async fn propose_row_outcome(
             .map_err(|e| RowError::new(RowErrorKind::Operational, e))
     }
 }
+
+#[cfg(test)]
+mod code_tests {
+    use super::RowErrorKind;
+    use morpholog_cli::envelopes::ErrorCode;
+
+    /// Every row kind that becomes a receipt. The match is what keeps
+    /// the list honest: a new variant fails to compile until it is
+    /// placed on one side or the other.
+    fn receipt_kinds() -> Vec<RowErrorKind> {
+        use RowErrorKind::*;
+        let all = [
+            MalformedRow,
+            UnknownTransformation,
+            BadArgs,
+            Serialization,
+            Kernel,
+            DuplicateIntent,
+            ActorAssertionUnauthorised,
+            Operational,
+        ];
+        all.into_iter()
+            .filter(|k| match k {
+                MalformedRow
+                | UnknownTransformation
+                | BadArgs
+                | Serialization
+                | Kernel
+                | DuplicateIntent
+                | ActorAssertionUnauthorised => true,
+                Operational => false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_published_propose_codes_are_exactly_what_a_row_can_earn() {
+        let mut earned: Vec<ErrorCode> = receipt_kinds()
+            .into_iter()
+            .map(RowErrorKind::code)
+            .collect();
+        earned.sort_by_key(|c| format!("{c:?}"));
+        earned.dedup();
+        let mut published: Vec<ErrorCode> = ErrorCode::PROPOSE.to_vec();
+        published.sort_by_key(|c| format!("{c:?}"));
+        assert_eq!(
+            earned, published,
+            "ErrorCode::PROPOSE must list exactly the codes a proposal row can fail with"
+        );
+    }
+}
