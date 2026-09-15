@@ -16,7 +16,7 @@ mod common;
 use common::{compiled, propose_pg_with_test_actor, reset_db, subj, test_pool};
 
 use morpholog_core::Program;
-use morpholog_postgres::{PgPool, PgProposalOutcome};
+use morpholog_postgres::{PgPool, PgProposalOutcome, VerifyOutcome, verify_replay};
 use morpholog_surface::parse_program;
 use std::fmt::Write as _;
 
@@ -102,7 +102,9 @@ async fn a_long_hostile_argument_is_admitted_once_and_retracted_by_identity() {
     assert_eq!(claim_rows(&pool).await, 1, "an admitted claim admits once");
 
     // A statement differing in one byte is a different claim.
-    let sibling = format!("{}!", &statement[..statement.len() - 1]);
+    let mut sibling = statement.clone();
+    sibling.pop();
+    sibling.push('!');
     assert!(matches!(
         propose(&pool, &p, "record", &sibling).await,
         PgProposalOutcome::Committed { .. }
@@ -122,4 +124,45 @@ async fn a_long_hostile_argument_is_admitted_once_and_retracted_by_identity() {
     .await
     .unwrap();
     assert_eq!(remaining, serde_json::Value::String(sibling));
+}
+
+/// The verify replay pages the claims table by its key, so a table wider
+/// than one page is read whole, each row once. Rows go in beneath the audit
+/// log on purpose: the replay then reports every one of them as present
+/// only in the table, which is the count that proves the paging.
+#[tokio::test]
+async fn verify_pages_the_claims_table_by_its_key() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let rows: i64 = 1_500;
+    sqlx::query(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'Statement',
+                jsonb_build_array(jsonb_build_object('type', 'subject', 'value', i::text)),
+                gen_random_uuid()
+         FROM generate_series(1, $1) AS i",
+    )
+    .bind(rows)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    match verify_replay(&pool).await.unwrap() {
+        VerifyOutcome::Divergent {
+            only_in_claims_table,
+            only_in_replay,
+        } => {
+            assert!(only_in_replay.is_empty());
+            let mut seen = std::collections::HashSet::new();
+            for c in &only_in_claims_table {
+                assert!(seen.insert(c.clone()), "a row was paged twice: {c:?}");
+            }
+            assert_eq!(
+                i64::try_from(only_in_claims_table.len()).unwrap(),
+                rows,
+                "every row past the first page must be read exactly once"
+            );
+        }
+        VerifyOutcome::Consistent { .. } => panic!("rows beneath the audit log must diverge"),
+    }
 }

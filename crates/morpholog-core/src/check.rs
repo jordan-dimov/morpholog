@@ -1783,6 +1783,10 @@ impl CheckCtx<'_> {
             // reached the reference surfaces as Undeclared - loudly wrong
             // rather than silently passed.
             VocabularyKind::Definition => None,
+            // A derived head is never a reference target: rules naming one
+            // are refused above as DerivedInRule. Reaching here surfaces as
+            // Undeclared, the same loud wrongness as a definition.
+            VocabularyKind::Derived => None,
         };
         let Some(decl_args) = decl_args else {
             let context = self.context.clone();
@@ -2329,6 +2333,35 @@ mod tests {
                 }
             )),
             "actor in an invariant body must flag ActorNotAvailable; got {errs:?}"
+        );
+    }
+
+    #[test]
+    fn two_derived_declarations_of_one_head_are_refused() {
+        // The parser refuses this before validation sees it; a hand-built
+        // programme reaches validation directly, and the read cache that
+        // materialises derived output takes it as a set.
+        let mut p = empty_program();
+        p.predicates = vec![pdecl("Src", &[("k", PredicateArgKind::Subject)])];
+        let row = crate::ir::DerivedClaim {
+            predicate: "Row".into(),
+            keys: vec!["k".into()],
+            values: vec![],
+            domain: claim("Src", vec![var("k")]),
+        };
+        p.derived_claims = vec![row.clone(), row];
+        let errs = p
+            .validate()
+            .expect_err("a duplicate derived head is refused");
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::DuplicateDecl {
+                    vocabulary: VocabularyKind::Derived,
+                    name,
+                } if name == "Row"
+            )),
+            "got {errs:?}"
         );
     }
 

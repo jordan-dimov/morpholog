@@ -404,7 +404,7 @@ pub(crate) async fn load_state(
         "SELECT predicate_name, arguments
          FROM morpholog.claims
          WHERE predicate_name = ANY($1)
-         ORDER BY predicate_name, arguments",
+         ORDER BY predicate_name, arguments_hash",
         &scope[..],
     )
     .fetch_all(&mut **tx)

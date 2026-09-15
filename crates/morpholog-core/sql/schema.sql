@@ -53,7 +53,8 @@ CREATE FUNCTION claim_digest(args jsonb) RETURNS bytea
 -- Admitted state. Each row is one admitted claim.
 -- The primary key enforces set semantics: assert C where C is
 -- already present is a no-op; retract C where C is missing fails.
--- Identity is (predicate_name, digest of arguments) - see claim_digest.
+-- Identity is (predicate_name, arguments); the key is its fixed-width
+-- form, a digest of the arguments - see claim_digest.
 CREATE TABLE claims (
     predicate_name  text        NOT NULL,
     arguments       jsonb       NOT NULL CHECK (jsonb_typeof(arguments) = 'array'),
@@ -294,8 +295,9 @@ CREATE SCHEMA IF NOT EXISTS morpholog_read;
 
 -- `morpholog_read` is a discardable, separately-droppable cache, not
 -- covered by `init`'s day-zero guard (which only checks `morpholog`), so
--- its tables are created idempotently: re-running this script over a
--- lingering cache (e.g. after dropping only `morpholog`) must not fail.
+-- a lingering cache (e.g. after dropping only `morpholog`) is rebuilt
+-- here rather than kept: kept, it would carry whatever shape it was
+-- created with while the fresh record says every migration is applied.
 --
 -- One row per refresh generation (steady state: one, the active one).
 -- Freshness is OPERATIONAL metadata: which model produced it, when, and
@@ -309,7 +311,8 @@ CREATE SCHEMA IF NOT EXISTS morpholog_read;
 -- committed_at may sort EARLIER than this marker - is simply excluded and
 -- picked up by the next refresh. A consumer wanting lossless resume reads
 -- the audit log via `inspect audit`, not this column.
-CREATE TABLE IF NOT EXISTS morpholog_read.derived_refreshes (
+DROP TABLE IF EXISTS morpholog_read.derived_refreshes CASCADE;
+CREATE TABLE morpholog_read.derived_refreshes (
     refresh_id      uuid        PRIMARY KEY,
     model_hash      text        NOT NULL,
     refreshed_at    timestamptz NOT NULL,
@@ -320,7 +323,8 @@ CREATE TABLE IF NOT EXISTS morpholog_read.derived_refreshes (
 
 -- The single active generation. A refresh upserts this one row to flip
 -- which generation readers and derived views see.
-CREATE TABLE IF NOT EXISTS morpholog_read.derived_active (
+DROP TABLE IF EXISTS morpholog_read.derived_active CASCADE;
+CREATE TABLE morpholog_read.derived_active (
     singleton  boolean PRIMARY KEY DEFAULT true CHECK (singleton),
     refresh_id uuid    NOT NULL REFERENCES morpholog_read.derived_refreshes (refresh_id)
 );
@@ -334,7 +338,8 @@ CREATE TABLE IF NOT EXISTS morpholog_read.derived_active (
 -- put the index row-size ceiling on a derived figure just as it once
 -- did on a claim. The index leads with `refresh_id` so a derived view
 -- filters by the active generation then predicate.
-CREATE TABLE IF NOT EXISTS morpholog_read.derived_claims (
+DROP TABLE IF EXISTS morpholog_read.derived_claims CASCADE;
+CREATE TABLE morpholog_read.derived_claims (
     refresh_id     uuid  NOT NULL
                          REFERENCES morpholog_read.derived_refreshes (refresh_id)
                          ON DELETE CASCADE,
@@ -342,5 +347,5 @@ CREATE TABLE IF NOT EXISTS morpholog_read.derived_claims (
     arguments      jsonb NOT NULL CHECK (jsonb_typeof(arguments) = 'array')
 );
 
-CREATE INDEX IF NOT EXISTS derived_claims_generation_predicate
+CREATE INDEX derived_claims_generation_predicate
     ON morpholog_read.derived_claims (refresh_id, predicate_name);

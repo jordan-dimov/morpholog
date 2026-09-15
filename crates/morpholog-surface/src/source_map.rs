@@ -115,6 +115,7 @@ impl SourceMap {
                     VocabularyKind::Predicate => DeclKind::Predicate,
                     VocabularyKind::Intent => DeclKind::Intent,
                     VocabularyKind::Definition => DeclKind::Definition,
+                    VocabularyKind::Derived => DeclKind::DerivedClaim,
                 };
                 self.decl_span(kind, name)
             }
