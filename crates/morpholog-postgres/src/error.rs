@@ -156,8 +156,7 @@ pub enum PgError {
     #[error(
         "login role `{login_role}` is not authorised to propose as actor \
          `{actor}`; admit ActorAssertionAuthority({actor}, {login_role}) to \
-         grant it, or retract the ActorAssertionRestricted({actor}) claim to \
-         stop restricting the actor"
+         grant it"
     )]
     ActorAssertionUnauthorised { actor: Subject, login_role: String },
     /// A [`morpholog_core::Transition`] named a transformation the compiled programme

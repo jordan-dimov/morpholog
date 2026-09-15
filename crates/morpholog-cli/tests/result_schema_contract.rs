@@ -773,11 +773,11 @@ fn composite_envelopes_serialize_as_pinned() {
     assert_golden("batch_rejected_receipt.json", &batch_rejected);
     assert_golden(
         "batch_error_receipt.json",
-        &serde_json::json!({
-            "row": 3,
-            "status": "error",
-            "error": "malformed batch row: expected value at line 1 column 1",
-        }),
+        &to_value(&morpholog_cli::envelopes::ErrorReceipt::new(
+            morpholog_cli::envelopes::ErrorCode::InvalidRequest,
+            "malformed batch row: expected value at line 1 column 1".to_string(),
+            3,
+        )),
     );
 }
 
@@ -861,7 +861,7 @@ fn report_envelopes_serialize_as_pinned() {
         }),
     );
     {
-        use morpholog_cli::envelopes::{SessionErrorCode, SessionErrorReceipt, SessionReady};
+        use morpholog_cli::envelopes::{ErrorCode, ErrorReceipt, SessionReady};
         // The version is stamped from the crate at serialization time,
         // which would rot the golden on every release; pin the value
         // shape with the field overridden to a fixed string.
@@ -873,8 +873,8 @@ fn report_envelopes_serialize_as_pinned() {
         assert_golden("session_ready.json", &ready);
         assert_golden(
             "session_error_receipt.json",
-            &to_value(&SessionErrorReceipt::new(
-                SessionErrorCode::SerializationFailure,
+            &to_value(&ErrorReceipt::new(
+                ErrorCode::SerializationFailure,
                 "the proposal could not be decided: restart the transaction".to_string(),
                 17,
             )),
@@ -1851,15 +1851,47 @@ fn every_internal_ref_resolves() {
 /// the published set.
 #[test]
 fn every_session_error_code_is_in_the_pinned_enum() {
-    use morpholog_cli::envelopes::SessionErrorCode;
+    use morpholog_cli::envelopes::ErrorCode;
     let schema = result_schema();
-    let published = schema["$defs"]["session_error_receipt"]["properties"]["code"]["enum"]
+    // Each receipt references a named set rather than carrying a copy:
+    // the session the whole vocabulary, the batch exactly what a
+    // proposal row can earn - a schema must admit nothing the command
+    // cannot produce.
+    assert_eq!(
+        schema["$defs"]["session_error_receipt"]["properties"]["code"]["$ref"],
+        "#/$defs/error_code"
+    );
+    assert_eq!(
+        schema["$defs"]["batch_receipt"]["oneOf"][2]["properties"]["code"]["$ref"],
+        "#/$defs/propose_error_code"
+    );
+    let propose_published: Vec<String> = schema["$defs"]["propose_error_code"]["enum"]
+        .as_array()
+        .expect("the propose code enum is an array")
+        .iter()
+        .map(|v| v.as_str().expect("codes are strings").to_string())
+        .collect();
+    let propose_emitted: Vec<String> = ErrorCode::PROPOSE
+        .iter()
+        .map(|c| {
+            serde_json::to_value(c)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        propose_published, propose_emitted,
+        "propose_error_code must be exactly the codes a batch row can carry"
+    );
+    let published = schema["$defs"]["error_code"]["enum"]
         .as_array()
         .expect("the code enum is an array")
         .iter()
         .map(|v| v.as_str().expect("codes are strings").to_string())
         .collect::<Vec<_>>();
-    for code in SessionErrorCode::ALL {
+    for code in ErrorCode::ALL {
         let wire = serde_json::to_value(code).expect("a code serialises");
         let wire = wire.as_str().expect("as a string");
         assert!(
@@ -1870,7 +1902,7 @@ fn every_session_error_code_is_in_the_pinned_enum() {
     }
     assert_eq!(
         published.len(),
-        SessionErrorCode::ALL.len(),
+        ErrorCode::ALL.len(),
         "result.json publishes codes the binary cannot emit: {published:?}"
     );
 }

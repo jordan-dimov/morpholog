@@ -265,6 +265,7 @@ class BatchReceipts(unittest.TestCase):
         error = envelopes.BatchReceipt.from_json(golden("batch_error_receipt.json"))
         self.assertEqual(error.row, 3)
         self.assertIsInstance(error.outcome, envelopes.BatchError)
+        self.assertEqual(error.outcome.code, "invalid_request")
 
 
 class Outbox(unittest.TestCase):

@@ -92,21 +92,22 @@ impl SessionReady {
     }
 }
 
-/// `session`: the per-request error receipt. Unlike the batch error
-/// receipt it carries a stable `code`, because a session caller
-/// deciding whether a retry is safe must never parse English prose.
-/// `row` is the 1-based request line number, the same counter the
-/// propose receipts carry.
+/// The per-row error receipt of `propose --batch` and `session`, one
+/// shape for both: a caller deciding whether a retry is safe, or
+/// matching a refusal in a control test, must never parse English
+/// prose, so the receipt carries a stable `code`. `row` is the 1-based
+/// input line or request number, the same counter the propose receipts
+/// carry.
 #[derive(Serialize)]
-pub struct SessionErrorReceipt {
-    pub code: SessionErrorCode,
+pub struct ErrorReceipt {
+    pub code: ErrorCode,
     pub error: String,
     pub row: u64,
     pub status: &'static str,
 }
 
-impl SessionErrorReceipt {
-    pub fn new(code: SessionErrorCode, error: String, row: u64) -> Self {
+impl ErrorReceipt {
+    pub fn new(code: ErrorCode, error: String, row: u64) -> Self {
         Self {
             code,
             error,
@@ -116,32 +117,49 @@ impl SessionErrorReceipt {
     }
 }
 
-/// The closed set of per-request failure codes a session can answer
-/// with. `serialization_failure` is the one a caller may re-submit on
-/// (retries stay the caller's); the rest describe the request itself.
-/// Operational failures never become receipts - the session aborts.
+/// The closed set of per-row failure codes a batch or a session can
+/// answer with. `serialization_failure` is the one a caller may
+/// re-submit on (retries stay the caller's); the rest describe the row
+/// itself. Operational failures never become receipts - the run aborts.
 /// One list, two products: the enum and the slice a contract test
 /// walks. Declaring a variant anywhere else is impossible, so a code
 /// the binary can emit cannot go missing from the published set - a
 /// hand-kept array would compile happily while the enum grew past it.
-macro_rules! session_error_codes {
+macro_rules! error_codes {
     ($($variant:ident),+ $(,)?) => {
         #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
         #[serde(rename_all = "snake_case")]
-        pub enum SessionErrorCode {
+        pub enum ErrorCode {
             $($variant),+
         }
 
-        impl SessionErrorCode {
+        impl ErrorCode {
             /// Every code, so a test can hold `result.json` to what
             /// the binary can actually emit.
-            pub const ALL: &'static [SessionErrorCode] =
-                &[$(SessionErrorCode::$variant),+];
+            pub const ALL: &'static [ErrorCode] =
+                &[$(ErrorCode::$variant),+];
         }
     };
 }
 
-session_error_codes!(
+impl ErrorCode {
+    /// The codes a proposal row can fail with, on the batch and the
+    /// session alike - the whole set minus the session's own
+    /// `unknown_operation`, which a batch row has no way to earn.
+    /// Published as its own schema enum so the batch contract admits
+    /// nothing the batch cannot produce; held to `RowErrorKind` by test.
+    pub const PROPOSE: &'static [ErrorCode] = &[
+        ErrorCode::ActorAssertionUnauthorised,
+        ErrorCode::DuplicateIntent,
+        ErrorCode::InvalidArguments,
+        ErrorCode::InvalidRequest,
+        ErrorCode::KernelError,
+        ErrorCode::SerializationFailure,
+        ErrorCode::UnknownTransformation,
+    ];
+}
+
+error_codes!(
     ActorAssertionUnauthorised,
     DuplicateIntent,
     InvalidArguments,

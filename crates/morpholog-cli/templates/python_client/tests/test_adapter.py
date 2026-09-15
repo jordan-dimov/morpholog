@@ -28,7 +28,7 @@ if mode == "operational_failure":
     sys.exit(1)
 if mode == "batch_ok":
     print('{"row": 1, "status": "rejected", "reason": "closed period"}')
-    print('{"row": 2, "status": "error", "error": "malformed batch row"}')
+    print('{"row": 2, "status": "error", "code": "invalid_request", "error": "malformed batch row"}')
     sys.exit(0)
 if mode == "batch_aborted":
     print('{"row": 1, "status": "rejected", "reason": "closed period"}')

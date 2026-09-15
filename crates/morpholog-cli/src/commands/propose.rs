@@ -197,11 +197,9 @@ pub(crate) struct BatchRow {
     pub(crate) args_named: Option<serde_json::Value>,
 }
 
-/// What exactly went wrong with one row's proposal. The batch only
-/// needs the row-vs-operational split (its exit-code contract), but
-/// the session answers with a stable per-request code, so the
-/// classification keeps the distinctions rather than collapsing them
-/// into prose.
+/// What exactly went wrong with one row's proposal: the receipt's
+/// stable code on the batch and session surfaces, and the
+/// row-vs-operational split that decides receipt-or-abort.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RowErrorKind {
     /// The row itself did not parse or carried both/neither codec.
@@ -227,9 +225,28 @@ pub(crate) enum RowErrorKind {
     Operational,
 }
 
+impl RowErrorKind {
+    /// The stable code a receipt carries for this kind. Operational is
+    /// unreachable: both surfaces abort on it before any receipt.
+    pub(crate) fn code(self) -> envelopes::ErrorCode {
+        match self {
+            RowErrorKind::MalformedRow => envelopes::ErrorCode::InvalidRequest,
+            RowErrorKind::UnknownTransformation => envelopes::ErrorCode::UnknownTransformation,
+            RowErrorKind::BadArgs => envelopes::ErrorCode::InvalidArguments,
+            RowErrorKind::Serialization => envelopes::ErrorCode::SerializationFailure,
+            RowErrorKind::Kernel => envelopes::ErrorCode::KernelError,
+            RowErrorKind::DuplicateIntent => envelopes::ErrorCode::DuplicateIntent,
+            RowErrorKind::ActorAssertionUnauthorised => {
+                envelopes::ErrorCode::ActorAssertionUnauthorised
+            }
+            RowErrorKind::Operational => unreachable!("operational failures abort, never map"),
+        }
+    }
+}
+
 /// A per-row failure with its kind. The kind decides receipt-vs-abort
-/// (batch) and the stable error code (session); the reason renders
-/// into the receipt's human prose.
+/// and the receipt's stable code; the reason renders into the
+/// receipt's human prose.
 pub(crate) struct RowError {
     pub(crate) kind: RowErrorKind,
     pub(crate) reason: anyhow::Error,
@@ -323,11 +340,11 @@ async fn run_batch(
             // failure: the rows after it still run.
             Err(err) => {
                 errored += 1;
-                serde_json::json!({
-                    "row": row,
-                    "status": "error",
-                    "error": format!("{:#}", err.reason),
-                })
+                serde_json::to_value(envelopes::ErrorReceipt::new(
+                    err.kind.code(),
+                    format!("{:#}", err.reason),
+                    row as u64,
+                ))?
             }
         };
         println!("{}", serde_json::to_string(&receipt)?);
@@ -432,5 +449,56 @@ pub(crate) async fn propose_row_outcome(
         serde_json::to_value(&outcome)
             .context("serialising the receipt")
             .map_err(|e| RowError::new(RowErrorKind::Operational, e))
+    }
+}
+
+#[cfg(test)]
+mod code_tests {
+    use super::RowErrorKind;
+    use morpholog_cli::envelopes::ErrorCode;
+
+    /// Every row kind that becomes a receipt. The match is what keeps
+    /// the list honest: a new variant fails to compile until it is
+    /// placed on one side or the other.
+    fn receipt_kinds() -> Vec<RowErrorKind> {
+        use RowErrorKind::*;
+        let all = [
+            MalformedRow,
+            UnknownTransformation,
+            BadArgs,
+            Serialization,
+            Kernel,
+            DuplicateIntent,
+            ActorAssertionUnauthorised,
+            Operational,
+        ];
+        all.into_iter()
+            .filter(|k| match k {
+                MalformedRow
+                | UnknownTransformation
+                | BadArgs
+                | Serialization
+                | Kernel
+                | DuplicateIntent
+                | ActorAssertionUnauthorised => true,
+                Operational => false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_published_propose_codes_are_exactly_what_a_row_can_earn() {
+        let mut earned: Vec<ErrorCode> = receipt_kinds()
+            .into_iter()
+            .map(RowErrorKind::code)
+            .collect();
+        earned.sort_by_key(|c| format!("{c:?}"));
+        earned.dedup();
+        let mut published: Vec<ErrorCode> = ErrorCode::PROPOSE.to_vec();
+        published.sort_by_key(|c| format!("{c:?}"));
+        assert_eq!(
+            earned, published,
+            "ErrorCode::PROPOSE must list exactly the codes a proposal row can fail with"
+        );
     }
 }
