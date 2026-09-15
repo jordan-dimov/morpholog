@@ -20,11 +20,13 @@
 
 use std::collections::BTreeSet;
 
+use crate::analysis::{has_admission_gate, predicates_written_by};
 use crate::compiled::CompiledProgram;
 use crate::definitions::DefinitionTable;
 use crate::disciplines::append_only_predicates;
 use crate::ir::{
-    DefinitionName, Discipline, Invariant, InvariantOrigin, PredicateName, Prop, Term, ValueExpr,
+    DefinitionName, Discipline, Invariant, InvariantOrigin, PredicateName, Program, Prop, Term,
+    ValueExpr,
 };
 
 /// One lint finding. See the module doc for the error-vs-lint line.
@@ -95,6 +97,65 @@ pub enum Lint {
     /// first version exists. `--strict` promotes it for authors who want
     /// the pairing guaranteed rather than remembered.
     EffectiveWithoutDeclaredTotality { predicate: String },
+
+    /// A transformation of this programme writes a predicate another
+    /// programme also writes. Two programmes proposing into one
+    /// database share rows for a same-named predicate, each ungoverned
+    /// by the other's gates, so both hold write authority over the same
+    /// persisted state. Reads are not findings. A hint, because two
+    /// programmes may share a claim on purpose; `guarded` says only
+    /// whether a transformation carries a top-level admission gate,
+    /// never how strong it is.
+    SharedWriter {
+        transformation: String,
+        predicate: String,
+        guarded: bool,
+        other_program: String,
+        other_writers: Vec<SharedWriterPeer>,
+    },
+}
+
+/// A writing transformation on the other side of a [`Lint::SharedWriter`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedWriterPeer {
+    pub transformation: String,
+    pub guarded: bool,
+}
+
+/// The cross-programme findings for `this`, judged against `other`:
+/// one per transformation of `this` and predicate it writes that some
+/// transformation of `other` also writes, in declaration order. Pure;
+/// naming which file `other` came from is the caller's.
+pub fn shared_writer_lints(this: &Program, other: &Program) -> Vec<Lint> {
+    let writers: Vec<(&crate::ir::Transformation, BTreeSet<PredicateName>)> = other
+        .transformations
+        .iter()
+        .map(|t| (t, predicates_written_by(t)))
+        .collect();
+    let mut out = Vec::new();
+    for t in &this.transformations {
+        for predicate in predicates_written_by(t) {
+            let other_writers: Vec<SharedWriterPeer> = writers
+                .iter()
+                .filter(|(_, written)| written.contains(&predicate))
+                .map(|(o, _)| SharedWriterPeer {
+                    transformation: o.name.to_string(),
+                    guarded: has_admission_gate(o),
+                })
+                .collect();
+            if other_writers.is_empty() {
+                continue;
+            }
+            out.push(Lint::SharedWriter {
+                transformation: t.name.to_string(),
+                predicate: predicate.to_string(),
+                guarded: has_admission_gate(t),
+                other_program: other.name.to_string(),
+                other_writers,
+            });
+        }
+    }
+    out
 }
 
 impl std::fmt::Display for Lint {
@@ -165,6 +226,38 @@ impl std::fmt::Display for Lint {
                      on_or_before d)` - `at_or_before` for timestamps) \
                      beside the ordinary action's `require` gate",
                     names_first = predicates.first().map(String::as_str).unwrap_or("P"),
+                )
+            }
+            Lint::SharedWriter {
+                transformation,
+                predicate,
+                guarded,
+                other_program,
+                other_writers,
+            } => {
+                let gate = |g: bool| {
+                    if g {
+                        "has an admission gate"
+                    } else {
+                        "ungated"
+                    }
+                };
+                let peers = other_writers
+                    .iter()
+                    .map(|p| format!("`{}`: {}", p.transformation, gate(p.guarded)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "`{predicate}` is writable by another programme `{other_program}` \
+                     ({peers}); `{transformation}` here also writes it and {this}. Both \
+                     programmes hold write authority over the same persisted predicate, \
+                     each ungoverned by the other's gates",
+                    this = if *guarded {
+                        "has an admission gate"
+                    } else {
+                        "is ungated"
+                    },
                 )
             }
         }

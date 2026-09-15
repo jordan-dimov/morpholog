@@ -44,13 +44,29 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     }
 
     let lints = morpholog_core::lints(&compiled);
-    if !lints.is_empty() {
-        for lint in &lints {
-            render_lint(lint, args.strict, &parsed);
-        }
-        if args.strict {
+    let mut findings = !lints.is_empty();
+    for lint in &lints {
+        render_finding(&lint.to_string(), lint, args.strict, &parsed);
+    }
+    for path in &args.against {
+        refuse_self_comparison(&args.file, path)?;
+        let other = parse_or_report(path)?;
+        compile_or_report(&other)?;
+        let policy = morpholog_postgres::validate_declarations(&other.program);
+        if !policy.is_empty() {
+            for finding in &policy {
+                eprintln!("error: against {}: {finding}", path.display());
+            }
             return Err(AlreadyReported.into());
         }
+        for lint in &morpholog_core::shared_writer_lints(&parsed.program, &other.program) {
+            findings = true;
+            let message = format!("against {}: {lint}", path.display());
+            render_finding(&message, lint, args.strict, &parsed);
+        }
+    }
+    if findings && args.strict {
+        return Err(AlreadyReported.into());
     }
 
     if args.verbose {
@@ -148,24 +164,72 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
     print_json(&payload)
 }
 
-/// Render one lint to stderr: a caret block at hint severity (error
-/// under `--strict`) when the source map places it, the plain
-/// `hint: ...` / `error: ...` line otherwise.
-fn render_lint(lint: &morpholog_core::Lint, strict: bool, parsed: &ParsedSource) {
+/// Render one lint finding to stderr: a caret block at hint severity
+/// (error under `--strict`) when the source map places it, the plain
+/// `hint: ...` / `error: ...` line otherwise. `message` is the lint's
+/// text, possibly prefixed with what it was judged against.
+fn render_finding(message: &str, lint: &morpholog_core::Lint, strict: bool, parsed: &ParsedSource) {
     match parsed.map.span_for_lint(lint) {
         Some(span) => {
             let diagnostic = if strict {
-                Diagnostic::error(lint.to_string(), span)
+                Diagnostic::error(message.to_string(), span)
             } else {
-                Diagnostic::hint(lint.to_string(), span)
+                Diagnostic::hint(message.to_string(), span)
             };
             eprint!("{}", diagnostic.render(&parsed.source_name, &parsed.source));
         }
         None => {
             let label = if strict { "error" } else { "hint" };
-            eprintln!("{label}: {lint}");
+            eprintln!("{label}: {message}");
         }
     }
+}
+
+/// `--against` the file being checked would report every write as a
+/// collision with itself: nonsensical input, refused.
+fn refuse_self_comparison(file: &Path, against: &Path) -> anyhow::Result<()> {
+    let same = match (file.canonicalize(), against.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => file == against,
+    };
+    if same {
+        anyhow::bail!(
+            "--against {} is the file being checked; a programme cannot collide with itself",
+            against.display()
+        );
+    }
+    Ok(())
+}
+
+/// The programme behind an `--against` path, cleared to the same floor
+/// `check` holds the primary file to - parse, validation, declaration
+/// policy - or every reason it is not, as messages naming the path.
+/// Messages only: the JSON report has one `file`, and a span from
+/// another file would be a lying location.
+fn load_against(path: &Path) -> Result<Program, Vec<String>> {
+    let against = path.display();
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| vec![format!("against {against}: read source file: {e}")])?;
+    let (program, _) = parse_program_with_sources(&source).map_err(|diagnostics| {
+        diagnostics
+            .into_iter()
+            .map(|d| format!("against {against}: {}", d.message))
+            .collect::<Vec<_>>()
+    })?;
+    let compiled = CompiledProgram::new(program).map_err(|errors| {
+        errors
+            .iter()
+            .map(|e| format!("against {against}: {e}"))
+            .collect::<Vec<_>>()
+    })?;
+    let policy = morpholog_postgres::validate_declarations(compiled.program());
+    if !policy.is_empty() {
+        return Err(policy
+            .iter()
+            .map(|f| format!("against {against}: {f}"))
+            .collect());
+    }
+    Ok(compiled.program().clone())
 }
 
 /// `check --json`: every finding - parse errors, validation errors,
@@ -226,6 +290,44 @@ fn run_json(args: &CheckArgs) -> anyhow::Result<()> {
                             map.span_for_lint(lint),
                             &source,
                         ));
+                    }
+                    for path in &args.against {
+                        // One object on stdout, whatever went wrong: the
+                        // self-comparison refusal is a finding here too.
+                        if let Err(e) = refuse_self_comparison(&args.file, path) {
+                            failed = true;
+                            findings.push(CheckDiagnostic::new(
+                                "error",
+                                e.to_string(),
+                                None,
+                                &source,
+                            ));
+                            continue;
+                        }
+                        match load_against(path) {
+                            Err(messages) => {
+                                failed = true;
+                                for message in messages {
+                                    findings.push(CheckDiagnostic::new(
+                                        "error", message, None, &source,
+                                    ));
+                                }
+                            }
+                            Ok(other) => {
+                                for lint in
+                                    &morpholog_core::shared_writer_lints(compiled.program(), &other)
+                                {
+                                    let severity = if args.strict { "error" } else { "hint" };
+                                    failed |= args.strict;
+                                    findings.push(CheckDiagnostic::new(
+                                        severity,
+                                        format!("against {}: {lint}", path.display()),
+                                        map.span_for_lint(lint),
+                                        &source,
+                                    ));
+                                }
+                            }
+                        }
                     }
                 }
             }

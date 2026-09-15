@@ -1122,6 +1122,16 @@ pub(crate) struct CheckArgs {
     #[arg(long, conflicts_with_all = ["json", "verbose"])]
     pub(crate) ir: bool,
 
+    /// Another programme deployed against the same database. Every
+    /// predicate this file admits or retracts that the other also
+    /// admits or retracts is reported as a hint on this file's
+    /// writing transformation: two programmes writing one predicate
+    /// each escape the other's gates. Repeatable; each file must
+    /// itself parse and validate (its own lints are its own `check`'s
+    /// business).
+    #[arg(long, value_name = "FILE")]
+    pub(crate) against: Vec<PathBuf>,
+
     /// Emit every finding - parse errors, validation errors, lints -
     /// as one JSON object on stdout, each with byte offsets and
     /// 1-based line/column where the finding has a source location.
