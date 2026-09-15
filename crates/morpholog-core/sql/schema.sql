@@ -15,9 +15,6 @@ CREATE SCHEMA IF NOT EXISTS morpholog;
 SET search_path TO morpholog, public;
 
 
--- Admitted state. Each row is one admitted claim.
--- The primary key enforces set semantics: assert C where C is
--- already present is a no-op; retract C where C is missing fails.
 -- Which numbered migrations this database has had applied. A fresh
 -- database created from this file is at the head by construction, so
 -- `morpholog init` records every migration as applied without running
@@ -35,12 +32,35 @@ CREATE TABLE schema_migrations (
 );
 
 
+-- The digest a claim is keyed by. Keying on the whole argument array
+-- put a silent ceiling on argument size: a btree index row may not
+-- exceed 2704 bytes, so a long enough argument (an embedder's free-text
+-- statement) was refused by the index, never by a rule. The digest of
+-- the canonical jsonb text is fixed-width, and it agrees with jsonb
+-- equality for every lawfully encoded argument: the codec writes
+-- decimals as strings, so jsonb's numeric normalisation (1 = 1.0) never
+-- applies. SHA-256 collision resistance is assumed, as the audit tree
+-- already assumes it.
+--
+-- IMMUTABLE although convert_to is marked stable: its only hidden input
+-- is the database encoding, fixed for the database's life. The plain
+-- text-to-bytea cast cannot be used here - it parses backslash escapes
+-- and refuses the `\"` every quoted string produces.
+CREATE FUNCTION claim_digest(args jsonb) RETURNS bytea
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    RETURN sha256(convert_to(args::text, 'UTF8'));
+
+-- Admitted state. Each row is one admitted claim.
+-- The primary key enforces set semantics: assert C where C is
+-- already present is a no-op; retract C where C is missing fails.
+-- Identity is (predicate_name, digest of arguments) - see claim_digest.
 CREATE TABLE claims (
     predicate_name  text        NOT NULL,
     arguments       jsonb       NOT NULL CHECK (jsonb_typeof(arguments) = 'array'),
+    arguments_hash  bytea       NOT NULL GENERATED ALWAYS AS (claim_digest(arguments)) STORED,
     asserted_in     uuid        NOT NULL,
     asserted_at     timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (predicate_name, arguments)
+    PRIMARY KEY (predicate_name, arguments_hash)
 );
 
 -- Find all claims admitted by a given transition.
@@ -309,13 +329,18 @@ CREATE TABLE IF NOT EXISTS morpholog_read.derived_active (
 -- kernel's positional value array, tagged-JSONB exactly as
 -- `morpholog.claims.arguments` - so the exact computed value is preserved
 -- and the (future) derived-view layer reuses the base-predicate
--- extractors unchanged. The PK leads with `refresh_id` so a derived view
+-- extractors unchanged. No key: the rows are the kernel's set-valued
+-- output, already distinct, and keying on the whole argument array would
+-- put the index row-size ceiling on a derived figure just as it once
+-- did on a claim. The index leads with `refresh_id` so a derived view
 -- filters by the active generation then predicate.
 CREATE TABLE IF NOT EXISTS morpholog_read.derived_claims (
     refresh_id     uuid  NOT NULL
                          REFERENCES morpholog_read.derived_refreshes (refresh_id)
                          ON DELETE CASCADE,
     predicate_name text  NOT NULL,
-    arguments      jsonb NOT NULL CHECK (jsonb_typeof(arguments) = 'array'),
-    PRIMARY KEY (refresh_id, predicate_name, arguments)
+    arguments      jsonb NOT NULL CHECK (jsonb_typeof(arguments) = 'array')
 );
+
+CREATE INDEX IF NOT EXISTS derived_claims_generation_predicate
+    ON morpholog_read.derived_claims (refresh_id, predicate_name);

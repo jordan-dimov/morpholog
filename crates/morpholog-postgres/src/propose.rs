@@ -576,7 +576,9 @@ pub(crate) async fn write_claim_delta(
     // one row per distinct retraction is expected; zero rows means a
     // persistent-state mismatch (concurrent interference, which SSI
     // catches later, or a pre-state snapshot that disagrees with the
-    // live table).
+    // live table). The digest finds the row through the key; the
+    // equality on the array is what makes a digest collision retract
+    // nothing rather than the wrong claim.
     let mut seen: HashSet<(PredicateName, String)> = HashSet::new();
     for claim in retracted_claims {
         let args_repr = serde_json::to_string(&claim.args)?;
@@ -586,7 +588,10 @@ pub(crate) async fn write_claim_delta(
         }
         let args_json: serde_json::Value = serde_json::to_value(&claim.args)?;
         let result = sqlx::query!(
-            "DELETE FROM morpholog.claims WHERE predicate_name = $1 AND arguments = $2",
+            "DELETE FROM morpholog.claims
+             WHERE predicate_name = $1
+               AND arguments_hash = morpholog.claim_digest($2)
+               AND arguments = $2",
             claim.predicate.as_str(),
             args_json,
         )
@@ -610,7 +615,7 @@ pub(crate) async fn write_claim_delta(
         sqlx::query!(
             "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
              VALUES ($1, $2, $3)
-             ON CONFLICT (predicate_name, arguments) DO NOTHING",
+             ON CONFLICT (predicate_name, arguments_hash) DO NOTHING",
             claim.predicate.as_str(),
             args_json,
             transition_id,

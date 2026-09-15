@@ -537,7 +537,7 @@ fn migration_reports_serialize_as_pinned() {
     let behind = morpholog_postgres::MigrationReport {
         recorded_version_before: Some(9),
         recorded_version_after: Some(9),
-        binary_version: 11,
+        binary_version: 12,
         applied: Vec::new(),
         unknown: Vec::new(),
         pending: vec![
@@ -549,14 +549,18 @@ fn migration_reports_serialize_as_pinned() {
                 version: 11,
                 name: "schema_migrations".to_string(),
             },
+            morpholog_postgres::MigrationRef {
+                version: 12,
+                name: "claims_hash_key".to_string(),
+            },
         ],
     };
     assert_golden("migration_report_behind.json", &to_value(&behind));
 
     let applied = morpholog_postgres::MigrationReport {
         recorded_version_before: Some(9),
-        recorded_version_after: Some(11),
-        binary_version: 11,
+        recorded_version_after: Some(12),
+        binary_version: 12,
         applied: behind.pending.clone(),
         pending: Vec::new(),
         unknown: Vec::new(),
@@ -566,13 +570,13 @@ fn migration_reports_serialize_as_pinned() {
     // A database migrated by a NEWER binary. The dangerous shape: nothing
     // is pending, and it is emphatically not current.
     let ahead = morpholog_postgres::MigrationReport {
-        recorded_version_before: Some(12),
-        recorded_version_after: Some(12),
-        binary_version: 11,
+        recorded_version_before: Some(13),
+        recorded_version_after: Some(13),
+        binary_version: 12,
         applied: Vec::new(),
         pending: Vec::new(),
         unknown: vec![morpholog_postgres::MigrationRef {
-            version: 12,
+            version: 13,
             name: "something_this_build_never_saw".to_string(),
         }],
     };
