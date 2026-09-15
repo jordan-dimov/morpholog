@@ -659,6 +659,203 @@ async fn signature_policy_flags_compose_and_the_pin_is_refused_on_a_sparse_pack(
     assert!(status.success(), "{stdout}");
 }
 
+const KEY_GOVERNANCE_MORPH: &str = "
+program key_governance
+
+predicate AuditSigningKey(key_id: Subject, purpose: Subject, public_key: Subject)
+
+transformation authorize(key_id, purpose, public_key):
+    admit AuditSigningKey(key_id, purpose, public_key)
+";
+
+/// A fresh keypair on disk, authorised in the log under `key_id` for the
+/// checkpoint purpose. Returns the private PEM path and the public key
+/// file path, as `audit keygen` wrote them.
+fn authorised_key(dir: &std::path::Path, key_id: &str) -> (String, String) {
+    let pem = dir.join(format!("{key_id}.pem"));
+    let public = dir.join(format!("{key_id}.pub"));
+    let (status, public_key, stderr) = run_cli_no_db(&[
+        "audit",
+        "keygen",
+        "--private-out",
+        pem.to_str().unwrap(),
+        "--public-out",
+        public.to_str().unwrap(),
+    ]);
+    assert!(status.success(), "{stderr}");
+    let fixture = common::write_fixture("key_governance", KEY_GOVERNANCE_MORPH);
+    let args = serde_json::json!([
+        {"type": "subject", "value": key_id},
+        {"type": "subject", "value": "audit_checkpoint_v1"},
+        {"type": "subject", "value": public_key.trim()},
+    ]);
+    let (status, stdout, stderr) = run_cli(&[
+        "propose",
+        fixture.path.to_str().unwrap(),
+        "authorize",
+        "--actor",
+        "operator",
+        "--args",
+        &args.to_string(),
+    ]);
+    assert!(status.success(), "authorising {key_id}: {stdout}\n{stderr}");
+    (
+        pem.to_str().unwrap().to_string(),
+        public.to_str().unwrap().to_string(),
+    )
+}
+
+/// Checkpoint the current head signed by `key_id`; returns the head's
+/// tree size (the key authorisations are audit rows too, so sizes are
+/// read back, never assumed).
+fn checkpoint_signed_by(pem: &str, key_id: &str) -> i64 {
+    let (status, stdout, stderr) = run_cli(&[
+        "audit",
+        "checkpoint",
+        "--signing-key",
+        pem,
+        "--key-id",
+        key_id,
+    ]);
+    assert!(status.success(), "checkpoint signed by {key_id}: {stderr}");
+    serde_json::from_str::<Value>(&stdout).unwrap()["tree_size"]
+        .as_i64()
+        .expect("a checkpoint reports its tree size")
+}
+
+fn export_to_file(extra: &[&str]) -> tempfile::NamedTempFile {
+    let mut args = vec!["audit", "export"];
+    args.extend_from_slice(extra);
+    let (status, pack, stderr) = run_cli(&args);
+    assert!(status.success(), "{stderr}");
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut file, pack.as_bytes()).unwrap();
+    file
+}
+
+/// The exact surface #307 asked for, end to end: a credential brings its
+/// own authorised key, the log is intact and genuinely signed, and only
+/// the verifier's pin on a complete-prefix pack says "not by the key I
+/// trust" - until the honest key co-signs the same head.
+#[tokio::test(flavor = "current_thread")]
+async fn a_full_prefix_pack_is_pinned_offline_against_a_rogue_authorised_signer() {
+    reset_db().await;
+    let dir = tempfile::tempdir().unwrap();
+    let (honest_pem, honest_pub) = authorised_key(dir.path(), "honest");
+    let (rogue_pem, _) = authorised_key(dir.path(), "rogue");
+    post_balanced_entry("pin1", 100);
+    checkpoint_signed_by(&rogue_pem, "rogue");
+
+    let pack = export_to_file(&[]);
+    let pack_path = pack.path().to_str().unwrap();
+    let (status, stdout, _) = run_cli_no_db(&["audit", "verify-pack", pack_path]);
+    assert!(status.success(), "intact intrinsically: {stdout}");
+    let (status, stdout, _) = run_cli_no_db(&[
+        "audit",
+        "verify-pack",
+        pack_path,
+        "--require-signing-key",
+        &honest_pub,
+    ]);
+    assert!(!status.success());
+    let verdict: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(verdict["status"], "signing_key_required", "{stdout}");
+    assert_eq!(
+        verdict["public_key"],
+        std::fs::read_to_string(&honest_pub).unwrap().trim(),
+        "{stdout}"
+    );
+
+    // The honest key co-signs the same head; the rogue signature is not
+    // held against it.
+    checkpoint_signed_by(&honest_pem, "honest");
+    let pack = export_to_file(&[]);
+    let (status, stdout, _) = run_cli_no_db(&[
+        "audit",
+        "verify-pack",
+        pack.path().to_str().unwrap(),
+        "--require-signing-key",
+        &honest_pub,
+        "--require-signatures-from",
+        "1",
+    ]);
+    assert!(status.success(), "{stdout}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout).unwrap()["status"],
+        "intact"
+    );
+}
+
+/// A broken sparse pack reports as broken whatever the policy: the pin's
+/// refusal comes after the intrinsic verdict, never in front of it.
+#[tokio::test(flavor = "current_thread")]
+async fn the_pin_never_masks_a_sparse_packs_intrinsic_verdict() {
+    reset_db().await;
+    let dir = tempfile::tempdir().unwrap();
+    let (honest_pem, honest_pub) = authorised_key(dir.path(), "honest");
+    post_balanced_entry("mask1", 100);
+    let from = checkpoint_signed_by(&honest_pem, "honest").to_string();
+    post_balanced_entry("mask2", 100);
+    checkpoint_signed_by(&honest_pem, "honest");
+
+    // A window whose end signature has been corrupted.
+    let (status, pack, stderr) = run_cli(&["audit", "export", "--from-tree-size", &from]);
+    assert!(status.success(), "{stderr}");
+    let mut pack: Value = serde_json::from_str(&pack).unwrap();
+    pack["to_checkpoint"]["signatures"][0]["signature"] =
+        Value::String(format!("ed25519-sig:{}", "0".repeat(128)));
+    let mut broken = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut broken, pack.to_string().as_bytes()).unwrap();
+    let broken_path = broken.path().to_str().unwrap();
+    let mut malformed = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(
+        &mut malformed,
+        br#"{"manifest": {"pack_format_version": 2}}"#,
+    )
+    .unwrap();
+    let malformed_path = malformed.path().to_str().unwrap();
+
+    for (path, expected) in [
+        (broken_path, "signature_invalid"),
+        (malformed_path, "malformed"),
+    ] {
+        let (_, without, _) = run_cli_no_db(&["audit", "verify-pack", path]);
+        let (status, with, stderr) = run_cli_no_db(&[
+            "audit",
+            "verify-pack",
+            path,
+            "--require-signing-key",
+            &honest_pub,
+        ]);
+        assert!(!status.success());
+        assert_eq!(
+            serde_json::from_str::<Value>(&without).unwrap()["status"],
+            expected,
+            "{without}"
+        );
+        assert_eq!(
+            with, without,
+            "the verdict must be byte-identical with the pin: {with}\n{stderr}"
+        );
+    }
+
+    // Only an intact sparse pack reaches the refusal.
+    let intact = export_to_file(&["--from-tree-size", &from]);
+    let (status, stdout, stderr) = run_cli_no_db(&[
+        "audit",
+        "verify-pack",
+        intact.path().to_str().unwrap(),
+        "--require-signing-key",
+        &honest_pub,
+    ]);
+    assert!(!status.success() && stdout.trim().is_empty(), "{stdout}");
+    assert!(stderr.contains("complete-prefix pack"), "{stderr}");
+
+    // A negative threshold has no meaning and is refused at the boundary.
+    let (status, _, stderr) = run_cli(&["audit", "verify", "--require-signatures-from", "-1"]);
+    assert!(!status.success() && stderr.contains("-1"), "{stderr}");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn evidence_export_then_verify_offline() {
     reset_db().await;

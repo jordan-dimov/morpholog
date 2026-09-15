@@ -243,6 +243,34 @@ impl SignaturePolicy {
     }
 }
 
+/// The checkpoints as the verifier effectively holds them: where an
+/// externally held anchor matches one by tree size - which an intact
+/// verdict has already proven - its signatures count for that
+/// checkpoint too, exactly as the intrinsic authority check judges the
+/// anchor's own signatures. A stripped database copy beside a signed
+/// anchor is attributable, and the policy sees it that way.
+pub fn with_anchor_signatures(
+    checkpoints: &[Checkpoint],
+    anchor: Option<&Checkpoint>,
+) -> Vec<Checkpoint> {
+    checkpoints
+        .iter()
+        .map(|c| {
+            let mut merged = c.clone();
+            if let Some(a) = anchor
+                && a.tree_size == c.tree_size
+            {
+                for sig in &a.signatures {
+                    if !merged.signatures.contains(sig) {
+                        merged.signatures.push(sig.clone());
+                    }
+                }
+            }
+            merged
+        })
+        .collect()
+}
+
 impl From<SignaturePolicyViolation> for TreeVerification {
     fn from(v: SignaturePolicyViolation) -> Self {
         match v {
@@ -688,7 +716,8 @@ pub async fn verify_audit_tree_under(
     }
     if let Some(policy) = policy
         && matches!(verdict, TreeVerification::Intact { .. })
-        && let Some(violation) = policy.violation(&checkpoints)
+        && let Some(violation) =
+            policy.violation(&with_anchor_signatures(&checkpoints, anchor.as_ref()))
     {
         return Ok(violation.into());
     }

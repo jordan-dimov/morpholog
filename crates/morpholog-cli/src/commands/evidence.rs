@@ -10,6 +10,7 @@ use morpholog_postgres::{
     Checkpoint, EvidencePack, SelectiveEvidencePack, SelectiveVerification, SignaturePolicy,
     TreeVerification, WindowEvidencePack, WindowStart, WindowVerification, export_pack,
     export_selective, export_window, verify_pack, verify_selective, verify_window,
+    with_anchor_signatures,
 };
 
 use anyhow::Context;
@@ -100,35 +101,23 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
         args.require_signatures_from,
         args.require_signing_key.as_deref(),
     )?;
-    let version = pack_format_version(&bytes);
-    // A sparse pack checks signatures cryptographically only; it cannot
-    // say whether a key was authorised as of its prefix. A pin is an
-    // intersection with that authority, so here it would silently become
-    // "signed by this key" - a different claim. Refused, remedy named.
-    if matches!(version, Some(2 | 3))
-        && policy
-            .as_ref()
-            .is_some_and(|p| p.required_public_key.is_some())
-    {
-        anyhow::bail!(
-            "--require-signing-key needs a complete-prefix pack: a window or selective pack \
-             cannot establish signing-key authority, so the pin could only be checked \
-             cryptographically. Verify a full-prefix pack, or the live log with `audit verify`."
-        );
-    }
-    let intact = match version {
-        Some(2) => {
-            let verdict = verify_window_pack(&bytes, anchor.as_ref(), policy.as_ref());
-            let intact = matches!(verdict, WindowVerification::Intact { .. });
-            print_json(&verdict)?;
-            intact
-        }
-        Some(3) => {
-            let verdict = verify_selective_pack(&bytes, anchor.as_ref(), policy.as_ref());
-            let intact = matches!(verdict, SelectiveVerification::Intact { .. });
-            print_json(&verdict)?;
-            intact
-        }
+    let intact = match pack_format_version(&bytes) {
+        Some(2) => match verify_window_pack(&bytes, anchor.as_ref(), policy.as_ref()) {
+            Offline::Verdict(verdict) => {
+                let intact = matches!(verdict, WindowVerification::Intact { .. });
+                print_json(&verdict)?;
+                intact
+            }
+            Offline::PinNeedsFullPrefix => return Err(pin_needs_full_prefix()),
+        },
+        Some(3) => match verify_selective_pack(&bytes, anchor.as_ref(), policy.as_ref()) {
+            Offline::Verdict(verdict) => {
+                let intact = matches!(verdict, SelectiveVerification::Intact { .. });
+                print_json(&verdict)?;
+                intact
+            }
+            Offline::PinNeedsFullPrefix => return Err(pin_needs_full_prefix()),
+        },
         Some(n) if n > 3 => {
             print_json(&TreeVerification::MalformedPack {
                 detail: format!(
@@ -150,6 +139,26 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
         return Err(AlreadyReported.into());
     }
     Ok(())
+}
+
+/// What an offline verifier answers: the pack's verdict, or - only once
+/// the pack has proven intact - that the policy asked of it cannot be
+/// judged here. A broken pack reports as broken whatever the policy.
+enum Offline<V> {
+    Verdict(V),
+    PinNeedsFullPrefix,
+}
+
+/// A sparse pack checks signatures cryptographically only; it cannot say
+/// whether a key was authorised as of its prefix. A pin is an
+/// intersection with that authority, so here it would silently become
+/// "signed by this key" - a different claim. Refused, remedy named.
+fn pin_needs_full_prefix() -> anyhow::Error {
+    anyhow::anyhow!(
+        "--require-signing-key needs a complete-prefix pack: a window or selective pack \
+         cannot establish signing-key authority, so the pin could only be checked \
+         cryptographically. Verify a full-prefix pack, or the live log with `audit verify`."
+    )
 }
 
 /// The `manifest.pack_format_version`, if the bytes parse as JSON with that
@@ -184,7 +193,8 @@ fn verify_prefix_pack(
     // genuine and authorised by the pack's full prefix.
     if let Some(policy) = policy
         && matches!(verdict, TreeVerification::Intact { .. })
-        && let Some(violation) = policy.violation(&pack.checkpoints)
+        && let Some(violation) =
+            policy.violation(&with_anchor_signatures(&pack.checkpoints, anchor))
     {
         return violation.into();
     }
@@ -195,55 +205,67 @@ fn verify_selective_pack(
     bytes: &[u8],
     anchor: Option<&Checkpoint>,
     policy: Option<&SignaturePolicy>,
-) -> SelectiveVerification {
+) -> Offline<SelectiveVerification> {
     let pack: SelectiveEvidencePack = match serde_json::from_slice(bytes) {
         Ok(pack) => pack,
         Err(e) => {
-            return SelectiveVerification::Malformed {
+            return Offline::Verdict(SelectiveVerification::Malformed {
                 detail: e.to_string(),
-            };
+            });
         }
     };
     let verdict =
         verify_selective(&pack, anchor).unwrap_or_else(|e| SelectiveVerification::Malformed {
             detail: e.to_string(),
         });
-    // Policy over the one covering checkpoint: presence only, since a
-    // sparse pack cannot judge authority and so never carries a pin.
-    if let Some(policy) = policy
-        && matches!(verdict, SelectiveVerification::Intact { .. })
-        && let Some(tree_size) = policy.unsigned_at_or_after([&pack.checkpoint])
-    {
-        return SelectiveVerification::SignatureRequired { tree_size };
+    if !matches!(verdict, SelectiveVerification::Intact { .. }) {
+        return Offline::Verdict(verdict);
     }
-    verdict
+    // Policy over the one covering checkpoint, and presence only: a
+    // sparse pack cannot judge authority, so a pin cannot be an
+    // intersection with it here.
+    if let Some(policy) = policy {
+        if policy.required_public_key.is_some() {
+            return Offline::PinNeedsFullPrefix;
+        }
+        let held = with_anchor_signatures(std::slice::from_ref(&pack.checkpoint), anchor);
+        if let Some(tree_size) = policy.unsigned_at_or_after(&held) {
+            return Offline::Verdict(SelectiveVerification::SignatureRequired { tree_size });
+        }
+    }
+    Offline::Verdict(verdict)
 }
 
 fn verify_window_pack(
     bytes: &[u8],
     anchor: Option<&Checkpoint>,
     policy: Option<&SignaturePolicy>,
-) -> WindowVerification {
+) -> Offline<WindowVerification> {
     let pack: WindowEvidencePack = match serde_json::from_slice(bytes) {
         Ok(pack) => pack,
         Err(e) => {
-            return WindowVerification::Malformed {
+            return Offline::Verdict(WindowVerification::Malformed {
                 detail: e.to_string(),
-            };
+            });
         }
     };
     let verdict = verify_window(&pack, anchor).unwrap_or_else(|e| WindowVerification::Malformed {
         detail: e.to_string(),
     });
-    // Policy over the window's end only (REMIT attribution wants a signed
-    // window end; the trusted start is the anchor's business): presence
-    // only, since a sparse pack cannot judge authority and never carries
-    // a pin.
-    if let Some(policy) = policy
-        && matches!(verdict, WindowVerification::Intact { .. })
-        && let Some(tree_size) = policy.unsigned_at_or_after([&pack.to_checkpoint])
-    {
-        return WindowVerification::SignatureRequired { tree_size };
+    if !matches!(verdict, WindowVerification::Intact { .. }) {
+        return Offline::Verdict(verdict);
     }
-    verdict
+    // Policy over the window's end only (REMIT attribution wants a signed
+    // window end; the trusted start is the anchor's business), and
+    // presence only: a sparse pack cannot judge authority, so a pin
+    // cannot be an intersection with it here.
+    if let Some(policy) = policy {
+        if policy.required_public_key.is_some() {
+            return Offline::PinNeedsFullPrefix;
+        }
+        if let Some(tree_size) = policy.unsigned_at_or_after([&pack.to_checkpoint]) {
+            return Offline::Verdict(WindowVerification::SignatureRequired { tree_size });
+        }
+    }
+    Offline::Verdict(verdict)
 }

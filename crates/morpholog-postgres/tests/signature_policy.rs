@@ -220,3 +220,35 @@ async fn honest_history_before_signing_began_passes_under_a_threshold() {
         }
     }
 }
+
+#[tokio::test]
+async fn a_signed_anchor_satisfies_the_pin_when_the_stored_copy_is_stripped() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    commit_entry(&pool, "x1").await;
+    let (honest, honest_key) = signer(&pool, "honest").await;
+    let anchor = head(&pool, &honest).await;
+    // The database copy loses its signatures; the verifier still holds
+    // the signed head. Intrinsically attributable through the anchor,
+    // and the policy judges what the verifier holds.
+    sqlx::query("UPDATE morpholog.audit_checkpoints SET signatures = '[]'::jsonb")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let pinned = policy(0, Some(&honest_key));
+    assert_eq!(
+        verify_audit_tree_under(&pool, None, Some(&pinned))
+            .await
+            .unwrap(),
+        TreeVerification::SignatureRequired {
+            tree_size: anchor.tree_size
+        },
+        "without the anchor the stored copy is unsigned"
+    );
+    assert!(matches!(
+        verify_audit_tree_under(&pool, Some(anchor), Some(&pinned))
+            .await
+            .unwrap(),
+        TreeVerification::Intact { .. }
+    ));
+}

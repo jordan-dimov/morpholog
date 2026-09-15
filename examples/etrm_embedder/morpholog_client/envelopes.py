@@ -1479,7 +1479,7 @@ class TreeSigningKeyRequired:
     @classmethod
     def from_json(cls, payload: object) -> TreeSigningKeyRequired:
         data = _strict("signing-key-required tree", payload, {"status", "tree_size", "public_key"})
-        return cls(tree_size=data["tree_size"], public_key=str(data["public_key"]))
+        return cls(tree_size=data["tree_size"], public_key=data["public_key"])
 
 
 TreeVerification = (
