@@ -375,8 +375,25 @@ pub(crate) struct VerifyArgs {
     /// Compliance mode: require every checkpoint in the chain to be
     /// signed. An unsigned checkpoint then fails (`signature_required`).
     /// Off by default - signing is opt-in.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "require_signatures_from")]
     pub(crate) require_signatures: bool,
+
+    /// Require signatures only from this tree size on: checkpoints
+    /// before it - honest history from before signing began - are not
+    /// asked. `--require-signatures` is this at zero.
+    #[arg(long, value_name = "TREE_SIZE", value_parser = clap::value_parser!(i64).range(0..))]
+    pub(crate) require_signatures_from: Option<i64>,
+
+    /// Pin the signing key: a file holding the `ed25519-pub:<hex>` key
+    /// `audit keygen` wrote. Every checkpoint the policy covers must
+    /// then carry a signature by this key (`signature_required` if it
+    /// carries none, `signing_key_required` if none is by this key),
+    /// on top of that key being authorised in the log - the pin narrows
+    /// which authorised signer you accept, it never admits an
+    /// unauthorised one. A signature on the anchor you hold counts for
+    /// its checkpoint. Implies requiring signatures.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) require_signing_key: Option<std::path::PathBuf>,
 
     /// Also verify the generated SQL view surface in this schema: each
     /// catalogued view's live definition (as PostgreSQL stores it) must
@@ -579,8 +596,26 @@ pub(crate) struct EvidenceVerifyArgs {
 
     /// Compliance mode: require every checkpoint in the pack to be signed
     /// (`signature_required` otherwise). Off by default.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "require_signatures_from")]
     pub(crate) require_signatures: bool,
+
+    /// Require signatures only from this tree size on; earlier
+    /// checkpoints are not asked. `--require-signatures` is this at zero.
+    #[arg(long, value_name = "TREE_SIZE", value_parser = clap::value_parser!(i64).range(0..))]
+    pub(crate) require_signatures_from: Option<i64>,
+
+    /// Pin the signing key (a file holding the `ed25519-pub:<hex>` key
+    /// `audit keygen` wrote): every covered checkpoint must carry a
+    /// signature by this key (`signature_required` if it carries none,
+    /// `signing_key_required` if none is by this key), on top of the
+    /// key being authorised in the log; a signature on the anchor you
+    /// hold counts for its checkpoint. Complete-prefix packs only - a
+    /// window or selective pack cannot establish key authority, so on
+    /// an intact one the pin is refused rather than weakened to a bare
+    /// cryptographic match; a broken pack reports as broken first.
+    /// Implies requiring signatures.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) require_signing_key: Option<std::path::PathBuf>,
 }
 
 /// Arguments for `init`: the connection string plus the idempotent

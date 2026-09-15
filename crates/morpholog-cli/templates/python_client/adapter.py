@@ -492,20 +492,30 @@ class Morpholog:
         anchor_file: str | None = None,
         require_signatures: bool = False,
         views_schema: str | None = None,
+        *,
+        require_signatures_from: int | None = None,
+        require_signing_key: str | None = None,
     ) -> envelopes.VerifyReport:
         """Replay the audit log against the claims table and check the
         audit Merkle tree against its checkpoints (and an external
         ``anchor_file`` if given). ``require_signatures`` is compliance
-        mode: an unsigned checkpoint becomes a failing verdict.
-        ``views_schema`` also verifies the generated SQL view surface
+        mode: an unsigned checkpoint becomes a failing verdict;
+        ``require_signatures_from`` asks only of checkpoints at or after
+        that tree size, and ``require_signing_key`` (a file holding the
+        ``ed25519-pub:<hex>`` key) fails a covered checkpoint with no
+        signature by that key, on top of the key being authorised in
+        the log, never instead of it. ``views_schema`` also verifies the generated SQL view surface
         in that schema against its recorded seals, adding the ``views``
         verdict to the report. A divergence or tamper is a decided
         verdict on stdout, not an operational error."""
         args = ["audit", "verify", "--database-url", self.database_url]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
-        if require_signatures:
-            args.append("--require-signatures")
+        args.extend(
+            self._signature_policy_args(
+                require_signatures, require_signatures_from, require_signing_key
+            )
+        )
         if views_schema is not None:
             args.extend(["--views-schema", views_schema])
         return envelopes.VerifyReport.from_json(self._json(*args))
@@ -546,13 +556,26 @@ class Morpholog:
         pack_file: str,
         anchor_file: str | None = None,
         require_signatures: bool = False,
+        *,
+        require_signatures_from: int | None = None,
+        require_signing_key: str | None = None,
     ) -> envelopes.TreeVerification:
         """Verify a prefix evidence pack offline - no database. Returns the
         tamper-evidence verdict; a tamper or malformed pack is a decided
-        verdict on stdout. ``require_signatures`` is compliance mode: an
-        unsigned checkpoint becomes a failing verdict."""
+        verdict on stdout. ``require_signatures``, ``require_signatures_from``
+        and ``require_signing_key`` are the verifier's policy, as on
+        ``audit_verify``; the pin needs a complete-prefix pack, and a
+        window or selective pack refuses it as an operational error."""
         return envelopes.parse_tree_verification(
-            self._json(*self._verify_pack_args(pack_file, anchor_file, require_signatures))
+            self._json(
+                *self._verify_pack_args(
+                    pack_file,
+                    anchor_file,
+                    require_signatures,
+                    require_signatures_from,
+                    require_signing_key,
+                )
+            )
         )
 
     def audit_export_window(
@@ -584,13 +607,24 @@ class Morpholog:
         pack_file: str,
         anchor_file: str | None = None,
         require_signatures: bool = False,
+        *,
+        require_signatures_from: int | None = None,
+        require_signing_key: str | None = None,
     ) -> envelopes.WindowVerification:
         """Verify a window pack offline - no database. Returns the window
         verdict; a tamper, inconsistent extension, or malformed pack is a
         decided verdict on stdout. ``require_signatures`` is compliance
         mode, as on ``audit_verify_pack``."""
         return envelopes.parse_window_verification(
-            self._json(*self._verify_pack_args(pack_file, anchor_file, require_signatures))
+            self._json(
+                *self._verify_pack_args(
+                    pack_file,
+                    anchor_file,
+                    require_signatures,
+                    require_signatures_from,
+                    require_signing_key,
+                )
+            )
         )
 
     def audit_export_selective(
@@ -618,6 +652,9 @@ class Morpholog:
         pack_file: str,
         anchor_file: str | None = None,
         require_signatures: bool = False,
+        *,
+        require_signatures_from: int | None = None,
+        require_signing_key: str | None = None,
     ) -> envelopes.SelectiveVerification:
         """Verify a selective pack offline - no database. Returns the
         selective verdict; a row not included, anchor mismatch, or
@@ -625,18 +662,49 @@ class Morpholog:
         ``require_signatures`` is compliance mode, as on
         ``evidence_verify``."""
         return envelopes.parse_selective_verification(
-            self._json(*self._verify_pack_args(pack_file, anchor_file, require_signatures))
+            self._json(
+                *self._verify_pack_args(
+                    pack_file,
+                    anchor_file,
+                    require_signatures,
+                    require_signatures_from,
+                    require_signing_key,
+                )
+            )
         )
 
     @staticmethod
+    def _signature_policy_args(
+        require_signatures: bool,
+        require_signatures_from: int | None,
+        require_signing_key: str | None,
+    ) -> list[str]:
+        args: list[str] = []
+        if require_signatures:
+            args.append("--require-signatures")
+        if require_signatures_from is not None:
+            args.extend(["--require-signatures-from", str(require_signatures_from)])
+        if require_signing_key is not None:
+            args.extend(["--require-signing-key", str(require_signing_key)])
+        return args
+
+    @classmethod
     def _verify_pack_args(
-        pack_file: str, anchor_file: str | None, require_signatures: bool
+        cls,
+        pack_file: str,
+        anchor_file: str | None,
+        require_signatures: bool,
+        require_signatures_from: int | None = None,
+        require_signing_key: str | None = None,
     ) -> list[str]:
         args = ["audit", "verify-pack", str(pack_file)]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
-        if require_signatures:
-            args.append("--require-signatures")
+        args.extend(
+            cls._signature_policy_args(
+                require_signatures, require_signatures_from, require_signing_key
+            )
+        )
         return args
 
     # ------------------------------------------------------------

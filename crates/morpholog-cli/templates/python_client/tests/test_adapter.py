@@ -321,6 +321,19 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertNotIn("--anchor-file", argv)
             self.assertNotIn("--require-signatures", argv)
             self.assertNotIn("--views-schema", argv)
+            self.assertNotIn("--require-signatures-from", argv)
+            self.assertNotIn("--require-signing-key", argv)
+
+            # The policy refinements ride the same builder, on every
+            # verify method: threshold and pin land exactly when asked.
+            argv = argv_after(
+                lambda: self.client.audit_verify(
+                    require_signatures_from=1842, require_signing_key="honest.pub"
+                )
+            )
+            self.assertEqual(argv[argv.index("--require-signatures-from") + 1], "1842")
+            self.assertEqual(argv[argv.index("--require-signing-key") + 1], "honest.pub")
+            self.assertNotIn("--require-signatures", argv)
 
             # All three pack-verify methods plumb require_signatures
             # into the shared argv builder; each is asserted on its own
@@ -345,6 +358,16 @@ class AdapterDiscrimination(unittest.TestCase):
 
                 argv = argv_after(lambda m=method: m("pack.json"))
                 self.assertNotIn("--require-signatures", argv)
+                self.assertNotIn("--require-signatures-from", argv)
+                self.assertNotIn("--require-signing-key", argv)
+
+                argv = argv_after(
+                    lambda m=method: m(
+                        "pack.json", require_signatures_from=7, require_signing_key="k.pub"
+                    )
+                )
+                self.assertEqual(argv[argv.index("--require-signatures-from") + 1], "7")
+                self.assertEqual(argv[argv.index("--require-signing-key") + 1], "k.pub")
 
     def test_audit_empty_tail_is_a_lawful_empty_list(self):
         self._mode("record_argv_empty")

@@ -59,8 +59,9 @@ pub use audit::{
     list_audit_rows, list_audit_rows_page,
 };
 pub use checkpoints::{
-    Checkpoint, CheckpointOutcome, CheckpointSigner, TreeHeadSignature, TreeVerification,
-    create_checkpoint, first_unsigned_checkpoint_size, verify_audit_tree,
+    Checkpoint, CheckpointOutcome, CheckpointSigner, SignaturePolicy, SignaturePolicyViolation,
+    TreeHeadSignature, TreeVerification, create_checkpoint, verify_audit_tree,
+    verify_audit_tree_under, with_anchor_signatures,
 };
 pub use claims::{
     ClaimFilter, list_claims, list_claims_for_predicates, list_claims_where, load_scoped_state,

@@ -3,8 +3,8 @@
 
 use anyhow::Context;
 use morpholog_postgres::{
-    Checkpoint, TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification,
-    first_unsigned_checkpoint_size, verify_audit_tree, verify_replay, verify_views,
+    Checkpoint, SignaturePolicy, TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification,
+    parse_public_key, render_public_key, verify_audit_tree_under, verify_replay, verify_views,
 };
 
 use crate::VerifyArgs;
@@ -30,21 +30,16 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
         }
         None => None,
     };
-    let mut tree = verify_audit_tree(&pool, anchor)
+    // The verifier's signature policy rides inside the same snapshot the
+    // intrinsic verdict is computed from, over the chain it just proved.
+    let policy = signature_policy(
+        args.require_signatures,
+        args.require_signatures_from,
+        args.require_signing_key.as_deref(),
+    )?;
+    let tree = verify_audit_tree_under(&pool, anchor, policy.as_ref())
         .await
         .context("verify_audit_tree failed")?;
-
-    // Compliance policy: with --require-signatures, an otherwise-intact
-    // tree that has an unsigned checkpoint fails. Signing is opt-in, so
-    // this is the verifier's choice, applied over the intrinsic verdict.
-    if args.require_signatures
-        && matches!(tree, TreeVerification::Intact { .. })
-        && let Some(tree_size) = first_unsigned_checkpoint_size(&pool)
-            .await
-            .context("checking for unsigned checkpoints")?
-    {
-        tree = TreeVerification::SignatureRequired { tree_size };
-    }
 
     // The views leg is opt-in: only a deployment that generated a view
     // surface has one to verify.
@@ -73,4 +68,34 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
         return Err(AlreadyReported.into());
     }
     Ok(())
+}
+
+/// The signature policy the flags spell, or none. Each flag alone
+/// requires signatures: `--require-signatures` from zero,
+/// `--require-signatures-from N` from N, and a pinned key from zero
+/// unless a threshold is given too. The key file is parsed and
+/// re-rendered so the pin is the canonical `ed25519-pub:<hex>` form,
+/// whatever whitespace the file carries.
+pub(crate) fn signature_policy(
+    require: bool,
+    from: Option<i64>,
+    key_file: Option<&std::path::Path>,
+) -> anyhow::Result<Option<SignaturePolicy>> {
+    let required_public_key = match key_file {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("reading the pinned signing key {}", path.display()))?;
+            let key = parse_public_key(text.trim())
+                .with_context(|| format!("{} is not an ed25519-pub:<hex> key", path.display()))?;
+            Some(render_public_key(&key))
+        }
+        None => None,
+    };
+    if !require && from.is_none() && required_public_key.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(SignaturePolicy {
+        from_tree_size: from.unwrap_or(0),
+        required_public_key,
+    }))
 }

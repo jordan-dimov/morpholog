@@ -163,6 +163,129 @@ pub enum TreeVerification {
     /// verifier opts into (compliance mode), not an intrinsic tamper - an
     /// unsigned checkpoint is valid by default.
     SignatureRequired { tree_size: i64 },
+    /// The verifier pinned a signing key, the tree is otherwise intact -
+    /// every signature it carries genuine and authorised - but this
+    /// checkpoint carries no signature by that key. Policy, layered over
+    /// the intrinsic verdict: the pin narrows which authorised signer the
+    /// verifier accepts, and never makes an unauthorised one acceptable.
+    SigningKeyRequired { tree_size: i64, public_key: String },
+}
+
+/// What a verifier requires of checkpoint signatures, over and above
+/// the intrinsic verdict: from which tree size on a checkpoint must be
+/// signed, and by which key if one is pinned. Applied only to an intact
+/// tree, so every signature it inspects is already proven genuine and
+/// authorised as of its prefix - a pin is an intersection with that
+/// fold, never a substitute for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignaturePolicy {
+    /// Checkpoints at or after this tree size must satisfy the policy;
+    /// earlier ones - honest history from before signing began - are
+    /// not asked. Zero asks of every checkpoint.
+    pub from_tree_size: i64,
+    /// The `ed25519-pub:<hex>` key at least one signature must be by.
+    pub required_public_key: Option<String>,
+}
+
+/// The first policy failure over a checkpoint sequence, lowest tree size
+/// first: the verdict a verifier reports in place of `Intact`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignaturePolicyViolation {
+    SignatureRequired { tree_size: i64 },
+    SigningKeyRequired { tree_size: i64, public_key: String },
+}
+
+impl SignaturePolicy {
+    /// The first checkpoint at or after the threshold with no signature
+    /// at all. The one check a verifier that cannot judge key authority
+    /// (a window or selective pack) may still apply.
+    pub fn unsigned_at_or_after<'a>(
+        &self,
+        checkpoints: impl IntoIterator<Item = &'a Checkpoint>,
+    ) -> Option<i64> {
+        checkpoints
+            .into_iter()
+            .filter(|c| c.tree_size >= self.from_tree_size && c.signatures.is_empty())
+            .map(|c| c.tree_size)
+            .min()
+    }
+
+    /// The first policy failure over checkpoints whose signatures are
+    /// already proven genuine and authorised. A missing signature
+    /// outranks a missing pinned key at the same checkpoint; across
+    /// checkpoints the lowest tree size wins.
+    pub fn violation<'a>(
+        &self,
+        checkpoints: impl IntoIterator<Item = &'a Checkpoint>,
+    ) -> Option<SignaturePolicyViolation> {
+        checkpoints
+            .into_iter()
+            .filter(|c| c.tree_size >= self.from_tree_size)
+            .filter_map(|c| {
+                if c.signatures.is_empty() {
+                    return Some(SignaturePolicyViolation::SignatureRequired {
+                        tree_size: c.tree_size,
+                    });
+                }
+                let key = self.required_public_key.as_ref()?;
+                if c.signatures.iter().any(|s| &s.public_key == key) {
+                    return None;
+                }
+                Some(SignaturePolicyViolation::SigningKeyRequired {
+                    tree_size: c.tree_size,
+                    public_key: key.clone(),
+                })
+            })
+            .min_by_key(|v| match v {
+                SignaturePolicyViolation::SignatureRequired { tree_size }
+                | SignaturePolicyViolation::SigningKeyRequired { tree_size, .. } => *tree_size,
+            })
+    }
+}
+
+/// The checkpoints as the verifier effectively holds them: where an
+/// externally held anchor matches one by tree size - which an intact
+/// verdict has already proven - its signatures count for that
+/// checkpoint too, exactly as the intrinsic authority check judges the
+/// anchor's own signatures. A stripped database copy beside a signed
+/// anchor is attributable, and the policy sees it that way.
+pub fn with_anchor_signatures(
+    checkpoints: &[Checkpoint],
+    anchor: Option<&Checkpoint>,
+) -> Vec<Checkpoint> {
+    checkpoints
+        .iter()
+        .map(|c| {
+            let mut merged = c.clone();
+            if let Some(a) = anchor
+                && a.tree_size == c.tree_size
+            {
+                for sig in &a.signatures {
+                    if !merged.signatures.contains(sig) {
+                        merged.signatures.push(sig.clone());
+                    }
+                }
+            }
+            merged
+        })
+        .collect()
+}
+
+impl From<SignaturePolicyViolation> for TreeVerification {
+    fn from(v: SignaturePolicyViolation) -> Self {
+        match v {
+            SignaturePolicyViolation::SignatureRequired { tree_size } => {
+                TreeVerification::SignatureRequired { tree_size }
+            }
+            SignaturePolicyViolation::SigningKeyRequired {
+                tree_size,
+                public_key,
+            } => TreeVerification::SigningKeyRequired {
+                tree_size,
+                public_key,
+            },
+        }
+    }
 }
 
 /// This checkpoint's identity hash: `SHA-256(tree_size_le ||
@@ -556,6 +679,18 @@ pub async fn verify_audit_tree(
     pool: &PgPool,
     anchor: Option<Checkpoint>,
 ) -> Result<TreeVerification, PgError> {
+    verify_audit_tree_under(pool, anchor, None).await
+}
+
+/// [`verify_audit_tree`], then the verifier's signature policy over the
+/// same checkpoint chain the intrinsic verdict was computed from - one
+/// snapshot, so a checkpoint appended between the two could not be
+/// judged by the policy without having been judged intrinsically.
+pub async fn verify_audit_tree_under(
+    pool: &PgPool,
+    anchor: Option<Checkpoint>,
+    policy: Option<&SignaturePolicy>,
+) -> Result<TreeVerification, PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
 
     let checkpoints = load_checkpoint_chain(&mut tx).await?;
@@ -579,23 +714,14 @@ pub async fn verify_audit_tree(
             return Ok(violation);
         }
     }
+    if let Some(policy) = policy
+        && matches!(verdict, TreeVerification::Intact { .. })
+        && let Some(violation) =
+            policy.violation(&with_anchor_signatures(&checkpoints, anchor.as_ref()))
+    {
+        return Ok(violation.into());
+    }
     Ok(verdict)
-}
-
-/// The smallest `tree_size` of a checkpoint that carries no signature, or
-/// `None` if every checkpoint is signed (or there are none). The
-/// `--require-signatures` compliance policy reads this; signing stays
-/// opt-in by default, so this is not part of the intrinsic verdict.
-pub async fn first_unsigned_checkpoint_size(pool: &PgPool) -> Result<Option<i64>, PgError> {
-    let row = sqlx::query!(
-        r#"SELECT MIN(tree_size) AS "size"
-           FROM morpholog.audit_checkpoints
-           WHERE signatures = '[]'::jsonb"#
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(classify_checked_query)?;
-    Ok(row.size)
 }
 
 /// The pure tamper-evidence check shared by [`verify_audit_tree`] (live,

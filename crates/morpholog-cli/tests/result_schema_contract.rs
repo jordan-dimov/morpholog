@@ -1223,6 +1223,15 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "tree_verification_signature_required.json",
         &to_value(&TreeVerification::SignatureRequired { tree_size: 2 }),
     );
+    assert_golden(
+        "tree_verification_signing_key_required.json",
+        &to_value(&TreeVerification::SigningKeyRequired {
+            tree_size: 2,
+            public_key:
+                "ed25519-pub:0000000000000000000000000000000000000000000000000000000000000000"
+                    .into(),
+        }),
+    );
 
     // `evidence export --from-*`: the windowed pack (v2).
     assert_golden(
@@ -1756,6 +1765,10 @@ fn every_golden_validates_against_its_defs_entry() {
         ),
         (
             "tree_verification_signature_required.json",
+            "tree_verification",
+        ),
+        (
+            "tree_verification_signing_key_required.json",
             "tree_verification",
         ),
         ("window_evidence_pack.json", "window_evidence_pack"),
