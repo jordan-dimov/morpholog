@@ -54,6 +54,13 @@ class MorphologError(RuntimeError):
     business rejection, which is a decided outcome on stdout."""
 
 
+class MorphologTimeout(MorphologError):
+    """The binary did not finish within the client's timeout and was
+    killed. Operational for a read; for a proposal the caller must not
+    assume nothing changed, since the kill can land after COMMIT was
+    sent - ``propose`` re-raises it as ``MorphologOutcomeUnknown``."""
+
+
 class MorphologOutcomeUnknown(MorphologError):
     """A proposal was submitted and its commit outcome cannot be proven.
     Either no trustworthy response arrived (a session died, hung, or
@@ -111,7 +118,7 @@ class Morpholog:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            raise MorphologError(
+            raise MorphologTimeout(
                 f"`{self.binary} {_redact_argv(args)}` timed out after {timeout}s"
             ) from None
 
@@ -225,7 +232,8 @@ class Morpholog:
         every rule holds; a refusal is a lawful outcome, returned as
         ``Rejected``. A database failure before anything was recorded is
         an operational ``MorphologError`` (nothing changed); a commit
-        whose outcome the runtime could not prove raises
+        whose outcome the runtime could not prove, or a client timeout
+        that killed the binary after the proposal was submitted, raises
         ``MorphologOutcomeUnknown`` - read the record before
         re-submitting."""
         args = [
@@ -236,10 +244,18 @@ class Morpholog:
         ]
         if explain_on_reject:
             args.append("--explain-on-reject")
-        # The exit code is checked before the empty-stdout rule: an
-        # unknown commit prints nothing on stdout too, and must never
-        # read as an ordinary operational failure.
-        proc = self._run(args, timeout=self.timeout)
+        # A timeout kills the child, which may already have sent COMMIT:
+        # the same standing as exit 3. Then the exit code is checked
+        # before the empty-stdout rule, because an unknown commit prints
+        # nothing on stdout too and must never read as an ordinary
+        # operational failure.
+        try:
+            proc = self._run(args, timeout=self.timeout)
+        except MorphologTimeout as exc:
+            raise MorphologOutcomeUnknown(
+                "the proposal timed out after it was submitted; the commit outcome "
+                f"is unknown - read the record before re-submitting. ({exc})"
+            ) from None
         if proc.returncode == EXIT_COMMIT_OUTCOME_UNKNOWN:
             raise MorphologOutcomeUnknown(
                 "the commit outcome is unknown - read the record before "

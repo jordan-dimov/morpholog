@@ -97,19 +97,23 @@ async fn proposal_path_errors_say_what_they_know() {
 
     // Phase 1: the delta write itself is refused by the server (a CHECK
     // on the audit table). Nothing was committed, and the caller is
-    // told so by an ordinary database error.
+    // told so by an ordinary database error. Each phase restores the
+    // schema before it asserts: a failed assertion must not leave the
+    // shared database poisoned for the suite.
     ddl(
         &pool,
         "ALTER TABLE morpholog.audit ADD CONSTRAINT probe CHECK (false)",
     )
     .await;
-    let err = try_entry(&pool, "e1").await.unwrap_err();
+    let refused = try_entry(&pool, "e1").await;
+    let rows_after_refusal = audit_rows(&pool).await;
+    ddl(&pool, "ALTER TABLE morpholog.audit DROP CONSTRAINT probe").await;
+    let err = refused.unwrap_err();
     assert!(
         matches!(err, PgError::Database(_)),
         "a known non-commit: {err}"
     );
-    assert_eq!(audit_rows(&pool).await, 0);
-    ddl(&pool, "ALTER TABLE morpholog.audit DROP CONSTRAINT probe").await;
+    assert_eq!(rows_after_refusal, 0);
     assert!(
         matches!(
             try_entry(&pool, "e1").await.unwrap(),
@@ -134,18 +138,19 @@ async fn proposal_path_errors_say_what_they_know() {
     )
     .await;
     let before = audit_rows(&pool).await;
-    let err = try_entry(&pool, "e2").await.unwrap_err();
+    let refused = try_entry(&pool, "e2").await;
+    let rows_after_refusal = audit_rows(&pool).await;
+    ddl(&pool, "DROP TRIGGER probe_at_commit ON morpholog.audit").await;
+    ddl(&pool, "DROP FUNCTION probe_refuse()").await;
+    let err = refused.unwrap_err();
     assert!(
         matches!(&err, PgError::Database(e) if e.to_string().contains("refused at commit")),
         "the server's own verdict at COMMIT is a known non-commit: {err}"
     );
     assert_eq!(
-        audit_rows(&pool).await,
-        before,
+        rows_after_refusal, before,
         "nothing survived the refused COMMIT"
     );
-    ddl(&pool, "DROP TRIGGER probe_at_commit ON morpholog.audit").await;
-    ddl(&pool, "DROP FUNCTION probe_refuse()").await;
     assert!(matches!(
         try_entry(&pool, "e2").await.unwrap(),
         PgProposalOutcome::Committed { .. }
@@ -164,16 +169,17 @@ async fn proposal_path_errors_say_what_they_know() {
         "ALTER TABLE morpholog.rejections ADD CONSTRAINT probe CHECK (false)",
     )
     .await;
-    let err = try_gated(&pool, "g1", 2).await.unwrap_err();
-    assert!(
-        matches!(err, PgError::RejectionLogFailure(_)),
-        "decided, unrecorded: {err}"
-    );
+    let unrecorded = try_gated(&pool, "g1", 2).await;
     ddl(
         &pool,
         "ALTER TABLE morpholog.rejections DROP CONSTRAINT probe",
     )
     .await;
+    let err = unrecorded.unwrap_err();
+    assert!(
+        matches!(err, PgError::RejectionLogFailure(_)),
+        "decided, unrecorded: {err}"
+    );
     assert!(matches!(
         try_gated(&pool, "g1", 2).await.unwrap(),
         PgProposalOutcome::Rejected { .. }

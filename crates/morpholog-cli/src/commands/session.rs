@@ -14,7 +14,9 @@
 //! recorded, `commit_outcome_unknown` when COMMIT failed without a
 //! server verdict - and the session stays in step either way. What
 //! aborts the process with a non-zero exit is a failure that cannot be
-//! a receipt: a broken stream, or an operational failure on a read.
+//! a receipt: a broken stream, an operational failure on a read, or a
+//! rejection that was decided but could not be recorded (a receipt
+//! code would misdescribe a decided verdict).
 //! To a caller with a request in flight an abort means the outcome is
 //! UNKNOWN, which the generated client surfaces as its outcome-unknown
 //! error, never as a silent retry.

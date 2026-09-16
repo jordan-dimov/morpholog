@@ -15,7 +15,12 @@ from _support import GOLDEN_DIR, add_client_to_path, recording_argv
 add_client_to_path()
 
 from python_client import envelopes
-from python_client.adapter import Morpholog, MorphologError, MorphologOutcomeUnknown
+from python_client.adapter import (
+    Morpholog,
+    MorphologError,
+    MorphologOutcomeUnknown,
+    MorphologTimeout,
+)
 
 STUB = """#!/usr/bin/env python3
 import os, sys
@@ -477,6 +482,22 @@ class AdapterDiscrimination(unittest.TestCase):
         with self.assertRaises(MorphologError) as caught:
             self.client.audit()
         self.assertIn("failed to connect", str(caught.exception))
+
+    def test_a_propose_timeout_is_outcome_unknown_and_a_read_timeout_is_not(self):
+        # The kill can land after COMMIT was sent, so a timed-out
+        # proposal is exactly as unknown as exit 3; a timed-out read
+        # changed nothing and stays an ordinary operational error.
+        self._mode("hang")
+        bounded = Morpholog(
+            "model.morph", "postgres:///stub", binary=str(self.stub), timeout=0.2
+        )
+        with self.assertRaises(MorphologOutcomeUnknown) as unknown:
+            bounded.propose("post", "alex", {})
+        self.assertIn("read the record", str(unknown.exception))
+        with self.assertRaises(MorphologError) as read:
+            bounded.claims("Entry")
+        self.assertIsInstance(read.exception, MorphologTimeout)
+        self.assertNotIsInstance(read.exception, MorphologOutcomeUnknown)
 
     def test_a_client_timeout_surfaces_as_an_operational_error(self):
         self._mode("hang")

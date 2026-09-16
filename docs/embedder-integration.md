@@ -146,7 +146,7 @@ A kernel error under `--trace` (a transformation that raised `EvalError` mid-exe
 
 The traced and untraced envelopes are intentionally asymmetric; the embedder should decide at request time which it wants, not auto-discriminate.
 
-Exit codes: `0` on a committed outcome; `1` on a rejected outcome or any operational failure (parse, validation, unknown transformation, decoder error, a database error before anything was recorded - stderr says "the proposal was not committed"); `2` on a command-line usage error; `3` on the one failure a caller must treat differently - the commit outcome is unknown, because the database connection failed while COMMIT was in flight without a server verdict. Nothing is on stdout at 1, 2 or 3; a caller tells "nothing changed" from "read the record before re-submitting" by the exit code, never by parsing prose. The generated client raises `MorphologOutcomeUnknown` on 3.
+Exit codes: `0` on a committed outcome; `1` on a rejected outcome or any operational failure (parse, validation, unknown transformation, decoder error, a database error before anything was recorded - stderr says "the proposal was not committed"); `2` on a command-line usage error; `3` on the one failure a caller must treat differently - the commit outcome is unknown, because the database connection failed while COMMIT was in flight without a server verdict. A rejection at 1 prints its envelope on stdout; an operational failure at 1, a usage error at 2, and the unknown commit at 3 print nothing there. A caller tells "nothing changed" from "read the record before re-submitting" by the exit code, never by parsing prose. The generated client raises `MorphologOutcomeUnknown` on 3, and on a client-side timeout of a proposal, since the killed binary may already have sent COMMIT.
 
 A rejected envelope carries `rule`: the refused rule's stable identifier - an invariant's name, or a named gate's. Hold that, not `reason`. The reason string is prose for a human and includes rendered expression text, so anything asserting on it breaks the moment a rule is reworded; `rule` is the author's own name and does not move. The key is **absent** for a gate with no name, never filled with the expression, so a value read from `rule` is always safe to compare.
 
@@ -512,8 +512,10 @@ anything was recorded - nothing changed) once its cause is fixed;
 `commit_outcome_unknown` (COMMIT failed without a server verdict)
 only after reading the record. The session stays healthy after every
 coded receipt. What aborts the process with a non-zero exit and no
-receipt is a failure that cannot be a receipt: a broken stream, or an
-operational failure on a read.
+receipt is a failure that cannot be a receipt: a broken stream, an
+operational failure on a read, or a rejection that was decided but
+could not be recorded in the operational log - a receipt code would
+misdescribe a decided verdict. The batch aborts on the same failure.
 
 **A lost response is an unknown outcome.** Once a propose request has
 been written, a session that dies, hangs, or answers garbage leaves
