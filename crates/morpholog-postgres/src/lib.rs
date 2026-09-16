@@ -42,6 +42,7 @@ mod scope_differential;
 mod score;
 mod signing;
 mod sql_quote;
+mod transact;
 mod txn;
 mod verify;
 mod witnesses;
@@ -106,6 +107,7 @@ pub use signing::{
     render_public_key, render_signature, sign_tree_head, signing_key_from_pem, signing_key_to_pem,
     tree_head_signing_bytes, tree_head_witness_bytes, verify_tree_head,
 };
+pub use transact::{AtomicAct, PgAtomicOutcome, propose_all_against_pg};
 pub use verify::{
     VerifyOutcome, VerifyReport, ViewsVerification, coverage_replay, verify_replay, verify_views,
 };
