@@ -296,6 +296,26 @@ class AdapterDiscrimination(unittest.TestCase):
 
             argv = argv_after(lambda: self.client.audit_checkpoint())
             self.assertNotIn("--writer-role", argv)
+            self.assertNotIn("--witness", argv)
+
+            argv = argv_after(
+                lambda: self.client.audit_checkpoint(
+                    witnesses=["rfc3161:http://a.example/tsr", "rfc3161:http://b.example/tsr"]
+                )
+            )
+            self.assertEqual(argv.count("--witness"), 2)
+            self.assertEqual(argv[argv.index("--witness") + 1], "rfc3161:http://a.example/tsr")
+
+            os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "checkpoint_witnessed.json").read_text()
+            checkpoint = self.client.audit_witness(3, ["rfc3161:http://a.example/tsr"])
+            self.assertIsInstance(checkpoint, envelopes.Checkpoint)
+            argv = argv_after(
+                lambda: self.client.audit_witness(3, ["rfc3161:http://a.example/tsr"])
+            )
+            self.assertEqual(argv[argv.index("--tree-size") + 1], "3")
+            self.assertEqual(argv[argv.index("--witness") + 1], "rfc3161:http://a.example/tsr")
+            with self.assertRaises(ValueError):
+                self.client.audit_witness(3, [])
 
     def test_verify_flags_land_on_argv_exactly_when_supplied(self):
         # The verdict-affecting verify flags: each appears exactly when

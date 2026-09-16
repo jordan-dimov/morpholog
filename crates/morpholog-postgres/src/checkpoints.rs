@@ -706,6 +706,29 @@ pub(crate) async fn load_checkpoint_chain(
         .collect())
 }
 
+/// The checkpoint at exactly `tree_size`, if one was recorded there.
+pub async fn load_checkpoint(pool: &PgPool, tree_size: i64) -> Result<Option<Checkpoint>, PgError> {
+    let row = sqlx::query!(
+        r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
+                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
+                  witnesses as "witnesses: sqlx::types::Json<Vec<Witness>>"
+           FROM morpholog.audit_checkpoints
+           WHERE tree_size = $1"#,
+        tree_size,
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(row.map(|r| Checkpoint {
+        tree_size: r.tree_size,
+        root_hash: r.root_hash,
+        prev_checkpoint_hash: r.prev_checkpoint_hash,
+        checkpoint_hash: r.checkpoint_hash,
+        signatures: r.signatures.0,
+        witnesses: r.witnesses.0,
+    }))
+}
+
 /// Attach an external witness to the checkpoint at `tree_size`, which
 /// must still be the head the proof was obtained for: the caller went to
 /// the authority outside any transaction, and a chain rebuilt in between

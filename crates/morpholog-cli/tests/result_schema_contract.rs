@@ -1180,8 +1180,10 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
     }];
     assert_golden(
         "checkpoint_created_witnessed.json",
-        &to_value(&CheckpointOutcome::Created(witnessed)),
+        &to_value(&CheckpointOutcome::Created(witnessed.clone())),
     );
+    // `audit witness` prints the checkpoint as now stored, bare.
+    assert_golden("checkpoint_witnessed.json", &to_value(&witnessed));
 
     // The witness axis: what each stored witness proves, on the live
     // report and on the pack report that carries it beside the verdict.
@@ -1858,6 +1860,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("checkpoint_created_signed.json", "checkpoint_outcome"),
         ("checkpoint_no_new_rows.json", "checkpoint_outcome"),
         ("checkpoint_created_witnessed.json", "checkpoint_outcome"),
+        ("checkpoint_witnessed.json", "checkpoint"),
         ("verify_report_witnessed.json", "verify_report"),
         ("pack_verification_report.json", "pack_verification_report"),
         ("witness_verdict_invalid.json", "witness_verdict"),

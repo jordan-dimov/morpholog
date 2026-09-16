@@ -536,20 +536,37 @@ class Morpholog:
         key_id: str | None = None,
         *,
         writer_roles: list[str] | None = None,
+        witnesses: list[str] | None = None,
     ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
         """Record a checkpoint over the current stable prefix, or return
         the unchanged head - either way a usable external anchor. Pass
         ``signing_key`` (a PKCS#8 PEM path) and ``key_id`` to sign the new
         tree head, so the anchor is attributable. ``writer_roles`` as on
         ``audit`` - the checkpoint's stable prefix rests on the same
-        resume horizon."""
+        resume horizon. ``witnesses`` (each ``"rfc3161:<url>"``) has those
+        timestamp authorities countersign the new head after the commit;
+        the checkpoint is recorded either way, and a failed submission is
+        an operational error naming ``audit_witness`` to retry."""
         if (signing_key is None) != (key_id is None):
             raise ValueError("signing_key and key_id must be given together")
         args = ["audit", "checkpoint", "--database-url", self.database_url]
         if signing_key is not None:
             args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
         args += self._repeat("--writer-role", writer_roles)
+        args += self._repeat("--witness", witnesses)
         return envelopes.parse_checkpoint_outcome(self._json(*args))
+
+    def audit_witness(self, tree_size: int, witnesses: list[str]) -> envelopes.Checkpoint:
+        """Have timestamp authorities (each ``"rfc3161:<url>"``) witness
+        the checkpoint recorded at ``tree_size``, storing each exact
+        response on it. Returns the checkpoint as now stored; a response
+        that is not over this head is refused and stores nothing."""
+        if not witnesses:
+            raise ValueError("name at least one witness")
+        args = ["audit", "witness", "--database-url", self.database_url]
+        args.extend(["--tree-size", str(tree_size)])
+        args += self._repeat("--witness", witnesses)
+        return envelopes.Checkpoint.from_json(self._json(*args))
 
     def audit_export(self, tree_size: int | None = None) -> envelopes.EvidencePack:
         """Export a complete-prefix evidence pack covering the latest

@@ -545,6 +545,8 @@ class TamperEvidence(unittest.TestCase):
         self.assertEqual(witness.submitted_to, "http://timestamp.example/tsr")
         self.assertTrue(witness.proof.startswith("MIIB"))
         self.assertEqual(signed.checkpoint.witnesses, [])
+        bare = envelopes.Checkpoint.from_json(golden("checkpoint_witnessed.json"))
+        self.assertEqual(bare.witnesses, witnessed.checkpoint.witnesses)
 
     def test_every_tree_verdict_parses(self):
         for name, cls in [

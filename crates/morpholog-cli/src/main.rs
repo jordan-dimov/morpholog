@@ -436,6 +436,35 @@ pub(crate) struct CheckpointArgs {
 
     #[command(flatten)]
     pub(crate) writers: WriterRoleArgs,
+
+    /// Also have an outside authority witness the new head:
+    /// `rfc3161:<url>` posts a timestamp request for it to that RFC 3161
+    /// authority and stores the exact response on the checkpoint, so a
+    /// later verifier can show the head existed no later than the
+    /// authority's time. Repeat for several authorities. The checkpoint
+    /// is recorded first and printed whatever the authority does; a
+    /// failed submission exits one and names `audit witness` to retry.
+    /// Skipped when no new rows were checkpointed.
+    #[arg(long, value_name = "SCHEME:URL")]
+    pub(crate) witness: Vec<commands::witness::WitnessTarget>,
+}
+
+/// Arguments for `audit witness`: which recorded checkpoint, and which
+/// authorities.
+#[derive(clap::Args, Debug)]
+pub(crate) struct WitnessArgs {
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+
+    /// The recorded checkpoint to have witnessed, by its tree size (as
+    /// `audit checkpoint` printed it).
+    #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
+    pub(crate) tree_size: i64,
+
+    /// `rfc3161:<url>` - the RFC 3161 authority to post the request to.
+    /// Repeat for several.
+    #[arg(long, value_name = "SCHEME:URL", required = true)]
+    pub(crate) witness: Vec<commands::witness::WitnessTarget>,
 }
 
 /// Arguments for `keygen`: where to write the new Ed25519 keypair.
@@ -520,6 +549,16 @@ pub(crate) enum AuditCmd {
     /// `--signing-key` the tree head is signed, so the anchor is
     /// attributable as well as tamper-evident.
     Checkpoint(CheckpointArgs),
+
+    /// Have an outside authority witness a recorded checkpoint.
+    ///
+    /// Posts an RFC 3161 timestamp request over the checkpoint's head
+    /// and stores the authority's exact response on it, after checking
+    /// the response is over this head. A later `audit verify` or
+    /// `verify-pack` judges the stored token against the authorities
+    /// the verifier trusts. Same as `audit checkpoint --witness`, for a
+    /// head recorded earlier or a submission that failed then.
+    Witness(WitnessArgs),
 
     /// Export a portable evidence pack as JSON (redirect to a file).
     ///
@@ -1401,6 +1440,7 @@ async fn run() -> anyhow::Result<()> {
         Command::Audit { what } => match what {
             AuditCmd::Verify(args) => commands::verify::run(args).await,
             AuditCmd::Checkpoint(args) => commands::checkpoint::run(args).await,
+            AuditCmd::Witness(args) => commands::witness::run(args).await,
             AuditCmd::Export(args) => commands::evidence::export(args).await,
             AuditCmd::VerifyPack(args) => commands::evidence::verify(args),
             AuditCmd::Keygen(args) => commands::keygen::run(&args),

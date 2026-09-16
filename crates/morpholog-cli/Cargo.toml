@@ -14,6 +14,7 @@ path = "src/main.rs"
 morpholog-core = { path = "../morpholog-core" }
 morpholog-postgres = { path = "../morpholog-postgres" }
 morpholog-surface = { path = "../morpholog-surface" }
+morpholog-witness = { path = "../morpholog-witness" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
@@ -23,6 +24,10 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 jiff = { workspace = true }
 rust_decimal = { workspace = true }
+base64 = { workspace = true }
+# The timestamp-authority exchange, rustls only: no OpenSSL, no async
+# client stack for one POST per checkpoint.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 # Tests only: the binary stays file-path-driven and bundles no
@@ -31,7 +36,6 @@ rust_decimal = { workspace = true }
 morpholog-examples = { path = "../morpholog-examples" }
 sqlx = { workspace = true }
 tempfile = "3"
-base64 = { workspace = true }
 
 [lints]
 workspace = true
