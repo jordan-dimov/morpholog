@@ -35,12 +35,12 @@ use morpholog_core::{
     explain,
 };
 use morpholog_postgres::{
-    AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, CheckpointWitnesses,
-    EvidencePack, OutboxRow, PackManifest, PackVerdict, PackVerificationReport, PgProposalOutcome,
-    RowInclusionProof, SelectiveEvidencePack, SelectivePackManifest, SelectiveVerification,
-    TreeHeadSignature, TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification,
-    WindowEvidencePack, WindowPackManifest, WindowVerification, WitnessScheme, WitnessStanding,
-    WitnessVerdict, WitnessesReport,
+    AtomicAct, AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, CheckpointWitnesses,
+    EvidencePack, OutboxRow, PackManifest, PackVerdict, PackVerificationReport, PgAtomicOutcome,
+    PgProposalOutcome, RowInclusionProof, SelectiveEvidencePack, SelectivePackManifest,
+    SelectiveVerification, TreeHeadSignature, TreeVerification, VerifyOutcome, VerifyReport,
+    ViewsVerification, WindowEvidencePack, WindowPackManifest, WindowVerification, WitnessScheme,
+    WitnessStanding, WitnessVerdict, WitnessesReport,
 };
 use rust_decimal::Decimal;
 use std::path::PathBuf;
@@ -137,6 +137,40 @@ fn committed_outcome() -> PgProposalOutcome {
             name: "AccountOpened".into(),
             args: vec![EvalValue::Subject(Subject::from("acct_1"))],
         }],
+    }
+}
+
+/// `transact`: one decision, three shapes; the session adds `row`.
+fn atomic_committed() -> PgAtomicOutcome {
+    let PgProposalOutcome::Committed {
+        actor,
+        asserted_claims,
+        retracted_claims,
+        emitted_intents,
+        ..
+    } = committed_outcome()
+    else {
+        unreachable!()
+    };
+    PgAtomicOutcome::Committed {
+        acts: vec![
+            AtomicAct {
+                actor: actor.clone(),
+                asserted_claims: asserted_claims.clone(),
+                emitted_intents: Vec::new(),
+                retracted_claims: Vec::new(),
+                row: 1,
+                transition_id: sample_uuid(),
+            },
+            AtomicAct {
+                actor,
+                asserted_claims: Vec::new(),
+                emitted_intents,
+                retracted_claims,
+                row: 2,
+                transition_id: uuid::Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0002),
+            },
+        ],
     }
 }
 
@@ -1176,6 +1210,34 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         }),
     );
 
+    // `transact`: every act's receipt, or the refusing act, or a coded
+    // error; the session's answer adds the request row.
+    assert_golden("transact_committed.json", &to_value(&atomic_committed()));
+    assert_golden(
+        "transact_rejected.json",
+        &to_value(&PgAtomicOutcome::Rejected {
+            act: 2,
+            reason: "invariant `balance_unique_by_account` violated".to_string(),
+            rule: Some("balance_unique_by_account".to_string()),
+            witness: witness_sample(),
+        }),
+    );
+    assert_golden(
+        "transact_error.json",
+        &to_value(&morpholog_cli::envelopes::AtomicError::new(
+            morpholog_cli::envelopes::ErrorCode::SerializationFailure,
+            "the proposal could not be decided: restart the transaction".to_string(),
+        )),
+    );
+    let mut in_session = to_value(&PgAtomicOutcome::Rejected {
+        act: 1,
+        reason: "require `Account(account)` failed".to_string(),
+        rule: None,
+        witness: Vec::new(),
+    });
+    in_session["row"] = serde_json::json!(4);
+    assert_golden("transact_rejected_session.json", &in_session);
+
     // `checkpoint`: both variants carry a full checkpoint under the tag.
     assert_golden(
         "checkpoint_created.json",
@@ -1839,6 +1901,10 @@ fn every_golden_validates_against_its_defs_entry() {
         ("batch_rejected_receipt.json", "batch_receipt"),
         ("batch_error_receipt.json", "batch_receipt"),
         ("batch_error_receipt_not_committed.json", "batch_receipt"),
+        ("transact_committed.json", "atomic_outcome"),
+        ("transact_rejected.json", "atomic_outcome"),
+        ("transact_error.json", "atomic_outcome"),
+        ("transact_rejected_session.json", "atomic_outcome"),
         (
             "session_error_receipt_commit_outcome_unknown.json",
             "session_error_receipt",

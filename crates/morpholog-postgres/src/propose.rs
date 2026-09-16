@@ -486,7 +486,7 @@ pub(crate) const REJECTION_KIND_BIND: &str = "bind";
 /// The refused rule's stable identifier, or `None` when it has none.
 /// Matched off the variant, never parsed out of the Display text - the
 /// reason string is prose for a human, and this is the value a caller holds.
-fn rule_identity(reason: &RejectionReason) -> Option<String> {
+pub(crate) fn rule_identity(reason: &RejectionReason) -> Option<String> {
     match reason {
         RejectionReason::Invariant { name, .. } => Some(name.to_string()),
         RejectionReason::Require { name, .. } | RejectionReason::BindNone { name, .. } => {

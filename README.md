@@ -126,7 +126,7 @@ The list below is by domain. If you arrived with a question rather than a domain
 - [**Borrowing base**](examples/11_borrowing_base/) - drawn amounts can never exceed the advance rate times eligible collateral.
 - [**Laytime and demurrage**](examples/12_laytime_demurrage/) - voyage chartering's argument about minutes: exact instants, computed deadlines, cargo in tonnes, delay priced in dollars.
 - [**Biometric identification oversight**](examples/13_biometric_identification_oversight/) - an EU AI Act statute enforced as admission rules: the AI's output has no standing until verified by two distinct, currently-authorised people.
-- [**Margin call run**](examples/14_margin_call_run/) - a risk engine submits a whole batch as one decision, admitted only if *complete*: a missing margin call is refused, not just a wrong one.
+- [**Margin call run**](examples/14_margin_call_run/) - a risk engine submits a whole batch as one decision, admitted only if *complete*: a missing margin call is refused, not just a wrong one. (Several *separate* proposals as one decision - every act or none - is `morpholog transact`.)
 - [**Metered billing**](examples/15_metered_billing/) - a bill correct to the penny: each line recomputed and rounded, the sealed total refusing the rival convention by name.
 - [**Release governance**](examples/16_release_governance/) - this project's own release checklist as law: a tag at an ungated commit, or an announcement missing a platform's download, refuses to commit.
 - [**Covenant reporting**](examples/17_covenant_reporting/) - a loan's reporting calendar as law: test dates rolling exactly three calendar months (clamped at month ends), and an overdue notice refused unless its day count is the record's own.

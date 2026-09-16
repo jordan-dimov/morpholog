@@ -62,8 +62,8 @@ use morpholog_core::{
 };
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    PgError, PgPool, PgProposalOutcome, Proposal, list_claims_for_predicates, list_derived_at,
-    propose_against_pg, reconstruct_state_at,
+    PgAtomicOutcome, PgError, PgPool, PgProposalOutcome, Proposal, list_claims_for_predicates,
+    list_derived_at, propose_against_pg, propose_all_against_pg, reconstruct_state_at,
 };
 use rust_decimal::Decimal;
 use sqlx::postgres::PgPoolOptions;
@@ -112,6 +112,14 @@ enum Command {
     /// batch adds NDJSON parsing, argument decoding, and receipt
     /// serialisation around each of these commits.
     Import(ImportArgs),
+
+    /// Time N ledger postings as ONE decision (`propose_all_against_pg`)
+    /// against the same N as sequential single proposals, from the
+    /// same prepopulated book; with `--writers W`, W concurrent single
+    /// proposers post into the same period while the atomic batch
+    /// runs, and the batch's own 40001 retries are counted - the
+    /// conflict window grows with N, and this is where that shows.
+    Transact(TransactArgs),
 
     /// Propose against, and read back, a synthetic WIDE predicate
     /// (default arity 13 - the widest consumer-reported claim shape).
@@ -410,6 +418,42 @@ enum OutputFormat {
 /// target URL is echoed so the operator can see what is about to be
 /// truncated; this is the closest the binary gets to a "are you sure"
 /// dialog without making scripted use awkward.
+#[derive(clap::Args, Debug)]
+struct TransactArgs {
+    /// Acts in the one decision. The embedder that forced the surface
+    /// runs about 370 a day.
+    #[arg(long, default_value_t = 370)]
+    acts: usize,
+
+    /// Journal entries already in the book before the batch runs.
+    #[arg(long, default_value_t = 1000)]
+    prepopulate: usize,
+
+    /// Concurrent single proposers posting into the same period for
+    /// the batch's whole duration; 0 is the no-contention baseline.
+    #[arg(long, default_value_t = 0)]
+    writers: usize,
+
+    /// The batch's own retry budget on a serialization failure.
+    #[arg(long, default_value_t = 20)]
+    max_retries: usize,
+
+    /// Pause between a writer's proposals, in milliseconds: a real
+    /// embedder does not spin, and a spinning writer starves a batch
+    /// that must re-run whole on every conflict.
+    #[arg(long, default_value_t = 5)]
+    writer_pause_ms: u64,
+
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
+
+    #[arg(long)]
+    reset: bool,
+
+    #[arg(long, default_value_t = 3)]
+    repeat: usize,
+}
+
 fn require_reset_ack(args: &ScenarioArgs) -> Result<()> {
     check_reset_ack(args.reset, &args.database_url)
 }
@@ -456,6 +500,7 @@ async fn main() -> Result<()> {
         Command::Contend(args) => run_contend(args).await,
         Command::Import(args) => run_import(args).await,
         Command::Wide(args) => run_wide(args).await,
+        Command::Transact(args) => run_transact(args).await,
         Command::Suite(args) => run_suite(args).await,
     }
 }
@@ -1873,6 +1918,12 @@ const CASE_PROVENANCE: &[(&str, &str)] = &[
          replay); the real batch adds NDJSON/decode/receipt cost per row",
     ),
     (
+        "transact",
+        "several proposals as one decision (an embedder's ~370-act day) \
+         against the same acts one by one; /contend adds concurrent single \
+         writers on the same period and counts the batch's 40001 retries",
+    ),
+    (
         "wide",
         "the billing embedder's 13-ary InvoiceLine shape (the gallery tops \
          out at 7-ary); /size sweeps rows at arity 13, /arity sweeps the \
@@ -2268,6 +2319,193 @@ async fn run_suite(args: SuiteArgs) -> Result<()> {
     Ok(())
 }
 
+fn posting(i: usize, tag: &str) -> Transition {
+    Transition {
+        transformation_name: double_entry_ledger::post_simple_entry().name.clone(),
+        args: vec![
+            subj(&format!("entry_{tag}_{i}")),
+            subj("d_2026_05_17"),
+            subj("p_bench"),
+            subj(&format!("account_{}", i % 2)),
+            subj(&format!("account_{}", (i + 1) % 2)),
+            dec(42),
+        ],
+        actor: Subject::from("bench"),
+    }
+}
+
+/// The batch as the caller experiences it: the whole wait including
+/// every retry and backoff, the retries spent, and whether it ever
+/// committed within the budget. Exhausting the budget is a reading,
+/// not an error: it is what a batch on a contended footprint does.
+async fn transact_once(
+    pool: &PgPool,
+    compiled: &CompiledProgram,
+    proposals: &[Proposal],
+    max_retries: usize,
+) -> Result<(Duration, u64, bool)> {
+    let mut retries = 0u64;
+    let t = Instant::now();
+    loop {
+        match propose_all_against_pg(pool, compiled, proposals).await {
+            Ok(PgAtomicOutcome::Committed { acts }) => {
+                if acts.len() != proposals.len() {
+                    return Err(anyhow!(
+                        "the batch committed {} of {} acts",
+                        acts.len(),
+                        proposals.len()
+                    ));
+                }
+                return Ok((t.elapsed(), retries, true));
+            }
+            Ok(PgAtomicOutcome::Rejected { act, reason, .. }) => {
+                return Err(anyhow!("the batch was refused at act {act}: {reason}"));
+            }
+            Err(PgError::SerializationFailure) => {
+                retries += 1;
+                if retries as usize > max_retries {
+                    return Ok((t.elapsed(), retries, false));
+                }
+                tokio::time::sleep(Duration::from_micros(100 * retries)).await;
+            }
+            Err(e) => return Err(anyhow::Error::new(e).context("transact")),
+        }
+    }
+}
+
+async fn measure_transact(
+    pool: &PgPool,
+    acts: usize,
+    prepopulate: usize,
+    writers: usize,
+    max_retries: usize,
+    writer_pause: Duration,
+    repeat: usize,
+) -> Result<CaseResult> {
+    let compiled = CompiledProgram::new(double_entry_ledger::program())
+        .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+    let mut atomic = Vec::with_capacity(repeat);
+    let mut sequential = Vec::with_capacity(repeat);
+    let mut batch_retries = Vec::with_capacity(repeat);
+    let mut batch_committed = Vec::with_capacity(repeat);
+    let mut writer_commits = Vec::with_capacity(repeat);
+    let mut writer_retries = Vec::with_capacity(repeat);
+    for round in 0..repeat {
+        // The batch, with the writers racing it for as long as it runs.
+        reset_db(pool).await?;
+        insert_n_entries(pool, prepopulate, 2).await?;
+        analyze_claims(pool).await?;
+        let proposals: Vec<Proposal> = (0..acts)
+            .map(|i| Proposal::gateway(&posting(i, &format!("atomic_r{round}"))))
+            .collect();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut handles = Vec::with_capacity(writers);
+        for w in 0..writers {
+            let pool = pool.clone();
+            let compiled = compiled.clone();
+            let stop = stop.clone();
+            handles.push(tokio::spawn(async move {
+                let mut tally = Tally::default();
+                let mut op = 0usize;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let transition = posting(op, &format!("writer_r{round}_w{w}"));
+                    one_op(
+                        &pool,
+                        &compiled,
+                        &transition,
+                        max_retries,
+                        "transact writer",
+                        &mut tally,
+                    )
+                    .await?;
+                    op += 1;
+                    tokio::time::sleep(writer_pause).await;
+                }
+                Ok::<Tally, anyhow::Error>(tally)
+            }));
+        }
+        let (elapsed, retries, committed) =
+            transact_once(pool, &compiled, &proposals, max_retries).await?;
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let mut commits = 0u64;
+        let mut retried = 0u64;
+        for h in handles {
+            let tally = h.await.context("join transact writer")??;
+            commits += tally.committed;
+            retried += tally.retries;
+        }
+        atomic.push(elapsed);
+        batch_retries.push(retries as f64);
+        batch_committed.push(if committed { 1.0 } else { 0.0 });
+        writer_commits.push(commits as f64);
+        writer_retries.push(retried as f64);
+
+        // The same acts one by one, from the same book, uncontended.
+        reset_db(pool).await?;
+        insert_n_entries(pool, prepopulate, 2).await?;
+        analyze_claims(pool).await?;
+        let t = Instant::now();
+        for i in 0..acts {
+            let outcome = propose_against_pg(
+                pool,
+                &compiled,
+                &Proposal::gateway(&posting(i, &format!("single_r{round}"))),
+            )
+            .await?;
+            if !matches!(outcome, PgProposalOutcome::Committed { .. }) {
+                return Err(anyhow!("single act {i} did not commit"));
+            }
+        }
+        sequential.push(t.elapsed());
+    }
+    Ok(CaseResult {
+        case: if writers > 0 {
+            "transact/contend"
+        } else {
+            "transact"
+        }
+        .to_string(),
+        implementation: IMPLEMENTATION,
+        axis: "acts",
+        point: acts as u64,
+        metrics: vec![
+            Metric::ms("transact_all", &atomic),
+            Metric::ms("single_each", &sequential),
+            Metric::series("batch_retries", "count", batch_retries),
+            Metric::series("batch_committed", "count", batch_committed),
+            Metric::series("writer_commits", "count", writer_commits),
+            Metric::series("writer_retries", "count", writer_retries),
+        ],
+    })
+}
+
+async fn run_transact(args: TransactArgs) -> Result<()> {
+    check_reset_ack(args.reset, &args.database_url)?;
+    require_positive_repeat(args.repeat)?;
+    if args.acts == 0 {
+        return Err(anyhow!("--acts must be at least 1"));
+    }
+    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
+        .await
+        .context("connect to PostgreSQL")?;
+    println!(
+        "scenario=transact acts={} prepopulate={} writers={} repeat={}",
+        args.acts, args.prepopulate, args.writers, args.repeat
+    );
+    let result = measure_transact(
+        &pool,
+        args.acts,
+        args.prepopulate,
+        args.writers,
+        args.max_retries,
+        Duration::from_millis(args.writer_pause_ms),
+        args.repeat,
+    )
+    .await?;
+    print_case_human(&result);
+    Ok(())
+}
+
 #[cfg(test)]
 mod smoke {
     //! Minimal-size compatibility smoke test: runs every scenario once
@@ -2320,6 +2558,19 @@ mod smoke {
         })
         .await
         .expect("read scenario smoke");
+
+        run_transact(TransactArgs {
+            acts: 2,
+            prepopulate: 1,
+            writers: 0,
+            max_retries: 20,
+            writer_pause_ms: 5,
+            database_url: url.clone(),
+            reset: true,
+            repeat: 2,
+        })
+        .await
+        .expect("transact scenario smoke");
 
         run_as_of(AsOfArgs {
             n: 4,

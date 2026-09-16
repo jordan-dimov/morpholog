@@ -207,7 +207,7 @@ pub(crate) struct RowError {
 }
 
 impl RowError {
-    fn coded(code: envelopes::ProposeCode, reason: anyhow::Error) -> Self {
+    pub(crate) fn coded(code: envelopes::ProposeCode, reason: anyhow::Error) -> Self {
         Self {
             code: Some(code),
             reason,
@@ -241,7 +241,7 @@ fn one_shot_failure(err: morpholog_postgres::PgError) -> anyhow::Error {
 /// outcome the adapter could not prove, and a decided rejection whose
 /// record could not be written - which is operational, because the
 /// verdict was reached and a pre-decision code would misdescribe it.
-fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
+pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
     use envelopes::ProposeCode;
     use morpholog_postgres::PgError;
     let (code, context) = match &err {
@@ -384,19 +384,15 @@ async fn batch_row_outcome(
     propose_row_outcome(&args.file, args.explain_on_reject, compiled, pool, row).await
 }
 
-/// One self-contained transition to its single-run envelope (without
-/// the `row` field): the same codecs, the same propose calls, the
-/// same JSON shapes as the non-batch path, so the receipt contract
-/// cannot drift from the pinned single-run contract. Shared by the
-/// batch (whose explanation flag is batch-wide) and the session
-/// (whose flag is per request).
-pub(crate) async fn propose_row_outcome(
+/// A batch row to the kernel transition it names: the transformation
+/// looked up, the arguments decoded by the row's codec. Shared by the
+/// batch, the session, and `transact`, so every row-shaped surface
+/// refuses a malformed row with the same code.
+pub(crate) fn decode_row(
     file: &std::path::Path,
-    explain_on_reject: bool,
     compiled: &morpholog_core::CompiledProgram,
-    pool: &morpholog_postgres::PgPool,
     row: BatchRow,
-) -> Result<serde_json::Value, RowError> {
+) -> Result<Transition, RowError> {
     let transformation = lookup_transformation(compiled, &row.transformation, file)
         .map_err(|e| RowError::coded(envelopes::ProposeCode::UnknownTransformation, e))?;
     let (tagged, named);
@@ -418,12 +414,27 @@ pub(crate) async fn propose_row_outcome(
     };
     let eval_args = decode_args(&compiled.validated(), transformation, file, codec_input)
         .map_err(|e| RowError::coded(envelopes::ProposeCode::InvalidArguments, e))?;
-    let transition = Transition {
+    Ok(Transition {
         transformation_name: transformation.name.clone(),
         args: eval_args,
         actor: Subject::from(row.actor),
-    };
+    })
+}
 
+/// One self-contained transition to its single-run envelope (without
+/// the `row` field): the same codecs, the same propose calls, the
+/// same JSON shapes as the non-batch path, so the receipt contract
+/// cannot drift from the pinned single-run contract. Shared by the
+/// batch (whose explanation flag is batch-wide) and the session
+/// (whose flag is per request).
+pub(crate) async fn propose_row_outcome(
+    file: &std::path::Path,
+    explain_on_reject: bool,
+    compiled: &morpholog_core::CompiledProgram,
+    pool: &morpholog_postgres::PgPool,
+    row: BatchRow,
+) -> Result<serde_json::Value, RowError> {
+    let transition = decode_row(file, compiled, row)?;
     if explain_on_reject {
         let morpholog_postgres::RejectionStateOutcome {
             outcome,

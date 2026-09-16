@@ -53,6 +53,33 @@ class MorphologError(RuntimeError):
     """An operational failure from the CLI - distinct from a lawful
     business rejection, which is a decided outcome on stdout."""
 
+    #: Whether re-submitting the same request is known to be safe. False
+    #: for every error but a ``serialization_failure`` receipt: an
+    #: unknown outcome may already have committed, and any other failure
+    #: needs its cause fixed first. The one retry predicate.
+    retriable: bool = False
+
+
+class MorphologRequestError(MorphologError):
+    """A per-request error receipt with its stable ``code``: the request
+    was received, classified, and refused, and the session (or the
+    one-shot binary) did nothing durable. ``serialization_failure`` is
+    re-submittable as is - ``retriable`` says so; ``not_committed`` once
+    its cause is fixed; every other code is the request's own fault.
+    ``row`` is the session request number, or ``None`` for a one-shot
+    ``transact``."""
+
+    def __init__(self, code: str, error: str, row: int | None = None) -> None:
+        where = f"session request {row}" if row is not None else "request"
+        super().__init__(f"{where} refused ({code}): {error}")
+        self.code = code
+        self.error = error
+        self.row = row
+
+    @property
+    def retriable(self) -> bool:  # type: ignore[override]
+        return self.code == "serialization_failure"
+
 
 class MorphologTimeout(MorphologError):
     """The binary did not finish within the client's timeout and was
@@ -314,6 +341,45 @@ class Morpholog:
                 f"{self._redact_stderr(proc.stderr)}"
             )
         return receipts
+
+    def transact(
+        self, acts: list[dict[str, object]], timeout: float | None = None
+    ) -> envelopes.AtomicCommitted | envelopes.AtomicRejected:
+        """Propose several acts as one decision (`transact --acts -`):
+        every act commits or none does. Each act is a dict in the batch
+        row shape; they apply in order, and each sees what the acts
+        before it staged. Returns ``AtomicCommitted`` (one receipt per
+        act) or ``AtomicRejected`` (the refusing act, nothing written) -
+        both lawful outcomes. A known error of the whole batch raises
+        ``MorphologRequestError`` with its code, whose ``retriable`` is
+        true only for ``serialization_failure``; a commit whose outcome
+        the runtime could not prove, or a timeout after submission,
+        raises ``MorphologOutcomeUnknown`` - read the record first,
+        never re-submit blind. ``timeout`` bounds this one call and
+        defaults to unbounded, as for a batch."""
+        ndjson = "".join(json.dumps(act) + "\n" for act in acts)
+        args = ["transact", self.file, "--acts", "-", "--database-url", self.database_url]
+        try:
+            proc = self._run(args, stdin=ndjson, timeout=timeout)
+        except MorphologTimeout as exc:
+            raise MorphologOutcomeUnknown(
+                "the atomic batch timed out after it was submitted; the commit outcome "
+                f"is unknown - read the record before re-submitting. ({exc})"
+            ) from None
+        if proc.returncode == EXIT_COMMIT_OUTCOME_UNKNOWN:
+            raise MorphologOutcomeUnknown(
+                "the commit outcome is unknown - read the record before "
+                f"re-submitting:\n{self._redact_stderr(proc.stderr)}"
+            )
+        if not proc.stdout.strip():
+            raise MorphologError(
+                f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}"
+            )
+        payload = json.loads(proc.stdout)
+        if isinstance(payload, dict) and payload.get("status") == "error":
+            data = envelopes._strict("atomic error", payload, {"status", "code", "error"})
+            raise MorphologRequestError(str(data["code"]), str(data["error"]))
+        return envelopes.parse_atomic_outcome(payload)
 
     def explain(
         self, transformation: str, actor: str, args_named: dict[str, object]

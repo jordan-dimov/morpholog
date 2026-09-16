@@ -117,6 +117,27 @@ impl ErrorReceipt {
     }
 }
 
+/// `transact`'s error object: a known error of the whole batch, with
+/// the same stable code a receipt carries and no `row` - the batch is
+/// one request. Printed so a caller never parses prose to learn
+/// whether re-submitting is safe.
+#[derive(Serialize)]
+pub struct AtomicError {
+    pub code: ErrorCode,
+    pub error: String,
+    pub status: &'static str,
+}
+
+impl AtomicError {
+    pub fn new(code: ErrorCode, error: String) -> Self {
+        Self {
+            code,
+            error,
+            status: "error",
+        }
+    }
+}
+
 /// The closed set of per-row failure codes a batch or a session can
 /// answer with. `serialization_failure` is the one a caller may
 /// re-submit on (retries stay the caller's); the rest describe the row

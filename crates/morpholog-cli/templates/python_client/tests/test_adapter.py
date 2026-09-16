@@ -19,6 +19,7 @@ from python_client.adapter import (
     Morpholog,
     MorphologError,
     MorphologOutcomeUnknown,
+    MorphologRequestError,
     MorphologTimeout,
 )
 
@@ -37,6 +38,10 @@ if mode == "not_committed_exit_1":
 if mode == "commit_outcome_unknown_exit_3":
     print("Error: the commit outcome is unknown - read the record", file=sys.stderr)
     sys.exit(3)
+if mode == "transact_stdout":
+    sys.stdin.read()
+    print(os.environ["STUB_STDOUT"])
+    sys.exit(int(os.environ.get("STUB_EXIT", "0")))
 if mode == "usage_error_exit_2":
     print("error: unexpected argument '--bogus'", file=sys.stderr)
     sys.exit(2)
@@ -330,6 +335,47 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertEqual(argv[argv.index("--witness") + 1], "rfc3161:http://a.example/tsr")
             with self.assertRaises(ValueError):
                 self.client.audit_witness(3, [])
+
+    def test_transact_returns_the_decision_and_raises_a_coded_error_with_retriable(self):
+        self._mode("transact_stdout")
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        self.addCleanup(os.environ.pop, "STUB_EXIT", None)
+        acts = [{"transformation": "open", "actor": "teller", "args_named": {"id": "a1"}}]
+
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "transact_committed.json").read_text()
+        committed = self.client.transact(acts)
+        self.assertIsInstance(committed, envelopes.AtomicCommitted)
+
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "transact_rejected.json").read_text()
+        os.environ["STUB_EXIT"] = "1"
+        rejected = self.client.transact(acts)
+        self.assertIsInstance(rejected, envelopes.AtomicRejected)
+        self.assertEqual(rejected.act, 2)
+
+        # The error object is raised with its code; only a serialization
+        # failure is retriable, and the predicate says so.
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "transact_error.json").read_text()
+        with self.assertRaises(MorphologRequestError) as coded:
+            self.client.transact(acts)
+        self.assertEqual(coded.exception.code, "serialization_failure")
+        self.assertTrue(coded.exception.retriable)
+        self.assertIsNone(coded.exception.row)
+        os.environ["STUB_STDOUT"] = json.dumps(
+            {"status": "error", "code": "not_committed", "error": "check constraint"}
+        )
+        with self.assertRaises(MorphologRequestError) as fixed_first:
+            self.client.transact(acts)
+        self.assertFalse(fixed_first.exception.retriable)
+
+        # Exit 3 and a timeout are the unknown standing, never retriable.
+        os.environ["STUB_STDOUT"] = ""
+        os.environ["STUB_EXIT"] = "3"
+        with self.assertRaises(MorphologOutcomeUnknown) as unknown:
+            self.client.transact(acts)
+        self.assertFalse(unknown.exception.retriable)
+        self._mode("hang")
+        with self.assertRaises(MorphologOutcomeUnknown):
+            self.client.transact(acts, timeout=0.2)
 
     def test_the_one_shot_exit_codes_say_what_the_runtime_knows(self):
         # 1 with nothing on stdout is an ordinary operational failure -

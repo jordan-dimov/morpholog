@@ -289,6 +289,7 @@ What this document promises:
 - Witnessed checkpoints: `audit checkpoint --witness rfc3161:<url>` (repeatable; or `audit witness --tree-size N --witness ...` for a head recorded earlier) has a public RFC 3161 timestamp authority countersign the new tree head, and stores the authority's exact response on the checkpoint as a `witness` (`scheme`, `proof` base64, `submitted_to`) - nothing derived from it is stored, so what a witness proves is always read from the proof itself. The bytes witnessed are the head's own typed, length-delimited **witness payload** (its own frozen type, distinct from the signing payload). A signature says the operator's key vouched for a head; a witness says the head **existed no later than the authority's time** - it never says anything about business completeness, and never subtracts from the tree's own verdict. Submission happens after the commit, outside any transaction: every authority named is attempted and each response stored as it arrives, the checkpoint is recorded and printed whatever they do, and any failed submission exits one naming each failed authority and the one command that retries exactly those. A response that is not over this head is refused before storage. Verification is the verifier's, with its own trust: `audit verify --trusted-tsa-file <cas.pem>` judges every stored witness in the chain (the `witnesses` field of `verify_report`, present whenever any checkpoint carries one) and `audit verify-pack --witnesses` (or `--trusted-tsa-file`, which implies it) wraps the pack verdict as `pack_verification_report` (`{verdict, witnesses}`; without either flag the output is the bare verdict it always was). Each `witness_verdict` is `verified` (a certification path from the token's signer to an anchor you supplied validates **at the attested time** - names chain, signatures verify, every certificate was valid then, each issuer is an authority whose constraints admit the path; the signature names its certificate, is the token's only one, and that certificate carries the critical timestamping usage alone; revocation and policies are not checked, so choose anchors accordingly), `untrusted` (sound, but no such path to an anchor you named; `detail` says where it failed), `unverified` (sound, no anchors supplied), `unsupported` (this build cannot check its signature primitive - never reported verified, never a failure), or `invalid` (it does not vouch for this head); `earliest_attested_at` rests on verified witnesses only. Only `invalid` fails the command. Packs of every kind carry the witnesses of the checkpoints they already carry.
 - Exit-code semantics for `propose`, `explain`, `audit verify`, and `audit verify-pack` (a divergence, tamper, malformed pack, or invalid witness is a decided verdict on stdout at exit one, not an operational failure; `propose` exits 3, and only 3, when the commit outcome is unknown).
 - The proposal-row error codes `not_committed` and `commit_outcome_unknown` on the batch and session receipts, and the rule that the rows after either still run.
+- `transact`: the `atomic_outcome` union (`atomic_committed` with one `atomic_act` per act, `atomic_rejected` naming the act, `atomic_error` with the proposal-row code), all-or-nothing semantics, act-order audit replay, and the rule that an unknown outcome is never retried blind.
 
 What is deliberately left open, pending the worked example that forces the shape:
 
@@ -436,6 +437,93 @@ and a row whose COMMIT failed without a server verdict
 each proposal is its own transaction, so the rows after either still
 run. Retries stay the caller's, per the runtime doctrine.
 
+## Several proposals as one decision (`transact`)
+
+`morpholog transact <file.morph> --acts <acts.ndjson>` (`-` reads
+stdin) applies several acts as one decision: every act commits or none
+does. The acts are batch rows, one per line, applied in order inside
+one `SERIALIZABLE` transaction, and each act's gates, rules and actor
+authorisation are evaluated against what the acts before it staged -
+a correction and the re-run that depends on it, a day's related acts,
+where committing half is worse than committing none. This is the
+other contract from `propose --batch`, and it is chosen by name: the
+import shape keeps its per-row receipts and carries on; `transact`
+never does.
+
+One JSON object on stdout, the `atomic_outcome` union:
+
+- `{"status": "committed", "acts": [...]}` - one receipt per act, in
+  order, each the committed outcome's fields (no `status` of its own)
+  plus its 1-based `row` and its own `transition_id`. Audit replay order within the batch is
+  act order (every act shares the transaction's `committed_at`; the
+  ids carry the order). Intents reach the outbox with the commit and
+  never before it. Exit 0.
+- `{"status": "rejected", "act": N, "reason": ..., "rule"?: ...,
+  "witness"?: [...]}` - the first refused act by 1-based position, and
+  nothing written. The acts before it were staged and rolled back;
+  they get no receipt, because a receipt would read as committed. The
+  witness may name values the rolled-back prefix staged. Exit 1.
+- `{"status": "error", "code": ..., "error": ...}` - a known error of
+  the whole batch, with the proposal-row code set: a malformed or
+  undecodable act (`invalid_request`, `invalid_arguments`,
+  `unknown_transformation`, named by position), `serialization_failure`
+  (the one code that is safe to re-submit, as a whole batch),
+  `not_committed` (the database refused or failed before anything was
+  recorded; nothing changed, re-submit once the cause is fixed), or
+  `commit_outcome_unknown` (COMMIT failed without a server verdict).
+  Exit 1, except `commit_outcome_unknown`, which exits 3 as on
+  `propose`. Unlike `propose`, the coded object is printed even on a
+  known error, so a caller never parses prose to learn whether
+  re-submitting is safe.
+
+**An unknown outcome is not retriable.** Atomicity means zero or all
+acts committed; if all committed and only the acknowledgement was
+lost, re-submitting applies the whole operation twice, and nothing in
+a proposal identifies it durably enough to deduplicate. Read the
+governed record first. The generated client's `retriable` property is
+the one retry predicate: true only on a `serialization_failure`.
+
+The rejection recorded in the operational log for an atomic batch
+describes the refusing act against the staged prefix of that
+transaction; earlier staged acts may have contributed to its witness
+even though all of them were rolled back. The log stays deliberately
+weaker than the caller's envelope, which names the act.
+
+The session answers `{"op": "transact", "acts": [...]}` with the same
+object plus the request `row`; a known error is the session's ordinary
+coded receipt, and the session stays in step. The generated client has
+`transact(acts)` on both the one-shot client and the session,
+returning `AtomicCommitted` or `AtomicRejected` - both lawful
+outcomes - and raising `MorphologRequestError` with the code for a
+known error, `MorphologOutcomeUnknown` for exit 3 or a timeout after
+submission.
+
+**Sizing.** The bench's `transact` scenario times N acts as one
+decision against the same N one by one, with optional concurrent
+writers on the same period. Its reading on the development machine
+(ledger postings over a book of a thousand entries, release build;
+a measurement, not a ceiling):
+
+| acts | as one decision | one by one | concurrent writer on the same footprint |
+|---|---|---|---|
+| 50 | 0.4 s | 1.4 s | a writer every 35 ms: the batch never commits within 20 retries |
+| 370 | 2.9 s | 11.4 s | a writer every 35 ms or every 0.5 s: never commits; one every 5 s: one retry, then commits |
+
+Two things follow. Uncontended, the one decision is cheaper than the
+same acts one by one - one transaction, one state load, one commit -
+so size is not the concern up to the embedder's realistic day. Under
+contention it is: in this benchmark the atomic batch lost whenever a
+concurrent writer committed on its footprint during the batch window,
+at every size tried, and a batch re-runs whole on every conflict.
+That is the workload's result, not a law of `SERIALIZABLE`:
+PostgreSQL aborts on dependency patterns that could break
+serializability, not on every overlapping write, and this batch's
+broad predicate reads make such a pattern with almost any writer on
+the same predicates. Run a `transact` when its footprint is quiet for
+longer than it takes, or partition the footprint (the `contend`
+lesson: value sharding does not relieve it, predicate partitioning
+does), and give the retry budget the interval between writes.
+
 ## The resident session (`morpholog session`)
 
 ```bash
@@ -495,6 +583,9 @@ parameters. Unknown fields are refused, not ignored - a misspelt
   array (tagged or named), compact on one line.
 - `{"op": "derived", "name": ..., "named"?: true, "as_of"?: ...,
   "where"?: {...}}` - the derived read, same array shapes.
+- `{"op": "transact", "acts": [...]}` - several proposals as one
+  decision (the section above), answered with the atomic outcome plus
+  `row`.
 
 The streaming reads stay one-shot commands: the audit tail holds a
 read transaction open and coverage replays the whole log under a
