@@ -481,11 +481,10 @@ class Session:
     ) -> envelopes.AtomicCommitted | envelopes.AtomicRejected:
         """Propose several acts as one decision through the session, as
         on the one-shot client: every act or none, each act seeing what
-        the acts before it staged. A known error of the whole batch is
-        a coded ``MorphologRequestError`` (``retriable`` only for
-        ``serialization_failure``); the session stays in step."""
-        if not acts:
-            raise ValueError("an atomic batch needs at least one act")
+        the acts before it staged. A known error of the whole batch - an
+        empty batch included - is a coded ``MorphologRequestError``
+        (``retriable`` only for ``serialization_failure``), exactly as on
+        the one-shot client; the session stays in step."""
         body: dict[str, object] = {"op": "transact", "acts": [dict(a) for a in acts]}
         return self._exchange(body, commitful=True, decode=_decode_atomic)
 

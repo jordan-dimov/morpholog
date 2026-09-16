@@ -453,8 +453,8 @@ never does.
 One JSON object on stdout, the `atomic_outcome` union:
 
 - `{"status": "committed", "acts": [...]}` - one receipt per act, in
-  order, each the single-proposal committed envelope plus its `row`
-  and its own `transition_id`. Audit replay order within the batch is
+  order, each the committed outcome's fields (no `status` of its own)
+  plus its 1-based `row` and its own `transition_id`. Audit replay order within the batch is
   act order (every act shares the transaction's `committed_at`; the
   ids carry the order). Intents reach the outbox with the commit and
   never before it. Exit 0.
@@ -512,15 +512,17 @@ a measurement, not a ceiling):
 Two things follow. Uncontended, the one decision is cheaper than the
 same acts one by one - one transaction, one state load, one commit -
 so size is not the concern up to the embedder's realistic day. Under
-contention it is: a `SERIALIZABLE` transaction that reads a footprint
-loses to any writer that commits on that footprint during its window,
-and a batch re-runs whole on every conflict, so a batch cannot win
-against a steady stream of writers on its own predicates however
-small it is. Run a `transact` when its footprint is quiet for longer
-than it takes, or partition the footprint (the `contend` lesson: value
-sharding does not relieve it, predicate partitioning does), and give
-the retry budget the interval between writes. This is the SSI law the
-roadmap records, seen from the batch's side.
+contention it is: in this benchmark the atomic batch lost whenever a
+concurrent writer committed on its footprint during the batch window,
+at every size tried, and a batch re-runs whole on every conflict.
+That is the workload's result, not a law of `SERIALIZABLE`:
+PostgreSQL aborts on dependency patterns that could break
+serializability, not on every overlapping write, and this batch's
+broad predicate reads make such a pattern with almost any writer on
+the same predicates. Run a `transact` when its footprint is quiet for
+longer than it takes, or partition the footprint (the `contend`
+lesson: value sharding does not relieve it, predicate partitioning
+does), and give the retry budget the interval between writes.
 
 ## The resident session (`morpholog session`)
 

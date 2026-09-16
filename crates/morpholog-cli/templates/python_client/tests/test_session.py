@@ -124,6 +124,8 @@ for request in sys.stdin:
         say(json.dumps({"code": "commit_outcome_unknown", "error": "the commit outcome is unknown - read the record before re-submitting: connection reset by peer", "row": n, "status": "error"}))
     elif mode == "transact_rejected":
         say(json.dumps({"act": 1, "reason": "require `Account(account)` failed", "row": n, "status": "rejected"}))
+    elif mode == "empty_batch_receipt":
+        say(json.dumps({"code": "invalid_request", "error": "an atomic batch needs at least one act", "row": n, "status": "error"}))
     elif mode == "not_committed_receipt":
         say(json.dumps({"code": "not_committed", "error": "the proposal was not committed: check constraint", "row": n, "status": "error"}))
     elif mode == "bogus_rows":
@@ -292,11 +294,19 @@ class TranscriptConversation(SessionHarness):
             self.assertIsInstance(rejected, envelopes.AtomicRejected)
             self.assertEqual(rejected.act, 1)
             self.assertIsNone(s._poisoned)
-            with self.assertRaises(ValueError):
-                s.transact([])
         request = json.loads(self.recorded()[0])
         self.assertEqual(request["op"], "transact")
         self.assertEqual(request["acts"], acts)
+
+    def test_an_empty_batch_is_the_runtimes_coded_refusal_on_both_transports(self):
+        # The runtime owns the contract: the session sends the empty
+        # batch and relays the coded receipt, as the one-shot does.
+        with self.session("empty_batch_receipt") as s:
+            with self.assertRaises(MorphologRequestError) as refused:
+                s.transact([])
+            self.assertEqual(refused.exception.code, "invalid_request")
+            self.assertIsNone(s._poisoned)
+        self.assertEqual(json.loads(self.recorded()[0])["acts"], [])
 
     def test_a_not_committed_receipt_is_a_coded_refusal(self):
         with self.session("not_committed_receipt") as s:
