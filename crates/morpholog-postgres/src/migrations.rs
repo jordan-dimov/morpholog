@@ -61,6 +61,7 @@ migrations![
     (11, "schema_migrations", "011_schema_migrations.sql"),
     (12, "claims_hash_key", "012_claims_hash_key.sql"),
     (13, "checkpoint_witnesses", "013_checkpoint_witnesses.sql"),
+    (14, "audit_parameters", "014_audit_parameters.sql"),
 ];
 
 /// The newest migration this binary carries.

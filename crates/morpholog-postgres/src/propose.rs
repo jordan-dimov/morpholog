@@ -669,8 +669,9 @@ pub(crate) async fn write_accepted(
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents, attestation
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            asserted_claims, retracted_claims, emitted_intents, attestation,
+            parameters
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         transition_id,
         transformation.name.as_str(),
         serde_json::to_value(&transition.args)?,
@@ -681,6 +682,13 @@ pub(crate) async fn write_accepted(
         serde_json::to_value(retracted_claims)?,
         serde_json::to_value(emitted_intents)?,
         serde_json::to_value(&attestation)?,
+        serde_json::to_value(
+            transformation
+                .parameters
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        )?,
     )
     .execute(&mut **tx)
     .await

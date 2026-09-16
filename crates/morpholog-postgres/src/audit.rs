@@ -30,6 +30,38 @@ pub struct AuditRow {
     /// leaf encoding, so the field's presence selects the leaf version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attestation: Option<AuditAttestation>,
+    /// The transformation's parameter names in declaration order, one
+    /// per argument, stamped at commit: the row names its own signature
+    /// after the act that wrote it is retired. Absent on rows written
+    /// before names existed; presence selects the third leaf encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<Vec<String>>,
+}
+
+impl AuditRow {
+    /// The shapes a row can lawfully have, by what it carries: nothing
+    /// (the original encoding), an attestation (the attested one), or
+    /// an attestation and names, one per argument (the self-describing
+    /// one). Names without an attestation, or names that do not match
+    /// the arguments' count, describe no row the runtime ever wrote.
+    /// Checked at the database boundary and before any row is hashed,
+    /// because packs carry rows as hostile input.
+    pub fn validate_shape(&self) -> Result<(), String> {
+        match (&self.attestation, &self.parameters) {
+            (_, None) => Ok(()),
+            (None, Some(_)) => Err(format!(
+                "audit row {} carries parameter names but no attestation",
+                self.transition_id
+            )),
+            (Some(_), Some(names)) if names.len() != self.arguments.len() => Err(format!(
+                "audit row {} carries {} parameter names for {} arguments",
+                self.transition_id,
+                names.len(),
+                self.arguments.len()
+            )),
+            (Some(_), Some(_)) => Ok(()),
+        }
+    }
 }
 /// Page size for every keyset read over the replay order - the audit
 /// tail, coverage's two passes, and the chunked replays. One chunk in
@@ -55,6 +87,8 @@ pub(crate) struct AuditRowRaw {
     // upgraded databases must describe the column identically for the
     // compile-time query checks.
     attestation: Option<serde_json::Value>,
+    // Nullable for the same reason: historical rows carry no names.
+    parameters: Option<serde_json::Value>,
 }
 // The audit columns, in the order `AuditRowRaw`'s fields and the listing
 // queries' SELECTs share. Inlined as a literal in each `query_as!`
@@ -63,9 +97,9 @@ pub(crate) struct AuditRowRaw {
 //   transition_id, transformation_name, arguments, actor,
 //   invariant_epoch, invariants_checked,
 //   asserted_claims, retracted_claims, emitted_intents, committed_at,
-//   attestation
+//   attestation, parameters
 pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
-    Ok(AuditRow {
+    let decoded = AuditRow {
         transition_id: row.transition_id,
         transformation_name: TransformationName::from(row.transformation_name),
         arguments: serde_json::from_value(row.arguments)?,
@@ -92,7 +126,13 @@ pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
             .attestation
             .map(serde_json::from_value::<AuditAttestation>)
             .transpose()?,
-    })
+        parameters: row
+            .parameters
+            .map(serde_json::from_value::<Vec<String>>)
+            .transpose()?,
+    };
+    decoded.validate_shape().map_err(PgError::InvalidState)?;
+    Ok(decoded)
 }
 /// Return every committed audit row from `morpholog.audit`, ordered by
 /// `(committed_at, transition_id)`: causal commit order with the
@@ -133,7 +173,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation
+                attestation, parameters
                  FROM morpholog.audit
                  ORDER BY committed_at, transition_id
                  LIMIT $1",
@@ -148,7 +188,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation
+                attestation, parameters
                  FROM morpholog.audit
                  WHERE (committed_at, transition_id) > ($2, $3)
                  ORDER BY committed_at, transition_id
@@ -166,7 +206,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation
+                attestation, parameters
                  FROM morpholog.audit
                  WHERE committed_at < $2
                  ORDER BY committed_at, transition_id
@@ -183,7 +223,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation
+                attestation, parameters
                  FROM morpholog.audit
                  WHERE (committed_at, transition_id) > ($2, $3)
                    AND committed_at < $4

@@ -485,6 +485,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     .expect("simulate a database from before checkpoint witnesses");
     ddl(
         &pool,
+        "ALTER TABLE morpholog.audit DROP COLUMN parameters".to_string(),
+    )
+    .await
+    .expect("simulate a database from before self-describing rows");
+    ddl(
+        &pool,
         "DROP INDEX morpholog_read.derived_claims_generation_predicate".to_string(),
     )
     .await

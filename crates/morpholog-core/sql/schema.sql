@@ -100,7 +100,23 @@ CREATE TABLE audit (
     -- column identically to the compile-time query checks); on an
     -- upgraded database the constraint is NOT VALID, exempting only
     -- the pre-attestation rows.
-    CONSTRAINT audit_attestation_required CHECK (attestation IS NOT NULL)
+    CONSTRAINT audit_attestation_required CHECK (attestation IS NOT NULL),
+    -- The transformation's parameter names, in declaration order, one
+    -- per argument: stamped at commit so a row names its own signature
+    -- after the act that wrote it is retired. Part of the Merkle leaf
+    -- for the rows that carry it (a third leaf encoding, chosen by the
+    -- field's presence like the attestation's). Nullable at the column
+    -- for the same reason as `attestation`: an upgraded database keeps
+    -- its historical rows NULL - never backfill - while the named
+    -- constraint (NOT VALID on an upgrade) refuses every new unstamped
+    -- row.
+    parameters           jsonb,
+    CONSTRAINT audit_parameters_shape CHECK (
+        parameters IS NULL
+        OR (jsonb_typeof(parameters) = 'array'
+            AND jsonb_array_length(parameters) = jsonb_array_length(arguments))
+    ),
+    CONSTRAINT audit_parameters_required CHECK (parameters IS NOT NULL)
 );
 
 -- Keyset replay order: every audit read (the blessed tail, verify,

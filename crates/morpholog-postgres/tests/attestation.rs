@@ -68,11 +68,26 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::query("ALTER TABLE morpholog.audit DROP CONSTRAINT IF EXISTS audit_parameters_required")
+        .execute(&pool)
+        .await
+        .unwrap();
     legacy_insert(&pool).await.unwrap();
     sqlx::query(
         "ALTER TABLE morpholog.audit
          ADD CONSTRAINT audit_attestation_required
          CHECK (attestation IS NOT NULL) NOT VALID",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Then the second regime: attested rows from before parameter
+    // names existed, then that activation boundary too.
+    attested_unstamped_insert(&pool).await.unwrap();
+    sqlx::query(
+        "ALTER TABLE morpholog.audit
+         ADD CONSTRAINT audit_parameters_required
+         CHECK (parameters IS NOT NULL) NOT VALID",
     )
     .execute(&pool)
     .await
@@ -87,8 +102,8 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     .map(expect_committed)
     .unwrap();
 
-    // The whole history - legacy prefix plus attested suffix -
-    // verifies, live and offline.
+    // The whole history - legacy, attested, self-describing - verifies
+    // as one tree, live and offline; the rows carry their encodings.
     create_checkpoint(&pool, None, None).await.unwrap();
     let verification = verify_audit_tree(&pool, None).await.unwrap();
     assert!(
@@ -100,14 +115,63 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         verify_pack(&pack, None).unwrap(),
         TreeVerification::Intact { .. }
     ));
+    let regimes: Vec<(bool, bool)> = pack
+        .rows
+        .iter()
+        .map(|r| (r.attestation.is_some(), r.parameters.is_some()))
+        .collect();
+    assert_eq!(
+        regimes,
+        vec![(false, false), (true, false), (true, true)],
+        "the three encodings, in the real chronology"
+    );
+    let declared: Vec<String> = double_entry_ledger::post_simple_entry()
+        .parameters
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        pack.rows[2].parameters.as_deref(),
+        Some(declared.as_slice()),
+        "the stamped row names its own signature, in declaration order"
+    );
 
-    // The boundary is one-way: after activation, an insert shaped like
-    // the pre-attestation writer is refused by the database itself -
-    // a stale binary cannot quietly extend the legacy prefix.
+    // A stamped name is evidence: edit one in the exported pack and the
+    // tree no longer verifies.
+    let mut edited = pack.clone();
+    edited.rows[2].parameters.as_mut().unwrap()[0] = "entry".to_string();
+    assert!(
+        !matches!(
+            verify_pack(&edited, None).unwrap(),
+            TreeVerification::Intact { .. }
+        ),
+        "a renamed parameter must break the leaf"
+    );
+    // Names grafted onto an attested-but-unstamped row are not an
+    // encoding at all: malformed, never intact under the nearest one.
+    let mut grafted = pack.clone();
+    grafted.rows[0].parameters = Some(vec![]);
+    assert!(
+        !matches!(
+            verify_pack(&grafted, None),
+            Ok(TreeVerification::Intact { .. })
+        ),
+        "names on an unattested row are no encoding"
+    );
+
+    // The boundaries are one-way: after activation, an insert shaped
+    // like an earlier writer is refused by the database itself - a
+    // stale binary cannot quietly extend a historical regime.
     let refused = legacy_insert(&pool).await;
     let err = refused.expect_err("an unattested insert must be refused after activation");
     assert!(
         err.to_string().contains("audit_attestation_required"),
+        "the refusal names the activation constraint: {err}"
+    );
+    let refused = attested_unstamped_insert(&pool).await;
+    let err = refused.expect_err("an unstamped insert must be refused after activation");
+    assert!(
+        err.to_string().contains("audit_parameters_required"),
         "the refusal names the activation constraint: {err}"
     );
 }
@@ -122,6 +186,24 @@ async fn legacy_insert(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
             asserted_claims, retracted_claims, emitted_intents
          ) VALUES ($1, 'legacy_import', '[]', '{\"type\":\"subject\",\"value\":\"importer\"}',
                    1, '[]', '[]', '[]', '[]')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+/// An audit insert shaped like the writer from between attestation and
+/// parameter names: attested, no names.
+async fn attested_unstamped_insert(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents, attestation
+         ) VALUES ($1, 'attested_import', '[]', '{\"type\":\"subject\",\"value\":\"importer\"}',
+                   1, '[]', '[]', '[]', '[]',
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"importer_role\"}')",
     )
     .bind(uuid::Uuid::now_v7())
     .execute(pool)
@@ -147,8 +229,9 @@ async fn tampering_with_the_attestation_breaks_the_root() {
 
     // An attacker with full DDL control can drop the database floor;
     // the tree is the layer that still catches them. Rewriting the
-    // lineage - or stripping it to fall back to the other encoding -
-    // both change the leaf and break the root.
+    // lineage changes the leaf and breaks the root; stripping it from
+    // a stamped row leaves a shape no writer produced, refused at the
+    // read boundary before anything hashes.
     sqlx::query("ALTER TABLE morpholog.audit DROP CONSTRAINT IF EXISTS audit_attestation_required")
         .execute(&pool)
         .await
@@ -166,7 +249,7 @@ async fn tampering_with_the_attestation_breaks_the_root() {
         .execute(&pool)
         .await
         .unwrap();
-    let stripped = verify_audit_tree(&pool, None).await.unwrap();
+    let stripped = verify_audit_tree(&pool, None).await;
 
     // Restore the production floor BEFORE asserting, so a failing
     // assertion cannot leave every later test binary running against a
@@ -188,7 +271,8 @@ async fn tampering_with_the_attestation_breaks_the_root() {
         "rewritten lineage must not verify: {rewritten:?}"
     );
     assert!(
-        !matches!(stripped, TreeVerification::Intact { .. }),
-        "stripped lineage must not verify: {stripped:?}"
+        matches!(&stripped, Err(morpholog_postgres::PgError::InvalidState(detail))
+            if detail.contains("parameter names but no attestation")),
+        "a stripped stamped row is refused by name: {stripped:?}"
     );
 }
