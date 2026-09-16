@@ -36,12 +36,14 @@ const NODE_PREFIX: u8 = 0x01;
 /// Version bytes for the canonical leaf encoding. A codec change
 /// becomes a new leaf version rather than a silent change to historical
 /// roots. The version a row hashes under is derived from the row's own
-/// content - attestation absent selects the original encoding, present
-/// selects the attested one - so a verifier needs no side channel, and
-/// moving a field across the boundary in either direction changes the
+/// content - nothing selects the original encoding, an attestation the
+/// attested one, an attestation with parameter names the
+/// self-describing one - so a verifier needs no side channel, and
+/// moving a field across a boundary in either direction changes the
 /// leaf and breaks the root.
 const LEAF_FORMAT_V1: u8 = 1;
 const LEAF_FORMAT_V2: u8 = 2;
+const LEAF_FORMAT_V3: u8 = 3;
 
 /// A 32-byte SHA-256 digest.
 pub(crate) type Hash = [u8; 32];
@@ -129,14 +131,17 @@ fn push_field(buf: &mut Vec<u8>, bytes: &[u8]) {
 /// columns reuse the existing deterministic tagged codec (the same
 /// determinism `compute_idempotency_key` relies on).
 fn canonical_leaf_bytes(row: &AuditRow) -> Result<Vec<u8>, serde_json::Error> {
+    // A row no writer could have produced gets no encoding at all,
+    // rather than the nearest one: hostile input must not hash.
+    row.validate_shape().map_err(serde::ser::Error::custom)?;
     let mut buf = Vec::new();
-    match &row.attestation {
+    match (&row.attestation, &row.parameters) {
         // The original encoding, frozen forever: rows written before
         // attestation existed hash exactly as they always did, so every
         // historical root still verifies. Its one quirk stays with it -
         // the actor serialises as the transparent bare string here,
         // although the column and the envelope carry the tagged form.
-        None => {
+        (None, _) => {
             buf.push(LEAF_FORMAT_V1);
             push_transition_fields(&mut buf, row, &serde_json::to_vec(&row.actor)?)?;
         }
@@ -145,11 +150,21 @@ fn canonical_leaf_bytes(row: &AuditRow) -> Result<Vec<u8>, serde_json::Error> {
         // attestation object covered whole - its internal shape can
         // grow (new modes, new fields) without another leaf version,
         // because the leaf commits to its exact bytes either way.
-        Some(attestation) => {
+        (Some(attestation), None) => {
             buf.push(LEAF_FORMAT_V2);
             let actor = EvalValue::Subject(row.actor.clone());
             push_transition_fields(&mut buf, row, &serde_json::to_vec(&actor)?)?;
             push_field(&mut buf, &serde_json::to_vec(attestation)?);
+        }
+        // The self-describing encoding: the attested fields, then the
+        // parameter names as one JSON array - the signature a reader's
+        // absence claims rest on, covered by the same leaf.
+        (Some(attestation), Some(parameters)) => {
+            buf.push(LEAF_FORMAT_V3);
+            let actor = EvalValue::Subject(row.actor.clone());
+            push_transition_fields(&mut buf, row, &serde_json::to_vec(&actor)?)?;
+            push_field(&mut buf, &serde_json::to_vec(attestation)?);
+            push_field(&mut buf, &serde_json::to_vec(parameters)?);
         }
     }
     Ok(buf)
@@ -440,6 +455,7 @@ mod tests {
             }],
             committed_at: "2026-01-02T03:04:05.123456Z".parse().unwrap(),
             attestation: None,
+            parameters: None,
         }
     }
 
@@ -469,6 +485,44 @@ mod tests {
         }
     }
 
+    fn stamped_fixed_row() -> AuditRow {
+        AuditRow {
+            parameters: Some(vec!["entry".to_string(), "amount".to_string()]),
+            ..attested_fixed_row()
+        }
+    }
+
+    /// The frozen leaf hash of the self-describing twin, derived
+    /// independently (Python, from the documented layout) before the
+    /// encoder was written: version byte 3, the attested fields, then
+    /// the names as one JSON array.
+    #[test]
+    fn frozen_v3_leaf_hash_pins_the_self_describing_encoding() {
+        let hash = audit_leaf_hash(&stamped_fixed_row()).unwrap();
+        assert_eq!(
+            render_hash(&hash),
+            "sha256:e026e4d49353c7437c6b3b82a5938848fe26ea6be95fa53c927894323508c61f"
+        );
+    }
+
+    /// Names on an unattested row, or names that do not match the
+    /// arguments, describe no row the runtime wrote: no encoding, so
+    /// nothing to hash - a pack carrying one is malformed, never
+    /// intact under the nearest version.
+    #[test]
+    fn an_impossible_row_shape_gets_no_leaf() {
+        let unattested = AuditRow {
+            attestation: None,
+            ..stamped_fixed_row()
+        };
+        assert!(audit_leaf_hash(&unattested).is_err());
+        let short = AuditRow {
+            parameters: Some(vec!["entry".to_string()]),
+            ..stamped_fixed_row()
+        };
+        assert!(audit_leaf_hash(&short).is_err());
+    }
+
     /// The frozen leaf hash of the attested twin. Pins the attested
     /// encoding byte-exactly: version byte, tagged actor, and the
     /// attestation bytes covered whole.
@@ -488,7 +542,10 @@ mod tests {
     fn attestation_presence_selects_the_encoding() {
         let bare = audit_leaf_hash(&fixed_row()).unwrap();
         let attested = audit_leaf_hash(&attested_fixed_row()).unwrap();
+        let stamped = audit_leaf_hash(&stamped_fixed_row()).unwrap();
         assert_ne!(bare, attested);
+        assert_ne!(attested, stamped);
+        assert_ne!(bare, stamped);
     }
 
     /// The empty tree is `SHA-256("")` - the fixed RFC 6962 constant.

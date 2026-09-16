@@ -1384,13 +1384,85 @@ async fn inspect_audit_streams_one_ndjson_line_per_committed_transition() {
         "two committed transitions, two lines: {stdout}"
     );
     // Every line is a full audit row: the tagged arrays and the
-    // scalar fields ride together.
+    // scalar fields ride together, and the row names its own
+    // parameters, one per argument, as the programme declares them.
     for row in &rows {
         assert!(row["transition_id"].is_string());
         assert!(row["asserted_claims"].is_array());
         assert!(row["committed_at"].is_string());
         assert_eq!(row["actor"]["type"], "subject");
+        assert_eq!(
+            row["parameters"],
+            serde_json::json!([
+                "entry_id",
+                "posting_date",
+                "period",
+                "debit_account",
+                "credit_account",
+                "amount"
+            ]),
+            "{row}"
+        );
+        assert_eq!(
+            row["parameters"].as_array().unwrap().len(),
+            row["arguments"].as_array().unwrap().len()
+        );
     }
+}
+
+/// The act that wrote a row is retired; the row still names its
+/// signature, read bare with no programme at all.
+#[tokio::test(flavor = "current_thread")]
+async fn a_retired_acts_rows_still_name_their_parameters() {
+    reset_db().await;
+    let before = common::write_fixture(
+        "cases_v1",
+        "program cases\n\npredicate Case(case_id: Subject, region: Subject, severity: Decimal)\n\ntransformation open_case(case_id, region, severity):\n    admit Case(case_id, region, severity)\n",
+    );
+    let after = common::write_fixture(
+        "cases_v2",
+        "program cases\n\npredicate Case(case_id: Subject, region: Subject, severity: Decimal)\n\ntransformation open(case_id, region, severity, channel):\n    admit Case(case_id, region, severity)\n",
+    );
+    let (status, _, stderr) = run_cli(&[
+        "propose",
+        before.path.to_str().unwrap(),
+        "open_case",
+        "--actor",
+        "alex",
+        "--args-named",
+        r#"{"case_id":"C-17","region":"north","severity":"3"}"#,
+    ]);
+    assert!(status.success(), "{stderr}");
+
+    // Bare: no transformation metadata consulted, the names are the row's.
+    let (status, stdout, _) = run_cli(&["inspect", "audit"]);
+    assert!(status.success());
+    let rows = ndjson(&stdout);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["transformation_name"], "open_case");
+    assert_eq!(
+        rows[0]["parameters"],
+        serde_json::json!(["case_id", "region", "severity"]),
+        "{}",
+        rows[0]
+    );
+    assert_eq!(rows[0]["arguments"][0]["value"], "C-17");
+
+    // Named under the later programme, which has retired the act but
+    // still declares the claim: the claims decode, the names stay.
+    let (status, stdout, stderr) =
+        run_cli(&["inspect", "audit", "--named", after.path.to_str().unwrap()]);
+    assert!(status.success(), "{stderr}");
+    let rows = ndjson(&stdout);
+    assert_eq!(
+        rows[0]["asserted_claims"][0]["args"]["case_id"], "C-17",
+        "{}",
+        rows[0]
+    );
+    assert_eq!(
+        rows[0]["parameters"],
+        serde_json::json!(["case_id", "region", "severity"])
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

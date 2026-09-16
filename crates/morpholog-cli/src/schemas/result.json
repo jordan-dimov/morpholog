@@ -699,7 +699,8 @@
           "items": { "$ref": "#/$defs/intent_instance" }
         },
         "committed_at": { "type": "string", "format": "date-time" },
-        "attestation": { "$ref": "#/$defs/attestation" }
+        "attestation": { "$ref": "#/$defs/attestation" },
+        "parameters": { "type": "array", "items": { "type": "string" } }
       }
     },
     "audit_row_named": {
@@ -751,7 +752,8 @@
           "items": { "$ref": "#/$defs/intent_instance" }
         },
         "committed_at": { "type": "string", "format": "date-time" },
-        "attestation": { "$ref": "#/$defs/attestation" }
+        "attestation": { "$ref": "#/$defs/attestation" },
+        "parameters": { "type": "array", "items": { "type": "string" } }
       }
     },
     "outbox_row": {

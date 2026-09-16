@@ -485,6 +485,27 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     .expect("simulate a database from before checkpoint witnesses");
     ddl(
         &pool,
+        "ALTER TABLE morpholog.audit DROP COLUMN parameters".to_string(),
+    )
+    .await
+    .expect("simulate a database from before self-describing rows");
+    // A row that deployment wrote: attested, no names - the shape the
+    // migration must carry forward untouched.
+    sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents, attestation
+         ) VALUES ($1, 'historical', '[]', '{\"type\":\"subject\",\"value\":\"h\"}',
+                   1, '[]', '[]', '[]', '[]',
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"h\"}')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .execute(&pool)
+    .await
+    .expect("a historical attested row");
+    ddl(
+        &pool,
         "DROP INDEX morpholog_read.derived_claims_generation_predicate".to_string(),
     )
     .await
@@ -540,6 +561,74 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
             "re-running applied {} migrations",
             again.applied.len()
         ));
+    }
+
+    // Migration 014's contract, proved on the migrated table rather than
+    // assumed from its record: the historical row survives unstamped,
+    // the column is back nullable, and each named constraint refuses
+    // what it is for.
+    let stamped = columns(&pool, "morpholog", "audit")
+        .await
+        .into_iter()
+        .find(|(name, _, _)| name == "parameters");
+    if stamped
+        != Some((
+            "parameters".to_string(),
+            "YES".to_string(),
+            "jsonb".to_string(),
+        ))
+    {
+        return Err(format!(
+            "parameters must come back as nullable jsonb, got {stamped:?}"
+        ));
+    }
+    let historical = morpholog_postgres::list_audit_rows(&pool)
+        .await
+        .map_err(|e| format!("the historical row must still read: {e}"))?;
+    if historical.len() != 1 || historical[0].parameters.is_some() {
+        return Err(format!(
+            "the historical row must survive unstamped, got {historical:?}"
+        ));
+    }
+    let unstamped = sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents, attestation
+         ) VALUES ($1, 'stale_binary', '[]', '{\"type\":\"subject\",\"value\":\"s\"}',
+                   1, '[]', '[]', '[]', '[]',
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"s\"}')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .execute(&pool)
+    .await;
+    match unstamped {
+        Err(e) if e.to_string().contains("audit_parameters_required") => {}
+        other => {
+            return Err(format!(
+                "a new unstamped row must be refused by audit_parameters_required, got {other:?}"
+            ));
+        }
+    }
+    let wrong_arity = sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents, attestation, parameters
+         ) VALUES ($1, 'misshapen', '[]', '{\"type\":\"subject\",\"value\":\"m\"}',
+                   1, '[]', '[]', '[]', '[]',
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"m\"}', '[\"extra\"]')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .execute(&pool)
+    .await;
+    match wrong_arity {
+        Err(e) if e.to_string().contains("audit_parameters_shape") => {}
+        other => {
+            return Err(format!(
+                "names that do not match the arguments must be refused by audit_parameters_shape, got {other:?}"
+            ));
+        }
     }
 
     // And the column the whole thing was about is usable: a lawful refusal

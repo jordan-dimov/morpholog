@@ -115,6 +115,7 @@ mod tests {
             emitted_intents: vec![],
             committed_at: chrono::Utc::now(),
             attestation: None,
+            parameters: None,
         }
     }
 

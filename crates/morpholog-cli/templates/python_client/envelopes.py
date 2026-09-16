@@ -950,7 +950,26 @@ _AUDIT_ROW_KEYS = {
     "committed_at",
 }
 
-_AUDIT_ROW_OPTIONAL_KEYS = {"attestation"}
+_AUDIT_ROW_OPTIONAL_KEYS = {"attestation", "parameters"}
+
+
+def _parameters_of(data: dict[str, object]) -> list[str] | None:
+    """The stamped parameter names, held to the shapes a row can have:
+    names are strings (leaf-covered evidence, never coerced), only an
+    attested row carries them, and there is one per argument."""
+    raw = data.get("parameters")
+    if raw is None:
+        return None
+    names = _str_list("parameters", raw)
+    if data.get("attestation") is None:
+        raise EnvelopeError("an audit row carries parameter names but no attestation")
+    arguments = data.get("arguments")
+    if not isinstance(arguments, list) or len(names) != len(arguments):
+        raise EnvelopeError(
+            f"an audit row carries {len(names)} parameter names for "
+            f"{len(arguments) if isinstance(arguments, list) else '?'} arguments"
+        )
+    return names
 
 
 @dataclass(frozen=True)
@@ -999,6 +1018,11 @@ class AuditRow:
     emitted_intents: list[IntentInstance]
     committed_at: datetime
     attestation: Attestation | None = None
+    # The transformation's parameter names in declaration order, one
+    # per argument, as the writer stamped them: the row's own signature,
+    # readable after the act is retired. None on rows from before names
+    # were stamped.
+    parameters: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRow:
@@ -1017,6 +1041,7 @@ class AuditRow:
             emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
             committed_at=values.parse_timestamp(data["committed_at"]),
             attestation=_attestation_of(data),
+            parameters=_parameters_of(data),
         )
 
 
@@ -1038,6 +1063,11 @@ class AuditRowNamed:
     emitted_intents: list[IntentInstance]
     committed_at: datetime
     attestation: Attestation | None = None
+    # The transformation's parameter names in declaration order, one
+    # per argument, as the writer stamped them: the row's own signature,
+    # readable after the act is retired. None on rows from before names
+    # were stamped.
+    parameters: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRowNamed:
@@ -1056,6 +1086,7 @@ class AuditRowNamed:
             emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
             committed_at=values.parse_timestamp(data["committed_at"]),
             attestation=_attestation_of(data),
+            parameters=_parameters_of(data),
         )
 
 

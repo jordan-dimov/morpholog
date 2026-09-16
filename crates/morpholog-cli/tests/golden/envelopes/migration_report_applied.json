@@ -15,10 +15,14 @@
     {
       "name": "checkpoint_witnesses",
       "version": 13
+    },
+    {
+      "name": "audit_parameters",
+      "version": 14
     }
   ],
-  "binary_version": 13,
+  "binary_version": 14,
   "pending": [],
-  "recorded_version_after": 13,
+  "recorded_version_after": 14,
   "recorded_version_before": 9
 }

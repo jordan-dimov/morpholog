@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT transition_id, transformation_name, arguments, actor,\n                        invariant_epoch, invariants_checked,\n                        asserted_claims, retracted_claims, emitted_intents, committed_at,\n                attestation\n                 FROM morpholog.audit\n                 WHERE (committed_at, transition_id) > ($2, $3)\n                   AND committed_at < $4\n                 ORDER BY committed_at, transition_id\n                 LIMIT $1",
+  "query": "SELECT transition_id, transformation_name, arguments, actor,\n                        invariant_epoch, invariants_checked,\n                        asserted_claims, retracted_claims, emitted_intents, committed_at,\n                attestation, parameters\n                 FROM morpholog.audit\n                 WHERE (committed_at, transition_id) > ($2, $3)\n                   AND committed_at < $4\n                 ORDER BY committed_at, transition_id\n                 LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -123,6 +123,17 @@
             "name": "attestation"
           }
         }
+      },
+      {
+        "ordinal": 11,
+        "name": "parameters",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "parameters"
+          }
+        }
       }
     ],
     "parameters": {
@@ -144,8 +155,9 @@
       false,
       false,
       false,
+      true,
       true
     ]
   },
-  "hash": "ba82c9356b4fb88b33c117c5602838509cb145a603d55fa2c1fd8455dde6f5ee"
+  "hash": "1ea5d9e4d54444cacf7b60d45d762c7f6bd6d47a69ef2d9986eabc915bc65805"
 }

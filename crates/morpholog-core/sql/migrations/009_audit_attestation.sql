@@ -17,7 +17,9 @@
 -- bless under the historical encoding. Attestation is a one-way
 -- switch, not a per-row option. See
 -- crates/morpholog-core/sql/schema.sql for the fresh-database
--- definition, which is NOT NULL outright.
+-- definition, where the same named constraint is validated outright
+-- on a column that stays nullable, so fresh and upgraded databases
+-- describe it identically.
 
 ALTER TABLE morpholog.audit
     ADD COLUMN IF NOT EXISTS attestation jsonb

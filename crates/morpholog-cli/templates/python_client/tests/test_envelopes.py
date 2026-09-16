@@ -212,22 +212,28 @@ class Migrations(unittest.TestCase):
         report = envelopes.MigrationReport.from_json(golden("migration_report_behind.json"))
         self.assertFalse(report.is_current)
         self.assertEqual(report.recorded_version_before, 9)
-        self.assertEqual(report.binary_version, 13)
+        self.assertEqual(report.binary_version, 14)
         self.assertEqual(
             [m.name for m in report.pending],
-            ["rejections_witness", "schema_migrations", "claims_hash_key", "checkpoint_witnesses"],
+            [
+                "rejections_witness",
+                "schema_migrations",
+                "claims_hash_key",
+                "checkpoint_witnesses",
+                "audit_parameters",
+            ],
         )
         self.assertEqual(report.applied, [])
 
     def test_a_migrated_database_reports_what_it_applied(self):
         report = envelopes.MigrationReport.from_json(golden("migration_report_applied.json"))
         self.assertTrue(report.is_current)
-        self.assertEqual([m.version for m in report.applied], [10, 11, 12, 13])
+        self.assertEqual([m.version for m in report.applied], [10, 11, 12, 13, 14])
         # The version AFTER, not the one it started at - a report saying
         # "current" and "version 9" at once would be two answers to one
         # question.
         self.assertEqual(report.recorded_version_before, 9)
-        self.assertEqual(report.recorded_version_after, 13)
+        self.assertEqual(report.recorded_version_after, 14)
 
     def test_a_database_ahead_of_the_binary_is_not_current(self):
         # Nothing pending, and emphatically not ready: this build cannot know
@@ -235,7 +241,7 @@ class Migrations(unittest.TestCase):
         report = envelopes.MigrationReport.from_json(golden("migration_report_ahead.json"))
         self.assertEqual(report.pending, [])
         self.assertFalse(report.is_current)
-        self.assertEqual([m.version for m in report.unknown], [14])
+        self.assertEqual([m.version for m in report.unknown], [15])
 
 
 class Explanations(unittest.TestCase):
@@ -517,6 +523,28 @@ class TamperEvidence(unittest.TestCase):
         self.assertIsNone(
             envelopes.WitnessVerdict.from_json(golden("witness_verdict_invalid.json")).attested_at
         )
+
+    def test_an_audit_row_names_its_own_parameters(self):
+        stamped = envelopes.AuditRow.from_json(golden("audit_row_self_describing.json"))
+        self.assertEqual(stamped.parameters, ["account_id"])
+        self.assertEqual(len(stamped.parameters), len(stamped.arguments))
+        # Rows from before names were stamped carry none.
+        older = envelopes.AuditRow.from_json(golden("audit_row_attested.json"))
+        self.assertIsNone(older.parameters)
+        named = envelopes.AuditRowNamed.from_json(golden("audit_row_named.json"))
+        self.assertIsNone(named.parameters)
+        # Evidence is never coerced, and the row's shapes hold: names
+        # are strings, only an attested row carries them, one per
+        # argument.
+        for tamper in (
+            lambda r: r.__setitem__("parameters", [1]),
+            lambda r: r.pop("attestation"),
+            lambda r: r.__setitem__("parameters", ["account_id", "extra"]),
+        ):
+            row = golden("audit_row_self_describing.json")
+            tamper(row)
+            with self.assertRaises(envelopes.EnvelopeError):
+                envelopes.AuditRow.from_json(row)
 
     def test_transact_outcomes(self):
         committed = envelopes.parse_atomic_outcome(golden("transact_committed.json"))
