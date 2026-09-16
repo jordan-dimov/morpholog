@@ -1,0 +1,7 @@
+{
+  "attested_at": "2026-09-16T10:20:05Z",
+  "detail": "no trust anchors were supplied",
+  "scheme": "rfc3161",
+  "status": "unverified",
+  "submitted_to": "http://timestamp.example/tsr"
+}

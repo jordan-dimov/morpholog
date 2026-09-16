@@ -395,6 +395,16 @@ pub(crate) struct VerifyArgs {
     #[arg(long, value_name = "FILE")]
     pub(crate) require_signing_key: Option<std::path::PathBuf>,
 
+    /// Trust anchors for the external witnesses checkpoints carry: a PEM
+    /// file of the timestamp authorities' CA certificates. A witness whose
+    /// token chains to one of them reports `verified`; one that does not,
+    /// `untrusted`. Without this file every intact witness is
+    /// `unverified` - present and consistent, but vouched for by no one
+    /// you named. A witness that does not match its checkpoint is
+    /// `invalid` either way, and fails the command.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) trusted_tsa_file: Option<std::path::PathBuf>,
+
     /// Also verify the generated SQL view surface in this schema: each
     /// catalogued view's live definition (as PostgreSQL stores it) must
     /// hash to the seal recorded when the views were applied, so a view
@@ -616,6 +626,19 @@ pub(crate) struct EvidenceVerifyArgs {
     /// Implies requiring signatures.
     #[arg(long, value_name = "FILE")]
     pub(crate) require_signing_key: Option<std::path::PathBuf>,
+
+    /// Also report what the external witnesses on the pack's checkpoints
+    /// prove. The output becomes `{"verdict": <the pack verdict>,
+    /// "witnesses": ...}`; without this flag it stays the bare verdict.
+    #[arg(long)]
+    pub(crate) witnesses: bool,
+
+    /// Trust anchors for those witnesses: a PEM file of the timestamp
+    /// authorities' CA certificates (`verified` if a token chains to one,
+    /// `untrusted` if not, `unverified` without the file). Implies
+    /// `--witnesses`. An `invalid` witness fails the command.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) trusted_tsa_file: Option<std::path::PathBuf>,
 }
 
 /// Arguments for `init`: the connection string plus the idempotent

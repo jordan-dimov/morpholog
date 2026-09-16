@@ -369,6 +369,44 @@ class AdapterDiscrimination(unittest.TestCase):
                 self.assertEqual(argv[argv.index("--require-signatures-from") + 1], "7")
                 self.assertEqual(argv[argv.index("--require-signing-key") + 1], "k.pub")
 
+    def test_the_witness_axis_flags_and_the_wrapper_report(self):
+        # Trust anchors land on the live verify; on the pack verifiers
+        # asking for witnesses (or supplying anchors) switches the reply
+        # to the wrapper report, and each kind's parser still reads the
+        # verdict inside it.
+        self._mode("record_argv_stdout")
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "verify_report_witnessed.json").read_text()
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with recording_argv() as argv_after:
+            argv = argv_after(lambda: self.client.audit_verify(trusted_tsa_file="tsa.pem"))
+            self.assertEqual(argv[argv.index("--trusted-tsa-file") + 1], "tsa.pem")
+            argv = argv_after(lambda: self.client.audit_verify())
+            self.assertNotIn("--trusted-tsa-file", argv)
+
+            os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "pack_verification_report.json").read_text()
+            report = self.client.audit_verify_pack_window("pack.json", witnesses=True)
+            self.assertIsInstance(report, envelopes.PackVerificationReport)
+            self.assertIsInstance(report.verdict, envelopes.WindowIntact)
+            self.assertEqual(report.witnesses.checkpoints[0].tree_size, 2)
+            argv = argv_after(
+                lambda: self.client.audit_verify_pack_window("pack.json", witnesses=True)
+            )
+            self.assertIn("--witnesses", argv)
+            self.assertNotIn("--trusted-tsa-file", argv)
+            argv = argv_after(
+                lambda: self.client.audit_verify_pack_window(
+                    "pack.json", trusted_tsa_file="tsa.pem"
+                )
+            )
+            self.assertNotIn("--witnesses", argv)
+            self.assertEqual(argv[argv.index("--trusted-tsa-file") + 1], "tsa.pem")
+
+            os.environ["STUB_STDOUT"] = (
+                GOLDEN_DIR / "window_verification_intact.json"
+            ).read_text()
+            bare = self.client.audit_verify_pack_window("pack.json")
+            self.assertIsInstance(bare, envelopes.WindowIntact)
+
     def test_audit_empty_tail_is_a_lawful_empty_list(self):
         self._mode("record_argv_empty")
         with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:

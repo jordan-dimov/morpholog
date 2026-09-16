@@ -52,6 +52,9 @@ NOT_A_SINGLE_ENVELOPE = {
     "batch_score.json": "a score report keyed by case, not one envelope",
     "score_report.json": "a score report, read through its own accessor",
     "score_report_split.json": "a split score report",
+    "pack_verification_report.json": (
+        "a pack verdict of any kind beside its witnesses; parsed with the kind's own verdict parser"
+    ),
 }
 
 # The element-type check is only as strong as the payloads it sees:

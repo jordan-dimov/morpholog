@@ -31,6 +31,7 @@ rust_decimal = { workspace = true }
 morpholog-examples = { path = "../morpholog-examples" }
 sqlx = { workspace = true }
 tempfile = "3"
+base64 = { workspace = true }
 
 [lints]
 workspace = true

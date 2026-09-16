@@ -479,6 +479,40 @@ class TamperEvidence(unittest.TestCase):
         unsealed = envelopes.parse_views_verification(golden("views_verification_not_sealed.json"))
         self.assertIsInstance(unsealed, envelopes.ViewsNotSealed)
 
+    def test_the_witness_axis_on_the_live_and_pack_reports(self):
+        report = envelopes.VerifyReport.from_json(golden("verify_report_witnessed.json"))
+        axis = report.witnesses
+        self.assertIsInstance(axis, envelopes.WitnessesReport)
+        [checkpoint] = axis.checkpoints
+        self.assertEqual(checkpoint.tree_size, 2)
+        verified, untrusted = checkpoint.witnesses
+        self.assertEqual(verified.status, "verified")
+        self.assertEqual(verified.attested_at, axis.earliest_attested_at)
+        self.assertIsNone(verified.detail)
+        self.assertEqual(untrusted.status, "untrusted")
+        self.assertIn("none of the supplied anchors", untrusted.detail)
+        # Without any witness the field is simply absent.
+        bare = envelopes.VerifyReport.from_json(golden("verify_report_consistent.json"))
+        self.assertIsNone(bare.witnesses)
+
+        pack = envelopes.PackVerificationReport.from_json(
+            golden("pack_verification_report.json"), envelopes.parse_window_verification
+        )
+        self.assertIsInstance(pack.verdict, envelopes.WindowIntact)
+        self.assertEqual(pack.witnesses, axis)
+
+        for name, status in [
+            ("witness_verdict_invalid.json", "invalid"),
+            ("witness_verdict_unverified.json", "unverified"),
+            ("witness_verdict_unsupported.json", "unsupported"),
+        ]:
+            verdict = envelopes.WitnessVerdict.from_json(golden(name))
+            self.assertEqual(verdict.status, status)
+            self.assertIsNotNone(verdict.detail)
+        self.assertIsNone(
+            envelopes.WitnessVerdict.from_json(golden("witness_verdict_invalid.json")).attested_at
+        )
+
     def test_verify_report_divergent_and_tampered(self):
         report = envelopes.VerifyReport.from_json(golden("verify_report_divergent.json"))
         self.assertIsInstance(report.replay, envelopes.ReplayDivergent)

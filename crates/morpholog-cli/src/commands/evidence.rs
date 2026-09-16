@@ -7,15 +7,15 @@
 //! product promise.
 
 use morpholog_postgres::{
-    Checkpoint, EvidencePack, SelectiveEvidencePack, SelectiveVerification, SignaturePolicy,
-    TreeVerification, WindowEvidencePack, WindowStart, WindowVerification, export_pack,
-    export_selective, export_window, verify_pack, verify_selective, verify_window,
-    with_anchor_signatures,
+    Checkpoint, EvidencePack, PackVerdict, PackVerificationReport, SelectiveEvidencePack,
+    SelectiveVerification, SignaturePolicy, TreeVerification, WindowEvidencePack, WindowStart,
+    WindowVerification, WitnessesReport, export_pack, export_selective, export_window, verify_pack,
+    verify_selective, verify_window, with_anchor_signatures, witnesses_report,
 };
 
 use anyhow::Context;
 
-use crate::commands::verify::signature_policy;
+use crate::commands::verify::{signature_policy, witness_anchors};
 use crate::commands::{AlreadyReported, connect, print_json};
 use crate::{EvidenceExportArgs, EvidenceVerifyArgs};
 
@@ -101,44 +101,65 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
         args.require_signatures_from,
         args.require_signing_key.as_deref(),
     )?;
-    let intact = match pack_format_version(&bytes) {
+    let verdict = match pack_format_version(&bytes) {
         Some(2) => match verify_window_pack(&bytes, anchor.as_ref(), policy.as_ref()) {
-            Offline::Verdict(verdict) => {
-                let intact = matches!(verdict, WindowVerification::Intact { .. });
-                print_json(&verdict)?;
-                intact
-            }
+            Offline::Verdict(verdict) => PackVerdict::Window(verdict),
             Offline::PinNeedsFullPrefix => return Err(pin_needs_full_prefix()),
         },
         Some(3) => match verify_selective_pack(&bytes, anchor.as_ref(), policy.as_ref()) {
-            Offline::Verdict(verdict) => {
-                let intact = matches!(verdict, SelectiveVerification::Intact { .. });
-                print_json(&verdict)?;
-                intact
-            }
+            Offline::Verdict(verdict) => PackVerdict::Selective(verdict),
             Offline::PinNeedsFullPrefix => return Err(pin_needs_full_prefix()),
         },
-        Some(n) if n > 3 => {
-            print_json(&TreeVerification::MalformedPack {
-                detail: format!(
-                    "pack_format_version {n} is newer than this binary understands; \
-                     upgrade morpholog to verify it"
-                ),
-            })?;
-            false
-        }
-        _ => {
-            let verdict = verify_prefix_pack(&bytes, anchor.as_ref(), policy.as_ref());
-            let intact = matches!(verdict, TreeVerification::Intact { .. });
-            print_json(&verdict)?;
-            intact
-        }
+        Some(n) if n > 3 => PackVerdict::Prefix(TreeVerification::MalformedPack {
+            detail: format!(
+                "pack_format_version {n} is newer than this binary understands; \
+                 upgrade morpholog to verify it"
+            ),
+        }),
+        _ => PackVerdict::Prefix(verify_prefix_pack(&bytes, anchor.as_ref(), policy.as_ref())),
     };
+    let intact = matches!(
+        verdict,
+        PackVerdict::Prefix(TreeVerification::Intact { .. })
+            | PackVerdict::Window(WindowVerification::Intact { .. })
+            | PackVerdict::Selective(SelectiveVerification::Intact { .. })
+    );
 
-    if !intact {
+    // The witness axis is judged over the pack's own checkpoints and is
+    // independent of the verdict; it changes the output shape, so it is
+    // emitted only when asked for.
+    let mut witness_invalid = false;
+    if args.witnesses || args.trusted_tsa_file.is_some() {
+        let anchors = witness_anchors(args.trusted_tsa_file.as_deref())?;
+        let witnesses = witnesses_report(&pack_checkpoints(&bytes), anchors.as_ref());
+        witness_invalid = witnesses.as_ref().is_some_and(WitnessesReport::any_invalid);
+        print_json(&PackVerificationReport { verdict, witnesses })?;
+    } else {
+        print_json(&verdict)?;
+    }
+
+    if !intact || witness_invalid {
         return Err(AlreadyReported.into());
     }
     Ok(())
+}
+
+/// Every checkpoint a pack carries, whatever its kind; none for bytes
+/// that are not a pack this binary understands (the verdict already says
+/// so).
+fn pack_checkpoints(bytes: &[u8]) -> Vec<Checkpoint> {
+    match pack_format_version(bytes) {
+        Some(2) => serde_json::from_slice::<WindowEvidencePack>(bytes)
+            .map(|p| vec![p.from_checkpoint, p.to_checkpoint])
+            .unwrap_or_default(),
+        Some(3) => serde_json::from_slice::<SelectiveEvidencePack>(bytes)
+            .map(|p| vec![p.checkpoint])
+            .unwrap_or_default(),
+        Some(n) if n > 3 => Vec::new(),
+        _ => serde_json::from_slice::<EvidencePack>(bytes)
+            .map(|p| p.checkpoints)
+            .unwrap_or_default(),
+    }
 }
 
 /// What an offline verifier answers: the pack's verdict, or - only once

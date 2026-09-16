@@ -1,0 +1,6 @@
+{
+  "detail": "signature algorithm 1.2.840.10045.4.3.4 is not one this verifier checks",
+  "scheme": "rfc3161",
+  "status": "unsupported",
+  "submitted_to": "http://timestamp.example/tsr"
+}

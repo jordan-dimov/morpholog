@@ -4,7 +4,8 @@
 use anyhow::Context;
 use morpholog_postgres::{
     Checkpoint, SignaturePolicy, TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification,
-    parse_public_key, render_public_key, verify_audit_tree_under, verify_replay, verify_views,
+    WitnessAnchors, WitnessesReport, parse_public_key, render_public_key,
+    verify_audit_tree_with_chain, verify_replay, verify_views, witnesses_report,
 };
 
 use crate::VerifyArgs;
@@ -37,9 +38,14 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
         args.require_signatures_from,
         args.require_signing_key.as_deref(),
     )?;
-    let tree = verify_audit_tree_under(&pool, anchor, policy.as_ref())
+    let (tree, chain) = verify_audit_tree_with_chain(&pool, anchor, policy.as_ref())
         .await
         .context("verify_audit_tree failed")?;
+    // The witness axis reads the same chain the tree verdict saw, and is
+    // independent of it: a witness vouches for a head's existence at a
+    // time whether or not the log still recomputes to it.
+    let anchors = witness_anchors(args.trusted_tsa_file.as_deref())?;
+    let witnesses = witnesses_report(&chain, anchors.as_ref());
 
     // The views leg is opt-in: only a deployment that generated a view
     // surface has one to verify.
@@ -56,6 +62,7 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
         replay,
         tree,
         views,
+        witnesses,
     };
     print_json(&report)?;
 
@@ -64,10 +71,32 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
     // NotSealed is visible in the JSON but not a failure: an unsealed
     // surface has nothing to contradict.
     let surface_tampered = matches!(report.views, Some(ViewsVerification::Tampered { .. }));
-    if diverged || tampered || surface_tampered {
+    // Of the witness standings only `invalid` is a judgement; the rest
+    // describe what the verifier could and could not establish.
+    let witness_invalid = report
+        .witnesses
+        .as_ref()
+        .is_some_and(WitnessesReport::any_invalid);
+    if diverged || tampered || surface_tampered || witness_invalid {
         return Err(AlreadyReported.into());
     }
     Ok(())
+}
+
+/// The timestamp-authority trust anchors the verifier named, or none.
+pub(crate) fn witness_anchors(
+    pem_file: Option<&std::path::Path>,
+) -> anyhow::Result<Option<WitnessAnchors>> {
+    match pem_file {
+        Some(path) => {
+            let pem = std::fs::read(path)
+                .with_context(|| format!("reading the trusted TSA file {}", path.display()))?;
+            let anchors = WitnessAnchors::from_pem(&pem)
+                .with_context(|| format!("{} is not a PEM file of certificates", path.display()))?;
+            Ok(Some(anchors))
+        }
+        None => Ok(None),
+    }
 }
 
 /// The signature policy the flags spell, or none. Each flag alone

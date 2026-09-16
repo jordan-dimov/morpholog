@@ -110,6 +110,6 @@ pub use verify::{
     VerifyOutcome, VerifyReport, ViewsVerification, coverage_replay, verify_replay, verify_views,
 };
 pub use witnesses::{
-    CheckpointWitnesses, WitnessAnchors, WitnessStanding, WitnessVerdict, WitnessesReport,
-    witnesses_report,
+    CheckpointWitnesses, PackVerdict, PackVerificationReport, WitnessAnchors, WitnessStanding,
+    WitnessVerdict, WitnessesReport, witnesses_report,
 };

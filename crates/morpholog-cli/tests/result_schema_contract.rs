@@ -35,11 +35,12 @@ use morpholog_core::{
     explain,
 };
 use morpholog_postgres::{
-    AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, EvidencePack, OutboxRow,
-    PackManifest, PgProposalOutcome, RowInclusionProof, SelectiveEvidencePack,
-    SelectivePackManifest, SelectiveVerification, TreeHeadSignature, TreeVerification,
-    VerifyOutcome, VerifyReport, ViewsVerification, WindowEvidencePack, WindowPackManifest,
-    WindowVerification,
+    AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, CheckpointWitnesses,
+    EvidencePack, OutboxRow, PackManifest, PackVerdict, PackVerificationReport, PgProposalOutcome,
+    RowInclusionProof, SelectiveEvidencePack, SelectivePackManifest, SelectiveVerification,
+    TreeHeadSignature, TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification,
+    WindowEvidencePack, WindowPackManifest, WindowVerification, WitnessScheme, WitnessStanding,
+    WitnessVerdict, WitnessesReport,
 };
 use rust_decimal::Decimal;
 use std::path::PathBuf;
@@ -1100,6 +1101,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 tree_size: 2,
             },
             views: None,
+            witnesses: None,
         }),
     );
     // With the opt-in views leg: one golden per verdict shape.
@@ -1115,6 +1117,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 tree_size: 2,
             },
             views: Some(ViewsVerification::Intact { views_checked: 4 }),
+            witnesses: None,
         }),
     );
     assert_golden(
@@ -1140,6 +1143,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 only_in_replay: vec![],
             },
             views: None,
+            witnesses: None,
             tree: TreeVerification::Tampered {
                 tree_size: 2,
                 recorded_root: format!("sha256:{}", "a".repeat(64)),
@@ -1177,6 +1181,94 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
     assert_golden(
         "checkpoint_created_witnessed.json",
         &to_value(&CheckpointOutcome::Created(witnessed)),
+    );
+
+    // The witness axis: what each stored witness proves, on the live
+    // report and on the pack report that carries it beside the verdict.
+    let attested = chrono::Utc
+        .with_ymd_and_hms(2026, 9, 16, 10, 20, 5)
+        .unwrap();
+    let witnesses_report = WitnessesReport {
+        checkpoints: vec![CheckpointWitnesses {
+            tree_size: 2,
+            witnesses: vec![
+                WitnessVerdict {
+                    scheme: WitnessScheme::Rfc3161,
+                    submitted_to: "http://timestamp.example/tsr".into(),
+                    status: WitnessStanding::Verified,
+                    attested_at: Some(attested),
+                    detail: None,
+                },
+                WitnessVerdict {
+                    scheme: WitnessScheme::Rfc3161,
+                    submitted_to: "http://other.example/tsr".into(),
+                    status: WitnessStanding::Untrusted,
+                    attested_at: Some(attested),
+                    detail: Some(
+                        "signer `CN=Other TSA` chains to none of the supplied anchors".into(),
+                    ),
+                },
+            ],
+        }],
+        earliest_attested_at: Some(attested),
+    };
+    assert_golden_bytes(
+        "verify_report_witnessed.json",
+        &VerifyReport {
+            replay: VerifyOutcome::Consistent {
+                transitions: 2,
+                claims: 3,
+            },
+            tree: TreeVerification::Intact {
+                checkpoints: 1,
+                tree_size: 2,
+            },
+            views: None,
+            witnesses: Some(witnesses_report.clone()),
+        },
+    );
+    assert_golden_bytes(
+        "pack_verification_report.json",
+        &PackVerificationReport {
+            verdict: PackVerdict::Window(WindowVerification::Intact {
+                from_tree_size: 2,
+                to_tree_size: 3,
+                rows: 1,
+            }),
+            witnesses: Some(witnesses_report),
+        },
+    );
+    assert_golden(
+        "witness_verdict_invalid.json",
+        &to_value(&WitnessVerdict {
+            scheme: WitnessScheme::Rfc3161,
+            submitted_to: "http://timestamp.example/tsr".into(),
+            status: WitnessStanding::Invalid,
+            attested_at: None,
+            detail: Some("the token's message imprint is not this head's witness payload".into()),
+        }),
+    );
+    assert_golden(
+        "witness_verdict_unverified.json",
+        &to_value(&WitnessVerdict {
+            scheme: WitnessScheme::Rfc3161,
+            submitted_to: "http://timestamp.example/tsr".into(),
+            status: WitnessStanding::Unverified,
+            attested_at: Some(attested),
+            detail: Some("no trust anchors were supplied".into()),
+        }),
+    );
+    assert_golden(
+        "witness_verdict_unsupported.json",
+        &to_value(&WitnessVerdict {
+            scheme: WitnessScheme::Rfc3161,
+            submitted_to: "http://timestamp.example/tsr".into(),
+            status: WitnessStanding::Unsupported,
+            attested_at: None,
+            detail: Some(
+                "signature algorithm 1.2.840.10045.4.3.4 is not one this verifier checks".into(),
+            ),
+        }),
     );
 
     // `audit export`: the portable pack.
@@ -1766,6 +1858,11 @@ fn every_golden_validates_against_its_defs_entry() {
         ("checkpoint_created_signed.json", "checkpoint_outcome"),
         ("checkpoint_no_new_rows.json", "checkpoint_outcome"),
         ("checkpoint_created_witnessed.json", "checkpoint_outcome"),
+        ("verify_report_witnessed.json", "verify_report"),
+        ("pack_verification_report.json", "pack_verification_report"),
+        ("witness_verdict_invalid.json", "witness_verdict"),
+        ("witness_verdict_unverified.json", "witness_verdict"),
+        ("witness_verdict_unsupported.json", "witness_verdict"),
         ("evidence_pack.json", "evidence_pack"),
         ("tree_verification_chain_broken.json", "tree_verification"),
         (

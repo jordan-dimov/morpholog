@@ -5,6 +5,7 @@ use crate::claims::decode_claim_rows;
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::propose::REJECTION_KIND_INVARIANT;
 use crate::txn::{TxIsolation, begin_isolated_tx};
+use crate::witnesses::WitnessesReport;
 use chrono::{DateTime, Utc};
 use morpholog_core::{
     ClaimInstance, CoverageReport, CoverageTracker, PredicateName, Program, State,
@@ -46,15 +47,18 @@ pub enum VerifyOutcome {
 /// The `morpholog audit verify` envelope: the replay verdict (claims table vs
 /// audit log) beside the tamper-evidence verdict (the audit Merkle tree
 /// against its checkpoints), so one read carries both, plus - when the
-/// verifier asked for it - the generated-view-surface verdict. Field
-/// order is the wire contract; `replay` then `tree`, `views` only when
-/// requested.
+/// verifier asked for it - the generated-view-surface verdict, and -
+/// when any checkpoint carries one - what its external witnesses prove.
+/// Field order is the wire contract; `replay` then `tree`, `views` only
+/// when requested, `witnesses` only when there are some.
 #[derive(Debug, Clone, Serialize)]
 pub struct VerifyReport {
     pub replay: VerifyOutcome,
     pub tree: TreeVerification,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub views: Option<ViewsVerification>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub witnesses: Option<WitnessesReport>,
 }
 
 /// The verdict over a generated SQL view surface: the seal the apply

@@ -1250,6 +1250,7 @@ name = "morpholog-cli"
 version = "0.0.10"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "clap",
  "jiff",

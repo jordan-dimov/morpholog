@@ -1,0 +1,35 @@
+{
+  "replay": {
+    "status": "consistent",
+    "transitions": 2,
+    "claims": 3
+  },
+  "tree": {
+    "status": "intact",
+    "checkpoints": 1,
+    "tree_size": 2
+  },
+  "witnesses": {
+    "checkpoints": [
+      {
+        "tree_size": 2,
+        "witnesses": [
+          {
+            "scheme": "rfc3161",
+            "submitted_to": "http://timestamp.example/tsr",
+            "status": "verified",
+            "attested_at": "2026-09-16T10:20:05Z"
+          },
+          {
+            "scheme": "rfc3161",
+            "submitted_to": "http://other.example/tsr",
+            "status": "untrusted",
+            "attested_at": "2026-09-16T10:20:05Z",
+            "detail": "signer `CN=Other TSA` chains to none of the supplied anchors"
+          }
+        ]
+      }
+    ],
+    "earliest_attested_at": "2026-09-16T10:20:05Z"
+  }
+}

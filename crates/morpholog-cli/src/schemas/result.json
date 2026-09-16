@@ -1226,7 +1226,53 @@
       "properties": {
         "replay": { "$ref": "#/$defs/verify_outcome" },
         "tree": { "$ref": "#/$defs/tree_verification" },
-        "views": { "$ref": "#/$defs/views_verification" }
+        "views": { "$ref": "#/$defs/views_verification" },
+        "witnesses": { "$ref": "#/$defs/witnesses_report" }
+      }
+    },
+    "witness_verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scheme", "submitted_to", "status"],
+      "properties": {
+        "scheme": { "enum": ["rfc3161"] },
+        "submitted_to": { "type": "string" },
+        "status": { "enum": ["verified", "untrusted", "unverified", "unsupported", "invalid"] },
+        "attested_at": { "type": "string", "format": "date-time" },
+        "detail": { "type": "string" }
+      }
+    },
+    "checkpoint_witnesses": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tree_size", "witnesses"],
+      "properties": {
+        "tree_size": { "type": "integer" },
+        "witnesses": { "type": "array", "items": { "$ref": "#/$defs/witness_verdict" } }
+      }
+    },
+    "witnesses_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checkpoints"],
+      "properties": {
+        "checkpoints": { "type": "array", "items": { "$ref": "#/$defs/checkpoint_witnesses" } },
+        "earliest_attested_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "pack_verification_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict"],
+      "properties": {
+        "verdict": {
+          "oneOf": [
+            { "$ref": "#/$defs/tree_verification" },
+            { "$ref": "#/$defs/window_verification" },
+            { "$ref": "#/$defs/selective_verification" }
+          ]
+        },
+        "witnesses": { "$ref": "#/$defs/witnesses_report" }
       }
     },
     "pack_manifest": {

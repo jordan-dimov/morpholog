@@ -3500,3 +3500,109 @@ async fn an_already_reported_failure_gets_no_second_message() {
         "the sentinel's Display is an implementation detail, never output: {stderr}"
     );
 }
+
+/// The recorded DigiCert token over the frozen sample head, base64 as a
+/// checkpoint stores it. It vouches for that head and no other.
+fn recorded_witness_json() -> Value {
+    use base64::Engine as _;
+    let tsr = std::fs::read(format!(
+        "{}/../morpholog-witness/tests/fixtures/rfc3161/genesis_digicert.tsr",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    serde_json::json!({
+        "scheme": "rfc3161",
+        "proof": base64::engine::general_purpose::STANDARD.encode(tsr),
+        "submitted_to": "http://timestamp.digicert.com",
+    })
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_witness_that_does_not_vouch_for_its_checkpoint_fails_the_live_verify() {
+    // Attacker capability: attaches a genuine timestamp token, obtained
+    // over some other head, to a checkpoint it never covered.
+    reset_db().await;
+    post_balanced_entry("w1", 100);
+    let (status, cp_stdout, stderr) = run_cli(&["audit", "checkpoint"]);
+    assert!(status.success(), "{stderr}");
+    let cp: Value = serde_json::from_str(&cp_stdout).unwrap();
+
+    // Before any witness: the report has no witness axis at all.
+    let (status, stdout, _) = run_cli(&["audit", "verify"]);
+    assert!(status.success(), "{stdout}");
+    let report: Value = serde_json::from_str(&stdout).unwrap();
+    assert!(report.get("witnesses").is_none(), "{stdout}");
+
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    let witness: morpholog_postgres::Witness =
+        serde_json::from_value(recorded_witness_json()).unwrap();
+    morpholog_postgres::attach_witness(
+        &pool,
+        cp["tree_size"].as_i64().unwrap(),
+        cp["checkpoint_hash"].as_str().unwrap(),
+        witness,
+    )
+    .await
+    .unwrap();
+
+    let (status, stdout, _) = run_cli(&["audit", "verify"]);
+    assert!(!status.success(), "an invalid witness fails: {stdout}");
+    let report: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        report["tree"]["status"], "intact",
+        "the tree itself is fine: {stdout}"
+    );
+    let verdict = &report["witnesses"]["checkpoints"][0]["witnesses"][0];
+    assert_eq!(verdict["status"], "invalid", "{stdout}");
+    assert_eq!(verdict["submitted_to"], "http://timestamp.digicert.com");
+    assert!(
+        verdict.get("attested_at").is_none(),
+        "no time from a token that does not apply"
+    );
+    assert!(report["witnesses"].get("earliest_attested_at").is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn verify_pack_reports_witnesses_only_when_asked() {
+    reset_db().await;
+    post_balanced_entry("wp1", 100);
+    let (status, _, stderr) = run_cli(&["audit", "checkpoint"]);
+    assert!(status.success(), "{stderr}");
+    let (status, pack_stdout, stderr) = run_cli(&["audit", "export"]);
+    assert!(status.success(), "{stderr}");
+
+    // The same pack with the recorded token grafted onto its checkpoint.
+    let mut pack: Value = serde_json::from_str(&pack_stdout).unwrap();
+    pack["checkpoints"][0]["witnesses"] = Value::Array(vec![recorded_witness_json()]);
+    let mut packfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut packfile, pack.to_string().as_bytes()).unwrap();
+    let path = packfile.path().to_str().unwrap();
+
+    // Not asked: the bare verdict, byte-for-byte the shape it always had.
+    let (status, stdout, _) = run_cli_no_db(&["audit", "verify-pack", path]);
+    assert!(status.success(), "{stdout}");
+    let bare: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(bare["status"], "intact", "{stdout}");
+    assert!(bare.get("witnesses").is_none() && bare.get("verdict").is_none());
+
+    // Asked: the wrapper, and the grafted token is judged invalid.
+    let (status, stdout, _) = run_cli_no_db(&["audit", "verify-pack", path, "--witnesses"]);
+    assert!(!status.success(), "{stdout}");
+    let wrapped: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(wrapped["verdict"]["status"], "intact", "{stdout}");
+    assert_eq!(
+        wrapped["witnesses"]["checkpoints"][0]["witnesses"][0]["status"], "invalid",
+        "{stdout}"
+    );
+
+    // A trust-anchor file implies asking; an unreadable one is operational.
+    let (status, stdout, stderr) = run_cli_no_db(&[
+        "audit",
+        "verify-pack",
+        path,
+        "--trusted-tsa-file",
+        "/nonexistent/tsa.pem",
+    ]);
+    assert!(!status.success() && stdout.trim().is_empty(), "{stdout}");
+    assert!(stderr.contains("trusted TSA file"), "{stderr}");
+}

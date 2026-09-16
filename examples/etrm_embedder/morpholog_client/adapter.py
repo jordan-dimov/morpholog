@@ -17,8 +17,11 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from typing import Callable, TypeVar
 
 from . import envelopes
+
+_Verdict = TypeVar("_Verdict")
 
 
 # Flags whose VALUE is a credential. It must never appear in a raised
@@ -495,6 +498,7 @@ class Morpholog:
         *,
         require_signatures_from: int | None = None,
         require_signing_key: str | None = None,
+        trusted_tsa_file: str | None = None,
     ) -> envelopes.VerifyReport:
         """Replay the audit log against the claims table and check the
         audit Merkle tree against its checkpoints (and an external
@@ -506,8 +510,12 @@ class Morpholog:
         signature by that key, on top of the key being authorised in
         the log, never instead of it. ``views_schema`` also verifies the generated SQL view surface
         in that schema against its recorded seals, adding the ``views``
-        verdict to the report. A divergence or tamper is a decided
-        verdict on stdout, not an operational error."""
+        verdict to the report. ``trusted_tsa_file`` (a PEM file of
+        timestamp-authority CA certificates) is what the checkpoints'
+        external witnesses are judged against; without it a sound
+        witness reports ``unverified``. A divergence, tamper, or invalid
+        witness is a decided verdict on stdout, not an operational
+        error."""
         args = ["audit", "verify", "--database-url", self.database_url]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
@@ -518,6 +526,8 @@ class Morpholog:
         )
         if views_schema is not None:
             args.extend(["--views-schema", views_schema])
+        if trusted_tsa_file is not None:
+            args.extend(["--trusted-tsa-file", str(trusted_tsa_file)])
         return envelopes.VerifyReport.from_json(self._json(*args))
 
     def audit_checkpoint(
@@ -559,23 +569,27 @@ class Morpholog:
         *,
         require_signatures_from: int | None = None,
         require_signing_key: str | None = None,
-    ) -> envelopes.TreeVerification:
+        witnesses: bool = False,
+        trusted_tsa_file: str | None = None,
+    ) -> envelopes.TreeVerification | envelopes.PackVerificationReport[envelopes.TreeVerification]:
         """Verify a prefix evidence pack offline - no database. Returns the
         tamper-evidence verdict; a tamper or malformed pack is a decided
         verdict on stdout. ``require_signatures``, ``require_signatures_from``
         and ``require_signing_key`` are the verifier's policy, as on
         ``audit_verify``; the pin needs a complete-prefix pack, and a
-        window or selective pack refuses it as an operational error."""
-        return envelopes.parse_tree_verification(
-            self._json(
-                *self._verify_pack_args(
-                    pack_file,
-                    anchor_file,
-                    require_signatures,
-                    require_signatures_from,
-                    require_signing_key,
-                )
-            )
+        window or selective pack refuses it as an operational error. With
+        ``witnesses=True`` or a ``trusted_tsa_file`` the result is a
+        ``PackVerificationReport`` carrying this verdict beside what the
+        pack's external witnesses prove."""
+        return self._verify_pack(
+            envelopes.parse_tree_verification,
+            pack_file,
+            anchor_file,
+            require_signatures,
+            require_signatures_from,
+            require_signing_key,
+            witnesses,
+            trusted_tsa_file,
         )
 
     def audit_export_window(
@@ -610,21 +624,25 @@ class Morpholog:
         *,
         require_signatures_from: int | None = None,
         require_signing_key: str | None = None,
-    ) -> envelopes.WindowVerification:
+        witnesses: bool = False,
+        trusted_tsa_file: str | None = None,
+    ) -> envelopes.WindowVerification | envelopes.PackVerificationReport[envelopes.WindowVerification]:
         """Verify a window pack offline - no database. Returns the window
         verdict; a tamper, inconsistent extension, or malformed pack is a
         decided verdict on stdout. ``require_signatures`` is compliance
-        mode, as on ``audit_verify_pack``."""
-        return envelopes.parse_window_verification(
-            self._json(
-                *self._verify_pack_args(
-                    pack_file,
-                    anchor_file,
-                    require_signatures,
-                    require_signatures_from,
-                    require_signing_key,
-                )
-            )
+        mode, as on ``audit_verify_pack``. With
+        ``witnesses=True`` or a ``trusted_tsa_file`` the result is a
+        ``PackVerificationReport`` carrying this verdict beside what the
+        pack's external witnesses prove."""
+        return self._verify_pack(
+            envelopes.parse_window_verification,
+            pack_file,
+            anchor_file,
+            require_signatures,
+            require_signatures_from,
+            require_signing_key,
+            witnesses,
+            trusted_tsa_file,
         )
 
     def audit_export_selective(
@@ -655,22 +673,26 @@ class Morpholog:
         *,
         require_signatures_from: int | None = None,
         require_signing_key: str | None = None,
-    ) -> envelopes.SelectiveVerification:
+        witnesses: bool = False,
+        trusted_tsa_file: str | None = None,
+    ) -> envelopes.SelectiveVerification | envelopes.PackVerificationReport[envelopes.SelectiveVerification]:
         """Verify a selective pack offline - no database. Returns the
         selective verdict; a row not included, anchor mismatch, or
         malformed pack is a decided verdict on stdout.
         ``require_signatures`` is compliance mode, as on
-        ``evidence_verify``."""
-        return envelopes.parse_selective_verification(
-            self._json(
-                *self._verify_pack_args(
-                    pack_file,
-                    anchor_file,
-                    require_signatures,
-                    require_signatures_from,
-                    require_signing_key,
-                )
-            )
+        ``evidence_verify``. With
+        ``witnesses=True`` or a ``trusted_tsa_file`` the result is a
+        ``PackVerificationReport`` carrying this verdict beside what the
+        pack's external witnesses prove."""
+        return self._verify_pack(
+            envelopes.parse_selective_verification,
+            pack_file,
+            anchor_file,
+            require_signatures,
+            require_signatures_from,
+            require_signing_key,
+            witnesses,
+            trusted_tsa_file,
         )
 
     @staticmethod
@@ -688,24 +710,33 @@ class Morpholog:
             args.extend(["--require-signing-key", str(require_signing_key)])
         return args
 
-    @classmethod
-    def _verify_pack_args(
-        cls,
+    def _verify_pack(
+        self,
+        parse_verdict: Callable[[object], _Verdict],
         pack_file: str,
         anchor_file: str | None,
         require_signatures: bool,
-        require_signatures_from: int | None = None,
-        require_signing_key: str | None = None,
-    ) -> list[str]:
+        require_signatures_from: int | None,
+        require_signing_key: str | None,
+        witnesses: bool,
+        trusted_tsa_file: str | None,
+    ) -> _Verdict | envelopes.PackVerificationReport[_Verdict]:
         args = ["audit", "verify-pack", str(pack_file)]
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
         args.extend(
-            cls._signature_policy_args(
+            self._signature_policy_args(
                 require_signatures, require_signatures_from, require_signing_key
             )
         )
-        return args
+        if witnesses:
+            args.append("--witnesses")
+        if trusted_tsa_file is not None:
+            args.extend(["--trusted-tsa-file", str(trusted_tsa_file)])
+        payload = self._json(*args)
+        if witnesses or trusted_tsa_file is not None:
+            return envelopes.PackVerificationReport.from_json(payload, parse_verdict)
+        return parse_verdict(payload)
 
     # ------------------------------------------------------------
     # The outbox lease protocol.
