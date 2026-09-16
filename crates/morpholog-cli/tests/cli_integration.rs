@@ -4021,6 +4021,17 @@ async fn transact_prints_the_one_decision_and_writes_all_or_nothing() {
     let empty = transact(&fixture.path, "\n");
     let out: Value = serde_json::from_slice(&empty.stdout).unwrap();
     assert_eq!(out["code"], "invalid_request", "{out}");
+    // A misspelt field is a refusal, never a silently ignored key.
+    let stray = transact(
+        &fixture.path,
+        &serde_json::json!({
+            "transformation": "open", "actor": "teller", "args_named": {"id": "a3"}, "actr": "x"
+        })
+        .to_string(),
+    );
+    let out: Value = serde_json::from_slice(&stray.stdout).unwrap();
+    assert_eq!(out["code"], "invalid_request", "{out}");
+    assert!(out["error"].as_str().unwrap().contains("act 1"), "{out}");
     let claims: i64 = sqlx::query_scalar("SELECT count(*) FROM morpholog.claims")
         .fetch_one(&pool)
         .await

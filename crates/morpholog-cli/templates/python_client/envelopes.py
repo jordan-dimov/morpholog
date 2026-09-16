@@ -211,11 +211,23 @@ class AtomicAct:
 
     @classmethod
     def from_json(cls, payload: object) -> AtomicAct:
-        if not isinstance(payload, dict) or "row" not in payload:
-            raise EnvelopeError(f"not an atomic act: {payload!r}")
-        body = {k: v for k, v in payload.items() if k != "row"}
+        # Strict on the wire shape first, so a stray key - `status`
+        # included - is drift, never silently rewritten.
+        data = _strict(
+            "atomic act",
+            payload,
+            {
+                "row",
+                "transition_id",
+                "actor",
+                "asserted_claims",
+                "retracted_claims",
+                "emitted_intents",
+            },
+        )
+        body = {k: v for k, v in data.items() if k != "row"}
         body["status"] = "committed"
-        return cls(row=int(str(payload["row"])), outcome=Committed.from_json(body))
+        return cls(row=int(str(data["row"])), outcome=Committed.from_json(body))
 
 
 @dataclass(frozen=True)

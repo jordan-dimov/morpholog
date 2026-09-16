@@ -2334,10 +2334,10 @@ fn posting(i: usize, tag: &str) -> Transition {
     }
 }
 
-/// One attempt at the batch, then the whole result: the last attempt's
-/// duration, the retries spent, and whether it ever committed within
-/// the budget. Exhausting the budget is a reading, not an error: it is
-/// what a batch on a contended footprint does.
+/// The batch as the caller experiences it: the whole wait including
+/// every retry and backoff, the retries spent, and whether it ever
+/// committed within the budget. Exhausting the budget is a reading,
+/// not an error: it is what a batch on a contended footprint does.
 async fn transact_once(
     pool: &PgPool,
     compiled: &CompiledProgram,
@@ -2345,8 +2345,8 @@ async fn transact_once(
     max_retries: usize,
 ) -> Result<(Duration, u64, bool)> {
     let mut retries = 0u64;
+    let t = Instant::now();
     loop {
-        let t = Instant::now();
         match propose_all_against_pg(pool, compiled, proposals).await {
             Ok(PgAtomicOutcome::Committed { acts }) => {
                 if acts.len() != proposals.len() {

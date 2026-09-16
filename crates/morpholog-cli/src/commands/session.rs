@@ -32,7 +32,7 @@ use crate::SessionArgs;
 use crate::commands::filter::FieldFilter;
 use crate::commands::inspect::{claims_rows, decode_claims_named, derived_rows, resolve_as_of};
 use crate::commands::propose::{BatchRow, RowError, classify_pg_error, propose_row_outcome};
-use crate::commands::transact::decode_acts;
+use crate::commands::transact::{Act, decode_acts};
 use crate::commands::{compile_or_report, parse_or_report};
 use morpholog_cli::envelopes::{ErrorCode, ErrorReceipt, SessionReady};
 use morpholog_core::CompiledProgram;
@@ -223,7 +223,10 @@ async fn handle_line(
         "derived" => handle_derived(args, compiled, pool, value).await,
         other => Err(SessionFailure::request(
             ErrorCode::UnknownOperation,
-            anyhow!("unknown operation `{other}`; this session answers propose, claims, derived"),
+            anyhow!(
+                "unknown operation `{other}`; this session answers propose, transact, claims, \
+                 derived"
+            ),
         )),
     }
 }
@@ -279,11 +282,11 @@ async fn handle_propose(
     Ok(envelope)
 }
 
-/// The transact body: the acts, each in the batch row shape.
+/// The transact body: the acts, each in the batch row shape, strict.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TransactBody {
-    acts: Vec<BatchRow>,
+    acts: Vec<Act>,
 }
 
 /// Several proposals as one decision, answered with the one atomic

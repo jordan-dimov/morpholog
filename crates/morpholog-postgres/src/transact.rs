@@ -64,8 +64,10 @@ pub enum PgAtomicOutcome {
 }
 
 /// Propose every act as one decision. An unknown transformation or a
-/// misshapen actor-policy declaration refuses the batch before a
-/// transaction opens; an empty batch is refused as invalid. On the
+/// misshapen actor-policy declaration (the programme's, checked as the
+/// acts resolve) refuses the batch before a transaction opens; the
+/// first act's actor is authorised as the transaction opens, every
+/// later act's inside it; an empty batch is refused as invalid. On the
 /// proposal path's terms, every error but `CommitOutcomeUnknown` means
 /// nothing was committed, for the whole batch. A `40001` retries the
 /// whole batch; an unknown outcome is read back, never retried blind.

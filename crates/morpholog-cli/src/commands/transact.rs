@@ -11,13 +11,38 @@ use crate::commands::{
 };
 use morpholog_cli::envelopes;
 
+/// One act: the batch row shape, strict - a misspelt field is a refusal
+/// of the whole batch, never a silently ignored key.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Act {
+    transformation: String,
+    actor: String,
+    #[serde(default)]
+    args: Option<serde_json::Value>,
+    #[serde(default)]
+    args_named: Option<serde_json::Value>,
+}
+
+impl From<Act> for BatchRow {
+    fn from(act: Act) -> Self {
+        BatchRow {
+            transformation: act.transformation,
+            actor: act.actor,
+            args: act.args,
+            args_named: act.args_named,
+        }
+    }
+}
+
 /// Every act decoded, or the first that cannot be, named by its
-/// position. A batch with a malformed act is one invalid request: it
-/// never reaches the database.
+/// 1-based position among the acts - the same numbering a refusal
+/// uses. A batch with a malformed act is one invalid request: it never
+/// reaches the database.
 pub(crate) fn decode_acts(
     file: &std::path::Path,
     compiled: &morpholog_core::CompiledProgram,
-    acts: Vec<BatchRow>,
+    acts: Vec<Act>,
 ) -> Result<Vec<Proposal>, RowError> {
     if acts.is_empty() {
         return Err(RowError::coded(
@@ -27,8 +52,8 @@ pub(crate) fn decode_acts(
     }
     acts.into_iter()
         .enumerate()
-        .map(|(index, row)| {
-            decode_row(file, compiled, row)
+        .map(|(index, act)| {
+            decode_row(file, compiled, act.into())
                 .map(|t| Proposal::gateway(&t))
                 .map_err(|e| RowError {
                     code: e.code,
@@ -54,13 +79,19 @@ pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
         std::fs::read_to_string(&args.acts)
             .with_context(|| format!("failed to read acts from {}", args.acts.display()))?
     };
-    let rows: Result<Vec<BatchRow>, RowError> = input
+    // Blank lines skip silently, as in a batch; an act's number is its
+    // position among the acts, the numbering a refusal uses, with the
+    // file line beside it for the reader.
+    let rows: Result<Vec<Act>, RowError> = input
         .lines()
         .enumerate()
         .filter(|(_, line)| !line.trim().is_empty())
-        .map(|(index, line)| {
+        .enumerate()
+        .map(|(position, (line_index, line))| {
             serde_json::from_str(line)
-                .with_context(|| format!("malformed act at line {}", index + 1))
+                .with_context(|| {
+                    format!("malformed act {} (line {})", position + 1, line_index + 1)
+                })
                 .map_err(|e| RowError::coded(envelopes::ProposeCode::InvalidRequest, e))
         })
         .collect();

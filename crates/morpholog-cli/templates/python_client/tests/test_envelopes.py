@@ -534,6 +534,12 @@ class TamperEvidence(unittest.TestCase):
         self.assertTrue(rejected.witness)
         in_session = envelopes.parse_atomic_outcome(golden("transact_rejected_session.json"))
         self.assertEqual((in_session.act, in_session.rule, in_session.witness), (1, None, []))
+        # An act with a key the contract does not name is drift, even
+        # one that would be overwritten.
+        stray = golden("transact_committed.json")
+        stray["acts"][0]["status"] = "committed"
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.parse_atomic_outcome(stray)
         # A coded error is not an outcome: the parser refuses it, the
         # adapter raises it.
         with self.assertRaises(envelopes.EnvelopeError):
