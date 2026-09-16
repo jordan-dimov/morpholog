@@ -33,7 +33,8 @@ pub struct AuditRow {
     /// The transformation's parameter names in declaration order, one
     /// per argument, stamped at commit: the row names its own signature
     /// after the act that wrote it is retired. Absent on rows written
-    /// before names existed; presence selects the third leaf encoding.
+    /// before names existed; presence selects the self-describing leaf
+    /// encoding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameters: Option<Vec<String>>,
 }

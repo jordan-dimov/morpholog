@@ -123,7 +123,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     assert_eq!(
         regimes,
         vec![(false, false), (true, false), (true, true)],
-        "the three encodings, in the real chronology"
+        "every encoding, in the real chronology"
     );
     let declared: Vec<String> = double_entry_ledger::post_simple_entry()
         .parameters

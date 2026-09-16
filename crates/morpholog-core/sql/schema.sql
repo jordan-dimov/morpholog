@@ -104,7 +104,7 @@ CREATE TABLE audit (
     -- The transformation's parameter names, in declaration order, one
     -- per argument: stamped at commit so a row names its own signature
     -- after the act that wrote it is retired. Part of the Merkle leaf
-    -- for the rows that carry it (a third leaf encoding, chosen by the
+    -- for the rows that carry it (the self-describing leaf encoding, chosen by the
     -- field's presence like the attestation's). Nullable at the column
     -- for the same reason as `attestation`: an upgraded database keeps
     -- its historical rows NULL - never backfill - while the named

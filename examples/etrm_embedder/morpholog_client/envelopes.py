@@ -954,12 +954,22 @@ _AUDIT_ROW_OPTIONAL_KEYS = {"attestation", "parameters"}
 
 
 def _parameters_of(data: dict[str, object]) -> list[str] | None:
+    """The stamped parameter names, held to the shapes a row can have:
+    names are strings (leaf-covered evidence, never coerced), only an
+    attested row carries them, and there is one per argument."""
     raw = data.get("parameters")
     if raw is None:
         return None
-    if not isinstance(raw, list):
-        raise EnvelopeError(f"`parameters` must be a list of names, got {raw!r}")
-    return [str(name) for name in raw]
+    names = _str_list("parameters", raw)
+    if data.get("attestation") is None:
+        raise EnvelopeError("an audit row carries parameter names but no attestation")
+    arguments = data.get("arguments")
+    if not isinstance(arguments, list) or len(names) != len(arguments):
+        raise EnvelopeError(
+            f"an audit row carries {len(names)} parameter names for "
+            f"{len(arguments) if isinstance(arguments, list) else '?'} arguments"
+        )
+    return names
 
 
 @dataclass(frozen=True)

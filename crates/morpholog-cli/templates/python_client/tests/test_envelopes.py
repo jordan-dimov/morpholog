@@ -533,6 +533,18 @@ class TamperEvidence(unittest.TestCase):
         self.assertIsNone(older.parameters)
         named = envelopes.AuditRowNamed.from_json(golden("audit_row_named.json"))
         self.assertIsNone(named.parameters)
+        # Evidence is never coerced, and the row's shapes hold: names
+        # are strings, only an attested row carries them, one per
+        # argument.
+        for tamper in (
+            lambda r: r.__setitem__("parameters", [1]),
+            lambda r: r.pop("attestation"),
+            lambda r: r.__setitem__("parameters", ["account_id", "extra"]),
+        ):
+            row = golden("audit_row_self_describing.json")
+            tamper(row)
+            with self.assertRaises(envelopes.EnvelopeError):
+                envelopes.AuditRow.from_json(row)
 
     def test_transact_outcomes(self):
         committed = envelopes.parse_atomic_outcome(golden("transact_committed.json"))
