@@ -701,6 +701,18 @@ fn audit_rows_serialize_as_pinned() {
     };
     assert_golden("audit_row_attested.json", &to_value(&attested));
 
+    // The self-describing variant: the attested row plus the parameter
+    // names the writer stamped, one per argument - the row's own
+    // signature, outliving the programme that wrote it.
+    let self_describing = AuditRow {
+        parameters: Some(vec!["account_id".to_string()]),
+        ..attested.clone()
+    };
+    assert_golden(
+        "audit_row_self_describing.json",
+        &to_value(&self_describing),
+    );
+
     // The --named form replaces the two claim arrays with
     // field-keyed bare objects (the named_claim shape) and leaves
     // everything else byte-identical - through the same projection
@@ -1938,6 +1950,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("batch_score.json", "batch_score"),
         ("audit_row.json", "audit_row"),
         ("audit_row_attested.json", "audit_row"),
+        ("audit_row_self_describing.json", "audit_row"),
         ("audit_row_named.json", "audit_row_named"),
         ("check_report.json", "check_report"),
         ("hash_report.json", "hash_report"),

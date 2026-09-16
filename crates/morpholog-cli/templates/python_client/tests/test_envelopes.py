@@ -524,6 +524,16 @@ class TamperEvidence(unittest.TestCase):
             envelopes.WitnessVerdict.from_json(golden("witness_verdict_invalid.json")).attested_at
         )
 
+    def test_an_audit_row_names_its_own_parameters(self):
+        stamped = envelopes.AuditRow.from_json(golden("audit_row_self_describing.json"))
+        self.assertEqual(stamped.parameters, ["account_id"])
+        self.assertEqual(len(stamped.parameters), len(stamped.arguments))
+        # Rows from before names were stamped carry none.
+        older = envelopes.AuditRow.from_json(golden("audit_row_attested.json"))
+        self.assertIsNone(older.parameters)
+        named = envelopes.AuditRowNamed.from_json(golden("audit_row_named.json"))
+        self.assertIsNone(named.parameters)
+
     def test_transact_outcomes(self):
         committed = envelopes.parse_atomic_outcome(golden("transact_committed.json"))
         self.assertIsInstance(committed, envelopes.AtomicCommitted)

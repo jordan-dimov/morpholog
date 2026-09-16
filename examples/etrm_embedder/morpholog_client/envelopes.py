@@ -950,7 +950,16 @@ _AUDIT_ROW_KEYS = {
     "committed_at",
 }
 
-_AUDIT_ROW_OPTIONAL_KEYS = {"attestation"}
+_AUDIT_ROW_OPTIONAL_KEYS = {"attestation", "parameters"}
+
+
+def _parameters_of(data: dict[str, object]) -> list[str] | None:
+    raw = data.get("parameters")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise EnvelopeError(f"`parameters` must be a list of names, got {raw!r}")
+    return [str(name) for name in raw]
 
 
 @dataclass(frozen=True)
@@ -999,6 +1008,11 @@ class AuditRow:
     emitted_intents: list[IntentInstance]
     committed_at: datetime
     attestation: Attestation | None = None
+    # The transformation's parameter names in declaration order, one
+    # per argument, as the writer stamped them: the row's own signature,
+    # readable after the act is retired. None on rows from before names
+    # were stamped.
+    parameters: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRow:
@@ -1017,6 +1031,7 @@ class AuditRow:
             emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
             committed_at=values.parse_timestamp(data["committed_at"]),
             attestation=_attestation_of(data),
+            parameters=_parameters_of(data),
         )
 
 
@@ -1038,6 +1053,11 @@ class AuditRowNamed:
     emitted_intents: list[IntentInstance]
     committed_at: datetime
     attestation: Attestation | None = None
+    # The transformation's parameter names in declaration order, one
+    # per argument, as the writer stamped them: the row's own signature,
+    # readable after the act is retired. None on rows from before names
+    # were stamped.
+    parameters: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRowNamed:
@@ -1056,6 +1076,7 @@ class AuditRowNamed:
             emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
             committed_at=values.parse_timestamp(data["committed_at"]),
             attestation=_attestation_of(data),
+            parameters=_parameters_of(data),
         )
 
 
