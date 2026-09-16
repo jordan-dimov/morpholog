@@ -202,12 +202,12 @@ pub(crate) struct BatchRow {
 /// aborts the batch or the session and never becomes a receipt. The
 /// reason renders into the receipt's human prose.
 pub(crate) struct RowError {
-    pub(crate) code: Option<envelopes::ErrorCode>,
+    pub(crate) code: Option<envelopes::ProposeCode>,
     pub(crate) reason: anyhow::Error,
 }
 
 impl RowError {
-    fn coded(code: envelopes::ErrorCode, reason: anyhow::Error) -> Self {
+    fn coded(code: envelopes::ProposeCode, reason: anyhow::Error) -> Self {
         Self {
             code: Some(code),
             reason,
@@ -223,13 +223,13 @@ impl RowError {
 /// retries stay the caller's), and a kernel error or colliding intent
 /// is that row's data speaking - everything else is infrastructure.
 fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
-    use envelopes::ErrorCode;
+    use envelopes::ProposeCode;
     use morpholog_postgres::PgError;
     let code = match &err {
-        PgError::SerializationFailure => Some(ErrorCode::SerializationFailure),
-        PgError::Kernel(_) => Some(ErrorCode::KernelError),
-        PgError::DuplicateIntent => Some(ErrorCode::DuplicateIntent),
-        PgError::ActorAssertionUnauthorised { .. } => Some(ErrorCode::ActorAssertionUnauthorised),
+        PgError::SerializationFailure => Some(ProposeCode::SerializationFailure),
+        PgError::Kernel(_) => Some(ProposeCode::KernelError),
+        PgError::DuplicateIntent => Some(ProposeCode::DuplicateIntent),
+        PgError::ActorAssertionUnauthorised { .. } => Some(ProposeCode::ActorAssertionUnauthorised),
         _ => None,
     };
     RowError {
@@ -300,7 +300,7 @@ async fn run_batch(
             }) => {
                 errored += 1;
                 serde_json::to_value(envelopes::ErrorReceipt::new(
-                    code,
+                    code.into(),
                     format!("{reason:#}"),
                     row as u64,
                 ))?
@@ -324,7 +324,7 @@ async fn batch_row_outcome(
 ) -> Result<serde_json::Value, RowError> {
     let row: BatchRow = serde_json::from_str(line)
         .context("malformed batch row")
-        .map_err(|e| RowError::coded(envelopes::ErrorCode::InvalidRequest, e))?;
+        .map_err(|e| RowError::coded(envelopes::ProposeCode::InvalidRequest, e))?;
     propose_row_outcome(&args.file, args.explain_on_reject, compiled, pool, row).await
 }
 
@@ -342,7 +342,7 @@ pub(crate) async fn propose_row_outcome(
     row: BatchRow,
 ) -> Result<serde_json::Value, RowError> {
     let transformation = lookup_transformation(compiled, &row.transformation, file)
-        .map_err(|e| RowError::coded(envelopes::ErrorCode::UnknownTransformation, e))?;
+        .map_err(|e| RowError::coded(envelopes::ProposeCode::UnknownTransformation, e))?;
     let (tagged, named);
     let codec_input = match (&row.args, &row.args_named) {
         (Some(t), None) => {
@@ -355,13 +355,13 @@ pub(crate) async fn propose_row_outcome(
         }
         _ => {
             return Err(RowError::coded(
-                envelopes::ErrorCode::InvalidRequest,
+                envelopes::ProposeCode::InvalidRequest,
                 anyhow::anyhow!("a batch row carries exactly one of `args` and `args_named`"),
             ));
         }
     };
     let eval_args = decode_args(&compiled.validated(), transformation, file, codec_input)
-        .map_err(|e| RowError::coded(envelopes::ErrorCode::InvalidArguments, e))?;
+        .map_err(|e| RowError::coded(envelopes::ProposeCode::InvalidArguments, e))?;
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: eval_args,

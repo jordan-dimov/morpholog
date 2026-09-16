@@ -263,7 +263,7 @@ async fn handle_propose(
         RowError {
             code: Some(code),
             reason,
-        } => SessionFailure::request(code, reason),
+        } => SessionFailure::request(code.into(), reason),
     })?;
     if let Some(receipt) = envelope.as_object_mut() {
         receipt.insert("row".to_string(), serde_json::json!(row));

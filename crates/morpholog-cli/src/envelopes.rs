@@ -142,21 +142,47 @@ macro_rules! error_codes {
     };
 }
 
-impl ErrorCode {
-    /// The codes a proposal row can fail with, on the batch and the
-    /// session alike - the whole set minus the session's own
-    /// `unknown_operation`, which a batch row has no way to earn.
-    /// Published as its own schema enum so the batch contract admits
-    /// nothing the batch cannot produce; held to `RowErrorKind` by test.
-    pub const PROPOSE: &'static [ErrorCode] = &[
-        ErrorCode::ActorAssertionUnauthorised,
-        ErrorCode::DuplicateIntent,
-        ErrorCode::InvalidArguments,
-        ErrorCode::InvalidRequest,
-        ErrorCode::KernelError,
-        ErrorCode::SerializationFailure,
-        ErrorCode::UnknownTransformation,
+/// The codes a proposal row can fail with, on the batch and the session
+/// alike: the whole vocabulary minus the session's own
+/// `unknown_operation`, which a batch row has no way to earn. A type
+/// rather than a list so a proposal-row failure cannot be given a code
+/// the published `propose_error_code` set says is impossible; the
+/// schema is held to `ALL` by test.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProposeCode {
+    ActorAssertionUnauthorised,
+    DuplicateIntent,
+    InvalidArguments,
+    InvalidRequest,
+    KernelError,
+    SerializationFailure,
+    UnknownTransformation,
+}
+
+impl ProposeCode {
+    pub const ALL: &'static [ProposeCode] = &[
+        ProposeCode::ActorAssertionUnauthorised,
+        ProposeCode::DuplicateIntent,
+        ProposeCode::InvalidArguments,
+        ProposeCode::InvalidRequest,
+        ProposeCode::KernelError,
+        ProposeCode::SerializationFailure,
+        ProposeCode::UnknownTransformation,
     ];
+}
+
+impl From<ProposeCode> for ErrorCode {
+    fn from(code: ProposeCode) -> Self {
+        match code {
+            ProposeCode::ActorAssertionUnauthorised => ErrorCode::ActorAssertionUnauthorised,
+            ProposeCode::DuplicateIntent => ErrorCode::DuplicateIntent,
+            ProposeCode::InvalidArguments => ErrorCode::InvalidArguments,
+            ProposeCode::InvalidRequest => ErrorCode::InvalidRequest,
+            ProposeCode::KernelError => ErrorCode::KernelError,
+            ProposeCode::SerializationFailure => ErrorCode::SerializationFailure,
+            ProposeCode::UnknownTransformation => ErrorCode::UnknownTransformation,
+        }
+    }
 }
 
 error_codes!(

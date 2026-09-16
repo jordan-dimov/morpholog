@@ -1864,7 +1864,7 @@ fn every_internal_ref_resolves() {
 /// the published set.
 #[test]
 fn every_session_error_code_is_in_the_pinned_enum() {
-    use morpholog_cli::envelopes::ErrorCode;
+    use morpholog_cli::envelopes::{ErrorCode, ProposeCode};
     let schema = result_schema();
     // Each receipt references a named set rather than carrying a copy:
     // the session the whole vocabulary, the batch exactly what a
@@ -1884,10 +1884,10 @@ fn every_session_error_code_is_in_the_pinned_enum() {
         .iter()
         .map(|v| v.as_str().expect("codes are strings").to_string())
         .collect();
-    let propose_emitted: Vec<String> = ErrorCode::PROPOSE
+    let propose_emitted: Vec<String> = ProposeCode::ALL
         .iter()
         .map(|c| {
-            serde_json::to_value(c)
+            serde_json::to_value(ErrorCode::from(*c))
                 .unwrap()
                 .as_str()
                 .unwrap()
@@ -1898,18 +1898,18 @@ fn every_session_error_code_is_in_the_pinned_enum() {
         propose_published, propose_emitted,
         "propose_error_code must be exactly the codes a batch row can carry"
     );
-    // The propose set is the whole vocabulary minus the codes only a
-    // session can answer with; a new code has to be placed on one side.
+    // The vocabulary partitions into the proposal codes and the codes
+    // only a session can answer with; a new code has to land on one side.
     let session_only = [ErrorCode::UnknownOperation];
-    let expected: Vec<&ErrorCode> = ErrorCode::ALL
-        .iter()
-        .filter(|c| !session_only.contains(c))
-        .collect();
-    assert_eq!(
-        ErrorCode::PROPOSE.iter().collect::<Vec<_>>(),
-        expected,
-        "ErrorCode::PROPOSE is ALL minus the session-only codes"
-    );
+    for code in ErrorCode::ALL {
+        let is_propose = ProposeCode::ALL
+            .iter()
+            .any(|p| ErrorCode::from(*p) == *code);
+        assert!(
+            is_propose != session_only.contains(code),
+            "{code:?} must be exactly one of: a proposal code, a session-only code"
+        );
+    }
     let published = schema["$defs"]["error_code"]["enum"]
         .as_array()
         .expect("the code enum is an array")

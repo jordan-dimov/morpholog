@@ -18,23 +18,13 @@ No Docker. No additional system dependencies.
 
 ## Local setup
 
+The PostgreSQL-backed suites need a **disposable cluster**, not just a disposable database: they truncate whatever `DATABASE_URL` names on entry; several create and drop roles, which are cluster-global; some need the connecting role to be a superuser; and the checkpoint writer census asserts that nothing else in the cluster can write `morpholog.audit` - so a role a *neighbouring* Morpholog deployment granted membership in the cluster-global `morpholog_writer` reddens the census test, correctly, because it is a real privilege relationship. That happened here: a second project on the same machine, with its own database and its own roles, failed this repo's census test twice, and deleting its roles was the wrong remedy.
+
+So development gets a cluster of its own on a second port, and that is the only local setup this guide describes. On Ubuntu:
+
 ```bash
 git clone https://github.com/jordan-dimov/morpholog.git
 cd morpholog
-createdb morpholog_dev
-psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
-export DATABASE_URL=postgres:///morpholog_dev
-```
-
-The schema applies the head state from `crates/morpholog-core/sql/schema.sql`. An existing database comes forward with `morpholog migrate` (`--check` to ask first), which carries the numbered migrations under `crates/morpholog-core/sql/migrations/` inside the binary. (An installed `morpholog` binary provisions the same schema with `morpholog init`; the `psql` path is right for a source checkout, where the binary you last installed may trail the schema at head.)
-
-### The test cluster is disposable
-
-The PostgreSQL-backed suites assume a disposable **cluster**, not just a disposable database. They truncate whatever `DATABASE_URL` names on entry; several create and drop roles, which are cluster-global; some need the connecting role to be a superuser; and the checkpoint writer census asserts that nothing else in the cluster can write `morpholog.audit` - so a role a *neighbouring* Morpholog deployment granted membership in the cluster-global `morpholog_writer` reddens the census test, correctly, because it is a real privilege relationship. That happened here: a second project on the same machine, with its own database and its own roles, failed this repo's census test twice, and deleting its roles was the wrong remedy.
-
-Give the suites a cluster of their own on a second port. On Ubuntu:
-
-```bash
 sudo pg_createcluster -p 55432 --start 18 morpholog_test
 sudo -u postgres createuser -p 55432 --superuser "$USER"
 createdb -p 55432 morpholog_dev
@@ -42,7 +32,9 @@ psql -p 55432 morpholog_dev -f crates/morpholog-core/sql/schema.sql
 export DATABASE_URL='postgres:///morpholog_dev?port=55432'
 ```
 
-The socket form keeps peer authentication, so no password is involved; `postgres://localhost:55432/...` would ask for one under the default `pg_hba.conf`. Nothing in the suites changes - the port rides in `DATABASE_URL`. Real Morpholog deployments stay on `:5432`, untouched by any test. To dispose of the cluster: `sudo pg_dropcluster --stop 18 morpholog_test`.
+The socket form keeps peer authentication, so no password is involved; `postgres://localhost:55432/...` would ask for one under the default `pg_hba.conf`. Real Morpholog deployments stay on `:5432`, untouched by any test. To dispose of the cluster: `sudo pg_dropcluster --stop 18 morpholog_test`.
+
+The schema applies the head state from `crates/morpholog-core/sql/schema.sql`. An existing database comes forward with `morpholog migrate` (`--check` to ask first), which carries the numbered migrations under `crates/morpholog-core/sql/migrations/` inside the binary. (An installed `morpholog` binary provisions the same schema with `morpholog init`; the `psql` path is right for a source checkout, where the binary you last installed may trail the schema at head.)
 
 Optional but recommended:
 
@@ -57,11 +49,11 @@ That puts the `morpholog` binary on `~/.cargo/bin/`. Refresh it after pulling ch
 Run [`./scripts/precommit.sh`](scripts/precommit.sh) before pushing. It runs the suites and checks CI gates on, plus `morpholog check` over every `.morph`; CI additionally runs a coverage job for visibility only, and verifies the declared Rust floor (precommit does the same when that toolchain is installed, and says so when it is not). If it passes locally, CI passes.
 
 ```bash
-./scripts/precommit.sh   # without PG tests
-./scripts/precommit.sh   # full suite, with DATABASE_URL exported as above
+./scripts/precommit.sh                       # full suite, with DATABASE_URL exported as above
+env -u DATABASE_URL ./scripts/precommit.sh   # without the PG-backed suites
 ```
 
-The script bails on the first failure. Without `DATABASE_URL` it skips the PG-backed test suites with a note.
+The script bails on the first failure. Without `DATABASE_URL` it skips the PG-backed test suites with a note; with it set, it runs them against whatever the URL names, which is why the URL above points at the disposable cluster.
 
 The underlying commands (CI runs the same in `.github/workflows/ci.yml`):
 
@@ -82,10 +74,10 @@ The PG-backed test suites share one schema and truncate it between tests; they m
 
 The persistence adapter's queries are `sqlx::query!` / `query_as!` macros, verified against the real schema **at build time**. A query that drifts from the schema is a compile error, not a runtime surprise. Every cargo command in this workspace defaults to `SQLX_OFFLINE=true` (via [`.cargo/config.toml`](.cargo/config.toml)), so a plain `cargo build` - and precommit, and CI - reads the committed cache in `.sqlx/` and needs no database.
 
-When you add or change a query, regenerate the cache against a disposable database and commit the result:
+When you add or change a query, regenerate the cache with `DATABASE_URL` exported as above and commit the result:
 
 ```bash
-DATABASE_URL='postgres:///morpholog_sqlx_prep?port=55432' ./scripts/sqlx-prepare.sh
+./scripts/sqlx-prepare.sh   # against the same disposable database; it drops and recreates the schemas
 git add .sqlx
 ```
 

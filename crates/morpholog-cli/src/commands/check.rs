@@ -36,7 +36,10 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
                     CheckDiagnostic::new(
                         f.severity,
                         f.message.clone(),
-                        f.diagnostic.as_ref().map(|d| d.primary.clone()),
+                        f.diagnostic
+                            .as_ref()
+                            .filter(|_| f.foreign.is_none())
+                            .map(|d| d.primary.clone()),
                         &collected.source,
                     )
                 })
@@ -46,9 +49,12 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&payload)?);
     } else {
         for f in &collected.findings {
-            match &f.diagnostic {
-                Some(d) => eprint!("{}", d.render(&collected.source_name, &collected.source)),
-                None => eprintln!("{}: {}", f.severity, f.message),
+            match (&f.diagnostic, &f.foreign) {
+                (Some(d), Some((name, source))) => eprint!("{}", d.render(name, source)),
+                (Some(d), None) => {
+                    eprint!("{}", d.render(&collected.source_name, &collected.source));
+                }
+                (None, _) => eprintln!("{}: {}", f.severity, f.message),
             }
         }
     }
@@ -66,14 +72,18 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// One finding, with the caret-located diagnostic when the source map
-/// places it in the checked file. A finding about another file (an
-/// `--against` programme that does not validate) carries none: the
-/// report has one `file`, and a span into another would lie.
+/// One finding, with the caret-located diagnostic when a source map
+/// places it. A finding about another file (an `--against` programme
+/// that does not validate) carries that file's own source so the plain
+/// renderer can still show its carets; the JSON report has one `file`,
+/// so there it is reported without a location rather than a lying one.
 struct Finding {
     severity: &'static str,
     message: String,
     diagnostic: Option<Diagnostic>,
+    /// `(source_name, source)` of the file the diagnostic points into,
+    /// when that is not the file being checked.
+    foreign: Option<(String, String)>,
 }
 
 impl Finding {
@@ -82,6 +92,22 @@ impl Finding {
             severity: "error",
             message: message.clone(),
             diagnostic: span.map(|s| Diagnostic::error(message, s)),
+            foreign: None,
+        }
+    }
+    fn foreign_error(
+        message: String,
+        diagnostic: Option<Diagnostic>,
+        path: &Path,
+        source: &str,
+    ) -> Self {
+        Self {
+            severity: "error",
+            message,
+            foreign: diagnostic
+                .as_ref()
+                .map(|_| (path.display().to_string(), source.to_string())),
+            diagnostic,
         }
     }
     fn lint(message: String, span: Option<Span>, strict: bool) -> Self {
@@ -94,6 +120,7 @@ impl Finding {
             severity,
             message: message.clone(),
             diagnostic: span.map(|s| build(message, s)),
+            foreign: None,
         }
     }
 }
@@ -128,6 +155,7 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
                     severity: "error",
                     message: d.message.clone(),
                     diagnostic: Some(d),
+                    foreign: None,
                 }));
             return Ok(out);
         }
@@ -166,10 +194,9 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
             continue;
         }
         match load_against(path) {
-            Err(messages) => {
+            Err(findings) => {
                 out.failed = true;
-                out.findings
-                    .extend(messages.into_iter().map(|m| Finding::error(m, None)));
+                out.findings.extend(findings);
             }
             Ok(other) => {
                 for lint in &morpholog_core::shared_writer_lints(compiled.program(), &other) {
@@ -206,28 +233,46 @@ fn refuse_self_comparison(file: &Path, against: &Path) -> anyhow::Result<()> {
 /// The programme behind an `--against` path, cleared to the floor
 /// `check` holds the primary file to - parse, validation, declaration
 /// policy; its own lints are its own `check`'s business - or every
-/// reason it is not, as messages naming the path.
-fn load_against(path: &Path) -> Result<Program, Vec<String>> {
+/// reason it is not, as findings naming the path and carrying the
+/// other file's source for their carets.
+fn load_against(path: &Path) -> Result<Program, Vec<Finding>> {
     let against = path.display();
-    let source = std::fs::read_to_string(path)
-        .map_err(|e| vec![format!("against {against}: read source file: {e}")])?;
-    let (program, _) = parse_program_with_sources(&source).map_err(|diagnostics| {
+    let source = std::fs::read_to_string(path).map_err(|e| {
+        vec![Finding::error(
+            format!("against {against}: read source file: {e}"),
+            None,
+        )]
+    })?;
+    let (program, map) = parse_program_with_sources(&source).map_err(|diagnostics| {
         diagnostics
             .into_iter()
-            .map(|d| format!("against {against}: {}", d.message))
+            .map(|d| {
+                Finding::foreign_error(
+                    format!("against {against}: {}", d.message),
+                    Some(d),
+                    path,
+                    &source,
+                )
+            })
             .collect::<Vec<_>>()
     })?;
     let compiled = CompiledProgram::new(program).map_err(|errors| {
         errors
             .iter()
-            .map(|e| format!("against {against}: {e}"))
+            .map(|e| {
+                let message = format!("against {against}: {e}");
+                let diagnostic = map
+                    .span_for_error(e)
+                    .map(|span| Diagnostic::error(message.clone(), span));
+                Finding::foreign_error(message, diagnostic, path, &source)
+            })
             .collect::<Vec<_>>()
     })?;
     let policy = morpholog_postgres::validate_declarations(compiled.program());
     if !policy.is_empty() {
         return Err(policy
             .iter()
-            .map(|f| format!("against {against}: {f}"))
+            .map(|f| Finding::error(format!("against {against}: {f}"), None))
             .collect());
     }
     Ok(compiled.program().clone())
