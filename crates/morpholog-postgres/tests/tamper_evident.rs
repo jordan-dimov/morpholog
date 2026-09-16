@@ -127,7 +127,7 @@ async fn coordinated_rewrite_passes_bare_verify_but_fails_against_an_anchor() {
         common::commit_entry(&pool, &format!("h{i}")).await;
     }
     // The operator saved this externally before the tampering.
-    let anchor = common::make_checkpoint(&pool).await;
+    let anchor = common::make_checkpoint_at(&pool, 3).await;
 
     // Attacker edits the log AND rebuilds the checkpoint chain to match -
     // the same tree_size, a new self-consistent root.

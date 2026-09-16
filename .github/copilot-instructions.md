@@ -41,18 +41,38 @@ over inferring intent from surrounding code.
 - **`unsafe_code = "forbid"`** at the workspace level - any
   introduction is a structural change requiring justification.
 
+## Doctrine lines a review should check, each with the test that pins it
+
+These are the lines reviews have caught crossed. A change near one of
+them should either keep the pinning test green or move it deliberately.
+
+- A verifier **policy flag never masks the intrinsic verdict**: a broken
+  pack reports as broken with or without `--require-signatures`,
+  `--require-signatures-from`, or `--require-signing-key`
+  (`the_pin_never_masks_a_sparse_packs_intrinsic_verdict`). A pin is an
+  intersection with the log's own key authority, never a substitute.
+- A `check --json` report has **one `file`**, so a finding about another
+  file (an `--against` programme) carries no span
+  (`against_json_carries_the_finding_with_the_local_span_and_no_foreign_spans`);
+  the plain renderer may show that file's own carets.
+- A proposal row can carry **only a published proposal code**
+  (`ProposeCode`, held to `propose_error_code` in `result.json` by the
+  contract test); the session-only codes never reach a batch receipt.
+- Every surface an embedder consumes is a **pinned envelope**: a `$defs`
+  entry in `result.json`, a golden under `tests/golden/envelopes/`, and
+  the generated Python client, moving together. Ad-hoc JSON on a
+  consumed surface is drift.
+- A migration **refuses a shape it does not recognise** rather than
+  declaring it current, and never replaces a function that generated
+  stored values (`012_claims_hash_key` is the model).
+
 ## Validation
 
-CI is `.github/workflows/ci.yml`. The local equivalent is:
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
-cargo audit                                                                          # needs `cargo install cargo-audit` once
-cargo test -p morpholog-core -p morpholog-examples -p morpholog-surface -p morpholog-test-support -p morpholog-cli --all-targets --locked
-
-# Against a local PostgreSQL 18+ with crates/morpholog-core/sql/schema.sql applied:
-DATABASE_URL=postgres:///morpholog_dev \
-  cargo test -p morpholog-postgres -p morpholog-outbox --all-targets --locked -- --test-threads=1
-```
+CI is `.github/workflows/ci.yml`. The local equivalent is
+`./scripts/precommit.sh`, run in two steps: `env -u DATABASE_URL
+./scripts/precommit.sh` first (formatting, clippy, rustdoc, the Rust
+floor, `cargo audit`, the sync suites, the Python client), then the
+full run with `DATABASE_URL` set. The PostgreSQL-backed suites need a
+disposable **cluster**, not just a database - they truncate the schema
+and create and drop cluster-global roles - so `CONTRIBUTING.md` puts
+development on a second cluster (`postgres:///morpholog_dev?port=55432`).

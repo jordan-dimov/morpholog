@@ -699,6 +699,22 @@ fn against_json_carries_the_finding_with_the_local_span_and_no_foreign_spans() {
 }
 
 #[test]
+fn against_a_broken_file_carets_that_file_in_plain_mode() {
+    let secure = temp_morph(SECURE_MORPH);
+    let broken = temp_morph("program broken\npredicate P(x: Subject)\ninvariant t: Nope(x)\n");
+    let out = check_against(secure.path(), &[broken.path()], &[]);
+    assert!(!out.status.success());
+    let stderr = strip_ansi(&String::from_utf8(out.stderr).unwrap());
+    let broken_path = broken.path().display().to_string();
+    assert!(
+        stderr.contains(&format!("against {broken_path}"))
+            && stderr.contains(&format!("{broken_path}:3:1"))
+            && stderr.contains("invariant t: Nope(x)"),
+        "the other file's own source and caret, named as the against file: {stderr}"
+    );
+}
+
+#[test]
 fn against_a_reader_is_silent_and_against_itself_is_refused() {
     let secure = temp_morph(SECURE_MORPH);
     let reader = temp_morph(READER_MORPH);

@@ -197,67 +197,24 @@ pub(crate) struct BatchRow {
     pub(crate) args_named: Option<serde_json::Value>,
 }
 
-/// What exactly went wrong with one row's proposal: the receipt's
-/// stable code on the batch and session surfaces, and the
-/// row-vs-operational split that decides receipt-or-abort.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RowErrorKind {
-    /// The row itself did not parse or carried both/neither codec.
-    MalformedRow,
-    /// The named transformation is not in the programme.
-    UnknownTransformation,
-    /// The arguments did not decode against the inferred kinds.
-    BadArgs,
-    /// A SERIALIZABLE conflict: the one failure a caller re-submits.
-    Serialization,
-    /// The kernel refused to evaluate (a programme/data mismatch).
-    Kernel,
-    /// The emitted intent collided on its idempotency key.
-    DuplicateIntent,
-    /// The connecting login role may not propose as the named actor.
-    /// A receipt, not an abort: the request was well formed and the
-    /// session is healthy - the caller simply may not speak for that
-    /// actor. Deliberately NOT a business rejection, so it never
-    /// reaches the rejection log.
-    ActorAssertionUnauthorised,
-    /// Infrastructure: a dead connection, a schema mismatch. Aborts
-    /// the batch or the session; never a receipt.
-    Operational,
-}
-
-impl RowErrorKind {
-    /// The stable code a receipt carries for this kind. Operational is
-    /// unreachable: both surfaces abort on it before any receipt.
-    pub(crate) fn code(self) -> envelopes::ErrorCode {
-        match self {
-            RowErrorKind::MalformedRow => envelopes::ErrorCode::InvalidRequest,
-            RowErrorKind::UnknownTransformation => envelopes::ErrorCode::UnknownTransformation,
-            RowErrorKind::BadArgs => envelopes::ErrorCode::InvalidArguments,
-            RowErrorKind::Serialization => envelopes::ErrorCode::SerializationFailure,
-            RowErrorKind::Kernel => envelopes::ErrorCode::KernelError,
-            RowErrorKind::DuplicateIntent => envelopes::ErrorCode::DuplicateIntent,
-            RowErrorKind::ActorAssertionUnauthorised => {
-                envelopes::ErrorCode::ActorAssertionUnauthorised
-            }
-            RowErrorKind::Operational => unreachable!("operational failures abort, never map"),
-        }
-    }
-}
-
-/// A per-row failure with its kind. The kind decides receipt-vs-abort
-/// and the receipt's stable code; the reason renders into the
-/// receipt's human prose.
+/// A per-row failure: the stable code its receipt carries, or none for
+/// an operational failure - a dead connection, a schema mismatch - which
+/// aborts the batch or the session and never becomes a receipt. The
+/// reason renders into the receipt's human prose.
 pub(crate) struct RowError {
-    pub(crate) kind: RowErrorKind,
+    pub(crate) code: Option<envelopes::ProposeCode>,
     pub(crate) reason: anyhow::Error,
 }
 
 impl RowError {
-    fn new(kind: RowErrorKind, reason: anyhow::Error) -> Self {
-        Self { kind, reason }
+    fn coded(code: envelopes::ProposeCode, reason: anyhow::Error) -> Self {
+        Self {
+            code: Some(code),
+            reason,
+        }
     }
-    pub(crate) fn is_operational(&self) -> bool {
-        self.kind == RowErrorKind::Operational
+    fn operational(reason: anyhow::Error) -> Self {
+        Self { code: None, reason }
     }
 }
 
@@ -266,18 +223,19 @@ impl RowError {
 /// retries stay the caller's), and a kernel error or colliding intent
 /// is that row's data speaking - everything else is infrastructure.
 fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
+    use envelopes::ProposeCode;
     use morpholog_postgres::PgError;
-    let kind = match &err {
-        PgError::SerializationFailure => RowErrorKind::Serialization,
-        PgError::Kernel(_) => RowErrorKind::Kernel,
-        PgError::DuplicateIntent => RowErrorKind::DuplicateIntent,
-        PgError::ActorAssertionUnauthorised { .. } => RowErrorKind::ActorAssertionUnauthorised,
-        _ => RowErrorKind::Operational,
+    let code = match &err {
+        PgError::SerializationFailure => Some(ProposeCode::SerializationFailure),
+        PgError::Kernel(_) => Some(ProposeCode::KernelError),
+        PgError::DuplicateIntent => Some(ProposeCode::DuplicateIntent),
+        PgError::ActorAssertionUnauthorised { .. } => Some(ProposeCode::ActorAssertionUnauthorised),
+        _ => None,
     };
-    RowError::new(
-        kind,
-        anyhow::Error::new(err).context("the proposal could not be decided"),
-    )
+    RowError {
+        code,
+        reason: anyhow::Error::new(err).context("the proposal could not be decided"),
+    }
 }
 
 /// Batch mode: one receipt per row, in row order, each row its own
@@ -327,22 +285,23 @@ async fn run_batch(
             }
             // Infrastructure failure aborts: the summary names how far
             // the batch got, and the exit code tells the truth.
-            Err(err) if err.is_operational() => {
+            Err(RowError { code: None, reason }) => {
                 eprintln!(
                     "batch aborted at row {row}: {committed} committed, \
                      {rejected} rejected, {errored} errors before the failure"
                 );
-                return Err(err
-                    .reason
-                    .context(format!("operational failure at row {row}")));
+                return Err(reason.context(format!("operational failure at row {row}")));
             }
             // A row-level failure is a receipt, never a process
             // failure: the rows after it still run.
-            Err(err) => {
+            Err(RowError {
+                code: Some(code),
+                reason,
+            }) => {
                 errored += 1;
                 serde_json::to_value(envelopes::ErrorReceipt::new(
-                    err.kind.code(),
-                    format!("{:#}", err.reason),
+                    code.into(),
+                    format!("{reason:#}"),
                     row as u64,
                 ))?
             }
@@ -365,7 +324,7 @@ async fn batch_row_outcome(
 ) -> Result<serde_json::Value, RowError> {
     let row: BatchRow = serde_json::from_str(line)
         .context("malformed batch row")
-        .map_err(|e| RowError::new(RowErrorKind::MalformedRow, e))?;
+        .map_err(|e| RowError::coded(envelopes::ProposeCode::InvalidRequest, e))?;
     propose_row_outcome(&args.file, args.explain_on_reject, compiled, pool, row).await
 }
 
@@ -383,7 +342,7 @@ pub(crate) async fn propose_row_outcome(
     row: BatchRow,
 ) -> Result<serde_json::Value, RowError> {
     let transformation = lookup_transformation(compiled, &row.transformation, file)
-        .map_err(|e| RowError::new(RowErrorKind::UnknownTransformation, e))?;
+        .map_err(|e| RowError::coded(envelopes::ProposeCode::UnknownTransformation, e))?;
     let (tagged, named);
     let codec_input = match (&row.args, &row.args_named) {
         (Some(t), None) => {
@@ -395,14 +354,14 @@ pub(crate) async fn propose_row_outcome(
             CliArgs::Named(&named)
         }
         _ => {
-            return Err(RowError::new(
-                RowErrorKind::MalformedRow,
+            return Err(RowError::coded(
+                envelopes::ProposeCode::InvalidRequest,
                 anyhow::anyhow!("a batch row carries exactly one of `args` and `args_named`"),
             ));
         }
     };
     let eval_args = decode_args(&compiled.validated(), transformation, file, codec_input)
-        .map_err(|e| RowError::new(RowErrorKind::BadArgs, e))?;
+        .map_err(|e| RowError::coded(envelopes::ProposeCode::InvalidArguments, e))?;
     let transition = Transition {
         transformation_name: transformation.name.clone(),
         args: eval_args,
@@ -437,68 +396,17 @@ pub(crate) async fn propose_row_outcome(
                 explanation,
             ))
             .context("serialising the receipt")
-            .map_err(|e| RowError::new(RowErrorKind::Operational, e));
+            .map_err(RowError::operational);
         }
         serde_json::to_value(&outcome)
             .context("serialising the receipt")
-            .map_err(|e| RowError::new(RowErrorKind::Operational, e))
+            .map_err(RowError::operational)
     } else {
         let outcome = propose_against_pg(pool, compiled, &Proposal::gateway(&transition))
             .await
             .map_err(classify_pg_error)?;
         serde_json::to_value(&outcome)
             .context("serialising the receipt")
-            .map_err(|e| RowError::new(RowErrorKind::Operational, e))
-    }
-}
-
-#[cfg(test)]
-mod code_tests {
-    use super::RowErrorKind;
-    use morpholog_cli::envelopes::ErrorCode;
-
-    /// Every row kind that becomes a receipt. The match is what keeps
-    /// the list honest: a new variant fails to compile until it is
-    /// placed on one side or the other.
-    fn receipt_kinds() -> Vec<RowErrorKind> {
-        use RowErrorKind::*;
-        let all = [
-            MalformedRow,
-            UnknownTransformation,
-            BadArgs,
-            Serialization,
-            Kernel,
-            DuplicateIntent,
-            ActorAssertionUnauthorised,
-            Operational,
-        ];
-        all.into_iter()
-            .filter(|k| match k {
-                MalformedRow
-                | UnknownTransformation
-                | BadArgs
-                | Serialization
-                | Kernel
-                | DuplicateIntent
-                | ActorAssertionUnauthorised => true,
-                Operational => false,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn the_published_propose_codes_are_exactly_what_a_row_can_earn() {
-        let mut earned: Vec<ErrorCode> = receipt_kinds()
-            .into_iter()
-            .map(RowErrorKind::code)
-            .collect();
-        earned.sort_by_key(|c| format!("{c:?}"));
-        earned.dedup();
-        let mut published: Vec<ErrorCode> = ErrorCode::PROPOSE.to_vec();
-        published.sort_by_key(|c| format!("{c:?}"));
-        assert_eq!(
-            earned, published,
-            "ErrorCode::PROPOSE must list exactly the codes a proposal row can fail with"
-        );
+            .map_err(RowError::operational)
     }
 }

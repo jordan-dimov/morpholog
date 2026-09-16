@@ -11,22 +11,30 @@ the source.
 - **Rust 1.95+** (edition 2024). Stable toolchain; `rustup default stable` suffices.
 - **PostgreSQL 18+**, system-wide on Ubuntu or equivalent. PG-only; portability is not a goal. The adapter uses SSI, JSONB, and generated columns.
 - **`cargo-audit`** for the dependency-vulnerability check: `cargo install cargo-audit`.
-- **`sqlx-cli`** (only when adding or changing a SQL query): the adapter's queries are compile-time-checked against the schema via a committed offline cache, and regenerating it uses the version-matched CLI: `cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls`. A normal build needs neither the CLI nor a database (see below).
+- **`sqlx-cli`** (only when adding or changing a SQL query): the adapter's queries are compile-time-checked against the schema via a committed offline cache, and regenerating it uses the version-matched CLI: `cargo install sqlx-cli --version 0.9.0 --no-default-features --features postgres,rustls`. A normal build needs neither the CLI nor a database (see below).
 - **Python 3** (optional): the precommit script runs the generated-client template tests, and (with `DATABASE_URL`) the worked embedder end to end; both are skipped with a note when `python3` is absent. CI pins the generated client's declared floor; any local Python 3 is a smoke test.
 
 No Docker. No additional system dependencies.
 
 ## Local setup
 
+The PostgreSQL-backed suites need a **disposable cluster**, not just a disposable database: they truncate whatever `DATABASE_URL` names on entry; several create and drop roles, which are cluster-global; some need the connecting role to be a superuser; and the checkpoint writer census asserts that nothing else in the cluster can write `morpholog.audit` - so a role a *neighbouring* Morpholog deployment granted membership in the cluster-global `morpholog_writer` reddens the census test, correctly, because it is a real privilege relationship. That happened here: a second project on the same machine, with its own database and its own roles, failed this repo's census test twice, and deleting its roles was the wrong remedy.
+
+So development gets a cluster of its own on a second port, and that is the only local setup this guide describes. On Ubuntu:
+
 ```bash
 git clone https://github.com/jordan-dimov/morpholog.git
 cd morpholog
-createdb morpholog_dev
-psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
-export DATABASE_URL=postgres:///morpholog_dev
+sudo pg_createcluster -p 55432 --start 18 morpholog_test
+sudo -u postgres createuser -p 55432 --superuser "$USER"
+createdb -p 55432 morpholog_dev
+psql -p 55432 morpholog_dev -f crates/morpholog-core/sql/schema.sql
+export DATABASE_URL='postgres:///morpholog_dev?port=55432'
 ```
 
-The schema applies the head state from `crates/morpholog-core/sql/schema.sql`. For an existing database, the migrations under `crates/morpholog-core/sql/migrations/` apply in numeric order. (An installed `morpholog` binary provisions the same schema with `morpholog init`; the `psql` path is right for a source checkout, where the binary you last installed may trail the schema at head.)
+The socket form keeps peer authentication, so no password is involved; `postgres://localhost:55432/...` would ask for one under the default `pg_hba.conf`. Real Morpholog deployments stay on `:5432`, untouched by any test. To dispose of the cluster: `sudo pg_dropcluster --stop 18 morpholog_test`.
+
+The schema applies the head state from `crates/morpholog-core/sql/schema.sql`. An existing database comes forward with `morpholog migrate` (`--check` to ask first), which carries the numbered migrations under `crates/morpholog-core/sql/migrations/` inside the binary. (An installed `morpholog` binary provisions the same schema with `morpholog init`; the `psql` path is right for a source checkout, where the binary you last installed may trail the schema at head.)
 
 Optional but recommended:
 
@@ -41,11 +49,13 @@ That puts the `morpholog` binary on `~/.cargo/bin/`. Refresh it after pulling ch
 Run [`./scripts/precommit.sh`](scripts/precommit.sh) before pushing. It runs the suites and checks CI gates on, plus `morpholog check` over every `.morph`; CI additionally runs a coverage job for visibility only, and verifies the declared Rust floor (precommit does the same when that toolchain is installed, and says so when it is not). If it passes locally, CI passes.
 
 ```bash
-./scripts/precommit.sh                                        # without PG tests
-DATABASE_URL=postgres:///morpholog_dev ./scripts/precommit.sh # full suite
+env -u DATABASE_URL ./scripts/precommit.sh   # the fast pass: everything but the PG-backed suites
+./scripts/precommit.sh                       # the full run, with DATABASE_URL exported as above
 ```
 
-The script bails on the first failure. Without `DATABASE_URL` it skips the PG-backed test suites with a note.
+Run them in that order. The fast pass takes a fraction of the time and catches most of what fails a full run (formatting, clippy, rustdoc, the sync suites); the full run is then paid once. A full run restarted for a formatting slip is ten minutes lost.
+
+The script bails on the first failure. Without `DATABASE_URL` it skips the PG-backed test suites with a note; with it set, it runs them against whatever the URL names, which is why the URL above points at the disposable cluster.
 
 The underlying commands (CI runs the same in `.github/workflows/ci.yml`):
 
@@ -55,8 +65,7 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
 cargo audit
 cargo test -p morpholog-core -p morpholog-examples -p morpholog-surface -p morpholog-test-support --all-targets --locked
-DATABASE_URL=postgres:///morpholog_dev \
-  cargo test -p morpholog-cli -p morpholog-postgres -p morpholog-outbox -p morpholog-bench --all-targets --locked -- --test-threads=1
+cargo test -p morpholog-cli -p morpholog-postgres -p morpholog-outbox -p morpholog-bench --all-targets --locked -- --test-threads=1   # with DATABASE_URL exported
 # when python3 is available:
 python3 -m unittest discover crates/morpholog-cli/templates/python_client/tests
 ```
@@ -67,10 +76,10 @@ The PG-backed test suites share one schema and truncate it between tests; they m
 
 The persistence adapter's queries are `sqlx::query!` / `query_as!` macros, verified against the real schema **at build time**. A query that drifts from the schema is a compile error, not a runtime surprise. Every cargo command in this workspace defaults to `SQLX_OFFLINE=true` (via [`.cargo/config.toml`](.cargo/config.toml)), so a plain `cargo build` - and precommit, and CI - reads the committed cache in `.sqlx/` and needs no database.
 
-When you add or change a query, regenerate the cache against a disposable database and commit the result:
+When you add or change a query, regenerate the cache with `DATABASE_URL` exported as above and commit the result:
 
 ```bash
-DATABASE_URL=postgres:///morpholog_sqlx_prep ./scripts/sqlx-prepare.sh
+./scripts/sqlx-prepare.sh   # against the same disposable database; it drops and recreates the schemas
 git add .sqlx
 ```
 
@@ -112,7 +121,7 @@ Comments and docs earn their place by the same subtraction test as code. This is
 - **rustdoc is the exception** - precise and complete on every public item, since it is the API contract. The WHY-not-WHAT bar is for inline `//` comments, not `///` docs.
 - **One concept, one home.** Each doc has a single role (see [Reference](#reference)); explain a thing where it belongs and link to it rather than restating it - duplicated prose drifts out of sync.
 - **Audience prose evokes the why** (README, `docs/`, example READMEs): lead with the question Morpholog answers, not the feature list.
-- **History compresses as it ages.** `design-history.md` entries distil to Forced-by/Landed stubs once the work settles; git holds the per-PR detail.
+- **History compresses as it ages.** `design-history.md` entries distil to Forced-by/Landed stubs once the work settles; git holds the per-PR detail. The cadence is the release: at each one, every entry that landed before the previous release and still runs past roughly 350 words is cut to its stub - keep the decisions and the refutations (what was tried and why it was wrong), drop the blow-by-blow.
 
 ## Adding code
 
@@ -123,9 +132,9 @@ Comments and docs earn their place by the same subtraction test as code. This is
 
 ## Adding a worked example
 
-A worked example is **its `.morph`**. Put the canonical `.morph` source and the business framing (`README.md`) in `examples/NN_<name>/`, then add one line - `example_module!(<name>);` - to `crates/morpholog-examples/src/lib.rs`.
+A worked example is **its `.morph`**. Put the canonical `.morph` source and the business framing (`README.md`) in `examples/NN_<name>/`, add one line - `example_module!(<name>);` - to `crates/morpholog-examples/src/lib.rs`, a row to the capability index in [`examples/README.md`](examples/README.md), and an entry to the main README's domain list.
 
-That one line is the only manual step, and it cannot be silently forgotten: the generated `all_programs()` registry references the module, so a missing `example_module!` line is a **compile error**, not a quietly skipped example (the failure mode the old hand-maintained list had). `crates/morpholog-examples/build.rs` reads the `.morph`, extracts its `transformation` / `invariant` / `derived` declarations, and generates the accessor module (`program`, `all_invariants`, one getter per declaration) that the tests use as fixtures; the cross-example property tests pick the example up through that registry. There is no hand-written accessor module and no IR by hand. If a test needs a domain-symbol constant the `.morph` cannot yield (a role name, a list name) or an accessor for a *generated* discipline invariant, add it as a small supplement in that `example_module!` call's `{ ... }` body.
+None of those can be silently forgotten. The generated `all_programs()` registry references the module, so a missing `example_module!` line is a **compile error**, not a quietly skipped example (the failure mode the old hand-maintained list had). The `capability_index` test refuses an example missing from either README, and checks that each index row's construct actually appears in the example it points at - an embedder once spent a week designing around a limitation that did not exist because the example demonstrating it was named after a different business. `crates/morpholog-examples/build.rs` reads the `.morph`, extracts its `transformation` / `invariant` / `derived` declarations, and generates the accessor module (`program`, `all_invariants`, one getter per declaration) that the tests use as fixtures; the cross-example property tests pick the example up through that registry. There is no hand-written accessor module and no IR by hand. If a test needs a domain-symbol constant the `.morph` cannot yield (a role name, a list name) or an accessor for a *generated* discipline invariant, add it as a small supplement in that `example_module!` call's `{ ... }` body.
 
 The `.morph` file is the **single source of truth**, not an illustration: the runnable program *is* the parsed teaching source, so the two cannot drift - there is no separate hand-built IR to keep in sync. A pedagogical simplification belongs in the `README` or in `.morph` comments, never in a divergent model. (The round-trip test in `morpholog-surface` checks `format(IR) -> parse == IR` over generated source, and the CLI integration test verifies every example parses and validates.)
 
@@ -135,10 +144,13 @@ The `README.md` is the example's **browsable face** - what renders when someone 
 
 ## Reference
 
+- [`docs/developer-intro.md`](docs/developer-intro.md) - the guided first hour: a programme, a database, a proposal, a refusal.
+- [`docs/install.md`](docs/install.md) - the prebuilt-binary path and how a deployment upgrades.
 - [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - **read first** when reasoning about whether a direction fits the project.
 - [`docs/roadmap.md`](docs/roadmap.md) - what's imminent, deferred, and out of scope.
 - [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - what the kernel means.
 - [`docs/refactoring-playbook.md`](docs/refactoring-playbook.md) - how to make a codebase-wide type change safely.
+- [`docs/benchmarking.md`](docs/benchmarking.md) - the benchmark suite's discipline: what may be made fast, and what may not be made easier.
 - [`docs/design-history.md`](docs/design-history.md) - for each significant IR decision, the worked example that forced it.
 - [`docs/embedder-integration.md`](docs/embedder-integration.md) - the pinned public contract for non-Rust integrations, including the generated Python client.
 - [`docs/prior-art.md`](docs/prior-art.md) - the influences behind the roadmap directions, with the calibrations that survived review.
