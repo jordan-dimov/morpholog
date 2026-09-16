@@ -15,7 +15,7 @@ from _support import GOLDEN_DIR, add_client_to_path, recording_argv
 add_client_to_path()
 
 from python_client import envelopes
-from python_client.adapter import Morpholog, MorphologError
+from python_client.adapter import Morpholog, MorphologError, MorphologOutcomeUnknown
 
 STUB = """#!/usr/bin/env python3
 import os, sys
@@ -26,6 +26,15 @@ if mode == "rejected_exit_1":
 if mode == "operational_failure":
     print("error: failed to connect to PostgreSQL", file=sys.stderr)
     sys.exit(1)
+if mode == "not_committed_exit_1":
+    print("Error: the proposal was not committed: check constraint", file=sys.stderr)
+    sys.exit(1)
+if mode == "commit_outcome_unknown_exit_3":
+    print("Error: the commit outcome is unknown - read the record", file=sys.stderr)
+    sys.exit(3)
+if mode == "usage_error_exit_2":
+    print("error: unexpected argument '--bogus'", file=sys.stderr)
+    sys.exit(2)
 if mode == "batch_ok":
     print('{"row": 1, "status": "rejected", "reason": "closed period"}')
     print('{"row": 2, "status": "error", "code": "invalid_request", "error": "malformed batch row"}')
@@ -316,6 +325,27 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertEqual(argv[argv.index("--witness") + 1], "rfc3161:http://a.example/tsr")
             with self.assertRaises(ValueError):
                 self.client.audit_witness(3, [])
+
+    def test_the_one_shot_exit_codes_say_what_the_runtime_knows(self):
+        # 1 with nothing on stdout is an ordinary operational failure -
+        # here a database refusal before anything was recorded; 3 is the
+        # one exit that means "read the record"; 2 is a usage error and
+        # must never be mistaken for an unknown commit.
+        self._mode("not_committed_exit_1")
+        with self.assertRaises(MorphologError) as err:
+            self.client.propose("post", "alex", {})
+        self.assertNotIsInstance(err.exception, MorphologOutcomeUnknown)
+        self.assertIn("not committed", str(err.exception))
+
+        self._mode("commit_outcome_unknown_exit_3")
+        with self.assertRaises(MorphologOutcomeUnknown) as unknown:
+            self.client.propose("post", "alex", {})
+        self.assertIn("read the record", str(unknown.exception))
+
+        self._mode("usage_error_exit_2")
+        with self.assertRaises(MorphologError) as usage:
+            self.client.propose("post", "alex", {})
+        self.assertNotIsInstance(usage.exception, MorphologOutcomeUnknown)
 
     def test_verify_flags_land_on_argv_exactly_when_supplied(self):
         # The verdict-affecting verify flags: each appears exactly when

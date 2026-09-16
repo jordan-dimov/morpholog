@@ -146,7 +146,7 @@ A kernel error under `--trace` (a transformation that raised `EvalError` mid-exe
 
 The traced and untraced envelopes are intentionally asymmetric; the embedder should decide at request time which it wants, not auto-discriminate.
 
-Exit codes: `0` on a committed outcome; `1` on a rejected outcome or any operational failure (parse, validation, unknown transformation, decoder error, database error).
+Exit codes: `0` on a committed outcome; `1` on a rejected outcome or any operational failure (parse, validation, unknown transformation, decoder error, a database error before anything was recorded - stderr says "the proposal was not committed"); `2` on a command-line usage error; `3` on the one failure a caller must treat differently - the commit outcome is unknown, because the database connection failed while COMMIT was in flight without a server verdict. Nothing is on stdout at 1, 2 or 3; a caller tells "nothing changed" from "read the record before re-submitting" by the exit code, never by parsing prose. The generated client raises `MorphologOutcomeUnknown` on 3.
 
 A rejected envelope carries `rule`: the refused rule's stable identifier - an invariant's name, or a named gate's. Hold that, not `reason`. The reason string is prose for a human and includes rendered expression text, so anything asserting on it breaks the moment a rule is reworded; `rule` is the author's own name and does not move. The key is **absent** for a gate with no name, never filled with the expression, so a value read from `rule` is always safe to compare.
 
@@ -287,7 +287,8 @@ What this document promises:
 - Keys as claims: a signing key is authorised by an admitted `AuditSigningKey(key_id, purpose, public_key)` claim - the operator declares the predicate (recognised by that name and its exact `Subject` triple) and admits/retracts it through its own transformation under its own authority gate (key rotation is supersession, revocation is retraction; both land in the audit log and travel in evidence packs). `checkpoint --signing-key` refuses to sign with a key not authorised as of the prefix, so an unauthorised or misshapen-declaration key fails at signing time rather than passing then failing verify. Verification resolves the authorised key **as of the checkpoint's own prefix**, live and offline alike, so revocation is non-retroactive: a key valid when a checkpoint was signed stays valid for that checkpoint. A genuine signature by a key the ledger did not authorise as of that prefix is the `unauthorized_key` verdict; a supplied signed anchor's own signatures are verified the same way. The root of trust stays honest: the first authorisation is trusted the way the schema is - signing makes key authority governed, auditable, and revocable, it does not conjure trust from nothing.
 - Compliance mode: `audit verify --require-signatures` / `audit verify-pack --require-signatures` fails an otherwise-intact tree that carries any unsigned checkpoint (`signature_required`). Signing is opt-in by default; this is the verifier's policy, applied over the intrinsic verdict. Two refinements of that policy: `--require-signatures-from <tree_size>` asks only of checkpoints at or after that size, so honest history from before signing began passes; and `--require-signing-key <file>` (the `ed25519-pub:<hex>` file `audit keygen` wrote) fails a covered checkpoint that carries no signature by that key (`signing_key_required`). The pin is an intersection with the log's own key authority, never a substitute - an intact tree has already proven every signature genuine and authorised, and the pin only narrows which authorised signer you accept. It therefore needs the whole prefix: a window or selective pack cannot establish authority, and `verify-pack` refuses the pin on an intact one rather than weakening it to a cryptographic match (a broken pack reports as broken first, whatever the policy). A signature on the anchor you hold counts for its checkpoint, exactly as it does intrinsically. Sizes, not times, are the coordinate throughout.
 - Witnessed checkpoints: `audit checkpoint --witness rfc3161:<url>` (repeatable; or `audit witness --tree-size N --witness ...` for a head recorded earlier) has a public RFC 3161 timestamp authority countersign the new tree head, and stores the authority's exact response on the checkpoint as a `witness` (`scheme`, `proof` base64, `submitted_to`) - nothing derived from it is stored, so what a witness proves is always read from the proof itself. The bytes witnessed are the head's own typed, length-delimited **witness payload** (its own frozen type, distinct from the signing payload). A signature says the operator's key vouched for a head; a witness says the head **existed no later than the authority's time** - it never says anything about business completeness, and never subtracts from the tree's own verdict. Submission happens after the commit, outside any transaction: every authority named is attempted and each response stored as it arrives, the checkpoint is recorded and printed whatever they do, and any failed submission exits one naming each failed authority and the one command that retries exactly those. A response that is not over this head is refused before storage. Verification is the verifier's, with its own trust: `audit verify --trusted-tsa-file <cas.pem>` judges every stored witness in the chain (the `witnesses` field of `verify_report`, present whenever any checkpoint carries one) and `audit verify-pack --witnesses` (or `--trusted-tsa-file`, which implies it) wraps the pack verdict as `pack_verification_report` (`{verdict, witnesses}`; without either flag the output is the bare verdict it always was). Each `witness_verdict` is `verified` (a certification path from the token's signer to an anchor you supplied validates **at the attested time** - names chain, signatures verify, every certificate was valid then, each issuer is an authority whose constraints admit the path; the signature names its certificate, is the token's only one, and that certificate carries the critical timestamping usage alone; revocation and policies are not checked, so choose anchors accordingly), `untrusted` (sound, but no such path to an anchor you named; `detail` says where it failed), `unverified` (sound, no anchors supplied), `unsupported` (this build cannot check its signature primitive - never reported verified, never a failure), or `invalid` (it does not vouch for this head); `earliest_attested_at` rests on verified witnesses only. Only `invalid` fails the command. Packs of every kind carry the witnesses of the checkpoints they already carry.
-- Exit-code semantics for `propose`, `explain`, `audit verify`, and `audit verify-pack` (a divergence, tamper, malformed pack, or invalid witness is a decided verdict on stdout at exit one, not an operational failure).
+- Exit-code semantics for `propose`, `explain`, `audit verify`, and `audit verify-pack` (a divergence, tamper, malformed pack, or invalid witness is a decided verdict on stdout at exit one, not an operational failure; `propose` exits 3, and only 3, when the commit outcome is unknown).
+- The proposal-row error codes `not_committed` and `commit_outcome_unknown` on the batch and session receipts, and the rule that the rows after either still run.
 
 What is deliberately left open, pending the worked example that forces the shape:
 
@@ -425,10 +426,15 @@ single proposals. A summary line lands on stderr.
 A single `propose` exits 1 on a rejection; a batch exits 0 whenever every
 row was processed, because partial admission is an import's normal
 outcome - the receipts are the result, not the exit code. Non-zero is
-reserved for operational failure: unreadable input, a programme that
-fails validation, a broken connection. A serialization conflict
-(SQLSTATE 40001) surfaces in that row's error receipt; retries stay
-the caller's, per the runtime doctrine.
+reserved for what cannot be a receipt: unreadable input, a programme
+that fails validation, a broken stream. A serialization conflict
+(SQLSTATE 40001) surfaces in that row's error receipt, and so does the
+database refusing or failing a row before anything was recorded
+(`not_committed`: nothing changed, re-submit once the cause is fixed)
+and a row whose COMMIT failed without a server verdict
+(`commit_outcome_unknown`: read the record before re-submitting) -
+each proposal is its own transaction, so the rows after either still
+run. Retries stay the caller's, per the runtime doctrine.
 
 ## The resident session (`morpholog session`)
 
@@ -496,14 +502,18 @@ deferrable snapshot - neither fits a lockstep wire.
 
 **Per-request failure is a coded receipt; operational failure aborts.**
 A malformed line, an unknown operation or transformation, undecodable
-arguments, a serialization conflict, a kernel error, or a colliding
-intent answers with `session_error_receipt`: `status: "error"`, the
-`row`, the prose, and a stable `code` - because a caller deciding
-whether a retry is safe must never parse prose.
-`serialization_failure` is the one code that is safe to re-submit on;
-the session stays healthy after every coded receipt. An operational
-failure (a dead connection, a schema mismatch) aborts the process
-with a non-zero exit and no receipt.
+arguments, a serialization conflict, a kernel error, a colliding
+intent, or a database failure on a proposal answers with
+`session_error_receipt`: `status: "error"`, the `row`, the prose, and
+a stable `code` - because a caller deciding whether a retry is safe
+must never parse prose. `serialization_failure` is safe to re-submit
+on as is; `not_committed` (the database refused or failed before
+anything was recorded - nothing changed) once its cause is fixed;
+`commit_outcome_unknown` (COMMIT failed without a server verdict)
+only after reading the record. The session stays healthy after every
+coded receipt. What aborts the process with a non-zero exit and no
+receipt is a failure that cannot be a receipt: a broken stream, or an
+operational failure on a read.
 
 **A lost response is an unknown outcome.** Once a propose request has
 been written, a session that dies, hangs, or answers garbage leaves
@@ -513,8 +523,11 @@ session (no later call can consume a late line) and raises
 `MorphologOutcomeUnknown`, distinct from both a coded refusal
 (`MorphologRequestError`) and an ordinary operational error: blind
 re-submission after an unknown outcome can duplicate a business
-action, so read the record first. Retries stay the caller's in every
-case, per the runtime doctrine.
+action, so read the record first. A `commit_outcome_unknown` receipt
+raises the same error for the same reason, but does NOT poison: the
+response arrived, so the wire is in step, and what is unknown is the
+database's side. Retries stay the caller's in every case, per the
+runtime doctrine.
 
 **Attestation is the batch's, documented.** Every commit still
 records `authenticated_by` from its own connection's `session_user`

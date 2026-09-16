@@ -784,6 +784,18 @@ fn composite_envelopes_serialize_as_pinned() {
             3,
         )),
     );
+    // A row the database refused before anything was recorded: a
+    // receipt, the rows after it still run.
+    assert_golden(
+        "batch_error_receipt_not_committed.json",
+        &to_value(&morpholog_cli::envelopes::ErrorReceipt::new(
+            morpholog_cli::envelopes::ErrorCode::NotCommitted,
+            "the proposal was not committed: error returned from database: new row for \
+             relation \"audit\" violates check constraint \"probe\""
+                .to_string(),
+            2,
+        )),
+    );
 }
 
 // A real coverage report over a programme with a DECLARED discipline,
@@ -882,6 +894,18 @@ fn report_envelopes_serialize_as_pinned() {
                 ErrorCode::SerializationFailure,
                 "the proposal could not be decided: restart the transaction".to_string(),
                 17,
+            )),
+        );
+        // COMMIT failed without a server verdict: the one receipt that
+        // means "read the record before re-submitting".
+        assert_golden(
+            "session_error_receipt_commit_outcome_unknown.json",
+            &to_value(&ErrorReceipt::new(
+                ErrorCode::CommitOutcomeUnknown,
+                "the commit outcome is unknown - read the record before re-submitting: \
+                 the commit outcome is unknown: connection reset by peer"
+                    .to_string(),
+                18,
             )),
         );
     }
@@ -1814,6 +1838,11 @@ fn every_golden_validates_against_its_defs_entry() {
         ("batch_committed_receipt.json", "batch_receipt"),
         ("batch_rejected_receipt.json", "batch_receipt"),
         ("batch_error_receipt.json", "batch_receipt"),
+        ("batch_error_receipt_not_committed.json", "batch_receipt"),
+        (
+            "session_error_receipt_commit_outcome_unknown.json",
+            "session_error_receipt",
+        ),
         ("session_ready.json", "session_ready"),
         ("session_error_receipt.json", "session_error_receipt"),
         ("explanation_admissible.json", "explanation"),

@@ -120,6 +120,10 @@ for request in sys.stdin:
         say(json.dumps({"error": "prose only", "row": n, "status": "error"}))
     elif mode == "wrong_row_error":
         say(json.dumps({"code": "kernel_error", "error": "x", "row": 99, "status": "error"}))
+    elif mode == "commit_outcome_unknown_receipt":
+        say(json.dumps({"code": "commit_outcome_unknown", "error": "the commit outcome is unknown - read the record before re-submitting: connection reset by peer", "row": n, "status": "error"}))
+    elif mode == "not_committed_receipt":
+        say(json.dumps({"code": "not_committed", "error": "the proposal was not committed: check constraint", "row": n, "status": "error"}))
     elif mode == "bogus_rows":
         say(json.dumps([{"bogus": True}]))
     elif mode == "bad_tag_in_receipt":
@@ -264,6 +268,27 @@ class TranscriptConversation(SessionHarness):
     def test_a_request_error_is_not_a_poisoned_session(self):
         with self.session() as s:
             s.propose("open_account", "teller", {"account": "acct_1", "opened_on": "2026-01-15"})
+            self.assertIsNone(s._poisoned)
+
+    def test_the_runtimes_own_unknown_verdict_is_outcome_unknown_but_not_poison(self):
+        # The receipt ARRIVED, so lockstep holds and the session stays
+        # usable; what is unknown is the database's side. A LOST
+        # response poisons (the tests below); this must not.
+        with self.session("commit_outcome_unknown_receipt") as s:
+            with self.assertRaises(MorphologOutcomeUnknown) as unknown:
+                s.propose("open_account", "teller", {"account": "a", "opened_on": "2026-01-15"})
+            self.assertIn("read the record", str(unknown.exception))
+            self.assertIsNone(s._poisoned)
+            with self.assertRaises(MorphologOutcomeUnknown):
+                s.propose("open_account", "teller", {"account": "b", "opened_on": "2026-01-15"})
+            self.assertIsNone(s._poisoned, "still answering, still in step")
+
+    def test_a_not_committed_receipt_is_a_coded_refusal(self):
+        with self.session("not_committed_receipt") as s:
+            with self.assertRaises(MorphologRequestError) as refused:
+                s.propose("open_account", "teller", {"account": "a", "opened_on": "2026-01-15"})
+            self.assertEqual(refused.exception.code, "not_committed")
+            self.assertNotIsInstance(refused.exception, MorphologOutcomeUnknown)
             self.assertIsNone(s._poisoned)
 
 

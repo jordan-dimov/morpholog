@@ -9,11 +9,15 @@
 //! line number); the reads answer with the pinned claim arrays; a
 //! per-request failure answers with a session error receipt carrying
 //! a stable `code`, because a caller deciding whether a retry is safe
-//! must never parse prose. Operational failure (a dead connection, a
-//! schema mismatch) aborts the process with a non-zero exit - to a
-//! caller with a request in flight that means the outcome is UNKNOWN,
-//! which the generated client surfaces as its outcome-unknown error,
-//! never as a silent retry.
+//! must never parse prose. A proposal's database failure is such a
+//! receipt too: `not_committed` when the adapter knows nothing was
+//! recorded, `commit_outcome_unknown` when COMMIT failed without a
+//! server verdict - and the session stays in step either way. What
+//! aborts the process with a non-zero exit is a failure that cannot be
+//! a receipt: a broken stream, or an operational failure on a read.
+//! To a caller with a request in flight an abort means the outcome is
+//! UNKNOWN, which the generated client surfaces as its outcome-unknown
+//! error, never as a silent retry.
 //!
 //! The programme is pinned at start: the ready line's `model_hash` is
 //! the staleness token, and editing the file never changes a running

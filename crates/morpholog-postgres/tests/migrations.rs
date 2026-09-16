@@ -251,8 +251,14 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
 
     let err = outcome.expect_err("a refusal against a stale schema must fail operationally");
     let rendered = err.to_string();
+    // The refusal was decided; only its record failed - so the error
+    // carries that provenance, with the stale-schema diagnosis inside.
     assert!(
-        matches!(err, morpholog_postgres::PgError::SchemaBehind { .. }),
+        matches!(
+            &err,
+            morpholog_postgres::PgError::RejectionLogFailure(inner)
+                if matches!(**inner, morpholog_postgres::PgError::SchemaBehind { .. })
+        ),
         "the refusal path must diagnose a stale schema, got {err:?}"
     );
     // The remedy must be something the reader can run. It used to name a

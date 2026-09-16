@@ -151,10 +151,17 @@ macro_rules! error_codes {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ProposeCode {
     ActorAssertionUnauthorised,
+    /// The database connection failed while COMMIT was in flight, so
+    /// the runtime cannot prove whether the proposal took effect. Read
+    /// the record before re-submitting.
+    CommitOutcomeUnknown,
     DuplicateIntent,
     InvalidArguments,
     InvalidRequest,
     KernelError,
+    /// The database refused or failed before the proposal was durably
+    /// recorded: nothing changed. Re-submit once the cause is fixed.
+    NotCommitted,
     SerializationFailure,
     UnknownTransformation,
 }
@@ -162,10 +169,12 @@ pub enum ProposeCode {
 impl ProposeCode {
     pub const ALL: &'static [ProposeCode] = &[
         ProposeCode::ActorAssertionUnauthorised,
+        ProposeCode::CommitOutcomeUnknown,
         ProposeCode::DuplicateIntent,
         ProposeCode::InvalidArguments,
         ProposeCode::InvalidRequest,
         ProposeCode::KernelError,
+        ProposeCode::NotCommitted,
         ProposeCode::SerializationFailure,
         ProposeCode::UnknownTransformation,
     ];
@@ -175,10 +184,12 @@ impl From<ProposeCode> for ErrorCode {
     fn from(code: ProposeCode) -> Self {
         match code {
             ProposeCode::ActorAssertionUnauthorised => ErrorCode::ActorAssertionUnauthorised,
+            ProposeCode::CommitOutcomeUnknown => ErrorCode::CommitOutcomeUnknown,
             ProposeCode::DuplicateIntent => ErrorCode::DuplicateIntent,
             ProposeCode::InvalidArguments => ErrorCode::InvalidArguments,
             ProposeCode::InvalidRequest => ErrorCode::InvalidRequest,
             ProposeCode::KernelError => ErrorCode::KernelError,
+            ProposeCode::NotCommitted => ErrorCode::NotCommitted,
             ProposeCode::SerializationFailure => ErrorCode::SerializationFailure,
             ProposeCode::UnknownTransformation => ErrorCode::UnknownTransformation,
         }
@@ -187,10 +198,12 @@ impl From<ProposeCode> for ErrorCode {
 
 error_codes!(
     ActorAssertionUnauthorised,
+    CommitOutcomeUnknown,
     DuplicateIntent,
     InvalidArguments,
     InvalidRequest,
     KernelError,
+    NotCommitted,
     SerializationFailure,
     UnknownOperation,
     UnknownTransformation,

@@ -3775,3 +3775,138 @@ async fn a_public_authority_witnesses_a_fresh_head_end_to_end() {
         "{stdout}"
     );
 }
+
+/// A ledger posting as a batch or session row, by entry id.
+fn posting_row(op: Option<&str>, entry_id: &str) -> String {
+    let mut row = serde_json::json!({
+        "transformation": "post_simple_entry",
+        "actor": "alex",
+        "args": serde_json::from_str::<Value>(&ledger_args_json(entry_id, "2026-04-15", "q1_2026", "100")).unwrap(),
+    });
+    if let Some(op) = op {
+        row["op"] = Value::String(op.to_string());
+    }
+    row.to_string()
+}
+
+/// Attacker capability: none. The database refuses one row's delta
+/// write (a selective CHECK on the audit table); the runtime must say
+/// on every surface that nothing was committed, and carry on with the
+/// rows after it under the same constraint.
+#[tokio::test(flavor = "current_thread")]
+async fn a_refused_delta_write_is_a_known_non_commit_on_every_surface() {
+    reset_db().await;
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    sqlx::raw_sql(
+        "ALTER TABLE morpholog.audit DROP CONSTRAINT IF EXISTS probe;
+         ALTER TABLE morpholog.audit ADD CONSTRAINT probe
+             CHECK (arguments::text NOT LIKE '%poison%')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Everything runs first and the constraint comes off before any
+    // assertion can bail out: the suite shares this database.
+    let one_shot = run_cli(&[
+        "propose",
+        &ledger_morph(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args",
+        &ledger_args_json("poison_1", "2026-04-15", "q1_2026", "100"),
+    ]);
+    let batch_input = format!(
+        "{}\n{}\n",
+        posting_row(None, "poison_2"),
+        posting_row(None, "fine_2")
+    );
+    let batch = {
+        let mut child = Command::new(common::bin())
+            .args([
+                "propose",
+                &ledger_morph(),
+                "--batch",
+                "-",
+                "--database-url",
+                &database_url(),
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(child.stdin.as_mut().unwrap(), batch_input.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let session = {
+        let mut child = Command::new(common::bin())
+            .args([
+                "session",
+                &ledger_morph(),
+                "--database-url",
+                &database_url(),
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let input = format!(
+            "{}\n{}\n{{\"op\":\"claims\"}}\n",
+            posting_row(Some("propose"), "poison_3"),
+            posting_row(Some("propose"), "fine_3")
+        );
+        std::io::Write::write_all(child.stdin.as_mut().unwrap(), input.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    };
+    sqlx::raw_sql("ALTER TABLE morpholog.audit DROP CONSTRAINT probe")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // One-shot: nothing on stdout, exit 1 (not 3), the prose says so.
+    let (status, stdout, stderr) = one_shot;
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert!(stdout.trim().is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("the proposal was not committed"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("outcome is unknown"), "{stderr}");
+
+    // Batch: a receipt for the refused row, the next row commits, exit 0.
+    assert!(
+        batch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&batch.stderr)
+    );
+    let receipts: Vec<Value> = String::from_utf8(batch.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(receipts.len(), 2, "{receipts:?}");
+    assert_eq!(receipts[0]["status"], "error");
+    assert_eq!(receipts[0]["code"], "not_committed", "{}", receipts[0]);
+    assert_eq!(receipts[0]["row"], 1);
+    assert_eq!(receipts[1]["status"], "committed", "{}", receipts[1]);
+
+    // Session: the same receipt, then a commit, then a read - in step.
+    assert!(
+        session.status.success(),
+        "{}",
+        String::from_utf8_lossy(&session.stderr)
+    );
+    let lines: Vec<Value> = String::from_utf8(session.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 4, "ready plus three answers: {lines:?}");
+    assert_eq!(lines[1]["code"], "not_committed", "{}", lines[1]);
+    assert_eq!(lines[1]["row"], 1);
+    assert_eq!(lines[2]["status"], "committed", "{}", lines[2]);
+    assert!(lines[3].is_array(), "the read still answers: {}", lines[3]);
+}

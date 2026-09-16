@@ -44,9 +44,24 @@ def _redact_argv(args: list[str]) -> str:
     return " ".join(parts)
 
 
+#: The one-shot ``propose`` exit for a commit whose outcome the runtime
+#: could not prove. Not 2, which is a command-line usage error.
+EXIT_COMMIT_OUTCOME_UNKNOWN = 3
+
+
 class MorphologError(RuntimeError):
     """An operational failure from the CLI - distinct from a lawful
     business rejection, which is a decided outcome on stdout."""
+
+
+class MorphologOutcomeUnknown(MorphologError):
+    """A proposal was submitted and its commit outcome cannot be proven.
+    Either no trustworthy response arrived (a session died, hung, or
+    answered garbage after the request was written), or the runtime
+    itself reported ``commit_outcome_unknown``: the database connection
+    failed while COMMIT was in flight, after the server may already have
+    made it durable. Re-submitting blindly can duplicate a business
+    action - read the record first."""
 
 
 class Morpholog:
@@ -208,7 +223,11 @@ class Morpholog:
     ) -> envelopes.Committed | envelopes.Rejected:
         """Propose a change by transformation name: it commits only if
         every rule holds; a refusal is a lawful outcome, returned as
-        ``Rejected``."""
+        ``Rejected``. A database failure before anything was recorded is
+        an operational ``MorphologError`` (nothing changed); a commit
+        whose outcome the runtime could not prove raises
+        ``MorphologOutcomeUnknown`` - read the record before
+        re-submitting."""
         args = [
             "propose", self.file, transformation,
             "--actor", actor,
@@ -217,7 +236,20 @@ class Morpholog:
         ]
         if explain_on_reject:
             args.append("--explain-on-reject")
-        return envelopes.parse_run_outcome(self._json(*args))
+        # The exit code is checked before the empty-stdout rule: an
+        # unknown commit prints nothing on stdout too, and must never
+        # read as an ordinary operational failure.
+        proc = self._run(args, timeout=self.timeout)
+        if proc.returncode == EXIT_COMMIT_OUTCOME_UNKNOWN:
+            raise MorphologOutcomeUnknown(
+                "the commit outcome is unknown - read the record before "
+                f"re-submitting:\n{self._redact_stderr(proc.stderr)}"
+            )
+        if not proc.stdout.strip():
+            raise MorphologError(
+                f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}"
+            )
+        return envelopes.parse_run_outcome(json.loads(proc.stdout))
 
     def submit(
         self, request: object, actor: str, explain_on_reject: bool = False

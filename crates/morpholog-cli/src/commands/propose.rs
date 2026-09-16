@@ -18,8 +18,8 @@ use morpholog_postgres::{
 use crate::ProposeArgs;
 use crate::commands::args::{CliArgs, decode_args};
 use crate::commands::{
-    AlreadyReported, ParsedSource, compile_or_report, connect, lookup_transformation,
-    parse_or_report, print_json,
+    AlreadyReported, CommitOutcomeUnknown, ParsedSource, compile_or_report, connect,
+    lookup_transformation, parse_or_report, print_json,
 };
 use morpholog_cli::envelopes;
 
@@ -81,7 +81,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         let traced =
             propose_against_pg_with_trace(&pool, &compiled, &Proposal::gateway(&transition))
                 .await
-                .context("the proposal could not be decided")?;
+                .map_err(one_shot_failure)?;
         match traced {
             PgTracedOutcome::Outcome { outcome, trace } => {
                 print_json(&envelopes::Traced {
@@ -115,7 +115,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             &Proposal::gateway(&transition),
         )
         .await
-        .context("the proposal could not be decided")?;
+        .map_err(one_shot_failure)?;
         match (&outcome, rejection_state) {
             (
                 PgProposalOutcome::Rejected {
@@ -139,7 +139,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     } else {
         let outcome = propose_against_pg(&pool, &compiled, &Proposal::gateway(&transition))
             .await
-            .context("the proposal could not be decided")?;
+            .map_err(one_shot_failure)?;
         print_json(&outcome)?;
         if let PgProposalOutcome::Rejected { reason, .. } = &outcome {
             return report_rejection(reason, &parsed);
@@ -218,23 +218,79 @@ impl RowError {
     }
 }
 
-/// Classify a proposal-path error. `SerializationFailure` is the
-/// documented per-row outcome (the caller re-submits that row;
-/// retries stay the caller's), and a kernel error or colliding intent
-/// is that row's data speaking - everything else is infrastructure.
+/// A one-shot proposal's adapter failure, worded for what the adapter
+/// knows: every error but one means the proposal was not committed;
+/// the one is a commit whose outcome could not be proven, which exits
+/// on its own code so a caller need not parse this prose.
+fn one_shot_failure(err: morpholog_postgres::PgError) -> anyhow::Error {
+    use morpholog_postgres::PgError;
+    match err {
+        PgError::CommitOutcomeUnknown(inner) => CommitOutcomeUnknown(inner.to_string()).into(),
+        PgError::RejectionLogFailure(_) => anyhow::Error::new(err),
+        other => anyhow::Error::new(other).context("the proposal was not committed"),
+    }
+}
+
+/// Classify a proposal-path error into its receipt code. Exhaustive on
+/// purpose: a new adapter error must be placed here - safe to
+/// re-submit, must inspect first, or operational - before it compiles.
+/// `SerializationFailure` is the documented per-row outcome (the caller
+/// re-submits that row; retries stay the caller's); a kernel error or
+/// colliding intent is that row's data speaking; every other adapter
+/// error on this path is a known non-commit, except the commit whose
+/// outcome the adapter could not prove, and a decided rejection whose
+/// record could not be written - which is operational, because the
+/// verdict was reached and a pre-decision code would misdescribe it.
 fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
     use envelopes::ProposeCode;
     use morpholog_postgres::PgError;
-    let code = match &err {
-        PgError::SerializationFailure => Some(ProposeCode::SerializationFailure),
-        PgError::Kernel(_) => Some(ProposeCode::KernelError),
-        PgError::DuplicateIntent => Some(ProposeCode::DuplicateIntent),
-        PgError::ActorAssertionUnauthorised { .. } => Some(ProposeCode::ActorAssertionUnauthorised),
-        _ => None,
+    let (code, context) = match &err {
+        PgError::SerializationFailure => (
+            Some(ProposeCode::SerializationFailure),
+            "the proposal could not be decided",
+        ),
+        PgError::Kernel(_) => (
+            Some(ProposeCode::KernelError),
+            "the proposal could not be decided",
+        ),
+        PgError::DuplicateIntent => (
+            Some(ProposeCode::DuplicateIntent),
+            "the proposal could not be decided",
+        ),
+        PgError::ActorAssertionUnauthorised { .. } => (
+            Some(ProposeCode::ActorAssertionUnauthorised),
+            "the proposal could not be decided",
+        ),
+        PgError::CommitOutcomeUnknown(_) => (
+            Some(ProposeCode::CommitOutcomeUnknown),
+            "the commit outcome is unknown - read the record before re-submitting",
+        ),
+        PgError::Database(_)
+        | PgError::Encoding(_)
+        | PgError::InvalidState(_)
+        | PgError::SchemaBehind { .. }
+        | PgError::TransitionNotFound(_)
+        | PgError::TransitionNotCovered { .. }
+        | PgError::NoTransitionAtOrBefore(_)
+        | PgError::StatVisibility { .. }
+        | PgError::WriterRoleUnknown { .. }
+        | PgError::WriterAssertionIncomplete { .. }
+        | PgError::WriterSessionsHidden { .. }
+        | PgError::WriterAssertionEmpty
+        | PgError::ActorPolicyDeclaration { .. }
+        | PgError::UnknownTransformation { .. }
+        | PgError::NoCheckpoint
+        | PgError::AnchorDivergedFromStart { .. }
+        | PgError::SigningKeyUnauthorised { .. }
+        | PgError::SigningKeyUnauthorisedAtTruncatedPrefix { .. } => (
+            Some(ProposeCode::NotCommitted),
+            "the proposal was not committed",
+        ),
+        PgError::RejectionLogFailure(_) => (None, "the rejection could not be recorded"),
     };
     RowError {
         code,
-        reason: anyhow::Error::new(err).context("the proposal could not be decided"),
+        reason: anyhow::Error::new(err).context(context),
     }
 }
 
@@ -408,5 +464,29 @@ pub(crate) async fn propose_row_outcome(
         serde_json::to_value(&outcome)
             .context("serialising the receipt")
             .map_err(RowError::operational)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use envelopes::ProposeCode;
+    use morpholog_postgres::PgError;
+
+    /// The three standings a row can be left in, by adapter error.
+    #[test]
+    fn adapter_errors_map_to_safe_to_retry_inspect_first_or_operational() {
+        let not_committed = classify_pg_error(PgError::Database(sqlx::Error::PoolClosed));
+        assert_eq!(not_committed.code, Some(ProposeCode::NotCommitted));
+        let unknown = classify_pg_error(PgError::CommitOutcomeUnknown(sqlx::Error::PoolClosed));
+        assert_eq!(unknown.code, Some(ProposeCode::CommitOutcomeUnknown));
+        assert!(format!("{:#}", unknown.reason).contains("read the record"));
+        let unrecorded = classify_pg_error(PgError::RejectionLogFailure(Box::new(
+            PgError::Database(sqlx::Error::PoolClosed),
+        )));
+        assert_eq!(
+            unrecorded.code, None,
+            "decided, so never a pre-decision code"
+        );
     }
 }
