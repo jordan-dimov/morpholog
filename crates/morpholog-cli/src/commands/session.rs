@@ -31,7 +31,8 @@ use std::io::{BufRead, Write};
 use crate::SessionArgs;
 use crate::commands::filter::FieldFilter;
 use crate::commands::inspect::{claims_rows, decode_claims_named, derived_rows, resolve_as_of};
-use crate::commands::propose::{BatchRow, RowError, propose_row_outcome};
+use crate::commands::propose::{BatchRow, RowError, classify_pg_error, propose_row_outcome};
+use crate::commands::transact::decode_acts;
 use crate::commands::{compile_or_report, parse_or_report};
 use morpholog_cli::envelopes::{ErrorCode, ErrorReceipt, SessionReady};
 use morpholog_core::CompiledProgram;
@@ -217,6 +218,7 @@ async fn handle_line(
     };
     match op.as_str() {
         "propose" => handle_propose(args, compiled, pool, value, row).await,
+        "transact" => handle_transact(args, compiled, pool, value, row).await,
         "claims" => handle_claims(args, compiled, pool, value).await,
         "derived" => handle_derived(args, compiled, pool, value).await,
         other => Err(SessionFailure::request(
@@ -275,6 +277,49 @@ async fn handle_propose(
         receipt.insert("row".to_string(), serde_json::json!(row));
     }
     Ok(envelope)
+}
+
+/// The transact body: the acts, each in the batch row shape.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TransactBody {
+    acts: Vec<BatchRow>,
+}
+
+/// Several proposals as one decision, answered with the one atomic
+/// outcome plus this request's row. A known error of the whole batch
+/// is the session's ordinary coded receipt; the session stays in step
+/// either way.
+async fn handle_transact(
+    args: &SessionArgs,
+    compiled: &CompiledProgram,
+    pool: &PgPool,
+    body: serde_json::Value,
+    row: u64,
+) -> Result<serde_json::Value, SessionFailure> {
+    let body: TransactBody = serde_json::from_value(body)
+        .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
+    let proposals = decode_acts(&args.file, compiled, body.acts).map_err(row_failure)?;
+    let outcome = morpholog_postgres::propose_all_against_pg(pool, compiled, &proposals)
+        .await
+        .map_err(|e| row_failure(classify_pg_error(e)))?;
+    let mut envelope = serde_json::to_value(&outcome)
+        .context("serialising the outcome")
+        .map_err(SessionFailure::Operational)?;
+    if let Some(object) = envelope.as_object_mut() {
+        object.insert("row".to_string(), serde_json::json!(row));
+    }
+    Ok(envelope)
+}
+
+fn row_failure(e: RowError) -> SessionFailure {
+    match e {
+        RowError { code: None, reason } => SessionFailure::Operational(reason),
+        RowError {
+            code: Some(code),
+            reason,
+        } => SessionFailure::request(code.into(), reason),
+    }
 }
 
 /// The claims read body: the generated client's `claims`/

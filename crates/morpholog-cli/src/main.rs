@@ -133,6 +133,21 @@ enum Command {
     /// docs/embedder-integration.md.
     Session(SessionArgs),
 
+    /// Propose several changes as one decision: every act or none.
+    ///
+    /// Reads NDJSON acts (`--acts -` for stdin) in the batch row shape
+    /// and applies them in order inside one transaction - each act's
+    /// gates, rules and actor authorisation see what the acts before
+    /// it staged - then commits all of them or none. Prints one JSON
+    /// object: every act's receipt on commit (exit 0); the refusing
+    /// act, its rule and witness on a refusal, with nothing written
+    /// (exit 1); or a coded error - `serialization_failure` is the one
+    /// safe to re-submit whole, `not_committed` once its cause is
+    /// fixed, and `commit_outcome_unknown` only after reading the
+    /// record (exit 3). Not `propose --batch`, which is the import
+    /// shape: one receipt per row and carry on.
+    Transact(TransactArgs),
+
     /// Preview whether a change would be admitted or refused, and why.
     ///
     /// Nothing is committed and nothing is recorded: this is a
@@ -1263,6 +1278,21 @@ pub(crate) struct SchemaArgs {
 /// Args for `session`: the programme file to pin for the session's
 /// lifetime, and the database connection.
 #[derive(clap::Args, Debug)]
+pub(crate) struct TransactArgs {
+    /// Path to a `.morph` source file containing the programme.
+    pub(crate) file: PathBuf,
+
+    /// Path to NDJSON acts (`-` for stdin), one per line as
+    /// `{"transformation": ..., "actor": ..., "args_named": {...}}`
+    /// (or `"args"` for the tagged codec), applied in order.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) acts: PathBuf,
+
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+}
+
+#[derive(clap::Args, Debug)]
 pub(crate) struct SessionArgs {
     /// Path to a `.morph` source file containing the programme. Read
     /// once at startup; the ready line's `model_hash` is its
@@ -1442,6 +1472,7 @@ async fn run() -> anyhow::Result<()> {
         Command::Inspect { what } => commands::inspect::run(what).await,
         Command::Check(args) => commands::check::run(args),
         Command::Propose(args) => commands::propose::run(args).await,
+        Command::Transact(args) => commands::transact::run(args).await,
         Command::Session(args) => commands::session::run(args).await,
         Command::Explain(args) => commands::explain::run(args).await,
         Command::Outbox { what } => match what {

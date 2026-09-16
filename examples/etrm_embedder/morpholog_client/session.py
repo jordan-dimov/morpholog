@@ -37,7 +37,12 @@ import threading
 import time
 
 from . import envelopes
-from .adapter import MorphologError, MorphologOutcomeUnknown, _redact_argv
+from .adapter import (
+    MorphologError,
+    MorphologOutcomeUnknown,
+    MorphologRequestError,
+    _redact_argv,
+)
 
 #: The wire version this client speaks; the ready line must agree.
 PROTOCOL = 1
@@ -61,6 +66,24 @@ class _ResponseContract(Exception):
         super().__init__(detail)
         self.poison = poison
         self.detail = detail
+
+
+def _decode_atomic(payload: object, expected_row: int) -> object:
+    """The transact decoder: the one atomic outcome, matched to the row
+    THIS caller sent (the session adds it beside the outcome)."""
+    if not isinstance(payload, dict) or payload.get("row") != expected_row:
+        raise _ResponseContract(
+            "a transact response did not match the request row",
+            f"session answered row {payload.get('row') if isinstance(payload, dict) else None} "
+            f"to request {expected_row}",
+        )
+    try:
+        return envelopes.parse_atomic_outcome(payload)
+    except envelopes.EnvelopeError as exc:
+        raise _ResponseContract(
+            "a transact response did not match the outcome contract",
+            f"unparseable transact outcome: {exc}",
+        ) from None
 
 
 def _decode_receipt(payload: object, expected_row: int) -> object:
@@ -109,21 +132,6 @@ def _decode_rows(cls: type):
             ) from None
 
     return decode
-
-
-class MorphologRequestError(MorphologError):
-    """A per-request session error receipt: the request was received,
-    classified, and refused, and the session is still healthy. The
-    stable ``code`` says whether re-submitting is safe -
-    ``serialization_failure`` is re-submittable as is, ``not_committed``
-    once its cause is fixed (nothing was recorded); every other code is
-    the request's own fault."""
-
-    def __init__(self, code: str, error: str, row: int) -> None:
-        super().__init__(f"session request {row} refused ({code}): {error}")
-        self.code = code
-        self.error = error
-        self.row = row
 
 
 class Session:
@@ -467,6 +475,19 @@ class Session:
         if explain_on_reject:
             body["explain_on_reject"] = True
         return self._exchange(body, commitful=True, decode=_decode_receipt)
+
+    def transact(
+        self, acts: list[dict[str, object]]
+    ) -> envelopes.AtomicCommitted | envelopes.AtomicRejected:
+        """Propose several acts as one decision through the session, as
+        on the one-shot client: every act or none, each act seeing what
+        the acts before it staged. A known error of the whole batch is
+        a coded ``MorphologRequestError`` (``retriable`` only for
+        ``serialization_failure``); the session stays in step."""
+        if not acts:
+            raise ValueError("an atomic batch needs at least one act")
+        body: dict[str, object] = {"op": "transact", "acts": [dict(a) for a in acts]}
+        return self._exchange(body, commitful=True, decode=_decode_atomic)
 
     def submit(
         self, request: object, actor: str, explain_on_reject: bool = False

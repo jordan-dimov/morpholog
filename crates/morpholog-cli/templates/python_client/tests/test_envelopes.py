@@ -518,6 +518,27 @@ class TamperEvidence(unittest.TestCase):
             envelopes.WitnessVerdict.from_json(golden("witness_verdict_invalid.json")).attested_at
         )
 
+    def test_transact_outcomes(self):
+        committed = envelopes.parse_atomic_outcome(golden("transact_committed.json"))
+        self.assertIsInstance(committed, envelopes.AtomicCommitted)
+        self.assertEqual([a.row for a in committed.acts], [1, 2])
+        self.assertIsInstance(committed.acts[0].outcome, envelopes.Committed)
+        self.assertEqual(committed.acts[1].outcome.emitted_intents[0].name, "AccountOpened")
+        self.assertNotEqual(
+            committed.acts[0].outcome.transition_id, committed.acts[1].outcome.transition_id
+        )
+        rejected = envelopes.parse_atomic_outcome(golden("transact_rejected.json"))
+        self.assertIsInstance(rejected, envelopes.AtomicRejected)
+        self.assertEqual(rejected.act, 2)
+        self.assertEqual(rejected.rule, "balance_unique_by_account")
+        self.assertTrue(rejected.witness)
+        in_session = envelopes.parse_atomic_outcome(golden("transact_rejected_session.json"))
+        self.assertEqual((in_session.act, in_session.rule, in_session.witness), (1, None, []))
+        # A coded error is not an outcome: the parser refuses it, the
+        # adapter raises it.
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.parse_atomic_outcome(golden("transact_error.json"))
+
     def test_verify_report_divergent_and_tampered(self):
         report = envelopes.VerifyReport.from_json(golden("verify_report_divergent.json"))
         self.assertIsInstance(report.replay, envelopes.ReplayDivergent)

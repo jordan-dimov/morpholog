@@ -39,6 +39,7 @@ pub(crate) mod propose;
 pub(crate) mod refresh;
 pub(crate) mod schema;
 pub(crate) mod session;
+pub(crate) mod transact;
 pub(crate) mod verify;
 pub(crate) mod witness;
 

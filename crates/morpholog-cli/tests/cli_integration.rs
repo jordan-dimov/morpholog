@@ -3910,3 +3910,152 @@ async fn a_refused_delta_write_is_a_known_non_commit_on_every_surface() {
     assert_eq!(lines[2]["status"], "committed", "{}", lines[2]);
     assert!(lines[3].is_array(), "the read still answers: {}", lines[3]);
 }
+
+/// A register with a gate: the transact tests' refusing act.
+const TRANSACT_FIXTURE: &str = "\
+program transact_fixture
+
+predicate Account(id: Subject)
+predicate Balance(account: Subject, figure: Decimal)
+    unique by (account)
+
+transformation open(id):
+    admit Account(id)
+
+transformation post(account, figure):
+    require Account(account)
+    admit Balance(account, figure)
+";
+
+fn transact(file: &std::path::Path, acts: &str) -> std::process::Output {
+    let mut child = Command::new(common::bin())
+        .args(["transact"])
+        .arg(file)
+        .args(["--acts", "-", "--database-url", &database_url()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(child.stdin.as_mut().unwrap(), acts.as_bytes()).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+fn act_row(transformation: &str, named: Value) -> String {
+    serde_json::json!({"transformation": transformation, "actor": "teller", "args_named": named})
+        .to_string()
+}
+
+/// Attacker capability: none. The one-shot `transact` prints the one
+/// decision with the exit code `propose` would give it, and nothing of
+/// a refused batch reaches the record.
+#[tokio::test(flavor = "current_thread")]
+async fn transact_prints_the_one_decision_and_writes_all_or_nothing() {
+    reset_db().await;
+    let fixture = common::write_fixture("transact_fixture", TRANSACT_FIXTURE);
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+
+    // Refused at act 2: act 1's account was staged and rolled back.
+    let refused = transact(
+        &fixture.path,
+        &format!(
+            "{}\n{}\n",
+            act_row("open", serde_json::json!({"id": "a1"})),
+            act_row(
+                "post",
+                serde_json::json!({"account": "ghost", "figure": "5"})
+            )
+        ),
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    let out: Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert_eq!(out["status"], "rejected", "{out}");
+    assert_eq!(out["act"], 2);
+    assert!(out.get("row").is_none(), "no row on the one-shot: {out}");
+    let claims: i64 = sqlx::query_scalar("SELECT count(*) FROM morpholog.claims")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(claims, 0, "nothing of the refused batch was written");
+
+    // Committed: one receipt per act, in order, each with its own id.
+    let committed = transact(
+        &fixture.path,
+        &format!(
+            "{}\n\n{}\n",
+            act_row("open", serde_json::json!({"id": "a1"})),
+            act_row(
+                "post",
+                serde_json::json!({"account": "a1", "figure": "100"})
+            )
+        ),
+    );
+    assert!(
+        committed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&committed.stderr)
+    );
+    let out: Value = serde_json::from_slice(&committed.stdout).unwrap();
+    assert_eq!(out["status"], "committed", "{out}");
+    let acts = out["acts"].as_array().unwrap();
+    assert_eq!(acts.len(), 2);
+    assert_eq!(acts[0]["row"], 1);
+    assert_eq!(acts[1]["row"], 2);
+    assert_ne!(acts[0]["transition_id"], acts[1]["transition_id"]);
+
+    // A malformed act is one invalid request, named by position, and
+    // nothing ran; so is an empty batch.
+    let malformed = transact(
+        &fixture.path,
+        &format!(
+            "{}\n{}\n",
+            act_row("open", serde_json::json!({"id": "a2"})),
+            act_row("post", serde_json::json!({"account": "a2"}))
+        ),
+    );
+    assert_eq!(malformed.status.code(), Some(1));
+    let out: Value = serde_json::from_slice(&malformed.stdout).unwrap();
+    assert_eq!(out["status"], "error", "{out}");
+    assert_eq!(out["code"], "invalid_arguments");
+    assert!(out["error"].as_str().unwrap().contains("act 2"), "{out}");
+    let empty = transact(&fixture.path, "\n");
+    let out: Value = serde_json::from_slice(&empty.stdout).unwrap();
+    assert_eq!(out["code"], "invalid_request", "{out}");
+    let claims: i64 = sqlx::query_scalar("SELECT count(*) FROM morpholog.claims")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(claims, 2, "only the committed batch's claims exist");
+
+    // A known non-commit of the whole batch is the coded error object at
+    // exit 1, and nothing of it was written.
+    sqlx::raw_sql(
+        "ALTER TABLE morpholog.audit ADD CONSTRAINT probe CHECK (arguments::text NOT LIKE '%poison%')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let not_committed = transact(
+        &fixture.path,
+        &format!(
+            "{}\n{}\n",
+            act_row("open", serde_json::json!({"id": "fine"})),
+            act_row("open", serde_json::json!({"id": "poison"}))
+        ),
+    );
+    let claims_after: i64 = sqlx::query_scalar("SELECT count(*) FROM morpholog.claims")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql("ALTER TABLE morpholog.audit DROP CONSTRAINT probe")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(not_committed.status.code(), Some(1));
+    let out: Value = serde_json::from_slice(&not_committed.stdout).unwrap();
+    assert_eq!(out["code"], "not_committed", "{out}");
+    assert_eq!(
+        claims_after, 2,
+        "the first act did not survive the second's refusal"
+    );
+}

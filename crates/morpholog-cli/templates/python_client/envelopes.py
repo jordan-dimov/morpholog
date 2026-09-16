@@ -202,6 +202,80 @@ def parse_run_outcome(payload: object) -> Committed | Rejected:
 
 
 @dataclass(frozen=True)
+class AtomicAct:
+    """One act's receipt inside a committed ``transact``: its 1-based
+    ``row`` and the committed outcome, with its own transition id."""
+
+    row: int
+    outcome: Committed
+
+    @classmethod
+    def from_json(cls, payload: object) -> AtomicAct:
+        if not isinstance(payload, dict) or "row" not in payload:
+            raise EnvelopeError(f"not an atomic act: {payload!r}")
+        body = {k: v for k, v in payload.items() if k != "row"}
+        body["status"] = "committed"
+        return cls(row=int(str(payload["row"])), outcome=Committed.from_json(body))
+
+
+@dataclass(frozen=True)
+class AtomicCommitted:
+    """Every act committed, in order, as one decision."""
+
+    acts: list[AtomicAct]
+
+    @classmethod
+    def from_json(cls, payload: object) -> AtomicCommitted:
+        data = _strict("atomic committed", payload, {"status", "acts"}, optional={"row"})
+        raw = data["acts"]
+        if not isinstance(raw, list) or not raw:
+            raise EnvelopeError(f"`acts` must be a non-empty list, got {raw!r}")
+        return cls(acts=[AtomicAct.from_json(a) for a in raw])
+
+
+@dataclass(frozen=True)
+class AtomicRejected:
+    """The first refused act, by 1-based position, and nothing written:
+    the acts before it were staged and rolled back, and get no receipt.
+    ``rule`` and ``witness`` are as on ``Rejected``; the witness may
+    name values the rolled-back prefix staged."""
+
+    act: int
+    reason: str
+    rule: str | None = None
+    witness: list[WitnessBinding] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, payload: object) -> AtomicRejected:
+        data = _strict(
+            "atomic rejected",
+            payload,
+            {"status", "act", "reason"},
+            optional={"rule", "witness", "row"},
+        )
+        rule = data.get("rule")
+        return cls(
+            act=int(str(data["act"])),
+            reason=str(data["reason"]),
+            rule=None if rule is None else str(rule),
+            witness=[WitnessBinding.from_json(w) for w in data.get("witness", [])],
+        )
+
+
+def parse_atomic_outcome(payload: object) -> AtomicCommitted | AtomicRejected:
+    """A ``transact`` outcome: committed or rejected. A coded error is
+    not an outcome and is raised by the adapter."""
+    return _by_status(
+        payload,
+        "a transact outcome",
+        {
+            "committed": AtomicCommitted.from_json,
+            "rejected": AtomicRejected.from_json,
+        },
+    )
+
+
+@dataclass(frozen=True)
 class RenderedClaim:
     predicate: str
     rendered: str

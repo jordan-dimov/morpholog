@@ -410,3 +410,65 @@ async fn an_unauthorised_actor_is_a_coded_receipt_and_the_session_stays_usable()
     );
     assert!(output.status.success(), "session should exit 0 on EOF");
 }
+
+/// The session's `transact`: the one decision, with this request's row,
+/// and the session in step after a refusal and after an empty batch.
+#[tokio::test]
+async fn transact_answers_with_the_one_decision_and_the_session_stays_in_step() {
+    reset_db().await;
+    let fixture = common::write_fixture("session_fixture", FIXTURE);
+    let mut child = spawn_session(&fixture.path);
+    let mut stdin = child.stdin.take().unwrap();
+
+    let act = |transformation: &str, args: serde_json::Value| serde_json::json!({"transformation": transformation, "actor": "teller", "args_named": args});
+    // Refused at act 2: the balance names no account.
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({"op": "transact", "acts": [
+            act("open_account", serde_json::json!({"account": "acct_1", "opened_on": "2026-01-15"})),
+            act("post_balance", serde_json::json!({"account": "ghost", "figure": "5"})),
+        ]})
+    )
+    .unwrap();
+    // Empty: one invalid request.
+    writeln!(stdin, r#"{{"op":"transact","acts":[]}}"#).unwrap();
+    // Committed: both acts, in order.
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({"op": "transact", "acts": [
+            act("open_account", serde_json::json!({"account": "acct_1", "opened_on": "2026-01-15"})),
+            act("post_balance", serde_json::json!({"account": "acct_1", "figure": "100"})),
+        ]})
+    )
+    .unwrap();
+    writeln!(stdin, r#"{{"op":"claims","predicates":["Balance"]}}"#).unwrap();
+    drop(stdin);
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 5, "ready plus four answers: {lines:?}");
+    assert_eq!(lines[1]["status"], "rejected", "{}", lines[1]);
+    assert_eq!(lines[1]["act"], 2);
+    assert_eq!(lines[1]["row"], 1);
+    assert_eq!(lines[2]["code"], "invalid_request", "{}", lines[2]);
+    assert_eq!(lines[2]["row"], 2);
+    assert_eq!(lines[3]["status"], "committed", "{}", lines[3]);
+    assert_eq!(lines[3]["row"], 3);
+    assert_eq!(lines[3]["acts"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        lines[4].as_array().unwrap().len(),
+        1,
+        "the balance is on the record"
+    );
+}

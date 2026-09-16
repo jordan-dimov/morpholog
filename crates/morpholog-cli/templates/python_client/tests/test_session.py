@@ -122,6 +122,8 @@ for request in sys.stdin:
         say(json.dumps({"code": "kernel_error", "error": "x", "row": 99, "status": "error"}))
     elif mode == "commit_outcome_unknown_receipt":
         say(json.dumps({"code": "commit_outcome_unknown", "error": "the commit outcome is unknown - read the record before re-submitting: connection reset by peer", "row": n, "status": "error"}))
+    elif mode == "transact_rejected":
+        say(json.dumps({"act": 1, "reason": "require `Account(account)` failed", "row": n, "status": "rejected"}))
     elif mode == "not_committed_receipt":
         say(json.dumps({"code": "not_committed", "error": "the proposal was not committed: check constraint", "row": n, "status": "error"}))
     elif mode == "bogus_rows":
@@ -282,6 +284,19 @@ class TranscriptConversation(SessionHarness):
             with self.assertRaises(MorphologOutcomeUnknown):
                 s.propose("open_account", "teller", {"account": "b", "opened_on": "2026-01-15"})
             self.assertIsNone(s._poisoned, "still answering, still in step")
+
+    def test_transact_answers_with_the_one_decision_in_step(self):
+        acts = [{"transformation": "open", "actor": "teller", "args_named": {"id": "a1"}}]
+        with self.session("transact_rejected") as s:
+            rejected = s.transact(acts)
+            self.assertIsInstance(rejected, envelopes.AtomicRejected)
+            self.assertEqual(rejected.act, 1)
+            self.assertIsNone(s._poisoned)
+            with self.assertRaises(ValueError):
+                s.transact([])
+        request = json.loads(self.recorded()[0])
+        self.assertEqual(request["op"], "transact")
+        self.assertEqual(request["acts"], acts)
 
     def test_a_not_committed_receipt_is_a_coded_refusal(self):
         with self.session("not_committed_receipt") as s:
