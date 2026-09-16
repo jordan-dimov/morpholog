@@ -735,7 +735,8 @@ pub async fn load_checkpoint(pool: &PgPool, tree_size: i64) -> Result<Option<Che
 /// would make the proof about a head that no longer exists here.
 /// Monotonic and exact-deduplicated - a proof already present is not
 /// stored twice, whatever endpoint served it - and never a downgrade:
-/// nothing existing is removed. Returns the checkpoint as now stored.
+/// nothing existing is removed, which the row lock guarantees when two
+/// attachments arrive together. Returns the checkpoint as now stored.
 pub async fn attach_witness(
     pool: &PgPool,
     tree_size: i64,
@@ -743,38 +744,56 @@ pub async fn attach_witness(
     witness: Witness,
 ) -> Result<Checkpoint, PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
-    let mut chain = load_checkpoint_chain(&mut tx).await?;
-    let Some(pos) = chain.iter().position(|c| c.tree_size == tree_size) else {
+    let row = sqlx::query!(
+        r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
+                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
+                  witnesses as "witnesses: sqlx::types::Json<Vec<Witness>>"
+           FROM morpholog.audit_checkpoints
+           WHERE tree_size = $1
+           FOR UPDATE"#,
+        tree_size,
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(classify_checked_query)?;
+    let Some(row) = row else {
         return Err(PgError::InvalidState(format!(
             "no checkpoint at tree size {tree_size} to attach a witness to"
         )));
     };
-    if chain[pos].checkpoint_hash != checkpoint_hash {
+    let mut checkpoint = Checkpoint {
+        tree_size: row.tree_size,
+        root_hash: row.root_hash,
+        prev_checkpoint_hash: row.prev_checkpoint_hash,
+        checkpoint_hash: row.checkpoint_hash,
+        signatures: row.signatures.0,
+        witnesses: row.witnesses.0,
+    };
+    if checkpoint.checkpoint_hash != checkpoint_hash {
         return Err(PgError::InvalidState(format!(
             "the checkpoint at tree size {tree_size} is {} now, not {checkpoint_hash}: the \
              proof was obtained for a head this chain no longer holds",
-            chain[pos].checkpoint_hash
+            checkpoint.checkpoint_hash
         )));
     }
-    let mut witnesses = std::mem::take(&mut chain[pos].witnesses);
-    if !witnesses
+    if !checkpoint
+        .witnesses
         .iter()
         .any(|w| w.scheme == witness.scheme && w.proof == witness.proof)
     {
-        witnesses.push(witness);
+        checkpoint.witnesses.push(witness);
         sqlx::query!(
             "UPDATE morpholog.audit_checkpoints
-             SET witnesses = $1 WHERE checkpoint_hash = $2",
-            sqlx::types::Json(&witnesses) as _,
-            checkpoint_hash,
+             SET witnesses = $1 WHERE tree_size = $2",
+            sqlx::types::Json(&checkpoint.witnesses) as _,
+            tree_size,
         )
         .execute(&mut *tx)
         .await
         .map_err(classify_checked_query)?;
     }
     tx.commit().await.map_err(classify)?;
-    chain[pos].witnesses = witnesses;
-    Ok(chain.swap_remove(pos))
+    Ok(checkpoint)
 }
 
 /// Verify the audit tree against its checkpoints. Reads under

@@ -1,6 +1,7 @@
 //! `morpholog audit witness` - have an outside authority witness a recorded
 //! checkpoint, and the submission `audit checkpoint --witness` shares.
 
+use std::fmt;
 use std::str::FromStr;
 
 use anyhow::Context;
@@ -12,13 +13,21 @@ use morpholog_postgres::{
 use morpholog_witness::{Refusal, build_request, check_response};
 
 use crate::WitnessArgs;
-use crate::commands::{connect, print_json};
+use crate::commands::{AlreadyReported, connect, print_json};
 
 /// An authority to submit to: `rfc3161:<url>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WitnessTarget {
     pub(crate) scheme: WitnessScheme,
     pub(crate) url: String,
+}
+
+impl fmt::Display for WitnessTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.scheme {
+            WitnessScheme::Rfc3161 => write!(f, "rfc3161:{}", self.url),
+        }
+    }
 }
 
 impl FromStr for WitnessTarget {
@@ -38,28 +47,79 @@ impl FromStr for WitnessTarget {
     }
 }
 
-/// Run `audit witness`: submit the recorded head at `--tree-size` to each
-/// authority and store what comes back. Prints the checkpoint as now
-/// stored; a submission that fails stores nothing and exits one.
+/// Run `audit witness`: submit the recorded head at `--tree-size` to every
+/// authority named, storing each response as it arrives. Prints the
+/// checkpoint as now stored, then exits one if any authority failed,
+/// naming each and the one command that retries exactly those.
 pub(crate) async fn run(args: WitnessArgs) -> anyhow::Result<()> {
     let pool = connect(&args.db.database_url).await?;
-    let mut checkpoint = load_checkpoint(&pool, args.tree_size)
+    let checkpoint = load_checkpoint(&pool, args.tree_size)
         .await
         .context("load_checkpoint failed")?
         .with_context(|| format!("no checkpoint is recorded at tree size {}", args.tree_size))?;
-    for target in &args.witness {
-        let witness = obtain(target, &checkpoint).await?;
-        checkpoint = attach_witness(
-            &pool,
-            checkpoint.tree_size,
-            &checkpoint.checkpoint_hash,
-            witness,
-        )
-        .await
-        .context("attach_witness failed")?;
-    }
+    let (checkpoint, failed) = witness_all(&pool, checkpoint, &args.witness).await?;
     print_json(&checkpoint)?;
+    if report_failures(checkpoint.tree_size, &failed) {
+        return Err(AlreadyReported.into());
+    }
     Ok(())
+}
+
+/// An authority that did not answer with a storable witness.
+pub(crate) struct Failed {
+    pub(crate) target: WitnessTarget,
+    pub(crate) error: anyhow::Error,
+}
+
+/// Submit the head to every authority, storing each proof as it arrives,
+/// so one authority's failure never costs another's token. Returns the
+/// checkpoint as now stored and the authorities that failed. A storage
+/// failure is operational and stops the run.
+pub(crate) async fn witness_all(
+    pool: &morpholog_postgres::PgPool,
+    mut checkpoint: Checkpoint,
+    targets: &[WitnessTarget],
+) -> anyhow::Result<(Checkpoint, Vec<Failed>)> {
+    let mut failed = Vec::new();
+    for target in targets {
+        match obtain(target, &checkpoint).await {
+            Ok(witness) => {
+                checkpoint = attach_witness(
+                    pool,
+                    checkpoint.tree_size,
+                    &checkpoint.checkpoint_hash,
+                    witness,
+                )
+                .await
+                .context("attach_witness failed")?;
+            }
+            Err(error) => failed.push(Failed {
+                target: target.clone(),
+                error,
+            }),
+        }
+    }
+    Ok((checkpoint, failed))
+}
+
+/// Name each failed authority and the one command that retries exactly
+/// those. Whether anything failed.
+pub(crate) fn report_failures(tree_size: i64, failed: &[Failed]) -> bool {
+    if failed.is_empty() {
+        return false;
+    }
+    for f in failed {
+        eprintln!("error: {}: {:#}", f.target.url, f.error);
+    }
+    let retry: String = failed
+        .iter()
+        .map(|f| format!(" --witness {}", f.target))
+        .collect();
+    eprintln!(
+        "The checkpoint is recorded and printed above; retry with \
+         `audit witness --tree-size {tree_size}{retry}`."
+    );
+    true
 }
 
 /// Ask the authority to witness this head. The response is self-checked

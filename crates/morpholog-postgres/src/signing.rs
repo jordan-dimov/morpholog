@@ -78,7 +78,6 @@ pub fn tree_head_signing_bytes(purpose: &str, key_id: &str, head: &TreeHead<'_>)
     b
 }
 
-/// Sign a tree head under `key_id` for `purpose`.
 /// The bytes an external witness commits to: the typed, length-delimited
 /// head, encoded exactly as [`tree_head_signing_bytes`] encodes it, minus
 /// the signing-only fields. A timestamp authority receives the SHA-256 of
@@ -101,6 +100,7 @@ pub fn tree_head_witness_bytes(head: &TreeHead<'_>) -> Vec<u8> {
     b
 }
 
+/// Sign a tree head under `key_id` for `purpose`.
 pub fn sign_tree_head(
     key: &SigningKey,
     purpose: &str,

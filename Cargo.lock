@@ -1387,6 +1387,7 @@ dependencies = [
  "chrono",
  "cryptographic-message-syntax",
  "rand 0.10.2",
+ "sha1",
  "sha2 0.11.0",
  "thiserror",
  "x509-certificate",

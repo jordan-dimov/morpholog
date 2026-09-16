@@ -3670,13 +3670,41 @@ async fn a_response_over_another_head_is_refused_and_the_checkpoint_still_stands
         "{request_head}"
     );
 
-    // The retry path refuses the same answer the same way, storing nothing.
+    // The retry path refuses the same answer the same way, storing
+    // nothing, and still prints the checkpoint as it stands.
     let (url, _served) = canned_tsa(recorded_tsr());
     let target = format!("rfc3161:{url}");
     let (status, stdout, stderr) =
         run_cli(&["audit", "witness", "--tree-size", "1", "--witness", &target]);
-    assert!(!status.success() && stdout.trim().is_empty(), "{stdout}");
+    assert!(!status.success(), "{stderr}");
+    let cp: Value = serde_json::from_str(&stdout).expect("the checkpoint is printed");
+    assert_eq!(cp["tree_size"], 1);
+    assert!(cp.get("witnesses").is_none(), "{stdout}");
     assert!(stderr.contains("nothing stored"), "{stderr}");
+    assert!(stderr.contains(&format!("--witness {target}")), "{stderr}");
+
+    // Every authority named is attempted, and the retry names exactly
+    // the ones that failed.
+    let (url_a, served_a) = canned_tsa(recorded_tsr());
+    let (url_b, served_b) = canned_tsa(recorded_tsr());
+    let (target_a, target_b) = (format!("rfc3161:{url_a}"), format!("rfc3161:{url_b}"));
+    let (status, _, stderr) = run_cli(&[
+        "audit",
+        "witness",
+        "--tree-size",
+        "1",
+        "--witness",
+        &target_a,
+        "--witness",
+        &target_b,
+    ]);
+    assert!(!status.success());
+    served_a.join().unwrap();
+    served_b.join().unwrap();
+    assert!(
+        stderr.contains(&format!("--witness {target_a} --witness {target_b}")),
+        "{stderr}"
+    );
     let (status, stdout, _) = run_cli(&["audit", "verify"]);
     assert!(status.success(), "{stdout}");
     assert!(

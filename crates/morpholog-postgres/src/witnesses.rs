@@ -140,12 +140,11 @@ fn judge(
             WitnessStatus::Untrusted {
                 attested_at,
                 signer,
+                reason,
             } => verdict(
                 WitnessStanding::Untrusted,
                 Some(attested_at),
-                Some(format!(
-                    "signer `{signer}` chains to none of the supplied anchors"
-                )),
+                Some(format!("signer `{signer}`: {reason}")),
             ),
             WitnessStatus::Unverified { attested_at } => verdict(
                 WitnessStanding::Unverified,

@@ -559,8 +559,11 @@ class Morpholog:
     def audit_witness(self, tree_size: int, witnesses: list[str]) -> envelopes.Checkpoint:
         """Have timestamp authorities (each ``"rfc3161:<url>"``) witness
         the checkpoint recorded at ``tree_size``, storing each exact
-        response on it. Returns the checkpoint as now stored; a response
-        that is not over this head is refused and stores nothing."""
+        response on it as it arrives. Returns the checkpoint as now
+        stored. Every authority is attempted; a response that is not over
+        this head is refused and stores nothing, and if any authority
+        failed the call is an operational error naming the retry, with
+        the others' witnesses already stored."""
         if not witnesses:
             raise ValueError("name at least one witness")
         args = ["audit", "witness", "--database-url", self.database_url]

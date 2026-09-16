@@ -441,10 +441,12 @@ pub(crate) struct CheckpointArgs {
     /// `rfc3161:<url>` posts a timestamp request for it to that RFC 3161
     /// authority and stores the exact response on the checkpoint, so a
     /// later verifier can show the head existed no later than the
-    /// authority's time. Repeat for several authorities. The checkpoint
-    /// is recorded first and printed whatever the authority does; a
-    /// failed submission exits one and names `audit witness` to retry.
-    /// Skipped when no new rows were checkpointed.
+    /// authority's time. Repeat for several authorities: every one is
+    /// attempted and each response stored as it arrives. The checkpoint
+    /// is recorded first and printed whatever the authorities do; any
+    /// failed submission exits one and names the `audit witness` command
+    /// that retries exactly those. Skipped when no new rows were
+    /// checkpointed.
     #[arg(long, value_name = "SCHEME:URL")]
     pub(crate) witness: Vec<commands::witness::WitnessTarget>,
 }
@@ -458,11 +460,13 @@ pub(crate) struct WitnessArgs {
 
     /// The recorded checkpoint to have witnessed, by its tree size (as
     /// `audit checkpoint` printed it).
-    #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
+    #[arg(long, value_parser = clap::value_parser!(i64).range(0..))]
     pub(crate) tree_size: i64,
 
     /// `rfc3161:<url>` - the RFC 3161 authority to post the request to.
-    /// Repeat for several.
+    /// Repeat for several: every one is attempted, each response is
+    /// stored as it arrives, and the command exits one naming any that
+    /// failed and the one command that retries exactly those.
     #[arg(long, value_name = "SCHEME:URL", required = true)]
     pub(crate) witness: Vec<commands::witness::WitnessTarget>,
 }

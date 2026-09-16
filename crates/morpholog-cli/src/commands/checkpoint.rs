@@ -3,11 +3,11 @@
 
 use anyhow::Context;
 use morpholog_postgres::{
-    CheckpointOutcome, CheckpointSigner, attach_witness, create_checkpoint, signing_key_from_pem,
+    CheckpointOutcome, CheckpointSigner, create_checkpoint, signing_key_from_pem,
 };
 
 use crate::CheckpointArgs;
-use crate::commands::witness::obtain;
+use crate::commands::witness::{report_failures, witness_all};
 use crate::commands::{AlreadyReported, connect, print_json};
 
 /// Run `audit checkpoint`: compute the audit Merkle root over the committed
@@ -17,9 +17,9 @@ use crate::commands::{AlreadyReported, connect, print_json};
 /// coordinated rewrite of the audit log and the checkpoint table cannot
 /// pass; a signature makes the anchor attributable as well, and an
 /// outside witness (`--witness`) dates it. Witnessing happens after the
-/// commit, outside any transaction: the checkpoint is recorded and
-/// printed whatever the authority does, and a failed submission exits
-/// one naming the retry.
+/// commit, outside any transaction: every authority named is attempted,
+/// the checkpoint is recorded and printed whatever they do, and any
+/// failed submission exits one naming the retry.
 pub(crate) async fn run(args: CheckpointArgs) -> anyhow::Result<()> {
     let signer = match (&args.signing_key, &args.key_id) {
         (Some(path), Some(key_id)) => {
@@ -42,27 +42,13 @@ pub(crate) async fn run(args: CheckpointArgs) -> anyhow::Result<()> {
         .await
         .context("create_checkpoint failed")?;
 
-    let mut failed = None;
+    let mut failed = Vec::new();
     match &mut outcome {
         CheckpointOutcome::Created(checkpoint) => {
-            for target in &args.witness {
-                match obtain(target, checkpoint).await {
-                    Ok(witness) => {
-                        *checkpoint = attach_witness(
-                            &pool,
-                            checkpoint.tree_size,
-                            &checkpoint.checkpoint_hash,
-                            witness,
-                        )
-                        .await
-                        .context("attach_witness failed")?;
-                    }
-                    Err(e) => {
-                        failed = Some((checkpoint.tree_size, e));
-                        break;
-                    }
-                }
-            }
+            let (witnessed, failures) =
+                witness_all(&pool, checkpoint.clone(), &args.witness).await?;
+            *checkpoint = witnessed;
+            failed = failures;
         }
         CheckpointOutcome::NoNewRows(checkpoint) if !args.witness.is_empty() => {
             eprintln!(
@@ -74,11 +60,10 @@ pub(crate) async fn run(args: CheckpointArgs) -> anyhow::Result<()> {
         CheckpointOutcome::NoNewRows(_) => {}
     }
     print_json(&outcome)?;
-    if let Some((tree_size, e)) = failed {
-        eprintln!(
-            "error: {e:#}\nThe checkpoint is recorded and printed above; retry with \
-             `audit witness --tree-size {tree_size} --witness ...`."
-        );
+    let tree_size = match &outcome {
+        CheckpointOutcome::Created(c) | CheckpointOutcome::NoNewRows(c) => c.tree_size,
+    };
+    if report_failures(tree_size, &failed) {
         return Err(AlreadyReported.into());
     }
     Ok(())

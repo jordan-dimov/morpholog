@@ -12,6 +12,7 @@ cryptographic-message-syntax = { version = "0.28", default-features = false }
 x509-certificate = "0.25"
 bcder = "0.7"
 bytes = "1"
+sha1 = "0.11"
 sha2 = { workspace = true }
 chrono = { workspace = true }
 rand = { workspace = true }
