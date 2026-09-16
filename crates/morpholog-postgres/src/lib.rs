@@ -102,7 +102,7 @@ pub use score::{
 pub use signing::{
     SigningError, TreeHead, generate_signing_key, parse_public_key, parse_signature,
     render_public_key, render_signature, sign_tree_head, signing_key_from_pem, signing_key_to_pem,
-    tree_head_signing_bytes, verify_tree_head,
+    tree_head_signing_bytes, tree_head_witness_bytes, verify_tree_head,
 };
 pub use verify::{
     VerifyOutcome, VerifyReport, ViewsVerification, coverage_replay, verify_replay, verify_views,
