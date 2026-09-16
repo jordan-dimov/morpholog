@@ -212,22 +212,22 @@ class Migrations(unittest.TestCase):
         report = envelopes.MigrationReport.from_json(golden("migration_report_behind.json"))
         self.assertFalse(report.is_current)
         self.assertEqual(report.recorded_version_before, 9)
-        self.assertEqual(report.binary_version, 12)
+        self.assertEqual(report.binary_version, 13)
         self.assertEqual(
             [m.name for m in report.pending],
-            ["rejections_witness", "schema_migrations", "claims_hash_key"],
+            ["rejections_witness", "schema_migrations", "claims_hash_key", "checkpoint_witnesses"],
         )
         self.assertEqual(report.applied, [])
 
     def test_a_migrated_database_reports_what_it_applied(self):
         report = envelopes.MigrationReport.from_json(golden("migration_report_applied.json"))
         self.assertTrue(report.is_current)
-        self.assertEqual([m.version for m in report.applied], [10, 11, 12])
+        self.assertEqual([m.version for m in report.applied], [10, 11, 12, 13])
         # The version AFTER, not the one it started at - a report saying
         # "current" and "version 9" at once would be two answers to one
         # question.
         self.assertEqual(report.recorded_version_before, 9)
-        self.assertEqual(report.recorded_version_after, 12)
+        self.assertEqual(report.recorded_version_after, 13)
 
     def test_a_database_ahead_of_the_binary_is_not_current(self):
         # Nothing pending, and emphatically not ready: this build cannot know
@@ -235,7 +235,7 @@ class Migrations(unittest.TestCase):
         report = envelopes.MigrationReport.from_json(golden("migration_report_ahead.json"))
         self.assertEqual(report.pending, [])
         self.assertFalse(report.is_current)
-        self.assertEqual([m.version for m in report.unknown], [13])
+        self.assertEqual([m.version for m in report.unknown], [14])
 
 
 class Explanations(unittest.TestCase):
@@ -479,6 +479,40 @@ class TamperEvidence(unittest.TestCase):
         unsealed = envelopes.parse_views_verification(golden("views_verification_not_sealed.json"))
         self.assertIsInstance(unsealed, envelopes.ViewsNotSealed)
 
+    def test_the_witness_axis_on_the_live_and_pack_reports(self):
+        report = envelopes.VerifyReport.from_json(golden("verify_report_witnessed.json"))
+        axis = report.witnesses
+        self.assertIsInstance(axis, envelopes.WitnessesReport)
+        [checkpoint] = axis.checkpoints
+        self.assertEqual(checkpoint.tree_size, 2)
+        verified, untrusted = checkpoint.witnesses
+        self.assertEqual(verified.status, "verified")
+        self.assertEqual(verified.attested_at, axis.earliest_attested_at)
+        self.assertIsNone(verified.detail)
+        self.assertEqual(untrusted.status, "untrusted")
+        self.assertIn("none of the supplied anchors", untrusted.detail)
+        # Without any witness the field is simply absent.
+        bare = envelopes.VerifyReport.from_json(golden("verify_report_consistent.json"))
+        self.assertIsNone(bare.witnesses)
+
+        pack = envelopes.PackVerificationReport.from_json(
+            golden("pack_verification_report.json"), envelopes.parse_window_verification
+        )
+        self.assertIsInstance(pack.verdict, envelopes.WindowIntact)
+        self.assertEqual(pack.witnesses, axis)
+
+        for name, status in [
+            ("witness_verdict_invalid.json", "invalid"),
+            ("witness_verdict_unverified.json", "unverified"),
+            ("witness_verdict_unsupported.json", "unsupported"),
+        ]:
+            verdict = envelopes.WitnessVerdict.from_json(golden(name))
+            self.assertEqual(verdict.status, status)
+            self.assertIsNotNone(verdict.detail)
+        self.assertIsNone(
+            envelopes.WitnessVerdict.from_json(golden("witness_verdict_invalid.json")).attested_at
+        )
+
     def test_verify_report_divergent_and_tampered(self):
         report = envelopes.VerifyReport.from_json(golden("verify_report_divergent.json"))
         self.assertIsInstance(report.replay, envelopes.ReplayDivergent)
@@ -505,6 +539,14 @@ class TamperEvidence(unittest.TestCase):
         self.assertEqual(sig.purpose, "audit_checkpoint_v1")
         self.assertTrue(sig.public_key.startswith("ed25519-pub:"))
         self.assertTrue(sig.signature.startswith("ed25519-sig:"))
+        witnessed = envelopes.parse_checkpoint_outcome(golden("checkpoint_created_witnessed.json"))
+        [witness] = witnessed.checkpoint.witnesses
+        self.assertEqual(witness.scheme, "rfc3161")
+        self.assertEqual(witness.submitted_to, "http://timestamp.example/tsr")
+        self.assertTrue(witness.proof.startswith("MIIB"))
+        self.assertEqual(signed.checkpoint.witnesses, [])
+        bare = envelopes.Checkpoint.from_json(golden("checkpoint_witnessed.json"))
+        self.assertEqual(bare.witnesses, witnessed.checkpoint.witnesses)
 
     def test_every_tree_verdict_parses(self):
         for name, cls in [

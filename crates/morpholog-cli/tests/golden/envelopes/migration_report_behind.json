@@ -1,6 +1,6 @@
 {
   "applied": [],
-  "binary_version": 12,
+  "binary_version": 13,
   "pending": [
     {
       "name": "rejections_witness",
@@ -13,6 +13,10 @@
     {
       "name": "claims_hash_key",
       "version": 12
+    },
+    {
+      "name": "checkpoint_witnesses",
+      "version": 13
     }
   ],
   "recorded_version_after": 9,

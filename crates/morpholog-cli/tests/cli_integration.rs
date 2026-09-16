@@ -3500,3 +3500,278 @@ async fn an_already_reported_failure_gets_no_second_message() {
         "the sentinel's Display is an implementation detail, never output: {stderr}"
     );
 }
+
+/// The recorded DigiCert token over the frozen sample head, base64 as a
+/// checkpoint stores it. It vouches for that head and no other.
+fn recorded_witness_json() -> Value {
+    use base64::Engine as _;
+    let tsr = std::fs::read(format!(
+        "{}/../morpholog-witness/tests/fixtures/rfc3161/genesis_digicert.tsr",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    serde_json::json!({
+        "scheme": "rfc3161",
+        "proof": base64::engine::general_purpose::STANDARD.encode(tsr),
+        "submitted_to": "http://timestamp.digicert.com",
+    })
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_witness_that_does_not_vouch_for_its_checkpoint_fails_the_live_verify() {
+    // Attacker capability: attaches a genuine timestamp token, obtained
+    // over some other head, to a checkpoint it never covered.
+    reset_db().await;
+    post_balanced_entry("w1", 100);
+    let (status, cp_stdout, stderr) = run_cli(&["audit", "checkpoint"]);
+    assert!(status.success(), "{stderr}");
+    let cp: Value = serde_json::from_str(&cp_stdout).unwrap();
+
+    // Before any witness: the report has no witness axis at all.
+    let (status, stdout, _) = run_cli(&["audit", "verify"]);
+    assert!(status.success(), "{stdout}");
+    let report: Value = serde_json::from_str(&stdout).unwrap();
+    assert!(report.get("witnesses").is_none(), "{stdout}");
+
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    let witness: morpholog_postgres::Witness =
+        serde_json::from_value(recorded_witness_json()).unwrap();
+    morpholog_postgres::attach_witness(
+        &pool,
+        cp["tree_size"].as_i64().unwrap(),
+        cp["checkpoint_hash"].as_str().unwrap(),
+        witness,
+    )
+    .await
+    .unwrap();
+
+    let (status, stdout, _) = run_cli(&["audit", "verify"]);
+    assert!(!status.success(), "an invalid witness fails: {stdout}");
+    let report: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        report["tree"]["status"], "intact",
+        "the tree itself is fine: {stdout}"
+    );
+    let verdict = &report["witnesses"]["checkpoints"][0]["witnesses"][0];
+    assert_eq!(verdict["status"], "invalid", "{stdout}");
+    assert_eq!(verdict["submitted_to"], "http://timestamp.digicert.com");
+    assert!(
+        verdict.get("attested_at").is_none(),
+        "no time from a token that does not apply"
+    );
+    assert!(report["witnesses"].get("earliest_attested_at").is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn verify_pack_reports_witnesses_only_when_asked() {
+    reset_db().await;
+    post_balanced_entry("wp1", 100);
+    let (status, _, stderr) = run_cli(&["audit", "checkpoint"]);
+    assert!(status.success(), "{stderr}");
+    let (status, pack_stdout, stderr) = run_cli(&["audit", "export"]);
+    assert!(status.success(), "{stderr}");
+
+    // The same pack with the recorded token grafted onto its checkpoint.
+    let mut pack: Value = serde_json::from_str(&pack_stdout).unwrap();
+    pack["checkpoints"][0]["witnesses"] = Value::Array(vec![recorded_witness_json()]);
+    let mut packfile = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut packfile, pack.to_string().as_bytes()).unwrap();
+    let path = packfile.path().to_str().unwrap();
+
+    // Not asked: the bare verdict, byte-for-byte the shape it always had.
+    let (status, stdout, _) = run_cli_no_db(&["audit", "verify-pack", path]);
+    assert!(status.success(), "{stdout}");
+    let bare: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(bare["status"], "intact", "{stdout}");
+    assert!(bare.get("witnesses").is_none() && bare.get("verdict").is_none());
+
+    // Asked: the wrapper, and the grafted token is judged invalid.
+    let (status, stdout, _) = run_cli_no_db(&["audit", "verify-pack", path, "--witnesses"]);
+    assert!(!status.success(), "{stdout}");
+    let wrapped: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(wrapped["verdict"]["status"], "intact", "{stdout}");
+    assert_eq!(
+        wrapped["witnesses"]["checkpoints"][0]["witnesses"][0]["status"], "invalid",
+        "{stdout}"
+    );
+
+    // A trust-anchor file implies asking; an unreadable one is operational.
+    let (status, stdout, stderr) = run_cli_no_db(&[
+        "audit",
+        "verify-pack",
+        path,
+        "--trusted-tsa-file",
+        "/nonexistent/tsa.pem",
+    ]);
+    assert!(!status.success() && stdout.trim().is_empty(), "{stdout}");
+    assert!(stderr.contains("trusted TSA file"), "{stderr}");
+}
+
+/// A one-shot timestamp authority on localhost that answers every request
+/// with the same canned bytes, and hands back the request head it saw.
+/// Enough to drive the whole submission path except the authority's
+/// signature, which no offline double can produce.
+fn canned_tsa(reply: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/tsr", listener.local_addr().unwrap());
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = vec![0_u8; 8192];
+        let n = stream.read(&mut buf).unwrap();
+        let head = String::from_utf8_lossy(&buf[..n]).to_string();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/timestamp-reply\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n",
+            reply.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        stream.write_all(&reply).unwrap();
+        head
+    });
+    (url, handle)
+}
+
+fn recorded_tsr() -> Vec<u8> {
+    std::fs::read(format!(
+        "{}/../morpholog-witness/tests/fixtures/rfc3161/genesis_digicert.tsr",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_response_over_another_head_is_refused_and_the_checkpoint_still_stands() {
+    // Attacker capability: an authority (or the path to it) answers with
+    // a genuine token over some other head. Nothing of it is stored; the
+    // checkpoint is recorded and printed regardless.
+    reset_db().await;
+    post_balanced_entry("ws1", 100);
+
+    let (url, served) = canned_tsa(recorded_tsr());
+    let target = format!("rfc3161:{url}");
+    let (status, stdout, stderr) = run_cli(&["audit", "checkpoint", "--witness", &target]);
+    assert!(!status.success(), "a failed submission exits one: {stderr}");
+    let cp: Value = serde_json::from_str(&stdout).expect("the checkpoint is still printed");
+    assert_eq!(cp["status"], "created", "{stdout}");
+    assert!(cp.get("witnesses").is_none(), "nothing stored: {stdout}");
+    assert!(stderr.contains("does not vouch for this head"), "{stderr}");
+    assert!(
+        stderr.contains("audit witness --tree-size 1"),
+        "the retry is named: {stderr}"
+    );
+    let request_head = served.join().unwrap();
+    assert!(
+        request_head.starts_with("POST /tsr HTTP/1.1"),
+        "{request_head}"
+    );
+    assert!(
+        request_head.contains("content-type: application/timestamp-query"),
+        "{request_head}"
+    );
+
+    // The retry path refuses the same answer the same way, storing
+    // nothing, and still prints the checkpoint as it stands.
+    let (url, _served) = canned_tsa(recorded_tsr());
+    let target = format!("rfc3161:{url}");
+    let (status, stdout, stderr) =
+        run_cli(&["audit", "witness", "--tree-size", "1", "--witness", &target]);
+    assert!(!status.success(), "{stderr}");
+    let cp: Value = serde_json::from_str(&stdout).expect("the checkpoint is printed");
+    assert_eq!(cp["tree_size"], 1);
+    assert!(cp.get("witnesses").is_none(), "{stdout}");
+    assert!(stderr.contains("nothing stored"), "{stderr}");
+    assert!(stderr.contains(&format!("--witness {target}")), "{stderr}");
+
+    // Every authority named is attempted, and the retry names exactly
+    // the ones that failed.
+    let (url_a, served_a) = canned_tsa(recorded_tsr());
+    let (url_b, served_b) = canned_tsa(recorded_tsr());
+    let (target_a, target_b) = (format!("rfc3161:{url_a}"), format!("rfc3161:{url_b}"));
+    let (status, _, stderr) = run_cli(&[
+        "audit",
+        "witness",
+        "--tree-size",
+        "1",
+        "--witness",
+        &target_a,
+        "--witness",
+        &target_b,
+    ]);
+    assert!(!status.success());
+    served_a.join().unwrap();
+    served_b.join().unwrap();
+    assert!(
+        stderr.contains(&format!("--witness {target_a} --witness {target_b}")),
+        "{stderr}"
+    );
+    let (status, stdout, _) = run_cli(&["audit", "verify"]);
+    assert!(status.success(), "{stdout}");
+    assert!(
+        serde_json::from_str::<Value>(&stdout)
+            .unwrap()
+            .get("witnesses")
+            .is_none(),
+        "{stdout}"
+    );
+
+    // An unknown tree size is operational, not a verdict.
+    let (status, stdout, stderr) =
+        run_cli(&["audit", "witness", "--tree-size", "7", "--witness", &target]);
+    assert!(!status.success() && stdout.trim().is_empty());
+    assert!(
+        stderr.contains("no checkpoint is recorded at tree size 7"),
+        "{stderr}"
+    );
+
+    // No new rows: nothing is submitted, the head is re-printed, the
+    // note names the command that witnesses it.
+    let (status, stdout, stderr) = run_cli(&["audit", "checkpoint", "--witness", &target]);
+    assert!(status.success(), "{stderr}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout).unwrap()["status"],
+        "no_new_rows"
+    );
+    assert!(stderr.contains("audit witness --tree-size 1"), "{stderr}");
+}
+
+/// The success path needs a real authority's signature, so it runs only
+/// when `MORPHOLOG_NETWORK_TESTS` is set: DigiCert's public RFC 3161
+/// service witnesses a fresh head, and the live verifier judges it
+/// `verified` against DigiCert's published chain.
+#[tokio::test(flavor = "current_thread")]
+async fn a_public_authority_witnesses_a_fresh_head_end_to_end() {
+    if std::env::var_os("MORPHOLOG_NETWORK_TESTS").is_none() {
+        eprintln!("skipped: set MORPHOLOG_NETWORK_TESTS=1 to reach the public authority");
+        return;
+    }
+    reset_db().await;
+    post_balanced_entry("wn1", 100);
+    let (status, stdout, stderr) = run_cli(&[
+        "audit",
+        "checkpoint",
+        "--witness",
+        "rfc3161:http://timestamp.digicert.com",
+    ]);
+    assert!(status.success(), "{stderr}");
+    let cp: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(cp["witnesses"][0]["scheme"], "rfc3161", "{stdout}");
+    assert_eq!(
+        cp["witnesses"][0]["submitted_to"],
+        "http://timestamp.digicert.com"
+    );
+
+    let chain = format!(
+        "{}/../morpholog-witness/tests/fixtures/rfc3161/digicert_chain.pem",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let (status, stdout, _) = run_cli(&["audit", "verify", "--trusted-tsa-file", &chain]);
+    assert!(status.success(), "{stdout}");
+    let report: Value = serde_json::from_str(&stdout).unwrap();
+    let verdict = &report["witnesses"]["checkpoints"][0]["witnesses"][0];
+    assert_eq!(verdict["status"], "verified", "{stdout}");
+    assert!(
+        report["witnesses"]["earliest_attested_at"].is_string(),
+        "{stdout}"
+    );
+}

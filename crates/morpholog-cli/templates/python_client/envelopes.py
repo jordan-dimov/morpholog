@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from collections.abc import Set as AbstractSet
-from typing import Callable, TypeVar
+from typing import Callable, Generic, TypeVar
 
 from . import values
 
@@ -1573,23 +1573,106 @@ def parse_views_verification(payload: object) -> ViewsVerification:
 
 
 @dataclass(frozen=True)
+class WitnessVerdict:
+    """One stored external witness, judged: ``verified`` (its token
+    chains to a supplied trust anchor), ``untrusted`` (a sound token from
+    an authority you did not name), ``unverified`` (sound, no anchors
+    supplied), ``unsupported`` (this verifier cannot check it), or
+    ``invalid`` (it does not vouch for this checkpoint - the one standing
+    that fails the command). ``attested_at`` is the authority's time,
+    present whenever the token could be read."""
+
+    scheme: str
+    submitted_to: str
+    status: str
+    attested_at: datetime | None = None
+    detail: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> WitnessVerdict:
+        data = _strict(
+            "witness verdict",
+            payload,
+            {"scheme", "submitted_to", "status"},
+            optional={"attested_at", "detail"},
+        )
+        detail = data.get("detail")
+        return cls(
+            scheme=data["scheme"],
+            submitted_to=data["submitted_to"],
+            status=data["status"],
+            attested_at=_optional_timestamp(data.get("attested_at")),
+            detail=None if detail is None else str(detail),
+        )
+
+
+@dataclass(frozen=True)
+class CheckpointWitnesses:
+    """A checkpoint's witnesses, judged."""
+
+    tree_size: int
+    witnesses: list[WitnessVerdict]
+
+    @classmethod
+    def from_json(cls, payload: object) -> CheckpointWitnesses:
+        data = _strict("checkpoint witnesses", payload, {"tree_size", "witnesses"})
+        raw = data["witnesses"]
+        if not isinstance(raw, list):
+            raise EnvelopeError(f"`witnesses` must be a list, got {raw!r}")
+        return cls(
+            tree_size=data["tree_size"],
+            witnesses=[WitnessVerdict.from_json(w) for w in raw],
+        )
+
+
+@dataclass(frozen=True)
+class WitnessesReport:
+    """What the external witnesses on a chain of checkpoints prove.
+    ``earliest_attested_at`` is the earliest time any VERIFIED witness
+    attests - the figure a "no later than" claim can rest on; absent when
+    none verified."""
+
+    checkpoints: list[CheckpointWitnesses]
+    earliest_attested_at: datetime | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> WitnessesReport:
+        data = _strict(
+            "witnesses report", payload, {"checkpoints"}, optional={"earliest_attested_at"}
+        )
+        raw = data["checkpoints"]
+        if not isinstance(raw, list):
+            raise EnvelopeError(f"`checkpoints` must be a list, got {raw!r}")
+        return cls(
+            checkpoints=[CheckpointWitnesses.from_json(c) for c in raw],
+            earliest_attested_at=_optional_timestamp(data.get("earliest_attested_at")),
+        )
+
+
+@dataclass(frozen=True)
 class VerifyReport:
     """The `verify` envelope: the replay verdict beside the
     tamper-evidence verdict, plus the generated-view-surface verdict
-    when the verifier asked for it (`--views-schema`)."""
+    when the verifier asked for it (`--views-schema`), plus what the
+    checkpoints' external witnesses prove when any carries one."""
 
     replay: ReplayConsistent | ReplayDivergent
     tree: TreeVerification
     views: ViewsVerification | None = None
+    witnesses: WitnessesReport | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> VerifyReport:
-        data = _strict("verify report", payload, {"replay", "tree"}, optional={"views"})
+        data = _strict(
+            "verify report", payload, {"replay", "tree"}, optional={"views", "witnesses"}
+        )
         views = data.get("views")
+        witnesses = data.get("witnesses")
         return cls(
             replay=parse_verify_outcome(data["replay"]),
             tree=parse_tree_verification(data["tree"]),
             views=None if views is None else parse_views_verification(views),
+            witnesses=None if witnesses is None else WitnessesReport.from_json(witnesses),
         )
 
 
@@ -1617,6 +1700,30 @@ class TreeHeadSignature:
         )
 
 
+@dataclass(frozen=True)
+class Witness:
+    """One external witness to a tree head: the authority's exact
+    response (`proof`, base64) and where it was obtained. The attested
+    time and whether it verifies are read from the proof by the
+    verifier, never stored."""
+
+    scheme: str
+    proof: str
+    submitted_to: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> Witness:
+        data = _strict("witness", payload, {"scheme", "proof", "submitted_to"})
+        return cls(scheme=data["scheme"], proof=data["proof"], submitted_to=data["submitted_to"])
+
+
+def _parse_witnesses(data: dict[str, object]) -> list[Witness]:
+    raw = data.get("witnesses", [])
+    if not isinstance(raw, list):
+        raise EnvelopeError(f"`witnesses` must be a list, got {raw!r}")
+    return [Witness.from_json(w) for w in raw]
+
+
 def _parse_signatures(data: dict[str, object]) -> list[TreeHeadSignature]:
     raw = data.get("signatures", [])
     if not isinstance(raw, list):
@@ -1636,6 +1743,7 @@ class Checkpoint:
     prev_checkpoint_hash: str | None
     checkpoint_hash: str
     signatures: list[TreeHeadSignature] = field(default_factory=list)
+    witnesses: list[Witness] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> Checkpoint:
@@ -1643,7 +1751,7 @@ class Checkpoint:
             "checkpoint",
             payload,
             {"tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
-            {"signatures"},
+            {"signatures", "witnesses"},
         )
         return cls(
             tree_size=data["tree_size"],
@@ -1651,6 +1759,7 @@ class Checkpoint:
             prev_checkpoint_hash=data["prev_checkpoint_hash"],
             checkpoint_hash=data["checkpoint_hash"],
             signatures=_parse_signatures(data),
+            witnesses=_parse_witnesses(data),
         )
 
 
@@ -1662,7 +1771,7 @@ def _checkpoint_from_flattened(name: str, payload: object) -> Checkpoint:
         name,
         payload,
         {"status", "tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
-        {"signatures"},
+        {"signatures", "witnesses"},
     )
     return Checkpoint(
         tree_size=data["tree_size"],
@@ -1670,6 +1779,7 @@ def _checkpoint_from_flattened(name: str, payload: object) -> Checkpoint:
         prev_checkpoint_hash=data["prev_checkpoint_hash"],
         checkpoint_hash=data["checkpoint_hash"],
         signatures=_parse_signatures(data),
+        witnesses=_parse_witnesses(data),
     )
 
 
@@ -2173,3 +2283,27 @@ def parse_selective_verification(payload: object) -> SelectiveVerification:
             "malformed": SelectiveMalformed.from_json,
         },
     )
+
+
+_PackVerdict = TypeVar("_PackVerdict")
+
+
+@dataclass(frozen=True)
+class PackVerificationReport(Generic[_PackVerdict]):
+    """`verify-pack` with the witness axis requested: the pack's own
+    verdict beside what its checkpoints' witnesses prove. ``witnesses``
+    is absent when no checkpoint in the pack carries one."""
+
+    verdict: _PackVerdict
+    witnesses: WitnessesReport | None = None
+
+    @classmethod
+    def from_json(
+        cls, payload: object, parse_verdict: Callable[[object], _PackVerdict]
+    ) -> PackVerificationReport[_PackVerdict]:
+        data = _strict("pack verification report", payload, {"verdict"}, optional={"witnesses"})
+        witnesses = data.get("witnesses")
+        return cls(
+            verdict=parse_verdict(data["verdict"]),
+            witnesses=None if witnesses is None else WitnessesReport.from_json(witnesses),
+        )

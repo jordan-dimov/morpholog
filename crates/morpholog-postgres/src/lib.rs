@@ -44,6 +44,7 @@ mod signing;
 mod sql_quote;
 mod txn;
 mod verify;
+mod witnesses;
 
 // Re-export the full public surface so `morpholog_postgres::X` paths are unchanged.
 pub use actor_policy::{
@@ -60,8 +61,9 @@ pub use audit::{
 };
 pub use checkpoints::{
     Checkpoint, CheckpointOutcome, CheckpointSigner, SignaturePolicy, SignaturePolicyViolation,
-    TreeHeadSignature, TreeVerification, create_checkpoint, verify_audit_tree,
-    verify_audit_tree_under, with_anchor_signatures,
+    TreeHeadSignature, TreeVerification, Witness, WitnessScheme, attach_witness, create_checkpoint,
+    load_checkpoint, verify_audit_tree, verify_audit_tree_under, verify_audit_tree_with_chain,
+    with_anchor_signatures,
 };
 pub use claims::{
     ClaimFilter, list_claims, list_claims_for_predicates, list_claims_where, load_scoped_state,
@@ -102,8 +104,12 @@ pub use score::{
 pub use signing::{
     SigningError, TreeHead, generate_signing_key, parse_public_key, parse_signature,
     render_public_key, render_signature, sign_tree_head, signing_key_from_pem, signing_key_to_pem,
-    tree_head_signing_bytes, verify_tree_head,
+    tree_head_signing_bytes, tree_head_witness_bytes, verify_tree_head,
 };
 pub use verify::{
     VerifyOutcome, VerifyReport, ViewsVerification, coverage_replay, verify_replay, verify_views,
+};
+pub use witnesses::{
+    CheckpointWitnesses, PackVerdict, PackVerificationReport, WitnessAnchors, WitnessStanding,
+    WitnessVerdict, WitnessesReport, witnesses_report,
 };

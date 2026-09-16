@@ -149,7 +149,16 @@ CREATE TABLE audit_checkpoints (
     -- keeps a hand-edit from turning a tamper-evidence verdict into a
     -- decode error on the read path.
     signatures            jsonb        NOT NULL DEFAULT '[]'::jsonb
-        CHECK (jsonb_typeof(signatures) = 'array')
+        CHECK (jsonb_typeof(signatures) = 'array'),
+    -- External witnesses to this tree head; `[]` when none. Each element
+    -- is {scheme, proof, submitted_to}: the authority's response stored
+    -- as the exact bytes received (base64), and where it came from.
+    -- Nothing derived is stored - the attested time and whether the
+    -- proof verifies are read from the proof by the verifier, because
+    -- witnesses sit outside checkpoint_hash and a stored derivation
+    -- would be a mutable duplicate.
+    witnesses             jsonb        NOT NULL DEFAULT '[]'::jsonb
+        CHECK (jsonb_typeof(witnesses) = 'array')
 );
 
 -- At most one genesis checkpoint (the single chain root). A plain UNIQUE

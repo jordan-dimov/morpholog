@@ -22,6 +22,12 @@ use pkcs8::LineEnding;
 
 /// The payload type bound into every audit-tree-head signature.
 const TREE_HEAD_PAYLOAD_TYPE: &str = "application/vnd.morpholog.tree-head.v1";
+/// The payload type an external witness (a timestamp authority) binds:
+/// the head alone, without a purpose or key id, since a witness speaks
+/// for no key - and without the signature set, which may lawfully grow
+/// after the fact. Its own type string keeps a witness digest from ever
+/// colliding with a signing payload over the same head.
+const TREE_HEAD_WITNESS_PAYLOAD_TYPE: &str = "application/vnd.morpholog.tree-head-witness.v1";
 /// Rendering prefixes, mirroring the `sha256:` convention on hashes.
 const PUBLIC_KEY_PREFIX: &str = "ed25519-pub:";
 const SIGNATURE_PREFIX: &str = "ed25519-sig:";
@@ -59,6 +65,28 @@ pub fn tree_head_signing_bytes(purpose: &str, key_id: &str, head: &TreeHead<'_>)
     push_field(&mut b, TREE_HEAD_PAYLOAD_TYPE.as_bytes());
     push_field(&mut b, purpose.as_bytes());
     push_field(&mut b, key_id.as_bytes());
+    push_field(&mut b, &head.tree_size.to_le_bytes());
+    push_field(&mut b, head.root_hash.as_bytes());
+    match head.prev_checkpoint_hash {
+        Some(prev) => {
+            b.push(1);
+            push_field(&mut b, prev.as_bytes());
+        }
+        None => b.push(0),
+    }
+    push_field(&mut b, head.checkpoint_hash.as_bytes());
+    b
+}
+
+/// The bytes an external witness commits to: the typed, length-delimited
+/// head, encoded exactly as [`tree_head_signing_bytes`] encodes it, minus
+/// the signing-only fields. A timestamp authority receives the SHA-256 of
+/// these bytes as its message imprint. Frozen by test in both branches
+/// (genesis and chained), since a stored proof stops verifying the moment
+/// this encoding moves.
+pub fn tree_head_witness_bytes(head: &TreeHead<'_>) -> Vec<u8> {
+    let mut b = Vec::new();
+    push_field(&mut b, TREE_HEAD_WITNESS_PAYLOAD_TYPE.as_bytes());
     push_field(&mut b, &head.tree_size.to_le_bytes());
     push_field(&mut b, head.root_hash.as_bytes());
     match head.prev_checkpoint_hash {
@@ -359,6 +387,36 @@ mod tests {
     fn frozen_chained_signing_input_pins_the_other_branch() {
         let bytes = tree_head_signing_bytes("audit_checkpoint_v1", "k1", &chained_head());
         assert_eq!(crate::hex::encode(&bytes), PRE_UPGRADE_INPUT_CHAINED);
+    }
+
+    /// The witness payload, frozen in both branches. The expected bytes
+    /// were derived independently of this implementation (field by field
+    /// from the encoding's definition), so the pin is not the code
+    /// checking itself.
+    #[test]
+    fn frozen_witness_payload_pins_both_branches() {
+        assert_eq!(
+            crate::hex::encode(&tree_head_witness_bytes(&sample_head())),
+            "2e000000000000006170706c69636174696f6e2f766e642e6d6f7270686f6c6f672e747265652d686561642d7769746e6573732e763108000000000000002a0000000000000047000000000000007368613235363a313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310047000000000000007368613235363a32323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232"
+        );
+        let chained = TreeHead {
+            tree_size: 43,
+            root_hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            prev_checkpoint_hash: Some(
+                "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            ),
+            checkpoint_hash: "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        };
+        assert_eq!(
+            crate::hex::encode(&tree_head_witness_bytes(&chained)),
+            "2e000000000000006170706c69636174696f6e2f766e642e6d6f7270686f6c6f672e747265652d686561642d7769746e6573732e763108000000000000002b0000000000000047000000000000007368613235363a313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310147000000000000007368613235363a3232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323247000000000000007368613235363a33333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333"
+        );
+        // Domain separation: the witness bytes over a head never equal the
+        // signing bytes over the same head under any purpose or key id.
+        assert_ne!(
+            tree_head_witness_bytes(&sample_head()),
+            tree_head_signing_bytes("audit_checkpoint_v1", "k1", &sample_head())
+        );
     }
 
     #[test]

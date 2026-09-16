@@ -76,6 +76,33 @@ pub struct TreeHeadSignature {
     pub signature: String,
 }
 
+/// Which external scheme a witness proof comes from. Rung one: RFC 3161
+/// timestamp tokens. OpenTimestamps joins as a second variant when its
+/// pending-then-upgraded lifecycle is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WitnessScheme {
+    Rfc3161,
+}
+
+/// One external witness to a tree head: the exact bytes a timestamp
+/// authority returned, stored opaque and never re-encoded, and where it
+/// was obtained. Nothing derived is stored - not the attested time, not
+/// whether it verifies - because a witness sits outside `checkpoint_hash`
+/// and a stored derivation would be a mutable duplicate of what the
+/// proof already proves; the verifier reads both from the proof. Two
+/// byte-identical proofs are one witness whatever URL served them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Witness {
+    pub scheme: WitnessScheme,
+    /// The scheme's proof, base64 (standard alphabet, padded): for RFC 3161
+    /// the whole `TimeStampResp` as received.
+    pub proof: String,
+    /// Provenance, not identity: the endpoint the proof came from.
+    pub submitted_to: String,
+}
+
 /// A checkpoint as it is stored, printed, and held externally as an
 /// anchor. `tree_size` + `root_hash` are the cryptographic commitment;
 /// `checkpoint_hash` is this checkpoint's identity in the chain.
@@ -89,6 +116,11 @@ pub struct Checkpoint {
     /// checkpoint is unsigned, which stays valid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signatures: Vec<TreeHeadSignature>,
+    /// External witnesses to the head; empty (and omitted from JSON) when
+    /// none was obtained, which stays valid - a witness adds "existed no
+    /// later than T", it never subtracts from the tree's own verdict.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub witnesses: Vec<Witness>,
 }
 
 /// Outcome of [`create_checkpoint`]. Both variants carry a full
@@ -339,7 +371,8 @@ async fn collect_leaves(
 async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Checkpoint>, PgError> {
     let row = sqlx::query!(
         r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
-                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>"
+                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
+                  witnesses as "witnesses: sqlx::types::Json<Vec<Witness>>"
            FROM morpholog.audit_checkpoints
            ORDER BY tree_size DESC
            LIMIT 1"#,
@@ -353,6 +386,7 @@ async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Check
         prev_checkpoint_hash: r.prev_checkpoint_hash,
         checkpoint_hash: r.checkpoint_hash,
         signatures: r.signatures.0,
+        witnesses: r.witnesses.0,
     }))
 }
 
@@ -563,6 +597,7 @@ pub async fn create_checkpoint(
         prev_checkpoint_hash: prev_hash,
         checkpoint_hash: cp_hash,
         signatures,
+        witnesses: Vec::new(),
     }))
 }
 
@@ -650,7 +685,8 @@ pub(crate) async fn load_checkpoint_chain(
 ) -> Result<Vec<Checkpoint>, PgError> {
     let stored = sqlx::query!(
         r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
-                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>"
+                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
+                  witnesses as "witnesses: sqlx::types::Json<Vec<Witness>>"
            FROM morpholog.audit_checkpoints
            ORDER BY tree_size ASC"#,
     )
@@ -665,8 +701,99 @@ pub(crate) async fn load_checkpoint_chain(
             prev_checkpoint_hash: r.prev_checkpoint_hash,
             checkpoint_hash: r.checkpoint_hash,
             signatures: r.signatures.0,
+            witnesses: r.witnesses.0,
         })
         .collect())
+}
+
+/// The checkpoint at exactly `tree_size`, if one was recorded there.
+pub async fn load_checkpoint(pool: &PgPool, tree_size: i64) -> Result<Option<Checkpoint>, PgError> {
+    let row = sqlx::query!(
+        r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
+                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
+                  witnesses as "witnesses: sqlx::types::Json<Vec<Witness>>"
+           FROM morpholog.audit_checkpoints
+           WHERE tree_size = $1"#,
+        tree_size,
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(row.map(|r| Checkpoint {
+        tree_size: r.tree_size,
+        root_hash: r.root_hash,
+        prev_checkpoint_hash: r.prev_checkpoint_hash,
+        checkpoint_hash: r.checkpoint_hash,
+        signatures: r.signatures.0,
+        witnesses: r.witnesses.0,
+    }))
+}
+
+/// Attach an external witness to the checkpoint at `tree_size`, which
+/// must still be the head the proof was obtained for: the caller went to
+/// the authority outside any transaction, and a chain rebuilt in between
+/// would make the proof about a head that no longer exists here.
+/// Monotonic and exact-deduplicated - a proof already present is not
+/// stored twice, whatever endpoint served it - and never a downgrade:
+/// nothing existing is removed, which the row lock guarantees when two
+/// attachments arrive together. Returns the checkpoint as now stored.
+pub async fn attach_witness(
+    pool: &PgPool,
+    tree_size: i64,
+    checkpoint_hash: &str,
+    witness: Witness,
+) -> Result<Checkpoint, PgError> {
+    let mut tx = pool.begin().await.map_err(classify)?;
+    let row = sqlx::query!(
+        r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
+                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
+                  witnesses as "witnesses: sqlx::types::Json<Vec<Witness>>"
+           FROM morpholog.audit_checkpoints
+           WHERE tree_size = $1
+           FOR UPDATE"#,
+        tree_size,
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(classify_checked_query)?;
+    let Some(row) = row else {
+        return Err(PgError::InvalidState(format!(
+            "no checkpoint at tree size {tree_size} to attach a witness to"
+        )));
+    };
+    let mut checkpoint = Checkpoint {
+        tree_size: row.tree_size,
+        root_hash: row.root_hash,
+        prev_checkpoint_hash: row.prev_checkpoint_hash,
+        checkpoint_hash: row.checkpoint_hash,
+        signatures: row.signatures.0,
+        witnesses: row.witnesses.0,
+    };
+    if checkpoint.checkpoint_hash != checkpoint_hash {
+        return Err(PgError::InvalidState(format!(
+            "the checkpoint at tree size {tree_size} is {} now, not {checkpoint_hash}: the \
+             proof was obtained for a head this chain no longer holds",
+            checkpoint.checkpoint_hash
+        )));
+    }
+    if !checkpoint
+        .witnesses
+        .iter()
+        .any(|w| w.scheme == witness.scheme && w.proof == witness.proof)
+    {
+        checkpoint.witnesses.push(witness);
+        sqlx::query!(
+            "UPDATE morpholog.audit_checkpoints
+             SET witnesses = $1 WHERE tree_size = $2",
+            sqlx::types::Json(&checkpoint.witnesses) as _,
+            tree_size,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(classify_checked_query)?;
+    }
+    tx.commit().await.map_err(classify)?;
+    Ok(checkpoint)
 }
 
 /// Verify the audit tree against its checkpoints. Reads under
@@ -691,6 +818,19 @@ pub async fn verify_audit_tree_under(
     anchor: Option<Checkpoint>,
     policy: Option<&SignaturePolicy>,
 ) -> Result<TreeVerification, PgError> {
+    verify_audit_tree_with_chain(pool, anchor, policy)
+        .await
+        .map(|(verdict, _)| verdict)
+}
+
+/// [`verify_audit_tree_under`], also handing back the checkpoint chain the
+/// verdict was computed over - the same snapshot - so the witness axis is
+/// judged on exactly the checkpoints the tree verdict saw.
+pub async fn verify_audit_tree_with_chain(
+    pool: &PgPool,
+    anchor: Option<Checkpoint>,
+    policy: Option<&SignaturePolicy>,
+) -> Result<(TreeVerification, Vec<Checkpoint>), PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
 
     let checkpoints = load_checkpoint_chain(&mut tx).await?;
@@ -711,7 +851,7 @@ pub async fn verify_audit_tree_under(
     {
         let rows = load_audit_rows(&mut tx, max_size).await?;
         if let Some(violation) = authority_violation(&checkpoints, anchor.as_ref(), &rows) {
-            return Ok(violation);
+            return Ok((violation, checkpoints));
         }
     }
     if let Some(policy) = policy
@@ -719,9 +859,9 @@ pub async fn verify_audit_tree_under(
         && let Some(violation) =
             policy.violation(&with_anchor_signatures(&checkpoints, anchor.as_ref()))
     {
-        return Ok(violation.into());
+        return Ok((violation.into(), checkpoints));
     }
-    Ok(verdict)
+    Ok((verdict, checkpoints))
 }
 
 /// The pure tamper-evidence check shared by [`verify_audit_tree`] (live,

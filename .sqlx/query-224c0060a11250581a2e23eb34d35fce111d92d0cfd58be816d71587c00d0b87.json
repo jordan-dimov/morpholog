@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE morpholog.audit_checkpoints\n             SET witnesses = $1 WHERE tree_size = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "224c0060a11250581a2e23eb34d35fce111d92d0cfd58be816d71587c00d0b87"
+}

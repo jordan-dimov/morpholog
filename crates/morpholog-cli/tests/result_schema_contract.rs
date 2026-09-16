@@ -35,11 +35,12 @@ use morpholog_core::{
     explain,
 };
 use morpholog_postgres::{
-    AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, EvidencePack, OutboxRow,
-    PackManifest, PgProposalOutcome, RowInclusionProof, SelectiveEvidencePack,
-    SelectivePackManifest, SelectiveVerification, TreeHeadSignature, TreeVerification,
-    VerifyOutcome, VerifyReport, ViewsVerification, WindowEvidencePack, WindowPackManifest,
-    WindowVerification,
+    AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, CheckpointWitnesses,
+    EvidencePack, OutboxRow, PackManifest, PackVerdict, PackVerificationReport, PgProposalOutcome,
+    RowInclusionProof, SelectiveEvidencePack, SelectivePackManifest, SelectiveVerification,
+    TreeHeadSignature, TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification,
+    WindowEvidencePack, WindowPackManifest, WindowVerification, WitnessScheme, WitnessStanding,
+    WitnessVerdict, WitnessesReport,
 };
 use rust_decimal::Decimal;
 use std::path::PathBuf;
@@ -537,7 +538,7 @@ fn migration_reports_serialize_as_pinned() {
     let behind = morpholog_postgres::MigrationReport {
         recorded_version_before: Some(9),
         recorded_version_after: Some(9),
-        binary_version: 12,
+        binary_version: 13,
         applied: Vec::new(),
         unknown: Vec::new(),
         pending: vec![
@@ -553,14 +554,18 @@ fn migration_reports_serialize_as_pinned() {
                 version: 12,
                 name: "claims_hash_key".to_string(),
             },
+            morpholog_postgres::MigrationRef {
+                version: 13,
+                name: "checkpoint_witnesses".to_string(),
+            },
         ],
     };
     assert_golden("migration_report_behind.json", &to_value(&behind));
 
     let applied = morpholog_postgres::MigrationReport {
         recorded_version_before: Some(9),
-        recorded_version_after: Some(12),
-        binary_version: 12,
+        recorded_version_after: Some(13),
+        binary_version: 13,
         applied: behind.pending.clone(),
         pending: Vec::new(),
         unknown: Vec::new(),
@@ -570,13 +575,13 @@ fn migration_reports_serialize_as_pinned() {
     // A database migrated by a NEWER binary. The dangerous shape: nothing
     // is pending, and it is emphatically not current.
     let ahead = morpholog_postgres::MigrationReport {
-        recorded_version_before: Some(13),
-        recorded_version_after: Some(13),
-        binary_version: 12,
+        recorded_version_before: Some(14),
+        recorded_version_after: Some(14),
+        binary_version: 13,
         applied: Vec::new(),
         pending: Vec::new(),
         unknown: vec![morpholog_postgres::MigrationRef {
-            version: 13,
+            version: 14,
             name: "something_this_build_never_saw".to_string(),
         }],
     };
@@ -1061,6 +1066,7 @@ fn sample_checkpoint() -> Checkpoint {
         prev_checkpoint_hash: None,
         checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
         signatures: Vec::new(),
+        witnesses: Vec::new(),
     }
 }
 
@@ -1095,6 +1101,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 tree_size: 2,
             },
             views: None,
+            witnesses: None,
         }),
     );
     // With the opt-in views leg: one golden per verdict shape.
@@ -1110,6 +1117,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 tree_size: 2,
             },
             views: Some(ViewsVerification::Intact { views_checked: 4 }),
+            witnesses: None,
         }),
     );
     assert_golden(
@@ -1135,6 +1143,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 only_in_replay: vec![],
             },
             views: None,
+            witnesses: None,
             tree: TreeVerification::Tampered {
                 tree_size: 2,
                 recorded_root: format!("sha256:{}", "a".repeat(64)),
@@ -1162,6 +1171,106 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
     assert_golden(
         "checkpoint_no_new_rows.json",
         &to_value(&CheckpointOutcome::NoNewRows(sample_checkpoint())),
+    );
+    let mut witnessed = sample_checkpoint();
+    witnessed.witnesses = vec![morpholog_postgres::Witness {
+        scheme: morpholog_postgres::WitnessScheme::Rfc3161,
+        proof: "MIIB".repeat(4),
+        submitted_to: "http://timestamp.example/tsr".into(),
+    }];
+    assert_golden(
+        "checkpoint_created_witnessed.json",
+        &to_value(&CheckpointOutcome::Created(witnessed.clone())),
+    );
+    // `audit witness` prints the checkpoint as now stored, bare.
+    assert_golden("checkpoint_witnessed.json", &to_value(&witnessed));
+
+    // The witness axis: what each stored witness proves, on the live
+    // report and on the pack report that carries it beside the verdict.
+    let attested = chrono::Utc
+        .with_ymd_and_hms(2026, 9, 16, 10, 20, 5)
+        .unwrap();
+    let witnesses_report = WitnessesReport {
+        checkpoints: vec![CheckpointWitnesses {
+            tree_size: 2,
+            witnesses: vec![
+                WitnessVerdict {
+                    scheme: WitnessScheme::Rfc3161,
+                    submitted_to: "http://timestamp.example/tsr".into(),
+                    status: WitnessStanding::Verified,
+                    attested_at: Some(attested),
+                    detail: None,
+                },
+                WitnessVerdict {
+                    scheme: WitnessScheme::Rfc3161,
+                    submitted_to: "http://other.example/tsr".into(),
+                    status: WitnessStanding::Untrusted,
+                    attested_at: Some(attested),
+                    detail: Some(
+                        "signer `CN=Other TSA` chains to none of the supplied anchors".into(),
+                    ),
+                },
+            ],
+        }],
+        earliest_attested_at: Some(attested),
+    };
+    assert_golden_bytes(
+        "verify_report_witnessed.json",
+        &VerifyReport {
+            replay: VerifyOutcome::Consistent {
+                transitions: 2,
+                claims: 3,
+            },
+            tree: TreeVerification::Intact {
+                checkpoints: 1,
+                tree_size: 2,
+            },
+            views: None,
+            witnesses: Some(witnesses_report.clone()),
+        },
+    );
+    assert_golden_bytes(
+        "pack_verification_report.json",
+        &PackVerificationReport {
+            verdict: PackVerdict::Window(WindowVerification::Intact {
+                from_tree_size: 2,
+                to_tree_size: 3,
+                rows: 1,
+            }),
+            witnesses: Some(witnesses_report),
+        },
+    );
+    assert_golden(
+        "witness_verdict_invalid.json",
+        &to_value(&WitnessVerdict {
+            scheme: WitnessScheme::Rfc3161,
+            submitted_to: "http://timestamp.example/tsr".into(),
+            status: WitnessStanding::Invalid,
+            attested_at: None,
+            detail: Some("the token's message imprint is not this head's witness payload".into()),
+        }),
+    );
+    assert_golden(
+        "witness_verdict_unverified.json",
+        &to_value(&WitnessVerdict {
+            scheme: WitnessScheme::Rfc3161,
+            submitted_to: "http://timestamp.example/tsr".into(),
+            status: WitnessStanding::Unverified,
+            attested_at: Some(attested),
+            detail: Some("no trust anchors were supplied".into()),
+        }),
+    );
+    assert_golden(
+        "witness_verdict_unsupported.json",
+        &to_value(&WitnessVerdict {
+            scheme: WitnessScheme::Rfc3161,
+            submitted_to: "http://timestamp.example/tsr".into(),
+            status: WitnessStanding::Unsupported,
+            attested_at: None,
+            detail: Some(
+                "signature algorithm 1.2.840.10045.4.3.4 is not one this verifier checks".into(),
+            ),
+        }),
     );
 
     // `audit export`: the portable pack.
@@ -1254,6 +1363,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 prev_checkpoint_hash: Some(format!("sha256:{}", "b".repeat(64))),
                 checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
                 signatures: Vec::new(),
+                witnesses: Vec::new(),
             },
             consistency_proof: vec![format!("sha256:{}", "e".repeat(64))],
             rows: vec![sample_audit_row()],
@@ -1329,6 +1439,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 prev_checkpoint_hash: Some(format!("sha256:{}", "b".repeat(64))),
                 checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
                 signatures: Vec::new(),
+                witnesses: Vec::new(),
             },
             rows: vec![sample_audit_row()],
             inclusion_proofs: vec![RowInclusionProof {
@@ -1748,6 +1859,13 @@ fn every_golden_validates_against_its_defs_entry() {
         ("checkpoint_created.json", "checkpoint_outcome"),
         ("checkpoint_created_signed.json", "checkpoint_outcome"),
         ("checkpoint_no_new_rows.json", "checkpoint_outcome"),
+        ("checkpoint_created_witnessed.json", "checkpoint_outcome"),
+        ("checkpoint_witnessed.json", "checkpoint"),
+        ("verify_report_witnessed.json", "verify_report"),
+        ("pack_verification_report.json", "pack_verification_report"),
+        ("witness_verdict_invalid.json", "witness_verdict"),
+        ("witness_verdict_unverified.json", "witness_verdict"),
+        ("witness_verdict_unsupported.json", "witness_verdict"),
         ("evidence_pack.json", "evidence_pack"),
         ("tree_verification_chain_broken.json", "tree_verification"),
         (

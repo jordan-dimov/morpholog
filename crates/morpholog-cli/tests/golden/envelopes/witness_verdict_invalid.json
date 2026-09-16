@@ -1,0 +1,6 @@
+{
+  "detail": "the token's message imprint is not this head's witness payload",
+  "scheme": "rfc3161",
+  "status": "invalid",
+  "submitted_to": "http://timestamp.example/tsr"
+}

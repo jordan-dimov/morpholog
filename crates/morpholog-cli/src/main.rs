@@ -395,6 +395,16 @@ pub(crate) struct VerifyArgs {
     #[arg(long, value_name = "FILE")]
     pub(crate) require_signing_key: Option<std::path::PathBuf>,
 
+    /// Trust anchors for the external witnesses checkpoints carry: a PEM
+    /// file of the timestamp authorities' CA certificates. A witness whose
+    /// token chains to one of them reports `verified`; one that does not,
+    /// `untrusted`. Without this file every intact witness is
+    /// `unverified` - present and consistent, but vouched for by no one
+    /// you named. A witness that does not match its checkpoint is
+    /// `invalid` either way, and fails the command.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) trusted_tsa_file: Option<std::path::PathBuf>,
+
     /// Also verify the generated SQL view surface in this schema: each
     /// catalogued view's live definition (as PostgreSQL stores it) must
     /// hash to the seal recorded when the views were applied, so a view
@@ -426,6 +436,39 @@ pub(crate) struct CheckpointArgs {
 
     #[command(flatten)]
     pub(crate) writers: WriterRoleArgs,
+
+    /// Also have an outside authority witness the new head:
+    /// `rfc3161:<url>` posts a timestamp request for it to that RFC 3161
+    /// authority and stores the exact response on the checkpoint, so a
+    /// later verifier can show the head existed no later than the
+    /// authority's time. Repeat for several authorities: every one is
+    /// attempted and each response stored as it arrives. The checkpoint
+    /// is recorded first and printed whatever the authorities do; any
+    /// failed submission exits one and names the `audit witness` command
+    /// that retries exactly those. Skipped when no new rows were
+    /// checkpointed.
+    #[arg(long, value_name = "SCHEME:URL")]
+    pub(crate) witness: Vec<commands::witness::WitnessTarget>,
+}
+
+/// Arguments for `audit witness`: which recorded checkpoint, and which
+/// authorities.
+#[derive(clap::Args, Debug)]
+pub(crate) struct WitnessArgs {
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+
+    /// The recorded checkpoint to have witnessed, by its tree size (as
+    /// `audit checkpoint` printed it).
+    #[arg(long, value_parser = clap::value_parser!(i64).range(0..))]
+    pub(crate) tree_size: i64,
+
+    /// `rfc3161:<url>` - the RFC 3161 authority to post the request to.
+    /// Repeat for several: every one is attempted, each response is
+    /// stored as it arrives, and the command exits one naming any that
+    /// failed and the one command that retries exactly those.
+    #[arg(long, value_name = "SCHEME:URL", required = true)]
+    pub(crate) witness: Vec<commands::witness::WitnessTarget>,
 }
 
 /// Arguments for `keygen`: where to write the new Ed25519 keypair.
@@ -510,6 +553,16 @@ pub(crate) enum AuditCmd {
     /// `--signing-key` the tree head is signed, so the anchor is
     /// attributable as well as tamper-evident.
     Checkpoint(CheckpointArgs),
+
+    /// Have an outside authority witness a recorded checkpoint.
+    ///
+    /// Posts an RFC 3161 timestamp request over the checkpoint's head
+    /// and stores the authority's exact response on it, after checking
+    /// the response is over this head. A later `audit verify` or
+    /// `verify-pack` judges the stored token against the authorities
+    /// the verifier trusts. Same as `audit checkpoint --witness`, for a
+    /// head recorded earlier or a submission that failed then.
+    Witness(WitnessArgs),
 
     /// Export a portable evidence pack as JSON (redirect to a file).
     ///
@@ -616,6 +669,19 @@ pub(crate) struct EvidenceVerifyArgs {
     /// Implies requiring signatures.
     #[arg(long, value_name = "FILE")]
     pub(crate) require_signing_key: Option<std::path::PathBuf>,
+
+    /// Also report what the external witnesses on the pack's checkpoints
+    /// prove. The output becomes `{"verdict": <the pack verdict>,
+    /// "witnesses": ...}`; without this flag it stays the bare verdict.
+    #[arg(long)]
+    pub(crate) witnesses: bool,
+
+    /// Trust anchors for those witnesses: a PEM file of the timestamp
+    /// authorities' CA certificates (`verified` if a token chains to one,
+    /// `untrusted` if not, `unverified` without the file). Implies
+    /// `--witnesses`. An `invalid` witness fails the command.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) trusted_tsa_file: Option<std::path::PathBuf>,
 }
 
 /// Arguments for `init`: the connection string plus the idempotent
@@ -1378,6 +1444,7 @@ async fn run() -> anyhow::Result<()> {
         Command::Audit { what } => match what {
             AuditCmd::Verify(args) => commands::verify::run(args).await,
             AuditCmd::Checkpoint(args) => commands::checkpoint::run(args).await,
+            AuditCmd::Witness(args) => commands::witness::run(args).await,
             AuditCmd::Export(args) => commands::evidence::export(args).await,
             AuditCmd::VerifyPack(args) => commands::evidence::verify(args),
             AuditCmd::Keygen(args) => commands::keygen::run(&args),

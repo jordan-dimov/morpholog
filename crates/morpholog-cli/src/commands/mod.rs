@@ -40,6 +40,7 @@ pub(crate) mod refresh;
 pub(crate) mod schema;
 pub(crate) mod session;
 pub(crate) mod verify;
+pub(crate) mod witness;
 
 /// One parsed `.morph` file with everything needed to render a
 /// later finding against its source: the programme, the source map

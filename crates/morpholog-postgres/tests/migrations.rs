@@ -473,6 +473,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     wind_claims_key_back(&pool, "morpholog.claims").await;
     ddl(
         &pool,
+        "ALTER TABLE morpholog.audit_checkpoints DROP COLUMN witnesses".to_string(),
+    )
+    .await
+    .expect("simulate a database from before checkpoint witnesses");
+    ddl(
+        &pool,
         "DROP INDEX morpholog_read.derived_claims_generation_predicate".to_string(),
     )
     .await
@@ -936,6 +942,91 @@ async fn foreign_helper_probe(url: &str) -> Result<(), String> {
         return Err(format!(
             "the repaired row must be keyed by the real digest, got {reachable}"
         ));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_witnesses_column_of_another_shape_is_refused() {
+    let Ok(base) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let name = format!("morpholog_witness_shape_probe_{}", std::process::id());
+    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
+    let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
+    ddl(
+        &admin_pool,
+        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    )
+    .await
+    .unwrap();
+    ddl(&admin_pool, format!("CREATE DATABASE {name}"))
+        .await
+        .unwrap();
+
+    let probe_url = morpholog_postgres::with_default_user(&with_database(&base, &name));
+    let outcome = witness_shape_probe(&probe_url).await;
+
+    ddl(
+        &admin_pool,
+        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    )
+    .await
+    .unwrap();
+    outcome.expect("a foreign witnesses column must be refused, and the repaired one accepted");
+}
+
+async fn witness_shape_probe(url: &str) -> Result<(), String> {
+    let pool = sqlx::PgPool::connect(url).await.expect("probe");
+    morpholog_postgres::initialise_schema(&pool)
+        .await
+        .expect("provision");
+    // Someone's own `witnesses` column, then the migration asked again.
+    ddl(
+        &pool,
+        "ALTER TABLE morpholog.audit_checkpoints DROP COLUMN witnesses".to_string(),
+    )
+    .await
+    .unwrap();
+    ddl(
+        &pool,
+        "ALTER TABLE morpholog.audit_checkpoints ADD COLUMN witnesses text".to_string(),
+    )
+    .await
+    .unwrap();
+    ddl(
+        &pool,
+        "DELETE FROM morpholog.schema_migrations WHERE version = 13".to_string(),
+    )
+    .await
+    .unwrap();
+    match morpholog_postgres::apply_migrations(&pool).await {
+        Err(e) if e.to_string().contains("another shape") => {}
+        other => {
+            return Err(format!(
+                "a witnesses column of another shape must be refused by name, got {other:?}"
+            ));
+        }
+    }
+    // The foreign column removed: the migration adds the real one.
+    ddl(
+        &pool,
+        "ALTER TABLE morpholog.audit_checkpoints DROP COLUMN witnesses".to_string(),
+    )
+    .await
+    .unwrap();
+    morpholog_postgres::apply_migrations(&pool)
+        .await
+        .map_err(|e| format!("the repaired table must migrate: {e}"))?;
+    let shape: Option<String> = sqlx::query_scalar(
+        "SELECT format_type(atttypid, atttypmod) FROM pg_attribute
+         WHERE attrelid = 'morpholog.audit_checkpoints'::regclass AND attname = 'witnesses'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    if shape.as_deref() != Some("jsonb") {
+        return Err(format!("the real column must be jsonb, got {shape:?}"));
     }
     Ok(())
 }

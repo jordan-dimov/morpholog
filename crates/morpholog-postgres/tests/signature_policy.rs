@@ -29,6 +29,7 @@ fn unsigned(tree_size: i64) -> Checkpoint {
         prev_checkpoint_hash: None,
         checkpoint_hash: "sha256:00".into(),
         signatures: vec![],
+        witnesses: Vec::new(),
     }
 }
 

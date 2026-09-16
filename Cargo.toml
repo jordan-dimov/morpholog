@@ -9,6 +9,7 @@ members = [
     "crates/morpholog-postgres",
     "crates/morpholog-surface",
     "crates/morpholog-test-support",
+    "crates/morpholog-witness",
 ]
 
 [workspace.package]
@@ -35,6 +36,7 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "std"
 clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
 rand = "0.10"
+base64 = "0.22"
 chumsky = "0.13"
 ariadne = "0.6"
 

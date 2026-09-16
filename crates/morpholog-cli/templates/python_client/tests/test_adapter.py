@@ -296,6 +296,26 @@ class AdapterDiscrimination(unittest.TestCase):
 
             argv = argv_after(lambda: self.client.audit_checkpoint())
             self.assertNotIn("--writer-role", argv)
+            self.assertNotIn("--witness", argv)
+
+            argv = argv_after(
+                lambda: self.client.audit_checkpoint(
+                    witnesses=["rfc3161:http://a.example/tsr", "rfc3161:http://b.example/tsr"]
+                )
+            )
+            self.assertEqual(argv.count("--witness"), 2)
+            self.assertEqual(argv[argv.index("--witness") + 1], "rfc3161:http://a.example/tsr")
+
+            os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "checkpoint_witnessed.json").read_text()
+            checkpoint = self.client.audit_witness(3, ["rfc3161:http://a.example/tsr"])
+            self.assertIsInstance(checkpoint, envelopes.Checkpoint)
+            argv = argv_after(
+                lambda: self.client.audit_witness(3, ["rfc3161:http://a.example/tsr"])
+            )
+            self.assertEqual(argv[argv.index("--tree-size") + 1], "3")
+            self.assertEqual(argv[argv.index("--witness") + 1], "rfc3161:http://a.example/tsr")
+            with self.assertRaises(ValueError):
+                self.client.audit_witness(3, [])
 
     def test_verify_flags_land_on_argv_exactly_when_supplied(self):
         # The verdict-affecting verify flags: each appears exactly when
@@ -368,6 +388,44 @@ class AdapterDiscrimination(unittest.TestCase):
                 )
                 self.assertEqual(argv[argv.index("--require-signatures-from") + 1], "7")
                 self.assertEqual(argv[argv.index("--require-signing-key") + 1], "k.pub")
+
+    def test_the_witness_axis_flags_and_the_wrapper_report(self):
+        # Trust anchors land on the live verify; on the pack verifiers
+        # asking for witnesses (or supplying anchors) switches the reply
+        # to the wrapper report, and each kind's parser still reads the
+        # verdict inside it.
+        self._mode("record_argv_stdout")
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "verify_report_witnessed.json").read_text()
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with recording_argv() as argv_after:
+            argv = argv_after(lambda: self.client.audit_verify(trusted_tsa_file="tsa.pem"))
+            self.assertEqual(argv[argv.index("--trusted-tsa-file") + 1], "tsa.pem")
+            argv = argv_after(lambda: self.client.audit_verify())
+            self.assertNotIn("--trusted-tsa-file", argv)
+
+            os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "pack_verification_report.json").read_text()
+            report = self.client.audit_verify_pack_window("pack.json", witnesses=True)
+            self.assertIsInstance(report, envelopes.PackVerificationReport)
+            self.assertIsInstance(report.verdict, envelopes.WindowIntact)
+            self.assertEqual(report.witnesses.checkpoints[0].tree_size, 2)
+            argv = argv_after(
+                lambda: self.client.audit_verify_pack_window("pack.json", witnesses=True)
+            )
+            self.assertIn("--witnesses", argv)
+            self.assertNotIn("--trusted-tsa-file", argv)
+            argv = argv_after(
+                lambda: self.client.audit_verify_pack_window(
+                    "pack.json", trusted_tsa_file="tsa.pem"
+                )
+            )
+            self.assertNotIn("--witnesses", argv)
+            self.assertEqual(argv[argv.index("--trusted-tsa-file") + 1], "tsa.pem")
+
+            os.environ["STUB_STDOUT"] = (
+                GOLDEN_DIR / "window_verification_intact.json"
+            ).read_text()
+            bare = self.client.audit_verify_pack_window("pack.json")
+            self.assertIsInstance(bare, envelopes.WindowIntact)
 
     def test_audit_empty_tail_is_a_lawful_empty_list(self):
         self._mode("record_argv_empty")
