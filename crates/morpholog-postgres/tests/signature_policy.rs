@@ -11,7 +11,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
-use common::{authorize_signing_key, commit_entry, reset_db, test_pool};
+use common::{authorize_signing_key, commit_entry, make_checkpoint_at, reset_db, test_pool};
 
 use morpholog_postgres::{
     Checkpoint, CheckpointOutcome, CheckpointSigner, PgPool, SignaturePolicy,
@@ -194,15 +194,9 @@ async fn honest_history_before_signing_began_passes_under_a_threshold() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     commit_entry(&pool, "x1").await;
-    assert!(matches!(
-        create_checkpoint(&pool, None, None).await.unwrap(),
-        CheckpointOutcome::Created(Checkpoint { tree_size: 1, .. })
-    ));
+    make_checkpoint_at(&pool, 1).await;
     commit_entry(&pool, "x2").await;
-    assert!(matches!(
-        create_checkpoint(&pool, None, None).await.unwrap(),
-        CheckpointOutcome::Created(Checkpoint { tree_size: 2, .. })
-    ));
+    make_checkpoint_at(&pool, 2).await;
     for (from, expect) in [(1, Some(1)), (2, Some(2)), (3, None)] {
         let verdict = verify_audit_tree_under(&pool, None, Some(&policy(from, None)))
             .await

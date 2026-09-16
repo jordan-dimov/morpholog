@@ -303,6 +303,31 @@ pub async fn make_checkpoint(pool: &PgPool) -> morpholog_postgres::Checkpoint {
     unreachable!("the loop returns or panics")
 }
 
+/// A checkpoint covering exactly `tree_size` rows, retried through the
+/// straggler drain. A checkpoint is bounded by the resume watermark, so
+/// a transaction still winding down elsewhere - a previous test's pool
+/// closing under a slow instrumented build - can leave the newest rows
+/// withheld, correctly, and a test asserting the size then fails for a
+/// reason that is not its own. Twice in one week under llvm-cov.
+pub async fn make_checkpoint_at(pool: &PgPool, tree_size: i64) -> morpholog_postgres::Checkpoint {
+    use morpholog_postgres::CheckpointOutcome::{Created, NoNewRows};
+    for attempt in 0..3 {
+        match morpholog_postgres::create_checkpoint(pool, None, None)
+            .await
+            .unwrap()
+        {
+            Created(c) | NoNewRows(c) if c.tree_size == tree_size => return c,
+            other => {
+                if attempt == 2 {
+                    panic!("expected a checkpoint at tree size {tree_size}, got {other:?}")
+                }
+                drain_open_transactions(pool).await;
+            }
+        }
+    }
+    unreachable!("the loop returns or panics")
+}
+
 /// Round-trip a serialisable value through a JSON edit - the tamper
 /// harness every pack suite uses.
 pub fn edit_json<T: serde::Serialize + serde::de::DeserializeOwned>(

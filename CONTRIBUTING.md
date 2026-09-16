@@ -49,9 +49,11 @@ That puts the `morpholog` binary on `~/.cargo/bin/`. Refresh it after pulling ch
 Run [`./scripts/precommit.sh`](scripts/precommit.sh) before pushing. It runs the suites and checks CI gates on, plus `morpholog check` over every `.morph`; CI additionally runs a coverage job for visibility only, and verifies the declared Rust floor (precommit does the same when that toolchain is installed, and says so when it is not). If it passes locally, CI passes.
 
 ```bash
-./scripts/precommit.sh                       # full suite, with DATABASE_URL exported as above
-env -u DATABASE_URL ./scripts/precommit.sh   # without the PG-backed suites
+env -u DATABASE_URL ./scripts/precommit.sh   # the fast pass: everything but the PG-backed suites
+./scripts/precommit.sh                       # the full run, with DATABASE_URL exported as above
 ```
+
+Run them in that order. The fast pass takes a fraction of the time and catches most of what fails a full run (formatting, clippy, rustdoc, the sync suites); the full run is then paid once. A full run restarted for a formatting slip is ten minutes lost.
 
 The script bails on the first failure. Without `DATABASE_URL` it skips the PG-backed test suites with a note; with it set, it runs them against whatever the URL names, which is why the URL above points at the disposable cluster.
 
