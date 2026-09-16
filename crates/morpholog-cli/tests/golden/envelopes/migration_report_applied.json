@@ -11,10 +11,14 @@
     {
       "name": "claims_hash_key",
       "version": 12
+    },
+    {
+      "name": "checkpoint_witnesses",
+      "version": 13
     }
   ],
-  "binary_version": 12,
+  "binary_version": 13,
   "pending": [],
-  "recorded_version_after": 12,
+  "recorded_version_after": 13,
   "recorded_version_before": 9
 }

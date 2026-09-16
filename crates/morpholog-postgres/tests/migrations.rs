@@ -473,6 +473,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     wind_claims_key_back(&pool, "morpholog.claims").await;
     ddl(
         &pool,
+        "ALTER TABLE morpholog.audit_checkpoints DROP COLUMN witnesses".to_string(),
+    )
+    .await
+    .expect("simulate a database from before checkpoint witnesses");
+    ddl(
+        &pool,
         "DROP INDEX morpholog_read.derived_claims_generation_predicate".to_string(),
     )
     .await

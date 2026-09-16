@@ -114,6 +114,7 @@ async fn a_forged_anchor_is_an_anchor_mismatch() {
         prev_checkpoint_hash: None,
         checkpoint_hash: "forged".into(),
         signatures: Vec::new(),
+        witnesses: Vec::new(),
     };
     assert!(matches!(
         verify_window(&pack, Some(&forged)).unwrap(),
@@ -170,6 +171,7 @@ async fn export_from_a_diverged_anchor_refuses() {
         prev_checkpoint_hash: None,
         checkpoint_hash: "forged".into(),
         signatures: Vec::new(),
+        witnesses: Vec::new(),
     };
     assert!(matches!(
         export_window(&pool, WindowStart::Anchor(forged), Some(q2.tree_size)).await,

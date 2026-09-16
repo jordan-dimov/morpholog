@@ -1,0 +1,14 @@
+{
+  "checkpoint_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "prev_checkpoint_hash": null,
+  "root_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "status": "created",
+  "tree_size": 2,
+  "witnesses": [
+    {
+      "proof": "MIIBMIIBMIIBMIIB",
+      "scheme": "rfc3161",
+      "submitted_to": "http://timestamp.example/tsr"
+    }
+  ]
+}

@@ -537,7 +537,7 @@ fn migration_reports_serialize_as_pinned() {
     let behind = morpholog_postgres::MigrationReport {
         recorded_version_before: Some(9),
         recorded_version_after: Some(9),
-        binary_version: 12,
+        binary_version: 13,
         applied: Vec::new(),
         unknown: Vec::new(),
         pending: vec![
@@ -553,14 +553,18 @@ fn migration_reports_serialize_as_pinned() {
                 version: 12,
                 name: "claims_hash_key".to_string(),
             },
+            morpholog_postgres::MigrationRef {
+                version: 13,
+                name: "checkpoint_witnesses".to_string(),
+            },
         ],
     };
     assert_golden("migration_report_behind.json", &to_value(&behind));
 
     let applied = morpholog_postgres::MigrationReport {
         recorded_version_before: Some(9),
-        recorded_version_after: Some(12),
-        binary_version: 12,
+        recorded_version_after: Some(13),
+        binary_version: 13,
         applied: behind.pending.clone(),
         pending: Vec::new(),
         unknown: Vec::new(),
@@ -570,13 +574,13 @@ fn migration_reports_serialize_as_pinned() {
     // A database migrated by a NEWER binary. The dangerous shape: nothing
     // is pending, and it is emphatically not current.
     let ahead = morpholog_postgres::MigrationReport {
-        recorded_version_before: Some(13),
-        recorded_version_after: Some(13),
-        binary_version: 12,
+        recorded_version_before: Some(14),
+        recorded_version_after: Some(14),
+        binary_version: 13,
         applied: Vec::new(),
         pending: Vec::new(),
         unknown: vec![morpholog_postgres::MigrationRef {
-            version: 13,
+            version: 14,
             name: "something_this_build_never_saw".to_string(),
         }],
     };
@@ -1061,6 +1065,7 @@ fn sample_checkpoint() -> Checkpoint {
         prev_checkpoint_hash: None,
         checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
         signatures: Vec::new(),
+        witnesses: Vec::new(),
     }
 }
 
@@ -1163,6 +1168,16 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "checkpoint_no_new_rows.json",
         &to_value(&CheckpointOutcome::NoNewRows(sample_checkpoint())),
     );
+    let mut witnessed = sample_checkpoint();
+    witnessed.witnesses = vec![morpholog_postgres::Witness {
+        scheme: morpholog_postgres::WitnessScheme::Rfc3161,
+        proof: "MIIB".repeat(4),
+        submitted_to: "http://timestamp.example/tsr".into(),
+    }];
+    assert_golden(
+        "checkpoint_created_witnessed.json",
+        &to_value(&CheckpointOutcome::Created(witnessed)),
+    );
 
     // `audit export`: the portable pack.
     assert_golden(
@@ -1254,6 +1269,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 prev_checkpoint_hash: Some(format!("sha256:{}", "b".repeat(64))),
                 checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
                 signatures: Vec::new(),
+                witnesses: Vec::new(),
             },
             consistency_proof: vec![format!("sha256:{}", "e".repeat(64))],
             rows: vec![sample_audit_row()],
@@ -1329,6 +1345,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 prev_checkpoint_hash: Some(format!("sha256:{}", "b".repeat(64))),
                 checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
                 signatures: Vec::new(),
+                witnesses: Vec::new(),
             },
             rows: vec![sample_audit_row()],
             inclusion_proofs: vec![RowInclusionProof {
@@ -1748,6 +1765,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("checkpoint_created.json", "checkpoint_outcome"),
         ("checkpoint_created_signed.json", "checkpoint_outcome"),
         ("checkpoint_no_new_rows.json", "checkpoint_outcome"),
+        ("checkpoint_created_witnessed.json", "checkpoint_outcome"),
         ("evidence_pack.json", "evidence_pack"),
         ("tree_verification_chain_broken.json", "tree_verification"),
         (

@@ -212,22 +212,22 @@ class Migrations(unittest.TestCase):
         report = envelopes.MigrationReport.from_json(golden("migration_report_behind.json"))
         self.assertFalse(report.is_current)
         self.assertEqual(report.recorded_version_before, 9)
-        self.assertEqual(report.binary_version, 12)
+        self.assertEqual(report.binary_version, 13)
         self.assertEqual(
             [m.name for m in report.pending],
-            ["rejections_witness", "schema_migrations", "claims_hash_key"],
+            ["rejections_witness", "schema_migrations", "claims_hash_key", "checkpoint_witnesses"],
         )
         self.assertEqual(report.applied, [])
 
     def test_a_migrated_database_reports_what_it_applied(self):
         report = envelopes.MigrationReport.from_json(golden("migration_report_applied.json"))
         self.assertTrue(report.is_current)
-        self.assertEqual([m.version for m in report.applied], [10, 11, 12])
+        self.assertEqual([m.version for m in report.applied], [10, 11, 12, 13])
         # The version AFTER, not the one it started at - a report saying
         # "current" and "version 9" at once would be two answers to one
         # question.
         self.assertEqual(report.recorded_version_before, 9)
-        self.assertEqual(report.recorded_version_after, 12)
+        self.assertEqual(report.recorded_version_after, 13)
 
     def test_a_database_ahead_of_the_binary_is_not_current(self):
         # Nothing pending, and emphatically not ready: this build cannot know
@@ -235,7 +235,7 @@ class Migrations(unittest.TestCase):
         report = envelopes.MigrationReport.from_json(golden("migration_report_ahead.json"))
         self.assertEqual(report.pending, [])
         self.assertFalse(report.is_current)
-        self.assertEqual([m.version for m in report.unknown], [13])
+        self.assertEqual([m.version for m in report.unknown], [14])
 
 
 class Explanations(unittest.TestCase):
@@ -505,6 +505,12 @@ class TamperEvidence(unittest.TestCase):
         self.assertEqual(sig.purpose, "audit_checkpoint_v1")
         self.assertTrue(sig.public_key.startswith("ed25519-pub:"))
         self.assertTrue(sig.signature.startswith("ed25519-sig:"))
+        witnessed = envelopes.parse_checkpoint_outcome(golden("checkpoint_created_witnessed.json"))
+        [witness] = witnessed.checkpoint.witnesses
+        self.assertEqual(witness.scheme, "rfc3161")
+        self.assertEqual(witness.submitted_to, "http://timestamp.example/tsr")
+        self.assertTrue(witness.proof.startswith("MIIB"))
+        self.assertEqual(signed.checkpoint.witnesses, [])
 
     def test_every_tree_verdict_parses(self):
         for name, cls in [

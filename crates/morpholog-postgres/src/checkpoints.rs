@@ -76,6 +76,33 @@ pub struct TreeHeadSignature {
     pub signature: String,
 }
 
+/// Which external scheme a witness proof comes from. Rung one: RFC 3161
+/// timestamp tokens. OpenTimestamps joins as a second variant when its
+/// pending-then-upgraded lifecycle is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WitnessScheme {
+    Rfc3161,
+}
+
+/// One external witness to a tree head: the exact bytes a timestamp
+/// authority returned, stored opaque and never re-encoded, and where it
+/// was obtained. Nothing derived is stored - not the attested time, not
+/// whether it verifies - because a witness sits outside `checkpoint_hash`
+/// and a stored derivation would be a mutable duplicate of what the
+/// proof already proves; the verifier reads both from the proof. Two
+/// byte-identical proofs are one witness whatever URL served them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Witness {
+    pub scheme: WitnessScheme,
+    /// The scheme's proof, base64 (standard alphabet, padded): for RFC 3161
+    /// the whole `TimeStampResp` as received.
+    pub proof: String,
+    /// Provenance, not identity: the endpoint the proof came from.
+    pub submitted_to: String,
+}
+
 /// A checkpoint as it is stored, printed, and held externally as an
 /// anchor. `tree_size` + `root_hash` are the cryptographic commitment;
 /// `checkpoint_hash` is this checkpoint's identity in the chain.
@@ -89,6 +116,11 @@ pub struct Checkpoint {
     /// checkpoint is unsigned, which stays valid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signatures: Vec<TreeHeadSignature>,
+    /// External witnesses to the head; empty (and omitted from JSON) when
+    /// none was obtained, which stays valid - a witness adds "existed no
+    /// later than T", it never subtracts from the tree's own verdict.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub witnesses: Vec<Witness>,
 }
 
 /// Outcome of [`create_checkpoint`]. Both variants carry a full
@@ -339,7 +371,8 @@ async fn collect_leaves(
 async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Checkpoint>, PgError> {
     let row = sqlx::query!(
         r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
-                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>"
+                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
+                  witnesses as "witnesses: sqlx::types::Json<Vec<Witness>>"
            FROM morpholog.audit_checkpoints
            ORDER BY tree_size DESC
            LIMIT 1"#,
@@ -353,6 +386,7 @@ async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Check
         prev_checkpoint_hash: r.prev_checkpoint_hash,
         checkpoint_hash: r.checkpoint_hash,
         signatures: r.signatures.0,
+        witnesses: r.witnesses.0,
     }))
 }
 
@@ -563,6 +597,7 @@ pub async fn create_checkpoint(
         prev_checkpoint_hash: prev_hash,
         checkpoint_hash: cp_hash,
         signatures,
+        witnesses: Vec::new(),
     }))
 }
 
@@ -650,7 +685,8 @@ pub(crate) async fn load_checkpoint_chain(
 ) -> Result<Vec<Checkpoint>, PgError> {
     let stored = sqlx::query!(
         r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
-                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>"
+                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
+                  witnesses as "witnesses: sqlx::types::Json<Vec<Witness>>"
            FROM morpholog.audit_checkpoints
            ORDER BY tree_size ASC"#,
     )
@@ -665,8 +701,57 @@ pub(crate) async fn load_checkpoint_chain(
             prev_checkpoint_hash: r.prev_checkpoint_hash,
             checkpoint_hash: r.checkpoint_hash,
             signatures: r.signatures.0,
+            witnesses: r.witnesses.0,
         })
         .collect())
+}
+
+/// Attach an external witness to the checkpoint at `tree_size`, which
+/// must still be the head the proof was obtained for: the caller went to
+/// the authority outside any transaction, and a chain rebuilt in between
+/// would make the proof about a head that no longer exists here.
+/// Monotonic and exact-deduplicated - a proof already present is not
+/// stored twice, whatever endpoint served it - and never a downgrade:
+/// nothing existing is removed. Returns the checkpoint as now stored.
+pub async fn attach_witness(
+    pool: &PgPool,
+    tree_size: i64,
+    checkpoint_hash: &str,
+    witness: Witness,
+) -> Result<Checkpoint, PgError> {
+    let mut tx = pool.begin().await.map_err(classify)?;
+    let mut chain = load_checkpoint_chain(&mut tx).await?;
+    let Some(pos) = chain.iter().position(|c| c.tree_size == tree_size) else {
+        return Err(PgError::InvalidState(format!(
+            "no checkpoint at tree size {tree_size} to attach a witness to"
+        )));
+    };
+    if chain[pos].checkpoint_hash != checkpoint_hash {
+        return Err(PgError::InvalidState(format!(
+            "the checkpoint at tree size {tree_size} is {} now, not {checkpoint_hash}: the \
+             proof was obtained for a head this chain no longer holds",
+            chain[pos].checkpoint_hash
+        )));
+    }
+    let mut witnesses = std::mem::take(&mut chain[pos].witnesses);
+    if !witnesses
+        .iter()
+        .any(|w| w.scheme == witness.scheme && w.proof == witness.proof)
+    {
+        witnesses.push(witness);
+        sqlx::query!(
+            "UPDATE morpholog.audit_checkpoints
+             SET witnesses = $1 WHERE checkpoint_hash = $2",
+            sqlx::types::Json(&witnesses) as _,
+            checkpoint_hash,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(classify_checked_query)?;
+    }
+    tx.commit().await.map_err(classify)?;
+    chain[pos].witnesses = witnesses;
+    Ok(chain.swap_remove(pos))
 }
 
 /// Verify the audit tree against its checkpoints. Reads under

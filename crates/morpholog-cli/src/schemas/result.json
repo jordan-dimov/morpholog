@@ -1021,7 +1021,18 @@
         "root_hash": { "type": "string" },
         "prev_checkpoint_hash": { "type": ["string", "null"] },
         "checkpoint_hash": { "type": "string" },
-        "signatures": { "type": "array", "items": { "$ref": "#/$defs/tree_head_signature" } }
+        "signatures": { "type": "array", "items": { "$ref": "#/$defs/tree_head_signature" } },
+        "witnesses": { "type": "array", "items": { "$ref": "#/$defs/witness" } }
+      }
+    },
+    "witness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scheme", "proof", "submitted_to"],
+      "properties": {
+        "scheme": { "enum": ["rfc3161"] },
+        "proof": { "type": "string" },
+        "submitted_to": { "type": "string" }
       }
     },
     "checkpoint_outcome": {
@@ -1036,7 +1047,8 @@
             "root_hash": { "type": "string" },
             "prev_checkpoint_hash": { "type": ["string", "null"] },
             "checkpoint_hash": { "type": "string" },
-            "signatures": { "type": "array", "items": { "$ref": "#/$defs/tree_head_signature" } }
+            "signatures": { "type": "array", "items": { "$ref": "#/$defs/tree_head_signature" } },
+            "witnesses": { "type": "array", "items": { "$ref": "#/$defs/witness" } }
           }
         },
         {
@@ -1049,7 +1061,8 @@
             "root_hash": { "type": "string" },
             "prev_checkpoint_hash": { "type": ["string", "null"] },
             "checkpoint_hash": { "type": "string" },
-            "signatures": { "type": "array", "items": { "$ref": "#/$defs/tree_head_signature" } }
+            "signatures": { "type": "array", "items": { "$ref": "#/$defs/tree_head_signature" } },
+            "witnesses": { "type": "array", "items": { "$ref": "#/$defs/witness" } }
           }
         }
       ]

@@ -208,6 +208,7 @@ async fn refuses_to_score_against_a_mismatched_anchor() {
         prev_checkpoint_hash: None,
         checkpoint_hash: "forged".to_string(),
         signatures: Vec::new(),
+        witnesses: Vec::new(),
     };
     let err = score_candidate_against_pack(&no_entries(), &pack, Some(&forged), None).unwrap_err();
     assert!(matches!(err, PgError::InvalidState(msg) if msg.contains("does not verify")));

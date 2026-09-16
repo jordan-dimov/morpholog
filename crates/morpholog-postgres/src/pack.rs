@@ -1123,6 +1123,7 @@ mod tests {
             prev_checkpoint_hash: None,
             checkpoint_hash: format!("cp-{tree_size}"),
             signatures: Vec::new(),
+            witnesses: Vec::new(),
         }
     }
 
@@ -1509,6 +1510,7 @@ mod tests {
             prev_checkpoint_hash: prev_hash,
             checkpoint_hash,
             signatures: Vec::new(),
+            witnesses: Vec::new(),
         }
     }
 

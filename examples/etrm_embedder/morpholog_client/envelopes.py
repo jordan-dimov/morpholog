@@ -1617,6 +1617,30 @@ class TreeHeadSignature:
         )
 
 
+@dataclass(frozen=True)
+class Witness:
+    """One external witness to a tree head: the authority's exact
+    response (`proof`, base64) and where it was obtained. The attested
+    time and whether it verifies are read from the proof by the
+    verifier, never stored."""
+
+    scheme: str
+    proof: str
+    submitted_to: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> Witness:
+        data = _strict("witness", payload, {"scheme", "proof", "submitted_to"})
+        return cls(scheme=data["scheme"], proof=data["proof"], submitted_to=data["submitted_to"])
+
+
+def _parse_witnesses(data: dict[str, object]) -> list[Witness]:
+    raw = data.get("witnesses", [])
+    if not isinstance(raw, list):
+        raise EnvelopeError(f"`witnesses` must be a list, got {raw!r}")
+    return [Witness.from_json(w) for w in raw]
+
+
 def _parse_signatures(data: dict[str, object]) -> list[TreeHeadSignature]:
     raw = data.get("signatures", [])
     if not isinstance(raw, list):
@@ -1636,6 +1660,7 @@ class Checkpoint:
     prev_checkpoint_hash: str | None
     checkpoint_hash: str
     signatures: list[TreeHeadSignature] = field(default_factory=list)
+    witnesses: list[Witness] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> Checkpoint:
@@ -1643,7 +1668,7 @@ class Checkpoint:
             "checkpoint",
             payload,
             {"tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
-            {"signatures"},
+            {"signatures", "witnesses"},
         )
         return cls(
             tree_size=data["tree_size"],
@@ -1651,6 +1676,7 @@ class Checkpoint:
             prev_checkpoint_hash=data["prev_checkpoint_hash"],
             checkpoint_hash=data["checkpoint_hash"],
             signatures=_parse_signatures(data),
+            witnesses=_parse_witnesses(data),
         )
 
 
@@ -1662,7 +1688,7 @@ def _checkpoint_from_flattened(name: str, payload: object) -> Checkpoint:
         name,
         payload,
         {"status", "tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
-        {"signatures"},
+        {"signatures", "witnesses"},
     )
     return Checkpoint(
         tree_size=data["tree_size"],
@@ -1670,6 +1696,7 @@ def _checkpoint_from_flattened(name: str, payload: object) -> Checkpoint:
         prev_checkpoint_hash=data["prev_checkpoint_hash"],
         checkpoint_hash=data["checkpoint_hash"],
         signatures=_parse_signatures(data),
+        witnesses=_parse_witnesses(data),
     )
 
 

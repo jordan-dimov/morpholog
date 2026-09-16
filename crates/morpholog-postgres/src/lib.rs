@@ -60,8 +60,8 @@ pub use audit::{
 };
 pub use checkpoints::{
     Checkpoint, CheckpointOutcome, CheckpointSigner, SignaturePolicy, SignaturePolicyViolation,
-    TreeHeadSignature, TreeVerification, create_checkpoint, verify_audit_tree,
-    verify_audit_tree_under, with_anchor_signatures,
+    TreeHeadSignature, TreeVerification, Witness, WitnessScheme, attach_witness, create_checkpoint,
+    verify_audit_tree, verify_audit_tree_under, with_anchor_signatures,
 };
 pub use claims::{
     ClaimFilter, list_claims, list_claims_for_predicates, list_claims_where, load_scoped_state,
