@@ -30,7 +30,7 @@ The schema applies the head state from `crates/morpholog-core/sql/schema.sql`. A
 
 ### The test cluster is disposable
 
-The PostgreSQL-backed suites assume a disposable **cluster**, not just a disposable database. They truncate whatever `DATABASE_URL` names on entry; they create and drop roles, which are cluster-global; two suites need the connecting role to be a superuser; and the checkpoint writer census asserts that nothing else in the cluster can write `morpholog.audit` - so a role a *neighbouring* Morpholog deployment granted membership in the cluster-global `morpholog_writer` reddens the census test, correctly, because it is a real privilege relationship. That happened here: a second project on the same machine, with its own database and its own roles, failed this repo's census test twice, and deleting its roles was the wrong remedy.
+The PostgreSQL-backed suites assume a disposable **cluster**, not just a disposable database. They truncate whatever `DATABASE_URL` names on entry; several create and drop roles, which are cluster-global; some need the connecting role to be a superuser; and the checkpoint writer census asserts that nothing else in the cluster can write `morpholog.audit` - so a role a *neighbouring* Morpholog deployment granted membership in the cluster-global `morpholog_writer` reddens the census test, correctly, because it is a real privilege relationship. That happened here: a second project on the same machine, with its own database and its own roles, failed this repo's census test twice, and deleting its roles was the wrong remedy.
 
 Give the suites a cluster of their own on a second port. On Ubuntu:
 
@@ -57,8 +57,8 @@ That puts the `morpholog` binary on `~/.cargo/bin/`. Refresh it after pulling ch
 Run [`./scripts/precommit.sh`](scripts/precommit.sh) before pushing. It runs the suites and checks CI gates on, plus `morpholog check` over every `.morph`; CI additionally runs a coverage job for visibility only, and verifies the declared Rust floor (precommit does the same when that toolchain is installed, and says so when it is not). If it passes locally, CI passes.
 
 ```bash
-./scripts/precommit.sh                                        # without PG tests
-DATABASE_URL=postgres:///morpholog_dev ./scripts/precommit.sh # full suite
+./scripts/precommit.sh   # without PG tests
+./scripts/precommit.sh   # full suite, with DATABASE_URL exported as above
 ```
 
 The script bails on the first failure. Without `DATABASE_URL` it skips the PG-backed test suites with a note.
@@ -71,8 +71,7 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
 cargo audit
 cargo test -p morpholog-core -p morpholog-examples -p morpholog-surface -p morpholog-test-support --all-targets --locked
-DATABASE_URL=postgres:///morpholog_dev \
-  cargo test -p morpholog-cli -p morpholog-postgres -p morpholog-outbox -p morpholog-bench --all-targets --locked -- --test-threads=1
+cargo test -p morpholog-cli -p morpholog-postgres -p morpholog-outbox -p morpholog-bench --all-targets --locked -- --test-threads=1   # with DATABASE_URL exported
 # when python3 is available:
 python3 -m unittest discover crates/morpholog-cli/templates/python_client/tests
 ```
@@ -86,7 +85,7 @@ The persistence adapter's queries are `sqlx::query!` / `query_as!` macros, verif
 When you add or change a query, regenerate the cache against a disposable database and commit the result:
 
 ```bash
-DATABASE_URL=postgres:///morpholog_sqlx_prep ./scripts/sqlx-prepare.sh
+DATABASE_URL='postgres:///morpholog_sqlx_prep?port=55432' ./scripts/sqlx-prepare.sh
 git add .sqlx
 ```
 
@@ -128,7 +127,7 @@ Comments and docs earn their place by the same subtraction test as code. This is
 - **rustdoc is the exception** - precise and complete on every public item, since it is the API contract. The WHY-not-WHAT bar is for inline `//` comments, not `///` docs.
 - **One concept, one home.** Each doc has a single role (see [Reference](#reference)); explain a thing where it belongs and link to it rather than restating it - duplicated prose drifts out of sync.
 - **Audience prose evokes the why** (README, `docs/`, example READMEs): lead with the question Morpholog answers, not the feature list.
-- **History compresses as it ages.** `design-history.md` entries distil to Forced-by/Landed stubs once the work settles; git holds the per-PR detail.
+- **History compresses as it ages.** `design-history.md` entries distil to Forced-by/Landed stubs once the work settles; git holds the per-PR detail. The cadence is the release: at each one, every entry that landed before the previous release and still runs past roughly 350 words is cut to its stub - keep the decisions and the refutations (what was tried and why it was wrong), drop the blow-by-blow.
 
 ## Adding code
 

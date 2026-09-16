@@ -25,7 +25,7 @@ use std::io::{BufRead, Write};
 use crate::SessionArgs;
 use crate::commands::filter::FieldFilter;
 use crate::commands::inspect::{claims_rows, decode_claims_named, derived_rows, resolve_as_of};
-use crate::commands::propose::{BatchRow, RowErrorKind, propose_row_outcome};
+use crate::commands::propose::{BatchRow, RowError, propose_row_outcome};
 use crate::commands::{compile_or_report, parse_or_report};
 use morpholog_cli::envelopes::{ErrorCode, ErrorReceipt, SessionReady};
 use morpholog_core::CompiledProgram;
@@ -258,9 +258,12 @@ async fn handle_propose(
         batch_row,
     )
     .await
-    .map_err(|e| match e.kind {
-        RowErrorKind::Operational => SessionFailure::Operational(e.reason),
-        kind => SessionFailure::request(kind.code(), e.reason),
+    .map_err(|e| match e {
+        RowError { code: None, reason } => SessionFailure::Operational(reason),
+        RowError {
+            code: Some(code),
+            reason,
+        } => SessionFailure::request(code, reason),
     })?;
     if let Some(receipt) = envelope.as_object_mut() {
         receipt.insert("row".to_string(), serde_json::json!(row));

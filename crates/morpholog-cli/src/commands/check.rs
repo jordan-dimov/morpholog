@@ -1,82 +1,236 @@
 //! `morpholog check` - parse + validate + lint a `.morph` source file.
 
 use crate::CheckArgs;
-use crate::commands::{
-    AlreadyReported, ParsedSource, compile_or_report, parse_or_report, print_json,
-};
+use crate::commands::{AlreadyReported, print_json};
+use anyhow::Context;
 use morpholog_cli::envelopes::{CheckDiagnostic, CheckReport};
 use morpholog_core::{CompiledProgram, Program};
-use morpholog_surface::{Diagnostic, parse_program_with_sources};
+use morpholog_surface::{Diagnostic, Span, parse_program_with_sources};
 use std::path::Path;
 
-/// Run the `check` subcommand. Parse + validate the source file,
-/// surface diagnostics with a uniform shape from either layer.
+/// Run the `check` subcommand: collect every finding once, then render
+/// them the way the caller asked.
 ///
-/// - Parse failure: render parse diagnostics via ariadne, exit 1.
-/// - Validation failure: render each error as an ariadne caret block
-///   when the source map places it (its declaration, or the exact
-///   statement), as a plain `error: <message>` line when it has no
-///   source anchor. Exit 1.
-/// - Both clean: lints run next. A finding renders at hint severity
-///   and the check still passes - lints flag shapes with a deliberate
-///   reading. Under `--strict` the same finding renders as an error
-///   and the check fails.
-/// - Fully clean: print nothing and exit 0, or print a one-screen
-///   summary under `--verbose`. Scripts rely on the silent stdout
-///   default; findings go to stderr, so that contract holds either
-///   way. `--json` is the opt-in machine-readable stdout shape: one
-///   object carrying every finding with byte offsets and line/column,
-///   same exit semantics.
+/// - Parse failure: parse diagnostics, exit 1.
+/// - Validation failure: each error caret-located when the source map
+///   places it (its declaration, or the exact statement), a plain
+///   `error: <message>` line when it has no source anchor. Exit 1.
+/// - Both clean: declaration policy, then lints, then `--against`
+///   collisions. A lint renders at hint severity and the check still
+///   passes - lints flag shapes with a deliberate reading. Under
+///   `--strict` the same finding is an error and the check fails.
+/// - Fully clean: print nothing and exit 0, or a one-screen summary
+///   under `--verbose`. Scripts rely on the silent stdout default;
+///   findings go to stderr, so that contract holds either way.
+///   `--json` is the opt-in machine-readable stdout shape: one object
+///   carrying every finding with byte offsets and line/column, same
+///   exit semantics.
 pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
+    let collected = collect(&args)?;
     if args.json {
-        return run_json(&args);
-    }
-
-    let parsed = parse_or_report(&args.file)?;
-    let compiled = compile_or_report(&parsed)?;
-
-    let policy = morpholog_postgres::validate_declarations(&parsed.program);
-    if !policy.is_empty() {
-        for finding in &policy {
-            eprintln!("error: {finding}");
+        let payload = CheckReport {
+            diagnostics: collected
+                .findings
+                .iter()
+                .map(|f| {
+                    CheckDiagnostic::new(
+                        f.severity,
+                        f.message.clone(),
+                        f.diagnostic.as_ref().map(|d| d.primary.clone()),
+                        &collected.source,
+                    )
+                })
+                .collect(),
+            file: args.file.display().to_string(),
+        };
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        for f in &collected.findings {
+            match &f.diagnostic {
+                Some(d) => eprint!("{}", d.render(&collected.source_name, &collected.source)),
+                None => eprintln!("{}: {}", f.severity, f.message),
+            }
         }
+    }
+    if collected.failed {
         return Err(AlreadyReported.into());
     }
+    if let Some(program) = &collected.program {
+        if args.verbose {
+            print!("{}", summary(program, &args.file));
+        }
+        if args.ir {
+            return print_ir(program);
+        }
+    }
+    Ok(())
+}
 
-    let lints = morpholog_core::lints(&compiled);
-    let mut findings = !lints.is_empty();
-    for lint in &lints {
-        render_finding(&lint.to_string(), lint, args.strict, &parsed);
+/// One finding, with the caret-located diagnostic when the source map
+/// places it in the checked file. A finding about another file (an
+/// `--against` programme that does not validate) carries none: the
+/// report has one `file`, and a span into another would lie.
+struct Finding {
+    severity: &'static str,
+    message: String,
+    diagnostic: Option<Diagnostic>,
+}
+
+impl Finding {
+    fn error(message: String, span: Option<Span>) -> Self {
+        Self {
+            severity: "error",
+            message: message.clone(),
+            diagnostic: span.map(|s| Diagnostic::error(message, s)),
+        }
+    }
+    fn lint(message: String, span: Option<Span>, strict: bool) -> Self {
+        let (severity, build): (&'static str, fn(String, Span) -> Diagnostic) = if strict {
+            ("error", Diagnostic::error)
+        } else {
+            ("hint", Diagnostic::hint)
+        };
+        Self {
+            severity,
+            message: message.clone(),
+            diagnostic: span.map(|s| build(message, s)),
+        }
+    }
+}
+
+struct Collected {
+    findings: Vec<Finding>,
+    failed: bool,
+    source: String,
+    source_name: String,
+    /// The validated programme, for `--verbose` and `--ir`; absent when
+    /// parsing or validation failed.
+    program: Option<Program>,
+}
+
+/// Every finding for the file, in the order the layers run.
+fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
+    let source = std::fs::read_to_string(&args.file)
+        .with_context(|| format!("read source file {}", args.file.display()))?;
+    let mut out = Collected {
+        findings: Vec::new(),
+        failed: false,
+        source,
+        source_name: args.file.display().to_string(),
+        program: None,
+    };
+    let (program, map) = match parse_program_with_sources(&out.source) {
+        Ok(parsed) => parsed,
+        Err(diagnostics) => {
+            out.failed = true;
+            out.findings
+                .extend(diagnostics.into_iter().map(|d| Finding {
+                    severity: "error",
+                    message: d.message.clone(),
+                    diagnostic: Some(d),
+                }));
+            return Ok(out);
+        }
+    };
+    // Constructing the `CompiledProgram` is the validation gate: `Err`
+    // carries the same errors `program.validate()` would, and `Ok` is
+    // the compiled programme the lints run against - validated once.
+    let compiled = match CompiledProgram::new(program) {
+        Ok(compiled) => compiled,
+        Err(errors) => {
+            out.failed = true;
+            out.findings.extend(
+                errors
+                    .iter()
+                    .map(|e| Finding::error(e.to_string(), map.span_for_error(e))),
+            );
+            return Ok(out);
+        }
+    };
+    for finding in &morpholog_postgres::validate_declarations(compiled.program()) {
+        out.failed = true;
+        out.findings.push(Finding::error(finding.to_string(), None));
+    }
+    for lint in &morpholog_core::lints(&compiled) {
+        out.failed |= args.strict;
+        out.findings.push(Finding::lint(
+            lint.to_string(),
+            map.span_for_lint(lint),
+            args.strict,
+        ));
     }
     for path in &args.against {
-        refuse_self_comparison(&args.file, path)?;
-        let other = parse_or_report(path)?;
-        compile_or_report(&other)?;
-        let policy = morpholog_postgres::validate_declarations(&other.program);
-        if !policy.is_empty() {
-            for finding in &policy {
-                eprintln!("error: against {}: {finding}", path.display());
+        if let Err(e) = refuse_self_comparison(&args.file, path) {
+            out.failed = true;
+            out.findings.push(Finding::error(e.to_string(), None));
+            continue;
+        }
+        match load_against(path) {
+            Err(messages) => {
+                out.failed = true;
+                out.findings
+                    .extend(messages.into_iter().map(|m| Finding::error(m, None)));
             }
-            return Err(AlreadyReported.into());
+            Ok(other) => {
+                for lint in &morpholog_core::shared_writer_lints(compiled.program(), &other) {
+                    out.failed |= args.strict;
+                    out.findings.push(Finding::lint(
+                        format!("against {}: {lint}", path.display()),
+                        map.span_for_lint(lint),
+                        args.strict,
+                    ));
+                }
+            }
         }
-        for lint in &morpholog_core::shared_writer_lints(&parsed.program, &other.program) {
-            findings = true;
-            let message = format!("against {}: {lint}", path.display());
-            render_finding(&message, lint, args.strict, &parsed);
-        }
     }
-    if findings && args.strict {
-        return Err(AlreadyReported.into());
-    }
+    out.program = Some(compiled.program().clone());
+    Ok(out)
+}
 
-    if args.verbose {
-        print!("{}", summary(&parsed.program, &args.file));
+/// `--against` the file being checked would report every write as a
+/// collision with itself: nonsensical input, refused.
+fn refuse_self_comparison(file: &Path, against: &Path) -> anyhow::Result<()> {
+    let same = match (file.canonicalize(), against.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => file == against,
+    };
+    if same {
+        anyhow::bail!(
+            "--against {} is the file being checked; a programme cannot collide with itself",
+            against.display()
+        );
     }
-    if args.ir {
-        return print_ir(&parsed.program);
-    }
-
     Ok(())
+}
+
+/// The programme behind an `--against` path, cleared to the floor
+/// `check` holds the primary file to - parse, validation, declaration
+/// policy; its own lints are its own `check`'s business - or every
+/// reason it is not, as messages naming the path.
+fn load_against(path: &Path) -> Result<Program, Vec<String>> {
+    let against = path.display();
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| vec![format!("against {against}: read source file: {e}")])?;
+    let (program, _) = parse_program_with_sources(&source).map_err(|diagnostics| {
+        diagnostics
+            .into_iter()
+            .map(|d| format!("against {against}: {}", d.message))
+            .collect::<Vec<_>>()
+    })?;
+    let compiled = CompiledProgram::new(program).map_err(|errors| {
+        errors
+            .iter()
+            .map(|e| format!("against {against}: {e}"))
+            .collect::<Vec<_>>()
+    })?;
+    let policy = morpholog_postgres::validate_declarations(compiled.program());
+    if !policy.is_empty() {
+        return Err(policy
+            .iter()
+            .map(|f| format!("against {against}: {f}"))
+            .collect());
+    }
+    Ok(compiled.program().clone())
 }
 
 /// Print the validated programme's internal representation as pretty
@@ -162,187 +316,6 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
         "derived_claims": derived_payload,
     });
     print_json(&payload)
-}
-
-/// Render one lint finding to stderr: a caret block at hint severity
-/// (error under `--strict`) when the source map places it, the plain
-/// `hint: ...` / `error: ...` line otherwise. `message` is the lint's
-/// text, possibly prefixed with what it was judged against.
-fn render_finding(message: &str, lint: &morpholog_core::Lint, strict: bool, parsed: &ParsedSource) {
-    match parsed.map.span_for_lint(lint) {
-        Some(span) => {
-            let diagnostic = if strict {
-                Diagnostic::error(message.to_string(), span)
-            } else {
-                Diagnostic::hint(message.to_string(), span)
-            };
-            eprint!("{}", diagnostic.render(&parsed.source_name, &parsed.source));
-        }
-        None => {
-            let label = if strict { "error" } else { "hint" };
-            eprintln!("{label}: {message}");
-        }
-    }
-}
-
-/// `--against` the file being checked would report every write as a
-/// collision with itself: nonsensical input, refused.
-fn refuse_self_comparison(file: &Path, against: &Path) -> anyhow::Result<()> {
-    let same = match (file.canonicalize(), against.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => file == against,
-    };
-    if same {
-        anyhow::bail!(
-            "--against {} is the file being checked; a programme cannot collide with itself",
-            against.display()
-        );
-    }
-    Ok(())
-}
-
-/// The programme behind an `--against` path, cleared to the same floor
-/// `check` holds the primary file to - parse, validation, declaration
-/// policy - or every reason it is not, as messages naming the path.
-/// Messages only: the JSON report has one `file`, and a span from
-/// another file would be a lying location.
-fn load_against(path: &Path) -> Result<Program, Vec<String>> {
-    let against = path.display();
-    let source = std::fs::read_to_string(path)
-        .map_err(|e| vec![format!("against {against}: read source file: {e}")])?;
-    let (program, _) = parse_program_with_sources(&source).map_err(|diagnostics| {
-        diagnostics
-            .into_iter()
-            .map(|d| format!("against {against}: {}", d.message))
-            .collect::<Vec<_>>()
-    })?;
-    let compiled = CompiledProgram::new(program).map_err(|errors| {
-        errors
-            .iter()
-            .map(|e| format!("against {against}: {e}"))
-            .collect::<Vec<_>>()
-    })?;
-    let policy = morpholog_postgres::validate_declarations(compiled.program());
-    if !policy.is_empty() {
-        return Err(policy
-            .iter()
-            .map(|f| format!("against {against}: {f}"))
-            .collect());
-    }
-    Ok(compiled.program().clone())
-}
-
-/// `check --json`: every finding - parse errors, validation errors,
-/// lints - in one stdout object, uniform across layers. Exit
-/// semantics match the plain form (`--strict` promotes hints).
-fn run_json(args: &CheckArgs) -> anyhow::Result<()> {
-    let source = std::fs::read_to_string(&args.file)
-        .map_err(|e| anyhow::anyhow!("read source file {}: {e}", args.file.display()))?;
-
-    let mut findings = Vec::new();
-    let mut failed = false;
-
-    match parse_program_with_sources(&source) {
-        Err(diagnostics) => {
-            failed = true;
-            for d in diagnostics {
-                findings.push(CheckDiagnostic::new(
-                    "error",
-                    d.message,
-                    Some(d.primary),
-                    &source,
-                ));
-            }
-        }
-        Ok((program, map)) => {
-            // Constructing the `CompiledProgram` is the validation gate:
-            // `Err` carries the same errors `program.validate()` would, and
-            // `Ok` is the compiled programme the lints run against - so the
-            // programme is validated once, not twice.
-            match CompiledProgram::new(program) {
-                Err(errors) => {
-                    failed = true;
-                    for err in &errors {
-                        findings.push(CheckDiagnostic::new(
-                            "error",
-                            err.to_string(),
-                            map.span_for_error(err),
-                            &source,
-                        ));
-                    }
-                }
-                Ok(compiled) => {
-                    for finding in &morpholog_postgres::validate_declarations(compiled.program()) {
-                        failed = true;
-                        findings.push(CheckDiagnostic::new(
-                            "error",
-                            finding.to_string(),
-                            None,
-                            &source,
-                        ));
-                    }
-                    for lint in &morpholog_core::lints(&compiled) {
-                        let severity = if args.strict { "error" } else { "hint" };
-                        failed |= args.strict;
-                        findings.push(CheckDiagnostic::new(
-                            severity,
-                            lint.to_string(),
-                            map.span_for_lint(lint),
-                            &source,
-                        ));
-                    }
-                    for path in &args.against {
-                        // One object on stdout, whatever went wrong: the
-                        // self-comparison refusal is a finding here too.
-                        if let Err(e) = refuse_self_comparison(&args.file, path) {
-                            failed = true;
-                            findings.push(CheckDiagnostic::new(
-                                "error",
-                                e.to_string(),
-                                None,
-                                &source,
-                            ));
-                            continue;
-                        }
-                        match load_against(path) {
-                            Err(messages) => {
-                                failed = true;
-                                for message in messages {
-                                    findings.push(CheckDiagnostic::new(
-                                        "error", message, None, &source,
-                                    ));
-                                }
-                            }
-                            Ok(other) => {
-                                for lint in
-                                    &morpholog_core::shared_writer_lints(compiled.program(), &other)
-                                {
-                                    let severity = if args.strict { "error" } else { "hint" };
-                                    failed |= args.strict;
-                                    findings.push(CheckDiagnostic::new(
-                                        severity,
-                                        format!("against {}: {lint}", path.display()),
-                                        map.span_for_lint(lint),
-                                        &source,
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let payload = CheckReport {
-        diagnostics: findings,
-        file: args.file.display().to_string(),
-    };
-    println!("{}", serde_json::to_string_pretty(&payload)?);
-    if failed {
-        return Err(AlreadyReported.into());
-    }
-    Ok(())
 }
 
 /// The `--verbose` success summary: programme name and a count per

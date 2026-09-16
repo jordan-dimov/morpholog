@@ -1898,6 +1898,18 @@ fn every_session_error_code_is_in_the_pinned_enum() {
         propose_published, propose_emitted,
         "propose_error_code must be exactly the codes a batch row can carry"
     );
+    // The propose set is the whole vocabulary minus the codes only a
+    // session can answer with; a new code has to be placed on one side.
+    let session_only = [ErrorCode::UnknownOperation];
+    let expected: Vec<&ErrorCode> = ErrorCode::ALL
+        .iter()
+        .filter(|c| !session_only.contains(c))
+        .collect();
+    assert_eq!(
+        ErrorCode::PROPOSE.iter().collect::<Vec<_>>(),
+        expected,
+        "ErrorCode::PROPOSE is ALL minus the session-only codes"
+    );
     let published = schema["$defs"]["error_code"]["enum"]
         .as_array()
         .expect("the code enum is an array")
