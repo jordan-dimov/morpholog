@@ -37,7 +37,7 @@ import threading
 import time
 
 from . import envelopes
-from .adapter import MorphologError, _redact_argv
+from .adapter import MorphologError, MorphologOutcomeUnknown, _redact_argv
 
 #: The wire version this client speaks; the ready line must agree.
 PROTOCOL = 1
@@ -115,20 +115,15 @@ class MorphologRequestError(MorphologError):
     """A per-request session error receipt: the request was received,
     classified, and refused, and the session is still healthy. The
     stable ``code`` says whether re-submitting is safe -
-    ``serialization_failure`` is the one re-submittable code."""
+    ``serialization_failure`` is re-submittable as is, ``not_committed``
+    once its cause is fixed (nothing was recorded); every other code is
+    the request's own fault."""
 
     def __init__(self, code: str, error: str, row: int) -> None:
         super().__init__(f"session request {row} refused ({code}): {error}")
         self.code = code
         self.error = error
         self.row = row
-
-
-class MorphologOutcomeUnknown(MorphologError):
-    """A propose request was submitted but no trustworthy response
-    arrived: the commit outcome is unknown. The database may have
-    committed before the session died, so re-submitting blindly can
-    duplicate a business action - read the record first."""
 
 
 class Session:
@@ -419,6 +414,13 @@ class Session:
                     if commitful:
                         raise MorphologOutcomeUnknown(message)
                     raise MorphologError(message)
+                if receipt.code == "commit_outcome_unknown":
+                    # The runtime's own verdict of "unknown": the
+                    # response arrived, so the wire is in step and the
+                    # session stays usable - unlike a lost response.
+                    raise MorphologOutcomeUnknown(
+                        f"session request {receipt.row}: {receipt.error}"
+                    )
                 raise MorphologRequestError(receipt.code, receipt.error, receipt.row)
             try:
                 return decode(payload, expected_row)

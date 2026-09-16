@@ -15,7 +15,12 @@ from _support import GOLDEN_DIR, add_client_to_path, recording_argv
 add_client_to_path()
 
 from python_client import envelopes
-from python_client.adapter import Morpholog, MorphologError
+from python_client.adapter import (
+    Morpholog,
+    MorphologError,
+    MorphologOutcomeUnknown,
+    MorphologTimeout,
+)
 
 STUB = """#!/usr/bin/env python3
 import os, sys
@@ -26,6 +31,15 @@ if mode == "rejected_exit_1":
 if mode == "operational_failure":
     print("error: failed to connect to PostgreSQL", file=sys.stderr)
     sys.exit(1)
+if mode == "not_committed_exit_1":
+    print("Error: the proposal was not committed: check constraint", file=sys.stderr)
+    sys.exit(1)
+if mode == "commit_outcome_unknown_exit_3":
+    print("Error: the commit outcome is unknown - read the record", file=sys.stderr)
+    sys.exit(3)
+if mode == "usage_error_exit_2":
+    print("error: unexpected argument '--bogus'", file=sys.stderr)
+    sys.exit(2)
 if mode == "batch_ok":
     print('{"row": 1, "status": "rejected", "reason": "closed period"}')
     print('{"row": 2, "status": "error", "code": "invalid_request", "error": "malformed batch row"}')
@@ -317,6 +331,27 @@ class AdapterDiscrimination(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.client.audit_witness(3, [])
 
+    def test_the_one_shot_exit_codes_say_what_the_runtime_knows(self):
+        # 1 with nothing on stdout is an ordinary operational failure -
+        # here a database refusal before anything was recorded; 3 is the
+        # one exit that means "read the record"; 2 is a usage error and
+        # must never be mistaken for an unknown commit.
+        self._mode("not_committed_exit_1")
+        with self.assertRaises(MorphologError) as err:
+            self.client.propose("post", "alex", {})
+        self.assertNotIsInstance(err.exception, MorphologOutcomeUnknown)
+        self.assertIn("not committed", str(err.exception))
+
+        self._mode("commit_outcome_unknown_exit_3")
+        with self.assertRaises(MorphologOutcomeUnknown) as unknown:
+            self.client.propose("post", "alex", {})
+        self.assertIn("read the record", str(unknown.exception))
+
+        self._mode("usage_error_exit_2")
+        with self.assertRaises(MorphologError) as usage:
+            self.client.propose("post", "alex", {})
+        self.assertNotIsInstance(usage.exception, MorphologOutcomeUnknown)
+
     def test_verify_flags_land_on_argv_exactly_when_supplied(self):
         # The verdict-affecting verify flags: each appears exactly when
         # asked for, so the whole pinned verdict surface (signatures,
@@ -447,6 +482,22 @@ class AdapterDiscrimination(unittest.TestCase):
         with self.assertRaises(MorphologError) as caught:
             self.client.audit()
         self.assertIn("failed to connect", str(caught.exception))
+
+    def test_a_propose_timeout_is_outcome_unknown_and_a_read_timeout_is_not(self):
+        # The kill can land after COMMIT was sent, so a timed-out
+        # proposal is exactly as unknown as exit 3; a timed-out read
+        # changed nothing and stays an ordinary operational error.
+        self._mode("hang")
+        bounded = Morpholog(
+            "model.morph", "postgres:///stub", binary=str(self.stub), timeout=0.2
+        )
+        with self.assertRaises(MorphologOutcomeUnknown) as unknown:
+            bounded.propose("post", "alex", {})
+        self.assertIn("read the record", str(unknown.exception))
+        with self.assertRaises(MorphologError) as read:
+            bounded.claims("Entry")
+        self.assertIsInstance(read.exception, MorphologTimeout)
+        self.assertNotIsInstance(read.exception, MorphologOutcomeUnknown)
 
     def test_a_client_timeout_surfaces_as_an_operational_error(self):
         self._mode("hang")

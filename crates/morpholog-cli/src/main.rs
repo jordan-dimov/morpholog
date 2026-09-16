@@ -1421,8 +1421,18 @@ async fn main() -> std::process::ExitCode {
             // Byte-identical to what `Result`'s own `Termination` used
             // to print when `main` returned it.
             eprintln!("Error: {err:?}");
-            std::process::ExitCode::FAILURE
+            std::process::ExitCode::from(exit_code_for(&err))
         }
+    }
+}
+
+/// Every failure exits 1 except the one a caller must treat
+/// differently: a commit whose outcome could not be proven.
+fn exit_code_for(err: &anyhow::Error) -> u8 {
+    if err.is::<commands::CommitOutcomeUnknown>() {
+        commands::EXIT_COMMIT_OUTCOME_UNKNOWN
+    } else {
+        1
     }
 }
 
@@ -2442,5 +2452,21 @@ mod exit_path_tests {
             "the diagnostics were printed, so main must add nothing: {err:?}"
         );
         // Still here - which is the whole assertion.
+    }
+
+    /// The commit-unknown exit is its own number, and nothing else
+    /// borrows it: an ordinary failure, even one wrapping the marker
+    /// in context, exits 1 only when the marker is absent.
+    #[test]
+    fn a_commit_outcome_unknown_exits_three_and_nothing_else_does() {
+        let unknown: anyhow::Error = commands::CommitOutcomeUnknown("reset".into()).into();
+        assert_eq!(exit_code_for(&unknown), 3);
+        assert_eq!(exit_code_for(&unknown.context("wrapped")), 3);
+        assert_eq!(exit_code_for(&anyhow::anyhow!("not committed")), 1);
+        assert_eq!(
+            commands::EXIT_COMMIT_OUTCOME_UNKNOWN,
+            3,
+            "2 is clap's usage error"
+        );
     }
 }

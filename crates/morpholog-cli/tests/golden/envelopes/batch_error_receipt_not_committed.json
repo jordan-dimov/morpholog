@@ -1,0 +1,6 @@
+{
+  "code": "not_committed",
+  "error": "the proposal was not committed: error returned from database: new row for relation \"audit\" violates check constraint \"probe\"",
+  "row": 2,
+  "status": "error"
+}

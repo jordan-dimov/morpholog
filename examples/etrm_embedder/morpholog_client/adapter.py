@@ -44,9 +44,31 @@ def _redact_argv(args: list[str]) -> str:
     return " ".join(parts)
 
 
+#: The one-shot ``propose`` exit for a commit whose outcome the runtime
+#: could not prove. Not 2, which is a command-line usage error.
+EXIT_COMMIT_OUTCOME_UNKNOWN = 3
+
+
 class MorphologError(RuntimeError):
     """An operational failure from the CLI - distinct from a lawful
     business rejection, which is a decided outcome on stdout."""
+
+
+class MorphologTimeout(MorphologError):
+    """The binary did not finish within the client's timeout and was
+    killed. Operational for a read; for a proposal the caller must not
+    assume nothing changed, since the kill can land after COMMIT was
+    sent - ``propose`` re-raises it as ``MorphologOutcomeUnknown``."""
+
+
+class MorphologOutcomeUnknown(MorphologError):
+    """A proposal was submitted and its commit outcome cannot be proven.
+    Either no trustworthy response arrived (a session died, hung, or
+    answered garbage after the request was written), or the runtime
+    itself reported ``commit_outcome_unknown``: the database connection
+    failed while COMMIT was in flight, after the server may already have
+    made it durable. Re-submitting blindly can duplicate a business
+    action - read the record first."""
 
 
 class Morpholog:
@@ -96,7 +118,7 @@ class Morpholog:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            raise MorphologError(
+            raise MorphologTimeout(
                 f"`{self.binary} {_redact_argv(args)}` timed out after {timeout}s"
             ) from None
 
@@ -208,7 +230,12 @@ class Morpholog:
     ) -> envelopes.Committed | envelopes.Rejected:
         """Propose a change by transformation name: it commits only if
         every rule holds; a refusal is a lawful outcome, returned as
-        ``Rejected``."""
+        ``Rejected``. A database failure before anything was recorded is
+        an operational ``MorphologError`` (nothing changed); a commit
+        whose outcome the runtime could not prove, or a client timeout
+        that killed the binary after the proposal was submitted, raises
+        ``MorphologOutcomeUnknown`` - read the record before
+        re-submitting."""
         args = [
             "propose", self.file, transformation,
             "--actor", actor,
@@ -217,7 +244,28 @@ class Morpholog:
         ]
         if explain_on_reject:
             args.append("--explain-on-reject")
-        return envelopes.parse_run_outcome(self._json(*args))
+        # A timeout kills the child, which may already have sent COMMIT:
+        # the same standing as exit 3. Then the exit code is checked
+        # before the empty-stdout rule, because an unknown commit prints
+        # nothing on stdout too and must never read as an ordinary
+        # operational failure.
+        try:
+            proc = self._run(args, timeout=self.timeout)
+        except MorphologTimeout as exc:
+            raise MorphologOutcomeUnknown(
+                "the proposal timed out after it was submitted; the commit outcome "
+                f"is unknown - read the record before re-submitting. ({exc})"
+            ) from None
+        if proc.returncode == EXIT_COMMIT_OUTCOME_UNKNOWN:
+            raise MorphologOutcomeUnknown(
+                "the commit outcome is unknown - read the record before "
+                f"re-submitting:\n{self._redact_stderr(proc.stderr)}"
+            )
+        if not proc.stdout.strip():
+            raise MorphologError(
+                f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}"
+            )
+        return envelopes.parse_run_outcome(json.loads(proc.stdout))
 
     def submit(
         self, request: object, actor: str, explain_on_reject: bool = False

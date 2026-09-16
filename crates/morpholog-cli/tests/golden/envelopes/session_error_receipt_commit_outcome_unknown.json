@@ -1,0 +1,6 @@
+{
+  "code": "commit_outcome_unknown",
+  "error": "the commit outcome is unknown - read the record before re-submitting: the commit outcome is unknown: connection reset by peer",
+  "row": 18,
+  "status": "error"
+}

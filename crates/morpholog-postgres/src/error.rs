@@ -7,6 +7,13 @@ use uuid::Uuid;
 /// [`crate::PgProposalOutcome::Rejected`]. This enum captures only conditions
 /// where the caller cannot or should not proceed as if the kernel had
 /// run successfully.
+///
+/// On the proposal path (`propose_against_pg` and its trace-carrying
+/// twin), every variant reaching the caller except
+/// [`PgError::CommitOutcomeUnknown`] is known not to have committed the
+/// proposal: the transaction was rolled back, or never reached COMMIT.
+/// That promise is scoped to the proposal path; other commit sites in
+/// this crate make no such claim.
 #[derive(thiserror::Error, Debug)]
 pub enum PgError {
     /// SQLSTATE 40001 from PostgreSQL SSI. The transaction should be
@@ -17,9 +24,23 @@ pub enum PgError {
     /// type mismatch). Distinct from a business [`crate::PgProposalOutcome::Rejected`].
     #[error(transparent)]
     Kernel(#[from] EvalError),
-    /// Any other database error (connection, schema mismatch, etc.).
+    /// Any other database error (connection, schema mismatch, etc.). On
+    /// the proposal path: the proposal was not committed.
     #[error(transparent)]
     Database(sqlx::Error),
+    /// The proposal's COMMIT failed without a PostgreSQL error response,
+    /// so whether it took effect cannot be proven from here: the
+    /// connection may have dropped after the server made it durable.
+    /// The one proposal-path error that is not a known non-commit. Read
+    /// the record before re-submitting.
+    #[error("the commit outcome is unknown: {0}")]
+    CommitOutcomeUnknown(sqlx::Error),
+    /// The proposal was decided (rejected) and rolled back, but the
+    /// rejection could not be recorded in the operational log. The
+    /// verdict stands; only the record of it is missing. Operational,
+    /// never a pre-decision failure.
+    #[error("the rejection was decided but could not be recorded: {0}")]
+    RejectionLogFailure(Box<PgError>),
     /// JSON serialisation or deserialisation error at the codec boundary.
     #[error(transparent)]
     Encoding(#[from] serde_json::Error),
@@ -263,6 +284,21 @@ pub(crate) fn classify(err: sqlx::Error) -> PgError {
     PgError::Database(err)
 }
 
+/// The proposal's commit boundary. A PostgreSQL error response to COMMIT
+/// means the server rolled the transaction back, so the ordinary
+/// classification applies (`40001` retryable, anything else a known
+/// non-commit). Any other failure of the commit call - the connection
+/// dropped, the protocol broke, the pool closed - came without a
+/// server verdict, and the commit may have taken effect: unknown. A
+/// false "unknown" costs the caller a read of the record; a false "not
+/// committed" would let it duplicate a business action.
+pub(crate) fn classify_commit(err: sqlx::Error) -> PgError {
+    match err {
+        sqlx::Error::Database(_) => classify(err),
+        other => PgError::CommitOutcomeUnknown(other),
+    }
+}
+
 /// As [`classify`], plus: a missing column means the database is behind.
 ///
 /// Only for queries written with `sqlx::query!` / `query_as!` /
@@ -292,8 +328,31 @@ pub(crate) fn classify_checked_query(err: sqlx::Error) -> PgError {
 }
 #[cfg(test)]
 mod tests {
-    use super::{is_serialization_failure_code, is_undefined_column_code};
+    use super::{classify_commit, is_serialization_failure_code, is_undefined_column_code};
+    use crate::PgError;
     use sqlx::error::DatabaseError;
+
+    /// The commit boundary: a server error response is a known
+    /// non-commit, a failure without one is unknown.
+    #[test]
+    fn a_commit_failure_without_a_server_verdict_is_unknown() {
+        let dropped = sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset by peer",
+        ));
+        assert!(matches!(
+            classify_commit(dropped),
+            PgError::CommitOutcomeUnknown(sqlx::Error::Io(_))
+        ));
+        assert!(matches!(
+            classify_commit(sqlx::Error::Protocol("half a message".into())),
+            PgError::CommitOutcomeUnknown(_)
+        ));
+        assert!(matches!(
+            classify_commit(sqlx::Error::PoolClosed),
+            PgError::CommitOutcomeUnknown(_)
+        ));
+    }
     /// Pins the `"40001"` magic string so the retry contract cannot
     /// regress silently.
     #[test]

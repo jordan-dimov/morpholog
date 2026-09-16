@@ -262,6 +262,11 @@ class BatchReceipts(unittest.TestCase):
         rejected = envelopes.BatchReceipt.from_json(golden("batch_rejected_receipt.json"))
         self.assertEqual(rejected.row, 2)
         self.assertIsInstance(rejected.outcome, envelopes.Rejected)
+        not_committed = envelopes.BatchReceipt.from_json(
+            golden("batch_error_receipt_not_committed.json")
+        )
+        self.assertIsInstance(not_committed.outcome, envelopes.BatchError)
+        self.assertEqual(not_committed.outcome.code, "not_committed")
         error = envelopes.BatchReceipt.from_json(golden("batch_error_receipt.json"))
         self.assertEqual(error.row, 3)
         self.assertIsInstance(error.outcome, envelopes.BatchError)
@@ -628,6 +633,11 @@ class SessionEnvelopes(unittest.TestCase):
         self.assertEqual(ready.protocol, 1)
 
     def test_the_error_receipt_carries_the_stable_code(self):
+        unknown = envelopes.SessionErrorReceipt.from_json(
+            golden("session_error_receipt_commit_outcome_unknown.json")
+        )
+        self.assertEqual(unknown.code, "commit_outcome_unknown")
+        self.assertEqual(unknown.row, 18)
         receipt = envelopes.SessionErrorReceipt.from_json(golden("session_error_receipt.json"))
         self.assertEqual(receipt.code, "serialization_failure")
         self.assertEqual(receipt.row, 17)

@@ -65,6 +65,28 @@ pub(crate) struct ParsedSource {
 #[derive(Debug)]
 pub(crate) struct AlreadyReported;
 
+/// The one-shot exit code for a proposal whose commit outcome could not
+/// be proven: distinct from every decided or known-non-commit failure
+/// (1) and from a usage error (2, clap's), so a caller can tell "read
+/// the record before re-submitting" apart without parsing prose.
+pub(crate) const EXIT_COMMIT_OUTCOME_UNKNOWN: u8 = 3;
+
+/// A one-shot proposal's COMMIT failed without a PostgreSQL verdict.
+#[derive(Debug)]
+pub(crate) struct CommitOutcomeUnknown(pub(crate) String);
+
+impl std::fmt::Display for CommitOutcomeUnknown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the commit outcome is unknown - read the record before re-submitting: {}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for CommitOutcomeUnknown {}
+
 impl std::fmt::Display for AlreadyReported {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Reached only if something re-renders it; the diagnostics

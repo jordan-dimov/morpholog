@@ -1,5 +1,5 @@
 use crate::attestation::{AuditAttestation, Proposal};
-use crate::error::{PgError, classify, classify_checked_query};
+use crate::error::{PgError, classify, classify_checked_query, classify_commit};
 use crate::txn::begin_authorised_proposal_tx;
 use morpholog_core::{
     ClaimInstance, CompiledProgram, Definition, EvalError, EvalValue, IntentInstance, Invariant,
@@ -323,7 +323,9 @@ pub(crate) async fn finalise_outcome(
     match outcome {
         Outcome::Rejected { reason } => {
             tx.rollback().await.map_err(classify)?;
-            write_rejection(pool, transformation, transition, &reason).await?;
+            write_rejection(pool, transformation, transition, &reason)
+                .await
+                .map_err(|e| PgError::RejectionLogFailure(Box::new(e)))?;
             let witness = match &reason {
                 RejectionReason::Invariant { witness, .. } => witness.clone(),
                 RejectionReason::Require { .. } | RejectionReason::BindNone { .. } => Vec::new(),
@@ -353,7 +355,7 @@ pub(crate) async fn finalise_outcome(
                 login_role,
             )
             .await?;
-            tx.commit().await.map_err(classify)?;
+            tx.commit().await.map_err(classify_commit)?;
             Ok(PgProposalOutcome::Committed {
                 transition_id,
                 actor: transition.actor.clone(),
