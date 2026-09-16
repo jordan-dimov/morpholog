@@ -281,26 +281,18 @@ pub async fn drain_open_transactions(pool: &PgPool) {
     );
 }
 
-/// Unwrap a created checkpoint; a no-new-rows outcome is a fixture
-/// bug, not a scenario. One drain-and-retry absorbs the mid-test
-/// straggler (see [`drain_open_transactions`]) that otherwise makes
-/// this the suite's known flake.
+/// A checkpoint over every audit row committed so far. The count is
+/// read first and demanded of the checkpoint, so a row the resume
+/// watermark withheld - correctly, for a transaction still winding
+/// down elsewhere - is waited for rather than silently left out of an
+/// anchor a test then reasons about.
 pub async fn make_checkpoint(pool: &PgPool) -> morpholog_postgres::Checkpoint {
-    for attempt in 0..2 {
-        match morpholog_postgres::create_checkpoint(pool, None, None)
-            .await
-            .unwrap()
-        {
-            morpholog_postgres::CheckpointOutcome::Created(c) => return c,
-            other @ morpholog_postgres::CheckpointOutcome::NoNewRows(_) => {
-                if attempt == 1 {
-                    panic!("expected a created checkpoint, got {other:?}")
-                }
-                drain_open_transactions(pool).await;
-            }
-        }
-    }
-    unreachable!("the loop returns or panics")
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM morpholog.audit")
+        .fetch_one(pool)
+        .await
+        .expect("count audit rows");
+    assert!(rows > 0, "make_checkpoint needs committed rows to cover");
+    make_checkpoint_at(pool, rows).await
 }
 
 /// A checkpoint covering exactly `tree_size` rows, retried through the
@@ -321,6 +313,22 @@ pub async fn make_checkpoint_at(pool: &PgPool, tree_size: i64) -> morpholog_post
                 if attempt == 2 {
                     panic!("expected a checkpoint at tree size {tree_size}, got {other:?}")
                 }
+                // Name the straggler while it is still there: the next
+                // occurrence of the withheld-row flake should say who.
+                let census: Vec<(i32, String, String)> = sqlx::query_as(
+                    "SELECT pid, coalesce(state, '?'), left(coalesce(query, ''), 120)
+                     FROM pg_stat_activity
+                     WHERE datname = current_database()
+                       AND pid != pg_backend_pid()
+                       AND xact_start IS NOT NULL",
+                )
+                .fetch_all(pool)
+                .await
+                .expect("census open transactions");
+                eprintln!(
+                    "checkpoint covered fewer rows than committed (wanted {tree_size}, got \
+                     {other:?}); open transactions lowering the watermark: {census:?}"
+                );
                 drain_open_transactions(pool).await;
             }
         }
