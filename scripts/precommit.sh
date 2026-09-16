@@ -7,10 +7,12 @@
 # Optional env:
 #   DATABASE_URL  if set, runs the PG-backed test suites; otherwise
 #                 skips them with a note. These suites (and the bench
-#                 smoke test) TRUNCATE the morpholog schema on entry, so
-#                 point this at a DISPOSABLE database - never one holding
-#                 data you want to keep. Typical local value:
-#                   export DATABASE_URL=postgres:///morpholog_dev
+#                 smoke test) TRUNCATE the morpholog schema on entry and
+#                 create and drop cluster-global roles, so point this at
+#                 a DISPOSABLE CLUSTER - never one that also hosts a real
+#                 deployment (CONTRIBUTING.md has the second-port recipe).
+#                 Typical local value:
+#                   export DATABASE_URL='postgres:///morpholog_dev?port=55432'
 #
 # Usage:
 #   ./scripts/precommit.sh
