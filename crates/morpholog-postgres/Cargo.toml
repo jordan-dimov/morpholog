@@ -8,6 +8,8 @@ repository.workspace = true
 
 [dependencies]
 morpholog-core = { path = "../morpholog-core" }
+morpholog-witness = { path = "../morpholog-witness" }
+base64 = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }

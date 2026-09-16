@@ -776,6 +776,19 @@ pub async fn verify_audit_tree_under(
     anchor: Option<Checkpoint>,
     policy: Option<&SignaturePolicy>,
 ) -> Result<TreeVerification, PgError> {
+    verify_audit_tree_with_chain(pool, anchor, policy)
+        .await
+        .map(|(verdict, _)| verdict)
+}
+
+/// [`verify_audit_tree_under`], also handing back the checkpoint chain the
+/// verdict was computed over - the same snapshot - so the witness axis is
+/// judged on exactly the checkpoints the tree verdict saw.
+pub async fn verify_audit_tree_with_chain(
+    pool: &PgPool,
+    anchor: Option<Checkpoint>,
+    policy: Option<&SignaturePolicy>,
+) -> Result<(TreeVerification, Vec<Checkpoint>), PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
 
     let checkpoints = load_checkpoint_chain(&mut tx).await?;
@@ -796,7 +809,7 @@ pub async fn verify_audit_tree_under(
     {
         let rows = load_audit_rows(&mut tx, max_size).await?;
         if let Some(violation) = authority_violation(&checkpoints, anchor.as_ref(), &rows) {
-            return Ok(violation);
+            return Ok((violation, checkpoints));
         }
     }
     if let Some(policy) = policy
@@ -804,9 +817,9 @@ pub async fn verify_audit_tree_under(
         && let Some(violation) =
             policy.violation(&with_anchor_signatures(&checkpoints, anchor.as_ref()))
     {
-        return Ok(violation.into());
+        return Ok((violation.into(), checkpoints));
     }
-    Ok(verdict)
+    Ok((verdict, checkpoints))
 }
 
 /// The pure tamper-evidence check shared by [`verify_audit_tree`] (live,
