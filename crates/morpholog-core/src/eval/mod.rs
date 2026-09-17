@@ -140,6 +140,15 @@ pub enum EvalError {
     UnknownDefinition(String),
 }
 
+impl EvalError {
+    /// A sum of decimals whose exact total is not a representable
+    /// decimal. One constructor, so the interpreter and the compiled
+    /// checks report the same error.
+    pub fn sum_out_of_decimal_range() -> Self {
+        EvalError::ArithOutOfRange("sum of decimals exceeds the exact decimal range".to_string())
+    }
+}
+
 /// Evaluator context: state(s), bindings, optional actor. Threaded
 /// through `find_matches`, `eval_value`, and the helpers that recurse
 /// into expression bodies.
@@ -419,14 +428,20 @@ pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
             let pre_ctx = ctx.enter_pre().ok_or(EvalError::PreStateUnavailable)?;
             find_matches(inner, &pre_ctx)
         }
+        // Implication and forall evaluate every binding before answering
+        // false: an evaluation error at any binding is the result, so
+        // the answer never depends on which binding the state happened
+        // to present first. Error over false only; precedence among
+        // different errors is not decided here.
         Prop::Implies { left, right } => {
             let lm = find_matches(left, ctx)?;
+            let mut holds = true;
             for m in lm {
                 if find_matches(right, &ctx.with_bindings(&m))?.is_empty() {
-                    return Ok(vec![]);
+                    holds = false;
                 }
             }
-            Ok(vec![ctx.bindings.clone()])
+            Ok(verdict(ctx.bindings, holds))
         }
         Prop::Exists { binding: _, body } => {
             let m = find_matches(body, ctx)?;
@@ -438,12 +453,13 @@ pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
             body,
         } => {
             let sm = find_matches(source, ctx)?;
+            let mut holds = true;
             for m in sm {
                 if find_matches(body, &ctx.with_bindings(&m))?.is_empty() {
-                    return Ok(vec![]);
+                    holds = false;
                 }
             }
-            Ok(vec![ctx.bindings.clone()])
+            Ok(verdict(ctx.bindings, holds))
         }
         Prop::Eq(lhs, rhs) => {
             let l = eval_value(lhs, ctx)?;
@@ -1355,11 +1371,10 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         unit: unit.clone(),
                     },
                 },
-                SumTotal::Decimal(t) => EvalValue::Decimal(t.into_decimal().ok_or_else(|| {
-                    EvalError::ArithOutOfRange(
-                        "sum of decimals exceeds the exact decimal range".to_string(),
-                    )
-                })?),
+                SumTotal::Decimal(t) => EvalValue::Decimal(
+                    t.into_decimal()
+                        .ok_or_else(EvalError::sum_out_of_decimal_range)?,
+                ),
                 SumTotal::Duration(t) => {
                     EvalValue::Duration(nanos_to_duration(t).ok_or_else(|| {
                         EvalError::ArithOutOfRange("sum of durations out of range".to_string())
