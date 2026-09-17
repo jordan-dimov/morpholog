@@ -36,6 +36,7 @@ use crate::commands::transact::{Act, decode_acts};
 use crate::commands::{compile_or_report, parse_or_report};
 use morpholog_cli::envelopes::{ErrorCode, ErrorReceipt, SessionReady};
 use morpholog_core::CompiledProgram;
+use morpholog_postgres::PgProgram;
 use morpholog_postgres::PgPool;
 
 /// A runaway guard, not a working limit: a request line larger than
@@ -65,7 +66,8 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
     // Startup failures keep the one-shot exit shape: nothing has been
     // promised on stdout yet, so diagnostics + exit is the contract.
     let parsed = parse_or_report(&args.file)?;
-    let compiled = compile_or_report(&parsed)?;
+    let program = morpholog_postgres::PgProgram::new(compile_or_report(&parsed)?);
+    let compiled = program.core();
 
     // One connection: a lockstep protocol cannot use more, and the
     // cap bounds database connection load when many application
@@ -93,7 +95,7 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
         if line.trim().is_empty() {
             continue; // Skipped without a receipt, like a batch blank.
         }
-        match handle_line(&args, &compiled, &pool, line.trim(), row).await {
+        match handle_line(&args, &program, &pool, line.trim(), row).await {
             Ok(response) => write_line(&mut out, &response)?,
             Err(SessionFailure::Request { code, reason }) => {
                 let receipt = ErrorReceipt::new(code, format!("{reason:#}"), row);
@@ -161,7 +163,7 @@ mod tests;
 /// must be a refusal, never silently "all predicates".
 async fn handle_line(
     args: &SessionArgs,
-    compiled: &CompiledProgram,
+    program: &PgProgram,
     pool: &PgPool,
     line: &str,
     row: u64,
@@ -181,10 +183,10 @@ async fn handle_line(
         ));
     };
     match op.as_str() {
-        "propose" => handle_propose(args, compiled, pool, value, row).await,
-        "transact" => handle_transact(args, compiled, pool, value, row).await,
-        "claims" => handle_claims(args, compiled, pool, value).await,
-        "derived" => handle_derived(args, compiled, pool, value).await,
+        "propose" => handle_propose(args, program, pool, value, row).await,
+        "transact" => handle_transact(args, program, pool, value, row).await,
+        "claims" => handle_claims(args, program.core(), pool, value).await,
+        "derived" => handle_derived(args, program.core(), pool, value).await,
         other => Err(SessionFailure::request(
             ErrorCode::UnknownOperation,
             anyhow!(
@@ -212,7 +214,7 @@ struct ProposeBody {
 
 async fn handle_propose(
     args: &SessionArgs,
-    compiled: &CompiledProgram,
+    program: &PgProgram,
     pool: &PgPool,
     body: serde_json::Value,
     row: u64,
@@ -228,7 +230,7 @@ async fn handle_propose(
     let mut envelope = propose_row_outcome(
         &args.file,
         body.explain_on_reject,
-        compiled,
+        program,
         pool,
         batch_row,
     )
@@ -259,15 +261,15 @@ struct TransactBody {
 /// either way.
 async fn handle_transact(
     args: &SessionArgs,
-    compiled: &CompiledProgram,
+    program: &PgProgram,
     pool: &PgPool,
     body: serde_json::Value,
     row: u64,
 ) -> Result<serde_json::Value, SessionFailure> {
     let body: TransactBody = serde_json::from_value(body)
         .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
-    let proposals = decode_acts(&args.file, compiled, body.acts).map_err(row_failure)?;
-    let outcome = morpholog_postgres::propose_all_against_pg(pool, compiled, &proposals)
+    let proposals = decode_acts(&args.file, program.core(), body.acts).map_err(row_failure)?;
+    let outcome = morpholog_postgres::propose_all_against_pg(pool, program, &proposals)
         .await
         .map_err(|e| row_failure(classify_pg_error(e)))?;
     let mut envelope = serde_json::to_value(&outcome)

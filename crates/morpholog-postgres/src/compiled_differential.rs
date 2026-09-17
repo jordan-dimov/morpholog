@@ -36,14 +36,15 @@ use std::fmt::Write as _;
 
 use morpholog_core::{
     CompiledProgram, EvalError, EvalValue, Outcome, Program, RejectionReason, StagedDelta, Subject,
-    Transition, WitnessBinding, finish_staged_delta, propose_stage_delta,
+    Transition, finish_staged_delta, propose_stage_delta,
 };
 use uuid::Uuid;
 
 use crate::attestation::Proposal;
 use crate::compiled::{CompiledInvariantSet, SqlViolation, Stage, compile_invariants, disable_jit};
 use crate::error::{PgError, classify};
-use crate::propose::{compute_load_scope, load_state, write_claim_delta};
+use crate::program::PgProgram;
+use crate::propose::{Reads, compute_load_scope, load_state, write_claim_delta};
 use crate::txn::begin_authorised_proposal_tx;
 use crate::{PgPool, PgProposalOutcome, propose_against_pg};
 
@@ -109,7 +110,13 @@ async fn probe_raw(
     let (mut tx, _login_role) = begin_authorised_proposal_tx(pool, &transition.actor)
         .await
         .map_err(ProbeFailure::Pg)?;
-    let scope = compute_load_scope(transformation, invariants, definitions);
+    // The kernel judges this probe too, so its invariants' reads load.
+    let scope = compute_load_scope(
+        transformation,
+        invariants,
+        definitions,
+        Reads::BodyAndInvariants,
+    );
     let state = load_state(&mut tx, &scope)
         .await
         .map_err(ProbeFailure::Pg)?;
@@ -281,9 +288,13 @@ async fn sweep(program: Program) {
                     args: args.clone(),
                     actor: test_actor(),
                 };
-                let outcome = propose_against_pg(&pool, &compiled, &Proposal::gateway(&transition))
-                    .await
-                    .expect("replaying an accepted chain step");
+                let outcome = propose_against_pg(
+                    &pool,
+                    &PgProgram::new(CompiledProgram::new(compiled.program().clone()).unwrap()),
+                    &Proposal::gateway(&transition),
+                )
+                .await
+                .expect("replaying an accepted chain step");
                 assert!(
                     matches!(outcome, PgProposalOutcome::Committed { .. }),
                     "a previously accepted chain step must replay accepted"
@@ -354,6 +365,19 @@ async fn sweep(program: Program) {
 /// `repr_for`, like every operator, needs a forcing discriminator
 /// here, not merely a unit test asserting emitted text.
 const HOSTILE: &[&str] = &[
+    // A bare top-level negation, violated by admitting the second
+    // conjunct: the kernel reports no witness for a failure with
+    // nothing bound above it, and the compiled check must say the same.
+    "program bare_negation
+predicate Marked(x: Subject)
+predicate Sealed(x: Subject)
+invariant never_both:
+    not (Marked(x) and Sealed(x))
+transformation mark(x):
+    admit Marked(x)
+transformation seal(x):
+    admit Sealed(x)
+",
     "program comparison_edges
 predicate LeBand(x: Subject, level: Decimal)
 predicate LtBand(x: Subject, level: Decimal)

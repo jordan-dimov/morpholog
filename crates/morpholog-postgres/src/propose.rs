@@ -1,11 +1,13 @@
 use crate::attestation::{AuditAttestation, Proposal};
+use crate::compiled::{Stage, disable_jit};
 use crate::error::{PgError, classify, classify_checked_query, classify_commit};
+use crate::program::{PgProgram, Route};
 use crate::txn::begin_authorised_proposal_tx;
 use morpholog_core::{
     ClaimInstance, CompiledProgram, Definition, EvalError, EvalValue, IntentInstance, Invariant,
-    InvariantName, Outcome, PredicateName, RejectionReason, RuleName, State, Subject, TraceEntry,
-    TracedProposal, Transformation, TransformationName, Transition, WitnessBinding, propose,
-    propose_with_trace,
+    InvariantName, Outcome, PredicateName, RejectionReason, RuleName, StagedDelta, State, Subject,
+    TraceEntry, TracedProposal, Transformation, TransformationName, Transition, WitnessBinding,
+    propose, propose_stage_delta, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -57,11 +59,16 @@ pub enum PgProposalOutcome {
 /// Propose a transformation against the live `morpholog.*` tables.
 ///
 /// Opens one PostgreSQL transaction at SERIALIZABLE isolation, loads
-/// the current claims into an in-memory [`State`], calls the existing
-/// synchronous [`propose`] kernel, then either commits the changes
-/// (writing claims, audit, and outbox rows) or rolls back atomically.
-/// A rejection additionally records one row in the operational
-/// rejection log after the rollback (see [`PgProposalOutcome`]).
+/// the claims the transformation body reads into an in-memory
+/// [`State`] and runs the body through the synchronous kernel. When
+/// the programme's invariants compile to SQL ([`PgProgram::plan`]),
+/// the staged delta is written into the transaction and every
+/// invariant is checked in programme order against the claims table;
+/// otherwise the interpreter checks them over the loaded state. Either
+/// way the changes commit (claims, audit, outbox rows) or roll back
+/// atomically, and a rejection additionally records one row in the
+/// operational rejection log after the rollback (see
+/// [`PgProposalOutcome`]).
 ///
 /// External side effects do not run inside this transaction. Outbox rows
 /// are enqueued for post-commit delivery by workers running outside.
@@ -73,13 +80,23 @@ pub enum PgProposalOutcome {
 /// column and the attestation lineage to `morpholog.audit.attestation`.
 pub async fn propose_against_pg(
     pool: &PgPool,
-    compiled: &CompiledProgram,
+    program: &PgProgram,
     proposal: &Proposal,
 ) -> Result<PgProposalOutcome, PgError> {
     let (transformation, invariants, definitions) =
-        resolve(compiled, &proposal.transformation_name)?;
+        resolve(program.core(), &proposal.transformation_name)?;
     let transition = proposal.transition();
-    propose_against_pg_inner(pool, transformation, &transition, invariants, definitions).await
+    let run = propose_against_pg_run(
+        pool,
+        program.route(),
+        transformation,
+        &transition,
+        invariants,
+        definitions,
+        false,
+    )
+    .await?;
+    Ok(run.outcome)
 }
 
 /// Resolve the pieces the kernel needs from a compiled programme and the
@@ -109,9 +126,9 @@ pub(crate) fn resolve<'a>(
     ))
 }
 
-/// The decomposed propose primitive, shared by the public facade and the
-/// compensation path (which proposes from a [`CompensationSpec`]'s own
-/// transformation/invariants/definitions, not a [`CompiledProgram`]).
+/// The interpreted propose primitive for the compensation path, which
+/// proposes from a [`CompensationSpec`]'s own transformation,
+/// invariants and definitions rather than a programme object.
 pub(crate) async fn propose_against_pg_inner(
     pool: &PgPool,
     transformation: &Transformation,
@@ -119,12 +136,9 @@ pub(crate) async fn propose_against_pg_inner(
     invariants: &[Invariant],
     definitions: &[Definition],
 ) -> Result<PgProposalOutcome, PgError> {
-    // The rejection-state variant is the primitive: it is this function
-    // plus a free hand-off (the scoped state is moved, never cloned,
-    // and only on rejection), so the SERIALIZABLE-setup ritual lives
-    // in one fewer place.
     let run = propose_against_pg_run(
         pool,
+        Route::Interpreted,
         transformation,
         transition,
         invariants,
@@ -140,14 +154,15 @@ pub(crate) async fn propose_against_pg_inner(
 /// readings the ordinary facade never takes.
 pub async fn propose_against_pg_timed(
     pool: &PgPool,
-    compiled: &CompiledProgram,
+    program: &PgProgram,
     proposal: &Proposal,
 ) -> Result<TimedProposalOutcome, PgError> {
     let (transformation, invariants, definitions) =
-        resolve(compiled, &proposal.transformation_name)?;
+        resolve(program.core(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
+        program.route(),
         transformation,
         &transition,
         invariants,
@@ -197,8 +212,13 @@ pub struct TimedProposalOutcome {
 }
 
 /// Where one proposal's wall time went: opening the transaction,
-/// loading the scoped state, the kernel, and persisting the outcome.
+/// loading the scoped state, deciding, and persisting the outcome.
 /// Read from the production path itself, on the timed facade only.
+/// The phases are relative to the route: interpreted, `kernel` is the
+/// body and the invariants in memory and `finalise` writes the delta
+/// and the record; compiled, `kernel` is the body, the delta write and
+/// the SQL checks, and `finalise` the record alone. A comparison across
+/// routes reads the whole proposal's time, never a phase ratio.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProposalPhases {
     pub begin: std::time::Duration,
@@ -215,16 +235,20 @@ pub struct ProposalPhases {
 /// handing back the rejecting state closes that gap without a second
 /// read. `None` on commit: an admitted change needs no admissibility
 /// diagnosis, and the happy path stays free of the hand-off.
+///
+/// A diagnostic, so always the interpreted route: the explanation
+/// needs the invariants' state, which the compiled route never loads.
 pub async fn propose_against_pg_with_rejection_state(
     pool: &PgPool,
-    compiled: &CompiledProgram,
+    program: &PgProgram,
     proposal: &Proposal,
 ) -> Result<RejectionStateOutcome, PgError> {
     let (transformation, invariants, definitions) =
-        resolve(compiled, &proposal.transformation_name)?;
+        resolve(program.core(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
+        Route::Interpreted,
         transformation,
         &transition,
         invariants,
@@ -240,6 +264,7 @@ pub async fn propose_against_pg_with_rejection_state(
 
 pub(crate) async fn propose_against_pg_run(
     pool: &PgPool,
+    route: Route<'_>,
     transformation: &Transformation,
     transition: &Transition,
     invariants: &[Invariant],
@@ -253,22 +278,99 @@ pub(crate) async fn propose_against_pg_run(
     let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &transition.actor).await?;
     let begin = elapsed(clock);
 
-    let scope = compute_load_scope(transformation, invariants, definitions);
+    let scope = compute_load_scope(transformation, invariants, definitions, route.reads());
     let state = load_state(&mut tx, &scope).await?;
     let load = elapsed(clock) - begin;
-    let outcome = propose(transformation, transition, &state, invariants, definitions)?;
+
+    let (decided, rejection_state) = match route {
+        Route::Interpreted => {
+            let outcome = propose(transformation, transition, &state, invariants, definitions)?;
+            let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
+            (Decided::Kernel(outcome), rejection_state)
+        }
+        Route::Compiled(set) => {
+            let staged = propose_stage_delta(transformation, transition, &state, definitions)?;
+            match staged {
+                StagedDelta::Rejected { reason } => {
+                    (Decided::Kernel(Outcome::Rejected { reason }), Some(state))
+                }
+                StagedDelta::Staged {
+                    asserted,
+                    retracted,
+                    emitted,
+                } => {
+                    let transition_id = Uuid::now_v7();
+                    write_claim_delta(&mut tx, transition_id, &asserted, &retracted).await?;
+                    disable_jit(&mut tx).await?;
+                    let violation = set
+                        .first_violation(&mut tx, Stage::Full, &asserted, &retracted)
+                        .await?;
+                    match violation {
+                        Some(v) => {
+                            let reason = RejectionReason::Invariant {
+                                name: v.name,
+                                version: v.version,
+                                witness: v.witness,
+                            };
+                            (Decided::Kernel(Outcome::Rejected { reason }), None)
+                        }
+                        None => (
+                            Decided::Checked {
+                                transition_id,
+                                asserted,
+                                retracted,
+                                emitted,
+                            },
+                            None,
+                        ),
+                    }
+                }
+            }
+        }
+    };
     let kernel = elapsed(clock) - begin - load;
-    let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
-    let pg_outcome = finalise_outcome(
-        pool,
-        tx,
-        transformation,
-        transition,
-        invariants,
-        outcome,
-        &login_role,
-    )
-    .await?;
+
+    let pg_outcome = match decided {
+        Decided::Kernel(outcome) => {
+            finalise_outcome(
+                pool,
+                tx,
+                transformation,
+                transition,
+                invariants,
+                outcome,
+                &login_role,
+            )
+            .await?
+        }
+        Decided::Checked {
+            transition_id,
+            asserted,
+            retracted,
+            emitted,
+        } => {
+            write_acceptance_record(
+                &mut tx,
+                transition_id,
+                transformation,
+                transition,
+                invariants,
+                &asserted,
+                &retracted,
+                &emitted,
+                &login_role,
+            )
+            .await?;
+            tx.commit().await.map_err(classify_commit)?;
+            PgProposalOutcome::Committed {
+                transition_id,
+                actor: transition.actor.clone(),
+                asserted_claims: asserted,
+                retracted_claims: retracted,
+                emitted_intents: emitted,
+            }
+        }
+    };
     let finalise = elapsed(clock) - begin - load - kernel;
     Ok(ProposalRun {
         outcome: pg_outcome,
@@ -280,6 +382,20 @@ pub(crate) async fn propose_against_pg_run(
             finalise,
         }),
     })
+}
+
+/// What the deciding phase settled: a kernel outcome still to be
+/// persisted or refused through the shared path, or a delta the
+/// compiled checks already admitted into the transaction, which only
+/// the acceptance record and the commit still owe.
+enum Decided {
+    Kernel(Outcome),
+    Checked {
+        transition_id: Uuid,
+        asserted: Vec<ClaimInstance>,
+        retracted: Vec<ClaimInstance>,
+        emitted: Vec<IntentInstance>,
+    },
 }
 
 /// Three-way outcome returned by [`propose_against_pg_with_trace`].
@@ -329,11 +445,11 @@ pub enum PgTracedOutcome {
 ///   preserve.
 pub async fn propose_against_pg_with_trace(
     pool: &PgPool,
-    compiled: &CompiledProgram,
+    program: &PgProgram,
     proposal: &Proposal,
 ) -> Result<PgTracedOutcome, PgError> {
     let (transformation, invariants, definitions) =
-        resolve(compiled, &proposal.transformation_name)?;
+        resolve(program.core(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     propose_against_pg_with_trace_inner(pool, transformation, &transition, invariants, definitions)
         .await
@@ -348,7 +464,14 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
 ) -> Result<PgTracedOutcome, PgError> {
     let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &transition.actor).await?;
 
-    let scope = compute_load_scope(transformation, invariants, definitions);
+    // A diagnostic: the interpreter runs whatever the programme is
+    // eligible for, so the trace shows the specification's own steps.
+    let scope = compute_load_scope(
+        transformation,
+        invariants,
+        definitions,
+        Reads::BodyAndInvariants,
+    );
     let state = load_state(&mut tx, &scope).await?;
     let traced = propose_with_trace(transformation, transition, &state, invariants, definitions);
     match traced {
@@ -502,15 +625,25 @@ pub(crate) async fn load_state(
     Ok(State::from_claims(claims))
 }
 
+/// What a loaded state must serve: the transformation body alone,
+/// when the compiled checks read the candidate from the claims table,
+/// or the body and the interpreter's invariant evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reads {
+    Body,
+    BodyAndInvariants,
+}
+
 /// Compute the predicate scope that `load_state` must fetch to
 /// evaluate this transformation correctly. The union of:
 ///
 /// - Every predicate read by every statement in the transformation
 ///   body (via `morpholog_core::predicates_read_by_stmt`).
-/// - Every predicate referenced by every invariant body (via
-///   `morpholog_core::predicates_referenced_by_prop`). Invariants
-///   evaluate against the candidate state, so any predicate an
-///   invariant inspects must be loaded.
+/// - With [`Reads::BodyAndInvariants`], every predicate referenced by
+///   every invariant body (via
+///   `morpholog_core::predicates_referenced_by_prop`). The interpreter
+///   evaluates invariants against the candidate state, so any
+///   predicate an invariant inspects must be loaded.
 ///
 /// `Stmt::Assert`'s output predicate is deliberately NOT in the read
 /// set: the assert stages a new claim rather than reading existing
@@ -520,20 +653,23 @@ pub(crate) async fn load_state(
 /// Deliberately `pub(crate)`: the semantic promise is the
 /// EQUIVALENCE (a proposal against a state projected to this scope is
 /// observationally equivalent to one against full state - pinned by
-/// the in-crate scope differential), not the particular set this
-/// interpreter loads. Keeping the set private lets the loading
-/// mechanism change without a public API having promised it.
+/// the in-crate scope differential, for both answers), not the
+/// particular set. Keeping the set private lets the loading mechanism
+/// change without a public API having promised it.
 pub(crate) fn compute_load_scope(
     transformation: &Transformation,
     invariants: &[Invariant],
     definitions: &[Definition],
+    reads: Reads,
 ) -> Vec<PredicateName> {
     let mut scope = std::collections::BTreeSet::new();
     for stmt in &transformation.body {
         morpholog_core::predicates_read_by_stmt(stmt, definitions, &mut scope);
     }
-    for inv in invariants {
-        morpholog_core::predicates_referenced_by_prop(&inv.body, definitions, &mut scope);
+    if reads == Reads::BodyAndInvariants {
+        for inv in invariants {
+            morpholog_core::predicates_referenced_by_prop(&inv.body, definitions, &mut scope);
+        }
     }
     scope.into_iter().collect()
 }
@@ -708,6 +844,9 @@ pub(crate) async fn write_claim_delta(
     Ok(())
 }
 
+/// Persist an accepted outcome whole: the claim delta, then the
+/// acceptance record. The interpreted paths call this; the compiled
+/// route writes the delta first, checks, then records.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_accepted(
     tx: &mut Transaction<'_, Postgres>,
@@ -721,7 +860,37 @@ pub(crate) async fn write_accepted(
     login_role: &str,
 ) -> Result<(), PgError> {
     write_claim_delta(tx, transition_id, asserted_claims, retracted_claims).await?;
+    write_acceptance_record(
+        tx,
+        transition_id,
+        transformation,
+        transition,
+        invariants,
+        asserted_claims,
+        retracted_claims,
+        emitted_intents,
+        login_role,
+    )
+    .await
+}
 
+/// The record of an admitted transition: the audit row and one outbox
+/// row per emitted intent. Written after every invariant has held,
+/// whichever evaluator checked them; `invariants_checked` lists the
+/// whole programme's invariants either way, so the audit leaf does not
+/// depend on the route.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn write_acceptance_record(
+    tx: &mut Transaction<'_, Postgres>,
+    transition_id: Uuid,
+    transformation: &Transformation,
+    transition: &Transition,
+    invariants: &[Invariant],
+    asserted_claims: &[ClaimInstance],
+    retracted_claims: &[ClaimInstance],
+    emitted_intents: &[IntentInstance],
+    login_role: &str,
+) -> Result<(), PgError> {
     // Audit row.
     let checked: Vec<AuditedInvariantCheck> = invariants
         .iter()

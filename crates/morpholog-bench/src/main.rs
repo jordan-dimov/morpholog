@@ -62,7 +62,7 @@ use morpholog_core::{
 };
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    PgAtomicOutcome, PgError, PgPool, PgProposalOutcome, Proposal, coverage_replay,
+    PgAtomicOutcome, PgError, PgPool, PgProgram, PgProposalOutcome, Proposal, coverage_replay,
     list_claims_for_predicates, list_derived_at, propose_against_pg, propose_against_pg_timed,
     propose_all_against_pg, reconstruct_state_at, score_candidate,
 };
@@ -715,8 +715,10 @@ async fn measure_write(
     repeat: usize,
 ) -> Result<CaseResult> {
     let transformation = double_entry_ledger::post_simple_entry();
-    let compiled = CompiledProgram::new(double_entry_ledger::program())
-        .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+    let compiled = PgProgram::new(
+        CompiledProgram::new(double_entry_ledger::program())
+            .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
+    );
     let mut fixture = Vec::with_capacity(repeat);
     let mut propose = Vec::with_capacity(repeat);
     let mut begin = Vec::with_capacity(repeat);
@@ -1616,8 +1618,10 @@ async fn contend_worker(
         // in the ledger workload here partitions by *predicate*.
         let predicate = format!("Bench_{}", worker_id % periods);
         let transformation = synthetic_bump(&predicate);
-        let compiled = CompiledProgram::new(synthetic_program(&predicate))
-            .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+        let compiled = PgProgram::new(
+            CompiledProgram::new(synthetic_program(&predicate))
+                .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
+        );
         for op in 0..ops {
             let transition = Transition {
                 transformation_name: transformation.name.clone(),
@@ -1637,8 +1641,10 @@ async fn contend_worker(
         }
     } else {
         let transformation = double_entry_ledger::post_simple_entry();
-        let compiled = CompiledProgram::new(double_entry_ledger::program())
-            .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+        let compiled = PgProgram::new(
+            CompiledProgram::new(double_entry_ledger::program())
+                .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
+        );
         let period = format!("p_contend_{}", worker_id % periods);
         for op in 0..ops {
             let transition = Transition {
@@ -1675,7 +1681,7 @@ async fn contend_worker(
 /// test fail loudly instead of banking it as an expected outcome.
 async fn one_op(
     pool: &PgPool,
-    compiled: &CompiledProgram,
+    compiled: &PgProgram,
     transition: &Transition,
     max_retries: usize,
     label: &str,
@@ -1761,8 +1767,10 @@ async fn measure_import(pool: &PgPool, case: &str, n: usize, repeat: usize) -> R
         return Err(anyhow!("import requires n >= 1"));
     }
     let transformation = double_entry_ledger::post_simple_entry();
-    let compiled = CompiledProgram::new(double_entry_ledger::program())
-        .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+    let compiled = PgProgram::new(
+        CompiledProgram::new(double_entry_ledger::program())
+            .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
+    );
     let mut total_s = Vec::with_capacity(repeat);
     let mut rows_per_s = Vec::with_capacity(repeat);
     let mut first_decile = Vec::with_capacity(repeat);
@@ -1964,8 +1972,9 @@ async fn measure_wide(
         ));
     }
     let program = wide_program(arity);
-    let compiled =
-        CompiledProgram::new(program).map_err(|e| anyhow!("invalid wide programme: {e:?}"))?;
+    let compiled = PgProgram::new(
+        CompiledProgram::new(program).map_err(|e| anyhow!("invalid wide programme: {e:?}"))?,
+    );
     let footprint = vec!["WideLine".to_string()];
 
     let mut fixture = Vec::with_capacity(repeat);
@@ -2796,7 +2805,7 @@ fn posting(i: usize, tag: &str) -> Transition {
 /// not an error: it is what a batch on a contended footprint does.
 async fn transact_once(
     pool: &PgPool,
-    compiled: &CompiledProgram,
+    compiled: &PgProgram,
     proposals: &[Proposal],
     max_retries: usize,
 ) -> Result<(Duration, u64, bool)> {
@@ -2838,8 +2847,10 @@ async fn measure_transact(
     writer_pause: Duration,
     repeat: usize,
 ) -> Result<CaseResult> {
-    let compiled = CompiledProgram::new(double_entry_ledger::program())
-        .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+    let compiled = std::sync::Arc::new(PgProgram::new(
+        CompiledProgram::new(double_entry_ledger::program())
+            .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
+    ));
     let mut atomic = Vec::with_capacity(repeat);
     let mut sequential = Vec::with_capacity(repeat);
     let mut batch_retries = Vec::with_capacity(repeat);

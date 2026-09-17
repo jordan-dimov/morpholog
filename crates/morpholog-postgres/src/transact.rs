@@ -14,17 +14,21 @@
 //! name.
 
 use morpholog_core::{
-    ClaimInstance, CompiledProgram, IntentInstance, Outcome, RejectionReason, Subject,
-    Transformation, Transition, WitnessBinding, propose,
+    ClaimInstance, IntentInstance, Outcome, RejectionReason, StagedDelta, Subject, Transformation,
+    Transition, WitnessBinding, propose, propose_stage_delta,
 };
 use serde::Serialize;
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::PgPool;
 use crate::attestation::Proposal;
+use crate::compiled::{Stage, disable_jit};
 use crate::error::{PgError, classify, classify_commit};
+use crate::program::{PgProgram, Route};
 use crate::propose::{
-    compute_load_scope, load_state, resolve, rule_identity, write_accepted, write_rejection,
+    load_state, resolve, rule_identity, write_acceptance_record, write_accepted,
+    write_claim_delta, write_rejection,
 };
 use crate::txn::begin_authorised_proposal_tx;
 
@@ -73,7 +77,7 @@ pub enum PgAtomicOutcome {
 /// whole batch; an unknown outcome is read back, never retried blind.
 pub async fn propose_all_against_pg(
     pool: &PgPool,
-    compiled: &CompiledProgram,
+    program: &PgProgram,
     proposals: &[Proposal],
 ) -> Result<PgAtomicOutcome, PgError> {
     if proposals.is_empty() {
@@ -81,20 +85,25 @@ pub async fn propose_all_against_pg(
             "an atomic batch needs at least one proposal".to_string(),
         ));
     }
+    let compiled = program.core();
     let acts: Vec<(&Transformation, Transition)> = proposals
         .iter()
         .map(|p| resolve(compiled, &p.transformation_name).map(|(t, _, _)| (t, p.transition())))
         .collect::<Result<_, _>>()?;
     let invariants = &compiled.program().invariants;
     let definitions = &compiled.program().definitions;
+    let route = program.route();
 
     let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &acts[0].1.actor).await?;
+    if matches!(route, Route::Compiled(_)) {
+        disable_jit(&mut tx).await?;
+    }
 
     // One load over everything any act reads: later acts see the earlier
     // acts' effects through the kernel's candidate state, never a reread.
     let scope: Vec<_> = acts
         .iter()
-        .flat_map(|(t, _)| compute_load_scope(t, invariants, definitions))
+        .flat_map(|(t, _)| program.load_scope(t, route))
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -107,59 +116,116 @@ pub async fn propose_all_against_pg(
             // Against the policy as the acts before this one left it.
             crate::actor_policy::authorise(&mut tx, &transition.actor, &login_role).await?;
         }
-        match propose(transformation, transition, &state, invariants, definitions)? {
-            Outcome::Accepted {
-                asserted_claims,
-                retracted_claims,
-                emitted_intents,
-                candidate_state,
-            } => {
-                let transition_id = Uuid::now_v7();
-                write_accepted(
-                    &mut tx,
-                    transition_id,
-                    transformation,
-                    transition,
-                    invariants,
-                    &asserted_claims,
-                    &retracted_claims,
-                    &emitted_intents,
-                    &login_role,
-                )
-                .await?;
-                receipts.push(AtomicAct {
-                    actor: transition.actor.clone(),
-                    asserted_claims,
-                    emitted_intents,
-                    retracted_claims,
-                    row,
-                    transition_id,
-                });
-                state = candidate_state;
-            }
-            Outcome::Rejected { reason } => {
-                tx.rollback().await.map_err(classify)?;
-                // Recorded after the rollback, like a single refusal. The
-                // witness may carry values the rolled-back prefix staged:
-                // it describes this act against that prefix, not history.
-                write_rejection(pool, transformation, transition, &reason)
-                    .await
-                    .map_err(|e| PgError::RejectionLogFailure(Box::new(e)))?;
-                let witness = match &reason {
-                    RejectionReason::Invariant { witness, .. } => witness.clone(),
-                    RejectionReason::Require { .. } | RejectionReason::BindNone { .. } => {
-                        Vec::new()
+        let transition_id = Uuid::now_v7();
+        let (asserted_claims, retracted_claims, emitted_intents) = match route {
+            Route::Interpreted => {
+                match propose(transformation, transition, &state, invariants, definitions)? {
+                    Outcome::Accepted {
+                        asserted_claims,
+                        retracted_claims,
+                        emitted_intents,
+                        candidate_state,
+                    } => {
+                        write_accepted(
+                            &mut tx,
+                            transition_id,
+                            transformation,
+                            transition,
+                            invariants,
+                            &asserted_claims,
+                            &retracted_claims,
+                            &emitted_intents,
+                            &login_role,
+                        )
+                        .await?;
+                        state = candidate_state;
+                        (asserted_claims, retracted_claims, emitted_intents)
                     }
-                };
-                return Ok(PgAtomicOutcome::Rejected {
-                    act: row,
-                    reason: reason.to_string(),
-                    rule: rule_identity(&reason),
-                    witness,
-                });
+                    Outcome::Rejected { reason } => {
+                        return refuse(pool, tx, transformation, transition, reason, row).await;
+                    }
+                }
             }
-        }
+            Route::Compiled(set) => {
+                match propose_stage_delta(transformation, transition, &state, definitions)? {
+                    StagedDelta::Rejected { reason } => {
+                        return refuse(pool, tx, transformation, transition, reason, row).await;
+                    }
+                    StagedDelta::Staged {
+                        asserted,
+                        retracted,
+                        emitted,
+                    } => {
+                        write_claim_delta(&mut tx, transition_id, &asserted, &retracted).await?;
+                        if let Some(v) = set
+                            .first_violation(&mut tx, Stage::Full, &asserted, &retracted)
+                            .await?
+                        {
+                            let reason = RejectionReason::Invariant {
+                                name: v.name,
+                                version: v.version,
+                                witness: v.witness,
+                            };
+                            return refuse(pool, tx, transformation, transition, reason, row).await;
+                        }
+                        write_acceptance_record(
+                            &mut tx,
+                            transition_id,
+                            transformation,
+                            transition,
+                            invariants,
+                            &asserted,
+                            &retracted,
+                            &emitted,
+                            &login_role,
+                        )
+                        .await?;
+                        // The next act's body reads the state these
+                        // acts left, in memory as the claims table now
+                        // holds it.
+                        state.apply(&asserted, &retracted);
+                        (asserted, retracted, emitted)
+                    }
+                }
+            }
+        };
+        receipts.push(AtomicAct {
+            actor: transition.actor.clone(),
+            asserted_claims,
+            emitted_intents,
+            retracted_claims,
+            row,
+            transition_id,
+        });
     }
     tx.commit().await.map_err(classify_commit)?;
     Ok(PgAtomicOutcome::Committed { acts: receipts })
+}
+
+/// Roll the whole batch back and record the refusing act, after the
+/// rollback like a single refusal. The witness may carry values the
+/// rolled-back prefix staged: it describes this act against that
+/// prefix, not history.
+async fn refuse(
+    pool: &PgPool,
+    tx: Transaction<'_, Postgres>,
+    transformation: &Transformation,
+    transition: &Transition,
+    reason: RejectionReason,
+    row: u64,
+) -> Result<PgAtomicOutcome, PgError> {
+    tx.rollback().await.map_err(classify)?;
+    write_rejection(pool, transformation, transition, &reason)
+        .await
+        .map_err(|e| PgError::RejectionLogFailure(Box::new(e)))?;
+    let witness = match &reason {
+        RejectionReason::Invariant { witness, .. } => witness.clone(),
+        RejectionReason::Require { .. } | RejectionReason::BindNone { .. } => Vec::new(),
+    };
+    Ok(PgAtomicOutcome::Rejected {
+        act: row,
+        reason: reason.to_string(),
+        rule: rule_identity(&reason),
+        witness,
+    })
 }

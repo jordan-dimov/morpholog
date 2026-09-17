@@ -318,8 +318,11 @@ async fn drift_probe(
 
     let program = morpholog_surface::parse_program(DRIFT_FIXTURE).expect("fixture parses");
     program.validate().expect("fixture validates");
-    let compiled = morpholog_core::CompiledProgram::new(program).expect("fixture compiles");
-    let post = compiled
+    let program = morpholog_postgres::PgProgram::new(
+        morpholog_core::CompiledProgram::new(program).expect("fixture compiles"),
+    );
+    let post = program
+        .core()
         .program()
         .transformations
         .iter()
@@ -328,7 +331,7 @@ async fn drift_probe(
         .clone();
 
     let propose = |args: Vec<morpholog_core::EvalValue>| {
-        let compiled = &compiled;
+        let program = &program;
         let post = &post;
         let pool = &pool;
         async move {
@@ -339,7 +342,7 @@ async fn drift_probe(
             };
             morpholog_postgres::propose_against_pg(
                 pool,
-                compiled,
+                program,
                 &morpholog_postgres::Proposal::gateway(&transition),
             )
             .await

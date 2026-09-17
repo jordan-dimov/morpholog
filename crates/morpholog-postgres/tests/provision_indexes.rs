@@ -14,7 +14,7 @@ use morpholog_postgres::{IndexAction, PgPool, PgProgram, plan_indexes, provision
 use sqlx::Row as _;
 
 fn ledger() -> PgProgram {
-    PgProgram::new(compiled(double_entry_ledger::program()))
+    compiled(double_entry_ledger::program())
 }
 
 async fn catalogue_names(pool: &PgPool) -> Vec<(String, bool)> {
@@ -246,14 +246,14 @@ async fn a_requirement_once_satisfied_externally_still_protects_the_index() {
     let another = |name: &str| {
         let mut p = double_entry_ledger::program();
         p.name = name.into();
-        PgProgram::new(compiled(p))
+        compiled(p)
     };
     let built = provision_indexes(&pool, &another("another_book"), false)
         .await
         .unwrap();
     assert_eq!(built.entries[0].action, IndexAction::Create, "{built:?}");
     // B stops needing anything and prunes: A still requires all three.
-    let nobody = PgProgram::new(compiled(program("another_book").build()));
+    let nobody = compiled(program("another_book").build());
     let pruned = provision_indexes(&pool, &nobody, true).await.unwrap();
     assert!(pruned.pruned.is_empty(), "{pruned:?}");
     assert_eq!(
@@ -272,7 +272,7 @@ async fn stale_indexes_are_reported_and_pruned_only_on_request() {
     drop_our_indexes(&pool).await;
     provision_indexes(&pool, &ledger(), false).await.unwrap();
     // The same identity, now needing nothing.
-    let successor = PgProgram::new(compiled(program("double_entry_ledger").build()));
+    let successor = compiled(program("double_entry_ledger").build());
     let reported = provision_indexes(&pool, &successor, false).await.unwrap();
     assert_eq!(
         actions(&reported),
@@ -287,18 +287,18 @@ async fn stale_indexes_are_reported_and_pruned_only_on_request() {
     assert_eq!(registry_counts(&pool).await, (3, 0));
 
     // Another programme that still requires them protects them.
-    let other = PgProgram::new(compiled({
+    let other = compiled({
         let mut p = double_entry_ledger::program();
         p.name = "another_book".into();
         p
-    }));
+    });
     provision_indexes(&pool, &other, false).await.unwrap();
     let protected = provision_indexes(&pool, &successor, true).await.unwrap();
     assert!(actions(&protected).is_empty(), "{protected:?}");
     assert_eq!(catalogue_names(&pool).await.len(), 3);
 
     // Once nobody does, prune drops them.
-    let nobody = PgProgram::new(compiled(program("another_book").build()));
+    let nobody = compiled(program("another_book").build());
     provision_indexes(&pool, &nobody, false).await.unwrap();
     let pruned = provision_indexes(&pool, &successor, true).await.unwrap();
     assert_eq!(actions(&pruned), vec![IndexAction::Stale; 3], "{pruned:?}");

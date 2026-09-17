@@ -12,7 +12,7 @@
 
 use morpholog_core::{CompiledProgram, EvalValue, Program, Subject, Transformation, Transition};
 use morpholog_postgres::{
-    PgError, PgPool, PgProposalOutcome, PgTracedOutcome, Proposal, propose_against_pg,
+    PgError, PgPool, PgProgram, PgProposalOutcome, PgTracedOutcome, Proposal, propose_against_pg,
     propose_against_pg_with_trace,
 };
 use uuid::Uuid;
@@ -87,11 +87,12 @@ pub use morpholog_test_support::{
     test_actor, test_transition,
 };
 
-/// Compile a test programme (validates + indexes). The facade-based
-/// propose path now takes a `&CompiledProgram`; tests build one from an
-/// example's `program()` and reuse it across that test's proposals.
-pub fn compiled(program: Program) -> CompiledProgram {
-    CompiledProgram::new(program).expect("test programme is valid")
+/// Compile a test programme (validates + indexes) into the adapter's
+/// programme object, on whatever route the programme is eligible for;
+/// tests build one from an example's `program()` and reuse it across
+/// that test's proposals.
+pub fn compiled(program: Program) -> PgProgram {
+    PgProgram::new(CompiledProgram::new(program).expect("test programme is valid"))
 }
 
 /// Wrap a kernel transition in a gateway-attested proposal - the shape
@@ -105,7 +106,7 @@ pub fn attested(transition: &Transition) -> Proposal {
 /// the transition; the programme's rule slices come from `compiled`.
 pub async fn propose_pg_with_test_actor(
     pool: &PgPool,
-    compiled: &CompiledProgram,
+    compiled: &PgProgram,
     transformation: &Transformation,
     args: Vec<EvalValue>,
 ) -> Result<PgProposalOutcome, PgError> {
@@ -185,7 +186,7 @@ pub async fn retract_signing_key(pool: &PgPool, key_id: &str, purpose: &str, pub
 /// `test_actor()` for tests that don't model authority.
 pub async fn propose_pg_with_trace_using_test_actor(
     pool: &PgPool,
-    compiled: &CompiledProgram,
+    compiled: &PgProgram,
     transformation: &Transformation,
     args: Vec<EvalValue>,
 ) -> Result<PgTracedOutcome, PgError> {
@@ -198,7 +199,7 @@ pub async fn propose_pg_with_trace_using_test_actor(
 /// transition.
 pub async fn propose_pg_as(
     pool: &PgPool,
-    compiled: &CompiledProgram,
+    compiled: &PgProgram,
     transformation: &Transformation,
     args: Vec<EvalValue>,
     actor: impl Into<Subject>,

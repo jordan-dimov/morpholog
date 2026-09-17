@@ -11,7 +11,7 @@
 use anyhow::Context;
 use morpholog_core::{Subject, Transition, explain};
 use morpholog_postgres::{
-    PgProposalOutcome, PgTracedOutcome, Proposal, propose_against_pg,
+    PgProgram, PgProposalOutcome, PgTracedOutcome, Proposal, propose_against_pg,
     propose_against_pg_with_rejection_state, propose_against_pg_with_trace,
 };
 
@@ -32,10 +32,11 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     //    failure so a malformed programme never reaches the proposal
     //    path. The returned `ValidatedProgram` handle
     //    threads through to the codec so it does not re-validate.
-    let compiled = compile_or_report(&parsed)?;
+    let program = PgProgram::new(compile_or_report(&parsed)?);
+    let compiled = program.core();
 
     if let Some(batch_path) = &args.batch {
-        return run_batch(&args, &compiled, batch_path).await;
+        return run_batch(&args, &program, batch_path).await;
     }
 
     // 3. Resolve the transformation. Clap guarantees it is present
@@ -79,7 +80,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
 
     if args.trace {
         let traced =
-            propose_against_pg_with_trace(&pool, &compiled, &Proposal::gateway(&transition))
+            propose_against_pg_with_trace(&pool, &program, &Proposal::gateway(&transition))
                 .await
                 .map_err(one_shot_failure)?;
         match traced {
@@ -111,7 +112,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             rejection_state,
         } = propose_against_pg_with_rejection_state(
             &pool,
-            &compiled,
+            &program,
             &Proposal::gateway(&transition),
         )
         .await
@@ -137,7 +138,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             _ => print_json(&outcome)?,
         }
     } else {
-        let outcome = propose_against_pg(&pool, &compiled, &Proposal::gateway(&transition))
+        let outcome = propose_against_pg(&pool, &program, &Proposal::gateway(&transition))
             .await
             .map_err(one_shot_failure)?;
         print_json(&outcome)?;
@@ -306,7 +307,7 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
 /// receipts.
 async fn run_batch(
     args: &ProposeArgs,
-    compiled: &morpholog_core::CompiledProgram,
+    program: &PgProgram,
     batch_path: &std::path::Path,
 ) -> anyhow::Result<()> {
     let input = if batch_path == std::path::Path::new("-") {
@@ -328,7 +329,7 @@ async fn run_batch(
         }
         rows += 1;
         let row = line_no + 1;
-        let receipt = match batch_row_outcome(args, compiled, &pool, line).await {
+        let receipt = match batch_row_outcome(args, program, &pool, line).await {
             Ok(mut envelope) => {
                 match envelope.get("status").and_then(|s| s.as_str()) {
                     Some("committed") => committed += 1,
@@ -375,14 +376,14 @@ async fn run_batch(
 /// session shares.
 async fn batch_row_outcome(
     args: &ProposeArgs,
-    compiled: &morpholog_core::CompiledProgram,
+    program: &PgProgram,
     pool: &morpholog_postgres::PgPool,
     line: &str,
 ) -> Result<serde_json::Value, RowError> {
     let row: BatchRow = serde_json::from_str(line)
         .context("malformed batch row")
         .map_err(|e| RowError::coded(envelopes::ProposeCode::InvalidRequest, e))?;
-    propose_row_outcome(&args.file, args.explain_on_reject, compiled, pool, row).await
+    propose_row_outcome(&args.file, args.explain_on_reject, program, pool, row).await
 }
 
 /// A batch row to the kernel transition it names: the transformation
@@ -431,10 +432,11 @@ pub(crate) fn decode_row(
 pub(crate) async fn propose_row_outcome(
     file: &std::path::Path,
     explain_on_reject: bool,
-    compiled: &morpholog_core::CompiledProgram,
+    program: &PgProgram,
     pool: &morpholog_postgres::PgPool,
     row: BatchRow,
 ) -> Result<serde_json::Value, RowError> {
+    let compiled = program.core();
     let transition = decode_row(file, compiled, row)?;
     if explain_on_reject {
         let morpholog_postgres::RejectionStateOutcome {
@@ -442,7 +444,7 @@ pub(crate) async fn propose_row_outcome(
             rejection_state,
         } = propose_against_pg_with_rejection_state(
             pool,
-            compiled,
+            program,
             &Proposal::gateway(&transition),
         )
         .await
@@ -470,7 +472,7 @@ pub(crate) async fn propose_row_outcome(
             .context("serialising the receipt")
             .map_err(RowError::operational)
     } else {
-        let outcome = propose_against_pg(pool, compiled, &Proposal::gateway(&transition))
+        let outcome = propose_against_pg(pool, program, &Proposal::gateway(&transition))
             .await
             .map_err(classify_pg_error)?;
         serde_json::to_value(&outcome)

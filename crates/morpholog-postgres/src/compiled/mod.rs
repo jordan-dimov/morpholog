@@ -147,6 +147,9 @@ impl CompiledInvariantSet {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Stage {
     Full,
+    /// Dormant in production until its audit semantics are decided;
+    /// the differential keeps it proven.
+    #[cfg_attr(not(test), allow(dead_code))]
     CaseBound,
 }
 
@@ -546,8 +549,10 @@ fn compile_invariant(
             source,
             body,
         } => compile_denial(source, body, &mut ctx)?,
-        // Top-level Not: violated iff the inner matches; its bindings are
-        // the natural witness.
+        // Top-level Not: violated iff the inner matches. The inner's
+        // bindings bound the case for stage 2, but the kernel reports
+        // no witness for a failure with nothing bound above it, so
+        // neither does the check.
         Prop::Not(inner) => {
             let r = render_prop(inner, Env::new(), &mut ctx)?;
             if r.from.is_empty() {
@@ -568,7 +573,10 @@ fn compile_invariant(
         other => generic_denial(other, &mut ctx)?,
     };
 
-    let witness_vars = case_cols.keys().cloned().collect();
+    let witness_vars = match &inv.body {
+        Prop::Not(_) => Vec::new(),
+        _ => case_cols.keys().cloned().collect(),
+    };
     let occurrences = ctx
         .occurrences
         .into_iter()
