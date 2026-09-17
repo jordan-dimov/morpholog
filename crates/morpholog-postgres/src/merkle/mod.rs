@@ -117,7 +117,7 @@ impl Digest {
 
 impl std::fmt::Display for Digest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "sha256:{}", hex::encode(&self.0))
+        write!(f, "sha256:{}", hex::encode(self.0))
     }
 }
 

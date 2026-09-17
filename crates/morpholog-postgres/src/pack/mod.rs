@@ -62,6 +62,115 @@ pub struct EvidencePack {
     pub rows: Vec<AuditRow>,
 }
 
+/// The checkpoint a pack is exported against: the one at `tree_size`,
+/// or the latest when none is named.
+fn covering_checkpoint(
+    checkpoints: &[Checkpoint],
+    tree_size: Option<i64>,
+) -> Result<Checkpoint, PgError> {
+    match tree_size {
+        Some(n) => checkpoints.iter().find(|c| c.tree_size == n),
+        None => checkpoints.last(),
+    }
+    .cloned()
+    .ok_or(PgError::NoCheckpoint)
+}
+
+/// The first `tree_size` audit rows in canonical order. A checkpoint is
+/// watermark-bounded, so its rows are all present and visible; fewer
+/// means the audit log was edited under it, and the export fails loudly
+/// rather than emit a pack the verifier would rightly reject.
+async fn load_prefix_rows(
+    conn: &mut sqlx::PgConnection,
+    tree_size: i64,
+    what: &str,
+) -> Result<Vec<AuditRow>, PgError> {
+    let mut rows: Vec<AuditRow> = Vec::new();
+    let mut cursor = None;
+    while (rows.len() as i64) < tree_size {
+        let page = list_audit_rows_page(conn, cursor, None, REPLAY_CHUNK).await?;
+        if page.is_empty() {
+            break;
+        }
+        for row in page {
+            cursor = Some((row.committed_at, row.transition_id));
+            rows.push(row);
+            if (rows.len() as i64) >= tree_size {
+                break;
+            }
+        }
+    }
+    if rows.len() as i64 != tree_size {
+        return Err(PgError::InvalidState(format!(
+            "{what} commits to {tree_size} audit rows but only {} were present",
+            rows.len()
+        )));
+    }
+    Ok(rows)
+}
+
+/// The rows in canonical order - the order leaves are computed in and
+/// the authority fold reads them in - refusing two rows at one
+/// coordinate, since a Merkle position holds exactly one row.
+fn canonically_sorted(rows: &[AuditRow]) -> Result<Vec<AuditRow>, PackError> {
+    let mut rows = rows.to_vec();
+    rows.sort_by_key(|a| (a.committed_at, a.transition_id));
+    for pair in rows.windows(2) {
+        if (pair[0].committed_at, pair[0].transition_id)
+            == (pair[1].committed_at, pair[1].transition_id)
+        {
+            return Err(PackError::Malformed {
+                detail: format!(
+                    "two rows share coordinates ({}, {})",
+                    pair[0].committed_at, pair[0].transition_id
+                ),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+/// Whether a checkpoint's identity hash matches its own contents, so a
+/// forged checkpoint_hash is refused before any proof trusts it.
+fn identity_matches(cp: &Checkpoint) -> bool {
+    checkpoint_hash(
+        cp.tree_size,
+        &cp.root_hash,
+        cp.prev_checkpoint_hash.as_ref(),
+    ) == cp.checkpoint_hash
+}
+
+/// Every disclosed row against its inclusion proof under `cp`'s root.
+/// A malformed proof is a malformed pack; a proof that does not reach
+/// the root is the verdict `Err(leaf_index)`, for the caller to name in
+/// its own vocabulary.
+fn check_inclusions(
+    rows: &[AuditRow],
+    proofs: &[RowInclusionProof],
+    cp: &Checkpoint,
+) -> Result<Result<(), i64>, PackError> {
+    for (row, rp) in rows.iter().zip(proofs) {
+        let leaf = audit_leaf_hash(row)?;
+        let proof = proof_bytes(&rp.proof);
+        match verify_inclusion_proof(
+            rp.leaf_index as usize,
+            cp.tree_size as usize,
+            &leaf,
+            cp.root_hash.bytes(),
+            &proof,
+        ) {
+            Ok(()) => {}
+            Err(ProofError::Malformed | ProofError::BadParameters) => {
+                return Err(PackError::Malformed {
+                    detail: format!("inclusion proof for leaf {} is malformed", rp.leaf_index),
+                });
+            }
+            Err(ProofError::RootMismatch) => return Ok(Err(rp.leaf_index)),
+        }
+    }
+    Ok(Ok(()))
+}
+
 /// Export a complete-prefix evidence pack covering a checkpoint (the
 /// latest, or the one at `tree_size` if given). Reads under `SERIALIZABLE
 /// READ ONLY DEFERRABLE`. Errors if there is no such checkpoint.
@@ -70,42 +179,10 @@ pub async fn export_pack(pool: &PgPool, tree_size: Option<i64>) -> Result<Eviden
 
     let mut checkpoints = load_checkpoint_chain(&mut tx).await?;
 
-    let covering = match tree_size {
-        Some(n) => checkpoints.iter().find(|c| c.tree_size == n).cloned(),
-        None => checkpoints.last().cloned(),
-    };
-    let Some(covering) = covering else {
-        return Err(PgError::NoCheckpoint);
-    };
+    let covering = covering_checkpoint(&checkpoints, tree_size)?;
     checkpoints.retain(|c| c.tree_size <= covering.tree_size);
 
-    // The first `covering.tree_size` rows in canonical order.
-    let mut rows: Vec<AuditRow> = Vec::new();
-    let mut cursor = None;
-    while (rows.len() as i64) < covering.tree_size {
-        let page = list_audit_rows_page(&mut tx, cursor, None, REPLAY_CHUNK).await?;
-        if page.is_empty() {
-            break;
-        }
-        for row in page {
-            cursor = Some((row.committed_at, row.transition_id));
-            rows.push(row);
-            if (rows.len() as i64) >= covering.tree_size {
-                break;
-            }
-        }
-    }
-    // The checkpoint is watermark-bounded, so its rows should all be
-    // present and visible. Fewer means the audit log was edited under the
-    // checkpoint - fail loudly rather than emit a pack the verifier would
-    // (rightly) reject as malformed.
-    if rows.len() as i64 != covering.tree_size {
-        return Err(PgError::InvalidState(format!(
-            "checkpoint commits to {} audit rows but only {} were present",
-            covering.tree_size,
-            rows.len()
-        )));
-    }
+    let rows = load_prefix_rows(&mut tx, covering.tree_size, "checkpoint").await?;
     tx.commit().await.map_err(classify)?;
 
     Ok(EvidencePack {
@@ -152,20 +229,7 @@ pub fn verify_pack(
     // Owned + canonically sorted: the leaves are computed from this order
     // and the authority check folds the same rows, so live and offline
     // resolve signing keys from one ordering.
-    let mut rows = pack.rows.clone();
-    rows.sort_by_key(|a| (a.committed_at, a.transition_id));
-    for pair in rows.windows(2) {
-        if (pair[0].committed_at, pair[0].transition_id)
-            == (pair[1].committed_at, pair[1].transition_id)
-        {
-            return Err(PackError::Malformed {
-                detail: format!(
-                    "two rows share coordinates ({}, {})",
-                    pair[0].committed_at, pair[0].transition_id
-                ),
-            });
-        }
-    }
+    let rows = canonically_sorted(&pack.rows)?;
 
     let leaves: Vec<Hash> = rows.iter().map(audit_leaf_hash).collect::<Result<_, _>>()?;
     let verdict = verify_tree(&leaves, &pack.checkpoints, anchor);
@@ -385,13 +449,7 @@ pub async fn export_window(
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
     let checkpoints = load_checkpoint_chain(&mut tx).await?;
 
-    let to_checkpoint = match to_tree_size {
-        Some(n) => checkpoints.iter().find(|c| c.tree_size == n).cloned(),
-        None => checkpoints.last().cloned(),
-    };
-    let Some(to_checkpoint) = to_checkpoint else {
-        return Err(PgError::NoCheckpoint);
-    };
+    let to_checkpoint = covering_checkpoint(&checkpoints, to_tree_size)?;
     let Some(from_checkpoint) = checkpoints
         .iter()
         .find(|c| c.tree_size == start.tree_size())
@@ -420,29 +478,7 @@ pub async fn export_window(
 
     // The prover needs the whole `[0, to)` prefix to build the consistency
     // proof and the per-row inclusion paths.
-    let to_size = to_checkpoint.tree_size;
-    let mut rows: Vec<AuditRow> = Vec::new();
-    let mut cursor = None;
-    while (rows.len() as i64) < to_size {
-        let page = list_audit_rows_page(&mut tx, cursor, None, REPLAY_CHUNK).await?;
-        if page.is_empty() {
-            break;
-        }
-        for row in page {
-            cursor = Some((row.committed_at, row.transition_id));
-            rows.push(row);
-            if (rows.len() as i64) >= to_size {
-                break;
-            }
-        }
-    }
-    if rows.len() as i64 != to_size {
-        return Err(PgError::InvalidState(format!(
-            "to-checkpoint commits to {} audit rows but only {} were present",
-            to_size,
-            rows.len()
-        )));
-    }
+    let rows = load_prefix_rows(&mut tx, to_checkpoint.tree_size, "to-checkpoint").await?;
     tx.commit().await.map_err(classify)?;
 
     assemble_window_pack(&rows, from_checkpoint, to_checkpoint)
@@ -542,29 +578,8 @@ pub fn verify_window(
         }
     }
 
-    for (row, rp) in pack.rows.iter().zip(&pack.inclusion_proofs) {
-        let leaf = audit_leaf_hash(row)?;
-        let proof = proof_bytes(&rp.proof);
-        match verify_inclusion_proof(
-            rp.leaf_index as usize,
-            to.tree_size as usize,
-            &leaf,
-            to.root_hash.bytes(),
-            &proof,
-        ) {
-            Ok(()) => {}
-            Err(ProofError::Malformed | ProofError::BadParameters) => {
-                return Err(malformed(format!(
-                    "inclusion proof for leaf {} is malformed",
-                    rp.leaf_index
-                )));
-            }
-            Err(ProofError::RootMismatch) => {
-                return Ok(WindowVerification::RowNotIncluded {
-                    leaf_index: rp.leaf_index,
-                });
-            }
-        }
+    if let Err(leaf_index) = check_inclusions(&pack.rows, &pack.inclusion_proofs, to)? {
+        return Ok(WindowVerification::RowNotIncluded { leaf_index });
     }
 
     // The to-checkpoint is the new attestation this pack carries; its
@@ -631,12 +646,7 @@ fn validate_window_envelope(pack: &WindowEvidencePack) -> Result<(), PackError> 
     // Each checkpoint's identity hash must match its own contents - a forged
     // checkpoint_hash is rejected before the proofs trust it.
     for (label, cp) in [("from", from), ("to", to)] {
-        let expected = checkpoint_hash(
-            cp.tree_size,
-            &cp.root_hash,
-            cp.prev_checkpoint_hash.as_ref(),
-        );
-        if expected != cp.checkpoint_hash {
+        if !identity_matches(cp) {
             return Err(malformed(format!(
                 "{label}-checkpoint hash {} does not match its contents",
                 cp.checkpoint_hash
@@ -672,18 +682,7 @@ fn validate_window_envelope(pack: &WindowEvidencePack) -> Result<(), PackError> 
         }
     }
 
-    let mut rows = pack.rows.clone();
-    rows.sort_by_key(|a| (a.committed_at, a.transition_id));
-    for pair in rows.windows(2) {
-        if (pair[0].committed_at, pair[0].transition_id)
-            == (pair[1].committed_at, pair[1].transition_id)
-        {
-            return Err(malformed(format!(
-                "two rows share coordinates ({}, {})",
-                pair[0].committed_at, pair[0].transition_id
-            )));
-        }
-    }
+    canonically_sorted(&pack.rows)?;
 
     if m.from_tree_size != from.tree_size
         || m.to_tree_size != to.tree_size
@@ -881,37 +880,10 @@ pub async fn export_selective(
 ) -> Result<SelectiveEvidencePack, PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
     let checkpoints = load_checkpoint_chain(&mut tx).await?;
-    let covering = match tree_size {
-        Some(n) => checkpoints.iter().find(|c| c.tree_size == n).cloned(),
-        None => checkpoints.last().cloned(),
-    };
-    let Some(covering) = covering else {
-        return Err(PgError::NoCheckpoint);
-    };
+    let covering = covering_checkpoint(&checkpoints, tree_size)?;
 
     let to_size = covering.tree_size;
-    let mut rows: Vec<AuditRow> = Vec::new();
-    let mut cursor = None;
-    while (rows.len() as i64) < to_size {
-        let page = list_audit_rows_page(&mut tx, cursor, None, REPLAY_CHUNK).await?;
-        if page.is_empty() {
-            break;
-        }
-        for row in page {
-            cursor = Some((row.committed_at, row.transition_id));
-            rows.push(row);
-            if (rows.len() as i64) >= to_size {
-                break;
-            }
-        }
-    }
-    if rows.len() as i64 != to_size {
-        return Err(PgError::InvalidState(format!(
-            "the covering checkpoint commits to {} audit rows but only {} were present",
-            to_size,
-            rows.len()
-        )));
-    }
+    let rows = load_prefix_rows(&mut tx, to_size, "the covering checkpoint").await?;
     tx.commit().await.map_err(classify)?;
 
     assemble_selective_pack(&rows, covering, transitions).map_err(|e| match e {
@@ -945,30 +917,8 @@ pub fn verify_selective(
         });
     }
 
-    let malformed = |detail: String| PackError::Malformed { detail };
-    for (row, rp) in pack.rows.iter().zip(&pack.inclusion_proofs) {
-        let leaf = audit_leaf_hash(row)?;
-        let proof = proof_bytes(&rp.proof);
-        match verify_inclusion_proof(
-            rp.leaf_index as usize,
-            cp.tree_size as usize,
-            &leaf,
-            cp.root_hash.bytes(),
-            &proof,
-        ) {
-            Ok(()) => {}
-            Err(ProofError::Malformed | ProofError::BadParameters) => {
-                return Err(malformed(format!(
-                    "inclusion proof for leaf {} is malformed",
-                    rp.leaf_index
-                )));
-            }
-            Err(ProofError::RootMismatch) => {
-                return Ok(SelectiveVerification::RowNotIncluded {
-                    leaf_index: rp.leaf_index,
-                });
-            }
-        }
+    if let Err(leaf_index) = check_inclusions(&pack.rows, &pack.inclusion_proofs, cp)? {
+        return Ok(SelectiveVerification::RowNotIncluded { leaf_index });
     }
 
     if let Some(TreeVerification::SignatureInvalid {
@@ -1014,12 +964,7 @@ fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackE
     if cp.tree_size < 0 {
         return Err(malformed("the checkpoint tree_size is negative".into()));
     }
-    let expected = checkpoint_hash(
-        cp.tree_size,
-        &cp.root_hash,
-        cp.prev_checkpoint_hash.as_ref(),
-    );
-    if expected != cp.checkpoint_hash {
+    if !identity_matches(cp) {
         return Err(malformed(format!(
             "checkpoint hash {} does not match its contents",
             cp.checkpoint_hash
@@ -1055,18 +1000,7 @@ fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackE
         }
     }
 
-    let mut rows = pack.rows.clone();
-    rows.sort_by_key(|a| (a.committed_at, a.transition_id));
-    for pair in rows.windows(2) {
-        if (pair[0].committed_at, pair[0].transition_id)
-            == (pair[1].committed_at, pair[1].transition_id)
-        {
-            return Err(malformed(format!(
-                "two rows share coordinates ({}, {})",
-                pair[0].committed_at, pair[0].transition_id
-            )));
-        }
-    }
+    canonically_sorted(&pack.rows)?;
 
     if m.tree_size != cp.tree_size
         || m.root_hash != cp.root_hash

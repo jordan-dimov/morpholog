@@ -162,7 +162,7 @@ pub fn signing_key_from_pem(pem: &str) -> Result<SigningKey, SigningError> {
 
 /// `ed25519-pub:<hex>`.
 pub fn render_public_key(key: &VerifyingKey) -> String {
-    format!("{PUBLIC_KEY_PREFIX}{}", hex::encode(&key.to_bytes()))
+    format!("{PUBLIC_KEY_PREFIX}{}", hex::encode(key.to_bytes()))
 }
 
 /// Parse an `ed25519-pub:<hex>` public key.
@@ -182,7 +182,7 @@ pub fn parse_public_key(text: &str) -> Result<VerifyingKey, SigningError> {
 
 /// `ed25519-sig:<hex>`.
 pub fn render_signature(sig: &Signature) -> String {
-    format!("{SIGNATURE_PREFIX}{}", hex::encode(&sig.to_bytes()))
+    format!("{SIGNATURE_PREFIX}{}", hex::encode(sig.to_bytes()))
 }
 
 /// Parse an `ed25519-sig:<hex>` signature.
@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn frozen_signing_input_pins_the_payload_encoding() {
         let bytes = tree_head_signing_bytes("audit_checkpoint_v1", "k1", &sample_head());
-        let rendered = hex::encode(&bytes);
+        let rendered = hex::encode(bytes);
         assert_eq!(
             rendered,
             "26000000000000006170706c69636174696f6e2f766e642e6d6f7270686f6c6f672e747265652d686561642e7631130000000000000061756469745f636865636b706f696e745f763102000000000000006b3108000000000000002a0000000000000047000000000000007368613235363a313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310047000000000000007368613235363a32323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232"
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn frozen_chained_signing_input_pins_the_other_branch() {
         let bytes = tree_head_signing_bytes("audit_checkpoint_v1", "k1", &chained_head());
-        assert_eq!(hex::encode(&bytes), PRE_UPGRADE_INPUT_CHAINED);
+        assert_eq!(hex::encode(bytes), PRE_UPGRADE_INPUT_CHAINED);
     }
 
     /// The witness payload, frozen in both branches. The expected bytes
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn frozen_witness_payload_pins_both_branches() {
         assert_eq!(
-            hex::encode(&tree_head_witness_bytes(&sample_head())),
+            hex::encode(tree_head_witness_bytes(&sample_head())),
             "2e000000000000006170706c69636174696f6e2f766e642e6d6f7270686f6c6f672e747265652d686561642d7769746e6573732e763108000000000000002a0000000000000047000000000000007368613235363a313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310047000000000000007368613235363a32323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232"
         );
         let chained = TreeHead {
@@ -403,7 +403,7 @@ mod tests {
             checkpoint_hash: &THREES,
         };
         assert_eq!(
-            hex::encode(&tree_head_witness_bytes(&chained)),
+            hex::encode(tree_head_witness_bytes(&chained)),
             "2e000000000000006170706c69636174696f6e2f766e642e6d6f7270686f6c6f672e747265652d686561642d7769746e6573732e763108000000000000002b0000000000000047000000000000007368613235363a313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310147000000000000007368613235363a3232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323247000000000000007368613235363a33333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333"
         );
         // Domain separation: the witness bytes over a head never equal the
