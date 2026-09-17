@@ -5,6 +5,7 @@ use crate::commands::{AlreadyReported, print_json};
 use anyhow::Context;
 use morpholog_cli::envelopes::{CheckDiagnostic, CheckReport};
 use morpholog_core::{CompiledProgram, Program};
+use morpholog_postgres::{InvariantPlan, PgProgram};
 use morpholog_surface::{Diagnostic, Span, parse_program_with_sources};
 use std::path::Path;
 
@@ -63,7 +64,10 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     }
     if let Some(program) = &collected.program {
         if args.verbose {
-            print!("{}", summary(program, &args.file));
+            let compiled = CompiledProgram::new(program.clone()).map_err(|errors| {
+                anyhow::anyhow!("a checked programme failed to compile: {errors:?}")
+            })?;
+            print!("{}", summary(&PgProgram::new(compiled), &args.file));
         }
         if args.ir {
             return print_ir(program);
@@ -363,20 +367,33 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
     print_json(&payload)
 }
 
-/// The `--verbose` success summary: programme name and a count per
-/// declaration kind, echoing the file path the caller passed.
-fn summary(program: &Program, file: &Path) -> String {
-    format!(
+/// The `--verbose` success summary: programme name, a count per
+/// declaration kind, and the invariant plan - compiled to SQL when
+/// every invariant is inside the fragment, interpreted otherwise with
+/// each refusal named - echoing the file path the caller passed.
+fn summary(program: &PgProgram, file: &Path) -> String {
+    let p = program.core().program();
+    let mut out = format!(
         "ok: {}\nprogram: {}\n  predicates: {}\n  definitions: {}\n  invariants: {}\n  transformations: {}\n  intents: {}\n  derived claims: {}\n",
         file.display(),
-        program.name,
-        program.predicates.len(),
-        program.definitions.len(),
-        program.invariants.len(),
-        program.transformations.len(),
-        program.intents.len(),
-        program.derived_claims.len(),
-    )
+        p.name,
+        p.predicates.len(),
+        p.definitions.len(),
+        p.invariants.len(),
+        p.transformations.len(),
+        p.intents.len(),
+        p.derived_claims.len(),
+    );
+    match program.plan() {
+        InvariantPlan::Compiled { .. } => out.push_str("  invariant plan: compiled\n"),
+        InvariantPlan::Interpreted { refusals } => {
+            out.push_str("  invariant plan: interpreted\n");
+            for refusal in refusals {
+                out.push_str(&format!("    {}: {}\n", refusal.invariant, refusal.reason));
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -386,11 +403,11 @@ mod tests {
 
     #[test]
     fn summary_names_the_program_and_counts_each_declaration_kind() {
-        let p = program("demo").build();
+        let p = PgProgram::new(CompiledProgram::new(program("demo").build()).unwrap());
         let s = summary(&p, Path::new("demo.morph"));
         assert_eq!(
             s,
-            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n"
+            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant plan: compiled\n"
         );
     }
 }

@@ -22,7 +22,6 @@ mod claims;
 // Test-gated in rung 1 of the compiled-invariant arc: the compiler's
 // only consumer is the differential gate below, and no production path
 // changes until integration lands. Rung 2 drops the cfg.
-#[cfg(test)]
 mod compiled;
 #[cfg(test)]
 mod compiled_differential;
@@ -33,6 +32,7 @@ mod merkle;
 mod migrations;
 mod outbox;
 mod pack;
+mod program;
 mod propose;
 mod provision;
 mod rejections;
@@ -69,6 +69,7 @@ pub use checkpoints::{
 pub use claims::{
     ClaimFilter, list_claims, list_claims_for_predicates, list_claims_where, load_scoped_state,
 };
+pub use compiled::{CompileReason, CompileRefusal};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
 pub use error::PgError;
 pub use merkle::{Digest, DigestError};
@@ -88,6 +89,7 @@ pub use pack::{
     WindowStart, WindowVerification, export_pack, export_selective, export_window, verify_pack,
     verify_selective, verify_window,
 };
+pub use program::{InvariantPlan, PgProgram};
 pub use propose::{
     AuditedInvariantCheck, PgProposalOutcome, PgTracedOutcome, ProposalPhases,
     RejectionStateOutcome, TimedProposalOutcome, compute_idempotency_key, propose_against_pg,

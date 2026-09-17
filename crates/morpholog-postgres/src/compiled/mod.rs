@@ -58,7 +58,8 @@ use crate::sql_quote::{quote_ident, quote_literal};
 /// Why one invariant is outside the compiled fragment. Typed so tests and
 /// callers dispatch on the variant, never on message text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CompileReason {
+#[non_exhaustive]
+pub enum CompileReason {
     /// A construct the fragment has no rendering for (`or`, `pre`, a
     /// defined call, arithmetic, ...).
     Construct { construct: &'static str },
@@ -108,9 +109,10 @@ impl std::fmt::Display for CompileReason {
 
 /// One invariant the compiler could not express in the fragment.
 #[derive(Debug, Clone)]
-pub(crate) struct CompileRefusal {
-    pub(crate) invariant: InvariantName,
-    pub(crate) reason: CompileReason,
+#[non_exhaustive]
+pub struct CompileRefusal {
+    pub invariant: InvariantName,
+    pub reason: CompileReason,
 }
 
 /// Every invariant of a programme, compiled. Programme order is preserved:
@@ -123,6 +125,9 @@ pub(crate) struct CompiledInvariantSet {
 
 /// How much of a compiled invariant a transition's delta touches.
 #[derive(Debug, Clone, PartialEq, Eq)]
+// The checks themselves are dormant until the stage-1 integration
+// reaches production; the differential exercises them under test.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum CaseFilter {
     /// Delta disjoint from the invariant's occurrences: skip it entirely.
     Untouched,
@@ -143,6 +148,7 @@ struct ColRef {
 /// A claim pattern occurring anywhere in the body: which delta claims can
 /// affect this invariant, and how their constants bound the antecedent.
 #[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
 struct OccurrenceBinder {
     predicate: PredicateName,
     /// Literal guards: a delta claim mismatching one cannot affect this
@@ -154,6 +160,7 @@ struct OccurrenceBinder {
 }
 
 #[derive(Debug)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct CompiledInvariant {
     pub(crate) name: InvariantName,
     pub(crate) version: u32,
@@ -170,6 +177,7 @@ pub(crate) struct CompiledInvariant {
 impl CompiledInvariant {
     /// The violation query. `case_filter` is a stage-2 bound produced by
     /// [`Self::case_filter`]; `None` is the full stage-1 check.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn violation_sql(&self, case_filter: Option<&str>) -> String {
         let stage = if case_filter.is_some() { 2 } else { 1 };
         let mut sql = format!(
@@ -189,6 +197,7 @@ impl CompiledInvariant {
     /// Bound the check to the cases a delta could have changed. Sound by
     /// widening: a binder that cannot constrain a variable widens toward
     /// full stage 1, never narrows past a touched case.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn case_filter(
         &self,
         asserted: &[ClaimInstance],
@@ -240,6 +249,7 @@ impl CompiledInvariant {
 /// PostgreSQL block comments NEST, so an embedded `/*` is as hostile
 /// as `*/`: it opens a level our single closer would then close,
 /// leaving the real comment open over the rest of the statement.
+#[cfg_attr(not(test), allow(dead_code))]
 fn comment_safe(name: &str) -> String {
     name.replace(['\r', '\n'], " ")
         .replace("*/", "* /")
@@ -564,6 +574,7 @@ fn literal_sql(value: &Value) -> Result<(String, Repr), CompileReason> {
 /// tier compares the whole value as jsonb against the delta value's
 /// own serialisation - the same serde every stored claim passed
 /// through, so the constant and the column speak one canonical form.
+#[cfg_attr(not(test), allow(dead_code))]
 fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
     match ev {
         EvalValue::Subject(s) => Some(format!(
@@ -591,6 +602,7 @@ fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn literal_matches(lit: &Value, ev: &EvalValue) -> bool {
     match (lit, ev) {
         (Value::Subject(a), EvalValue::Subject(b)) => a == b,
