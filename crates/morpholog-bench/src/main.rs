@@ -228,7 +228,7 @@ struct AsOfArgs {
     /// a still-live prior entry; the actual retract-transition count
     /// is echoed at run time. The purely-additive default is
     /// best-case for replay, so this axis is what exposes any
-    /// non-linearity in the `ReplaySet` retract path. Capped at 50
+    /// non-linearity in the replay's retract path. Capped at 50
     /// because above that a retract would have to target a transition
     /// that itself only retracts.
     #[arg(long, default_value_t = 0)]
@@ -1898,7 +1898,7 @@ const CASE_PROVENANCE: &[(&str, &str)] = &[
     ),
     (
         "asof",
-        "audit-log replay; /retract is the ReplaySet retract-path control \
+        "audit-log replay; /retract is the replay's retract-path control \
          (the asserts-only default is best-case)",
     ),
     (
@@ -2575,7 +2575,7 @@ mod smoke {
         .expect("as-of scenario smoke (asserts only)");
 
         // Retract-heavy: exercises the `actor` column and the retract
-        // branch of the fabricator and the ReplaySet replay path.
+        // branch of the fabricator and the replay path.
         run_as_of(AsOfArgs {
             n: 10,
             at: 1.0,

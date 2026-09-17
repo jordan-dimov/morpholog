@@ -3,7 +3,7 @@ use crate::error::{PgError, classify, classify_checked_query};
 use chrono::{DateTime, Utc};
 use morpholog_core::{ClaimInstance, State};
 use sqlx::PgPool;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use uuid::Uuid;
 /// Reconstruct the full [`State`] that existed immediately after
 /// `transition_id` committed.
@@ -67,8 +67,9 @@ pub(crate) async fn reconstruct_state_at_for_predicates(
     let mut conn = pool.acquire().await.map_err(classify)?;
     reconstruct_inner(&mut conn, transition_id, Some(predicates)).await
 }
-/// Returns the claims admitted as of `transition_id`, in causal
-/// first-asserted order (the replay loop's construction order).
+/// Returns the claims admitted as of `transition_id`, in audit replay
+/// order: live claims keep the order the replay first admitted them,
+/// and a claim retracted and re-admitted moves to the tail.
 /// Differs from [`crate::list_claims`] in two ways: the state is historical,
 /// and the ordering is replay causality rather than `(asserted_at,
 /// predicate_name, args)`.
@@ -164,7 +165,7 @@ pub(crate) async fn reconstruct_inner(
         retracted_claims: serde_json::Value,
         committed_at: DateTime<Utc>,
     }
-    let mut replay = ReplaySet::new();
+    let mut state = State::default();
     let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
     loop {
         let rows: Vec<Row> = match &cursor {
@@ -209,28 +210,24 @@ pub(crate) async fn reconstruct_inner(
         cursor = Some((last.committed_at, last.transition_id));
         let exhausted = (rows.len() as i64) < REPLAY_CHUNK;
         for row in rows {
-            let asserted: Vec<ClaimInstance> = serde_json::from_value(row.asserted_claims)?;
-            let retracted: Vec<ClaimInstance> = serde_json::from_value(row.retracted_claims)?;
-            // Within each transition: retractions first, then
-            // assertions. Matches `State::with_delta` in the kernel.
-            for r in &retracted {
-                if !predicate_in_scope_set(r.predicate.as_str(), scope_set.as_ref()) {
-                    continue;
+            let in_scope = |claims: serde_json::Value| -> Result<Vec<ClaimInstance>, PgError> {
+                let mut claims: Vec<ClaimInstance> = serde_json::from_value(claims)?;
+                if let Some(scope) = scope_set.as_ref() {
+                    claims.retain(|c| predicate_in_scope_set(c.predicate.as_str(), Some(scope)));
                 }
-                replay.retract(r);
-            }
-            for a in &asserted {
-                if !predicate_in_scope_set(a.predicate.as_str(), scope_set.as_ref()) {
-                    continue;
-                }
-                replay.assert(a);
-            }
+                Ok(claims)
+            };
+            let asserted = in_scope(row.asserted_claims)?;
+            let retracted = in_scope(row.retracted_claims)?;
+            // The kernel's own order within a transition: retractions
+            // first, then assertions.
+            state.apply(&asserted, &retracted);
         }
         if exhausted {
             break;
         }
     }
-    Ok(replay.into_state())
+    Ok(state)
 }
 /// Predicate-scope check. `None` (full reconstruction) accepts
 /// everything; `Some(set)` accepts only predicates whose name is in
@@ -240,87 +237,5 @@ pub(crate) fn predicate_in_scope_set(predicate: &str, scope: Option<&HashSet<&st
     match scope {
         None => true,
         Some(set) => set.contains(predicate),
-    }
-}
-/// Working state for audit-log replay. Keeps claims in first-asserted
-/// order (the contract `list_claims_at` documents) while making both
-/// `assert` and `retract` O(1) amortised - a plain `Vec` with linear
-/// dedupe and `retain` would be O(N^2) over a full replay.
-///
-/// Internals:
-/// - `claims` holds every claim ever asserted during this replay, in
-///   first-asserted order. Never shrinks; compacted once at the end
-///   via [`into_state`].
-/// - `index` maps `claim -> position in claims`, used by both `assert`
-///   (re-assertion detection) and `retract` (entry to mark dead).
-/// - `live[i]` is `true` iff `claims[i]` is currently asserted.
-///   Retraction flips it `false`; re-assertion flips it back.
-pub(crate) struct ReplaySet {
-    claims: Vec<ClaimInstance>,
-    index: HashMap<ClaimInstance, usize>,
-    live: Vec<bool>,
-}
-impl ReplaySet {
-    pub(crate) fn new() -> Self {
-        Self {
-            claims: Vec::new(),
-            index: HashMap::new(),
-            live: Vec::new(),
-        }
-    }
-    /// Assert a claim. First-time claims are appended and marked live;
-    /// a previously-seen claim (live or retracted) has its existing
-    /// slot flipped back to live. Re-asserting an already-live claim is
-    /// a no-op, matching the set semantics the kernel pins.
-    ///
-    /// Re-assertion is zero-clone (only the `live` bit changes).
-    /// First-time assertion is two clones - one for the `claims` Vec,
-    /// one for the owned `index` key - the cost of keeping `claims`
-    /// contiguous. The clone is cheap relative to the JSON decode that
-    /// produced the input.
-    pub(crate) fn assert(&mut self, claim: &ClaimInstance) {
-        if let Some(&i) = self.index.get(claim) {
-            self.live[i] = true;
-        } else {
-            let i = self.claims.len();
-            self.claims.push(claim.clone());
-            self.live.push(true);
-            self.index.insert(claim.clone(), i);
-        }
-    }
-    /// Retract a claim by marking its `live` slot `false`. If the
-    /// claim was never asserted in this replay, the call is a no-op
-    /// (matches the kernel's `Stmt::Retract` semantics: retracting
-    /// a non-existent claim is an idempotent no-op).
-    pub(crate) fn retract(&mut self, claim: &ClaimInstance) {
-        if let Some(&i) = self.index.get(claim) {
-            self.live[i] = false;
-        }
-    }
-    /// Compact into a `State` containing only the live claims, in
-    /// their first-asserted order. Runs once at the end of replay;
-    /// O(|all-ever-asserted|).
-    fn into_state(self) -> State {
-        let claims: Vec<ClaimInstance> = self
-            .claims
-            .into_iter()
-            .zip(self.live)
-            .filter_map(|(c, alive)| alive.then_some(c))
-            .collect();
-        State::from_claims(claims)
-    }
-    /// A `State` of the currently-live claims without consuming the
-    /// replay - the per-step snapshot coverage needs. O(live claims)
-    /// per call, which is why [`coverage_replay`] only calls it when
-    /// a transition's delta actually touches a tracked antecedent.
-    pub(crate) fn snapshot_state(&self) -> State {
-        let claims: Vec<ClaimInstance> = self
-            .claims
-            .iter()
-            .zip(&self.live)
-            .filter(|&(_, &alive)| alive)
-            .map(|(c, _)| c.clone())
-            .collect();
-        State::from_claims(claims)
     }
 }
