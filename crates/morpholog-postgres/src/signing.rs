@@ -61,7 +61,7 @@ fn push_field(buf: &mut Vec<u8>, field: &[u8]) {
 /// typed, versioned encoding. Length prefixes make every field boundary
 /// unambiguous; the leading payload type stops a signature for one
 /// artefact kind being replayed as another.
-pub(crate) fn tree_head_signing_bytes(purpose: &str, key_id: &str, head: &TreeHead<'_>) -> Vec<u8> {
+pub fn tree_head_signing_bytes(purpose: &str, key_id: &str, head: &TreeHead<'_>) -> Vec<u8> {
     let mut b = Vec::new();
     push_field(&mut b, TREE_HEAD_PAYLOAD_TYPE.as_bytes());
     push_field(&mut b, purpose.as_bytes());
@@ -80,7 +80,7 @@ pub(crate) fn tree_head_signing_bytes(purpose: &str, key_id: &str, head: &TreeHe
 }
 
 /// The bytes an external witness commits to: the typed, length-delimited
-/// head, encoded exactly as the signing payload encodes it, minus
+/// head, encoded exactly as [`tree_head_signing_bytes`] encodes it, minus
 /// the signing-only fields. A timestamp authority receives the SHA-256 of
 /// these bytes as its message imprint. Frozen by test in both branches
 /// (genesis and chained), since a stored proof stops verifying the moment
@@ -113,7 +113,7 @@ pub fn sign_tree_head(
 
 /// Verify a tree-head signature against a public key. True only if the
 /// signature is over exactly this `(purpose, key_id, head)` payload.
-pub(crate) fn verify_tree_head(
+pub fn verify_tree_head(
     public_key: &VerifyingKey,
     signature: &Signature,
     purpose: &str,
@@ -186,7 +186,7 @@ pub fn render_signature(sig: &Signature) -> String {
 }
 
 /// Parse an `ed25519-sig:<hex>` signature.
-pub(crate) fn parse_signature(text: &str) -> Result<Signature, SigningError> {
+pub fn parse_signature(text: &str) -> Result<Signature, SigningError> {
     let hex = text
         .strip_prefix(SIGNATURE_PREFIX)
         .ok_or_else(|| SigningError::Malformed {

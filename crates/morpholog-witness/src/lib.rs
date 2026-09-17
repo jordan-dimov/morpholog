@@ -88,6 +88,14 @@ impl Anchors {
         }
         Ok(Self(certs))
     }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 /// What a verifier can say about one stored proof. Only `Invalid` is a

@@ -41,10 +41,12 @@ use std::fmt;
 
 use crate::diagnostics::Span;
 
-/// The fixed vocabulary in one list. A keyword's spelling feeds both the
-/// reserved-word map and the diagnostic rendering, so a word cannot be
-/// reserved in one place and forgotten in the other; every other token
-/// states how a diagnostic names it.
+/// The keyword vocabulary in one list. A keyword's spelling feeds both
+/// the reserved-word map and the diagnostic rendering, so a word cannot
+/// be reserved in one place and forgotten in the other; every other
+/// token states how a diagnostic names it. The kind names and the
+/// reserved bool literals lex to constructed tokens and stay in the
+/// map beside it.
 macro_rules! tokens {
     (
         keywords { $( $(#[$kd:meta])* $kw:ident = $kt:literal, )* }

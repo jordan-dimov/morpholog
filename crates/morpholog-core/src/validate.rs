@@ -992,27 +992,11 @@ fn duplicated<'a>(names: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
 
 fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-
-    // Predicates, intents, definitions, and derived heads are four
-    // namespaces; a name declared twice in one is one error.
-    for (vocabulary, names) in [
-        (
-            VocabularyKind::Predicate,
-            duplicated(p.predicates.iter().map(|d| d.name.as_str())),
-        ),
-        (
-            VocabularyKind::Intent,
-            duplicated(p.intents.iter().map(|d| d.name.as_str())),
-        ),
-        (
-            VocabularyKind::Definition,
-            duplicated(p.definitions.iter().map(|d| d.name.as_str())),
-        ),
-        (
-            VocabularyKind::Derived,
-            duplicated(p.derived_claims.iter().map(|d| d.predicate.as_str())),
-        ),
-    ] {
+    fn duplicate_decls(
+        errors: &mut Vec<ValidationError>,
+        vocabulary: VocabularyKind,
+        names: Vec<&str>,
+    ) {
         for name in names {
             errors.push(ValidationError::DuplicateDecl {
                 vocabulary,
@@ -1020,19 +1004,25 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
             });
         }
     }
+    duplicate_decls(
+        &mut errors,
+        VocabularyKind::Predicate,
+        duplicated(p.predicates.iter().map(|d| d.name.as_str())),
+    );
 
-    let declared_args = p
-        .predicates
-        .iter()
-        .map(|d| (VocabularyKind::Predicate, d.name.to_string(), &d.args))
-        .chain(
-            p.intents
-                .iter()
-                .map(|d| (VocabularyKind::Intent, d.name.to_string(), &d.args)),
-        );
-    for (vocabulary, name, args) in declared_args {
-        // CalendarSpan is expression-only; the surface cannot declare
-        // it, and hand-built IR is held to the same rule.
+    // CalendarSpan is expression-only; the surface cannot declare it,
+    // and hand-built IR is held to the same rule.
+    let declared_args = || {
+        p.predicates
+            .iter()
+            .map(|d| (VocabularyKind::Predicate, d.name.to_string(), &d.args))
+            .chain(
+                p.intents
+                    .iter()
+                    .map(|d| (VocabularyKind::Intent, d.name.to_string(), &d.args)),
+            )
+    };
+    for (_, name, args) in declared_args() {
         for arg in args {
             if arg.kind == crate::ir::PredicateArgKind::CalendarSpan {
                 errors.push(ValidationError::CalendarSpanNotDeclarable {
@@ -1041,16 +1031,26 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
                 });
             }
         }
-        // A field names one position, so argument names are
-        // duplicate-free.
-        for field in duplicated(args.iter().map(|a| a.name.as_str())) {
-            errors.push(ValidationError::DuplicateArgName {
-                vocabulary,
-                name: name.clone(),
-                field: field.to_string(),
-            });
-        }
     }
+
+    // Intents, definitions, and derived heads are their own namespaces;
+    // a derived head declared twice would publish two answers under one
+    // name, and the read cache takes the kernel's output as a set.
+    duplicate_decls(
+        &mut errors,
+        VocabularyKind::Intent,
+        duplicated(p.intents.iter().map(|d| d.name.as_str())),
+    );
+    duplicate_decls(
+        &mut errors,
+        VocabularyKind::Definition,
+        duplicated(p.definitions.iter().map(|d| d.name.as_str())),
+    );
+    duplicate_decls(
+        &mut errors,
+        VocabularyKind::Derived,
+        duplicated(p.derived_claims.iter().map(|d| d.predicate.as_str())),
+    );
 
     // A parameter is one binding slot in the call frame, so a repeated
     // name would let the later argument silently overwrite the earlier.
@@ -1059,6 +1059,17 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
             errors.push(ValidationError::DuplicateParameter {
                 definition: def.name.to_string(),
                 parameter: parameter.to_string(),
+            });
+        }
+    }
+
+    // A field names one position, so argument names are duplicate-free.
+    for (vocabulary, name, args) in declared_args() {
+        for field in duplicated(args.iter().map(|a| a.name.as_str())) {
+            errors.push(ValidationError::DuplicateArgName {
+                vocabulary,
+                name: name.clone(),
+                field: field.to_string(),
             });
         }
     }

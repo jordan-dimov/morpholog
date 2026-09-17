@@ -1610,14 +1610,14 @@ impl CheckCtx<'_> {
         InferredKind::UnknownOrAny
     }
 
-    /// A variable used where a bound value is required. Flags
-    /// `UnboundVariable` if nothing has bound it at this point.
     /// Record an error at the current context.
     fn report(&mut self, error: impl FnOnce(ValidationContext) -> ValidationError) {
         let context = self.context.clone();
         self.errors.push(error(context));
     }
 
+    /// A variable used where a bound value is required. Flags
+    /// `UnboundVariable` if nothing has bound it at this point.
     fn use_var(&mut self, scope: &Scope, name: &Var) {
         if !scope.bound.is_bound(name) {
             self.report(|context| ValidationError::UnboundVariable {
