@@ -67,9 +67,9 @@ pub(crate) async fn reconstruct_state_at_for_predicates(
     let mut conn = pool.acquire().await.map_err(classify)?;
     reconstruct_inner(&mut conn, transition_id, Some(predicates)).await
 }
-/// Returns the claims admitted as of `transition_id`, in the order the
-/// kernel's own candidate states carried them (a claim retracted and
-/// re-admitted moves to the tail).
+/// Returns the claims admitted as of `transition_id`, in audit replay
+/// order: live claims keep the order the replay first admitted them,
+/// and a claim retracted and re-admitted moves to the tail.
 /// Differs from [`crate::list_claims`] in two ways: the state is historical,
 /// and the ordering is replay causality rather than `(asserted_at,
 /// predicate_name, args)`.
@@ -211,11 +211,11 @@ pub(crate) async fn reconstruct_inner(
         let exhausted = (rows.len() as i64) < REPLAY_CHUNK;
         for row in rows {
             let in_scope = |claims: serde_json::Value| -> Result<Vec<ClaimInstance>, PgError> {
-                let claims: Vec<ClaimInstance> = serde_json::from_value(claims)?;
-                Ok(claims
-                    .into_iter()
-                    .filter(|c| predicate_in_scope_set(c.predicate.as_str(), scope_set.as_ref()))
-                    .collect())
+                let mut claims: Vec<ClaimInstance> = serde_json::from_value(claims)?;
+                if let Some(scope) = scope_set.as_ref() {
+                    claims.retain(|c| predicate_in_scope_set(c.predicate.as_str(), Some(scope)));
+                }
+                Ok(claims)
             };
             let asserted = in_scope(row.asserted_claims)?;
             let retracted = in_scope(row.retracted_claims)?;

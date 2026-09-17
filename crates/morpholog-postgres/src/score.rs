@@ -76,7 +76,7 @@ fn build_scorer(program: &Program) -> Result<CandidateScorer<'_>, PgError> {
 
 /// Fold a run of audit rows (in canonical order) into the scorer: each
 /// row's retractions then assertions update the `replayed state`, the post-state
-/// is snapshotted, and the scorer observes it against the carried pre-state.
+/// advances the one replayed state, and the scorer observes it.
 /// One fold for both the database and pack drivers, so the live and offline
 /// scores cannot diverge.
 fn fold_rows<'a>(
@@ -93,7 +93,7 @@ fn fold_rows<'a>(
             scorer.mark_split(pending.report);
         }
         replay.apply(&row.asserted_claims, &row.retracted_claims);
-        scorer.observe(replay, &row.transition_id.to_string())?;
+        scorer.observe_post(replay, &row.transition_id.to_string())?;
     }
     Ok(())
 }
