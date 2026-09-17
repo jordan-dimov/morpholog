@@ -2167,3 +2167,146 @@ fn every_session_error_code_is_in_the_pinned_enum() {
         "result.json publishes codes the binary cannot emit: {published:?}"
     );
 }
+
+// ============================================================
+// The manual-schema intent ledger.
+//
+// result.json is written by hand. Each entry below is one reason it
+// cannot be replaced by a schema generated from the Rust types: a rule
+// the schema states that the types do not, a name an embedder
+// references, a closed shape, or a format. Each is asserted on the
+// document itself, so dropping one from the schema fails here by name
+// and the reason is read before the entry is removed.
+// ============================================================
+
+#[derive(Debug, Clone, Copy)]
+enum Intent {
+    /// The schema refuses what the Rust type would accept.
+    StricterThanRust,
+    /// A `$defs` name an embedder references directly.
+    NamedDefinition,
+    /// No unknown keys, on every object.
+    ClosedShape,
+    /// A spelling rule serde does not express.
+    FormatConstraint,
+}
+
+fn every_node<'a>(
+    node: &'a serde_json::Value,
+    path: String,
+    out: &mut Vec<(String, &'a serde_json::Value)>,
+) {
+    out.push((path.clone(), node));
+    match node {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map {
+                every_node(v, format!("{path}/{k}"), out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (i, v) in items.iter().enumerate() {
+                every_node(v, format!("{path}/{i}"), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn the_manual_schema_intent_ledger_holds() {
+    let schema = result_schema();
+    let defs = &schema["$defs"];
+    let mut nodes = Vec::new();
+    every_node(&schema, String::new(), &mut nodes);
+
+    let ledger: Vec<(Intent, &str, bool)> = vec![
+        (
+            Intent::StricterThanRust,
+            "rejection_row: a gate row cannot carry invariant-only fields (the Rust struct holds independent options)",
+            defs["rejection_row"]["oneOf"]
+                .as_array()
+                .is_some_and(|arms| {
+                    arms.iter().any(|arm| {
+                        let props = &arm["properties"];
+                        props.get("invariant_version").is_none() && props.get("witness").is_none()
+                    })
+                }),
+        ),
+        (
+            Intent::StricterThanRust,
+            "refresh_derived_report: the source snapshot is paired both ways (two independent options in Rust)",
+            defs["refresh_derived_report"]["dependentRequired"]["source_snapshot_committed_at"]
+                == serde_json::json!(["source_snapshot_transition_id"])
+                && defs["refresh_derived_report"]["dependentRequired"]["source_snapshot_transition_id"]
+                    == serde_json::json!(["source_snapshot_committed_at"]),
+        ),
+        (
+            Intent::StricterThanRust,
+            "witness lists are absent, never empty (skip_serializing_if only makes them optional)",
+            nodes
+                .iter()
+                .filter(|(path, _)| path.ends_with("/properties/witness"))
+                .all(|(_, node)| node["minItems"].as_u64() >= Some(1)),
+        ),
+        (
+            Intent::StricterThanRust,
+            "tagged_value carries only the arms the runtime can emit (no calendar span on the wire)",
+            defs["tagged_value"]["oneOf"]
+                .as_array()
+                .is_some_and(|arms| !arms.is_empty())
+                && !defs["tagged_value"].to_string().contains("calendar"),
+        ),
+        (
+            Intent::NamedDefinition,
+            "the outcomes are addressable by name (a generated schema would inline enum variants)",
+            [
+                "committed",
+                "rejected",
+                "atomic_committed",
+                "atomic_rejected",
+                "errored",
+            ]
+            .iter()
+            .all(|name| defs.get(*name).is_some())
+                && schema["$defs"]["run_outcome"]["oneOf"]
+                    == serde_json::json!([{"$ref": "#/$defs/committed"}, {"$ref": "#/$defs/rejected"}]),
+        ),
+        (
+            Intent::ClosedShape,
+            "every object with properties refuses unknown keys",
+            nodes.iter().all(|(_, node)| {
+                node.get("properties").is_none() || node["additionalProperties"] == false
+            }),
+        ),
+        (
+            Intent::FormatConstraint,
+            "decimals and digests are patterned strings; ids and instants carry formats",
+            nodes
+                .iter()
+                .any(|(_, n)| n["pattern"] == "^-?(0|[1-9]\\d*)(\\.\\d+)?$")
+                && nodes
+                    .iter()
+                    .any(|(_, n)| n["pattern"] == "^sha256:[0-9a-f]{64}$")
+                && nodes.iter().any(|(_, n)| n["format"] == "uuid")
+                && nodes.iter().any(|(_, n)| n["format"] == "date-time"),
+        ),
+        (
+            Intent::FormatConstraint,
+            "row numbers are one-based (no Rust expression says so)",
+            nodes
+                .iter()
+                .any(|(path, n)| path.ends_with("/properties/row") && n["minimum"] == 1),
+        ),
+    ];
+
+    let broken: Vec<String> = ledger
+        .iter()
+        .filter(|(_, _, holds)| !holds)
+        .map(|(intent, reason, _)| format!("{intent:?}: {reason}"))
+        .collect();
+    assert!(
+        broken.is_empty(),
+        "the hand-written schema lost an intent it exists to state:\n{}",
+        broken.join("\n")
+    );
+}
