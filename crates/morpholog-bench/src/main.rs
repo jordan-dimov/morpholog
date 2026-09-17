@@ -582,8 +582,11 @@ async fn main() -> Result<()> {
 // Measurement layer
 // ============================================================
 
-/// The implementation column of every result row. #277's compiled
-/// engine will add its own value; the table contract does not change.
+/// The implementation column of every result row. Every scenario pins
+/// the interpreter by construction (`PgProgram::interpreted`), whatever
+/// the programme is eligible for, so this label stays true; the
+/// compiled route will be measured under its own value, and the table
+/// contract does not change.
 const IMPLEMENTATION: &str = "interpreted";
 
 /// Bumped only when benchmark semantics change (cases, fixtures,
@@ -715,7 +718,7 @@ async fn measure_write(
     repeat: usize,
 ) -> Result<CaseResult> {
     let transformation = double_entry_ledger::post_simple_entry();
-    let compiled = PgProgram::new(
+    let compiled = PgProgram::interpreted(
         CompiledProgram::new(double_entry_ledger::program())
             .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
     );
@@ -1618,7 +1621,7 @@ async fn contend_worker(
         // in the ledger workload here partitions by *predicate*.
         let predicate = format!("Bench_{}", worker_id % periods);
         let transformation = synthetic_bump(&predicate);
-        let compiled = PgProgram::new(
+        let compiled = PgProgram::interpreted(
             CompiledProgram::new(synthetic_program(&predicate))
                 .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
         );
@@ -1641,7 +1644,7 @@ async fn contend_worker(
         }
     } else {
         let transformation = double_entry_ledger::post_simple_entry();
-        let compiled = PgProgram::new(
+        let compiled = PgProgram::interpreted(
             CompiledProgram::new(double_entry_ledger::program())
                 .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
         );
@@ -1767,7 +1770,7 @@ async fn measure_import(pool: &PgPool, case: &str, n: usize, repeat: usize) -> R
         return Err(anyhow!("import requires n >= 1"));
     }
     let transformation = double_entry_ledger::post_simple_entry();
-    let compiled = PgProgram::new(
+    let compiled = PgProgram::interpreted(
         CompiledProgram::new(double_entry_ledger::program())
             .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
     );
@@ -1972,7 +1975,7 @@ async fn measure_wide(
         ));
     }
     let program = wide_program(arity);
-    let compiled = PgProgram::new(
+    let compiled = PgProgram::interpreted(
         CompiledProgram::new(program).map_err(|e| anyhow!("invalid wide programme: {e:?}"))?,
     );
     let footprint = vec!["WideLine".to_string()];
@@ -2847,7 +2850,7 @@ async fn measure_transact(
     writer_pause: Duration,
     repeat: usize,
 ) -> Result<CaseResult> {
-    let compiled = std::sync::Arc::new(PgProgram::new(
+    let compiled = std::sync::Arc::new(PgProgram::interpreted(
         CompiledProgram::new(double_entry_ledger::program())
             .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
     ));
