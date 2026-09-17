@@ -63,6 +63,7 @@ mod field_table;
 mod lets;
 mod program;
 mod stmt;
+mod walk;
 
 pub use expr::{parse_expression, parse_value_expr};
 pub use program::{parse_program, parse_program_with_sources};

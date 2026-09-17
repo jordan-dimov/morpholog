@@ -25,6 +25,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use morpholog_core::{Prop, Term, ValueExpr, Var};
 
+use super::walk::{
+    Node, binders_in_prop, binders_in_value, prop_nodes, read_var, value_nodes, vars_in_prop,
+    vars_in_value, walk_prop, walk_value,
+};
+
 use crate::diagnostics::Span;
 
 /// One parsed `let name = (value)` line, spans kept for refusals.
@@ -62,9 +67,9 @@ pub(crate) fn apply(
     // quantifier-binder collisions.
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     let mut binders = BTreeSet::new();
-    collect_binders_in_prop(&body, &mut binders);
+    binders_in_prop(&body, &mut binders);
     for b in &bindings {
-        collect_binders_in_value(&b.value, &mut binders);
+        binders_in_value(&b.value, &mut binders);
     }
     for b in &bindings {
         if b.name == "actor" {
@@ -232,14 +237,14 @@ pub(super) fn budgeted_substitute_prop(
     binding: &LetBinding,
     errors: &mut Vec<(Span, String)>,
 ) {
-    if count_prop(target, name) == 0 {
+    if count_prop(target, name, false) == 0 {
         return;
     }
     // Budget on value-position occurrences only: a term-slot use is a
     // 1-for-1 term swap or a refusal, never growth - counting it would
     // inflate the projection and let the budget error mask the more
     // specific term-slot diagnostic.
-    let growth_sites = count_growth_prop(target, name);
+    let growth_sites = count_prop(target, name, true);
     let projected = prop_nodes(target) + growth_sites * value_nodes.saturating_sub(1);
     if projected > MAX_BODY_NODES {
         errors.push((
@@ -263,10 +268,10 @@ pub(super) fn budgeted_substitute_value(
     binding: &LetBinding,
     errors: &mut Vec<(Span, String)>,
 ) {
-    if count_value(target, name) == 0 {
+    if count_value(target, name, false) == 0 {
         return;
     }
-    let growth_sites = count_growth_value(target, name);
+    let growth_sites = count_value(target, name, true);
     let projected = self::value_nodes(target) + growth_sites * value_nodes.saturating_sub(1);
     if projected > MAX_BODY_NODES {
         errors.push((
@@ -453,305 +458,25 @@ pub(super) fn substitute_in_value(
 // declare its behaviour here.
 // ------------------------------------------------------------
 
-pub(super) fn collect_binders_in_prop(prop: &Prop, out: &mut BTreeSet<String>) {
-    match prop {
-        Prop::Exists { binding, body } => {
-            out.insert(binding.to_string());
-            collect_binders_in_prop(body, out);
-        }
-        Prop::Forall {
-            binding,
-            source,
-            body,
-        } => {
-            out.insert(binding.to_string());
-            collect_binders_in_prop(source, out);
-            collect_binders_in_prop(body, out);
-        }
-        Prop::And(props) | Prop::Or(props) => {
-            for p in props {
-                collect_binders_in_prop(p, out);
-            }
-        }
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            collect_binders_in_prop(left, out);
-            collect_binders_in_prop(right, out);
-        }
-        Prop::Not(p) | Prop::Pre(p) => collect_binders_in_prop(p, out),
-        Prop::Eq(l, r) | Prop::Neq(l, r) => {
-            collect_binders_in_value(l, out);
-            collect_binders_in_value(r, out);
-        }
-        Prop::Compare { left, right, .. } => {
-            collect_binders_in_value(left, out);
-            collect_binders_in_value(right, out);
-        }
-        Prop::Claim { .. } | Prop::Defined { .. } | Prop::In(_, _) => {}
-    }
+/// Occurrences of `name` in the tree; with `growth_only`, only those in
+/// value position, where substitution can enlarge the tree. Slot
+/// occurrences swap one term for another or are refused.
+fn count_prop(prop: &Prop, name: &Var, growth_only: bool) -> usize {
+    let mut n = 0;
+    walk_prop(prop, &mut |node| {
+        n += usize::from(is_use(&node, name, growth_only))
+    });
+    n
 }
 
-pub(super) fn collect_binders_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
-    match expr {
-        // The sum target is CONSUMED against the bindings the sum body
-        // supplies - it introduces nothing, so it is not a binder. A
-        // let flowing into it is ordinary value substitution.
-        ValueExpr::Sum { value, body, .. } => {
-            collect_binders_in_value(value, out);
-            collect_binders_in_prop(body, out);
-        }
-        ValueExpr::Extremum { body, .. } => collect_binders_in_prop(body, out),
-        // The condition's quantifier binders count for collision
-        // detection like a sum body's; the branches recurse.
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            collect_binders_in_prop(when, out);
-            collect_binders_in_value(then, out);
-            collect_binders_in_value(otherwise, out);
-        }
-        ValueExpr::Call { args, .. } => {
-            for a in args {
-                collect_binders_in_value(a, out);
-            }
-        }
-        ValueExpr::Arith { left, right, .. } => {
-            collect_binders_in_value(left, out);
-            collect_binders_in_value(right, out);
-        }
-        ValueExpr::ValueOf { default, .. } => {
-            if let Some(d) = default {
-                collect_binders_in_value(d, out);
-            }
-        }
-        ValueExpr::Term(_) => {}
-    }
+fn count_value(expr: &ValueExpr, name: &Var, growth_only: bool) -> usize {
+    let mut n = 0;
+    walk_value(expr, &mut |node| {
+        n += usize::from(is_use(&node, name, growth_only))
+    });
+    n
 }
 
-pub(super) fn vars_in_term(term: &Term, out: &mut BTreeSet<String>) {
-    match term {
-        Term::Var(v) => {
-            out.insert(v.to_string());
-        }
-        Term::Wildcard | Term::Literal(_) | Term::Actor => {}
-    }
-}
-
-pub(super) fn vars_in_prop(prop: &Prop, out: &mut BTreeSet<String>) {
-    match prop {
-        Prop::Claim { args, .. } | Prop::Defined { args, .. } => {
-            for a in args {
-                vars_in_term(a, out);
-            }
-        }
-        Prop::In(l, r) => {
-            vars_in_term(l, out);
-            vars_in_term(r, out);
-        }
-        Prop::And(props) | Prop::Or(props) => {
-            for p in props {
-                vars_in_prop(p, out);
-            }
-        }
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            vars_in_prop(left, out);
-            vars_in_prop(right, out);
-        }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => vars_in_prop(p, out),
-        Prop::Forall { source, body, .. } => {
-            vars_in_prop(source, out);
-            vars_in_prop(body, out);
-        }
-        Prop::Eq(l, r) | Prop::Neq(l, r) => {
-            vars_in_value(l, out);
-            vars_in_value(r, out);
-        }
-        Prop::Compare { left, right, .. } => {
-            vars_in_value(left, out);
-            vars_in_value(right, out);
-        }
-    }
-}
-
-pub(super) fn vars_in_value(expr: &ValueExpr, out: &mut BTreeSet<String>) {
-    match expr {
-        ValueExpr::Term(t) => vars_in_term(t, out),
-        ValueExpr::Arith { left, right, .. } => {
-            vars_in_value(left, out);
-            vars_in_value(right, out);
-        }
-        ValueExpr::Sum {
-            value: target,
-            body,
-            ..
-        } => {
-            vars_in_value(target, out);
-            vars_in_prop(body, out);
-        }
-        ValueExpr::Extremum {
-            value: target,
-            body,
-            ..
-        } => {
-            vars_in_term(target, out);
-            vars_in_prop(body, out);
-        }
-        ValueExpr::ValueOf { args, default, .. } => {
-            for a in args {
-                vars_in_term(a, out);
-            }
-            if let Some(d) = default {
-                vars_in_value(d, out);
-            }
-        }
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            vars_in_prop(when, out);
-            vars_in_value(then, out);
-            vars_in_value(otherwise, out);
-        }
-        ValueExpr::Call { args, .. } => {
-            for a in args {
-                vars_in_value(a, out);
-            }
-        }
-    }
-}
-
-fn count_term(term: &Term, name: &Var) -> usize {
-    usize::from(matches!(term, Term::Var(v) if v == name))
-}
-
-fn count_prop(prop: &Prop, name: &Var) -> usize {
-    match prop {
-        Prop::Claim { args, .. } | Prop::Defined { args, .. } => {
-            args.iter().map(|a| count_term(a, name)).sum()
-        }
-        Prop::In(l, r) => count_term(l, name) + count_term(r, name),
-        Prop::And(props) | Prop::Or(props) => props.iter().map(|p| count_prop(p, name)).sum(),
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            count_prop(left, name) + count_prop(right, name)
-        }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => count_prop(p, name),
-        Prop::Forall { source, body, .. } => count_prop(source, name) + count_prop(body, name),
-        Prop::Eq(l, r) | Prop::Neq(l, r) => count_value(l, name) + count_value(r, name),
-        Prop::Compare { left, right, .. } => count_value(left, name) + count_value(right, name),
-    }
-}
-
-fn count_value(expr: &ValueExpr, name: &Var) -> usize {
-    match expr {
-        ValueExpr::Term(t) => count_term(t, name),
-        ValueExpr::Arith { left, right, .. } => count_value(left, name) + count_value(right, name),
-        ValueExpr::Sum {
-            value: target,
-            body,
-            ..
-        } => count_value(target, name) + count_prop(body, name),
-        ValueExpr::Extremum {
-            value: target,
-            body,
-            ..
-        } => count_term(target, name) + count_prop(body, name),
-        ValueExpr::ValueOf { args, default, .. } => {
-            args.iter().map(|a| count_term(a, name)).sum::<usize>()
-                + default.as_ref().map_or(0, |d| count_value(d, name))
-        }
-        ValueExpr::Call { args, .. } => args.iter().map(|a| count_value(a, name)).sum(),
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => count_prop(when, name) + count_value(then, name) + count_value(otherwise, name),
-    }
-}
-
-// Growth counting: occurrences that can enlarge the tree when
-// substituted, i.e. value-position variable references only. Term
-// slots (claim/call arguments, membership operands, sum targets,
-// lookup keys) are excluded - substitution there is a 1-for-1 term
-// swap when the value is a plain term and a refusal otherwise.
-fn count_growth_prop(prop: &Prop, name: &Var) -> usize {
-    match prop {
-        Prop::Claim { .. } | Prop::Defined { .. } | Prop::In(_, _) => 0,
-        Prop::And(props) | Prop::Or(props) => {
-            props.iter().map(|p| count_growth_prop(p, name)).sum()
-        }
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            count_growth_prop(left, name) + count_growth_prop(right, name)
-        }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => count_growth_prop(p, name),
-        Prop::Forall { source, body, .. } => {
-            count_growth_prop(source, name) + count_growth_prop(body, name)
-        }
-        Prop::Eq(l, r) | Prop::Neq(l, r) => {
-            count_growth_value(l, name) + count_growth_value(r, name)
-        }
-        Prop::Compare { left, right, .. } => {
-            count_growth_value(left, name) + count_growth_value(right, name)
-        }
-    }
-}
-
-fn count_growth_value(expr: &ValueExpr, name: &Var) -> usize {
-    match expr {
-        ValueExpr::Term(t) => count_term(t, name),
-        ValueExpr::Arith { left, right, .. } => {
-            count_growth_value(left, name) + count_growth_value(right, name)
-        }
-        ValueExpr::Sum { value, body, .. } => {
-            count_growth_value(value, name) + count_growth_prop(body, name)
-        }
-        ValueExpr::Extremum { body, .. } => count_growth_prop(body, name),
-        ValueExpr::ValueOf { default, .. } => {
-            default.as_ref().map_or(0, |d| count_growth_value(d, name))
-        }
-        ValueExpr::Call { args, .. } => args.iter().map(|a| count_growth_value(a, name)).sum(),
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            count_growth_prop(when, name)
-                + count_growth_value(then, name)
-                + count_growth_value(otherwise, name)
-        }
-    }
-}
-
-fn prop_nodes(prop: &Prop) -> usize {
-    1 + match prop {
-        Prop::Claim { args, .. } | Prop::Defined { args, .. } => args.len(),
-        Prop::In(_, _) => 2,
-        Prop::And(props) | Prop::Or(props) => props.iter().map(prop_nodes).sum(),
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            prop_nodes(left) + prop_nodes(right)
-        }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => prop_nodes(p),
-        Prop::Forall { source, body, .. } => prop_nodes(source) + prop_nodes(body),
-        Prop::Eq(l, r) | Prop::Neq(l, r) => value_nodes(l) + value_nodes(r),
-        Prop::Compare { left, right, .. } => value_nodes(left) + value_nodes(right),
-    }
-}
-
-pub(super) fn value_nodes(expr: &ValueExpr) -> usize {
-    1 + match expr {
-        ValueExpr::Term(_) => 0,
-        ValueExpr::Arith { left, right, .. } => value_nodes(left) + value_nodes(right),
-        ValueExpr::Sum { value, body, .. } => value_nodes(value) + prop_nodes(body),
-        ValueExpr::Extremum { body, .. } => 1 + prop_nodes(body),
-        ValueExpr::ValueOf { args, default, .. } => {
-            args.len() + default.as_ref().map_or(0, |d| value_nodes(d))
-        }
-        ValueExpr::Call { args, .. } => args.iter().map(value_nodes).sum(),
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => prop_nodes(when) + value_nodes(then) + value_nodes(otherwise),
-    }
+fn is_use(node: &Node<'_>, name: &Var, growth_only: bool) -> bool {
+    read_var(node).is_some_and(|(v, in_value)| v == name && (in_value || !growth_only))
 }

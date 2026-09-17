@@ -42,9 +42,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use morpholog_core::{DerivedClaim, Invariant, Stmt, Term, Transformation, ValueExpr, Var};
 
 use super::lets::{
-    LetBinding, budgeted_substitute_prop, budgeted_substitute_value, collect_binders_in_prop,
-    collect_binders_in_value, substitute_term_slot, value_nodes, vars_in_prop, vars_in_term,
-    vars_in_value,
+    LetBinding, budgeted_substitute_prop, budgeted_substitute_value, substitute_term_slot,
+};
+use super::walk::{
+    Node, binders_in_prop, binders_in_value, value_nodes, vars_in_prop, vars_in_stmt, vars_in_term,
+    vars_in_value, walk_prop, walk_stmt, walk_value,
 };
 use crate::diagnostics::Span;
 
@@ -117,7 +119,7 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
         collect_binders_named(&d.domain, &mut locals);
         for v in &d.values {
             let mut set = BTreeSet::new();
-            collect_binders_in_value(&v.expr, &mut set);
+            binders_in_value(&v.expr, &mut set);
             locals.extend(set.into_iter().map(|n| (n, "quantifier binding")));
         }
     }
@@ -201,20 +203,30 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
     // Constructive and ground slots (admit/emit/retract arguments,
     // `value` lookup keys, sum targets) stay ordinary uses.
     for (d, span) in targets.definitions.iter() {
-        refuse_pattern_positions_in_prop(&d.body, &const_names, span, &mut errors);
+        walk_prop(&d.body, &mut |n| {
+            refuse_pattern_node(&n, &const_names, span, &mut errors)
+        });
     }
     for (i, span) in targets.invariants.iter() {
-        refuse_pattern_positions_in_prop(&i.body, &const_names, span, &mut errors);
+        walk_prop(&i.body, &mut |n| {
+            refuse_pattern_node(&n, &const_names, span, &mut errors)
+        });
     }
     for (t, span, _) in targets.transformations.iter() {
         for s in &t.body {
-            refuse_pattern_positions_in_stmt(s, &const_names, span, &mut errors);
+            walk_stmt(s, &mut |n| {
+                refuse_pattern_node(&n, &const_names, span, &mut errors)
+            });
         }
     }
     for (d, span) in targets.derived_claims.iter() {
-        refuse_pattern_positions_in_prop(&d.domain, &const_names, span, &mut errors);
+        walk_prop(&d.domain, &mut |n| {
+            refuse_pattern_node(&n, &const_names, span, &mut errors)
+        });
         for v in &d.values {
-            refuse_pattern_positions_in_value(&v.expr, &const_names, span, &mut errors);
+            walk_value(&v.expr, &mut |n| {
+                refuse_pattern_node(&n, &const_names, span, &mut errors)
+            });
         }
     }
     if !errors.is_empty() {
@@ -232,7 +244,7 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
     }
     for (t, _, _) in targets.transformations.iter() {
         for s in &t.body {
-            stmt_vars(s, &mut live_names);
+            vars_in_stmt(s, &mut live_names);
         }
     }
     for (d, _) in targets.derived_claims.iter() {
@@ -412,7 +424,7 @@ fn substitute_stmt(
 /// diagnostic.
 fn collect_binders_named(prop: &morpholog_core::Prop, out: &mut Vec<(String, &'static str)>) {
     let mut set = BTreeSet::new();
-    collect_binders_in_prop(prop, &mut set);
+    binders_in_prop(prop, &mut set);
     out.extend(set.into_iter().map(|n| (n, "quantifier binding")));
 }
 
@@ -426,7 +438,7 @@ fn collect_stmt_locals(stmt: &Stmt, out: &mut Vec<(String, &'static str)>) {
         Stmt::Let { name, value } => {
             out.push((name.to_string(), "statement binding"));
             let mut set = BTreeSet::new();
-            collect_binders_in_value(value, &mut set);
+            binders_in_value(value, &mut set);
             out.extend(set.into_iter().map(|n| (n, "quantifier binding")));
         }
         Stmt::LetNewSubject { name } => out.push((name.to_string(), "statement binding")),
@@ -438,43 +450,10 @@ fn collect_stmt_locals(stmt: &Stmt, out: &mut Vec<(String, &'static str)>) {
         } => {
             out.push((binding.to_string(), "statement binding"));
             let mut set = BTreeSet::new();
-            collect_binders_in_value(collection, &mut set);
+            binders_in_value(collection, &mut set);
             out.extend(set.into_iter().map(|n| (n, "quantifier binding")));
             for s in body {
                 collect_stmt_locals(s, out);
-            }
-        }
-    }
-}
-
-/// Free variables a statement reads or writes with - the usage scan
-/// behind const liveness.
-fn stmt_vars(stmt: &Stmt, out: &mut BTreeSet<String>) {
-    match stmt {
-        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => vars_in_prop(p, out),
-        Stmt::Let { value, .. } => vars_in_value(value, out),
-        Stmt::LetNewSubject { .. } => {}
-        Stmt::Assert(c) => {
-            for a in &c.args {
-                vars_in_term(a, out);
-            }
-        }
-        Stmt::Retract { args, .. } => {
-            for a in args {
-                vars_in_term(a, out);
-            }
-        }
-        Stmt::Emit(intent) => {
-            for a in &intent.args {
-                vars_in_term(a, out);
-            }
-        }
-        Stmt::For {
-            collection, body, ..
-        } => {
-            vars_in_value(collection, out);
-            for s in body {
-                stmt_vars(s, out);
             }
         }
     }
@@ -596,123 +575,22 @@ fn refuse_pattern_slot(
     }
 }
 
-fn refuse_pattern_positions_in_prop(
-    prop: &morpholog_core::Prop,
+/// A const standing in a claim pattern would silently filter where the
+/// author expects a binding. Defined calls are still claim-shaped when
+/// this pass runs (resolution comes later); they get the same wording so
+/// a pipeline reorder cannot diverge the diagnostic.
+fn refuse_pattern_node(
+    node: &Node<'_>,
     const_names: &BTreeSet<&str>,
     decl_span: &Span,
     errors: &mut Vec<(Span, String)>,
 ) {
     use morpholog_core::Prop;
-    match prop {
-        Prop::Claim { predicate, args } => {
-            let shape = format!("the `{predicate}` claim pattern");
-            refuse_pattern_slot(args, &shape, const_names, decl_span, errors);
-        }
-        // Unreachable in the parse pipeline (defined calls are still
-        // claim-shaped here; resolution runs after this pass), kept
-        // for exhaustiveness with the wording the Claim arm uses, so
-        // a future pipeline reorder cannot diverge the diagnostic.
-        Prop::Defined { name, args } => {
-            let shape = format!("the `{name}` claim pattern");
-            refuse_pattern_slot(args, &shape, const_names, decl_span, errors);
-        }
-        Prop::In(_, _) => {}
-        Prop::And(props) | Prop::Or(props) => {
-            for p in props {
-                refuse_pattern_positions_in_prop(p, const_names, decl_span, errors);
-            }
-        }
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            refuse_pattern_positions_in_prop(left, const_names, decl_span, errors);
-            refuse_pattern_positions_in_prop(right, const_names, decl_span, errors);
-        }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => {
-            refuse_pattern_positions_in_prop(p, const_names, decl_span, errors);
-        }
-        Prop::Forall { source, body, .. } => {
-            refuse_pattern_positions_in_prop(source, const_names, decl_span, errors);
-            refuse_pattern_positions_in_prop(body, const_names, decl_span, errors);
-        }
-        Prop::Eq(l, r) | Prop::Neq(l, r) => {
-            refuse_pattern_positions_in_value(l, const_names, decl_span, errors);
-            refuse_pattern_positions_in_value(r, const_names, decl_span, errors);
-        }
-        Prop::Compare { left, right, .. } => {
-            refuse_pattern_positions_in_value(left, const_names, decl_span, errors);
-            refuse_pattern_positions_in_value(right, const_names, decl_span, errors);
-        }
-    }
-}
-
-fn refuse_pattern_positions_in_value(
-    expr: &ValueExpr,
-    const_names: &BTreeSet<&str>,
-    decl_span: &Span,
-    errors: &mut Vec<(Span, String)>,
-) {
-    match expr {
-        ValueExpr::Term(_) => {}
-        ValueExpr::Arith { left, right, .. } => {
-            refuse_pattern_positions_in_value(left, const_names, decl_span, errors);
-            refuse_pattern_positions_in_value(right, const_names, decl_span, errors);
-        }
-        // The sum target never binds (it is consumed against the
-        // body's bindings), but constructs nested inside it can carry
-        // their own pattern positions, so both sides are scanned.
-        ValueExpr::Sum { value, body, .. } => {
-            refuse_pattern_positions_in_value(value, const_names, decl_span, errors);
-            refuse_pattern_positions_in_prop(body, const_names, decl_span, errors);
-        }
-        ValueExpr::Extremum { body, .. } => {
-            refuse_pattern_positions_in_prop(body, const_names, decl_span, errors);
-        }
-        // ValueOf keys are ground lookups - they never bind.
-        ValueExpr::ValueOf { default, .. } => {
-            if let Some(d) = default {
-                refuse_pattern_positions_in_value(d, const_names, decl_span, errors);
-            }
-        }
-        ValueExpr::Call { args, .. } => {
-            for a in args {
-                refuse_pattern_positions_in_value(a, const_names, decl_span, errors);
-            }
-        }
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            refuse_pattern_positions_in_prop(when, const_names, decl_span, errors);
-            refuse_pattern_positions_in_value(then, const_names, decl_span, errors);
-            refuse_pattern_positions_in_value(otherwise, const_names, decl_span, errors);
-        }
-    }
-}
-
-fn refuse_pattern_positions_in_stmt(
-    stmt: &Stmt,
-    const_names: &BTreeSet<&str>,
-    decl_span: &Span,
-    errors: &mut Vec<(Span, String)>,
-) {
-    match stmt {
-        // `bind` patterns bind; require's props carry claim patterns.
-        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => {
-            refuse_pattern_positions_in_prop(p, const_names, decl_span, errors);
-        }
-        Stmt::Let { value, .. } => {
-            refuse_pattern_positions_in_value(value, const_names, decl_span, errors);
-        }
-        // Constructive and resolved-use slots: admit/emit build claims,
-        // retract resolves its arguments against bindings - none bind.
-        Stmt::LetNewSubject { .. } | Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) => {}
-        Stmt::For {
-            collection, body, ..
-        } => {
-            refuse_pattern_positions_in_value(collection, const_names, decl_span, errors);
-            for s in body {
-                refuse_pattern_positions_in_stmt(s, const_names, decl_span, errors);
-            }
-        }
-    }
+    let Node::Prop(prop) = node else { return };
+    let (shape, args) = match prop {
+        Prop::Claim { predicate, args } => (format!("the `{predicate}` claim pattern"), args),
+        Prop::Defined { name, args } => (format!("the `{name}` claim pattern"), args),
+        _ => return,
+    };
+    refuse_pattern_slot(args, &shape, const_names, decl_span, errors);
 }
