@@ -69,15 +69,28 @@ pub fn lower_discipline_definitions(program: &mut Program) {
     program.definitions.extend(generated);
 }
 
-pub fn lower_disciplines(program: &mut Program) {
-    let mut generated: Vec<Invariant> = Vec::new();
+/// One uniqueness commitment a discipline clause implies: the
+/// declaration it constrains (the lineage predicate for `superseded
+/// via`, the declaring one otherwise) and the key fields, with the
+/// clause and the declaration that carried it. A clause that cannot
+/// lower - an unknown or ill-shaped lineage - yields nothing; the
+/// validator owns that diagnostic. Declaration order, so every
+/// consumer sees the commitments in the order the generated invariant
+/// names appear in rejections and audit rows.
+struct Uniqueness<'p> {
+    target: &'p PredicateDecl,
+    fields: Vec<String>,
+    declared_on: &'p PredicateDecl,
+    clause: &'p Discipline,
+}
+
+fn uniqueness_clauses(program: &Program) -> Vec<Uniqueness<'_>> {
+    let mut out = Vec::new();
     for decl in &program.predicates {
-        for discipline in &decl.disciplines {
-            match discipline {
+        for clause in &decl.disciplines {
+            let (target, fields) = match clause {
                 Discipline::UniqueBy { fields } | Discipline::CurrentPointerBy { fields } => {
-                    if let Some(inv) = unique_invariant(decl, fields) {
-                        generated.push(inv);
-                    }
+                    (decl, fields.clone())
                 }
                 // The clause claims one version per key per date, so it
                 // owes the invariant that makes that true. Without it two
@@ -88,11 +101,8 @@ pub fn lower_disciplines(program: &mut Program) {
                 Discipline::EffectiveBy { keys, on, .. } => {
                     let mut fields = keys.clone();
                     fields.push(on.clone());
-                    if let Some(inv) = unique_invariant(decl, &fields) {
-                        generated.push(inv);
-                    }
+                    (decl, fields)
                 }
-                Discipline::AppendOnly => {}
                 Discipline::SupersededVia { lineage } => {
                     let Some(lineage_decl) = program.predicates.iter().find(|p| p.name == *lineage)
                     else {
@@ -101,14 +111,26 @@ pub fn lower_disciplines(program: &mut Program) {
                     if lineage_decl.args.len() != 2 {
                         continue;
                     }
-                    let prior_field = lineage_decl.args[1].name.clone();
-                    if let Some(inv) = unique_invariant(lineage_decl, &[prior_field]) {
-                        generated.push(inv);
-                    }
+                    (lineage_decl, vec![lineage_decl.args[1].name.clone()])
                 }
-            }
+                Discipline::AppendOnly => continue,
+            };
+            out.push(Uniqueness {
+                target,
+                fields,
+                declared_on: decl,
+                clause,
+            });
         }
     }
+    out
+}
+
+pub fn lower_disciplines(program: &mut Program) {
+    let generated: Vec<Invariant> = uniqueness_clauses(program)
+        .iter()
+        .filter_map(|u| unique_invariant(u.target, &u.fields))
+        .collect();
     // Generated invariants go FIRST: a discipline is a precondition of
     // sense for the authored rules (uniqueness is what makes lookups
     // and aggregates well-defined), so when a proposal violates both,
@@ -346,46 +368,16 @@ fn unique_invariant(decl: &PredicateDecl, fields: &[String]) -> Option<Invariant
 /// as the lowering, so the expectation and the generation cannot
 /// drift.
 pub(crate) fn expected_generated_invariants(program: &Program) -> Vec<(PredicateName, String)> {
-    let mut out = Vec::new();
-    for decl in &program.predicates {
-        for discipline in &decl.disciplines {
-            match discipline {
-                Discipline::UniqueBy { fields } | Discipline::CurrentPointerBy { fields } => {
-                    if unique_invariant(decl, fields).is_some() {
-                        out.push((decl.name.clone(), unique_invariant_name(&decl.name, fields)));
-                    }
-                }
-                Discipline::EffectiveBy { keys, on, .. } => {
-                    let mut fields = keys.clone();
-                    fields.push(on.clone());
-                    if unique_invariant(decl, &fields).is_some() {
-                        out.push((
-                            decl.name.clone(),
-                            unique_invariant_name(&decl.name, &fields),
-                        ));
-                    }
-                }
-                Discipline::AppendOnly => {}
-                Discipline::SupersededVia { lineage } => {
-                    let Some(lineage_decl) = program.predicates.iter().find(|p| p.name == *lineage)
-                    else {
-                        continue;
-                    };
-                    if lineage_decl.args.len() != 2 {
-                        continue;
-                    }
-                    let prior = vec![lineage_decl.args[1].name.clone()];
-                    if unique_invariant(lineage_decl, &prior).is_some() {
-                        out.push((
-                            lineage_decl.name.clone(),
-                            unique_invariant_name(&lineage_decl.name, &prior),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    out
+    uniqueness_clauses(program)
+        .iter()
+        .filter(|u| unique_invariant(u.target, &u.fields).is_some())
+        .map(|u| {
+            (
+                u.target.name.clone(),
+                unique_invariant_name(&u.target.name, &u.fields),
+            )
+        })
+        .collect()
 }
 
 /// Generated-invariant-name -> the declaration clause that implied it,
@@ -395,52 +387,29 @@ pub(crate) fn expected_generated_invariants(program: &Program) -> Vec<(Predicate
 pub(crate) fn discipline_provenance(
     program: &Program,
 ) -> std::collections::HashMap<String, String> {
-    let mut out = std::collections::HashMap::new();
-    for decl in &program.predicates {
-        for discipline in &decl.disciplines {
-            match discipline {
-                Discipline::EffectiveBy { .. } => {}
+    uniqueness_clauses(program)
+        .iter()
+        .filter(|u| unique_invariant(u.target, &u.fields).is_some())
+        .filter_map(|u| {
+            let declared = &u.declared_on.name;
+            let clause = match u.clause {
                 Discipline::UniqueBy { fields } => {
-                    if unique_invariant(decl, fields).is_some() {
-                        out.insert(
-                            unique_invariant_name(&decl.name, fields),
-                            format!("predicate {}, unique by ({})", decl.name, fields.join(", ")),
-                        );
-                    }
+                    format!("predicate {declared}, unique by ({})", fields.join(", "))
                 }
                 Discipline::CurrentPointerBy { fields } => {
-                    if unique_invariant(decl, fields).is_some() {
-                        out.insert(
-                            unique_invariant_name(&decl.name, fields),
-                            format!(
-                                "predicate {}, current pointer by ({})",
-                                decl.name,
-                                fields.join(", ")
-                            ),
-                        );
-                    }
+                    format!(
+                        "predicate {declared}, current pointer by ({})",
+                        fields.join(", ")
+                    )
                 }
-                Discipline::AppendOnly => {}
                 Discipline::SupersededVia { lineage } => {
-                    let Some(lineage_decl) = program.predicates.iter().find(|l| l.name == *lineage)
-                    else {
-                        continue;
-                    };
-                    if lineage_decl.args.len() != 2 {
-                        continue;
-                    }
-                    let prior = vec![lineage_decl.args[1].name.clone()];
-                    if unique_invariant(lineage_decl, &prior).is_some() {
-                        out.insert(
-                            unique_invariant_name(&lineage_decl.name, &prior),
-                            format!("predicate {}, superseded via {}", decl.name, lineage),
-                        );
-                    }
+                    format!("predicate {declared}, superseded via {lineage}")
                 }
-            }
-        }
-    }
-    out
+                Discipline::EffectiveBy { .. } | Discipline::AppendOnly => return None,
+            };
+            Some((unique_invariant_name(&u.target.name, &u.fields), clause))
+        })
+        .collect()
 }
 
 /// The predicates no transformation may retract: those declared

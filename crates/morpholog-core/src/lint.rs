@@ -796,8 +796,7 @@ mod tests {
     }
 
     fn positives_in(prop: &Prop) -> BTreeSet<crate::PredicateName> {
-        let out = positive_claims_of(prop, DefinitionTable::new(&[]));
-        out
+        positive_claims_of(prop, DefinitionTable::new(&[]))
     }
 
     /// `not` flips claim polarity, and flips it back when doubled.

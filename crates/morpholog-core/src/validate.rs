@@ -1055,7 +1055,7 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
     // A parameter is one binding slot in the call frame, so a repeated
     // name would let the later argument silently overwrite the earlier.
     for def in &p.definitions {
-        for parameter in duplicated(def.parameters.iter().map(|p| p.as_str())) {
+        for parameter in duplicated(def.parameters.iter().map(crate::ir::Var::as_str)) {
             errors.push(ValidationError::DuplicateParameter {
                 definition: def.name.to_string(),
                 parameter: parameter.to_string(),
