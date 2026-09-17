@@ -1,5 +1,5 @@
 use crate::error::{PgError, classify_checked_query};
-use crate::propose::compute_load_scope;
+use crate::propose::{Reads, compute_load_scope};
 use morpholog_core::{ClaimInstance, CompiledProgram, PredicateName, State, Transformation};
 use sqlx::PgPool;
 /// Return every currently-admitted claim from `morpholog.claims`.
@@ -192,11 +192,17 @@ pub async fn load_scoped_state(
     transformation: &Transformation,
 ) -> Result<State, PgError> {
     let program = compiled.program();
-    let scope: Vec<String> =
-        compute_load_scope(transformation, &program.invariants, &program.definitions)
-            .into_iter()
-            .map(|p| p.to_string())
-            .collect();
+    // A diagnostic read: the explanation runs the interpreter, so the
+    // invariants' predicates are loaded whatever the programme's plan.
+    let scope: Vec<String> = compute_load_scope(
+        transformation,
+        &program.invariants,
+        &program.definitions,
+        Reads::BodyAndInvariants,
+    )
+    .into_iter()
+    .map(|p| p.to_string())
+    .collect();
     let claims = list_claims_for_predicates(pool, &scope).await?;
     Ok(State::from_claims(claims))
 }

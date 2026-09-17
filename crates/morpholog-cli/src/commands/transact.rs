@@ -69,7 +69,8 @@ pub(crate) fn decode_acts(
 /// error, 3 when the commit outcome is unknown.
 pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
-    let compiled = compile_or_report(&parsed)?;
+    let program = morpholog_postgres::PgProgram::new(compile_or_report(&parsed)?);
+    let compiled = program.core();
     let input = if args.acts == std::path::Path::new("-") {
         let mut buf = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
@@ -95,13 +96,13 @@ pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
                 .map_err(|e| RowError::coded(envelopes::ProposeCode::InvalidRequest, e))
         })
         .collect();
-    let proposals = match rows.and_then(|rows| decode_acts(&args.file, &compiled, rows)) {
+    let proposals = match rows.and_then(|rows| decode_acts(&args.file, compiled, rows)) {
         Ok(proposals) => proposals,
         Err(failure) => return report_failure(failure),
     };
 
     let pool = connect(&args.db.database_url).await?;
-    match propose_all_against_pg(&pool, &compiled, &proposals).await {
+    match propose_all_against_pg(&pool, &program, &proposals).await {
         Ok(outcome) => {
             print_json(&outcome)?;
             match outcome {

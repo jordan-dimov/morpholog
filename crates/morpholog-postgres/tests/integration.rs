@@ -2260,7 +2260,7 @@ async fn load_scoped_state_loads_only_in_scope_predicates() {
 
     let state = load_scoped_state(
         &pool,
-        &common::compiled(settlement_netting::program()),
+        common::compiled(settlement_netting::program()).core(),
         &settlement_netting::create_net_settlement(),
     )
     .await

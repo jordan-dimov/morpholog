@@ -368,7 +368,7 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
 }
 
 /// The `--verbose` success summary: programme name, a count per
-/// declaration kind, and the invariant plan - compiled to SQL when
+/// declaration kind, and how the invariants are checked - compiled to SQL when
 /// every invariant is inside the fragment, interpreted otherwise with
 /// each refusal named - echoing the file path the caller passed.
 fn summary(program: &PgProgram, file: &Path) -> String {
@@ -385,9 +385,9 @@ fn summary(program: &PgProgram, file: &Path) -> String {
         p.derived_claims.len(),
     );
     match program.plan() {
-        InvariantPlan::Compiled { .. } => out.push_str("  invariant plan: compiled\n"),
+        InvariantPlan::Compiled { .. } => out.push_str("  invariant checks: compiled\n"),
         InvariantPlan::Interpreted { refusals } => {
-            out.push_str("  invariant plan: interpreted\n");
+            out.push_str("  invariant checks: interpreted\n");
             for refusal in refusals {
                 out.push_str(&format!("    {}: {}\n", refusal.invariant, refusal.reason));
             }
@@ -407,7 +407,7 @@ mod tests {
         let s = summary(&p, Path::new("demo.morph"));
         assert_eq!(
             s,
-            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant plan: compiled\n"
+            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant checks: compiled\n"
         );
     }
 }
