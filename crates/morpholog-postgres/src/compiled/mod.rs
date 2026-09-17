@@ -49,7 +49,7 @@ use std::fmt::Write as _;
 use rust_decimal::Decimal;
 
 use morpholog_core::{
-    ClaimInstance, EvalValue, Invariant, InvariantName, OrderedDomain, PredicateArgKind,
+    ClaimInstance, EvalError, EvalValue, Invariant, InvariantName, OrderedDomain, PredicateArgKind,
     PredicateDecl, PredicateName, Prop, SumSeed, Term, ValidatedProgram, Value, ValueExpr, Var,
     WitnessBinding,
 };
@@ -206,6 +206,21 @@ impl CompiledInvariantSet {
                 .await
                 .map_err(classify)?;
             if let Some(row) = row {
+                let range_error: bool = row.try_get("range_error").map_err(|e| {
+                    PgError::InvalidState(format!("range_error column missing: {e}"))
+                })?;
+                if range_error {
+                    return Err(PgError::Kernel(EvalError::sum_out_of_decimal_range()));
+                }
+                if let Some(range_sql) = &inv.sql_range {
+                    let any = sqlx::query(sqlx::AssertSqlSafe(range_sql.clone()))
+                        .fetch_optional(&mut **tx)
+                        .await
+                        .map_err(classify)?;
+                    if any.is_some() {
+                        return Err(PgError::Kernel(EvalError::sum_out_of_decimal_range()));
+                    }
+                }
                 return Ok(Some(SqlViolation {
                     name: inv.name.clone(),
                     version: inv.version,
@@ -371,6 +386,13 @@ pub(crate) struct CompiledInvariant {
     case_cols: BTreeMap<Var, ColRef>,
     sql_select_from_where: String,
     sql_order_limit: String,
+    /// Whether any row in the invariant's scope has an unrepresentable
+    /// sum, asked only after the violation query returned a violation:
+    /// that query stops at its first row in witness order, and the
+    /// range error must dominate a violation that merely sorts earlier.
+    /// `None` when the invariant has no sum, or its violation query
+    /// already answers over the whole scope.
+    sql_range: Option<String>,
     /// The indexes this invariant's SQL can seek on, in specification
     /// order.
     pub(crate) required_indexes: Vec<IndexSpec>,
@@ -393,6 +415,11 @@ impl CompiledInvariant {
         }
         sql.push_str(&self.sql_order_limit);
         sql
+    }
+
+    #[cfg(test)]
+    pub(crate) fn range_sql(&self) -> Option<&str> {
+        self.sql_range.as_deref()
     }
 
     /// Bound the check to the cases a delta could have changed. Sound by
@@ -500,35 +527,119 @@ struct Ctx<'a> {
     /// filters or joins on - the index specification, collected where
     /// the extractor is emitted so both come from the same object.
     required: BTreeSet<(PredicateName, usize, Representation)>,
+    /// Sums rendered while a comparison's operands were being rendered:
+    /// the comparison collects them into its own rendering.
+    pending_sums: Vec<RenderedSum>,
 }
 
+/// One sum, computed once per row of the scope it sits in as a LATERAL
+/// item, with the representability test of its total.
+struct RenderedSum {
+    lateral: String,
+    range_error: String,
+}
+
+/// A scope's rendering. `where_` holds the conjuncts before any sum
+/// comparison; `tail` is that comparison, the last conjunct of its
+/// scope, with the sums it reads in `laterals` and each total's
+/// representability in `range_errors`. Keeping the tail apart is what
+/// lets a violation query put the range error where the kernel
+/// evaluates the sum: reached only past the prefix, dominating the
+/// comparison once reached.
+#[derive(Default)]
 struct Rendered {
     from: Vec<(String, String)>, // (alias, from item)
+    laterals: Vec<String>,
     where_: Vec<String>,
+    tail: Option<String>,
+    range_errors: Vec<String>,
     env: Env,
 }
 
 impl Rendered {
+    fn has_sum(&self) -> bool {
+        !self.range_errors.is_empty()
+    }
+
+    /// The prefix conjuncts, or `true` when there are none.
+    fn prefix(&self) -> String {
+        if self.where_.is_empty() {
+            "true".to_string()
+        } else {
+            self.where_.join(" AND ")
+        }
+    }
+
+    /// Any of this scope's sums unrepresentable, or `false`.
+    fn range_error(&self) -> String {
+        if self.range_errors.is_empty() {
+            "false".to_string()
+        } else {
+            format!("({})", self.range_errors.join(" OR "))
+        }
+    }
+
     fn conjunction(&self) -> String {
-        self.where_.join(" AND ")
+        self.where_
+            .iter()
+            .chain(self.tail.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" AND ")
     }
 
     /// `EXISTS`-shaped rendering of this match, usable inside a WHERE.
+    /// Never reached with a sum in scope: those shapes are refused
+    /// before rendering nests them.
     fn exists_sql(&self) -> String {
-        if self.from.is_empty() {
+        if self.from.is_empty() && self.laterals.is_empty() {
             format!("({})", self.conjunction())
         } else {
             format!(
                 "EXISTS (SELECT 1 FROM {} WHERE {})",
-                self.from
-                    .iter()
-                    .map(|(_, f)| f.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                from_list(self),
                 self.conjunction()
             )
         }
     }
+}
+
+/// The total is a representable decimal iff, normalised, its scale is
+/// at most 28 and its coefficient fits 96 bits - the kernel's own
+/// test on its wide accumulator. Data, never a thrown error, so the
+/// planner's evaluation order cannot change what the query reports.
+/// Conjunction without the `true` an absent part contributes.
+fn and_all(parts: &[String]) -> String {
+    let live: Vec<&str> = parts
+        .iter()
+        .map(String::as_str)
+        .filter(|p| *p != "true")
+        .collect();
+    match live.len() {
+        0 => "true".to_string(),
+        1 => live[0].to_string(),
+        _ => format!("({})", live.join(" AND ")),
+    }
+}
+
+/// Disjunction without the `false` an absent part contributes.
+fn or_all(parts: &[String]) -> String {
+    let live: Vec<&str> = parts
+        .iter()
+        .map(String::as_str)
+        .filter(|p| *p != "false")
+        .collect();
+    match live.len() {
+        0 => "false".to_string(),
+        1 => live[0].to_string(),
+        _ => format!("({})", live.join(" OR ")),
+    }
+}
+
+fn range_error_sql(total: &str) -> String {
+    format!(
+        "NOT (min_scale({total}) <= 28 AND abs({total}) * power(10::numeric, min_scale({total})) < 79228162514264337593543950336::numeric)"
+    )
 }
 
 fn compile_invariant(
@@ -540,9 +651,10 @@ fn compile_invariant(
         counter: 0,
         occurrences: Vec::new(),
         required: BTreeSet::new(),
+        pending_sums: Vec::new(),
     };
 
-    let (select_from_where, order_limit, case_cols) = match &inv.body {
+    let (select_from_where, order_limit, sql_range, case_cols) = match &inv.body {
         Prop::Implies { left, right } => compile_denial(left, right, &mut ctx)?,
         Prop::Forall {
             binding: _,
@@ -558,14 +670,26 @@ fn compile_invariant(
             if r.from.is_empty() {
                 generic_denial(&inv.body, &mut ctx)?
             } else {
+                // Violated iff the inner matches: past the prefix, a
+                // range error or a holding tail.
                 let (select, order) = witness_select_order(&r);
+                let violated = or_all(&[
+                    r.range_error(),
+                    r.tail.clone().unwrap_or_else(|| "true".to_string()),
+                ]);
+                let mut where_ = r.where_.clone();
+                if violated != "true" {
+                    where_.push(violated);
+                }
                 (
                     format!(
-                        "SELECT {select}\nFROM {}\nWHERE {}",
+                        "SELECT {select},\n       {} AS \"range_error\"\nFROM {}\nWHERE {}",
+                        r.range_error(),
                         from_list(&r),
-                        r.where_.join("\n  AND ")
+                        where_.join("\n  AND ")
                     ),
                     format!("\nORDER BY {order}\nLIMIT 1"),
+                    range_query(&r),
                     r.env,
                 )
             }
@@ -598,6 +722,7 @@ fn compile_invariant(
         case_cols,
         sql_select_from_where: select_from_where,
         sql_order_limit: order_limit,
+        sql_range,
         required_indexes: ctx
             .required
             .iter()
@@ -608,11 +733,9 @@ fn compile_invariant(
 
 /// The dominant shape: `antecedent implies consequent`. Violation = an
 /// antecedent match with no consequent match.
-fn compile_denial(
-    left: &Prop,
-    right: &Prop,
-    ctx: &mut Ctx<'_>,
-) -> Result<(String, String, Env), CompileReason> {
+type Denial = (String, String, Option<String>, Env);
+
+fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReason> {
     let ant = render_prop(left, Env::new(), ctx)?;
     if ant.from.is_empty() {
         // Filter-only antecedent: no generators to witness; use the
@@ -620,32 +743,108 @@ fn compile_denial(
         return generic_denial_implies(left, right, ctx);
     }
     let cons = render_prop(right, ant.env.clone(), ctx)?;
-    let not_cons = if cons.from.is_empty() {
+    if cons.has_sum() && !cons.from.is_empty() {
+        return Err(CompileReason::SumShape {
+            detail: "sum beside claim patterns in a consequent",
+        });
+    }
+    // Reached past the antecedent's prefix: the antecedent's own range
+    // error, or its tail holding and the consequent failing. A
+    // consequent's range error counts only once its prefix holds; a
+    // failing prefix is an ordinary violation that never reaches the
+    // sum.
+    let ant_tail = ant.tail.clone().unwrap_or_else(|| "true".to_string());
+    let cons_range = if cons.has_sum() {
+        and_all(&[cons.prefix(), cons.range_error()])
+    } else {
+        "false".to_string()
+    };
+    let not_cons = if cons.has_sum() {
+        format!(
+            "NOT {}",
+            and_all(&[
+                cons.prefix(),
+                cons.tail.clone().unwrap_or_else(|| "true".to_string())
+            ])
+        )
+    } else if cons.from.is_empty() {
         format!("NOT ({})", cons.conjunction())
     } else {
         format!("NOT {}", cons.exists_sql())
     };
+    let range_error = or_all(&[ant.range_error(), and_all(&[ant_tail.clone(), cons_range])]);
     let (select, order) = witness_select_order(&ant);
     let mut where_ = ant.where_.clone();
-    where_.push(not_cons);
+    where_.push(or_all(&[
+        range_error.clone(),
+        and_all(&[ant_tail, not_cons]),
+    ]));
+    let mut scope = Rendered {
+        from: ant.from.clone(),
+        laterals: ant.laterals.clone(),
+        where_: ant.where_.clone(),
+        range_errors: Vec::new(),
+        ..Rendered::default()
+    };
+    scope.laterals.extend(cons.laterals.iter().cloned());
+    if range_error != "false" {
+        scope.range_errors.push(range_error.clone());
+    }
     Ok((
         format!(
-            "SELECT {select}\nFROM {}\nWHERE {}",
-            from_list(&ant),
+            "SELECT {select},\n       {range_error} AS \"range_error\"\nFROM {}\nWHERE {}",
+            from_list(&scope),
             where_.join("\n  AND ")
         ),
         format!("\nORDER BY {order}\nLIMIT 1"),
+        range_query(&scope),
         ant.env,
+    ))
+}
+
+/// Whether any row of the scope has a range error, over the whole
+/// scope and in no order. `None` when nothing in scope can have one.
+fn range_query(scope: &Rendered) -> Option<String> {
+    if !scope.has_sum() {
+        return None;
+    }
+    Some(format!(
+        "SELECT 1\nFROM {}\nWHERE {}\nLIMIT 1",
+        from_list(scope),
+        and_all(&[scope.prefix(), scope.range_error()])
     ))
 }
 
 /// Any other top-level shape: the invariant holds iff the body matches at
 /// all, so violation is bare non-existence, with an empty witness.
-fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<(String, String, Env), CompileReason> {
+fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReason> {
     let r = render_prop(body, Env::new(), ctx)?;
+    if !r.has_sum() {
+        return Ok((
+            format!(
+                "SELECT 1 AS \"w\", false AS \"range_error\"\nWHERE NOT {}",
+                r.exists_sql()
+            ),
+            String::new(),
+            None,
+            Env::new(),
+        ));
+    }
+    // The kernel evaluates the sum for every prefix match, so a range
+    // error anywhere dominates; otherwise the body must match somewhere.
+    let scope = |condition: String| {
+        format!(
+            "EXISTS (SELECT 1 FROM {} WHERE {})",
+            from_list(&r),
+            and_all(&[r.prefix(), condition])
+        )
+    };
+    let range = scope(r.range_error());
+    let holds = scope(r.tail.clone().unwrap_or_else(|| "true".to_string()));
     Ok((
-        format!("SELECT 1 AS \"w\"\nWHERE NOT {}", r.exists_sql()),
+        format!("SELECT 1 AS \"w\", {range} AS \"range_error\"\nWHERE {range} OR NOT {holds}"),
         String::new(),
+        None,
         Env::new(),
     ))
 }
@@ -654,9 +853,14 @@ fn generic_denial_implies(
     left: &Prop,
     right: &Prop,
     ctx: &mut Ctx<'_>,
-) -> Result<(String, String, Env), CompileReason> {
+) -> Result<Denial, CompileReason> {
     let l = render_prop(left, Env::new(), ctx)?;
     let r = render_prop(right, l.env.clone(), ctx)?;
+    if l.has_sum() || r.has_sum() {
+        return Err(CompileReason::SumShape {
+            detail: "sum in a filter-only implication",
+        });
+    }
     let not_r = if r.from.is_empty() {
         format!("NOT ({})", r.conjunction())
     } else {
@@ -667,11 +871,15 @@ fn generic_denial_implies(
     let violated = Rendered {
         from: l.from,
         where_,
-        env: Env::new(),
+        ..Rendered::default()
     };
     Ok((
-        format!("SELECT 1 AS \"w\"\nWHERE {}", violated.exists_sql()),
+        format!(
+            "SELECT 1 AS \"w\", false AS \"range_error\"\nWHERE {}",
+            violated.exists_sql()
+        ),
         String::new(),
+        None,
         Env::new(),
     ))
 }
@@ -680,6 +888,7 @@ fn from_list(r: &Rendered) -> String {
     r.from
         .iter()
         .map(|(_, f)| f.as_str())
+        .chain(r.laterals.iter().map(String::as_str))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -851,42 +1060,53 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
         Prop::Claim { predicate, args } => render_claim(predicate, args, env, ctx),
         Prop::And(ps) => {
             let mut acc = Rendered {
-                from: Vec::new(),
-                where_: Vec::new(),
                 env,
+                ..Rendered::default()
             };
             for p in ps {
+                if acc.tail.is_some() {
+                    // The kernel evaluates a later conjunct only for
+                    // bindings the sum comparison admitted; the query
+                    // computes every row's sum. Only a closing sum
+                    // comparison has one evaluation boundary.
+                    return Err(CompileReason::SumShape {
+                        detail: "a sum comparison must be the last conjunct of its scope",
+                    });
+                }
                 let r = render_prop(p, acc.env.clone(), ctx)?;
                 acc.from.extend(r.from);
+                acc.laterals.extend(r.laterals);
                 acc.where_.extend(r.where_);
+                acc.range_errors.extend(r.range_errors);
+                acc.tail = r.tail;
                 acc.env = r.env;
             }
             Ok(acc)
         }
         Prop::Not(inner) => {
-            let r = render_prop(inner, env.clone(), ctx)?;
+            let r = nested_scope(render_prop(inner, env.clone(), ctx)?)?;
             let clause = if r.from.is_empty() {
                 format!("NOT ({})", r.conjunction())
             } else {
                 format!("NOT {}", r.exists_sql())
             };
             Ok(Rendered {
-                from: Vec::new(),
                 where_: vec![clause],
                 env,
+                ..Rendered::default()
             })
         }
         Prop::Exists { binding: _, body } => {
-            let r = render_prop(body, env.clone(), ctx)?;
+            let r = nested_scope(render_prop(body, env.clone(), ctx)?)?;
             Ok(Rendered {
-                from: Vec::new(),
                 where_: vec![r.exists_sql()],
                 env,
+                ..Rendered::default()
             })
         }
         Prop::Implies { left, right } => {
-            let l = render_prop(left, env.clone(), ctx)?;
-            let r = render_prop(right, l.env.clone(), ctx)?;
+            let l = nested_scope(render_prop(left, env.clone(), ctx)?)?;
+            let r = nested_scope(render_prop(right, l.env.clone(), ctx)?)?;
             let not_r = if r.from.is_empty() {
                 format!("NOT ({})", r.conjunction())
             } else {
@@ -897,12 +1117,12 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             let violated = Rendered {
                 from: l.from,
                 where_,
-                env: Env::new(),
+                ..Rendered::default()
             };
             Ok(Rendered {
-                from: Vec::new(),
                 where_: vec![format!("NOT {}", violated.exists_sql())],
                 env,
+                ..Rendered::default()
             })
         }
         Prop::Forall {
@@ -1014,7 +1234,21 @@ fn render_claim(
         from: vec![(alias.clone(), format!("morpholog.claims {alias}"))],
         where_,
         env,
+        ..Rendered::default()
     })
+}
+
+/// A scope the query evaluates by existence (a nested negation,
+/// exists or implication) may stop at its first match, where the
+/// kernel evaluates every binding of a sum's scope; no sum compiles
+/// under one.
+fn nested_scope(r: Rendered) -> Result<Rendered, CompileReason> {
+    if r.has_sum() {
+        return Err(CompileReason::SumShape {
+            detail: "sum under a nested scope",
+        });
+    }
+    Ok(r)
 }
 
 fn compare_sql(
@@ -1026,10 +1260,21 @@ fn compare_sql(
 ) -> Result<Rendered, CompileReason> {
     let a_sql = value_sql(a, env, ctx)?;
     let b_sql = value_sql(b, env, ctx)?;
+    let clause = format!("({a_sql}) {op} ({b_sql})");
+    let sums = std::mem::take(&mut ctx.pending_sums);
+    if sums.is_empty() {
+        return Ok(Rendered {
+            where_: vec![clause],
+            env: env.clone(),
+            ..Rendered::default()
+        });
+    }
     Ok(Rendered {
-        from: Vec::new(),
-        where_: vec![format!("({a_sql}) {op} ({b_sql})")],
+        laterals: sums.iter().map(|s| s.lateral.clone()).collect(),
+        tail: Some(clause),
+        range_errors: sums.into_iter().map(|s| s.range_error).collect(),
         env: env.clone(),
+        ..Rendered::default()
     })
 }
 
@@ -1061,6 +1306,11 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<String, C
                     detail: "body binds no claims",
                 });
             }
+            if r.has_sum() {
+                return Err(CompileReason::SumShape {
+                    detail: "sum within a sum body",
+                });
+            }
             // The compiled sum target is a bound decimal variable or a
             // decimal literal - the pre-expression-target shape. A
             // computed target refuses.
@@ -1088,15 +1338,20 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<String, C
                     });
                 }
             };
-            Ok(format!(
-                "COALESCE((SELECT sum({val}) FROM {} WHERE {}), 0::numeric)",
-                r.from
-                    .iter()
-                    .map(|(_, f)| f.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                r.conjunction()
-            ))
+            // Computed once per row of the enclosing scope, so the
+            // comparison and the representability test read one total.
+            let alias = format!("l{}", ctx.counter);
+            ctx.counter += 1;
+            let total = format!("{alias}.s");
+            ctx.pending_sums.push(RenderedSum {
+                lateral: format!(
+                    "LATERAL (SELECT COALESCE(sum({val}), 0::numeric) AS s FROM {} WHERE {}) {alias}",
+                    from_list(&r),
+                    r.conjunction()
+                ),
+                range_error: range_error_sql(&total),
+            });
+            Ok(total)
         }
         ValueExpr::Arith { .. } => Err(CompileReason::Construct {
             construct: "arithmetic",

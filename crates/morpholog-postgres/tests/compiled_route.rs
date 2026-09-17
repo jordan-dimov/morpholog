@@ -17,7 +17,9 @@
 mod common;
 
 use common::{attested, reset_db, test_pool};
-use morpholog_core::{ClaimInstance, CompiledProgram, Program, Subject, Transition};
+use morpholog_core::{
+    ClaimInstance, CompiledProgram, EvalError, EvalValue, Program, Subject, Transition,
+};
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     InvariantPlan, PgAtomicOutcome, PgError, PgPool, PgProgram, PgProposalOutcome, Proposal,
@@ -73,17 +75,28 @@ struct Observed {
     outbox: i64,
 }
 
+/// A route's answer, typed: a decision with what it left behind, the
+/// kernel's own evaluation error, or an operational failure.
+#[derive(Debug, PartialEq, Eq)]
+enum RouteObservation {
+    Decided(Observed),
+    Kernel(EvalError),
+    Operational(String),
+}
+
 async fn observe(
     pool: &PgPool,
     program: &PgProgram,
     seeded: &[ClaimInstance],
     transition: &Transition,
-) -> Result<Observed, String> {
+) -> RouteObservation {
     reset_db(pool).await;
     seed(pool, seeded).await;
-    let outcome = propose_against_pg(pool, program, &attested(transition))
-        .await
-        .map_err(|e| e.to_string())?;
+    let outcome = match propose_against_pg(pool, program, &attested(transition)).await {
+        Ok(outcome) => outcome,
+        Err(PgError::Kernel(e)) => return RouteObservation::Kernel(e),
+        Err(e) => return RouteObservation::Operational(format!("{e:?}")),
+    };
     let outcome = match outcome {
         PgProposalOutcome::Committed {
             asserted_claims,
@@ -125,7 +138,7 @@ async fn observe(
             ))
         })
         .reduce(|a, b| format!("{a}\n{b}"));
-    Ok(Observed {
+    RouteObservation::Decided(Observed {
         outcome,
         rejection,
         audit: audit_invariants_checked(pool).await,
@@ -137,7 +150,8 @@ async fn observe(
 #[tokio::test]
 async fn both_routes_reach_the_same_decision_over_the_gallery() {
     let pool = test_pool().await;
-    let (mut cases, mut commits, mut refusals, mut skipped) = (0usize, 0usize, 0usize, 0usize);
+    let (mut cases, mut commits, mut refusals, mut errors, mut skipped) =
+        (0usize, 0usize, 0usize, 0usize, 0usize);
     for program in eligible_gallery() {
         let compiled = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
         let interpreted = PgProgram::interpreted(CompiledProgram::new(program.clone()).unwrap());
@@ -158,24 +172,18 @@ async fn both_routes_reach_the_same_decision_over_the_gallery() {
                     actor: Subject::from("route_test"),
                 };
                 let spec = observe(&pool, &interpreted, &seeded, &transition).await;
-                // A kernel error is the interpreter's verdict on the
-                // arguments, not a decision; nothing to compare.
-                let Ok(spec) = spec else {
-                    skipped += 1;
-                    continue;
-                };
                 let real = observe(&pool, &compiled, &seeded, &transition).await;
                 assert_eq!(
-                    real.as_ref(),
-                    Ok(&spec),
+                    real, spec,
                     "programme `{}`, transformation `{}`, salt {salt}",
-                    program.name,
-                    t.name
+                    program.name, t.name
                 );
-                if spec.outcome.starts_with("committed") {
-                    commits += 1;
-                } else {
-                    refusals += 1;
+                match &spec {
+                    RouteObservation::Decided(o) if o.outcome.starts_with("committed") => {
+                        commits += 1;
+                    }
+                    RouteObservation::Decided(_) => refusals += 1,
+                    RouteObservation::Kernel(_) | RouteObservation::Operational(_) => errors += 1,
                 }
                 cases += 1;
             }
@@ -188,8 +196,102 @@ async fn both_routes_reach_the_same_decision_over_the_gallery() {
     assert!(
         commits > 0 && refusals > 0,
         "both decisions must occur for the comparison to mean anything: \
-         {commits} commits, {refusals} refusals"
+         {commits} commits, {refusals} refusals, {errors} errors"
     );
+}
+
+fn max() -> EvalValue {
+    EvalValue::Decimal(rust_decimal::Decimal::MAX)
+}
+
+fn line(entry: &str, account: &str, debit: EvalValue, credit: EvalValue) -> ClaimInstance {
+    ClaimInstance {
+        predicate: "JournalLine".into(),
+        args: vec![subj(entry), subj(account), debit, credit],
+    }
+}
+
+fn entry(entry: &str) -> ClaimInstance {
+    ClaimInstance {
+        predicate: "JournalEntry".into(),
+        args: vec![subj(entry), subj("d_2026_05_17"), subj("p_2026_05")],
+    }
+}
+
+/// Both routes, from the same seeded ledger, on a fresh balanced posting.
+async fn both_routes(pool: &PgPool, seeded: &[ClaimInstance]) -> (RouteObservation, RouteObservation) {
+    let transition = Transition {
+        transformation_name: "post_simple_entry".into(),
+        args: vec![
+            subj("fresh"),
+            subj("d_2026_05_17"),
+            subj("p_2026_05"),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(10),
+        ],
+        actor: Subject::from("route_test"),
+    };
+    let interpreted =
+        PgProgram::interpreted(CompiledProgram::new(double_entry_ledger::program()).unwrap());
+    let spec = observe(pool, &interpreted, seeded, &transition).await;
+    let real = observe(pool, &ledger(), seeded, &transition).await;
+    (spec, real)
+}
+
+/// One entry breaks the balance, another's total is more than any
+/// decimal holds. The violation sorts first in witness order; the
+/// range error must still be the answer on both routes, with nothing
+/// recorded anywhere.
+#[tokio::test]
+async fn a_range_error_dominates_a_violation_that_sorts_earlier_on_both_routes() {
+    let pool = test_pool().await;
+    let seeded = vec![
+        entry("e0"),
+        line("e0", "account_cash", dec(5), dec(0)),
+        entry("e1"),
+        line("e1", "account_cash", max(), dec(0)),
+        line("e1", "account_other", dec(1), dec(0)),
+        line("e1", "account_revenue", dec(0), max()),
+        line("e1", "account_revenue", dec(0), dec(1)),
+    ];
+    let (spec, real) = both_routes(&pool, &seeded).await;
+    assert_eq!(
+        spec,
+        RouteObservation::Kernel(EvalError::sum_out_of_decimal_range())
+    );
+    assert_eq!(real, spec);
+    assert_eq!(count(&pool, "SELECT count(*) FROM morpholog.audit").await, 0);
+    assert_eq!(count(&pool, "SELECT count(*) FROM morpholog.rejections").await, 0);
+    assert_eq!(count(&pool, "SELECT count(*) FROM morpholog.outbox").await, 0);
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM morpholog.claims").await,
+        seeded.len() as i64,
+        "the fresh posting's delta rolled back"
+    );
+}
+
+/// The kernel accumulates wider than a decimal and tests only the
+/// final total, so an excess that cancels is no error: the compiled
+/// check must agree, and admit.
+#[tokio::test]
+async fn an_excess_that_cancels_is_representable_on_both_routes() {
+    let pool = test_pool().await;
+    let seeded = vec![
+        entry("e1"),
+        line("e1", "account_cash", max(), dec(0)),
+        line("e1", "account_cash", dec(1), dec(0)),
+        line("e1", "account_cash", dec(-1), dec(0)),
+        line("e1", "account_revenue", dec(0), max()),
+        line("e1", "account_revenue", dec(0), dec(1)),
+        line("e1", "account_revenue", dec(0), dec(-1)),
+    ];
+    let (spec, real) = both_routes(&pool, &seeded).await;
+    assert!(
+        matches!(&spec, RouteObservation::Decided(o) if o.outcome.starts_with("committed")),
+        "{spec:?}"
+    );
+    assert_eq!(real, spec);
 }
 
 fn ledger() -> PgProgram {

@@ -472,6 +472,7 @@ const MINIMUM_CORPUS: &[&str] = &[
     "double_entry_ledger",
     "approval_controls",
     "carbon_credit_provenance",
+    "release_governance",
 ];
 
 pub(crate) fn whole_in_fragment() -> Vec<Program> {

@@ -40,13 +40,26 @@ fn balanced_posted_entry_sql_is_pinned() {
     assert_eq!(
         sql,
         r#"/* morpholog compiled invariant balanced_posted_entry v1 stage1 */
-SELECT (t0.arguments -> 0)::text AS "w_entry"
-FROM morpholog.claims t0
+SELECT (t0.arguments -> 0)::text AS "w_entry",
+       (NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)) AS "range_error"
+FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((t1.arguments -> 2 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value')) l2, LATERAL (SELECT COALESCE(sum((t3.arguments -> 3 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t3.arguments -> 0 ->> 'value')) l4
 WHERE t0.predicate_name = 'JournalEntry'
-  AND NOT ((COALESCE((SELECT sum((t1.arguments -> 2 ->> 'value')::numeric) FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value')), 0::numeric)) = (COALESCE((SELECT sum((t2.arguments -> 3 ->> 'value')::numeric) FROM morpholog.claims t2 WHERE t2.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t2.arguments -> 0 ->> 'value')), 0::numeric)))
+  AND ((NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)) OR NOT (l2.s) = (l4.s))
 ORDER BY (t0.arguments -> 0 ->> 'value')::text
 LIMIT 1"#
     );
+    // Asked only once the query above returned a violation: any entry
+    // in scope whose total no decimal can hold.
+    assert_eq!(
+        set.invariants[1].range_sql(),
+        Some(
+            r#"SELECT 1
+FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((t1.arguments -> 2 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value')) l2, LATERAL (SELECT COALESCE(sum((t3.arguments -> 3 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t3.arguments -> 0 ->> 'value')) l4
+WHERE (t0.predicate_name = 'JournalEntry' AND ((NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric))))
+LIMIT 1"#
+        )
+    );
+    assert_eq!(set.invariants[0].range_sql(), None);
 }
 
 #[test]
@@ -59,7 +72,8 @@ fn supersedes_uniqueness_sql_is_pinned() {
         r#"/* morpholog compiled invariant supersedes_unique_by_prior_entry_id v1 stage1 */
 SELECT (t0.arguments -> 0)::text AS "w_new_entry_id_a",
        (t1.arguments -> 0)::text AS "w_new_entry_id_b",
-       (t0.arguments -> 1)::text AS "w_prior_entry_id"
+       (t0.arguments -> 1)::text AS "w_prior_entry_id",
+       false AS "range_error"
 FROM morpholog.claims t0, morpholog.claims t1
 WHERE t0.predicate_name = 'Supersedes'
   AND t1.predicate_name = 'Supersedes'
@@ -78,7 +92,8 @@ fn journal_entry_has_lines_sql_is_pinned() {
     assert_eq!(
         sql,
         r#"/* morpholog compiled invariant journal_entry_has_lines v1 stage1 */
-SELECT (t0.arguments -> 0)::text AS "w_entry"
+SELECT (t0.arguments -> 0)::text AS "w_entry",
+       false AS "range_error"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'JournalEntry'
   AND NOT EXISTS (SELECT 1 FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value'))
@@ -440,4 +455,42 @@ fn ledger_required_indexes_are_pinned() {
     // The digest covers the whole specification, so the same expression
     // over another predicate is another requirement.
     assert_ne!(specs[0].digest(), specs[1].digest());
+}
+
+/// The representability test the compiled sums carry, on the decimal
+/// domain's edges: the kernel's rule is a normalised scale of at most
+/// 28 and a normalised coefficient under 2^96, so the largest decimal
+/// passes and one more refuses, at scale 0 and at scale 28 alike; a
+/// coefficient of 1 at scale 29 refuses; trailing zeros never count.
+#[tokio::test]
+async fn the_range_test_matches_the_decimal_domain_at_its_edges() {
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let pool = sqlx::PgPool::connect(&crate::with_default_user(&url))
+        .await
+        .expect("connect");
+    let vectors: &[(&str, bool)] = &[
+        ("0", false),
+        ("79228162514264337593543950335", false),
+        ("-79228162514264337593543950335", false),
+        ("79228162514264337593543950336", true),
+        ("-79228162514264337593543950336", true),
+        ("7.9228162514264337593543950335", false),
+        ("7.9228162514264337593543950336", true),
+        ("0.0000000000000000000000000001", false),
+        ("0.00000000000000000000000000001", true),
+        ("1.500", false),
+        ("79228162514264337593543950335.0", false),
+        ("79228162514264337593543950335.5", true),
+    ];
+    for (value, out_of_range) in vectors {
+        let sql = format!(
+            "SELECT {} FROM (VALUES ({value}::numeric)) AS t(v)",
+            super::range_error_sql("v")
+        );
+        let got: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+            .fetch_one(&pool)
+            .await
+            .expect("evaluates");
+        assert_eq!(got, *out_of_range, "{value}");
+    }
 }
