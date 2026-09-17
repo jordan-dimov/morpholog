@@ -27,7 +27,7 @@ async fn attachments_arriving_together_all_land() {
     let mut tasks = tokio::task::JoinSet::new();
     for i in 0..8 {
         let pool = pool.clone();
-        let hash = cp.checkpoint_hash.clone();
+        let hash = cp.checkpoint_hash;
         let tree_size = cp.tree_size;
         tasks.spawn(async move { attach_witness(&pool, tree_size, &hash, witness(i)).await });
     }
@@ -52,9 +52,16 @@ async fn attachments_arriving_together_all_land() {
     assert_eq!(after.witnesses.len(), 8);
 
     // A proof for a head this chain does not hold is refused.
-    let err = attach_witness(&pool, cp.tree_size, "sha256:not-this-head", witness(9))
-        .await
-        .unwrap_err();
+    let err = attach_witness(
+        &pool,
+        cp.tree_size,
+        &format!("sha256:{}", "f".repeat(64))
+            .parse::<morpholog_postgres::Digest>()
+            .unwrap(),
+        witness(9),
+    )
+    .await
+    .unwrap_err();
     assert!(err.to_string().contains("no longer holds"), "{err}");
     let err = attach_witness(&pool, cp.tree_size + 5, &cp.checkpoint_hash, witness(9))
         .await

@@ -1032,6 +1032,33 @@ async fn evidence_verify_on_a_readable_but_invalid_pack_is_a_malformed_verdict()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn evidence_verify_refuses_a_pack_whose_hash_is_not_a_digest() {
+    // A hash that is not `sha256:<64 lowercase hex>` is refused where
+    // the pack is read, as a decided `malformed_pack` verdict that names
+    // the offending value - never parsed leniently and compared later.
+    // Uppercase hex is the case worth pinning: it decodes to the same
+    // bytes but is not the record's spelling.
+    let mut packfile = tempfile::NamedTempFile::new().unwrap();
+    let uppercase = format!("sha256:{}", "AB".repeat(32));
+    std::io::Write::write_all(
+        &mut packfile,
+        format!(r#"{{"manifest": {{"pack_format_version": 1, "root_hash": "{uppercase}"}}}}"#)
+            .as_bytes(),
+    )
+    .unwrap();
+    let (status, stdout, _stderr) =
+        run_cli_no_db(&["audit", "verify-pack", packfile.path().to_str().unwrap()]);
+    assert!(!status.success(), "got: {stdout}");
+    let verdict: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(verdict["status"], "malformed_pack", "got: {stdout}");
+    let detail = verdict["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("not a sha256:<hex> digest") && detail.contains(&uppercase),
+        "the verdict names the value it refused: {detail}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn evaluate_scores_a_candidate_against_history() {
     reset_db().await;
     post_balanced_entry("ev1", 100);
@@ -3594,7 +3621,11 @@ async fn a_witness_that_does_not_vouch_for_its_checkpoint_fails_the_live_verify(
     morpholog_postgres::attach_witness(
         &pool,
         cp["tree_size"].as_i64().unwrap(),
-        cp["checkpoint_hash"].as_str().unwrap(),
+        &cp["checkpoint_hash"]
+            .as_str()
+            .unwrap()
+            .parse::<morpholog_postgres::Digest>()
+            .unwrap(),
         witness,
     )
     .await

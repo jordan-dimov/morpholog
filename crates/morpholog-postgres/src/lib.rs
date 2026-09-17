@@ -71,6 +71,7 @@ pub use claims::{
 };
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
 pub use error::PgError;
+pub use merkle::{Digest, DigestError};
 pub use migrations::{
     MigrationRef, MigrationReport, apply_migrations, head_version, migration_status,
 };

@@ -106,7 +106,9 @@ async fn editing_an_earlier_checkpoint_breaks_the_chain() {
     // agrees - the break is in the chain, not the envelope.
     let mut broken = pack.clone();
     broken.checkpoints[0].root_hash =
-        "sha256:0000000000000000000000000000000000000000000000000000000000000000".into();
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            .parse()
+            .unwrap();
     assert!(matches!(
         verify_pack(&broken, None).unwrap(),
         TreeVerification::ChainBroken { .. }
@@ -134,9 +136,11 @@ async fn an_older_anchor_in_the_chain_is_intact_an_outside_anchor_mismatches() {
     // identity is the coordinated-rewrite signal.
     let forged = Checkpoint {
         tree_size: 2,
-        root_hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111".into(),
+        root_hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            .parse()
+            .unwrap(),
         prev_checkpoint_hash: None,
-        checkpoint_hash: "forged".into(),
+        checkpoint_hash: format!("sha256:{}", "f".repeat(64)).parse().unwrap(),
         signatures: Vec::new(),
         witnesses: Vec::new(),
     };

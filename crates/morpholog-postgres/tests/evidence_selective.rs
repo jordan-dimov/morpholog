@@ -109,7 +109,7 @@ async fn a_forged_anchor_is_an_anchor_mismatch() {
 
     let pack = export_selective(&pool, None, &[shown]).await.unwrap();
     let mut forged = covering.clone();
-    forged.root_hash = format!("sha256:{}", "f".repeat(64));
+    forged.root_hash = format!("sha256:{}", "f".repeat(64)).parse().unwrap();
     assert!(matches!(
         verify_selective(&pack, Some(&forged)),
         Ok(SelectiveVerification::AnchorMismatch { .. })

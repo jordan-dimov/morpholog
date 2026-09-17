@@ -16,6 +16,7 @@
 //! Pure and synchronous: no I/O, no database. Key file reading lives in
 //! the CLI; this module turns bytes into keys and keys into signatures.
 
+use crate::merkle::Digest;
 use ed25519_dalek::pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use pkcs8::LineEnding;
@@ -46,9 +47,9 @@ pub enum SigningError {
 /// from the storage type.
 pub struct TreeHead<'a> {
     pub tree_size: i64,
-    pub root_hash: &'a str,
-    pub prev_checkpoint_hash: Option<&'a str>,
-    pub checkpoint_hash: &'a str,
+    pub root_hash: &'a Digest,
+    pub prev_checkpoint_hash: Option<&'a Digest>,
+    pub checkpoint_hash: &'a Digest,
 }
 
 fn push_field(buf: &mut Vec<u8>, field: &[u8]) {
@@ -66,15 +67,15 @@ pub fn tree_head_signing_bytes(purpose: &str, key_id: &str, head: &TreeHead<'_>)
     push_field(&mut b, purpose.as_bytes());
     push_field(&mut b, key_id.as_bytes());
     push_field(&mut b, &head.tree_size.to_le_bytes());
-    push_field(&mut b, head.root_hash.as_bytes());
+    push_field(&mut b, head.root_hash.to_string().as_bytes());
     match head.prev_checkpoint_hash {
         Some(prev) => {
             b.push(1);
-            push_field(&mut b, prev.as_bytes());
+            push_field(&mut b, prev.to_string().as_bytes());
         }
         None => b.push(0),
     }
-    push_field(&mut b, head.checkpoint_hash.as_bytes());
+    push_field(&mut b, head.checkpoint_hash.to_string().as_bytes());
     b
 }
 
@@ -88,15 +89,15 @@ pub fn tree_head_witness_bytes(head: &TreeHead<'_>) -> Vec<u8> {
     let mut b = Vec::new();
     push_field(&mut b, TREE_HEAD_WITNESS_PAYLOAD_TYPE.as_bytes());
     push_field(&mut b, &head.tree_size.to_le_bytes());
-    push_field(&mut b, head.root_hash.as_bytes());
+    push_field(&mut b, head.root_hash.to_string().as_bytes());
     match head.prev_checkpoint_hash {
         Some(prev) => {
             b.push(1);
-            push_field(&mut b, prev.as_bytes());
+            push_field(&mut b, prev.to_string().as_bytes());
         }
         None => b.push(0),
     }
-    push_field(&mut b, head.checkpoint_hash.as_bytes());
+    push_field(&mut b, head.checkpoint_hash.to_string().as_bytes());
     b
 }
 
@@ -227,12 +228,19 @@ mod tests {
         assert!(parse_public_key(&non_hex).is_err());
     }
 
+    static ONES: std::sync::LazyLock<Digest> =
+        std::sync::LazyLock::new(|| format!("sha256:{}", "1".repeat(64)).parse().unwrap());
+    static TWOS: std::sync::LazyLock<Digest> =
+        std::sync::LazyLock::new(|| format!("sha256:{}", "2".repeat(64)).parse().unwrap());
+    static THREES: std::sync::LazyLock<Digest> =
+        std::sync::LazyLock::new(|| format!("sha256:{}", "3".repeat(64)).parse().unwrap());
+
     fn sample_head() -> TreeHead<'static> {
         TreeHead {
             tree_size: 42,
-            root_hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            root_hash: &ONES,
             prev_checkpoint_hash: None,
-            checkpoint_hash: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            checkpoint_hash: &TWOS,
         }
     }
 
@@ -306,9 +314,7 @@ mod tests {
     /// payload encoding and the one an enduring chain actually uses.
     fn chained_head() -> TreeHead<'static> {
         TreeHead {
-            prev_checkpoint_hash: Some(
-                "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-            ),
+            prev_checkpoint_hash: Some(&THREES),
             ..sample_head()
         }
     }
@@ -401,11 +407,9 @@ mod tests {
         );
         let chained = TreeHead {
             tree_size: 43,
-            root_hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-            prev_checkpoint_hash: Some(
-                "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-            ),
-            checkpoint_hash: "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+            root_hash: &ONES,
+            prev_checkpoint_hash: Some(&TWOS),
+            checkpoint_hash: &THREES,
         };
         assert_eq!(
             crate::hex::encode(&tree_head_witness_bytes(&chained)),

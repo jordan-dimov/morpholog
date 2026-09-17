@@ -1137,9 +1137,9 @@ fn score_reports_serialize_as_pinned() {
 fn sample_checkpoint() -> Checkpoint {
     Checkpoint {
         tree_size: 2,
-        root_hash: format!("sha256:{}", "a".repeat(64)),
+        root_hash: format!("sha256:{}", "a".repeat(64)).parse().unwrap(),
         prev_checkpoint_hash: None,
-        checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
+        checkpoint_hash: format!("sha256:{}", "b".repeat(64)).parse().unwrap(),
         signatures: Vec::new(),
         witnesses: Vec::new(),
     }
@@ -1222,7 +1222,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             witnesses: None,
             tree: TreeVerification::Tampered {
                 tree_size: 2,
-                recorded_root: format!("sha256:{}", "a".repeat(64)),
+                recorded_root: format!("sha256:{}", "a".repeat(64)).parse().unwrap(),
                 recomputed_root: format!("sha256:{}", "c".repeat(64)),
             },
         }),
@@ -1384,8 +1384,8 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             manifest: PackManifest {
                 pack_format_version: 1,
                 tree_size: 2,
-                root_hash: format!("sha256:{}", "a".repeat(64)),
-                checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
+                root_hash: format!("sha256:{}", "a".repeat(64)).parse().unwrap(),
+                checkpoint_hash: format!("sha256:{}", "b".repeat(64)).parse().unwrap(),
             },
             checkpoints: vec![sample_checkpoint()],
             rows: vec![sample_audit_row()],
@@ -1404,8 +1404,8 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "tree_verification_anchor_mismatch.json",
         &to_value(&TreeVerification::AnchorMismatch {
             tree_size: 2,
-            anchor_checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
-            stored_checkpoint_hash: Some(format!("sha256:{}", "d".repeat(64))),
+            anchor_checkpoint_hash: format!("sha256:{}", "b".repeat(64)).parse().unwrap(),
+            stored_checkpoint_hash: Some(format!("sha256:{}", "d".repeat(64)).parse().unwrap()),
         }),
     );
     assert_golden(
@@ -1455,25 +1455,25 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 pack_kind: "window".into(),
                 from_tree_size: 2,
                 to_tree_size: 3,
-                from_checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
-                to_checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
-                from_root_hash: format!("sha256:{}", "a".repeat(64)),
-                to_root_hash: format!("sha256:{}", "c".repeat(64)),
+                from_checkpoint_hash: format!("sha256:{}", "b".repeat(64)).parse().unwrap(),
+                to_checkpoint_hash: format!("sha256:{}", "d".repeat(64)).parse().unwrap(),
+                from_root_hash: format!("sha256:{}", "a".repeat(64)).parse().unwrap(),
+                to_root_hash: format!("sha256:{}", "c".repeat(64)).parse().unwrap(),
             },
             from_checkpoint: sample_checkpoint(),
             to_checkpoint: Checkpoint {
                 tree_size: 3,
-                root_hash: format!("sha256:{}", "c".repeat(64)),
-                prev_checkpoint_hash: Some(format!("sha256:{}", "b".repeat(64))),
-                checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
+                root_hash: format!("sha256:{}", "c".repeat(64)).parse().unwrap(),
+                prev_checkpoint_hash: Some(format!("sha256:{}", "b".repeat(64)).parse().unwrap()),
+                checkpoint_hash: format!("sha256:{}", "d".repeat(64)).parse().unwrap(),
                 signatures: Vec::new(),
                 witnesses: Vec::new(),
             },
-            consistency_proof: vec![format!("sha256:{}", "e".repeat(64))],
+            consistency_proof: vec![format!("sha256:{}", "e".repeat(64)).parse().unwrap()],
             rows: vec![sample_audit_row()],
             inclusion_proofs: vec![RowInclusionProof {
                 leaf_index: 2,
-                proof: vec![format!("sha256:{}", "f".repeat(64))],
+                proof: vec![format!("sha256:{}", "f".repeat(64)).parse().unwrap()],
             }],
         }),
     );
@@ -1502,8 +1502,8 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "window_verification_anchor_mismatch.json",
         &to_value(&WindowVerification::AnchorMismatch {
             tree_size: 2,
-            anchor_checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
-            pack_checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
+            anchor_checkpoint_hash: format!("sha256:{}", "b".repeat(64)).parse().unwrap(),
+            pack_checkpoint_hash: format!("sha256:{}", "d".repeat(64)).parse().unwrap(),
         }),
     );
     assert_golden(
@@ -1534,21 +1534,21 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 pack_format_version: 3,
                 pack_kind: "selective".into(),
                 tree_size: 3,
-                root_hash: format!("sha256:{}", "c".repeat(64)),
-                checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
+                root_hash: format!("sha256:{}", "c".repeat(64)).parse().unwrap(),
+                checkpoint_hash: format!("sha256:{}", "d".repeat(64)).parse().unwrap(),
             },
             checkpoint: Checkpoint {
                 tree_size: 3,
-                root_hash: format!("sha256:{}", "c".repeat(64)),
-                prev_checkpoint_hash: Some(format!("sha256:{}", "b".repeat(64))),
-                checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
+                root_hash: format!("sha256:{}", "c".repeat(64)).parse().unwrap(),
+                prev_checkpoint_hash: Some(format!("sha256:{}", "b".repeat(64)).parse().unwrap()),
+                checkpoint_hash: format!("sha256:{}", "d".repeat(64)).parse().unwrap(),
                 signatures: Vec::new(),
                 witnesses: Vec::new(),
             },
             rows: vec![sample_audit_row()],
             inclusion_proofs: vec![RowInclusionProof {
                 leaf_index: 1,
-                proof: vec![format!("sha256:{}", "f".repeat(64))],
+                proof: vec![format!("sha256:{}", "f".repeat(64)).parse().unwrap()],
             }],
         }),
     );
@@ -1567,8 +1567,8 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "selective_verification_anchor_mismatch.json",
         &to_value(&SelectiveVerification::AnchorMismatch {
             tree_size: 3,
-            anchor_checkpoint_hash: format!("sha256:{}", "b".repeat(64)),
-            pack_checkpoint_hash: format!("sha256:{}", "d".repeat(64)),
+            anchor_checkpoint_hash: format!("sha256:{}", "b".repeat(64)).parse().unwrap(),
+            pack_checkpoint_hash: format!("sha256:{}", "d".repeat(64)).parse().unwrap(),
         }),
     );
     assert_golden(

@@ -34,13 +34,13 @@
 use chrono::{DateTime, Utc};
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::{Digest as _, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::audit::{AuditRow, REPLAY_CHUNK, list_audit_rows_page};
 use crate::error::{PgError, classify, classify_checked_query};
-use crate::merkle::{Hash, audit_leaf_hash, merkle_root, render_hash};
+use crate::merkle::{Digest, Hash, audit_leaf_hash, merkle_root};
 use crate::signing;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 
@@ -109,9 +109,9 @@ pub struct Witness {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Checkpoint {
     pub tree_size: i64,
-    pub root_hash: String,
-    pub prev_checkpoint_hash: Option<String>,
-    pub checkpoint_hash: String,
+    pub root_hash: Digest,
+    pub prev_checkpoint_hash: Option<Digest>,
+    pub checkpoint_hash: Digest,
     /// Tree-head attestations; empty (and omitted from JSON) when the
     /// checkpoint is unsigned, which stays valid.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -149,7 +149,10 @@ pub enum TreeVerification {
     /// checkpoint.
     Tampered {
         tree_size: i64,
-        recorded_root: String,
+        recorded_root: Digest,
+        /// Usually the recomputed digest; when the log is shorter than
+        /// the checkpoint claims, a sentence saying so instead, so the
+        /// field stays prose-capable on the wire.
         recomputed_root: String,
     },
     /// The checkpoint chain is internally inconsistent (a `checkpoint_hash`
@@ -162,8 +165,8 @@ pub enum TreeVerification {
     /// but cannot match the copy that left the database.
     AnchorMismatch {
         tree_size: i64,
-        anchor_checkpoint_hash: String,
-        stored_checkpoint_hash: Option<String>,
+        anchor_checkpoint_hash: Digest,
+        stored_checkpoint_hash: Option<Digest>,
     },
     /// An evidence pack could not be parsed into a checkable tree. Only
     /// the offline `audit verify-pack` path produces this; the live
@@ -323,13 +326,19 @@ impl From<SignaturePolicyViolation> for TreeVerification {
 /// This checkpoint's identity hash: `SHA-256(tree_size_le ||
 /// root_hash_bytes || prev_bytes)`, rendered `sha256:<hex>`. A genesis
 /// checkpoint hashes the empty string for `prev`.
-pub(crate) fn checkpoint_hash(tree_size: i64, root_hash: &str, prev: Option<&str>) -> String {
+pub(crate) fn checkpoint_hash(tree_size: i64, root_hash: &Digest, prev: Option<&Digest>) -> Digest {
     let mut h = Sha256::new();
     h.update(tree_size.to_le_bytes());
-    h.update(root_hash.as_bytes());
-    h.update(prev.unwrap_or("").as_bytes());
-    let digest: [u8; 32] = h.finalize().into();
-    render_hash(&digest)
+    h.update(root_hash.to_string().as_bytes());
+    h.update(prev.map(ToString::to_string).unwrap_or_default().as_bytes());
+    Digest::from_bytes(h.finalize().into())
+}
+
+/// A hash column read back: the runtime wrote it, so a malformed one is
+/// the database holding something impossible, refused at the boundary.
+fn stored_digest(text: &str) -> Result<Digest, PgError> {
+    text.parse()
+        .map_err(|e| PgError::InvalidState(format!("a stored checkpoint hash is malformed: {e}")))
 }
 
 /// Page the audit log in canonical order, hashing each row to its leaf.
@@ -380,14 +389,21 @@ async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Check
     .fetch_optional(&mut *conn)
     .await
     .map_err(classify_checked_query)?;
-    Ok(row.map(|r| Checkpoint {
-        tree_size: r.tree_size,
-        root_hash: r.root_hash,
-        prev_checkpoint_hash: r.prev_checkpoint_hash,
-        checkpoint_hash: r.checkpoint_hash,
-        signatures: r.signatures.0,
-        witnesses: r.witnesses.0,
-    }))
+    row.map(|r| {
+        Ok(Checkpoint {
+            tree_size: r.tree_size,
+            root_hash: stored_digest(&r.root_hash)?,
+            prev_checkpoint_hash: r
+                .prev_checkpoint_hash
+                .as_deref()
+                .map(stored_digest)
+                .transpose()?,
+            checkpoint_hash: stored_digest(&r.checkpoint_hash)?,
+            signatures: r.signatures.0,
+            witnesses: r.witnesses.0,
+        })
+    })
+    .transpose()
 }
 
 /// Attest a tree head with the signer's key for the audit-checkpoint
@@ -445,7 +461,7 @@ pub async fn create_checkpoint(
     };
     read_tx.commit().await.map_err(classify)?;
 
-    let root_hash = render_hash(&merkle_root(&leaves));
+    let root_hash = Digest::from_bytes(merkle_root(&leaves));
 
     let mut tx = pool.begin().await.map_err(classify)?;
     sqlx::query!("SELECT pg_advisory_xact_lock($1)", CHECKPOINT_LOCK_KEY)
@@ -506,7 +522,7 @@ pub async fn create_checkpoint(
                 let head = signing::TreeHead {
                     tree_size: p.tree_size,
                     root_hash: &p.root_hash,
-                    prev_checkpoint_hash: p.prev_checkpoint_hash.as_deref(),
+                    prev_checkpoint_hash: p.prev_checkpoint_hash.as_ref(),
                     checkpoint_hash: &p.checkpoint_hash,
                 };
                 let new_sig = make_signature(s, &head);
@@ -521,7 +537,7 @@ pub async fn create_checkpoint(
                         "UPDATE morpholog.audit_checkpoints
                          SET signatures = $1 WHERE checkpoint_hash = $2",
                         sqlx::types::Json(&signatures) as _,
-                        p.checkpoint_hash,
+                        p.checkpoint_hash.to_string(),
                     )
                     .execute(&mut *tx)
                     .await
@@ -547,8 +563,8 @@ pub async fn create_checkpoint(
         return Err(refusal);
     }
 
-    let prev_hash = prev.as_ref().map(|p| p.checkpoint_hash.clone());
-    let cp_hash = checkpoint_hash(tree_size, &root_hash, prev_hash.as_deref());
+    let prev_hash = prev.as_ref().map(|p| p.checkpoint_hash);
+    let cp_hash = checkpoint_hash(tree_size, &root_hash, prev_hash.as_ref());
     let (last_tid, last_at) = match last {
         Some((tid, at)) => (Some(tid), Some(at)),
         None => (None, None),
@@ -562,7 +578,7 @@ pub async fn create_checkpoint(
             let head = signing::TreeHead {
                 tree_size,
                 root_hash: &root_hash,
-                prev_checkpoint_hash: prev_hash.as_deref(),
+                prev_checkpoint_hash: prev_hash.as_ref(),
                 checkpoint_hash: &cp_hash,
             };
             vec![make_signature(s, &head)]
@@ -578,9 +594,9 @@ pub async fn create_checkpoint(
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         Uuid::now_v7(),
         tree_size,
-        root_hash,
-        prev_hash,
-        cp_hash,
+        root_hash.to_string(),
+        prev_hash.map(|d| d.to_string()),
+        cp_hash.to_string(),
         horizon,
         last_tid,
         last_at,
@@ -693,17 +709,23 @@ pub(crate) async fn load_checkpoint_chain(
     .fetch_all(conn)
     .await
     .map_err(classify_checked_query)?;
-    Ok(stored
+    stored
         .into_iter()
-        .map(|r| Checkpoint {
-            tree_size: r.tree_size,
-            root_hash: r.root_hash,
-            prev_checkpoint_hash: r.prev_checkpoint_hash,
-            checkpoint_hash: r.checkpoint_hash,
-            signatures: r.signatures.0,
-            witnesses: r.witnesses.0,
+        .map(|r| {
+            Ok(Checkpoint {
+                tree_size: r.tree_size,
+                root_hash: stored_digest(&r.root_hash)?,
+                prev_checkpoint_hash: r
+                    .prev_checkpoint_hash
+                    .as_deref()
+                    .map(stored_digest)
+                    .transpose()?,
+                checkpoint_hash: stored_digest(&r.checkpoint_hash)?,
+                signatures: r.signatures.0,
+                witnesses: r.witnesses.0,
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// The checkpoint at exactly `tree_size`, if one was recorded there.
@@ -719,14 +741,21 @@ pub async fn load_checkpoint(pool: &PgPool, tree_size: i64) -> Result<Option<Che
     .fetch_optional(pool)
     .await
     .map_err(classify_checked_query)?;
-    Ok(row.map(|r| Checkpoint {
-        tree_size: r.tree_size,
-        root_hash: r.root_hash,
-        prev_checkpoint_hash: r.prev_checkpoint_hash,
-        checkpoint_hash: r.checkpoint_hash,
-        signatures: r.signatures.0,
-        witnesses: r.witnesses.0,
-    }))
+    row.map(|r| {
+        Ok(Checkpoint {
+            tree_size: r.tree_size,
+            root_hash: stored_digest(&r.root_hash)?,
+            prev_checkpoint_hash: r
+                .prev_checkpoint_hash
+                .as_deref()
+                .map(stored_digest)
+                .transpose()?,
+            checkpoint_hash: stored_digest(&r.checkpoint_hash)?,
+            signatures: r.signatures.0,
+            witnesses: r.witnesses.0,
+        })
+    })
+    .transpose()
 }
 
 /// Attach an external witness to the checkpoint at `tree_size`, which
@@ -740,7 +769,7 @@ pub async fn load_checkpoint(pool: &PgPool, tree_size: i64) -> Result<Option<Che
 pub async fn attach_witness(
     pool: &PgPool,
     tree_size: i64,
-    checkpoint_hash: &str,
+    checkpoint_hash: &Digest,
     witness: Witness,
 ) -> Result<Checkpoint, PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
@@ -763,13 +792,17 @@ pub async fn attach_witness(
     };
     let mut checkpoint = Checkpoint {
         tree_size: row.tree_size,
-        root_hash: row.root_hash,
-        prev_checkpoint_hash: row.prev_checkpoint_hash,
-        checkpoint_hash: row.checkpoint_hash,
+        root_hash: stored_digest(&row.root_hash)?,
+        prev_checkpoint_hash: row
+            .prev_checkpoint_hash
+            .as_deref()
+            .map(stored_digest)
+            .transpose()?,
+        checkpoint_hash: stored_digest(&row.checkpoint_hash)?,
         signatures: row.signatures.0,
         witnesses: row.witnesses.0,
     };
-    if checkpoint.checkpoint_hash != checkpoint_hash {
+    if checkpoint.checkpoint_hash != *checkpoint_hash {
         return Err(PgError::InvalidState(format!(
             "the checkpoint at tree size {tree_size} is {} now, not {checkpoint_hash}: the \
              proof was obtained for a head this chain no longer holds",
@@ -895,8 +928,8 @@ pub(crate) fn verify_tree(
         if !stored_at_size.is_some_and(|c| same_tree_head(c, anchor)) {
             return TreeVerification::AnchorMismatch {
                 tree_size: anchor.tree_size,
-                anchor_checkpoint_hash: anchor.checkpoint_hash.clone(),
-                stored_checkpoint_hash: stored_at_size.map(|c| c.checkpoint_hash.clone()),
+                anchor_checkpoint_hash: anchor.checkpoint_hash,
+                stored_checkpoint_hash: stored_at_size.map(|c| c.checkpoint_hash),
             };
         }
         // The signed anchor is the attestation the operator actually held
@@ -908,14 +941,14 @@ pub(crate) fn verify_tree(
         }
     }
 
-    let mut prev_hash: Option<&str> = None;
+    let mut prev_hash: Option<&Digest> = None;
     for cp in checkpoints {
         // Chain integrity: the recorded checkpoint_hash must match its
         // contents, and prev must link to the previous checkpoint.
         let expected = checkpoint_hash(
             cp.tree_size,
             &cp.root_hash,
-            cp.prev_checkpoint_hash.as_deref(),
+            cp.prev_checkpoint_hash.as_ref(),
         );
         if expected != cp.checkpoint_hash {
             return TreeVerification::ChainBroken {
@@ -925,7 +958,7 @@ pub(crate) fn verify_tree(
                 ),
             };
         }
-        if cp.prev_checkpoint_hash.as_deref() != prev_hash {
+        if cp.prev_checkpoint_hash.as_ref() != prev_hash {
             return TreeVerification::ChainBroken {
                 detail: format!(
                     "checkpoint at tree_size {} links to prev {:?}, expected {:?}",
@@ -940,16 +973,16 @@ pub(crate) fn verify_tree(
         if size > leaves.len() {
             return TreeVerification::Tampered {
                 tree_size: cp.tree_size,
-                recorded_root: cp.root_hash.clone(),
+                recorded_root: cp.root_hash,
                 recomputed_root: format!("only {} rows present", leaves.len()),
             };
         }
-        let recomputed = render_hash(&merkle_root(&leaves[..size]));
+        let recomputed = Digest::from_bytes(merkle_root(&leaves[..size]));
         if recomputed != cp.root_hash {
             return TreeVerification::Tampered {
                 tree_size: cp.tree_size,
-                recorded_root: cp.root_hash.clone(),
-                recomputed_root: recomputed,
+                recorded_root: cp.root_hash,
+                recomputed_root: recomputed.to_string(),
             };
         }
 
@@ -976,7 +1009,7 @@ pub(crate) fn signature_crypto_violation(cp: &Checkpoint) -> Option<TreeVerifica
     let head = signing::TreeHead {
         tree_size: cp.tree_size,
         root_hash: &cp.root_hash,
-        prev_checkpoint_hash: cp.prev_checkpoint_hash.as_deref(),
+        prev_checkpoint_hash: cp.prev_checkpoint_hash.as_ref(),
         checkpoint_hash: &cp.checkpoint_hash,
     };
     for sig in &cp.signatures {
