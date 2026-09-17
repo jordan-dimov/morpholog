@@ -194,7 +194,7 @@ pub enum PgError {
     NoCheckpoint,
     /// A checkpoint commits to more audit rows than the log now holds
     /// under it, so no pack can be exported against it. Whether rows
-    /// were deleted, lost, or rewritten is interpretation; the fact is
+    /// were deleted, lost, or rewritten is interpretation; the condition is
     /// that the covered prefix is no longer all present.
     #[error(
         "checkpoint commits to {tree_size} audit rows but only {rows_present} are present; \

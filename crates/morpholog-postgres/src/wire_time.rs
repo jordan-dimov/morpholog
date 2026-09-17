@@ -1,11 +1,18 @@
-//! The one spelling of an instant on the wire: RFC 3339, UTC, `Z`,
-//! seconds followed by the shortest of zero, three, six, or nine
-//! fractional digits that represents the instant exactly. Every
-//! serialized timestamp and every rendered one goes through here, so
-//! the bytes an embedder reads are specified in one place and the
-//! in-memory clock type can change without moving them. Parsing
-//! accepts more than rendering emits: any RFC 3339 offset, normalised
-//! to UTC.
+//! The one spelling of an operational instant on the wire - the
+//! adapter's `DateTime<Utc>` values: when a row committed, was
+//! rejected, enqueued, attested, or scored. RFC 3339, UTC, `Z`, seconds
+//! followed by the shortest of zero, three, six, or nine fractional
+//! digits that represents the instant exactly. Every adapter timestamp
+//! field and every adapter-rendered instant goes through here, so
+//! those bytes are specified in one place and the clock type behind
+//! them can change without moving them. Parsing accepts more than
+//! rendering emits: any RFC 3339 offset, normalised to UTC.
+//!
+//! Domain timestamps - a `Timestamp` value inside a claim - belong to
+//! the kernel's own codec and are not this module's concern. The
+//! module is public on purpose: the CLI's envelopes carry adapter
+//! instants and must spell them the same way, so this is part of the
+//! adapter's surface, not incidental plumbing.
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Deserializer, Serializer};
@@ -52,7 +59,7 @@ mod tests {
         parse(text).unwrap()
     }
 
-    /// The spelling is pinned by vector so a change of clock type has
+    /// The spelling is pinned by vectors so a change of clock type has
     /// to reproduce it byte for byte.
     #[test]
     fn renders_the_shortest_exact_fraction_in_utc() {

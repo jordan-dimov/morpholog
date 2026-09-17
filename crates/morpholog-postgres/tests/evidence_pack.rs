@@ -175,7 +175,8 @@ async fn export_refuses_without_a_covering_checkpoint() {
 
 /// Attacker capability: direct SQL on the audit table under an existing
 /// checkpoint. Every exporter reads the covered prefix through one
-/// loader, so all three report the same typed fact.
+/// loader, so the prefix, window, and selective exports report the same
+/// typed condition.
 #[tokio::test]
 async fn export_refuses_when_a_covered_row_is_missing() {
     let pool = test_pool().await;

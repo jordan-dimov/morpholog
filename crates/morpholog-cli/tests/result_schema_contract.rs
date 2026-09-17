@@ -2243,18 +2243,40 @@ fn the_manual_schema_intent_ledger_holds() {
         (
             Intent::StricterThanRust,
             "witness lists are absent, never empty (skip_serializing_if only makes them optional)",
-            nodes
-                .iter()
-                .filter(|(path, _)| path.ends_with("/properties/witness"))
-                .all(|(_, node)| node["minItems"].as_u64() >= Some(1)),
+            {
+                let witnesses: Vec<_> = nodes
+                    .iter()
+                    .filter(|(path, _)| path.ends_with("/properties/witness"))
+                    .collect();
+                !witnesses.is_empty()
+                    && witnesses
+                        .iter()
+                        .all(|(_, node)| node["minItems"].as_u64() >= Some(1))
+            },
         ),
         (
             Intent::StricterThanRust,
-            "tagged_value carries only the arms the runtime can emit (no calendar span on the wire)",
+            "tagged_value carries exactly the arms the runtime can emit (a calendar span never reaches the wire)",
             defs["tagged_value"]["oneOf"]
                 .as_array()
-                .is_some_and(|arms| !arms.is_empty())
-                && !defs["tagged_value"].to_string().contains("calendar"),
+                .is_some_and(|arms| {
+                    let mut kinds: Vec<&str> = arms
+                        .iter()
+                        .filter_map(|arm| arm["properties"]["type"]["const"].as_str())
+                        .collect();
+                    kinds.sort_unstable();
+                    kinds
+                        == [
+                            "bool",
+                            "collection",
+                            "date",
+                            "decimal",
+                            "duration",
+                            "quantity",
+                            "subject",
+                            "timestamp",
+                        ]
+                }),
         ),
         (
             Intent::NamedDefinition,
