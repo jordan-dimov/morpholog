@@ -1,4 +1,4 @@
-use crate::as_of::{ReplaySet, reconstruct_inner};
+use crate::as_of::reconstruct_inner;
 use crate::audit::REPLAY_CHUNK;
 use crate::checkpoints::TreeVerification;
 use crate::claims::decode_claim_rows;
@@ -231,7 +231,7 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
     let mut tracker = CoverageTracker::new(program);
     let needs_pre = tracker.needs_pre_state();
-    let mut replay = ReplaySet::new();
+    let mut replay = State::default();
     // The previous transition's state, carried only when some tracked
     // antecedent contains pre(...); the empty state otherwise (and for
     // the first transition - never absent, so pre(...) evaluates
@@ -303,20 +303,14 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
                 .chain(asserted.iter())
                 .map(|c| c.predicate.clone())
                 .collect();
-            // Within each transition: retractions first, then assertions -
-            // the same order the kernel's candidate build uses.
-            for r in &retracted {
-                replay.retract(r);
-            }
-            for a in &asserted {
-                replay.assert(a);
-            }
-            // A snapshot costs O(live claims); take one only when this
-            // transition can fire something, or when pre(...) tracking
-            // forces the previous state to stay current.
+            replay.apply(&asserted, &retracted);
+            // A snapshot copies what changed since the replay's last
+            // compaction; take one only when this transition can fire
+            // something, or when pre(...) tracking forces the previous
+            // state to stay current.
             let relevant = tracker.delta_is_relevant(&delta);
             if relevant || needs_pre {
-                let post_state = replay.snapshot_state();
+                let post_state = replay.clone();
                 tracker
                     .observe(
                         &post_state,

@@ -107,7 +107,7 @@ proptest! {
             naive_claims = naive(&naive_claims, asserted, retracted);
             let oracle = State::from_claims(naive_claims.clone());
             for (state, threshold) in layered.iter_mut().zip(thresholds) {
-                *state = state.with_delta_under(asserted, retracted, threshold);
+                state.apply_under(asserted, retracted, threshold);
                 prop_assert_eq!(state.claims().to_vec(), naive_claims.clone());
                 prop_assert_eq!(&*state, &oracle);
                 prop_assert_eq!(state.len(), naive_claims.len());
@@ -137,13 +137,13 @@ fn a_readmitted_claim_moves_to_the_tail() {
         predicate: "P".into(),
         args: vec![EvalValue::Decimal(rust_decimal::Decimal::from(n))],
     };
-    let state = State::from_claims(vec![c(1), c(2), c(3)]);
-    let state = state.with_delta_under(&[c(2)], &[c(2)], usize::MAX);
+    let mut state = State::from_claims(vec![c(1), c(2), c(3)]);
+    state.apply_under(&[c(2)], &[c(2)], usize::MAX);
     assert_eq!(state.claims().to_vec(), vec![c(1), c(3), c(2)]);
     // Now c(2) lives in the overlay: retract and readmit it again.
-    let state = state.with_delta_under(&[], &[c(2)], usize::MAX);
+    state.apply_under(&[], &[c(2)], usize::MAX);
     assert_eq!(state.claims().to_vec(), vec![c(1), c(3)]);
-    let state = state.with_delta_under(&[c(4), c(2)], &[], usize::MAX);
+    state.apply_under(&[c(4), c(2)], &[], usize::MAX);
     assert_eq!(state.claims().to_vec(), vec![c(1), c(3), c(4), c(2)]);
     assert_eq!(state.len(), 4);
 }

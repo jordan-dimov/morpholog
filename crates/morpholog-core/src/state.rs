@@ -259,36 +259,45 @@ impl State {
         asserted: &[ClaimInstance],
         retracted: &[ClaimInstance],
     ) -> State {
-        let threshold = (self.base.claims.len() / 8).max(COMPACTION_FLOOR);
-        self.with_delta_under(asserted, retracted, threshold)
+        let mut next = self.clone();
+        next.apply(asserted, retracted);
+        next
     }
 
-    /// `with_delta` folding into a fresh base once the churn
+    /// Advance this state in place by one transition's delta:
+    /// retractions first, then admissions, with the same rules as
+    /// [`State::from_claims`] followed by the naive rebuild - what a
+    /// replay does once per audit row. Cheap snapshots along the way
+    /// are `clone()`, which copies only what changed since the base.
+    pub fn apply(&mut self, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) {
+        let threshold = (self.base.claims.len() / 8).max(COMPACTION_FLOOR);
+        self.apply_under(asserted, retracted, threshold);
+    }
+
+    /// [`State::apply`] folding into a fresh base once the churn
     /// (retracted base positions plus every overlay slot, dead or
     /// alive) exceeds `threshold`, so a test can drive every layering
     /// of one logical history.
-    pub(crate) fn with_delta_under(
-        &self,
+    pub(crate) fn apply_under(
+        &mut self,
         asserted: &[ClaimInstance],
         retracted: &[ClaimInstance],
         threshold: usize,
-    ) -> State {
-        let mut next = self.clone();
+    ) {
         for claim in retracted {
-            next.retract(claim);
+            self.retract(claim);
         }
         for claim in asserted {
-            if !next.contains(claim) {
-                next.overlay.push(claim.clone());
-                next.dead_overlay.push(false);
-                next.live += 1;
+            if !self.contains(claim) {
+                self.overlay.push(claim.clone());
+                self.dead_overlay.push(false);
+                self.live += 1;
             }
         }
-        let churn = next.dead_base.len() + next.overlay.claims.len();
+        let churn = self.dead_base.len() + self.overlay.claims.len();
         if churn > threshold {
-            return State::from_claims(next.claims().to_vec());
+            *self = State::from_claims(self.claims().to_vec());
         }
-        next
     }
 
     fn retract(&mut self, claim: &ClaimInstance) {
