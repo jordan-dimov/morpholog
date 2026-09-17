@@ -87,6 +87,9 @@ struct ProbeObservation {
 enum Probe {
     BodyRejected,
     Observed(Box<ProbeObservation>),
+    /// The kernel's invariant check errored and both stages reported
+    /// the same typed error.
+    KernelErrorAgreed,
 }
 
 /// Stage once, judge three times, roll back. The comparator core both
@@ -138,9 +141,10 @@ async fn probe_raw(
     let retracted = retracted.clone();
 
     // The kernel's verdict, from the SAME staged delta the claims
-    // table is about to receive.
-    let kernel = finish_staged_delta(staged, &state, invariants, definitions)
-        .map_err(ProbeFailure::Kernel)?;
+    // table is about to receive. An error while the kernel checks the
+    // invariants (a sum past the decimal range) is a verdict the
+    // compiled checks must reproduce as the same typed error.
+    let kernel = finish_staged_delta(staged, &state, invariants, definitions);
 
     let transition_id = Uuid::now_v7();
     write_claim_delta(&mut tx, transition_id, &asserted, &retracted)
@@ -150,17 +154,36 @@ async fn probe_raw(
     disable_jit(&mut tx).await.map_err(ProbeFailure::Pg)?;
     let stage1 = sql_set
         .first_violation(&mut tx, Stage::Full, &asserted, &retracted)
-        .await
-        .map_err(ProbeFailure::Pg)?;
+        .await;
     let stage2 = sql_set
         .first_violation(&mut tx, Stage::CaseBound, &asserted, &retracted)
-        .await
-        .map_err(ProbeFailure::Pg)?;
+        .await;
 
     // Observationally inert: every probe rolls back, whatever it saw.
     tx.rollback()
         .await
         .map_err(|e| ProbeFailure::Pg(classify(e)))?;
+
+    let kernel = match kernel {
+        Ok(outcome) => outcome,
+        Err(expected) => {
+            for (label, stage) in [("full", stage1), ("case-bound", stage2)] {
+                match stage {
+                    Err(PgError::Kernel(got)) if got == expected => {}
+                    other => {
+                        return Err(ProbeFailure::Disagreement(disagreement(
+                            &format!("{label} kernel error"),
+                            &format!("{expected:?}"),
+                            &format!("{other:?}"),
+                        )));
+                    }
+                }
+            }
+            return Ok(Probe::KernelErrorAgreed);
+        }
+    };
+    let stage1 = stage1.map_err(ProbeFailure::Pg)?;
+    let stage2 = stage2.map_err(ProbeFailure::Pg)?;
 
     Ok(Probe::Observed(Box::new(ProbeObservation {
         kernel: Some(kernel),
@@ -171,7 +194,9 @@ async fn probe_raw(
 
 enum ProbeFailure {
     Pg(PgError),
+    /// The body itself could not be evaluated; no compiled check runs.
     Kernel(EvalError),
+    Disagreement(String),
 }
 
 fn disagreement(what: &str, spec: &str, compiled: &str) -> String {
@@ -257,7 +282,9 @@ fn summarise(v: &Option<SqlViolation>) -> Option<String> {
 /// accepted baseline chain once through the REAL production propose
 /// path, then run every transformation's boundary argument cases as
 /// rollback-only probes against that frontier state.
-async fn sweep(program: Program) {
+/// Returns how many probes the kernel refused with an evaluation error
+/// that both compiled stages reproduced.
+async fn sweep(program: Program) -> usize {
     let validated = program.validated().expect("gallery programme validates");
     let sql_set = compile_invariants(validated).expect("whole-in-fragment programme");
     let boundary_cases: Vec<(
@@ -277,6 +304,7 @@ async fn sweep(program: Program) {
     let pool = test_pool().await;
 
     let mut probes = 0usize;
+    let mut agreed_errors = 0usize;
     let mut chains: Vec<Vec<(String, Vec<EvalValue>)>> = vec![vec![]];
     for _depth in 0..REACHABILITY_DEPTH {
         let mut next_chains = Vec::new();
@@ -319,13 +347,19 @@ async fn sweep(program: Program) {
                                 next_chains.push(extended);
                             }
                         }
+                        Ok(Probe::KernelErrorAgreed) => agreed_errors += 1,
                         Err(ProbeFailure::Kernel(e))
                             if case.permits_range_refusal && is_permitted_range_error(&e) =>
                         {
-                            // The recorded ArithOutOfRange parity gap:
-                            // PG numeric is wider, so range-extreme
-                            // probes are skipped, never compared.
+                            // A range error in the body itself, on
+                            // range-extreme arguments: no compiled
+                            // check runs, so nothing to compare.
                         }
+                        Err(ProbeFailure::Disagreement(d)) => panic!(
+                            "{}::{name} with {:?}: {d}",
+                            compiled.program().name,
+                            case.args
+                        ),
                         Err(ProbeFailure::Kernel(e)) => panic!(
                             "{}::{name} with {:?} raised a kernel error: {e:?}",
                             compiled.program().name,
@@ -346,6 +380,7 @@ async fn sweep(program: Program) {
         probes > 0,
         "anti-vacuity: the sweep must have probed something"
     );
+    agreed_errors
 }
 
 /// Hostile fragments: the gallery supplies breadth, these supply
@@ -365,6 +400,20 @@ async fn sweep(program: Program) {
 /// `repr_for`, like every operator, needs a forcing discriminator
 /// here, not merely a unit test asserting emitted text.
 const HOSTILE: &[&str] = &[
+    // Two lines of one figure under a cap: on the range-extreme
+    // argument the exact total leaves the decimal range, and the
+    // kernel's error must be the compiled checks' error too.
+    "program two_lines
+predicate Cap(b: Subject, cap: Decimal)
+predicate Line(b: Subject, side: Subject, v: Decimal)
+invariant capped:
+    Cap(b, cap) implies sum(v | Line(b, _, v)) <= cap
+transformation set_cap(b, cap):
+    admit Cap(b, cap)
+transformation add_two(b, v):
+    admit Line(b, #left, v)
+    admit Line(b, #right, v)
+",
     // A bare top-level negation, violated by admitting the second
     // conjunct: the kernel reports no witness for a failure with
     // nothing bound above it, and the compiled check must say the same.
@@ -455,10 +504,18 @@ transformation set_left_span(x, v):
 
 #[tokio::test]
 async fn every_hostile_fragment_agrees_with_the_kernel() {
+    let mut agreed_errors = 0usize;
     for source in HOSTILE {
         let program = morpholog_surface::parse_program(source).expect("hostile fragment parses");
-        sweep(program).await;
+        agreed_errors += sweep(program).await;
     }
+    // The range parity is only proven if some probe reached a kernel
+    // range error and both stages reproduced it; `two_lines` puts one
+    // at depth one on the range-extreme argument.
+    assert!(
+        agreed_errors > 0,
+        "no probe reached a kernel range error; the sum-range parity went unexercised"
+    );
 }
 
 /// The named minimum corpus: gallery programmes that must stay
@@ -501,7 +558,7 @@ async fn the_minimum_corpus_is_still_whole_in_fragment() {
 #[tokio::test]
 async fn every_whole_in_fragment_programme_agrees_with_the_kernel() {
     for program in whole_in_fragment() {
-        sweep(program).await;
+        let _ = sweep(program).await;
     }
 }
 
@@ -555,8 +612,10 @@ async fn dirty_history_diverges_only_in_the_pinned_direction() {
             "expected an observed probe, got {:?}",
             match other {
                 Ok(Probe::BodyRejected) => "body rejection".to_string(),
+                Ok(Probe::KernelErrorAgreed) => "an agreed kernel error".to_string(),
                 Err(ProbeFailure::Kernel(e)) => format!("kernel error {e:?}"),
                 Err(ProbeFailure::Pg(e)) => format!("pg error {e:?}"),
+                Err(ProbeFailure::Disagreement(d)) => d,
                 Ok(Probe::Observed(_)) => unreachable!(),
             }
         ),

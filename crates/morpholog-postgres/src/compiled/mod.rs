@@ -608,8 +608,12 @@ impl Rendered {
 /// at most 28 and its coefficient fits 96 bits - the kernel's own
 /// test on its wide accumulator. Data, never a thrown error, so the
 /// planner's evaluation order cannot change what the query reports.
-/// Conjunction without the `true` an absent part contributes.
+/// Conjunction without the `true` an absent part contributes; `false`
+/// outright when any part is.
 fn and_all(parts: &[String]) -> String {
+    if parts.iter().any(|p| p == "false") {
+        return "false".to_string();
+    }
     let live: Vec<&str> = parts
         .iter()
         .map(String::as_str)
@@ -622,8 +626,12 @@ fn and_all(parts: &[String]) -> String {
     }
 }
 
-/// Disjunction without the `false` an absent part contributes.
+/// Disjunction without the `false` an absent part contributes; `true`
+/// outright when any part is.
 fn or_all(parts: &[String]) -> String {
+    if parts.iter().any(|p| p == "true") {
+        return "true".to_string();
+    }
     let live: Vec<&str> = parts
         .iter()
         .map(String::as_str)
