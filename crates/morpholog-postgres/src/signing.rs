@@ -80,7 +80,7 @@ pub(crate) fn tree_head_signing_bytes(purpose: &str, key_id: &str, head: &TreeHe
 }
 
 /// The bytes an external witness commits to: the typed, length-delimited
-/// head, encoded exactly as [`tree_head_signing_bytes`] encodes it, minus
+/// head, encoded exactly as the signing payload encodes it, minus
 /// the signing-only fields. A timestamp authority receives the SHA-256 of
 /// these bytes as its message imprint. Frozen by test in both branches
 /// (genesis and chained), since a stored proof stops verifying the moment
