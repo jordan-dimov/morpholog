@@ -38,6 +38,7 @@ A canonical `contend` row must be **clean** (no failed, no rejected operations);
 2. **The full ladder for every case the PR claims to improve.** The SQL spike's claims were 100x sweeps, and the sweep is what surfaced the JIT tax and the ORDER-BY planner flip; a quick ladder alone would have missed both.
 3. **Baseline and candidate measured on the same host, same PostgreSQL instance and version, same suite contract, during the PR.** Historical README timings are never the baseline - the README itself records absolute numbers moving in *both* directions with the machine while the scaling laws held.
 4. The command that produced each table, in the PR body - a performance claim's check is a re-runnable measurement, the same rule as every other claim here.
+5. **The `compare` table** for baseline against candidate: `suite --format json` on each, then `morpholog-bench compare before.json after.json`, which pairs every case metric by case, axis, point, metric and unit, prints the ratio, refuses two rulers, two ladders, or one metric in two units, and lists any row only one side has - so a changed plan cannot pass as a changed number. Type nothing by hand.
 
 ## What CI runs, and what it never runs
 

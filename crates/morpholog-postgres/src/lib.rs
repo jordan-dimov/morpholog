@@ -89,8 +89,9 @@ pub use pack::{
     verify_selective, verify_window,
 };
 pub use propose::{
-    AuditedInvariantCheck, PgProposalOutcome, PgTracedOutcome, RejectionStateOutcome,
-    compute_idempotency_key, propose_against_pg, propose_against_pg_with_rejection_state,
+    AuditedInvariantCheck, PgProposalOutcome, PgTracedOutcome, ProposalPhases,
+    RejectionStateOutcome, TimedProposalOutcome, compute_idempotency_key, propose_against_pg,
+    propose_against_pg_timed, propose_against_pg_with_rejection_state,
     propose_against_pg_with_trace,
 };
 pub(crate) use provision::least_privilege_roles_exist;
