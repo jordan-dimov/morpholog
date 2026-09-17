@@ -27,6 +27,7 @@ mod compiled;
 mod compiled_differential;
 mod derived;
 mod error;
+mod indexes;
 mod keys;
 mod merkle;
 mod migrations;
@@ -72,6 +73,7 @@ pub use claims::{
 pub use compiled::{CompileReason, CompileRefusal, IndexSpec, Representation};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
 pub use error::PgError;
+pub use indexes::{IndexAction, IndexPlanEntry, ProvisionReport, plan_indexes, provision_indexes};
 pub use merkle::{Digest, DigestError};
 pub use migrations::{
     MigrationRef, MigrationReport, apply_migrations, head_version, migration_status,

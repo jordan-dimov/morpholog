@@ -36,6 +36,7 @@ pub(crate) mod keygen;
 pub(crate) mod migrate;
 pub(crate) mod outbox;
 pub(crate) mod propose;
+pub(crate) mod provision;
 pub(crate) mod refresh;
 pub(crate) mod schema;
 pub(crate) mod session;

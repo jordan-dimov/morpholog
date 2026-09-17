@@ -198,6 +198,19 @@ enum Command {
         what: AuditCmd,
     },
 
+    /// Prepare a database for a programme, beyond the schema.
+    ///
+    /// `indexes` reconciles the partial expression indexes a programme's
+    /// compiled invariants can seek on: creates what is missing, repairs
+    /// an interrupted build, reports a conflict for an operator, and
+    /// leaves an equivalent index someone else made alone. Correctness
+    /// never depends on it - the checks are right without any index,
+    /// only slower.
+    Provision {
+        #[command(subcommand)]
+        what: ProvisionCmd,
+    },
+
     /// Print a stable fingerprint of a programme's rules.
     ///
     /// SHA-256 over the canonical (formatter-rendered) source, as
@@ -544,6 +557,33 @@ pub(crate) struct EvaluateArgs {
 /// `export` read the database; `verify-pack` is deliberately offline -
 /// it takes no connection string, only files - and `keygen` touches
 /// neither.
+#[derive(clap::Subcommand, Debug)]
+pub(crate) enum ProvisionCmd {
+    /// Reconcile the indexes a programme's compiled invariants can seek
+    /// on. Prints one line per index with its action - KEEP, CREATE,
+    /// REPAIR INVALID, SATISFIED EXTERNALLY, STALE, CONFLICT - and exits
+    /// non-zero on a conflict, which needs an operator. Builds run
+    /// concurrently, so the claims table stays writable throughout.
+    Indexes(ProvisionIndexesArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct ProvisionIndexesArgs {
+    /// The `.morph` programme whose compiled invariants set the requirement.
+    pub(crate) file: std::path::PathBuf,
+
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+
+    /// Print the plan and change nothing.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
+
+    /// Also drop managed indexes no programme requires any more.
+    #[arg(long)]
+    pub(crate) prune: bool,
+}
+
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum AuditCmd {
     /// Check that the claims table and the audit log still agree.
@@ -1482,6 +1522,9 @@ async fn run() -> anyhow::Result<()> {
         },
         Command::Schema(args) => commands::schema::run(args),
         Command::Evaluate(args) => commands::evaluate::run(args).await,
+        Command::Provision { what } => match what {
+            ProvisionCmd::Indexes(args) => commands::provision::indexes(args).await,
+        },
         Command::Audit { what } => match what {
             AuditCmd::Verify(args) => commands::verify::run(args).await,
             AuditCmd::Checkpoint(args) => commands::checkpoint::run(args).await,
