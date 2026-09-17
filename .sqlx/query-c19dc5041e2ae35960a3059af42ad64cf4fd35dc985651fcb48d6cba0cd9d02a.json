@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM morpholog.index_requirement WHERE program_identity = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c19dc5041e2ae35960a3059af42ad64cf4fd35dc985651fcb48d6cba0cd9d02a"
+}

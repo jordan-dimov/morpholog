@@ -393,3 +393,51 @@ fn comment_safe_leaves_no_delimiter_standing() {
     assert!(!safe.contains("/*"), "opener survived: {safe}");
     assert!(!safe.contains('\n') && !safe.contains('\r'));
 }
+
+/// The indexes the ledger's SQL can seek on are emitted by the compiler
+/// beside the SQL, one per (predicate, position) it filters or joins
+/// on, in the representation the SQL reads that position with. A
+/// witness-only position (the fork invariant's successor ids) is not a
+/// seek and is not indexed; the spike indexed every variable position.
+#[test]
+fn ledger_required_indexes_are_pinned() {
+    let specs = compiled(&ledger_program()).required_indexes();
+    let shape: Vec<(String, usize, &str)> = specs
+        .iter()
+        .map(|s| {
+            (
+                s.predicate.to_string(),
+                s.position,
+                s.representation.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            ("JournalEntry".to_string(), 0, "text"),
+            ("JournalLine".to_string(), 0, "text"),
+            ("Supersedes".to_string(), 1, "text"),
+        ]
+    );
+    let first = &specs[0];
+    assert_eq!(first.expression_sql, "arguments -> 0 ->> 'value'");
+    assert_eq!(
+        first.partial_predicate_sql,
+        "predicate_name = 'JournalEntry'"
+    );
+    assert_eq!(
+        first.index_name(),
+        format!("morpholog_ci_journalentry_0_text_{}", &first.digest()[..12])
+    );
+    assert_eq!(
+        first.create_sql(),
+        format!(
+            "CREATE INDEX CONCURRENTLY \"{}\" ON morpholog.claims USING btree ((arguments -> 0 ->> 'value')) WHERE predicate_name = 'JournalEntry'",
+            first.index_name()
+        )
+    );
+    // The digest covers the whole specification, so the same expression
+    // over another predicate is another requirement.
+    assert_ne!(specs[0].digest(), specs[1].digest());
+}

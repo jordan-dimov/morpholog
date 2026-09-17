@@ -648,6 +648,75 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     {
         return Err("the derived cache must have lost its whole-array key".to_string());
     }
+
+    // Migration 015's contract: the index registry exists with its
+    // static shape, and nothing in it - the command that fills it has
+    // not run. Correctness never rests on either table.
+    for (table, key) in [
+        ("managed_index", "spec_digest"),
+        ("index_requirement", "program_identity"),
+    ] {
+        let names: Vec<String> = columns(&pool, "morpholog", table)
+            .await
+            .into_iter()
+            .map(|(name, _, _)| name)
+            .collect();
+        if !names.iter().any(|n| n == key) {
+            return Err(format!(
+                "migration 015 must create morpholog.{table} with {key}; columns: {names:?}"
+            ));
+        }
+    }
+    // And it refuses to bless a table of the same name and another shape,
+    // rather than recording the version and failing on the first run of
+    // the command that fills it. Proved with the migration's own SQL on
+    // a wrong-shaped twin, then the tables put back.
+    let migration_015 = include_str!("../../morpholog-core/sql/migrations/015_managed_indexes.sql");
+    // Two twins: the wrong columns, and - the dangerous one - the right
+    // columns without a constraint the command relies on.
+    for (label, twin) in [
+        (
+            "wrong columns",
+            "CREATE TABLE morpholog.managed_index (something_else integer)",
+        ),
+        (
+            "right columns, no unique index_name",
+            "CREATE TABLE morpholog.managed_index (
+                spec_digest text PRIMARY KEY, index_name text NOT NULL,
+                predicate_name text NOT NULL, position integer NOT NULL CHECK (position >= 0),
+                representation text NOT NULL, expression_sql text NOT NULL,
+                partial_predicate text NOT NULL, registered_at timestamptz NOT NULL DEFAULT now())",
+        ),
+    ] {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "DROP TABLE IF EXISTS morpholog.index_requirement; DROP TABLE IF EXISTS morpholog.managed_index; {twin}"
+        )))
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("shaping the twin ({label}): {e}"))?;
+        match sqlx::raw_sql(migration_015).execute(&pool).await {
+            Ok(_) => {
+                return Err(format!(
+                    "migration 015 adopted a managed_index twin ({label})"
+                ));
+            }
+            Err(e) if e.to_string().contains("another shape") => {}
+            Err(e) => {
+                return Err(format!(
+                    "migration 015 refused {label} for the wrong reason: {e}"
+                ));
+            }
+        }
+        sqlx::raw_sql("DROP TABLE morpholog.managed_index")
+            .execute(&pool)
+            .await
+            .map_err(|e| format!("removing the twin ({label}): {e}"))?;
+    }
+    sqlx::raw_sql(migration_015)
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("migration 015 must recreate the registry: {e}"))?;
+
     Ok(())
 }
 

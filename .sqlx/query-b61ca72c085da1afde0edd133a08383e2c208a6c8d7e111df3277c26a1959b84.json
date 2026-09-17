@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT m.index_name AS \"index_name!\", m.predicate_name AS \"predicate!\",\n                  m.position AS \"position!\", m.representation AS \"representation!\"\n           FROM morpholog.managed_index m\n           WHERE NOT (m.spec_digest = ANY($2))\n             AND NOT EXISTS (\n                 SELECT 1 FROM morpholog.index_requirement r\n                 WHERE r.spec_digest = m.spec_digest AND r.program_identity <> $1)\n           ORDER BY m.index_name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "index_name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.managed_index",
+            "name": "index_name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "predicate!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.managed_index",
+            "name": "predicate_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "position!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "morpholog.managed_index",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "representation!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.managed_index",
+            "name": "representation"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b61ca72c085da1afde0edd133a08383e2c208a6c8d7e111df3277c26a1959b84"
+}

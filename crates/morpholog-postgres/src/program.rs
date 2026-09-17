@@ -9,7 +9,7 @@
 
 use morpholog_core::CompiledProgram;
 
-use crate::compiled::{CompileRefusal, CompiledInvariantSet, compile_invariants};
+use crate::compiled::{CompileRefusal, CompiledInvariantSet, IndexSpec, compile_invariants};
 
 pub struct PgProgram {
     core: CompiledProgram,
@@ -47,6 +47,15 @@ impl PgProgram {
 
     pub fn core(&self) -> &CompiledProgram {
         &self.core
+    }
+
+    /// The indexes the compiled SQL can seek on; none when the
+    /// programme is interpreted. What `provision indexes` reconciles.
+    pub(crate) fn required_indexes(&self) -> Vec<IndexSpec> {
+        match &self.backend {
+            InvariantBackend::Compiled(set) => set.required_indexes(),
+            InvariantBackend::Interpreted(_) => Vec::new(),
+        }
     }
 
     pub fn plan(&self) -> InvariantPlan<'_> {

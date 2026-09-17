@@ -1,0 +1,83 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.relname AS \"name!\",\n                  i.indisvalid AS \"valid!\",\n                  am.amname AS \"am!\",\n                  i.indnkeyatts AS \"keys!\",\n                  i.indkey::text AS \"indkey!\",\n                  pg_get_expr(i.indexprs, i.indrelid) AS \"expression?\",\n                  pg_get_expr(i.indpred, i.indrelid) AS \"partial?\"\n           FROM pg_index i\n           JOIN pg_class c ON c.oid = i.indexrelid\n           JOIN pg_am am ON am.oid = c.relam\n           WHERE i.indrelid = 'morpholog.claims'::regclass",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "valid!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_index",
+            "name": "indisvalid"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "am!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_am",
+            "name": "amname"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "keys!",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "pg_index",
+            "name": "indnkeyatts"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "indkey!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "expression?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "partial?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "69a80e700b3c9c1b927d29d35d4ecd39d764cadfab256cd86c9e7b8b7f706f37"
+}
