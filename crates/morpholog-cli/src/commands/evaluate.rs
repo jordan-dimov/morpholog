@@ -75,9 +75,12 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
 /// A `--train-until` boundary is spelled exactly like `--as-of`: a
 /// transition id, else an RFC 3339 timestamp.
 fn parse_boundary(raw: &str) -> anyhow::Result<SplitBoundary> {
-    let as_of: crate::AsOf = raw
-        .parse()
-        .map_err(|e| anyhow::anyhow!("--train-until: {e}"))?;
+    let as_of: crate::AsOf = raw.parse().map_err(|e| {
+        anyhow::anyhow!(
+            "--train-until takes a transition id or an RFC 3339 timestamp \
+             (e.g. 2026-07-01T00:00:00Z); `{raw}` parses as neither: {e}"
+        )
+    })?;
     Ok(match as_of {
         crate::AsOf::Transition(id) => SplitBoundary::Transition(id),
         crate::AsOf::AtOrBefore(at) => SplitBoundary::AtOrBefore(at),
