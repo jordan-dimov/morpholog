@@ -281,7 +281,7 @@ program: reported_revenue
   invariant checks: compiled
 ```
 
-The last line is the plan for checking your invariants: every one here is inside the fragment the runtime can compile to SQL. The plan is built and reported today; proposals run it in the database once the compiled path is wired in, and until then every programme is checked by the interpreter. A programme with an invariant outside the fragment reports `interpreted` and names the invariant and the construct that kept it out; either way the rules mean the same thing.
+The last line says how your invariants are checked when you propose: every one here is inside the fragment the runtime compiles to SQL, so the checks run in the database against the candidate state, and `morpholog provision indexes` gives them indexes to seek on. A programme with an invariant outside the fragment reports `interpreted` and names the invariant and the construct that kept it out; the interpreter then checks the whole programme. Either way the rules mean the same thing, and the same proposal reaches the same decision.
 
 ## Make it happen
 

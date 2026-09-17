@@ -28,7 +28,7 @@
 //! `compute_load_scope` stays `pub(crate)` so the loading mechanism
 //! can change without a public API having promised today's answer.
 
-use morpholog_core::{Program, State, StagedDelta, propose_stage_delta};
+use morpholog_core::{Program, StagedDelta, State, propose_stage_delta};
 use morpholog_test_support::differential::{observable, sample_args, sample_state};
 use morpholog_test_support::propose_with_test_actor;
 
@@ -160,12 +160,8 @@ fn body_only_scope_stages_the_same_delta_as_full_state() {
                     continue;
                 };
                 let full = sample_state(program, 2, salt);
-                let scope = compute_load_scope(
-                    t,
-                    &program.invariants,
-                    &program.definitions,
-                    Reads::Body,
-                );
+                let scope =
+                    compute_load_scope(t, &program.invariants, &program.definitions, Reads::Body);
                 let projected = project(&full, &scope);
                 let transition = morpholog_core::Transition {
                     transformation_name: t.name.clone(),

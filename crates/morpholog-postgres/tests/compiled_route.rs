@@ -12,6 +12,8 @@
 //! falling back. A SQL error inside a check is an operational error,
 //! with the transaction rolled back and nothing recorded.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 mod common;
 
 use common::{attested, reset_db, test_pool};
@@ -145,8 +147,11 @@ async fn both_routes_reach_the_same_decision_over_the_gallery() {
                     skipped += 1;
                     continue;
                 };
-                let seeded: Vec<ClaimInstance> =
-                    sample_state(&program, 2, salt).claims().iter().cloned().collect();
+                let seeded: Vec<ClaimInstance> = sample_state(&program, 2, salt)
+                    .claims()
+                    .iter()
+                    .cloned()
+                    .collect();
                 let transition = Transition {
                     transformation_name: t.name.clone(),
                     args,
@@ -285,25 +290,30 @@ async fn a_compiled_batch_checks_each_act_against_the_acts_before_it() {
     let program = ledger();
 
     // Two postings admitted as one decision.
-    let outcome = propose_all_against_pg(
-        &pool,
-        &program,
-        &[posting("e1", 100), posting("e2", 40)],
-    )
-    .await
-    .unwrap();
+    let outcome = propose_all_against_pg(&pool, &program, &[posting("e1", 100), posting("e2", 40)])
+        .await
+        .unwrap();
     let PgAtomicOutcome::Committed { acts } = outcome else {
         panic!("both admitted, got {outcome:?}");
     };
     assert_eq!(acts.len(), 2);
-    assert_eq!(count(&pool, "SELECT count(*) FROM morpholog.audit").await, 2);
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM morpholog.audit").await,
+        2
+    );
 
     // A split that balances on its own, admitted alone.
     let outcome = propose_all_against_pg(&pool, &program, &[split_posting("e3", 10, 6, 4)])
         .await
         .unwrap();
-    assert!(matches!(outcome, PgAtomicOutcome::Committed { .. }), "{outcome:?}");
-    assert_eq!(count(&pool, "SELECT count(*) FROM morpholog.audit").await, 3);
+    assert!(
+        matches!(outcome, PgAtomicOutcome::Committed { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM morpholog.audit").await,
+        3
+    );
 
     // The same split after a simple posting of the same entry in the
     // same batch: its debit line is the earlier act's line (claims are
@@ -344,5 +354,8 @@ async fn a_compiled_batch_checks_each_act_against_the_acts_before_it() {
     };
     assert_eq!(act, 2);
     assert_eq!(rule.as_deref(), Some("balanced_posted_entry"));
-    assert_eq!(count(&pool, "SELECT count(*) FROM morpholog.audit").await, 3);
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM morpholog.audit").await,
+        3
+    );
 }

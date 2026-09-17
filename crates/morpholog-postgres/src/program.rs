@@ -154,13 +154,16 @@ mod tests {
         let interpreted = program.load_scope(&post, Route::Interpreted);
         assert!(compiled.iter().all(|p| interpreted.contains(p)));
         assert!(
-            interpreted.contains(&"JournalLine".into()) && !compiled.contains(&"JournalLine".into()),
+            interpreted.contains(&"JournalLine".into())
+                && !compiled.contains(&"JournalLine".into()),
             "compiled {compiled:?}, interpreted {interpreted:?}"
         );
         let pinned = PgProgram::interpreted(
             CompiledProgram::new(morpholog_examples::double_entry_ledger::program()).unwrap(),
         );
         assert!(matches!(pinned.route(), Route::Interpreted));
-        assert!(matches!(pinned.plan(), InvariantPlan::Interpreted { refusals } if refusals.is_empty()));
+        assert!(
+            matches!(pinned.plan(), InvariantPlan::Interpreted { refusals } if refusals.is_empty())
+        );
     }
 }

@@ -47,7 +47,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         // panic path in the binary.
         anyhow::bail!("a transformation name is required outside --batch");
     };
-    let transformation = lookup_transformation(&compiled, transformation_name, &args.file)?;
+    let transformation = lookup_transformation(compiled, transformation_name, &args.file)?;
 
     // 4. Decode --args or --args-named into `Vec<EvalValue>`. Clap
     //    has already enforced exactly-one-of via `conflicts_with` +
@@ -442,13 +442,9 @@ pub(crate) async fn propose_row_outcome(
         let morpholog_postgres::RejectionStateOutcome {
             outcome,
             rejection_state,
-        } = propose_against_pg_with_rejection_state(
-            pool,
-            program,
-            &Proposal::gateway(&transition),
-        )
-        .await
-        .map_err(classify_pg_error)?;
+        } = propose_against_pg_with_rejection_state(pool, program, &Proposal::gateway(&transition))
+            .await
+            .map_err(classify_pg_error)?;
         if let (
             PgProposalOutcome::Rejected {
                 reason,

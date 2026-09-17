@@ -61,11 +61,10 @@ pub async fn commit_simple_entry(pool: &PgPool, entry_id: &str, period: &str) ->
         ],
         actor: Subject::from("outbox_test"),
     };
-    let program =
-        PgProgram::new(CompiledProgram::new(double_entry_ledger::program()).expect("valid programme"));
+    let program = PgProgram::new(
+        CompiledProgram::new(double_entry_ledger::program()).expect("valid programme"),
+    );
     let proposal = Proposal::gateway(&transition);
-    let outcome = propose_against_pg(pool, &program, &proposal)
-        .await
-        .unwrap();
+    let outcome = propose_against_pg(pool, &program, &proposal).await.unwrap();
     expect_committed(outcome)
 }

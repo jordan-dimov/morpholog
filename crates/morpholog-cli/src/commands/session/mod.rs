@@ -36,8 +36,8 @@ use crate::commands::transact::{Act, decode_acts};
 use crate::commands::{compile_or_report, parse_or_report};
 use morpholog_cli::envelopes::{ErrorCode, ErrorReceipt, SessionReady};
 use morpholog_core::CompiledProgram;
-use morpholog_postgres::PgProgram;
 use morpholog_postgres::PgPool;
+use morpholog_postgres::PgProgram;
 
 /// A runaway guard, not a working limit: a request line larger than
 /// this aborts the session (there is no way to resynchronise a
@@ -227,21 +227,16 @@ async fn handle_propose(
         args: body.args,
         args_named: body.args_named,
     };
-    let mut envelope = propose_row_outcome(
-        &args.file,
-        body.explain_on_reject,
-        program,
-        pool,
-        batch_row,
-    )
-    .await
-    .map_err(|e| match e {
-        RowError { code: None, reason } => SessionFailure::Operational(reason),
-        RowError {
-            code: Some(code),
-            reason,
-        } => SessionFailure::request(code.into(), reason),
-    })?;
+    let mut envelope =
+        propose_row_outcome(&args.file, body.explain_on_reject, program, pool, batch_row)
+            .await
+            .map_err(|e| match e {
+                RowError { code: None, reason } => SessionFailure::Operational(reason),
+                RowError {
+                    code: Some(code),
+                    reason,
+                } => SessionFailure::request(code.into(), reason),
+            })?;
     if let Some(receipt) = envelope.as_object_mut() {
         receipt.insert("row".to_string(), serde_json::json!(row));
     }

@@ -27,8 +27,8 @@ use crate::compiled::{Stage, disable_jit};
 use crate::error::{PgError, classify, classify_commit};
 use crate::program::{PgProgram, Route};
 use crate::propose::{
-    load_state, resolve, rule_identity, write_acceptance_record, write_accepted,
-    write_claim_delta, write_rejection,
+    load_state, resolve, rule_identity, write_acceptance_record, write_accepted, write_claim_delta,
+    write_rejection,
 };
 use crate::txn::begin_authorised_proposal_tx;
 
