@@ -39,6 +39,14 @@ psql morpholog_bench -f crates/morpholog-core/sql/schema.sql
 DATABASE_URL=postgres:///morpholog_bench \
   cargo run -p morpholog-bench --release -- write 100000 --reset
 
+# the same write under the compiled invariant route, unprovisioned and
+# then with the indexes the compiler names (the bench establishes the
+# index condition itself; see docs/benchmarking.md):
+DATABASE_URL=postgres:///morpholog_bench \
+  cargo run -p morpholog-bench --release -- write 100000 --reset --implementation compiled
+DATABASE_URL=postgres:///morpholog_bench \
+  cargo run -p morpholog-bench --release -- write 100000 --reset --implementation compiled-indexed
+
 DATABASE_URL=postgres:///morpholog_bench \
   cargo run -p morpholog-bench --release -- read 100000 --accounts 100 --reset
 
