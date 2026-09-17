@@ -590,7 +590,7 @@ const IMPLEMENTATION: &str = "interpreted";
 /// ladders, aggregation) - never by an implementation being measured.
 /// The distinction between changing the machine and changing the
 /// ruler; see docs/benchmarking.md.
-const SUITE_CONTRACT: u32 = 1;
+const SUITE_CONTRACT: u32 = 2;
 
 /// One measured metric of one case: named, unit-tagged samples in
 /// repeat order. `samples[0]` is the `first` reading - deliberately
@@ -2333,6 +2333,18 @@ const CASE_PROVENANCE: &[(&str, &str)] = &[
          out at 7-ary); /size sweeps rows at arity 13, /arity sweeps the \
          argument count itself",
     ),
+    (
+        "kernel",
+        "the kernel alone, no database: the interpreted core of transact \
+         (an embedder's ~370-act day proposed act by act against the \
+         candidate before it) and the candidate build by itself, which \
+         the layered state made free",
+    ),
+    (
+        "replay",
+        "the verification arc's cost: coverage and candidate scoring walk \
+         the whole audit log, once per row, over the as-of fixture",
+    ),
 ];
 
 #[derive(Debug, Clone)]
@@ -2365,6 +2377,14 @@ enum CaseKind {
         axis: &'static str,
         n: usize,
         arity: usize,
+    },
+    Kernel {
+        n: usize,
+        acts: usize,
+    },
+    Replay {
+        n: usize,
+        retract_fraction: usize,
     },
 }
 
@@ -2462,6 +2482,17 @@ fn suite_plan(ladder: Ladder) -> Vec<CaseSpec> {
                 axis: "n",
                 n,
                 arity: 13,
+            },
+        });
+        plan.push(CaseSpec {
+            case: "kernel/acts",
+            kind: CaseKind::Kernel { n, acts: 370 },
+        });
+        plan.push(CaseSpec {
+            case: "replay/retract",
+            kind: CaseKind::Replay {
+                n,
+                retract_fraction: 50,
             },
         });
     }
@@ -2586,6 +2617,11 @@ async fn run_case(pool: &PgPool, spec: &CaseSpec, repeat: usize) -> Result<CaseR
         CaseKind::Wide { axis, n, arity } => {
             measure_wide(pool, spec.case, axis, *n, *arity, repeat).await
         }
+        CaseKind::Kernel { n, acts } => measure_kernel(spec.case, *n, *acts, repeat),
+        CaseKind::Replay {
+            n,
+            retract_fraction,
+        } => measure_replay(pool, spec.case, *n, *retract_fraction, repeat).await,
     }
 }
 
@@ -3130,6 +3166,17 @@ mod smoke {
                     arity: 4,
                 },
             },
+            CaseSpec {
+                case: "kernel/acts",
+                kind: CaseKind::Kernel { n: 2, acts: 2 },
+            },
+            CaseSpec {
+                case: "replay/retract",
+                kind: CaseKind::Replay {
+                    n: 2,
+                    retract_fraction: 50,
+                },
+            },
         ];
         let cases = run_suite_specs(&pool, &plan, 2)
             .await
@@ -3188,7 +3235,7 @@ mod smoke {
             }],
         };
         let rendered = render_markdown(&report);
-        assert!(rendered.contains("suite_contract=1"));
+        assert!(rendered.contains(&format!("suite_contract={SUITE_CONTRACT}")));
         assert!(rendered.contains("requested_repeat=3"));
         // The flags travel with the number.
         assert!(rendered.contains("- `write/base` Write { n: 100, accounts: 2, noise: 0 }"));
@@ -3209,13 +3256,13 @@ mod smoke {
         assert!(!rendered.contains("benchmark-grade=false"));
     }
 
-    /// The frozen-matrix tripwire: `suite_contract=1` pins these
+    /// The frozen-matrix tripwire: `suite_contract=2` pins these
     /// fingerprints of the canonical plans. Touching `suite_plan`
     /// without bumping the contract (in its own reviewed commit) goes
     /// red here - the ruler cannot change as one innocent parameter
     /// buried in a diff.
     #[test]
-    fn the_canonical_matrix_is_frozen_under_contract_1() {
+    fn the_canonical_matrix_is_frozen_under_contract_2() {
         use sha2::{Digest, Sha256};
         let fingerprint = |ladder: Ladder| {
             let canonical: String = suite_plan(ladder)
@@ -3229,15 +3276,15 @@ mod smoke {
                 out
             })
         };
-        assert_eq!(SUITE_CONTRACT, 1, "bumping the contract re-pins these");
+        assert_eq!(SUITE_CONTRACT, 2, "bumping the contract re-pins these");
         assert_eq!(
             fingerprint(Ladder::Quick),
-            "232c3844b052140fbbefab3a568cf148f1f46b2627fe5886a5a6e3fc09d45bfa",
+            "ffd974c7fe2fa3624d92e3a94b2b8df3d43f3dd3a2e197483e66edbef369cb37",
             "the quick matrix changed without a contract bump"
         );
         assert_eq!(
             fingerprint(Ladder::Full),
-            "511cf3837651e1fdc8e5449d3462d4057e774bc87c45c84a687c1b754635b24e",
+            "d2fecec898de1d87f0ff08817f92da0867b552d78e229425bc56b1a3671a7a24",
             "the full matrix changed without a contract bump"
         );
     }
