@@ -109,7 +109,6 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         let morpholog_postgres::RejectionStateOutcome {
             outcome,
             rejection_state,
-            ..
         } = propose_against_pg_with_rejection_state(
             &pool,
             &compiled,
@@ -441,7 +440,6 @@ pub(crate) async fn propose_row_outcome(
         let morpholog_postgres::RejectionStateOutcome {
             outcome,
             rejection_state,
-            ..
         } = propose_against_pg_with_rejection_state(
             pool,
             compiled,

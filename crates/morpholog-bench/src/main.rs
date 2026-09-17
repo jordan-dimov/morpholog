@@ -64,8 +64,7 @@ use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     PgAtomicOutcome, PgError, PgPool, PgProposalOutcome, Proposal, coverage_replay,
     list_claims_for_predicates, list_derived_at, propose_against_pg,
-    propose_against_pg_with_rejection_state, propose_all_against_pg, reconstruct_state_at,
-    score_candidate,
+    propose_against_pg_with_phases, propose_all_against_pg, reconstruct_state_at, score_candidate,
 };
 use rust_decimal::Decimal;
 use sqlx::postgres::PgPoolOptions;
@@ -744,19 +743,15 @@ async fn measure_write(
             actor: Subject::from("bench"),
         };
         let t = Instant::now();
-        let result = propose_against_pg_with_rejection_state(
-            pool,
-            &compiled,
-            &Proposal::gateway(&transition),
-        )
-        .await
-        .context("propose_against_pg")?;
+        let (outcome, phases) =
+            propose_against_pg_with_phases(pool, &compiled, &Proposal::gateway(&transition))
+                .await
+                .context("propose_against_pg_with_phases")?;
         propose.push(t.elapsed());
-        begin.push(result.phases.begin);
-        load.push(result.phases.load);
-        kernel.push(result.phases.kernel);
-        finalise.push(result.phases.finalise);
-        let outcome = result.outcome;
+        begin.push(phases.begin);
+        load.push(phases.load);
+        kernel.push(phases.kernel);
+        finalise.push(phases.finalise);
         if !matches!(outcome, PgProposalOutcome::Committed { .. }) {
             return Err(anyhow!(
                 "expected the target propose to commit ({}); bench fixture or \

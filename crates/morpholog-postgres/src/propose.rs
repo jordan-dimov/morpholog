@@ -123,7 +123,7 @@ pub(crate) async fn propose_against_pg_inner(
     // plus a free hand-off (the scoped state is moved, never cloned,
     // and only on rejection), so the SERIALIZABLE-setup ritual lives
     // in one fewer place.
-    let result = propose_against_pg_with_rejection_state_inner(
+    let run = propose_against_pg_with_rejection_state_inner(
         pool,
         transformation,
         transition,
@@ -131,7 +131,29 @@ pub(crate) async fn propose_against_pg_inner(
         definitions,
     )
     .await?;
-    Ok(result.outcome)
+    Ok(run.outcome)
+}
+
+/// [`propose_against_pg`] with where the wall time went, for the bench's
+/// phase breakdown. Same path, same outcome; the phases are the four
+/// clock readings the primitive takes on every proposal anyway.
+pub async fn propose_against_pg_with_phases(
+    pool: &PgPool,
+    compiled: &CompiledProgram,
+    proposal: &Proposal,
+) -> Result<(PgProposalOutcome, ProposalPhases), PgError> {
+    let (transformation, invariants, definitions) =
+        resolve(compiled, &proposal.transformation_name)?;
+    let transition = proposal.transition();
+    let run = propose_against_pg_with_rejection_state_inner(
+        pool,
+        transformation,
+        &transition,
+        invariants,
+        definitions,
+    )
+    .await?;
+    Ok((run.outcome, run.phases))
 }
 
 /// What [`propose_against_pg_with_rejection_state`] returns: the
@@ -147,7 +169,14 @@ pub(crate) async fn propose_against_pg_inner(
 pub struct RejectionStateOutcome {
     pub outcome: PgProposalOutcome,
     pub rejection_state: Option<State>,
-    pub phases: ProposalPhases,
+}
+
+/// Everything one run of the primitive yields; the public entry points
+/// each hand out the part they promise.
+pub(crate) struct ProposalRun {
+    outcome: PgProposalOutcome,
+    rejection_state: Option<State>,
+    phases: ProposalPhases,
 }
 
 /// Where one proposal's wall time went: opening the transaction,
@@ -178,14 +207,18 @@ pub async fn propose_against_pg_with_rejection_state(
     let (transformation, invariants, definitions) =
         resolve(compiled, &proposal.transformation_name)?;
     let transition = proposal.transition();
-    propose_against_pg_with_rejection_state_inner(
+    let run = propose_against_pg_with_rejection_state_inner(
         pool,
         transformation,
         &transition,
         invariants,
         definitions,
     )
-    .await
+    .await?;
+    Ok(RejectionStateOutcome {
+        outcome: run.outcome,
+        rejection_state: run.rejection_state,
+    })
 }
 
 pub(crate) async fn propose_against_pg_with_rejection_state_inner(
@@ -194,7 +227,7 @@ pub(crate) async fn propose_against_pg_with_rejection_state_inner(
     transition: &Transition,
     invariants: &[Invariant],
     definitions: &[Definition],
-) -> Result<RejectionStateOutcome, PgError> {
+) -> Result<ProposalRun, PgError> {
     let clock = std::time::Instant::now();
     let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &transition.actor).await?;
     let begin = clock.elapsed();
@@ -216,7 +249,7 @@ pub(crate) async fn propose_against_pg_with_rejection_state_inner(
     )
     .await?;
     let finalise = clock.elapsed() - begin - load - kernel;
-    Ok(RejectionStateOutcome {
+    Ok(ProposalRun {
         outcome: pg_outcome,
         rejection_state,
         phases: ProposalPhases {
