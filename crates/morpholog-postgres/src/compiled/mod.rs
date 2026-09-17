@@ -123,6 +123,105 @@ pub(crate) struct CompiledInvariantSet {
     pub(crate) invariants: Vec<CompiledInvariant>,
 }
 
+impl CompiledInvariantSet {
+    /// Every index the set's SQL can seek on, once each, in
+    /// specification order.
+    pub(crate) fn required_indexes(&self) -> Vec<IndexSpec> {
+        let mut specs: Vec<IndexSpec> = self
+            .invariants
+            .iter()
+            .flat_map(|inv| inv.required_indexes.iter().cloned())
+            .collect();
+        specs.sort();
+        specs.dedup();
+        specs
+    }
+}
+
+/// One index the compiled SQL can seek on: a partial expression index
+/// over one argument position of one predicate, in the representation
+/// the SQL reads that position with. Emitted by the compiler beside the
+/// query, from the same [`Representation`], so the index necessarily
+/// matches the extractor. Provisioning reconciles these against the
+/// database; correctness never depends on them.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct IndexSpec {
+    pub predicate: PredicateName,
+    pub position: usize,
+    pub representation: Representation,
+    /// The indexed expression, unqualified, as it appears inside the
+    /// parentheses of `CREATE INDEX`.
+    pub expression_sql: String,
+    /// The partial-index predicate.
+    pub partial_predicate_sql: String,
+}
+
+impl IndexSpec {
+    fn new(predicate: PredicateName, position: usize, representation: Representation) -> Self {
+        let expression_sql = representation.extractor("", position);
+        let partial_predicate_sql =
+            format!("predicate_name = {}", quote_literal(predicate.as_str()));
+        Self {
+            predicate,
+            position,
+            representation,
+            expression_sql,
+            partial_predicate_sql,
+        }
+    }
+
+    /// The digest of the whole canonical specification: same digest,
+    /// same physical requirement.
+    pub fn digest(&self) -> String {
+        use sha2::{Digest as _, Sha256};
+        let canonical = format!(
+            "morpholog.claims\nbtree\n{}\n{}\n{}\n{}\n{}\n",
+            self.predicate,
+            self.position,
+            self.representation.as_str(),
+            self.expression_sql,
+            self.partial_predicate_sql
+        );
+        hex::encode(Sha256::digest(canonical.as_bytes()))
+    }
+
+    /// The deterministic name in Morpholog's reserved namespace: a
+    /// readable prefix and the digest that makes it unique, well under
+    /// the identifier limit.
+    pub fn index_name(&self) -> String {
+        let readable: String = self
+            .predicate
+            .as_str()
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .take(24)
+            .collect();
+        format!(
+            "morpholog_ci_{readable}_{}_{}_{}",
+            self.position,
+            self.representation.as_str(),
+            &self.digest()[..12]
+        )
+    }
+
+    /// The build statement, concurrent so the table stays writable; it
+    /// cannot run inside a transaction.
+    pub fn create_sql(&self) -> String {
+        format!(
+            "CREATE INDEX CONCURRENTLY {} ON morpholog.claims USING btree (({})) WHERE {}",
+            quote_ident(&self.index_name()),
+            self.expression_sql,
+            self.partial_predicate_sql
+        )
+    }
+}
+
 /// How much of a compiled invariant a transition's delta touches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 // The checks themselves are dormant until the stage-1 integration
@@ -141,6 +240,7 @@ pub(crate) enum CaseFilter {
 #[derive(Debug, Clone)]
 struct ColRef {
     alias: String,
+    predicate: PredicateName,
     position: usize,
     kind: PredicateArgKind,
 }
@@ -172,6 +272,9 @@ pub(crate) struct CompiledInvariant {
     case_cols: BTreeMap<Var, ColRef>,
     sql_select_from_where: String,
     sql_order_limit: String,
+    /// The indexes this invariant's SQL can seek on, in specification
+    /// order.
+    required_indexes: Vec<IndexSpec>,
 }
 
 impl CompiledInvariant {
@@ -297,6 +400,10 @@ struct Ctx<'a> {
     decls: &'a BTreeMap<&'a str, &'a PredicateDecl>,
     counter: usize,
     occurrences: Vec<RawOccurrence>,
+    /// Every (predicate, position, representation) the rendered SQL
+    /// filters or joins on - the index specification, collected where
+    /// the extractor is emitted so both come from the same object.
+    required: BTreeSet<(PredicateName, usize, Representation)>,
 }
 
 struct Rendered {
@@ -336,6 +443,7 @@ fn compile_invariant(
         decls,
         counter: 0,
         occurrences: Vec::new(),
+        required: BTreeSet::new(),
     };
 
     let (select_from_where, order_limit, case_cols) = match &inv.body {
@@ -389,6 +497,11 @@ fn compile_invariant(
         case_cols,
         sql_select_from_where: select_from_where,
         sql_order_limit: order_limit,
+        required_indexes: ctx
+            .required
+            .iter()
+            .map(|(predicate, position, repr)| IndexSpec::new(predicate.clone(), *position, *repr))
+            .collect(),
     })
 }
 
@@ -504,7 +617,7 @@ fn witness_select_order(r: &Rendered) -> (String, String) {
     } else {
         r.env
             .values()
-            .map(|col| format!("({})::text", col_sql(col, Repr::Text)))
+            .map(|col| format!("({})::text", col_sql(col, Representation::Text)))
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -512,9 +625,11 @@ fn witness_select_order(r: &Rendered) -> (String, String) {
 }
 
 /// How a claim-argument position is read in SQL so that SQL equality is
-/// kernel equality. See the module doc for the per-kind proofs.
-#[derive(Clone, Copy, PartialEq)]
-enum Repr {
+/// kernel equality - and, from the same object, how an index over that
+/// position is expressed, so the index necessarily matches the
+/// extractor. See the module doc for the per-kind proofs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Representation {
     Text,
     Numeric,
     /// The whole tagged value; sound only for kinds whose canonical
@@ -522,14 +637,37 @@ enum Repr {
     Jsonb,
 }
 
-fn repr_for(kind: &PredicateArgKind) -> Result<Repr, CompileReason> {
+impl Representation {
+    /// The extractor over `arguments` at `position`. `qualifier` is the
+    /// table alias followed by a dot in a query, empty in an index
+    /// expression.
+    fn extractor(self, qualifier: &str, position: usize) -> String {
+        match self {
+            Representation::Text => format!("{qualifier}arguments -> {position} ->> 'value'"),
+            Representation::Numeric => {
+                format!("({qualifier}arguments -> {position} ->> 'value')::numeric")
+            }
+            Representation::Jsonb => format!("{qualifier}arguments -> {position}"),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Representation::Text => "text",
+            Representation::Numeric => "numeric",
+            Representation::Jsonb => "jsonb",
+        }
+    }
+}
+
+fn repr_for(kind: &PredicateArgKind) -> Result<Representation, CompileReason> {
     match kind {
-        PredicateArgKind::Decimal => Ok(Repr::Numeric),
-        PredicateArgKind::Subject => Ok(Repr::Text),
+        PredicateArgKind::Decimal => Ok(Representation::Numeric),
+        PredicateArgKind::Subject => Ok(Representation::Text),
         PredicateArgKind::Bool
         | PredicateArgKind::Date
         | PredicateArgKind::Timestamp
-        | PredicateArgKind::Duration => Ok(Repr::Jsonb),
+        | PredicateArgKind::Duration => Ok(Representation::Jsonb),
         PredicateArgKind::Quantity(_)
         | PredicateArgKind::Collection
         | PredicateArgKind::Any
@@ -537,15 +675,8 @@ fn repr_for(kind: &PredicateArgKind) -> Result<Repr, CompileReason> {
     }
 }
 
-fn col_sql(col: &ColRef, repr: Repr) -> String {
-    let ColRef {
-        alias, position, ..
-    } = col;
-    match repr {
-        Repr::Text => format!("{alias}.arguments -> {position} ->> 'value'"),
-        Repr::Numeric => format!("({alias}.arguments -> {position} ->> 'value')::numeric"),
-        Repr::Jsonb => format!("{alias}.arguments -> {position}"),
-    }
+fn col_sql(col: &ColRef, repr: Representation) -> String {
+    repr.extractor(&format!("{}.", col.alias), col.position)
 }
 
 fn col_eq(a: &ColRef, b: &ColRef) -> Result<String, CompileReason> {
@@ -555,10 +686,13 @@ fn col_eq(a: &ColRef, b: &ColRef) -> Result<String, CompileReason> {
 
 /// A literal filter on a claim position, or a refusal when the literal
 /// kind is outside the fragment.
-fn literal_sql(value: &Value) -> Result<(String, Repr), CompileReason> {
+fn literal_sql(value: &Value) -> Result<(String, Representation), CompileReason> {
     match value {
-        Value::Subject(s) => Ok((quote_literal(s.as_str()), Repr::Text)),
-        Value::Decimal(d) => Ok((format!("{}::numeric", quote_literal(d)), Repr::Numeric)),
+        Value::Subject(s) => Ok((quote_literal(s.as_str()), Representation::Text)),
+        Value::Decimal(d) => Ok((
+            format!("{}::numeric", quote_literal(d)),
+            Representation::Numeric,
+        )),
         Value::Date(_) => Err(CompileReason::Literal { kind: "date" }),
         Value::Timestamp(_) => Err(CompileReason::Literal { kind: "timestamp" }),
         Value::Duration(_) => Err(CompileReason::Literal { kind: "duration" }),
@@ -579,12 +713,12 @@ fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
     match ev {
         EvalValue::Subject(s) => Some(format!(
             "({}) = {}",
-            col_sql(col, Repr::Text),
+            col_sql(col, Representation::Text),
             quote_literal(s.as_str())
         )),
         EvalValue::Decimal(d) => Some(format!(
             "({}) = {}::numeric",
-            col_sql(col, Repr::Numeric),
+            col_sql(col, Representation::Numeric),
             quote_literal(&d.to_string())
         )),
         EvalValue::Bool(_)
@@ -594,7 +728,7 @@ fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
             let json = serde_json::to_string(ev).ok()?;
             Some(format!(
                 "({}) = {}::jsonb",
-                col_sql(col, Repr::Jsonb),
+                col_sql(col, Representation::Jsonb),
                 quote_literal(&json)
             ))
         }
@@ -742,6 +876,7 @@ fn render_claim(
         })?;
         let col = ColRef {
             alias: alias.clone(),
+            predicate: predicate.clone(),
             position: i,
             kind,
         };
@@ -753,12 +888,17 @@ fn render_claim(
             Term::Literal(v) => {
                 let (lit, repr) = literal_sql(v)?;
                 where_.push(format!("({}) = {}", col_sql(&col, repr), lit));
+                ctx.required.insert((predicate.clone(), i, repr));
                 guards.push((i, v.clone()));
             }
             Term::Var(v) => {
                 var_map.push((i, v.clone()));
                 if let Some(bound) = env.get(v) {
                     where_.push(col_eq(bound, &col)?);
+                    let repr = repr_for(&col.kind)?;
+                    ctx.required
+                        .insert((bound.predicate.clone(), bound.position, repr));
+                    ctx.required.insert((predicate.clone(), i, repr));
                 } else {
                     // Binding a variable requires the position to carry a
                     // proved equality representation NOW, not lazily: a
@@ -838,7 +978,7 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<String, C
                             detail: "target is not a decimal position",
                         });
                     }
-                    col_sql(col, Repr::Numeric)
+                    col_sql(col, Representation::Numeric)
                 }
                 ValueExpr::Term(Term::Literal(Value::Decimal(d))) => {
                     format!("{}::numeric", quote_literal(d))
