@@ -2,7 +2,7 @@
 --
 -- Static structure only. The indexes themselves are created by the
 -- command, outside any transaction, from the specifications the SQL
--- compiler emits for a programme. Two facts, kept apart: what Morpholog
+-- compiler emits for a programme. Two records, kept apart: what Morpholog
 -- manages (and so may delete), and which programmes require which
 -- specification - whether Morpholog built the index or an operator's
 -- equivalent one satisfies it. The catalogue remains the truth about
@@ -13,7 +13,8 @@
 -- the tables without a record of this version - but never blessing a
 -- table of the same name and another shape. The shape the command
 -- relies on is pinned whole: columns with nullability and defaults,
--- and every constraint as PostgreSQL renders it.
+-- and every other constraint as PostgreSQL renders it (nullability is
+-- read once, from the column).
 
 DO $$
 DECLARE
@@ -28,11 +29,11 @@ BEGIN
         SELECT string_agg(contype::text || ':' || pg_get_constraintdef(oid), ',' ORDER BY contype::text, pg_get_constraintdef(oid))
           INTO constraints_seen
           FROM pg_constraint
-         WHERE conrelid = 'morpholog.managed_index'::regclass;
+         WHERE conrelid = 'morpholog.managed_index'::regclass AND contype <> 'n';
         IF columns_seen IS DISTINCT FROM
            'spec_digest:text:NO:-,index_name:text:NO:-,predicate_name:text:NO:-,position:integer:NO:-,representation:text:NO:-,expression_sql:text:NO:-,partial_predicate:text:NO:-,registered_at:timestamp with time zone:NO:now()'
            OR constraints_seen IS DISTINCT FROM
-           'c:CHECK (("position" >= 0)),n:NOT NULL expression_sql,n:NOT NULL index_name,n:NOT NULL partial_predicate,n:NOT NULL "position",n:NOT NULL predicate_name,n:NOT NULL registered_at,n:NOT NULL representation,n:NOT NULL spec_digest,p:PRIMARY KEY (spec_digest),u:UNIQUE (index_name)'
+           'c:CHECK (("position" >= 0)),p:PRIMARY KEY (spec_digest),u:UNIQUE (index_name)'
         THEN
             RAISE EXCEPTION 'morpholog.managed_index exists with another shape (columns %; constraints %); migration 015 refuses to adopt it', columns_seen, constraints_seen;
         END IF;
@@ -45,11 +46,11 @@ BEGIN
         SELECT string_agg(contype::text || ':' || pg_get_constraintdef(oid), ',' ORDER BY contype::text, pg_get_constraintdef(oid))
           INTO constraints_seen
           FROM pg_constraint
-         WHERE conrelid = 'morpholog.index_requirement'::regclass;
+         WHERE conrelid = 'morpholog.index_requirement'::regclass AND contype <> 'n';
         IF columns_seen IS DISTINCT FROM
            'program_identity:text:NO:-,spec_digest:text:NO:-,program_hash:text:NO:-,reconciled_at:timestamp with time zone:NO:now()'
            OR constraints_seen IS DISTINCT FROM
-           'n:NOT NULL program_hash,n:NOT NULL program_identity,n:NOT NULL reconciled_at,n:NOT NULL spec_digest,p:PRIMARY KEY (program_identity, spec_digest)'
+           'p:PRIMARY KEY (program_identity, spec_digest)'
         THEN
             RAISE EXCEPTION 'morpholog.index_requirement exists with another shape (columns %; constraints %); migration 015 refuses to adopt it', columns_seen, constraints_seen;
         END IF;

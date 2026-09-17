@@ -298,7 +298,7 @@ CREATE INDEX outbox_pending_intent_next_attempt
     WHERE status = 'pending';
 
 
--- The registry behind `morpholog provision indexes`. Two facts, kept
+-- The registry behind `morpholog provision indexes`. Two records, kept
 -- apart: which partial expression indexes over `claims` Morpholog
 -- manages (and so may delete), and which programmes require which
 -- specification - whether Morpholog built the index or an operator's
