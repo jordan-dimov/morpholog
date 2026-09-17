@@ -3,7 +3,9 @@
 //! programme eligibility decides the plan: every invariant compiles to
 //! SQL or none does, and the interpreter runs the whole programme. The
 //! decision is made here, once, and reported; nothing on a commit path
-//! classifies again.
+//! classifies again. Until the compiled path is wired into the commit
+//! paths, the plan is a classification the proposal paths do not yet
+//! act on.
 
 use morpholog_core::CompiledProgram;
 
@@ -19,9 +21,13 @@ pub(crate) enum InvariantBackend {
     Interpreted(Vec<CompileRefusal>),
 }
 
-/// How a programme's invariants are checked, as `check -v` reports it.
+/// The plan for checking a programme's invariants, as `check -v`
+/// reports it: what the programme is eligible for, decided once at
+/// load. Two outcomes by construction - the whole programme compiles
+/// or the whole programme is interpreted - so a caller matches both
+/// and nothing else.
 #[derive(Debug, Clone, Copy)]
-pub enum Backend<'a> {
+pub enum InvariantPlan<'a> {
     /// Every invariant compiles; the count is the whole programme's.
     Compiled { invariants: usize },
     /// At least one invariant is outside the compiled fragment, so the
@@ -43,12 +49,12 @@ impl PgProgram {
         &self.core
     }
 
-    pub fn backend(&self) -> Backend<'_> {
+    pub fn plan(&self) -> InvariantPlan<'_> {
         match &self.backend {
-            InvariantBackend::Compiled(set) => Backend::Compiled {
+            InvariantBackend::Compiled(set) => InvariantPlan::Compiled {
                 invariants: set.invariants.len(),
             },
-            InvariantBackend::Interpreted(refusals) => Backend::Interpreted { refusals },
+            InvariantBackend::Interpreted(refusals) => InvariantPlan::Interpreted { refusals },
         }
     }
 }

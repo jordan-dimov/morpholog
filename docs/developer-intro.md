@@ -278,10 +278,10 @@ program: reported_revenue
   transformations: 3
   intents: 3
   derived claims: 0
-  invariant checks: compiled
+  invariant plan: compiled
 ```
 
-The last line says which checker your invariants are eligible for: every one here is inside the fragment the runtime can compile to SQL. That plan is built and reported today; proposals run it in the database once the compiled path is wired in, and until then every programme is checked by the interpreter. A programme with an invariant outside the fragment reports `interpreted` and names the invariant and the construct that kept it out; either way the rules mean the same thing.
+The last line is the plan for checking your invariants: every one here is inside the fragment the runtime can compile to SQL. The plan is built and reported today; proposals run it in the database once the compiled path is wired in, and until then every programme is checked by the interpreter. A programme with an invariant outside the fragment reports `interpreted` and names the invariant and the construct that kept it out; either way the rules mean the same thing.
 
 ## Make it happen
 

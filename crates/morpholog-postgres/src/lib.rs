@@ -89,7 +89,7 @@ pub use pack::{
     WindowStart, WindowVerification, export_pack, export_selective, export_window, verify_pack,
     verify_selective, verify_window,
 };
-pub use program::{Backend, PgProgram};
+pub use program::{InvariantPlan, PgProgram};
 pub use propose::{
     AuditedInvariantCheck, PgProposalOutcome, PgTracedOutcome, ProposalPhases,
     RejectionStateOutcome, TimedProposalOutcome, compute_idempotency_key, propose_against_pg,

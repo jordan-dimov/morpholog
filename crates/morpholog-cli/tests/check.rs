@@ -96,7 +96,7 @@ fn check_verbose_clean_program_prints_summary() {
         String::from_utf8_lossy(&out.stderr)
     );
     let expected = format!(
-        "ok: {}\nprogram: demo\n  predicates: 1\n  definitions: 0\n  invariants: 1\n  transformations: 1\n  intents: 1\n  derived claims: 0\n  invariant checks: compiled\n",
+        "ok: {}\nprogram: demo\n  predicates: 1\n  definitions: 0\n  invariants: 1\n  transformations: 1\n  intents: 1\n  derived claims: 0\n  invariant plan: compiled\n",
         tmp.path().display()
     );
     assert_eq!(
@@ -135,7 +135,7 @@ fn check_verbose_names_the_invariant_that_keeps_a_programme_interpreted() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("  invariant checks: interpreted\n    sticky: "),
+        stdout.contains("  invariant plan: interpreted\n    sticky: "),
         "got: {stdout}"
     );
     assert!(

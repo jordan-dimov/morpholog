@@ -5,7 +5,7 @@ use crate::commands::{AlreadyReported, print_json};
 use anyhow::Context;
 use morpholog_cli::envelopes::{CheckDiagnostic, CheckReport};
 use morpholog_core::{CompiledProgram, Program};
-use morpholog_postgres::{Backend, PgProgram};
+use morpholog_postgres::{InvariantPlan, PgProgram};
 use morpholog_surface::{Diagnostic, Span, parse_program_with_sources};
 use std::path::Path;
 
@@ -368,9 +368,9 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
 }
 
 /// The `--verbose` success summary: programme name, a count per
-/// declaration kind, and how the invariants will be checked - compiled
-/// to SQL when every one is inside the fragment, interpreted otherwise
-/// with each refusal named - echoing the file path the caller passed.
+/// declaration kind, and the invariant plan - compiled to SQL when
+/// every invariant is inside the fragment, interpreted otherwise with
+/// each refusal named - echoing the file path the caller passed.
 fn summary(program: &PgProgram, file: &Path) -> String {
     let p = program.core().program();
     let mut out = format!(
@@ -384,10 +384,10 @@ fn summary(program: &PgProgram, file: &Path) -> String {
         p.intents.len(),
         p.derived_claims.len(),
     );
-    match program.backend() {
-        Backend::Compiled { .. } => out.push_str("  invariant checks: compiled\n"),
-        Backend::Interpreted { refusals } => {
-            out.push_str("  invariant checks: interpreted\n");
+    match program.plan() {
+        InvariantPlan::Compiled { .. } => out.push_str("  invariant plan: compiled\n"),
+        InvariantPlan::Interpreted { refusals } => {
+            out.push_str("  invariant plan: interpreted\n");
             for refusal in refusals {
                 out.push_str(&format!("    {}: {}\n", refusal.invariant, refusal.reason));
             }
@@ -407,7 +407,7 @@ mod tests {
         let s = summary(&p, Path::new("demo.morph"));
         assert_eq!(
             s,
-            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant checks: compiled\n"
+            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant plan: compiled\n"
         );
     }
 }
