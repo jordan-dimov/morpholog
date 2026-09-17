@@ -133,7 +133,7 @@ pub(crate) async fn obtain(target: &WitnessTarget, head: &Checkpoint) -> anyhow:
     let payload = tree_head_witness_bytes(&TreeHead {
         tree_size: head.tree_size,
         root_hash: &head.root_hash,
-        prev_checkpoint_hash: head.prev_checkpoint_hash.as_deref(),
+        prev_checkpoint_hash: head.prev_checkpoint_hash.as_ref(),
         checkpoint_hash: &head.checkpoint_hash,
     });
     let request = build_request(&payload);

@@ -53,7 +53,7 @@ fn fixed_row() -> AuditRow {
 fn frozen_v1_leaf_hash_pins_the_canonical_encoding() {
     let hash = audit_leaf_hash(&fixed_row()).unwrap();
     assert_eq!(
-        render_hash(&hash),
+        Digest::from_bytes(hash).to_string(),
         "sha256:d9b263c7ced1cdbebae9371350204a30da05879720cf414e1cae0bf23c174be9"
     );
 }
@@ -84,7 +84,7 @@ fn stamped_fixed_row() -> AuditRow {
 fn frozen_v3_leaf_hash_pins_the_self_describing_encoding() {
     let hash = audit_leaf_hash(&stamped_fixed_row()).unwrap();
     assert_eq!(
-        render_hash(&hash),
+        Digest::from_bytes(hash).to_string(),
         "sha256:e026e4d49353c7437c6b3b82a5938848fe26ea6be95fa53c927894323508c61f"
     );
 }
@@ -114,7 +114,7 @@ fn an_impossible_row_shape_gets_no_leaf() {
 fn frozen_v2_leaf_hash_pins_the_attested_encoding() {
     let hash = audit_leaf_hash(&attested_fixed_row()).unwrap();
     assert_eq!(
-        render_hash(&hash),
+        Digest::from_bytes(hash).to_string(),
         "sha256:95b17b38bd6318b725b2a901ff5fbbd1e4bf0d4269357a01a9b0d5aa5a55d6f4"
     );
 }
@@ -136,7 +136,7 @@ fn attestation_presence_selects_the_encoding() {
 #[test]
 fn empty_tree_is_sha256_of_empty() {
     assert_eq!(
-        render_hash(&merkle_root(&[])),
+        Digest::from_bytes(merkle_root(&[])).to_string(),
         "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     );
 }
@@ -193,7 +193,7 @@ fn two_leaf_root_is_one_node() {
 fn frozen_two_leaf_root_matches_an_independent_sha256() {
     let root = merkle_root(&[leaf_hash(b"a"), leaf_hash(b"b")]);
     assert_eq!(
-        render_hash(&root),
+        Digest::from_bytes(root).to_string(),
         "sha256:b137985ff484fb600db93107c77b0365c80d78f5b429ded0fd97361d077999eb"
     );
 }
@@ -223,12 +223,16 @@ fn split_point_is_largest_power_of_two_below_n() {
 
 /// `parse_hash` inverts `render_hash` and rejects malformed input.
 #[test]
-fn parse_hash_inverts_render_hash() {
-    let h = leaf_hash(b"roundtrip");
-    assert_eq!(parse_hash(&render_hash(&h)), Some(h));
-    assert_eq!(parse_hash("no-prefix"), None);
-    assert_eq!(parse_hash("sha256:abcd"), None); // too short
-    assert_eq!(parse_hash(&format!("sha256:{}", "zz".repeat(32))), None); // non-hex
+fn a_digest_parses_from_its_rendering_and_refuses_anything_else() {
+    let d = Digest::from_bytes(leaf_hash(b"roundtrip"));
+    assert_eq!(d.to_string().parse::<Digest>(), Ok(d));
+    assert!("no-prefix".parse::<Digest>().is_err());
+    assert!("sha256:abcd".parse::<Digest>().is_err()); // too short
+    assert!(
+        format!("sha256:{}", "zz".repeat(32))
+            .parse::<Digest>()
+            .is_err()
+    ); // non-hex
 }
 
 /// The RFC 6962 section 2.1.3/2.1.4 worked example tree over seven

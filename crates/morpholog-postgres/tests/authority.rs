@@ -53,7 +53,7 @@ fn signature_over(key: &SigningKey, key_id: &str, cp: &Checkpoint) -> TreeHeadSi
     let head = TreeHead {
         tree_size: cp.tree_size,
         root_hash: &cp.root_hash,
-        prev_checkpoint_hash: cp.prev_checkpoint_hash.as_deref(),
+        prev_checkpoint_hash: cp.prev_checkpoint_hash.as_ref(),
         checkpoint_hash: &cp.checkpoint_hash,
     };
     TreeHeadSignature {

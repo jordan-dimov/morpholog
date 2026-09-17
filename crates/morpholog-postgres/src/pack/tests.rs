@@ -1,5 +1,11 @@
 use super::*;
 
+/// A digest from its rendering; the tests forge DIFFERENT valid
+/// digests, never prose, because a checkpoint cannot hold prose.
+fn digest(text: &str) -> Digest {
+    text.parse().unwrap()
+}
+
 /// A dummy audit row built through the same `Deserialize` the pack
 /// uses. The content is irrelevant to envelope validation (which runs
 /// before any hashing); only the `(committed_at, transition_id)`
@@ -26,9 +32,9 @@ fn row(committed_at: &str, id: &str) -> AuditRow {
 fn checkpoint(tree_size: i64) -> Checkpoint {
     Checkpoint {
         tree_size,
-        root_hash: format!("sha256:{tree_size:0>64}"),
+        root_hash: digest(&format!("sha256:{:0>64}", tree_size.unsigned_abs())),
         prev_checkpoint_hash: None,
-        checkpoint_hash: format!("cp-{tree_size}"),
+        checkpoint_hash: digest(&format!("sha256:c{:0>63}", tree_size.unsigned_abs())),
         signatures: Vec::new(),
         witnesses: Vec::new(),
     }
@@ -38,8 +44,8 @@ fn manifest_for(c: &Checkpoint) -> PackManifest {
     PackManifest {
         pack_format_version: PACK_FORMAT_V1,
         tree_size: c.tree_size,
-        root_hash: c.root_hash.clone(),
-        checkpoint_hash: c.checkpoint_hash.clone(),
+        root_hash: c.root_hash,
+        checkpoint_hash: c.checkpoint_hash,
     }
 }
 
@@ -131,8 +137,8 @@ fn each_manifest_field_alone_is_enough_to_disagree() {
         let mut manifest = manifest_for(&cp);
         match field {
             "tree_size" => manifest.tree_size = 999,
-            "root_hash" => manifest.root_hash = format!("sha256:{}", "f".repeat(64)),
-            _ => manifest.checkpoint_hash = "cp-forged".to_string(),
+            "root_hash" => manifest.root_hash = digest(&format!("sha256:{}", "f".repeat(64))),
+            _ => manifest.checkpoint_hash = digest(&format!("sha256:{}", "e".repeat(64))),
         }
         let pack = EvidencePack {
             manifest,
@@ -159,7 +165,7 @@ fn an_unauthorized_signed_anchor_is_judged_even_on_an_unsigned_chain() {
     let head = crate::signing::TreeHead {
         tree_size: cp.tree_size,
         root_hash: &cp.root_hash,
-        prev_checkpoint_hash: cp.prev_checkpoint_hash.as_deref(),
+        prev_checkpoint_hash: cp.prev_checkpoint_hash.as_ref(),
         checkpoint_hash: &cp.checkpoint_hash,
     };
     let signature = crate::signing::sign_tree_head(
@@ -212,10 +218,10 @@ fn each_window_manifest_field_alone_is_enough_to_disagree() {
         match field {
             0 => pack.manifest.from_tree_size = 999,
             1 => pack.manifest.to_tree_size = 999,
-            2 => pack.manifest.from_checkpoint_hash = "forged".to_string(),
-            3 => pack.manifest.to_checkpoint_hash = "forged".to_string(),
-            4 => pack.manifest.from_root_hash = "forged".to_string(),
-            _ => pack.manifest.to_root_hash = "forged".to_string(),
+            2 => pack.manifest.from_checkpoint_hash = digest(&format!("sha256:{}", "f".repeat(64))),
+            3 => pack.manifest.to_checkpoint_hash = digest(&format!("sha256:{}", "f".repeat(64))),
+            4 => pack.manifest.from_root_hash = digest(&format!("sha256:{}", "f".repeat(64))),
+            _ => pack.manifest.to_root_hash = digest(&format!("sha256:{}", "f".repeat(64))),
         }
         match verify_window(&pack, None) {
             Err(PackError::Malformed { detail }) => {
@@ -240,7 +246,7 @@ fn an_unauthorized_signature_on_the_chain_itself_is_judged() {
     let head = crate::signing::TreeHead {
         tree_size: cp.tree_size,
         root_hash: &cp.root_hash,
-        prev_checkpoint_hash: cp.prev_checkpoint_hash.as_deref(),
+        prev_checkpoint_hash: cp.prev_checkpoint_hash.as_ref(),
         checkpoint_hash: &cp.checkpoint_hash,
     };
     let signature = crate::signing::sign_tree_head(
@@ -408,9 +414,9 @@ fn rows_tagged(n: usize, tag: char) -> Vec<AuditRow> {
 }
 
 fn real_checkpoint(leaves: &[Hash], size: usize, prev: Option<&Checkpoint>) -> Checkpoint {
-    let root = render_hash(&merkle_root(&leaves[..size]));
-    let prev_hash = prev.map(|c| c.checkpoint_hash.clone());
-    let checkpoint_hash = checkpoint_hash(size as i64, &root, prev_hash.as_deref());
+    let root = Digest::from_bytes(merkle_root(&leaves[..size]));
+    let prev_hash = prev.map(|c| c.checkpoint_hash);
+    let checkpoint_hash = checkpoint_hash(size as i64, &root, prev_hash.as_ref());
     Checkpoint {
         tree_size: size as i64,
         root_hash: root,
@@ -522,8 +528,8 @@ fn a_wrong_declared_leaf_index_is_malformed() {
 #[test]
 fn a_forged_checkpoint_hash_is_malformed() {
     let (mut pack, _) = valid_window(3, 7);
-    pack.to_checkpoint.checkpoint_hash = "cp-forged".into();
-    pack.manifest.to_checkpoint_hash = "cp-forged".into();
+    pack.to_checkpoint.checkpoint_hash = digest(&format!("sha256:{}", "f".repeat(64)));
+    pack.manifest.to_checkpoint_hash = digest(&format!("sha256:{}", "f".repeat(64)));
     match verify_window(&pack, None) {
         Err(PackError::Malformed { detail }) => {
             assert!(detail.contains("does not match its contents"))
@@ -653,11 +659,11 @@ fn selective_envelope_rules_are_each_enforced() {
     expect_malformed(&p, "manifest disagrees");
 
     let mut p = pack.clone();
-    p.manifest.root_hash = format!("sha256:{}", "b".repeat(64));
+    p.manifest.root_hash = digest(&format!("sha256:{}", "b".repeat(64)));
     expect_malformed(&p, "manifest disagrees");
 
     let mut p = pack.clone();
-    p.checkpoint.checkpoint_hash = "forged".to_string();
+    p.checkpoint.checkpoint_hash = digest(&format!("sha256:{}", "f".repeat(64)));
     expect_malformed(&p, "does not match its contents");
 
     let mut p = pack.clone();

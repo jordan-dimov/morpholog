@@ -3594,7 +3594,11 @@ async fn a_witness_that_does_not_vouch_for_its_checkpoint_fails_the_live_verify(
     morpholog_postgres::attach_witness(
         &pool,
         cp["tree_size"].as_i64().unwrap(),
-        cp["checkpoint_hash"].as_str().unwrap(),
+        &cp["checkpoint_hash"]
+            .as_str()
+            .unwrap()
+            .parse::<morpholog_postgres::Digest>()
+            .unwrap(),
         witness,
     )
     .await

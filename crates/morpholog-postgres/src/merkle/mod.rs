@@ -20,7 +20,7 @@
 //! no I/O.
 
 use chrono::{DateTime, Utc};
-use sha2::{Digest, Sha256};
+use sha2::{Digest as _, Sha256};
 
 use crate::audit::AuditRow;
 use morpholog_core::EvalValue;
@@ -92,27 +92,73 @@ pub(crate) fn merkle_root(leaves: &[Hash]) -> Hash {
     }
 }
 
-/// Render a digest as `sha256:<hex>` - the project's self-describing
-/// hash convention (matches the CLI model hash), so the algorithm is
-/// legible if it ever has to change.
-pub(crate) fn render_hash(hash: &Hash) -> String {
-    format!("sha256:{}", crate::hex::encode(hash))
+/// A SHA-256 digest as the record carries it: `sha256:<64 hex>`, the
+/// project's self-describing hash convention, so the algorithm is
+/// legible if it ever has to change. Parsed once, at every boundary a
+/// hash crosses - a checkpoint read from the database, a pack read
+/// from a file, an anchor handed to a verifier - so a value of this
+/// type is well-formed by construction and no verifier re-parses a
+/// hash at the point of use. A malformed hash is refused where it
+/// arrives, as the malformed input it is.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Digest(Hash);
+
+impl Digest {
+    pub(crate) fn from_bytes(hash: Hash) -> Self {
+        Self(hash)
+    }
+
+    pub(crate) fn bytes(&self) -> &Hash {
+        &self.0
+    }
 }
 
-/// Parse a `sha256:<hex>` string back into a digest - the inverse of
-/// [`render_hash`]. `None` if the prefix is wrong or the hex is not exactly
-/// 32 bytes; a window verifier parses proof hashes out of a pack, which is
-/// hostile input.
-pub(crate) fn parse_hash(s: &str) -> Option<Hash> {
-    let hex = s.strip_prefix("sha256:")?;
-    if hex.len() != 64 {
-        return None;
+impl std::fmt::Display for Digest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sha256:{}", crate::hex::encode(&self.0))
     }
-    let mut out = [0u8; 32];
-    for (i, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+}
+
+impl std::fmt::Debug for Digest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self}")
     }
-    Some(out)
+}
+
+/// Why a string is not a digest.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("not a sha256:<hex> digest: {0}")]
+pub struct DigestError(String);
+
+impl std::str::FromStr for Digest {
+    type Err = DigestError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let malformed = || DigestError(s.to_string());
+        let hex = s.strip_prefix("sha256:").ok_or_else(malformed)?;
+        if hex.len() != 64 {
+            return Err(malformed());
+        }
+        let mut out = [0u8; 32];
+        for (i, byte) in out.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(hex.get(i * 2..i * 2 + 2).ok_or_else(malformed)?, 16)
+                .map_err(|_| malformed())?;
+        }
+        Ok(Self(out))
+    }
+}
+
+impl serde::Serialize for Digest {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Digest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
 }
 
 /// Append `bytes` length-prefixed (u32 little-endian length, then the

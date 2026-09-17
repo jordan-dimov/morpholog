@@ -110,9 +110,11 @@ async fn a_forged_anchor_is_an_anchor_mismatch() {
     // holds does not match the pack's from-checkpoint - a coordinated rewrite.
     let forged = Checkpoint {
         tree_size: 2,
-        root_hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111".into(),
+        root_hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            .parse()
+            .unwrap(),
         prev_checkpoint_hash: None,
-        checkpoint_hash: "forged".into(),
+        checkpoint_hash: format!("sha256:{}", "f".repeat(64)).parse().unwrap(),
         signatures: Vec::new(),
         witnesses: Vec::new(),
     };
@@ -167,9 +169,11 @@ async fn export_from_a_diverged_anchor_refuses() {
     // An anchor at the same size but a different tree head is refused.
     let forged = Checkpoint {
         tree_size: q1.tree_size,
-        root_hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111".into(),
+        root_hash: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            .parse()
+            .unwrap(),
         prev_checkpoint_hash: None,
-        checkpoint_hash: "forged".into(),
+        checkpoint_hash: format!("sha256:{}", "f".repeat(64)).parse().unwrap(),
         signatures: Vec::new(),
         witnesses: Vec::new(),
     };

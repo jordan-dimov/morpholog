@@ -204,9 +204,10 @@ async fn refuses_to_score_against_a_mismatched_anchor() {
     let forged = Checkpoint {
         tree_size: pack.manifest.tree_size,
         root_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-            .to_string(),
+            .parse()
+            .unwrap(),
         prev_checkpoint_hash: None,
-        checkpoint_hash: "forged".to_string(),
+        checkpoint_hash: format!("sha256:{}", "f".repeat(64)).parse().unwrap(),
         signatures: Vec::new(),
         witnesses: Vec::new(),
     };

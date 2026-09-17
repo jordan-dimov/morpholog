@@ -80,7 +80,7 @@ pub fn witnesses_report(
             let head = TreeHead {
                 tree_size: c.tree_size,
                 root_hash: &c.root_hash,
-                prev_checkpoint_hash: c.prev_checkpoint_hash.as_deref(),
+                prev_checkpoint_hash: c.prev_checkpoint_hash.as_ref(),
                 checkpoint_hash: &c.checkpoint_hash,
             };
             let payload = tree_head_witness_bytes(&head);
@@ -201,9 +201,9 @@ mod tests {
     fn witnessed_head() -> Checkpoint {
         Checkpoint {
             tree_size: 42,
-            root_hash: format!("sha256:{}", "1".repeat(64)),
+            root_hash: format!("sha256:{}", "1".repeat(64)).parse().unwrap(),
             prev_checkpoint_hash: None,
-            checkpoint_hash: format!("sha256:{}", "2".repeat(64)),
+            checkpoint_hash: format!("sha256:{}", "2".repeat(64)).parse().unwrap(),
             signatures: Vec::new(),
             witnesses: vec![Witness {
                 scheme: WitnessScheme::Rfc3161,

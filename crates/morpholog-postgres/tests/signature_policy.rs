@@ -25,9 +25,9 @@ const PURPOSE: &str = "audit_checkpoint_v1";
 fn unsigned(tree_size: i64) -> Checkpoint {
     Checkpoint {
         tree_size,
-        root_hash: "sha256:00".into(),
+        root_hash: format!("sha256:{}", "f".repeat(64)).parse().unwrap(),
         prev_checkpoint_hash: None,
-        checkpoint_hash: "sha256:00".into(),
+        checkpoint_hash: format!("sha256:{}", "f".repeat(64)).parse().unwrap(),
         signatures: vec![],
         witnesses: Vec::new(),
     }
@@ -172,7 +172,7 @@ async fn a_pinned_key_the_log_never_authorised_is_an_intrinsic_refusal_not_polic
             &TreeHead {
                 tree_size: cp.tree_size,
                 root_hash: &cp.root_hash,
-                prev_checkpoint_hash: cp.prev_checkpoint_hash.as_deref(),
+                prev_checkpoint_hash: cp.prev_checkpoint_hash.as_ref(),
                 checkpoint_hash: &cp.checkpoint_hash,
             },
         )),

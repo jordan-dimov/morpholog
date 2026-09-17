@@ -27,7 +27,7 @@ async fn checkpoint_verifies_then_catches_an_audit_edit() {
     }
     let anchor = common::make_checkpoint(&pool).await;
     assert_eq!(anchor.tree_size, 3);
-    assert!(anchor.root_hash.starts_with("sha256:"));
+    assert!(anchor.root_hash.to_string().starts_with("sha256:"));
     assert!(
         anchor.prev_checkpoint_hash.is_none(),
         "the first is genesis"
@@ -76,8 +76,8 @@ async fn checkpoint_chain_extends_and_old_prefix_stays_stable() {
     let second = common::make_checkpoint(&pool).await;
     assert_eq!(second.tree_size, 3);
     assert_eq!(
-        second.prev_checkpoint_hash.as_deref(),
-        Some(first.checkpoint_hash.as_str()),
+        second.prev_checkpoint_hash.as_ref(),
+        Some(&first.checkpoint_hash),
         "second checkpoint chains off the first"
     );
 

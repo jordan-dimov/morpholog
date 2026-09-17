@@ -26,7 +26,7 @@ use crate::checkpoints::{
 };
 use crate::error::{PgError, classify};
 use crate::merkle::{
-    Hash, ProofError, audit_leaf_hash, consistency_proof, inclusion_proof, parse_hash, render_hash,
+    Digest, Hash, ProofError, audit_leaf_hash, consistency_proof, inclusion_proof,
     verify_consistency_proof, verify_inclusion_proof,
 };
 use crate::txn::{TxIsolation, begin_isolated_tx};
@@ -45,8 +45,8 @@ const PACK_KIND_SELECTIVE: &str = "selective";
 pub struct PackManifest {
     pub pack_format_version: u32,
     pub tree_size: i64,
-    pub root_hash: String,
-    pub checkpoint_hash: String,
+    pub root_hash: Digest,
+    pub checkpoint_hash: Digest,
 }
 
 /// A portable evidence pack: everything an offline verifier needs to
@@ -268,7 +268,7 @@ fn validate_envelope(pack: &EvidencePack) -> Result<(), PackError> {
 #[serde(deny_unknown_fields)]
 pub struct RowInclusionProof {
     pub leaf_index: i64,
-    pub proof: Vec<String>,
+    pub proof: Vec<Digest>,
 }
 
 /// The window pack's convenience header. The authoritative data is the two
@@ -281,10 +281,10 @@ pub struct WindowPackManifest {
     pub pack_kind: String,
     pub from_tree_size: i64,
     pub to_tree_size: i64,
-    pub from_checkpoint_hash: String,
-    pub to_checkpoint_hash: String,
-    pub from_root_hash: String,
-    pub to_root_hash: String,
+    pub from_checkpoint_hash: Digest,
+    pub to_checkpoint_hash: Digest,
+    pub from_root_hash: Digest,
+    pub to_root_hash: Digest,
 }
 
 /// A windowed evidence pack: everything an offline verifier needs to confirm
@@ -297,7 +297,7 @@ pub struct WindowEvidencePack {
     pub from_checkpoint: Checkpoint,
     pub to_checkpoint: Checkpoint,
     /// RFC 6962 consistency proof from `from` to `to` (rendered hashes).
-    pub consistency_proof: Vec<String>,
+    pub consistency_proof: Vec<Digest>,
     /// The window rows, in canonical order: exactly `to - from` of them.
     pub rows: Vec<AuditRow>,
     /// One inclusion proof per window row, declaring its leaf index.
@@ -331,8 +331,8 @@ pub enum WindowVerification {
     /// An externally held anchor disagrees with the pack's from-checkpoint.
     AnchorMismatch {
         tree_size: i64,
-        anchor_checkpoint_hash: String,
-        pack_checkpoint_hash: String,
+        anchor_checkpoint_hash: Digest,
+        pack_checkpoint_hash: Digest,
     },
     /// The to-checkpoint carries a signature that does not verify over its
     /// tree head (cryptographic check only; authority is not judged here).
@@ -461,15 +461,15 @@ fn assemble_window_pack(
     let from = from_checkpoint.tree_size as usize;
 
     let consistency_proof = consistency_proof(&leaves, from)
-        .iter()
-        .map(render_hash)
+        .into_iter()
+        .map(Digest::from_bytes)
         .collect();
     let inclusion_proofs = (from..leaves.len())
         .map(|index| RowInclusionProof {
             leaf_index: index as i64,
             proof: inclusion_proof(&leaves, index)
-                .iter()
-                .map(render_hash)
+                .into_iter()
+                .map(Digest::from_bytes)
                 .collect(),
         })
         .collect();
@@ -479,10 +479,10 @@ fn assemble_window_pack(
         pack_kind: PACK_KIND_WINDOW.to_string(),
         from_tree_size: from_checkpoint.tree_size,
         to_tree_size: to_checkpoint.tree_size,
-        from_checkpoint_hash: from_checkpoint.checkpoint_hash.clone(),
-        to_checkpoint_hash: to_checkpoint.checkpoint_hash.clone(),
-        from_root_hash: from_checkpoint.root_hash.clone(),
-        to_root_hash: to_checkpoint.root_hash.clone(),
+        from_checkpoint_hash: from_checkpoint.checkpoint_hash,
+        to_checkpoint_hash: to_checkpoint.checkpoint_hash,
+        from_root_hash: from_checkpoint.root_hash,
+        to_root_hash: to_checkpoint.root_hash,
     };
     Ok(WindowEvidencePack {
         manifest,
@@ -516,23 +516,18 @@ pub fn verify_window(
     {
         return Ok(WindowVerification::AnchorMismatch {
             tree_size: from.tree_size,
-            anchor_checkpoint_hash: anchor.checkpoint_hash.clone(),
-            pack_checkpoint_hash: from.checkpoint_hash.clone(),
+            anchor_checkpoint_hash: anchor.checkpoint_hash,
+            pack_checkpoint_hash: from.checkpoint_hash,
         });
     }
 
     let malformed = |detail: String| PackError::Malformed { detail };
-    let from_root = parse_hash(&from.root_hash)
-        .ok_or_else(|| malformed("from root_hash is not sha256".into()))?;
-    let to_root =
-        parse_hash(&to.root_hash).ok_or_else(|| malformed("to root_hash is not sha256".into()))?;
-
-    let consistency = parse_hashes(&pack.consistency_proof)?;
+    let consistency = proof_bytes(&pack.consistency_proof);
     match verify_consistency_proof(
         from.tree_size as usize,
-        &from_root,
+        from.root_hash.bytes(),
         to.tree_size as usize,
-        &to_root,
+        to.root_hash.bytes(),
         &consistency,
     ) {
         Ok(()) => {}
@@ -549,12 +544,12 @@ pub fn verify_window(
 
     for (row, rp) in pack.rows.iter().zip(&pack.inclusion_proofs) {
         let leaf = audit_leaf_hash(row)?;
-        let proof = parse_hashes(&rp.proof)?;
+        let proof = proof_bytes(&rp.proof);
         match verify_inclusion_proof(
             rp.leaf_index as usize,
             to.tree_size as usize,
             &leaf,
-            &to_root,
+            to.root_hash.bytes(),
             &proof,
         ) {
             Ok(()) => {}
@@ -598,15 +593,11 @@ pub fn verify_window(
     })
 }
 
-fn parse_hashes(strings: &[String]) -> Result<Vec<Hash>, PackError> {
-    strings
-        .iter()
-        .map(|s| {
-            parse_hash(s).ok_or_else(|| PackError::Malformed {
-                detail: format!("proof hash is not a sha256 digest: {s}"),
-            })
-        })
-        .collect()
+/// The raw digests of a proof, for the tree arithmetic. Nothing to
+/// refuse here: a pack whose proof was not made of digests never
+/// deserialised.
+fn proof_bytes(digests: &[Digest]) -> Vec<Hash> {
+    digests.iter().map(|d| *d.bytes()).collect()
 }
 
 /// The v2 envelope rules a well-formed window pack must satisfy before its
@@ -643,7 +634,7 @@ fn validate_window_envelope(pack: &WindowEvidencePack) -> Result<(), PackError> 
         let expected = checkpoint_hash(
             cp.tree_size,
             &cp.root_hash,
-            cp.prev_checkpoint_hash.as_deref(),
+            cp.prev_checkpoint_hash.as_ref(),
         );
         if expected != cp.checkpoint_hash {
             return Err(malformed(format!(
@@ -730,8 +721,8 @@ pub struct SelectivePackManifest {
     pub pack_format_version: u32,
     pub pack_kind: String,
     pub tree_size: i64,
-    pub root_hash: String,
-    pub checkpoint_hash: String,
+    pub root_hash: Digest,
+    pub checkpoint_hash: Digest,
 }
 
 /// A selective evidence pack: a chosen subset of audit rows, each proven
@@ -767,8 +758,8 @@ pub enum SelectiveVerification {
     /// An externally held anchor disagrees with the pack's checkpoint.
     AnchorMismatch {
         tree_size: i64,
-        anchor_checkpoint_hash: String,
-        pack_checkpoint_hash: String,
+        anchor_checkpoint_hash: Digest,
+        pack_checkpoint_hash: Digest,
     },
     /// The checkpoint carries a signature that does not verify over its
     /// tree head (cryptographic check only; authority is not judged here).
@@ -857,8 +848,8 @@ fn assemble_selective_pack(
         .map(|&index| RowInclusionProof {
             leaf_index: index as i64,
             proof: inclusion_proof(&leaves, index)
-                .iter()
-                .map(render_hash)
+                .into_iter()
+                .map(Digest::from_bytes)
                 .collect(),
         })
         .collect();
@@ -867,8 +858,8 @@ fn assemble_selective_pack(
         pack_format_version: PACK_FORMAT_V3,
         pack_kind: PACK_KIND_SELECTIVE.to_string(),
         tree_size: checkpoint.tree_size,
-        root_hash: checkpoint.root_hash.clone(),
-        checkpoint_hash: checkpoint.checkpoint_hash.clone(),
+        root_hash: checkpoint.root_hash,
+        checkpoint_hash: checkpoint.checkpoint_hash,
     };
     Ok(SelectiveEvidencePack {
         manifest,
@@ -949,23 +940,20 @@ pub fn verify_selective(
     {
         return Ok(SelectiveVerification::AnchorMismatch {
             tree_size: cp.tree_size,
-            anchor_checkpoint_hash: anchor.checkpoint_hash.clone(),
-            pack_checkpoint_hash: cp.checkpoint_hash.clone(),
+            anchor_checkpoint_hash: anchor.checkpoint_hash,
+            pack_checkpoint_hash: cp.checkpoint_hash,
         });
     }
 
     let malformed = |detail: String| PackError::Malformed { detail };
-    let root =
-        parse_hash(&cp.root_hash).ok_or_else(|| malformed("root_hash is not sha256".into()))?;
-
     for (row, rp) in pack.rows.iter().zip(&pack.inclusion_proofs) {
         let leaf = audit_leaf_hash(row)?;
-        let proof = parse_hashes(&rp.proof)?;
+        let proof = proof_bytes(&rp.proof);
         match verify_inclusion_proof(
             rp.leaf_index as usize,
             cp.tree_size as usize,
             &leaf,
-            &root,
+            cp.root_hash.bytes(),
             &proof,
         ) {
             Ok(()) => {}
@@ -1029,7 +1017,7 @@ fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackE
     let expected = checkpoint_hash(
         cp.tree_size,
         &cp.root_hash,
-        cp.prev_checkpoint_hash.as_deref(),
+        cp.prev_checkpoint_hash.as_ref(),
     );
     if expected != cp.checkpoint_hash {
         return Err(malformed(format!(
