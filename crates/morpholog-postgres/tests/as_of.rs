@@ -13,7 +13,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::{ClaimInstance, EvalValue};
-use morpholog_examples::{double_entry_ledger, verified_revenue};
+use morpholog_examples::{approval_controls, double_entry_ledger, verified_revenue};
 use morpholog_postgres::{
     PgError, PgPool, list_claims, list_claims_at, list_derived, list_derived_at,
     reconstruct_state_at,
@@ -525,5 +525,50 @@ async fn reconstruct_state_at_on_empty_audit_log_is_transition_not_found() {
     assert!(
         matches!(err, PgError::TransitionNotFound(_)),
         "empty audit log should still produce TransitionNotFound, not an empty state; got {err:?}"
+    );
+}
+
+/// The order contract of a historical read: live claims keep the order
+/// the replay first admitted them, and a claim retracted and re-admitted
+/// moves to the tail - the same rule the kernel's own state applies, so
+/// there is one replay rule and not a second resurrecting one.
+#[tokio::test]
+async fn list_claims_at_moves_a_readmitted_claim_to_the_tail() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let compiled = common::compiled(approval_controls::program());
+    let grant = approval_controls::grant_approval_authority();
+    let revoke = approval_controls::revoke_approval_authority();
+    let may_approve = |who: &str| ClaimInstance {
+        predicate: "MayApprove".into(),
+        args: vec![subj(who), subj("invoice")],
+    };
+    for (t, who) in [(&grant, "p1"), (&grant, "p2"), (&revoke, "p1")] {
+        expect_committed(
+            common::propose_pg_with_test_actor(
+                &pool,
+                &compiled,
+                t,
+                vec![subj(who), subj("invoice")],
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let readmitted = expect_committed(
+        common::propose_pg_with_test_actor(
+            &pool,
+            &compiled,
+            &grant,
+            vec![subj("p1"), subj("invoice")],
+        )
+        .await
+        .unwrap(),
+    );
+    let claims = list_claims_at(&pool, readmitted).await.unwrap();
+    assert_eq!(
+        claims,
+        vec![may_approve("p2"), may_approve("p1")],
+        "p1 was granted first, revoked, and granted again: it sits at the tail"
     );
 }

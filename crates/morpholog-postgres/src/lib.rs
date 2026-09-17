@@ -69,6 +69,7 @@ pub use checkpoints::{
 pub use claims::{
     ClaimFilter, list_claims, list_claims_for_predicates, list_claims_where, load_scoped_state,
 };
+pub use compiled::{CompileReason, CompileRefusal};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
 pub use error::PgError;
 pub use merkle::{Digest, DigestError};
@@ -88,7 +89,6 @@ pub use pack::{
     WindowStart, WindowVerification, export_pack, export_selective, export_window, verify_pack,
     verify_selective, verify_window,
 };
-pub use compiled::{CompileReason, CompileRefusal};
 pub use program::{Backend, PgProgram};
 pub use propose::{
     AuditedInvariantCheck, PgProposalOutcome, PgTracedOutcome, RejectionStateOutcome,
