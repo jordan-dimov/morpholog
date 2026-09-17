@@ -280,6 +280,7 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
         | PgError::ActorPolicyDeclaration { .. }
         | PgError::UnknownTransformation { .. }
         | PgError::NoCheckpoint
+        | PgError::AuditPrefixIncomplete { .. }
         | PgError::AnchorDivergedFromStart { .. }
         | PgError::SigningKeyUnauthorised { .. }
         | PgError::SigningKeyUnauthorisedAtTruncatedPrefix { .. } => (

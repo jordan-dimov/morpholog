@@ -192,6 +192,15 @@ pub enum PgError {
         "no checkpoint to export; run `audit checkpoint` first (or pass an existing --tree-size)"
     )]
     NoCheckpoint,
+    /// A checkpoint commits to more audit rows than the log now holds
+    /// under it, so no pack can be exported against it. Whether rows
+    /// were deleted, lost, or rewritten is interpretation; the fact is
+    /// that the covered prefix is no longer all present.
+    #[error(
+        "checkpoint commits to {tree_size} audit rows but only {rows_present} are present; \
+         the audit log under it is incomplete"
+    )]
+    AuditPrefixIncomplete { tree_size: i64, rows_present: i64 },
     /// `export_window` was given a full anchor (`--from-anchor`) whose tree
     /// head does not match the stored checkpoint at its size. The
     /// externally-held anchor is the trust object, so export refuses rather
