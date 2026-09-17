@@ -400,16 +400,23 @@ async fn sweep(program: Program) -> usize {
 /// `repr_for`, like every operator, needs a forcing discriminator
 /// here, not merely a unit test asserting emitted text.
 const HOSTILE: &[&str] = &[
-    // Two lines of one figure under a cap: on the range-extreme
-    // argument the exact total leaves the decimal range, and the
-    // kernel's error must be the compiled checks' error too.
+    // Two lines of one figure under a cap and over a floor: on the
+    // range-extreme argument the exact total leaves the decimal range,
+    // and the kernel's error must be the compiled checks' error too.
+    // Under the floor the oversized total compares as holding, so only
+    // the range test itself can report it.
     "program two_lines
 predicate Cap(b: Subject, cap: Decimal)
+predicate Floor(b: Subject, floor: Decimal)
 predicate Line(b: Subject, side: Subject, v: Decimal)
 invariant capped:
     Cap(b, cap) implies sum(v | Line(b, _, v)) <= cap
+invariant floored:
+    Floor(b, floor) implies sum(v | Line(b, _, v)) >= floor
 transformation set_cap(b, cap):
     admit Cap(b, cap)
+transformation set_floor(b, floor):
+    admit Floor(b, floor)
 transformation add_two(b, v):
     admit Line(b, #left, v)
     admit Line(b, #right, v)
