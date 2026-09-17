@@ -145,15 +145,15 @@ impl CompiledInvariantSet {
 /// matches the extractor. Provisioning reconciles these against the
 /// database; correctness never depends on them.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct IndexSpec {
-    pub predicate: PredicateName,
-    pub position: usize,
-    pub representation: Representation,
+pub(crate) struct IndexSpec {
+    pub(crate) predicate: PredicateName,
+    pub(crate) position: usize,
+    pub(crate) representation: Representation,
     /// The indexed expression, unqualified, as it appears inside the
     /// parentheses of `CREATE INDEX`.
-    pub expression_sql: String,
+    pub(crate) expression_sql: String,
     /// The partial-index predicate.
-    pub partial_predicate_sql: String,
+    pub(crate) partial_predicate_sql: String,
 }
 
 impl IndexSpec {
@@ -172,7 +172,7 @@ impl IndexSpec {
 
     /// The digest of the whole canonical specification: same digest,
     /// same physical requirement.
-    pub fn digest(&self) -> String {
+    pub(crate) fn digest(&self) -> String {
         use sha2::{Digest as _, Sha256};
         let canonical = format!(
             "morpholog.claims\nbtree\n{}\n{}\n{}\n{}\n{}\n",
@@ -188,7 +188,7 @@ impl IndexSpec {
     /// The deterministic name in Morpholog's reserved namespace: a
     /// readable prefix and the digest that makes it unique, well under
     /// the identifier limit.
-    pub fn index_name(&self) -> String {
+    pub(crate) fn index_name(&self) -> String {
         let readable: String = self
             .predicate
             .as_str()
@@ -212,7 +212,7 @@ impl IndexSpec {
 
     /// The build statement, concurrent so the table stays writable; it
     /// cannot run inside a transaction.
-    pub fn create_sql(&self) -> String {
+    pub(crate) fn create_sql(&self) -> String {
         format!(
             "CREATE INDEX CONCURRENTLY {} ON morpholog.claims USING btree (({})) WHERE {}",
             quote_ident(&self.index_name()),
@@ -629,7 +629,7 @@ fn witness_select_order(r: &Rendered) -> (String, String) {
 /// position is expressed, so the index necessarily matches the
 /// extractor. See the module doc for the per-kind proofs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Representation {
+pub(crate) enum Representation {
     Text,
     Numeric,
     /// The whole tagged value; sound only for kinds whose canonical
@@ -651,7 +651,7 @@ impl Representation {
         }
     }
 
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Representation::Text => "text",
             Representation::Numeric => "numeric",

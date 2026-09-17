@@ -667,6 +667,31 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
             ));
         }
     }
+    // And it refuses to bless a table of the same name and another shape,
+    // rather than recording the version and failing on the first run of
+    // the command that fills it. Proved with the migration's own SQL on
+    // a wrong-shaped twin, then the tables put back.
+    let migration_015 = include_str!("../../morpholog-core/sql/migrations/015_managed_indexes.sql");
+    sqlx::raw_sql(
+        "DROP TABLE morpholog.index_requirement; DROP TABLE morpholog.managed_index;
+         CREATE TABLE morpholog.managed_index (something_else integer)",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|e| format!("shaping the wrong twin: {e}"))?;
+    match sqlx::raw_sql(migration_015).execute(&pool).await {
+        Ok(_) => return Err("migration 015 adopted a wrong-shaped managed_index".to_string()),
+        Err(e) if e.to_string().contains("another shape") => {}
+        Err(e) => return Err(format!("migration 015 refused for the wrong reason: {e}")),
+    }
+    sqlx::raw_sql("DROP TABLE morpholog.managed_index")
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("removing the wrong twin: {e}"))?;
+    sqlx::raw_sql(migration_015)
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("migration 015 must recreate the registry: {e}"))?;
 
     Ok(())
 }

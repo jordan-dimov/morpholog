@@ -6,6 +6,39 @@
 -- manages and which programmes require each. The catalogue remains the
 -- truth about what physically exists. Neither table participates in
 -- correctness: the compiled checks are right without any index.
+--
+-- Idempotent, like every migration, because an installation may carry
+-- the tables without a record of this version - but never blessing a
+-- table of the same name and another shape: that is refused here, not
+-- discovered by the first provisioning run.
+
+DO $$
+DECLARE
+    shape text;
+BEGIN
+    IF to_regclass('morpholog.managed_index') IS NOT NULL THEN
+        SELECT string_agg(column_name || ':' || data_type, ',' ORDER BY ordinal_position)
+          INTO shape
+          FROM information_schema.columns
+         WHERE table_schema = 'morpholog' AND table_name = 'managed_index';
+        IF shape IS DISTINCT FROM
+           'spec_digest:text,index_name:text,predicate_name:text,position:integer,representation:text,expression_sql:text,partial_predicate:text,registered_at:timestamp with time zone'
+        THEN
+            RAISE EXCEPTION 'morpholog.managed_index exists with another shape (%); migration 015 refuses to adopt it', shape;
+        END IF;
+    END IF;
+    IF to_regclass('morpholog.index_requirement') IS NOT NULL THEN
+        SELECT string_agg(column_name || ':' || data_type, ',' ORDER BY ordinal_position)
+          INTO shape
+          FROM information_schema.columns
+         WHERE table_schema = 'morpholog' AND table_name = 'index_requirement';
+        IF shape IS DISTINCT FROM
+           'program_identity:text,spec_digest:text,program_hash:text,reconciled_at:timestamp with time zone'
+        THEN
+            RAISE EXCEPTION 'morpholog.index_requirement exists with another shape (%); migration 015 refuses to adopt it', shape;
+        END IF;
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS morpholog.managed_index (
     spec_digest        text        PRIMARY KEY,

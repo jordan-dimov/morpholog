@@ -51,7 +51,7 @@ impl PgProgram {
 
     /// The indexes the compiled SQL can seek on; none when the
     /// programme is interpreted. What `provision indexes` reconciles.
-    pub fn required_indexes(&self) -> Vec<IndexSpec> {
+    pub(crate) fn required_indexes(&self) -> Vec<IndexSpec> {
         match &self.backend {
             InvariantBackend::Compiled(set) => set.required_indexes(),
             InvariantBackend::Interpreted(_) => Vec::new(),

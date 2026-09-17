@@ -108,6 +108,21 @@ async fn an_unrecorded_matching_index_is_adopted() {
     assert_eq!(registry_counts(&pool).await, (3, 3));
 }
 
+/// The first specification the ledger requires, as the public report
+/// states it: name, expression, partial predicate.
+async fn first_spec(pool: &PgPool) -> (String, String, String) {
+    let entry = plan_indexes(pool, &ledger())
+        .await
+        .unwrap()
+        .entries
+        .remove(0);
+    (
+        entry.index_name,
+        entry.expression_sql,
+        entry.partial_predicate_sql,
+    )
+}
+
 /// An operator's equivalent index under another name satisfies the
 /// requirement, is never adopted, and is never pruned.
 #[tokio::test]
@@ -115,10 +130,9 @@ async fn an_equivalent_index_under_another_name_satisfies_and_is_never_pruned() 
     let pool = test_pool().await;
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
-    let spec = &ledger().required_indexes()[0];
+    let (_, expression, partial) = first_spec(&pool).await;
     sqlx::query(sqlx::AssertSqlSafe(format!(
-        "CREATE INDEX operator_made_this ON morpholog.claims USING btree (({})) WHERE {}",
-        spec.expression_sql, spec.partial_predicate_sql
+        "CREATE INDEX operator_made_this ON morpholog.claims USING btree (({expression})) WHERE {partial}"
     )))
     .execute(&pool)
     .await
@@ -154,17 +168,18 @@ async fn an_equivalent_index_under_another_name_satisfies_and_is_never_pruned() 
 }
 
 /// Morpholog's own name over a different definition is a conflict:
-/// reported, never touched, never adopted.
+/// reported, and the run applies nothing at all - no build, no
+/// registry write - because a partial reconciliation would drop this
+/// programme's requirement and let a later prune take the operator's
+/// index for stale.
 #[tokio::test]
-async fn a_conflicting_definition_under_our_name_is_never_touched() {
+async fn a_conflicting_definition_under_our_name_applies_nothing() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
-    let spec = &ledger().required_indexes()[0];
+    let (name, _, partial) = first_spec(&pool).await;
     sqlx::query(sqlx::AssertSqlSafe(format!(
-        "CREATE INDEX \"{}\" ON morpholog.claims USING btree ((arguments -> 7 ->> 'value')) WHERE {}",
-        spec.index_name(),
-        spec.partial_predicate_sql
+        "CREATE INDEX \"{name}\" ON morpholog.claims USING btree ((arguments -> 7 ->> 'value')) WHERE {partial}"
     )))
     .execute(&pool)
     .await
@@ -177,6 +192,7 @@ async fn a_conflicting_definition_under_our_name_is_never_touched() {
         "{report:?}"
     );
     assert!(report.has_conflict());
+    assert!(!report.applied, "a conflict fails closed");
     assert!(
         report.entries[0].detail.contains("arguments -> 7"),
         "{}",
@@ -184,7 +200,7 @@ async fn a_conflicting_definition_under_our_name_is_never_touched() {
     );
     let definition: String =
         sqlx::query_scalar("SELECT pg_get_indexdef(c.oid) FROM pg_class c WHERE c.relname = $1")
-            .bind(spec.index_name())
+            .bind(&name)
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -193,10 +209,11 @@ async fn a_conflicting_definition_under_our_name_is_never_touched() {
         "left exactly as found: {definition}"
     );
     assert_eq!(
-        registry_counts(&pool).await,
-        (2, 2),
-        "the conflict is not managed"
+        catalogue_names(&pool).await.len(),
+        1,
+        "no other index was built"
     );
+    assert_eq!(registry_counts(&pool).await, (0, 0), "no registry write");
 }
 
 /// A programme that stops requiring an index leaves it stale: reported,
@@ -278,7 +295,7 @@ async fn an_invalid_index_is_repaired_idempotently() {
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
     provision_indexes(&pool, &ledger(), false).await.unwrap();
-    let name = ledger().required_indexes()[0].index_name();
+    let (name, _, _) = first_spec(&pool).await;
     sqlx::query(
         "UPDATE pg_index SET indisvalid = false
          WHERE indexrelid = (SELECT oid FROM pg_class WHERE relname = $1)",

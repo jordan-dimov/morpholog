@@ -18,6 +18,15 @@
 //!   the check transaction, the ORDER BY over the extractor expressions)
 //!   and would show here as an index falling out of a plan.
 //!
+//! There is deliberately no third test asserting that every invariant's
+//! real violation SQL uses one of its own indexes across the gallery:
+//! it was written, and it found that a full stage-1 uniqueness check is
+//! a self-join over every row of the predicate, which the planner
+//! lawfully serves as a hash join of two whole-predicate scans without
+//! touching the expression index at any size. The seek pays in
+//! correlated lookups and in the case-bound stage, which is what the
+//! populated ledger's regression covers.
+//!
 //! Stage-1 SQL carries no bind parameters, so there is no generic plan
 //! to force; the day a parameter enters compiled SQL, a forced-generic
 //! case joins here. `DATABASE_URL`-gated like every PG suite.

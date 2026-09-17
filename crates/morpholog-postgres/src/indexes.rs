@@ -76,6 +76,10 @@ pub struct IndexPlanEntry {
     pub predicate: String,
     pub position: usize,
     pub representation: &'static str,
+    /// The indexed expression, as it appears inside `CREATE INDEX`'s
+    /// parentheses, and the partial predicate; empty on a stale entry.
+    pub expression_sql: String,
+    pub partial_predicate_sql: String,
     /// What the action rests on: the external index that satisfies, what
     /// a conflict differs in, why a stale index is stale.
     pub detail: String,
@@ -86,7 +90,8 @@ pub struct ProvisionReport {
     pub program_identity: String,
     pub program_hash: String,
     pub entries: Vec<IndexPlanEntry>,
-    /// Whether the plan was executed (false for a dry run).
+    /// Whether the plan was executed: false for a dry run, and false when
+    /// a conflict made the run apply nothing.
     pub applied: bool,
     /// Stale indexes physically dropped, by name.
     pub pruned: Vec<String>,
@@ -279,7 +284,6 @@ async fn reconcile(
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     let outcome = reconcile_locked(
-        pool,
         &mut conn,
         &specs,
         &program_identity,
@@ -297,9 +301,7 @@ async fn reconcile(
     outcome
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn reconcile_locked(
-    pool: &PgPool,
     conn: &mut sqlx::PgConnection,
     specs: &[IndexSpec],
     program_identity: &str,
@@ -318,11 +320,19 @@ async fn reconcile_locked(
             predicate: spec.predicate.to_string(),
             position: spec.position,
             representation: spec.representation.as_str(),
+            expression_sql: spec.expression_sql.clone(),
+            partial_predicate_sql: spec.partial_predicate_sql.clone(),
             detail,
         });
     }
 
-    if apply {
+    // Fail closed: a conflict means the catalogue and the specification
+    // disagree under Morpholog's own name, and a partial reconciliation
+    // around it would drop this programme's requirement for the index
+    // and let a later prune, by any programme, take the operator's index
+    // for stale. Nothing is applied; the report says why.
+    let applied = apply && !entries.iter().any(|e| e.action == IndexAction::Conflict);
+    if applied {
         for (spec, entry) in specs.iter().zip(&entries) {
             match entry.action {
                 IndexAction::RepairInvalid => {
@@ -345,8 +355,12 @@ async fn reconcile_locked(
             }
         }
         // The registry: every managed specification once, then this
-        // programme's requirement set replaced whole.
-        let mut tx = pool.begin().await.map_err(classify)?;
+        // programme's requirement set replaced whole - on the held
+        // connection, since a one-connection pool has no other, and the
+        // session lock outlives the transaction.
+        let mut tx = sqlx::Connection::begin(&mut *conn)
+            .await
+            .map_err(classify)?;
         for (spec, entry) in specs.iter().zip(&entries) {
             if !matches!(
                 entry.action,
@@ -425,7 +439,7 @@ async fn reconcile_locked(
             "jsonb" => "jsonb",
             _ => "text",
         };
-        if apply && prune {
+        if applied && prune {
             drop_concurrently(conn, &row.index_name).await?;
             sqlx::query!(
                 "DELETE FROM morpholog.managed_index WHERE index_name = $1",
@@ -442,7 +456,9 @@ async fn reconcile_locked(
             predicate: row.predicate,
             position: row.position as usize,
             representation,
-            detail: if apply && prune {
+            expression_sql: String::new(),
+            partial_predicate_sql: String::new(),
+            detail: if applied && prune {
                 "required by no programme; dropped".to_string()
             } else {
                 "required by no programme; `--prune` drops it".to_string()
@@ -454,7 +470,7 @@ async fn reconcile_locked(
         program_identity: program_identity.to_string(),
         program_hash: program_hash.to_string(),
         entries,
-        applied: apply,
+        applied,
         pruned,
     })
 }

@@ -72,7 +72,7 @@ pub use checkpoints::{
 pub use claims::{
     ClaimFilter, list_claims, list_claims_for_predicates, list_claims_where, load_scoped_state,
 };
-pub use compiled::{CompileReason, CompileRefusal, IndexSpec, Representation};
+pub use compiled::{CompileReason, CompileRefusal};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
 pub use error::PgError;
 pub use indexes::{IndexAction, IndexPlanEntry, ProvisionReport, plan_indexes, provision_indexes};
