@@ -3,10 +3,10 @@
 //! same seeded state, once through each route, and the two must reach
 //! the same decision: the same outcome and reason, the same refusing
 //! rule and version, the same witness variables, the same semantic
-//! rejection-log fields, and a byte-equal `invariants_checked` audit
-//! field. Witness values are observational (a symmetric plan may name
-//! the violating pair in another order), and generated identities and
-//! times are free.
+//! rejection-log fields, and the same persisted audit, claim and outbox
+//! rows up to generated identities and times. Witness values are
+//! observational (a symmetric plan may name the violating pair in
+//! another order).
 //!
 //! The other half is what a compiled check may never do: decide by
 //! falling back. A SQL error inside a check is an operational error,
@@ -48,12 +48,32 @@ async fn count(pool: &PgPool, sql: &'static str) -> i64 {
     sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
 }
 
-async fn audit_invariants_checked(pool: &PgPool) -> Vec<serde_json::Value> {
-    sqlx::query_scalar("SELECT invariants_checked FROM morpholog.audit ORDER BY transition_id")
-        .fetch_all(pool)
-        .await
-        .unwrap()
+/// Rows as text with generated identities normalised, sorted, so two
+/// runs that minted different subjects still compare equal when they
+/// persisted the same thing. Audit rows keep every field but their
+/// transition id and time; claims drop the transition that asserted
+/// them; outbox rows drop their ids and the key derived from one.
+async fn persisted(pool: &PgPool, sql: &'static str) -> Vec<String> {
+    let rows: Vec<String> = sqlx::query_scalar(sql).fetch_all(pool).await.unwrap();
+    let mut rows: Vec<String> = rows.iter().map(|r| normalize_uuids(r)).collect();
+    rows.sort();
+    rows
 }
+
+const AUDIT_ROWS: &str = "SELECT jsonb_build_object(
+        'transformation', transformation_name, 'arguments', arguments, 'actor', actor,
+        'epoch', invariant_epoch, 'checked', invariants_checked,
+        'asserted', asserted_claims, 'retracted', retracted_claims,
+        'emitted', emitted_intents, 'attestation', attestation, 'parameters', parameters
+    )::text FROM morpholog.audit";
+
+const CLAIM_ROWS: &str =
+    "SELECT jsonb_build_object('predicate', predicate_name, 'arguments', arguments)::text
+     FROM morpholog.claims";
+
+const OUTBOX_ROWS: &str =
+    "SELECT jsonb_build_object('intent', intent_type, 'arguments', arguments)::text
+     FROM morpholog.outbox";
 
 fn eligible_gallery() -> Vec<Program> {
     morpholog_examples::all_programs()
@@ -70,9 +90,9 @@ fn eligible_gallery() -> Vec<Program> {
 struct Observed {
     outcome: String,
     rejection: Option<String>,
-    audit: Vec<serde_json::Value>,
-    claims: i64,
-    outbox: i64,
+    audit: Vec<String>,
+    claims: Vec<String>,
+    outbox: Vec<String>,
 }
 
 /// A route's answer, typed: a decision with what it left behind, the
@@ -141,9 +161,9 @@ async fn observe(
     RouteObservation::Decided(Observed {
         outcome,
         rejection,
-        audit: audit_invariants_checked(pool).await,
-        claims: count(pool, "SELECT count(*) FROM morpholog.claims").await,
-        outbox: count(pool, "SELECT count(*) FROM morpholog.outbox").await,
+        audit: persisted(pool, AUDIT_ROWS).await,
+        claims: persisted(pool, CLAIM_ROWS).await,
+        outbox: persisted(pool, OUTBOX_ROWS).await,
     })
 }
 
