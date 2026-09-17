@@ -523,7 +523,7 @@ const MINIMUM_CORPUS: &[&str] = &[
     "carbon_credit_provenance",
 ];
 
-fn whole_in_fragment() -> Vec<Program> {
+pub(crate) fn whole_in_fragment() -> Vec<Program> {
     morpholog_examples::all_programs()
         .into_iter()
         .filter(|p| {

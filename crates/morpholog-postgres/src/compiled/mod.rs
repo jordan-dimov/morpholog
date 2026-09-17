@@ -274,7 +274,7 @@ pub(crate) struct CompiledInvariant {
     sql_order_limit: String,
     /// The indexes this invariant's SQL can seek on, in specification
     /// order.
-    required_indexes: Vec<IndexSpec>,
+    pub(crate) required_indexes: Vec<IndexSpec>,
 }
 
 impl CompiledInvariant {
@@ -641,7 +641,7 @@ impl Representation {
     /// The extractor over `arguments` at `position`. `qualifier` is the
     /// table alias followed by a dot in a query, empty in an index
     /// expression.
-    fn extractor(self, qualifier: &str, position: usize) -> String {
+    pub(crate) fn extractor(self, qualifier: &str, position: usize) -> String {
         match self {
             Representation::Text => format!("{qualifier}arguments -> {position} ->> 'value'"),
             Representation::Numeric => {

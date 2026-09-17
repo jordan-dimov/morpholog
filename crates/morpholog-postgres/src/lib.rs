@@ -25,6 +25,8 @@ mod claims;
 mod compiled;
 #[cfg(test)]
 mod compiled_differential;
+#[cfg(test)]
+mod compiled_plan_shapes;
 mod derived;
 mod error;
 mod indexes;
