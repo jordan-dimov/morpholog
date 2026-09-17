@@ -131,6 +131,100 @@ fn second_admission_against_existing_current_is_rejected() {
     );
 }
 
+/// Correcting a correction is one more supersession step, at any
+/// depth, and staleness is a pointer read rather than a walk along the
+/// chain: no rule in this programme follows a `Supersedes` link, so no
+/// rule has a hop count to exceed. The one thing a chain forbids is a
+/// fork - a second correction of a version already superseded, at any
+/// depth - and the generated no-fork invariant refuses it by name.
+#[test]
+fn correction_chains_run_to_any_depth_and_stale_versions_stay_stale() {
+    let mut state = admit_iv(State::default(), 91, "ver_001");
+    let chain = ["ver_001", "ver_002", "ver_003", "ver_004", "ver_005"];
+    for (depth, pair) in chain.windows(2).enumerate() {
+        state = ex().must_accept(
+            &verified_revenue::correct_independent_verification(),
+            vec![
+                asset(),
+                period(),
+                dec(90 - depth as i64),
+                subj(pair[1]),
+                subj(pair[0]),
+            ],
+            state,
+        );
+    }
+
+    // The pointer sits on the head; every earlier version is admitted
+    // history, none is current.
+    assert!(has_claim(
+        &state,
+        "CurrentVerification",
+        &[asset(), period(), subj("ver_005")]
+    ));
+    for stale in &chain[..4] {
+        assert!(
+            !has_claim(
+                &state,
+                "CurrentVerification",
+                &[asset(), period(), subj(stale)]
+            ),
+            "{stale} must no longer be current"
+        );
+        assert!(has_claim(
+            &state,
+            "Supersedes",
+            &[
+                subj(chain[chain.iter().position(|v| v == stale).unwrap() + 1]),
+                subj(stale)
+            ]
+        ));
+    }
+
+    // Standing attaches to the head only, whatever the depth of the
+    // version being asked about: the read is the pointer, not the chain.
+    for stale in &chain[..4] {
+        ex().must_reject(
+            &verified_revenue::grant_standing(),
+            vec![
+                subj(stale),
+                subj(verified_revenue::BANK_DEBT_SERVICE),
+                subj("credit_committee"),
+                subj(&format!("grant_{stale}")),
+            ],
+            &state,
+        );
+    }
+    let granted = grant(
+        state.clone(),
+        "ver_005",
+        verified_revenue::BANK_DEBT_SERVICE,
+        "credit_committee",
+        "grant_head",
+    );
+    assert!(has_claim(
+        &granted,
+        "AdmissibleFor",
+        &[subj("ver_005"), subj(verified_revenue::BANK_DEBT_SERVICE)],
+    ));
+
+    // A fork anywhere in the chain is refused: correcting a version that
+    // was itself already corrected, whether the first or the third.
+    for forked in ["ver_001", "ver_003"] {
+        ex().must_reject(
+            &verified_revenue::correct_independent_verification(),
+            vec![asset(), period(), dec(50), subj("ver_fork"), subj(forked)],
+            &state,
+        );
+    }
+    // Correcting the head is not a fork: the chain simply grows.
+    ex().must_accept(
+        &verified_revenue::correct_independent_verification(),
+        vec![asset(), period(), dec(70), subj("ver_006"), subj("ver_005")],
+        state,
+    );
+}
+
 // ============================================================
 // Standing pattern
 // ============================================================
