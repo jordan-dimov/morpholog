@@ -13,6 +13,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use common::{database_url, reset_db};
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
@@ -54,24 +55,6 @@ const REQUESTS: &[&str] = &[
     r#"{"actor":"teller","args_named":{},"op":"propose","transformation":"no_such_act"}"#,
     r#"{"as_of":"not-a-coordinate","op":"claims"}"#,
 ];
-
-fn database_url() -> String {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for morpholog-cli integration tests \
-         (e.g. postgres:///morpholog_dev)",
-    );
-    morpholog_postgres::with_default_user(&url)
-}
-
-async fn reset_db() {
-    let pool = morpholog_postgres::PgPool::connect(&database_url())
-        .await
-        .expect("connect to test DB");
-    sqlx::query(morpholog_postgres::testing::RESET_SQL)
-        .execute(&pool)
-        .await
-        .expect("truncate");
-}
 
 fn spawn_session(file: &std::path::Path) -> std::process::Child {
     Command::new(common::bin())

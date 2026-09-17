@@ -1,7 +1,7 @@
 //! End-to-end integration tests for the `morpholog` binary.
 //!
-//! Unlike the unit tests in `src/main.rs` (which exercise clap argument
-//! parsing only), these tests spawn the built binary against a real
+//! Unlike the binary's own tests in `src/cli_tests.rs` (argument parsing
+//! and the exit path), these tests spawn the built binary against a real
 //! PostgreSQL database and assert on stdout JSON, stderr error chains,
 //! and process exit codes. They cover the dispatch handlers - the
 //! `match cli.command` arms in `main`, the `propose` function, the
@@ -16,29 +16,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
+use common::{database_url, reset_db};
 
 use std::process::Command;
 
 use serde_json::Value;
 use sqlx::PgPool;
-
-fn database_url() -> String {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for morpholog-cli integration tests \
-         (e.g. postgres:///morpholog_dev or postgres://postgres:postgres@localhost:5432/postgres)",
-    );
-    morpholog_postgres::with_default_user(&url)
-}
-
-async fn reset_db() {
-    let pool = PgPool::connect(&database_url())
-        .await
-        .expect("connect to test DB");
-    sqlx::query(morpholog_postgres::testing::RESET_SQL)
-        .execute(&pool)
-        .await
-        .expect("truncate");
-}
 
 /// Run `morpholog` with the given subcommand args plus `--database-url`,
 /// returning (status, stdout, stderr). Does not panic on non-zero exit;

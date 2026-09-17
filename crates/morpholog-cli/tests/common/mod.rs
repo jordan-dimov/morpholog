@@ -39,6 +39,28 @@ pub fn write_fixture(name: &str, content: &str) -> Fixture {
     Fixture { path, _dir: dir }
 }
 
+/// The suites' connection string, from `DATABASE_URL`, with the default
+/// user applied as the binary applies it.
+pub fn database_url() -> String {
+    let url = std::env::var("DATABASE_URL").expect(
+        "DATABASE_URL must be set for morpholog-cli integration tests \
+         (e.g. postgres:///morpholog_dev)",
+    );
+    morpholog_postgres::with_default_user(&url)
+}
+
+/// Truncate the schema before a test, so the suites run serially
+/// without crosstalk.
+pub async fn reset_db() {
+    let pool = morpholog_postgres::PgPool::connect(&database_url())
+        .await
+        .expect("connect to test DB");
+    sqlx::query(morpholog_postgres::testing::RESET_SQL)
+        .execute(&pool)
+        .await
+        .expect("truncate");
+}
+
 /// The connecting role's name, via a throwaway pool.
 pub async fn session_user(database_url: &str) -> String {
     let pool = morpholog_postgres::PgPool::connect(database_url)
