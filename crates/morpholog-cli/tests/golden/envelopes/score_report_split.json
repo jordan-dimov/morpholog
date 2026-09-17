@@ -17,9 +17,9 @@
   ],
   "split": {
     "boundary": {
-      "requested": "2026-06-01T12:00:00+00:00",
+      "requested": "2026-06-01T12:00:00Z",
       "resolved_transition_id": "01900000-0000-7000-8000-000000000001",
-      "resolved_committed_at": "2026-06-01T12:00:00+00:00"
+      "resolved_committed_at": "2026-06-01T12:00:00Z"
     },
     "train": {
       "transitions_replayed": 1,

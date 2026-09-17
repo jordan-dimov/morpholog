@@ -147,41 +147,11 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
                 }
                 None => None,
             };
-            // `--where` names fields, and a field name means nothing
-            // without a declaration to read it against - hence a
-            // programme and exactly one predicate. Refused up front,
-            // before any database work, so the message is about the
-            // request rather than about an empty result.
-            // Set alongside the filters, from the same declaration, so
-            // the query cannot be handed an arity from a different one.
-            let mut declared_arity: i32 = 0;
-            let filters = if args.filter.is_empty() {
-                Vec::new()
-            } else {
-                let Some((program, file)) = named_program.as_ref() else {
-                    bail!(
-                        "`--where` needs `--named <FILE>`: a field name is resolved against a \
-                         declaration, and without one there is nothing to resolve it against"
-                    );
-                };
-                let [predicate] = args.predicate.as_slice() else {
-                    bail!(
-                        "`--where` needs exactly one `--predicate`, because the field names \
-                         belong to one claim shape; got {}",
-                        args.predicate.len()
-                    );
-                };
-                let decl = program.predicate(predicate).ok_or_else(|| {
-                    anyhow!(
-                        "predicate `{predicate}` is not declared in `{}`",
-                        file.display()
-                    )
-                })?;
-                declared_arity = i32::try_from(decl.args.len()).with_context(|| {
-                    format!("`{predicate}` declares too many arguments to filter")
-                })?;
-                crate::commands::filter::resolve(decl, &args.filter)?
-            };
+            let (filters, declared_arity) = crate::commands::filter::resolve_where(
+                named_program.as_ref().map(|(program, _)| program),
+                &args.predicate,
+                &args.filter,
+            )?;
 
             let pool = connect(&args.db.database_url).await?;
             let as_of = resolve_as_of(&pool, args.as_of).await?;
@@ -400,19 +370,11 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
     // A derived view's own output predicate is declared like any other,
     // so `--where` resolves field names the same way `inspect claims`
     // does - no second vocabulary.
-    let filters = if args.filter.is_empty() {
-        Vec::new()
-    } else {
-        let decl = program.predicate(&args.derived).ok_or_else(|| {
-            anyhow!(
-                "`--where` needs `{}` declared as a predicate in `{}` to resolve field names \
-                 against; a derived claim's head is its declaration",
-                args.derived,
-                args.file.display()
-            )
-        })?;
-        crate::commands::filter::resolve(decl, &args.filter)?
-    };
+    let (filters, _) = crate::commands::filter::resolve_where(
+        Some(program),
+        std::slice::from_ref(&args.derived),
+        &args.filter,
+    )?;
     let pool = connect(&args.db.database_url).await?;
     let as_of = resolve_as_of(&pool, args.as_of).await?;
     let rows = derived_rows(&pool, &program.definitions, derived, as_of, &filters).await?;

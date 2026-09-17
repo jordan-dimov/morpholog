@@ -44,6 +44,7 @@ mod sql_quote;
 mod transact;
 mod txn;
 mod verify;
+pub mod wire_time;
 mod witnesses;
 
 // Re-export the full public surface so `morpholog_postgres::X` paths are unchanged.

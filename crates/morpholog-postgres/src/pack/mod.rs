@@ -77,13 +77,12 @@ fn covering_checkpoint(
 }
 
 /// The first `tree_size` audit rows in canonical order. A checkpoint is
-/// watermark-bounded, so its rows are all present and visible; fewer
-/// means the audit log was edited under it, and the export fails loudly
-/// rather than emit a pack the verifier would rightly reject.
+/// watermark-bounded, so its rows are all present and visible; fewer is
+/// an incomplete prefix, and the export refuses rather than emit a pack
+/// the verifier would rightly reject.
 async fn load_prefix_rows(
     conn: &mut sqlx::PgConnection,
     tree_size: i64,
-    what: &str,
 ) -> Result<Vec<AuditRow>, PgError> {
     let mut rows: Vec<AuditRow> = Vec::new();
     let mut cursor = None;
@@ -101,10 +100,10 @@ async fn load_prefix_rows(
         }
     }
     if rows.len() as i64 != tree_size {
-        return Err(PgError::InvalidState(format!(
-            "{what} commits to {tree_size} audit rows but only {} were present",
-            rows.len()
-        )));
+        return Err(PgError::AuditPrefixIncomplete {
+            tree_size,
+            rows_present: rows.len() as i64,
+        });
     }
     Ok(rows)
 }
@@ -182,7 +181,7 @@ pub async fn export_pack(pool: &PgPool, tree_size: Option<i64>) -> Result<Eviden
     let covering = covering_checkpoint(&checkpoints, tree_size)?;
     checkpoints.retain(|c| c.tree_size <= covering.tree_size);
 
-    let rows = load_prefix_rows(&mut tx, covering.tree_size, "checkpoint").await?;
+    let rows = load_prefix_rows(&mut tx, covering.tree_size).await?;
     tx.commit().await.map_err(classify)?;
 
     Ok(EvidencePack {
@@ -478,7 +477,7 @@ pub async fn export_window(
 
     // The prover needs the whole `[0, to)` prefix to build the consistency
     // proof and the per-row inclusion paths.
-    let rows = load_prefix_rows(&mut tx, to_checkpoint.tree_size, "to-checkpoint").await?;
+    let rows = load_prefix_rows(&mut tx, to_checkpoint.tree_size).await?;
     tx.commit().await.map_err(classify)?;
 
     assemble_window_pack(&rows, from_checkpoint, to_checkpoint)
@@ -883,7 +882,7 @@ pub async fn export_selective(
     let covering = covering_checkpoint(&checkpoints, tree_size)?;
 
     let to_size = covering.tree_size;
-    let rows = load_prefix_rows(&mut tx, to_size, "the covering checkpoint").await?;
+    let rows = load_prefix_rows(&mut tx, to_size).await?;
     tx.commit().await.map_err(classify)?;
 
     assemble_selective_pack(&rows, covering, transitions).map_err(|e| match e {

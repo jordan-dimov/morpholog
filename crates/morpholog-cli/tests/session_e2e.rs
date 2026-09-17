@@ -394,6 +394,49 @@ async fn an_unauthorised_actor_is_a_coded_receipt_and_the_session_stays_usable()
     assert!(output.status.success(), "session should exit 0 on EOF");
 }
 
+/// The session reads a `where` clause through the same resolver as the
+/// one-shot: without the named read there is nothing to resolve field
+/// names against, and the refusal is a coded receipt the session
+/// survives.
+#[tokio::test]
+async fn a_where_clause_without_the_named_read_is_a_coded_receipt() {
+    reset_db().await;
+    let fixture = common::write_fixture("session_where", FIXTURE);
+    let mut child = spawn_session(&fixture.path);
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        r#"{{"named":false,"op":"claims","predicates":["Balance"],"where":{{"figure":"100"}}}}"#
+    )
+    .unwrap();
+    writeln!(
+        stdin,
+        r#"{{"named":true,"op":"claims","predicates":["Balance"],"where":{{"figure":"100"}}}}"#
+    )
+    .unwrap();
+    drop(stdin);
+
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 3, "ready plus one response each: {stdout}");
+
+    let refused: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(refused["status"], "error", "{}", lines[1]);
+    assert_eq!(refused["code"], "invalid_arguments", "{}", lines[1]);
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("needs the named read"),
+        "{}",
+        lines[1]
+    );
+    let after: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+    assert!(after.is_array(), "the named read answers: {}", lines[2]);
+    assert!(output.status.success(), "session should exit 0 on EOF");
+}
+
 /// The session's `transact`: the one decision, with this request's row,
 /// and the session in step after a refusal and after an empty batch.
 #[tokio::test]

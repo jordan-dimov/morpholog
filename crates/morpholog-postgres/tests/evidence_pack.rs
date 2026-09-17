@@ -8,7 +8,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_postgres::{Checkpoint, PackError, TreeVerification, export_pack, verify_pack};
+use morpholog_postgres::{
+    Checkpoint, PackError, TreeVerification, WindowStart, export_pack, export_selective,
+    export_window, verify_pack,
+};
 
 mod common;
 use common::{reset_db, test_pool};
@@ -170,11 +173,17 @@ async fn export_refuses_without_a_covering_checkpoint() {
     ));
 }
 
+/// Attacker capability: direct SQL on the audit table under an existing
+/// checkpoint. Every exporter reads the covered prefix through one
+/// loader, so the prefix, window, and selective exports report the same
+/// typed condition.
 #[tokio::test]
 async fn export_refuses_when_a_covered_row_is_missing() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    for i in 0..3 {
+    common::commit_entry(&pool, "g0").await;
+    common::make_checkpoint_at(&pool, 1).await; // the window's start
+    for i in 1..3 {
         common::commit_entry(&pool, &format!("g{i}")).await;
     }
     common::make_checkpoint(&pool).await; // commits to 3 rows
@@ -197,8 +206,27 @@ async fn export_refuses_when_a_covered_row_is_missing() {
     .await
     .unwrap();
 
-    assert!(matches!(
-        export_pack(&pool, None).await,
-        Err(morpholog_postgres::PgError::InvalidState(_))
-    ));
+    let incomplete = |err: Result<(), morpholog_postgres::PgError>| {
+        assert!(
+            matches!(
+                err,
+                Err(morpholog_postgres::PgError::AuditPrefixIncomplete {
+                    tree_size: 3,
+                    rows_present: 2,
+                })
+            ),
+            "got: {err:?}"
+        );
+    };
+    incomplete(export_pack(&pool, None).await.map(drop));
+    incomplete(
+        export_window(&pool, WindowStart::TreeSize(1), None)
+            .await
+            .map(drop),
+    );
+    incomplete(
+        export_selective(&pool, None, &[uuid::Uuid::now_v7()])
+            .await
+            .map(drop),
+    );
 }

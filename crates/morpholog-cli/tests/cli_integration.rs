@@ -2956,6 +2956,44 @@ async fn inspect_claims_named_decodes_args_by_declared_field_name() {
     );
 }
 
+/// A `--where` clause is refused before any database work when there
+/// is nothing to resolve its field names against: no named read, or
+/// more than one predicate. The one-shot and the session read the
+/// clause through one resolver, so the session test mirrors this one.
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_claims_where_is_refused_without_a_declaration_to_read_it_against() {
+    reset_db().await;
+    let ledger = ledger_morph();
+    let (status, _stdout, stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--predicate",
+        "JournalLine",
+        "--where",
+        "entry_id=entry_001",
+    ]);
+    assert!(!status.success(), "no named read: {stderr}");
+    assert!(stderr.contains("needs the named read"), "got: {stderr}");
+
+    let (status, _stdout, stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--predicate",
+        "JournalLine",
+        "--predicate",
+        "JournalEntry",
+        "--where",
+        "entry_id=entry_001",
+        "--named",
+        &ledger,
+    ]);
+    assert!(!status.success(), "two predicates: {stderr}");
+    assert!(
+        stderr.contains("needs exactly one predicate"),
+        "got: {stderr}"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_claims_named_hard_errors_on_programme_database_skew() {
     reset_db().await;

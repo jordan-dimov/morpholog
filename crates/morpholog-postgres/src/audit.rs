@@ -24,6 +24,7 @@ pub struct AuditRow {
     pub asserted_claims: Vec<ClaimInstance>,
     pub retracted_claims: Vec<ClaimInstance>,
     pub emitted_intents: Vec<IntentInstance>,
+    #[serde(with = "crate::wire_time")]
     pub committed_at: DateTime<Utc>,
     /// How the actor identity was established. Absent on rows written
     /// before attestation existed; those rows keep the original Merkle

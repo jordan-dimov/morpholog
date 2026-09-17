@@ -40,7 +40,7 @@ impl SplitBoundary {
     fn requested(&self) -> String {
         match self {
             SplitBoundary::Transition(id) => id.to_string(),
-            SplitBoundary::AtOrBefore(at) => at.to_rfc3339(),
+            SplitBoundary::AtOrBefore(at) => crate::wire_time::render(at),
         }
     }
 }
@@ -58,7 +58,7 @@ fn pending_split(boundary: SplitBoundary, cursor: (DateTime<Utc>, Uuid)) -> Pend
         report: SplitBoundaryReport {
             requested: boundary.requested(),
             resolved_transition_id: cursor.1.to_string(),
-            resolved_committed_at: cursor.0.to_rfc3339(),
+            resolved_committed_at: crate::wire_time::render(&cursor.0),
         },
     }
 }

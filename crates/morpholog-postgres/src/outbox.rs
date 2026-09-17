@@ -98,14 +98,20 @@ pub struct OutboxRow {
     pub idempotency_key: String,
     pub status: OutboxStatus,
     pub attempt_count: i32,
+    #[serde(with = "crate::wire_time")]
     pub enqueued_at: DateTime<Utc>,
+    #[serde(with = "crate::wire_time::option")]
     pub last_attempt_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::wire_time::option")]
     pub delivered_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::wire_time::option")]
     pub failed_at: Option<DateTime<Utc>>,
     pub failure_reason: Option<String>,
+    #[serde(with = "crate::wire_time::option")]
     pub next_attempt_at: Option<DateTime<Utc>>,
     pub compensation_transition_id: Option<Uuid>,
     pub locked_by: Option<String>,
+    #[serde(with = "crate::wire_time::option")]
     pub lock_expires_at: Option<DateTime<Utc>>,
 }
 /// Outcome of a state-mutating helper on a leased outbox row.
