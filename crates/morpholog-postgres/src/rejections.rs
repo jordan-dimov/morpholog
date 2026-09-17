@@ -32,6 +32,7 @@ pub struct RejectionRow {
     /// proof of what a refusal saw.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub witness: Option<Vec<WitnessBinding>>,
+    #[serde(with = "crate::wire_time")]
     pub rejected_at: DateTime<Utc>,
 }
 

@@ -23,6 +23,7 @@ pub struct WitnessVerdict {
     pub submitted_to: String,
     pub status: WitnessStanding,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::wire_time::option")]
     pub attested_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
@@ -53,6 +54,7 @@ pub struct CheckpointWitnesses {
 pub struct WitnessesReport {
     pub checkpoints: Vec<CheckpointWitnesses>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::wire_time::option")]
     pub earliest_attested_at: Option<DateTime<Utc>>,
 }
 

@@ -282,6 +282,7 @@ pub struct RefreshDerivedReport {
     pub refresh_id: uuid::Uuid,
     pub source_claim_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(with = "morpholog_postgres::wire_time::option")]
     pub source_snapshot_committed_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_snapshot_transition_id: Option<uuid::Uuid>,

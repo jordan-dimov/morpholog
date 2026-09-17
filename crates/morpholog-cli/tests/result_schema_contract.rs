@@ -1096,10 +1096,14 @@ fn score_reports_serialize_as_pinned() {
 
     let mut scorer = CandidateScorer::new(&candidate).unwrap();
     scorer.observe(&flagged, &empty, t1).unwrap();
+    // The boundary strings are rendered by the adapter's wire-time
+    // authority, as the scorer renders them, so the golden pins the
+    // real spelling and not one typed here.
+    let split_at = morpholog_postgres::wire_time::parse("2026-06-01T12:00:00Z").unwrap();
     scorer.mark_split(SplitBoundaryReport {
-        requested: "2026-06-01T12:00:00+00:00".to_string(),
+        requested: morpholog_postgres::wire_time::render(&split_at),
         resolved_transition_id: t1.to_string(),
-        resolved_committed_at: "2026-06-01T12:00:00+00:00".to_string(),
+        resolved_committed_at: morpholog_postgres::wire_time::render(&split_at),
     });
     scorer.observe(&empty, &flagged, t2).unwrap();
     assert_golden_bytes("score_report_split.json", &scorer.into_report());
