@@ -560,7 +560,7 @@ pub(crate) fn finish_staged_inner(
         } => (asserted, retracted, emitted),
     };
 
-    let candidate = build_candidate_state(pre_state, &asserted, &retracted);
+    let candidate = pre_state.with_delta(&asserted, &retracted);
 
     for inv in invariants {
         // Pass both pre_state and candidate. Invariants that contain
@@ -945,19 +945,4 @@ pub(crate) fn resolve_intent(
         name: intent.name.clone(),
         args,
     })
-}
-
-pub(crate) fn build_candidate_state(
-    pre: &State,
-    asserted: &[ClaimInstance],
-    retracted: &[ClaimInstance],
-) -> State {
-    let mut claims = pre.claims().to_vec();
-    claims.retain(|f| !retracted.iter().any(|r| r == f));
-    for a in asserted {
-        if !claims.iter().any(|f| f == a) {
-            claims.push(a.clone());
-        }
-    }
-    State::from_claims(claims)
 }

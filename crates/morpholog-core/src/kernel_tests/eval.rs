@@ -79,22 +79,22 @@ fn claims_for_returns_only_matching_predicate() {
     );
 
     assert_eq!(
-        state.claims(),
-        &[a1, b1, a2],
+        state.claims().to_vec(),
+        vec![a1, b1, a2],
         "claims() preserves construction order across all predicates"
     );
 }
 
-/// Pins the contract of `State::claim_indices_for_arg`: it returns
-/// the indices of claims with the requested predicate where the
-/// argument at the requested position equals the requested value,
-/// `None` (not Some empty) when no such bucket exists, and does
-/// not match claims of a different predicate that happen to share
-/// a value at the same position. The lookup is what
-/// `find_claim_matches` uses to make ground-argument matching
-/// O(bucket size) instead of O(predicate size).
+/// Pins the contract of `State::claim_candidates`: it yields the
+/// claims with the requested predicate where the argument at the
+/// requested position equals the requested value, `None` (not an
+/// empty bucket) when no such bucket exists, and does not match
+/// claims of a different predicate that happen to share a value at
+/// the same position. The lookup is what `find_claim_matches` uses to
+/// make ground-argument matching O(bucket size) instead of
+/// O(predicate size).
 #[test]
-fn claim_indices_for_arg_narrows_by_predicate_position_and_value() {
+fn claim_candidates_narrow_by_predicate_position_and_value() {
     let line_for_entry_a = ClaimInstance {
         predicate: "JournalLine".into(),
         args: vec![
@@ -122,10 +122,11 @@ fn claim_indices_for_arg_narrows_by_predicate_position_and_value() {
     ]);
 
     let entry_a = EvalValue::Subject("entry_a".into());
-    let positions = state
-        .claim_indices_for_arg(&"JournalLine".into(), 0, &entry_a)
-        .expect("entry_a appears at JournalLine[0]");
-    let claims: Vec<&ClaimInstance> = positions.iter().map(|&i| state.claim_at(i)).collect();
+    let claims: Vec<&ClaimInstance> = state
+        .claim_candidates(&"JournalLine".into(), 0, &entry_a)
+        .expect("entry_a appears at JournalLine[0]")
+        .iter()
+        .collect();
     assert_eq!(
         claims,
         vec![&line_for_entry_a],
@@ -135,17 +136,17 @@ fn claim_indices_for_arg_narrows_by_predicate_position_and_value() {
     let unknown = EvalValue::Subject("entry_z".into());
     assert!(
         state
-            .claim_indices_for_arg(&"JournalLine".into(), 0, &unknown)
+            .claim_candidates(&"JournalLine".into(), 0, &unknown)
             .is_none(),
         "absent value returns None, signalling empty intersection"
     );
 
     let cash = EvalValue::Subject("account_cash".into());
-    let cash_positions = state
-        .claim_indices_for_arg(&"JournalLine".into(), 1, &cash)
+    let cash_bucket = state
+        .claim_candidates(&"JournalLine".into(), 1, &cash)
         .expect("account_cash appears at JournalLine[1]");
     assert_eq!(
-        cash_positions.len(),
+        cash_bucket.iter().count(),
         2,
         "both JournalLine claims share account_cash at position 1"
     );
