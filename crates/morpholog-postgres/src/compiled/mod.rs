@@ -51,8 +51,11 @@ use rust_decimal::Decimal;
 use morpholog_core::{
     ClaimInstance, EvalValue, Invariant, InvariantName, OrderedDomain, PredicateArgKind,
     PredicateDecl, PredicateName, Prop, SumSeed, Term, ValidatedProgram, Value, ValueExpr, Var,
+    WitnessBinding,
 };
+use sqlx::{Postgres, Row, Transaction};
 
+use crate::error::{PgError, classify};
 use crate::sql_quote::{quote_ident, quote_literal};
 
 /// Why one invariant is outside the compiled fragment. Typed so tests and
@@ -136,6 +139,102 @@ impl CompiledInvariantSet {
         specs.dedup();
         specs
     }
+}
+
+/// Which check runs: the whole stage-1 query, or stage 2 bounded to the
+/// cases the delta could have changed. Production runs stage 1; stage 2
+/// stays differential-proven until its audit semantics are decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stage {
+    Full,
+    CaseBound,
+}
+
+/// A violation the runner found: the rule, its version, its witness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SqlViolation {
+    pub(crate) name: InvariantName,
+    pub(crate) version: u32,
+    pub(crate) witness: Vec<WitnessBinding>,
+}
+
+/// Correlated-subquery estimates inflate planned cost past the JIT
+/// threshold (~118ms of compilation for a sub-ms plan, measured at
+/// 100k claims in the spike). Off for the rest of this transaction;
+/// JIT is for analytics.
+pub(crate) async fn disable_jit(tx: &mut Transaction<'_, Postgres>) -> Result<(), PgError> {
+    sqlx::raw_sql("SET LOCAL jit = off")
+        .execute(&mut **tx)
+        .await
+        .map_err(classify)?;
+    Ok(())
+}
+
+impl CompiledInvariantSet {
+    /// The first violating invariant in programme order with its decoded
+    /// witness, or `None` when every check holds: the compiled analogue
+    /// of the kernel's first-failure loop. Runs inside the caller's
+    /// transaction, over the claims table as the written delta left it.
+    /// The commit path and the differential both run checks through
+    /// here, so the differential proves the runner that admits
+    /// transitions.
+    pub(crate) async fn first_violation(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        stage: Stage,
+        asserted: &[ClaimInstance],
+        retracted: &[ClaimInstance],
+    ) -> Result<Option<SqlViolation>, PgError> {
+        for inv in &self.invariants {
+            let sql = match stage {
+                Stage::Full => inv.violation_sql(None),
+                Stage::CaseBound => match inv.case_filter(asserted, retracted) {
+                    CaseFilter::Untouched => continue,
+                    CaseFilter::Bounded(filter) => inv.violation_sql(Some(&filter)),
+                    CaseFilter::Unbounded => inv.violation_sql(None),
+                },
+            };
+            // Audited for AssertSqlSafe: the SQL is rendered entirely by
+            // this module from a validated programme - identifiers are
+            // quoted, literals escaped, and the provenance comment
+            // neutralised.
+            let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(classify)?;
+            if let Some(row) = row {
+                return Ok(Some(SqlViolation {
+                    name: inv.name.clone(),
+                    version: inv.version,
+                    witness: decode_witness(inv, &row)?,
+                }));
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Decode a violation row's witness columns: each is the `::text` of
+/// the full tagged value, so `EvalValue`'s own serde is the decoder -
+/// the one wire contract, no per-kind column logic.
+fn decode_witness(
+    inv: &CompiledInvariant,
+    row: &sqlx::postgres::PgRow,
+) -> Result<Vec<WitnessBinding>, PgError> {
+    let mut witness = Vec::with_capacity(inv.witness_vars.len());
+    for var in &inv.witness_vars {
+        let col = format!("w_{var}");
+        let text: String = row
+            .try_get(col.as_str())
+            .map_err(|e| PgError::InvalidState(format!("witness column {col} missing: {e}")))?;
+        let value: EvalValue = serde_json::from_str(&text)
+            .map_err(|e| PgError::InvalidState(format!("witness value {col} undecodable: {e}")))?;
+        witness.push(WitnessBinding {
+            var: var.clone(),
+            value,
+        });
+    }
+    Ok(witness)
 }
 
 /// One index the compiled SQL can seek on: a partial expression index
@@ -226,7 +325,6 @@ impl IndexSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 // The checks themselves are dormant until the stage-1 integration
 // reaches production; the differential exercises them under test.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum CaseFilter {
     /// Delta disjoint from the invariant's occurrences: skip it entirely.
     Untouched,
@@ -248,7 +346,6 @@ struct ColRef {
 /// A claim pattern occurring anywhere in the body: which delta claims can
 /// affect this invariant, and how their constants bound the antecedent.
 #[derive(Debug, Clone)]
-#[cfg_attr(not(test), allow(dead_code))]
 struct OccurrenceBinder {
     predicate: PredicateName,
     /// Literal guards: a delta claim mismatching one cannot affect this
@@ -260,7 +357,6 @@ struct OccurrenceBinder {
 }
 
 #[derive(Debug)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct CompiledInvariant {
     pub(crate) name: InvariantName,
     pub(crate) version: u32,
@@ -280,7 +376,6 @@ pub(crate) struct CompiledInvariant {
 impl CompiledInvariant {
     /// The violation query. `case_filter` is a stage-2 bound produced by
     /// [`Self::case_filter`]; `None` is the full stage-1 check.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn violation_sql(&self, case_filter: Option<&str>) -> String {
         let stage = if case_filter.is_some() { 2 } else { 1 };
         let mut sql = format!(
@@ -300,7 +395,6 @@ impl CompiledInvariant {
     /// Bound the check to the cases a delta could have changed. Sound by
     /// widening: a binder that cannot constrain a variable widens toward
     /// full stage 1, never narrows past a touched case.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn case_filter(
         &self,
         asserted: &[ClaimInstance],
@@ -352,7 +446,6 @@ impl CompiledInvariant {
 /// PostgreSQL block comments NEST, so an embedded `/*` is as hostile
 /// as `*/`: it opens a level our single closer would then close,
 /// leaving the real comment open over the rest of the statement.
-#[cfg_attr(not(test), allow(dead_code))]
 fn comment_safe(name: &str) -> String {
     name.replace(['\r', '\n'], " ")
         .replace("*/", "* /")
@@ -708,7 +801,6 @@ fn literal_sql(value: &Value) -> Result<(String, Representation), CompileReason>
 /// tier compares the whole value as jsonb against the delta value's
 /// own serialisation - the same serde every stored claim passed
 /// through, so the constant and the column speak one canonical form.
-#[cfg_attr(not(test), allow(dead_code))]
 fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
     match ev {
         EvalValue::Subject(s) => Some(format!(
@@ -736,7 +828,6 @@ fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn literal_matches(lit: &Value, ev: &EvalValue) -> bool {
     match (lit, ev) {
         (Value::Subject(a), EvalValue::Subject(b)) => a == b,

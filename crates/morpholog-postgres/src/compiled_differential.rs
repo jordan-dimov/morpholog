@@ -38,11 +38,10 @@ use morpholog_core::{
     CompiledProgram, EvalError, EvalValue, Outcome, Program, RejectionReason, StagedDelta, Subject,
     Transition, WitnessBinding, finish_staged_delta, propose_stage_delta,
 };
-use sqlx::Row;
 use uuid::Uuid;
 
 use crate::attestation::Proposal;
-use crate::compiled::{CaseFilter, CompiledInvariant, CompiledInvariantSet, compile_invariants};
+use crate::compiled::{CompiledInvariantSet, SqlViolation, Stage, compile_invariants, disable_jit};
 use crate::error::{PgError, classify};
 use crate::propose::{compute_load_scope, load_state, write_claim_delta};
 use crate::txn::begin_authorised_proposal_tx;
@@ -74,9 +73,6 @@ async fn reset_db(pool: &PgPool) {
         .await
         .expect("failed to truncate test DB");
 }
-
-/// A rule identity plus decoded witness, as one SQL stage reports it.
-type SqlViolation = (morpholog_core::InvariantName, u32, Vec<WitnessBinding>);
 
 /// What one probe observed from all three evaluators over the same
 /// staged candidate. `kernel` is `None` when the body itself rejected
@@ -144,18 +140,13 @@ async fn probe_raw(
         .await
         .map_err(ProbeFailure::Pg)?;
 
-    // Correlated-subquery estimates inflate planned cost and trip the
-    // JIT threshold (~118ms of compilation for a sub-ms plan, measured
-    // at N=100k in the spike). JIT is for analytics; off for this tx.
-    sqlx::raw_sql("SET LOCAL jit = off")
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| ProbeFailure::Pg(classify(e)))?;
-
-    let stage1 = first_violation(&mut tx, sql_set, Stage::Full, &asserted, &retracted)
+    disable_jit(&mut tx).await.map_err(ProbeFailure::Pg)?;
+    let stage1 = sql_set
+        .first_violation(&mut tx, Stage::Full, &asserted, &retracted)
         .await
         .map_err(ProbeFailure::Pg)?;
-    let stage2 = first_violation(&mut tx, sql_set, Stage::CaseBound, &asserted, &retracted)
+    let stage2 = sql_set
+        .first_violation(&mut tx, Stage::CaseBound, &asserted, &retracted)
         .await
         .map_err(ProbeFailure::Pg)?;
 
@@ -174,70 +165,6 @@ async fn probe_raw(
 enum ProbeFailure {
     Pg(PgError),
     Kernel(EvalError),
-}
-
-#[derive(Clone, Copy)]
-enum Stage {
-    Full,
-    CaseBound,
-}
-
-/// First violating invariant in programme order at the given stage,
-/// with its decoded witness - the compiled analogue of the kernel's
-/// first-failure loop.
-async fn first_violation(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    sql_set: &CompiledInvariantSet,
-    stage: Stage,
-    asserted: &[morpholog_core::ClaimInstance],
-    retracted: &[morpholog_core::ClaimInstance],
-) -> Result<Option<SqlViolation>, PgError> {
-    for inv in &sql_set.invariants {
-        let sql = match stage {
-            Stage::Full => inv.violation_sql(None),
-            Stage::CaseBound => match inv.case_filter(asserted, retracted) {
-                CaseFilter::Untouched => continue,
-                CaseFilter::Bounded(filter) => inv.violation_sql(Some(&filter)),
-                CaseFilter::Unbounded => inv.violation_sql(None),
-            },
-        };
-        // Audited for AssertSqlSafe: the SQL is rendered entirely by
-        // `compiled.rs` from a validated programme - identifiers are
-        // quoted, literals escaped, and the provenance comment
-        // neutralised there.
-        let row = sqlx::query(sqlx::AssertSqlSafe(sql))
-            .fetch_optional(&mut **tx)
-            .await
-            .map_err(classify)?;
-        if let Some(row) = row {
-            let witness = decode_witness(inv, &row)?;
-            return Ok(Some((inv.name.clone(), inv.version, witness)));
-        }
-    }
-    Ok(None)
-}
-
-/// Decode a violation row's witness columns: each is the `::text` of
-/// the full tagged value, so `EvalValue`'s own serde is the decoder -
-/// the one wire contract, no per-kind column logic.
-fn decode_witness(
-    inv: &CompiledInvariant,
-    row: &sqlx::postgres::PgRow,
-) -> Result<Vec<WitnessBinding>, PgError> {
-    let mut witness = Vec::with_capacity(inv.witness_vars.len());
-    for var in &inv.witness_vars {
-        let col = format!("w_{var}");
-        let text: String = row
-            .try_get(col.as_str())
-            .map_err(|e| PgError::InvalidState(format!("witness column {col} missing: {e}")))?;
-        let value: EvalValue = serde_json::from_str(&text)
-            .map_err(|e| PgError::InvalidState(format!("witness value {col} undecodable: {e}")))?;
-        witness.push(WitnessBinding {
-            var: var.clone(),
-            value,
-        });
-    }
-    Ok(witness)
 }
 
 fn disagreement(what: &str, spec: &str, compiled: &str) -> String {
@@ -273,16 +200,16 @@ fn governed_contract(obs: &ProbeObservation) -> Result<bool, String> {
                 ));
             };
             for (label, s) in [("full", s1), ("case-bound", s2)] {
-                if &s.0 != name || s.1 != *version {
+                if &s.name != name || s.version != *version {
                     return Err(disagreement(
                         &format!("{label} rule identity"),
                         &format!("{name} v{version}"),
-                        &format!("{} v{}", s.0, s.1),
+                        &format!("{} v{}", s.name, s.version),
                     ));
                 }
                 // Witness VARS must agree; values are observational -
                 // the adopted witness contract.
-                let s_vars: Vec<_> = s.2.iter().map(|w| &w.var).collect();
+                let s_vars: Vec<_> = s.witness.iter().map(|w| &w.var).collect();
                 let k_vars: Vec<_> = witness.iter().map(|w| &w.var).collect();
                 if s_vars != k_vars {
                     return Err(disagreement(
@@ -316,7 +243,7 @@ fn governed_contract(obs: &ProbeObservation) -> Result<bool, String> {
 }
 
 fn summarise(v: &Option<SqlViolation>) -> Option<String> {
-    v.as_ref().map(|(n, ver, _)| format!("{n} v{ver}"))
+    v.as_ref().map(|s| format!("{} v{}", s.name, s.version))
 }
 
 /// Sweep one whole-in-fragment programme: reset and replay each
@@ -665,16 +592,16 @@ fn assert_stage1_keeps_kernel_identity(obs: &ProbeObservation) -> String {
     else {
         panic!("the kernel must refuse here");
     };
-    let (s1_name, s1_version, s1_witness) = obs
+    let s1 = obs
         .stage1
         .as_ref()
         .expect("the full check must refuse alongside the kernel");
-    assert_eq!(s1_name, name, "stage 1 keeps the kernel's rule name");
+    assert_eq!(&s1.name, name, "stage 1 keeps the kernel's rule name");
     assert_eq!(
-        s1_version, version,
+        s1.version, *version,
         "stage 1 keeps the kernel's rule version"
     );
-    let s1_vars: Vec<_> = s1_witness.iter().map(|w| &w.var).collect();
+    let s1_vars: Vec<_> = s1.witness.iter().map(|w| &w.var).collect();
     let k_vars: Vec<_> = witness.iter().map(|w| &w.var).collect();
     assert_eq!(
         s1_vars, k_vars,
