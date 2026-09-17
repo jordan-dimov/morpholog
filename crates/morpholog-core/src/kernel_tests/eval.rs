@@ -826,12 +826,3 @@ fn pre_outside_forall_vs_inside_distinguish_iteration_domain() {
         "forall over post Account where body asks pre(Balance) must fail when pre has no Balance"
     );
 }
-
-// ============================================================
-// Stmt::BindOne - the deterministic unique-lookup binding statement.
-//
-// Binding quartet:
-//   require  = gate; does not export bindings
-//   bind_one = unique lookup; exports bindings
-//   let      = compute a value expression
-// ============================================================

@@ -1,7 +1,7 @@
 //! The binary's own tests: what the argument surface parses to, and
 //! that a refused command returns to `main` rather than ending the
-//! process. Everything else about the CLI is tested end to end in
-//! `tests/`.
+//! process. The command modules keep their own unit suites beside
+//! their code; the CLI's behaviour is tested end to end in `tests/`.
 
 use super::*;
 use clap::error::ErrorKind;

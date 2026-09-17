@@ -1,7 +1,7 @@
 //! End-to-end integration tests for the `morpholog` binary.
 //!
-//! Unlike the unit tests in `src/main.rs` (which exercise clap argument
-//! parsing only), these tests spawn the built binary against a real
+//! Unlike the binary's own tests in `src/cli_tests.rs` (argument parsing
+//! and the exit path), these tests spawn the built binary against a real
 //! PostgreSQL database and assert on stdout JSON, stderr error chains,
 //! and process exit codes. They cover the dispatch handlers - the
 //! `match cli.command` arms in `main`, the `propose` function, the

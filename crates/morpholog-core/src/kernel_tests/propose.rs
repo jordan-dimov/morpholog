@@ -5,6 +5,15 @@ use super::*;
 
 /// `bind_one` with a uniquely matching claim binds the variable
 /// for use by subsequent statements.
+// ============================================================
+// Stmt::BindOne - the deterministic unique-lookup binding statement.
+//
+// Binding quartet:
+//   require  = gate; does not export bindings
+//   bind_one = unique lookup; exports bindings
+//   let      = compute a value expression
+// ============================================================
+
 #[test]
 fn bind_one_with_unique_match_extends_bindings_for_subsequent_stmts() {
     use ir_builder::*;
@@ -424,10 +433,12 @@ fn bind_one_with_actor_in_pattern() {
 // no longer has a construction to exercise.
 
 // ============================================================
-// Program::validate() - strict arity validation.
+// propose_with_trace - structured per-statement diagnostic trace.
 //
-// The validator collects every error rather than failing on the
-// first, so a migration sees the full work list in one re-run.
+// The contract these pin: every statement that ran produces one
+// entry (For wraps its iterations in one); rejections produce
+// Completed { Rejected, trace }; kernel errors produce
+// Errored { error, trace } - the trace is NOT dropped on error.
 // ============================================================
 
 /// Happy-path trace: every statement variant produces one entry,
@@ -791,12 +802,3 @@ fn propose_and_propose_with_trace_produce_identical_outcomes() {
     };
     assert_eq!(outcome_a, outcome_b);
 }
-
-// ============================================================
-// Expression failure-walk.
-//
-// When `require` or `bind_one` rejects, the trace's
-// `failing_sub_expression` field carries the most specific
-// sub-expression responsible. These tests pin which expression
-// shapes drill in and which return None.
-// ============================================================

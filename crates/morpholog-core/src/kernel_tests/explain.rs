@@ -2,6 +2,15 @@
 
 use super::*;
 
+// ============================================================
+// Expression failure-walk.
+//
+// When `require` or `bind_one` rejects, the trace's
+// `failing_sub_expression` field carries the most specific
+// sub-expression responsible. These tests pin which expression
+// shapes drill in and which return None.
+// ============================================================
+
 fn extract_require_failure(trace: &[TraceEntry]) -> Option<&str> {
     trace.iter().find_map(|e| match e {
         TraceEntry::Require {

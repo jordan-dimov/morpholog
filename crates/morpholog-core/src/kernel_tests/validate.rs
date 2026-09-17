@@ -2,6 +2,13 @@
 
 use super::*;
 
+// ============================================================
+// Program::validate() - strict arity validation.
+//
+// The validator collects every error rather than failing on the
+// first, so a migration sees the full work list in one re-run.
+// ============================================================
+
 /// Tiny one-claim programme with a `predicate` declaration that
 /// matches by default. Per-test mutations exercise each validator
 /// branch.
@@ -197,12 +204,3 @@ fn validate_returns_all_errors_not_just_the_first() {
     assert!(names.contains(&"MissingA"));
     assert!(names.contains(&"MissingB"));
 }
-
-// ============================================================
-// propose_with_trace - structured per-statement diagnostic trace.
-//
-// The contract these pin: every statement that ran produces one
-// entry (For wraps its iterations in one); rejections produce
-// Completed { Rejected, trace }; kernel errors produce
-// Errored { error, trace } - the trace is NOT dropped on error.
-// ============================================================

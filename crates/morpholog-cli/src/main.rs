@@ -1505,15 +1505,6 @@ async fn run() -> anyhow::Result<()> {
     }
 }
 
-// ===========================================================================
-// Tests - CLI argument parsing only.
-//
-// End-to-end CLI-against-PostgreSQL coverage lives in morpholog-postgres'
-// read-helper integration tests; duplicating it here adds no signal. These
-// tests verify that clap parses the expected command shapes, catches missing
-// required arguments, and threads the database URL through from flag or env.
-// ===========================================================================
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod cli_tests;
