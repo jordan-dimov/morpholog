@@ -603,7 +603,14 @@ async fn an_overflow_that_compares_as_holding_is_the_kernels_error_on_both_stage
     .expect("sets the floor");
     assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
     let largest = morpholog_test_support::dec_str("79228162514264337593543950335");
-    let probe = probe_raw(&pool, &compiled, &sql_set, "add_two", vec![subj("x"), largest]).await;
+    let probe = probe_raw(
+        &pool,
+        &compiled,
+        &sql_set,
+        "add_two",
+        vec![subj("x"), largest],
+    )
+    .await;
     match probe {
         Ok(Probe::KernelErrorAgreed) => {}
         Ok(Probe::BodyRejected) => panic!("the body admits"),
