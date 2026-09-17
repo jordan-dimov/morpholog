@@ -576,6 +576,44 @@ async fn every_whole_in_fragment_programme_agrees_with_the_kernel() {
 /// Attacker capability modelled: none - the dirty row stands in for
 /// history admitted under an older programme or a since-superseded
 /// rule version, which commit-time checking must tolerate.
+/// The overflow that compares as holding: under a floor of zero, two
+/// lines of the largest decimal total past the range while `>= 0` is
+/// true of the oversized number. The kernel errors; only the range
+/// test itself can make the compiled check say the same.
+#[tokio::test]
+async fn an_overflow_that_compares_as_holding_is_the_kernels_error_on_both_stages() {
+    let program = morpholog_surface::parse_program(HOSTILE[0]).expect("two_lines parses");
+    assert_eq!(program.name, "two_lines");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(validated).expect("two_lines is whole-in-fragment");
+    let compiled = CompiledProgram::new(program.clone()).expect("compiles");
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let floor = Transition {
+        transformation_name: "set_floor".into(),
+        args: vec![subj("x"), dec(0)],
+        actor: test_actor(),
+    };
+    let outcome = propose_against_pg(
+        &pool,
+        &PgProgram::new(CompiledProgram::new(program).expect("compiles")),
+        &Proposal::gateway(&floor),
+    )
+    .await
+    .expect("sets the floor");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+    let largest = morpholog_test_support::dec_str("79228162514264337593543950335");
+    let probe = probe_raw(&pool, &compiled, &sql_set, "add_two", vec![subj("x"), largest]).await;
+    match probe {
+        Ok(Probe::KernelErrorAgreed) => {}
+        Ok(Probe::BodyRejected) => panic!("the body admits"),
+        Ok(Probe::Observed(obs)) => panic!("the kernel must error, got {:?}", obs.kernel),
+        Err(ProbeFailure::Disagreement(d)) => panic!("{d}"),
+        Err(ProbeFailure::Kernel(e)) => panic!("body error {e:?}"),
+        Err(ProbeFailure::Pg(e)) => panic!("pg error {e:?}"),
+    }
+}
+
 #[tokio::test]
 async fn dirty_history_diverges_only_in_the_pinned_direction() {
     let program = morpholog_examples::double_entry_ledger::program();
