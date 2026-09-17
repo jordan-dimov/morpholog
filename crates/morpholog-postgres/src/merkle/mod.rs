@@ -99,7 +99,9 @@ pub(crate) fn merkle_root(leaves: &[Hash]) -> Hash {
 /// from a file, an anchor handed to a verifier - so a value of this
 /// type is well-formed by construction and no verifier re-parses a
 /// hash at the point of use. A malformed hash is refused where it
-/// arrives, as the malformed input it is.
+/// arrives, as the malformed input it is. The hex is lowercase only,
+/// so parsing a rendering and rendering a parse are both the identity
+/// and one digest has one spelling everywhere it is compared.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Digest(Hash);
 
@@ -136,7 +138,7 @@ impl std::str::FromStr for Digest {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let malformed = || DigestError(s.to_string());
         let hex = s.strip_prefix("sha256:").ok_or_else(malformed)?;
-        if hex.len() != 64 {
+        if hex.len() != 64 || hex.bytes().any(|b| b.is_ascii_uppercase()) {
             return Err(malformed());
         }
         let mut out = [0u8; 32];
@@ -156,7 +158,7 @@ impl serde::Serialize for Digest {
 
 impl<'de> serde::Deserialize<'de> for Digest {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
+        let text = <String as serde::Deserialize>::deserialize(deserializer)?;
         text.parse().map_err(serde::de::Error::custom)
     }
 }

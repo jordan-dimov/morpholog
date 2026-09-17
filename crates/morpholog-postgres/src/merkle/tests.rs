@@ -233,6 +233,10 @@ fn a_digest_parses_from_its_rendering_and_refuses_anything_else() {
             .parse::<Digest>()
             .is_err()
     ); // non-hex
+    assert!(
+        d.to_string().to_uppercase().parse::<Digest>().is_err(),
+        "uppercase hex is not the record's spelling"
+    );
 }
 
 /// The RFC 6962 section 2.1.3/2.1.4 worked example tree over seven
