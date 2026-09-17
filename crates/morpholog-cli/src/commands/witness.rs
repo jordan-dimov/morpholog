@@ -174,8 +174,8 @@ fn post_timestamp_query(url: &str, der: &[u8]) -> anyhow::Result<Vec<u8>> {
         .into();
     let response = agent
         .post(url)
-        .header("Content-Type", "application/timestamp-query")
-        .header("Accept", "application/timestamp-reply")
+        .header("Content-Type", morpholog_witness::REQUEST_CONTENT_TYPE)
+        .header("Accept", morpholog_witness::REPLY_CONTENT_TYPE)
         .send(der)?;
     let body = response
         .into_body()

@@ -375,21 +375,21 @@ async fn collect_leaves(
     Ok((leaves, last))
 }
 
-/// The latest checkpoint (highest `tree_size`), or `None` if the chain is
-/// empty.
-async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Checkpoint>, PgError> {
-    let row = sqlx::query!(
-        r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
-                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
-                  witnesses as "witnesses: sqlx::types::Json<Vec<Witness>>"
-           FROM morpholog.audit_checkpoints
-           ORDER BY tree_size DESC
-           LIMIT 1"#,
-    )
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(classify_checked_query)?;
-    row.map(|r| {
+/// A checkpoint row as the table holds it; every digest is text there
+/// and is parsed once, here, on the way out.
+struct StoredCheckpoint {
+    tree_size: i64,
+    root_hash: String,
+    prev_checkpoint_hash: Option<String>,
+    checkpoint_hash: String,
+    signatures: sqlx::types::Json<Vec<TreeHeadSignature>>,
+    witnesses: sqlx::types::Json<Vec<Witness>>,
+}
+
+impl TryFrom<StoredCheckpoint> for Checkpoint {
+    type Error = PgError;
+
+    fn try_from(r: StoredCheckpoint) -> Result<Self, PgError> {
         Ok(Checkpoint {
             tree_size: r.tree_size,
             root_hash: stored_digest(&r.root_hash)?,
@@ -402,8 +402,25 @@ async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Check
             signatures: r.signatures.0,
             witnesses: r.witnesses.0,
         })
-    })
-    .transpose()
+    }
+}
+
+/// The latest checkpoint (highest `tree_size`), or `None` if the chain is
+/// empty.
+async fn latest_checkpoint(conn: &mut sqlx::PgConnection) -> Result<Option<Checkpoint>, PgError> {
+    let row = sqlx::query_as!(
+        StoredCheckpoint,
+        r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
+                  signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
+                  witnesses as "witnesses: sqlx::types::Json<Vec<Witness>>"
+           FROM morpholog.audit_checkpoints
+           ORDER BY tree_size DESC
+           LIMIT 1"#,
+    )
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    row.map(Checkpoint::try_from).transpose()
 }
 
 /// Attest a tree head with the signer's key for the audit-checkpoint
@@ -699,7 +716,8 @@ async fn with_horizon_diagnosis(
 pub(crate) async fn load_checkpoint_chain(
     conn: &mut sqlx::PgConnection,
 ) -> Result<Vec<Checkpoint>, PgError> {
-    let stored = sqlx::query!(
+    let stored = sqlx::query_as!(
+        StoredCheckpoint,
         r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
                   signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
                   witnesses as "witnesses: sqlx::types::Json<Vec<Witness>>"
@@ -709,28 +727,13 @@ pub(crate) async fn load_checkpoint_chain(
     .fetch_all(conn)
     .await
     .map_err(classify_checked_query)?;
-    stored
-        .into_iter()
-        .map(|r| {
-            Ok(Checkpoint {
-                tree_size: r.tree_size,
-                root_hash: stored_digest(&r.root_hash)?,
-                prev_checkpoint_hash: r
-                    .prev_checkpoint_hash
-                    .as_deref()
-                    .map(stored_digest)
-                    .transpose()?,
-                checkpoint_hash: stored_digest(&r.checkpoint_hash)?,
-                signatures: r.signatures.0,
-                witnesses: r.witnesses.0,
-            })
-        })
-        .collect()
+    stored.into_iter().map(Checkpoint::try_from).collect()
 }
 
 /// The checkpoint at exactly `tree_size`, if one was recorded there.
 pub async fn load_checkpoint(pool: &PgPool, tree_size: i64) -> Result<Option<Checkpoint>, PgError> {
-    let row = sqlx::query!(
+    let row = sqlx::query_as!(
+        StoredCheckpoint,
         r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
                   signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
                   witnesses as "witnesses: sqlx::types::Json<Vec<Witness>>"
@@ -741,21 +744,7 @@ pub async fn load_checkpoint(pool: &PgPool, tree_size: i64) -> Result<Option<Che
     .fetch_optional(pool)
     .await
     .map_err(classify_checked_query)?;
-    row.map(|r| {
-        Ok(Checkpoint {
-            tree_size: r.tree_size,
-            root_hash: stored_digest(&r.root_hash)?,
-            prev_checkpoint_hash: r
-                .prev_checkpoint_hash
-                .as_deref()
-                .map(stored_digest)
-                .transpose()?,
-            checkpoint_hash: stored_digest(&r.checkpoint_hash)?,
-            signatures: r.signatures.0,
-            witnesses: r.witnesses.0,
-        })
-    })
-    .transpose()
+    row.map(Checkpoint::try_from).transpose()
 }
 
 /// Attach an external witness to the checkpoint at `tree_size`, which
@@ -773,7 +762,8 @@ pub async fn attach_witness(
     witness: Witness,
 ) -> Result<Checkpoint, PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
-    let row = sqlx::query!(
+    let row = sqlx::query_as!(
+        StoredCheckpoint,
         r#"SELECT tree_size, root_hash, prev_checkpoint_hash, checkpoint_hash,
                   signatures as "signatures: sqlx::types::Json<Vec<TreeHeadSignature>>",
                   witnesses as "witnesses: sqlx::types::Json<Vec<Witness>>"
@@ -790,18 +780,7 @@ pub async fn attach_witness(
             "no checkpoint at tree size {tree_size} to attach a witness to"
         )));
     };
-    let mut checkpoint = Checkpoint {
-        tree_size: row.tree_size,
-        root_hash: stored_digest(&row.root_hash)?,
-        prev_checkpoint_hash: row
-            .prev_checkpoint_hash
-            .as_deref()
-            .map(stored_digest)
-            .transpose()?,
-        checkpoint_hash: stored_digest(&row.checkpoint_hash)?,
-        signatures: row.signatures.0,
-        witnesses: row.witnesses.0,
-    };
+    let mut checkpoint = Checkpoint::try_from(row)?;
     if checkpoint.checkpoint_hash != *checkpoint_hash {
         return Err(PgError::InvalidState(format!(
             "the checkpoint at tree size {tree_size} is {} now, not {checkpoint_hash}: the \

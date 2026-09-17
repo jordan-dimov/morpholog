@@ -685,13 +685,19 @@ async fn measure_write(
     })
 }
 
+/// A scenario's pool, on the URL's implied user like every other
+/// Postgres tool.
+async fn connect(url: &str) -> Result<PgPool> {
+    PgPool::connect(&morpholog_postgres::with_default_user(url))
+        .await
+        .context("connect to PostgreSQL")
+}
+
 async fn run_write(args: ScenarioArgs) -> Result<()> {
     require_reset_ack(&args)?;
     require_positive_k(&args)?;
     require_positive_repeat(args.repeat)?;
-    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
-        .await
-        .context("connect to PostgreSQL")?;
+    let pool = connect(&args.database_url).await?;
     println!(
         "scenario=write n={} accounts={} noise_claims={} repeat={}",
         args.n, args.accounts, args.noise_claims, args.repeat
@@ -798,9 +804,7 @@ async fn run_read(args: ScenarioArgs) -> Result<()> {
     require_reset_ack(&args)?;
     require_positive_k(&args)?;
     require_positive_repeat(args.repeat)?;
-    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
-        .await
-        .context("connect to PostgreSQL")?;
+    let pool = connect(&args.database_url).await?;
     println!(
         "scenario=read n={} accounts={} noise_claims={} repeat={}",
         args.n, args.accounts, args.noise_claims, args.repeat
@@ -930,9 +934,7 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
             args.retract_fraction
         ));
     }
-    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
-        .await
-        .context("connect to PostgreSQL")?;
+    let pool = connect(&args.database_url).await?;
     println!(
         "scenario=as-of n={} at={} retract_fraction={} repeat={}",
         args.n, args.at, args.retract_fraction, args.repeat
@@ -1400,9 +1402,7 @@ async fn measure_import(pool: &PgPool, case: &str, n: usize, repeat: usize) -> R
 async fn run_import(args: ImportArgs) -> Result<()> {
     check_reset_ack(args.reset, &args.database_url)?;
     require_positive_repeat(args.repeat)?;
-    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
-        .await
-        .context("connect to PostgreSQL")?;
+    let pool = connect(&args.database_url).await?;
     println!("scenario=import n={} repeat={}", args.n, args.repeat);
     let result = measure_import(&pool, "import", args.n, args.repeat).await?;
     print_case_human(&result);
@@ -1608,9 +1608,7 @@ async fn measure_wide(
 async fn run_wide(args: WideArgs) -> Result<()> {
     check_reset_ack(args.reset, &args.database_url)?;
     require_positive_repeat(args.repeat)?;
-    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
-        .await
-        .context("connect to PostgreSQL")?;
+    let pool = connect(&args.database_url).await?;
     println!(
         "scenario=wide n={} arity={} repeat={}",
         args.n, args.arity, args.repeat
@@ -1917,12 +1915,6 @@ const CASE_PROVENANCE: &[(&str, &str)] = &[
         "the in-process CORE of the embedder import/replay path that forced \
          propose --batch (Redline's 130-act WAN seed; grid-mysteries' CI \
          replay); the real batch adds NDJSON/decode/receipt cost per row",
-    ),
-    (
-        "transact",
-        "several proposals as one decision (an embedder's ~370-act day) \
-         against the same acts one by one; /contend adds concurrent single \
-         writers on the same period and counts the batch's 40001 retries",
     ),
     (
         "wide",
@@ -2486,9 +2478,7 @@ async fn run_transact(args: TransactArgs) -> Result<()> {
     if args.acts == 0 {
         return Err(anyhow!("--acts must be at least 1"));
     }
-    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&args.database_url))
-        .await
-        .context("connect to PostgreSQL")?;
+    let pool = connect(&args.database_url).await?;
     println!(
         "scenario=transact acts={} prepopulate={} writers={} repeat={}",
         args.acts, args.prepopulate, args.writers, args.repeat

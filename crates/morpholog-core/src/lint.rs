@@ -347,15 +347,7 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
     }
 
     for (index, inv) in program.invariants.iter().enumerate() {
-        let mut implications = Vec::new();
-        collect_implications(
-            &inv.body,
-            true,
-            definitions,
-            &mut BTreeSet::new(),
-            &mut Vec::new(),
-            &mut implications,
-        );
+        let implications = implications_of(&inv.body, definitions);
         if do_gate {
             gate_vs_invariant_findings(
                 inv,
@@ -476,22 +468,8 @@ fn gate_vs_invariant_findings(
     out: &mut Vec<Lint>,
 ) {
     for implication in implications {
-        let mut antecedent_refs = BTreeSet::new();
-        positive_claims(
-            implication.antecedent,
-            true,
-            definitions,
-            &mut BTreeSet::new(),
-            &mut antecedent_refs,
-        );
-        let mut consequent_refs = BTreeSet::new();
-        positive_claims(
-            implication.consequent,
-            true,
-            definitions,
-            &mut BTreeSet::new(),
-            &mut consequent_refs,
-        );
+        let antecedent_refs = positive_claims_of(implication.antecedent, definitions);
+        let consequent_refs = positive_claims_of(implication.consequent, definitions);
         for a in antecedent_refs.iter().filter(|p| append_only.contains(*p)) {
             for q in consequent_refs.iter().filter(|p| pointers.contains(*p)) {
                 out.push(Lint::GateVsInvariant {
@@ -550,6 +528,34 @@ pub(crate) struct CollectedImplication<'a> {
     pub(crate) calls: Vec<DefinedCall<'a>>,
 }
 
+/// Every implication `prop` asserts, at top level or behind a defined
+/// call, each with the call chain it was found under.
+pub(crate) fn implications_of<'a>(
+    prop: &'a Prop,
+    definitions: DefinitionTable<'a>,
+) -> Vec<CollectedImplication<'a>> {
+    let mut out = Vec::new();
+    collect_implications(
+        prop,
+        true,
+        definitions,
+        &mut BTreeSet::new(),
+        &mut Vec::new(),
+        &mut out,
+    );
+    out
+}
+
+/// The predicates `prop` asserts positively, descending defined calls.
+pub(crate) fn positive_claims_of(
+    prop: &Prop,
+    definitions: DefinitionTable<'_>,
+) -> BTreeSet<PredicateName> {
+    let mut out = BTreeSet::new();
+    positive_claims(prop, true, definitions, &mut BTreeSet::new(), &mut out);
+    out
+}
+
 /// Every `Implies` node the invariant actually ASSERTS - collected
 /// only at positive polarity, because a negated implication
 /// (`not (A implies B)` is `A and not B`) and an implication sitting
@@ -562,7 +568,7 @@ pub(crate) struct CollectedImplication<'a> {
 /// collected antecedent/consequent references may therefore point
 /// into a definition's body; each implication carries the call chain
 /// it was found under so coverage can evaluate it in call context.
-pub(crate) fn collect_implications<'a>(
+fn collect_implications<'a>(
     prop: &'a Prop,
     positive: bool,
     definitions: DefinitionTable<'a>,
@@ -621,7 +627,7 @@ pub(crate) fn collect_implications<'a>(
 /// is retracted, which is the opposite of the bug. `Defined` calls
 /// descend into their bodies (with a seen-set, mirroring the analysis
 /// walkers), since a named condition hides its claims behind the call.
-pub(crate) fn positive_claims(
+fn positive_claims(
     prop: &Prop,
     positive: bool,
     definitions: DefinitionTable<'_>,
@@ -769,15 +775,7 @@ mod tests {
     }
 
     fn implications_in(prop: &Prop) -> usize {
-        let mut out = Vec::new();
-        collect_implications(
-            prop,
-            true,
-            DefinitionTable::new(&[]),
-            &mut BTreeSet::new(),
-            &mut Vec::new(),
-            &mut out,
-        );
+        let out = implications_of(prop, DefinitionTable::new(&[]));
         out.len()
     }
 
@@ -798,15 +796,7 @@ mod tests {
     }
 
     fn positives_in(prop: &Prop) -> BTreeSet<crate::PredicateName> {
-        let mut out = BTreeSet::new();
-        positive_claims(
-            prop,
-            true,
-            DefinitionTable::new(&[]),
-            &mut BTreeSet::new(),
-            &mut out,
-        );
-        out
+        positive_claims_of(prop, DefinitionTable::new(&[]))
     }
 
     /// `not` flips claim polarity, and flips it back when doubled.

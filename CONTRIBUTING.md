@@ -128,6 +128,7 @@ Comments and docs earn their place by the same subtraction test as code. This is
 - **Smallest possible increment that produces a working artefact.** Three lines compiling beat a sketch of the whole subsystem.
 - **Kernel primitives land alongside the worked example that forces them.** Speculative IR primitives are explicitly discouraged - see [`docs/design-history.md`](docs/design-history.md) for the pattern.
 - **Higher-level functional tests over low-level unit tests.** A test that exercises `propose`, `propose_against_pg`, or the `morpholog` CLI catches more real regressions than a test of an individual private function.
+- **Structural questions use the shared walk; semantic ones match the IR directly.** "Does this subtree contain X", "which names does it bind", "how many nodes" go through `morpholog_core::fold` in the kernel and `parser::walk` in the surface, never a fresh recursion - copied descents have drifted before. An evaluator, checker, formatter, or compiler matches the IR itself, because there the match is the rule: each arm means something different and hiding it behind a generic visitor would hide the semantics. The test of which you are writing: if every arm does the same thing but at the leaves, it is structural.
 - **`bind` / `admit` / `retract` / `emit` accept claim patterns at the surface.** The IR is more permissive for some of these; the parser refuses to produce IR the kernel will refuse to evaluate. See `crates/morpholog-surface/src/parser/stmt.rs` for the doctrine.
 
 ## Adding a worked example

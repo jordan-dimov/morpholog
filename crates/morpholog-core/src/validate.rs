@@ -909,7 +909,7 @@ fn collect_depth_errors(
 ) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     for inv in &p.invariants {
-        if prop_exceeds_depth(&inv.body, MAX_EXPR_DEPTH, depths) {
+        if prop_depth_capped(&inv.body, MAX_EXPR_DEPTH, depths).is_none() {
             errors.push(ValidationError::NestingTooDeep {
                 context: ValidationContext::Invariant {
                     name: inv.name.to_string(),
@@ -932,10 +932,10 @@ fn collect_depth_errors(
         }
     }
     for d in &p.derived_claims {
-        let too_deep = prop_exceeds_depth(&d.domain, MAX_EXPR_DEPTH, depths)
+        let too_deep = prop_depth_capped(&d.domain, MAX_EXPR_DEPTH, depths).is_none()
             || d.values
                 .iter()
-                .any(|v| value_exceeds_depth(&v.expr, MAX_EXPR_DEPTH, depths));
+                .any(|v| value_depth_capped(&v.expr, MAX_EXPR_DEPTH, depths).is_none());
         if too_deep {
             errors.push(ValidationError::NestingTooDeep {
                 context: ValidationContext::DerivedClaim {
@@ -947,102 +947,25 @@ fn collect_depth_errors(
     errors
 }
 
-/// True if `prop` nests deeper than `budget` levels. Spends one unit
-/// of budget per level and bails the instant it runs out, so its own
-/// recursion is bounded by `budget` - it cannot overflow on the very
-/// input it exists to reject. Crosses into [`value_exceeds_depth`] for
-/// comparator operands, since the sorts are mutually recursive.
-fn prop_exceeds_depth(prop: &Prop, budget: usize, depths: &HashMap<DefinitionName, usize>) -> bool {
-    let Some(budget) = budget.checked_sub(1) else {
-        return true;
-    };
-    match prop {
-        Prop::Claim { .. } | Prop::In(_, _) => false,
-        // A call expands to its callee's body, so it charges the
-        // callee's expanded depth (computed callees-first in
-        // `validate_program`); an unknown name charges nothing, the
-        // dangling reference being the check pass's error.
-        Prop::Defined { name, .. } => depths.get(name).copied().unwrap_or(0) > budget,
-        Prop::And(items) | Prop::Or(items) => {
-            items.iter().any(|p| prop_exceeds_depth(p, budget, depths))
-        }
-        Prop::Not(inner) | Prop::Pre(inner) | Prop::Exists { body: inner, .. } => {
-            prop_exceeds_depth(inner, budget, depths)
-        }
-        Prop::Implies { left, right } => {
-            prop_exceeds_depth(left, budget, depths) || prop_exceeds_depth(right, budget, depths)
-        }
-        // Xor is evaluated by lowering to `(a or b) and not (a and b)`,
-        // which nests deeper than the one binary node. Measure that
-        // lowered shape - the same definition eval uses - so a deep xor
-        // chain cannot pass the depth guard and then overflow eval.
-        Prop::Xor(left, right) => {
-            prop_exceeds_depth(&crate::eval::lower_xor(left, right), budget, depths)
-        }
-        Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
-            value_exceeds_depth(left, budget, depths) || value_exceeds_depth(right, budget, depths)
-        }
-        Prop::Forall { source, body, .. } => {
-            prop_exceeds_depth(source, budget, depths) || prop_exceeds_depth(body, budget, depths)
-        }
-    }
-}
-
-/// True if `expr` nests deeper than `budget` levels. The value-sort
-/// companion to [`prop_exceeds_depth`]; the two recurse into each other
-/// (`Sum`'s body is a `Prop`).
-fn value_exceeds_depth(
-    expr: &ValueExpr,
-    budget: usize,
-    depths: &HashMap<DefinitionName, usize>,
-) -> bool {
-    let Some(budget) = budget.checked_sub(1) else {
-        return true;
-    };
-    match expr {
-        ValueExpr::Term(_) => false,
-        ValueExpr::Arith { left, right, .. } => {
-            value_exceeds_depth(left, budget, depths) || value_exceeds_depth(right, budget, depths)
-        }
-        ValueExpr::Sum { value, body, .. } => {
-            value_exceeds_depth(value, budget, depths) || prop_exceeds_depth(body, budget, depths)
-        }
-        ValueExpr::Extremum { body, .. } => prop_exceeds_depth(body, budget, depths),
-        ValueExpr::ValueOf { default, .. } => default
-            .as_deref()
-            .is_some_and(|d| value_exceeds_depth(d, budget, depths)),
-        ValueExpr::Call { args, .. } => args.iter().any(|a| value_exceeds_depth(a, budget, depths)),
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            prop_exceeds_depth(when, budget, depths)
-                || value_exceeds_depth(then, budget, depths)
-                || value_exceeds_depth(otherwise, budget, depths)
-        }
-    }
-}
-
 /// True if `stmt` nests deeper than `budget` levels, counting both its
 /// expression bodies and nested `for` statements. Same bailing
-/// discipline as [`prop_exceeds_depth`].
+/// discipline as [`prop_depth_capped`].
 fn stmt_exceeds_depth(stmt: &Stmt, budget: usize, depths: &HashMap<DefinitionName, usize>) -> bool {
     let Some(budget) = budget.checked_sub(1) else {
         return true;
     };
     match stmt {
         Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => {
-            prop_exceeds_depth(p, budget, depths)
+            prop_depth_capped(p, budget, depths).is_none()
         }
-        Stmt::Let { value, .. } => value_exceeds_depth(value, budget, depths),
+        Stmt::Let { value, .. } => value_depth_capped(value, budget, depths).is_none(),
         Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) | Stmt::LetNewSubject { .. } => {
             false
         }
         Stmt::For {
             collection, body, ..
         } => {
-            value_exceeds_depth(collection, budget, depths)
+            value_depth_capped(collection, budget, depths).is_none()
                 || body.iter().any(|s| stmt_exceeds_depth(s, budget, depths))
         }
     }
@@ -1051,127 +974,88 @@ fn stmt_exceeds_depth(stmt: &Stmt, budget: usize, depths: &HashMap<DefinitionNam
 /// Name-level duplicate-declaration check across both vocabularies.
 /// Not a tree walk: it compares declaration names, so it has no
 /// place in the reference-visiting `check` pass.
-fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
-    let mut errors = Vec::new();
-
-    // 1. Duplicate predicate declarations. Counts must be collected
-    //    via HashMap for O(1) lookups, but the error emission order
-    //    must be deterministic (HashMap iteration is randomised, and
-    //    the workspace-wide validation test's panic output would
-    //    otherwise vary run-to-run). Collect duplicates into a Vec,
-    //    sort by name, then emit.
+/// The names appearing more than once, sorted so the errors emit in a
+/// deterministic order whatever the count map's iteration order.
+fn duplicated<'a>(names: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
     let mut seen = HashMap::<&str, usize>::new();
-    for decl in &p.predicates {
-        *seen.entry(decl.name.as_str()).or_insert(0) += 1;
+    for name in names {
+        *seen.entry(name).or_insert(0) += 1;
     }
     let mut duplicates: Vec<&str> = seen
-        .iter()
-        .filter(|(_, count)| **count > 1)
-        .map(|(name, _)| *name)
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(name, _)| name)
         .collect();
     duplicates.sort_unstable();
-    for name in duplicates {
-        errors.push(ValidationError::DuplicateDecl {
-            vocabulary: VocabularyKind::Predicate,
-            name: name.to_string(),
-        });
+    duplicates
+}
+
+fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    fn duplicate_decls(
+        errors: &mut Vec<ValidationError>,
+        vocabulary: VocabularyKind,
+        names: Vec<&str>,
+    ) {
+        for name in names {
+            errors.push(ValidationError::DuplicateDecl {
+                vocabulary,
+                name: name.to_string(),
+            });
+        }
     }
+    duplicate_decls(
+        &mut errors,
+        VocabularyKind::Predicate,
+        duplicated(p.predicates.iter().map(|d| d.name.as_str())),
+    );
 
     // CalendarSpan is expression-only; the surface cannot declare it,
     // and hand-built IR is held to the same rule.
-    for decl in p.predicates.iter() {
-        for arg in &decl.args {
-            if arg.kind == crate::ir::PredicateArgKind::CalendarSpan {
-                errors.push(ValidationError::CalendarSpanNotDeclarable {
-                    declaration: decl.name.to_string(),
-                    argument: arg.name.clone(),
-                });
-            }
-        }
-    }
-    for decl in p.intents.iter() {
-        for arg in &decl.args {
-            if arg.kind == crate::ir::PredicateArgKind::CalendarSpan {
-                errors.push(ValidationError::CalendarSpanNotDeclarable {
-                    declaration: decl.name.to_string(),
-                    argument: arg.name.clone(),
-                });
-            }
-        }
-    }
-
-    // Same duplicate check for intents - separate namespace.
-    let mut seen_intents = HashMap::<&str, usize>::new();
-    for decl in &p.intents {
-        *seen_intents.entry(decl.name.as_str()).or_insert(0) += 1;
-    }
-    let mut dup_intents: Vec<&str> = seen_intents
-        .iter()
-        .filter(|(_, count)| **count > 1)
-        .map(|(name, _)| *name)
-        .collect();
-    dup_intents.sort_unstable();
-    for name in dup_intents {
-        errors.push(ValidationError::DuplicateDecl {
-            vocabulary: VocabularyKind::Intent,
-            name: name.to_string(),
-        });
-    }
-
-    // Same duplicate check for definitions.
-    let mut seen_definitions = HashMap::<&str, usize>::new();
-    for decl in &p.definitions {
-        *seen_definitions.entry(decl.name.as_str()).or_insert(0) += 1;
-    }
-    let mut dup_definitions: Vec<&str> = seen_definitions
-        .iter()
-        .filter(|(_, count)| **count > 1)
-        .map(|(name, _)| *name)
-        .collect();
-    dup_definitions.sort_unstable();
-    for name in dup_definitions {
-        errors.push(ValidationError::DuplicateDecl {
-            vocabulary: VocabularyKind::Definition,
-            name: name.to_string(),
-        });
-    }
-
-    // And for derived claims: two declarations of one head would publish
-    // two answers under one name, and the read cache that materialises
-    // them takes the kernel's output as a set.
-    let mut seen_derived = HashMap::<&str, usize>::new();
-    for decl in &p.derived_claims {
-        *seen_derived.entry(decl.predicate.as_str()).or_insert(0) += 1;
-    }
-    let mut dup_derived: Vec<&str> = seen_derived
-        .iter()
-        .filter(|(_, count)| **count > 1)
-        .map(|(name, _)| *name)
-        .collect();
-    dup_derived.sort_unstable();
-    for name in dup_derived {
-        errors.push(ValidationError::DuplicateDecl {
-            vocabulary: VocabularyKind::Derived,
-            name: name.to_string(),
-        });
-    }
-
-    // Each definition's parameter list must be duplicate-free: a
-    // parameter is one binding slot in the call frame, so a repeated
-    // name would let the later argument silently overwrite the
-    // earlier one.
-    for def in &p.definitions {
-        let mut seen_params = HashMap::<&str, usize>::new();
-        for param in &def.parameters {
-            *seen_params.entry(param.as_str()).or_insert(0) += 1;
-        }
-        let mut dup_params: Vec<&str> = seen_params
+    let declared_args = || {
+        p.predicates
             .iter()
-            .filter(|(_, count)| **count > 1)
-            .map(|(name, _)| *name)
-            .collect();
-        dup_params.sort_unstable();
-        for parameter in dup_params {
+            .map(|d| (VocabularyKind::Predicate, d.name.to_string(), &d.args))
+            .chain(
+                p.intents
+                    .iter()
+                    .map(|d| (VocabularyKind::Intent, d.name.to_string(), &d.args)),
+            )
+    };
+    for (_, name, args) in declared_args() {
+        for arg in args {
+            if arg.kind == crate::ir::PredicateArgKind::CalendarSpan {
+                errors.push(ValidationError::CalendarSpanNotDeclarable {
+                    declaration: name.clone(),
+                    argument: arg.name.clone(),
+                });
+            }
+        }
+    }
+
+    // Intents, definitions, and derived heads are their own namespaces;
+    // a derived head declared twice would publish two answers under one
+    // name, and the read cache takes the kernel's output as a set.
+    duplicate_decls(
+        &mut errors,
+        VocabularyKind::Intent,
+        duplicated(p.intents.iter().map(|d| d.name.as_str())),
+    );
+    duplicate_decls(
+        &mut errors,
+        VocabularyKind::Definition,
+        duplicated(p.definitions.iter().map(|d| d.name.as_str())),
+    );
+    duplicate_decls(
+        &mut errors,
+        VocabularyKind::Derived,
+        duplicated(p.derived_claims.iter().map(|d| d.predicate.as_str())),
+    );
+
+    // A parameter is one binding slot in the call frame, so a repeated
+    // name would let the later argument silently overwrite the earlier.
+    for def in &p.definitions {
+        for parameter in duplicated(def.parameters.iter().map(crate::ir::Var::as_str)) {
             errors.push(ValidationError::DuplicateParameter {
                 definition: def.name.to_string(),
                 parameter: parameter.to_string(),
@@ -1179,29 +1063,9 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
         }
     }
 
-    // Predicate and intent argument names must be duplicate-free for
-    // the same reason: a field names one position.
-    for (vocabulary, name, args) in p
-        .predicates
-        .iter()
-        .map(|d| (VocabularyKind::Predicate, d.name.to_string(), &d.args))
-        .chain(
-            p.intents
-                .iter()
-                .map(|d| (VocabularyKind::Intent, d.name.to_string(), &d.args)),
-        )
-    {
-        let mut seen = HashMap::<&str, usize>::new();
-        for arg in args {
-            *seen.entry(arg.name.as_str()).or_insert(0) += 1;
-        }
-        let mut dups: Vec<&str> = seen
-            .iter()
-            .filter(|(_, count)| **count > 1)
-            .map(|(field, _)| *field)
-            .collect();
-        dups.sort_unstable();
-        for field in dups {
+    // A field names one position, so argument names are duplicate-free.
+    for (vocabulary, name, args) in declared_args() {
+        for field in duplicated(args.iter().map(|a| a.name.as_str())) {
             errors.push(ValidationError::DuplicateArgName {
                 vocabulary,
                 name: name.clone(),

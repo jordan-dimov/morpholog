@@ -28,7 +28,6 @@ mod compiled;
 mod compiled_differential;
 mod derived;
 mod error;
-mod hex;
 mod keys;
 mod merkle;
 mod migrations;

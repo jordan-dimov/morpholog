@@ -237,6 +237,42 @@ pub(crate) async fn connect_single(url: &str) -> anyhow::Result<PgPool> {
         .context("failed to connect to PostgreSQL")
 }
 
+/// The read-side tail every inspect surface shares: the structured form
+/// under `--json`, the rendered prose otherwise.
+pub(crate) fn emit<T: Serialize>(
+    json: bool,
+    value: &T,
+    prose: impl FnOnce() -> String,
+) -> anyhow::Result<()> {
+    if json {
+        print_json(value)
+    } else {
+        println!("{}", prose());
+        Ok(())
+    }
+}
+
+/// Read and parse a JSON file, naming the file and what it was meant
+/// to be in any failure.
+pub(crate) fn read_json<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    noun: &str,
+    shape: &str,
+) -> anyhow::Result<T> {
+    let bytes =
+        std::fs::read(path).with_context(|| format!("reading {noun} file {}", path.display()))?;
+    serde_json::from_slice(&bytes)
+        .with_context(|| format!("parsing {noun} file {} as {shape}", path.display()))
+}
+
+/// The external anchor a verifier or scorer holds, when one was given.
+pub(crate) fn read_anchor(
+    path: Option<&Path>,
+) -> anyhow::Result<Option<morpholog_postgres::Checkpoint>> {
+    path.map(|p| read_json(p, "anchor", "a checkpoint"))
+        .transpose()
+}
+
 /// Pretty-print a value as JSON to stdout. The canonical output shape
 /// for every read-only subcommand.
 pub(crate) fn print_json<T: Serialize>(value: &T) -> anyhow::Result<()> {

@@ -60,7 +60,7 @@ use crate::definitions::DefinitionTable;
 use crate::format;
 use crate::guarantees::{Guarantee, guarantees};
 use crate::ir::{InvariantOrigin, PredicateName, Program, Prop, Stmt};
-use crate::lint::{collect_implications, positive_claims};
+use crate::lint::{implications_of, positive_claims_of};
 
 /// One invariant a gate **front-loads**: the gate pre-checks, at action
 /// time, a condition the invariant enforces over committed state. This
@@ -302,32 +302,10 @@ fn authored_implications(program: &Program, defs: DefinitionTable<'_>) -> Vec<In
         if inv.origin != InvariantOrigin::Authored {
             continue;
         }
-        let mut collected = Vec::new();
-        collect_implications(
-            &inv.body,
-            true,
-            defs,
-            &mut BTreeSet::new(),
-            &mut Vec::new(),
-            &mut collected,
-        );
+        let collected = implications_of(&inv.body, defs);
         for imp in collected {
-            let mut antecedent = BTreeSet::new();
-            positive_claims(
-                imp.antecedent,
-                true,
-                defs,
-                &mut BTreeSet::new(),
-                &mut antecedent,
-            );
-            let mut consequent = BTreeSet::new();
-            positive_claims(
-                imp.consequent,
-                true,
-                defs,
-                &mut BTreeSet::new(),
-                &mut consequent,
-            );
+            let antecedent = positive_claims_of(imp.antecedent, defs);
+            let consequent = positive_claims_of(imp.consequent, defs);
             out.push(InvImplication {
                 invariant: inv.name.to_string(),
                 antecedent,
@@ -381,8 +359,7 @@ fn gate(
 
     // The predicates the gate references positively - the signature we
     // match against each triggerable invariant's consequent.
-    let mut gate_sig = BTreeSet::new();
-    positive_claims(prop, true, defs, &mut BTreeSet::new(), &mut gate_sig);
+    let gate_sig = positive_claims_of(prop, defs);
 
     // A gate front-loads an invariant when this transformation can trigger
     // it (admits a predicate the antecedent rests on) AND the gate

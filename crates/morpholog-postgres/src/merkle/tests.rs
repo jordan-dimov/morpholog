@@ -221,7 +221,7 @@ fn split_point_is_largest_power_of_two_below_n() {
     assert_eq!(split_point(9), 8);
 }
 
-/// `parse_hash` inverts `render_hash` and rejects malformed input.
+/// Parsing inverts rendering and refuses anything else.
 #[test]
 fn a_digest_parses_from_its_rendering_and_refuses_anything_else() {
     let d = Digest::from_bytes(leaf_hash(b"roundtrip"));

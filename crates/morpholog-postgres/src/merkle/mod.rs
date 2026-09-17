@@ -117,7 +117,7 @@ impl Digest {
 
 impl std::fmt::Display for Digest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "sha256:{}", crate::hex::encode(&self.0))
+        write!(f, "sha256:{}", hex::encode(self.0))
     }
 }
 
@@ -142,10 +142,7 @@ impl std::str::FromStr for Digest {
             return Err(malformed());
         }
         let mut out = [0u8; 32];
-        for (i, byte) in out.iter_mut().enumerate() {
-            *byte = u8::from_str_radix(hex.get(i * 2..i * 2 + 2).ok_or_else(malformed)?, 16)
-                .map_err(|_| malformed())?;
-        }
+        hex::decode_to_slice(hex, &mut out).map_err(|_| malformed())?;
         Ok(Self(out))
     }
 }

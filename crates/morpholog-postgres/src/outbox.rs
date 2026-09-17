@@ -72,6 +72,16 @@ impl std::fmt::Display for OutboxStatus {
     }
 }
 
+/// The verdict of a lease-gated update: exactly one row means the
+/// lease still held; none means another worker took it over first.
+fn lease_outcome(rows: &sqlx::postgres::PgQueryResult) -> OutboxUpdate {
+    if rows.rows_affected() == 1 {
+        OutboxUpdate::Applied
+    } else {
+        OutboxUpdate::LeaseLost
+    }
+}
+
 /// One row of `morpholog.outbox` decoded into typed runtime values.
 ///
 /// Carries every column on the table. The delivery-state extensions are
@@ -262,11 +272,7 @@ pub async fn mark_outbox_delivered(
     .execute(pool)
     .await
     .map_err(classify_checked_query)?;
-    Ok(if rows.rows_affected() == 1 {
-        OutboxUpdate::Applied
-    } else {
-        OutboxUpdate::LeaseLost
-    })
+    Ok(lease_outcome(&rows))
 }
 /// Record a transient delivery failure: schedule the row for retry
 /// at `next_attempt_at`. The row goes back to `status='pending'`
@@ -312,11 +318,7 @@ pub async fn mark_outbox_transient_attempt(
     .execute(pool)
     .await
     .map_err(classify_checked_query)?;
-    Ok(if rows.rows_affected() == 1 {
-        OutboxUpdate::Applied
-    } else {
-        OutboxUpdate::LeaseLost
-    })
+    Ok(lease_outcome(&rows))
 }
 /// Mark a non-retryable delivery failure. The row moves to
 /// `status='failed'`, captures `failed_at` and `failure_reason`,
@@ -351,11 +353,7 @@ pub async fn mark_outbox_failed(
     .execute(pool)
     .await
     .map_err(classify_checked_query)?;
-    Ok(if rows.rows_affected() == 1 {
-        OutboxUpdate::Applied
-    } else {
-        OutboxUpdate::LeaseLost
-    })
+    Ok(lease_outcome(&rows))
 }
 /// Link a compensating transformation to a failed outbox row.
 ///
@@ -538,11 +536,7 @@ pub async fn release_outbox_claim(
     .execute(pool)
     .await
     .map_err(classify_checked_query)?;
-    Ok(if rows.rows_affected() == 1 {
-        OutboxUpdate::Applied
-    } else {
-        OutboxUpdate::LeaseLost
-    })
+    Ok(lease_outcome(&rows))
 }
 /// Soonest future `next_attempt_at` over pending rows of the given
 /// `intent_type`. Returns `None` if no such row exists.
@@ -689,11 +683,7 @@ pub async fn complete_compensation(
     .execute(pool)
     .await
     .map_err(classify_checked_query)?;
-    Ok(if rows.rows_affected() == 1 {
-        OutboxUpdate::Applied
-    } else {
-        OutboxUpdate::LeaseLost
-    })
+    Ok(lease_outcome(&rows))
 }
 /// Resolve a compensation_in_progress row on failure: transitions it
 /// to `compensation_failed` with `reason` recorded, and releases the
@@ -739,11 +729,7 @@ pub async fn mark_compensation_failed(
     .execute(pool)
     .await
     .map_err(classify_checked_query)?;
-    Ok(if rows.rows_affected() == 1 {
-        OutboxUpdate::Applied
-    } else {
-        OutboxUpdate::LeaseLost
-    })
+    Ok(lease_outcome(&rows))
 }
 /// Outcome a [`Deliverer`] returns from a single delivery attempt.
 ///

@@ -16,7 +16,7 @@ use morpholog_postgres::{
 use anyhow::Context;
 
 use crate::commands::verify::{signature_policy, witness_anchors};
-use crate::commands::{AlreadyReported, connect, print_json};
+use crate::commands::{AlreadyReported, connect, print_json, read_anchor, read_json};
 use crate::{EvidenceExportArgs, EvidenceVerifyArgs};
 
 /// `audit export`: a complete-prefix pack by default, a window between
@@ -41,14 +41,11 @@ pub(crate) async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
     // refuses if the stored start has diverged from it), or the weaker
     // tree-size convenience. Either turns this into a window export.
     let start = match (&args.from_anchor, args.from_tree_size) {
-        (Some(path), _) => {
-            let bytes = std::fs::read(path)
-                .with_context(|| format!("reading anchor file {}", path.display()))?;
-            let anchor: Checkpoint = serde_json::from_slice(&bytes).with_context(|| {
-                format!("parsing anchor file {} as a checkpoint", path.display())
-            })?;
-            Some(WindowStart::Anchor(anchor))
-        }
+        (Some(path), _) => Some(WindowStart::Anchor(read_json(
+            path,
+            "anchor",
+            "a checkpoint",
+        )?)),
         (None, Some(n)) => Some(WindowStart::TreeSize(n)),
         (None, None) => None,
     };
@@ -80,16 +77,7 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     let bytes = std::fs::read(&args.pack_file)
         .with_context(|| format!("reading pack file {}", args.pack_file.display()))?;
 
-    let anchor: Option<Checkpoint> = match &args.anchor_file {
-        Some(path) => {
-            let bytes = std::fs::read(path)
-                .with_context(|| format!("reading anchor file {}", path.display()))?;
-            Some(serde_json::from_slice(&bytes).with_context(|| {
-                format!("parsing anchor file {} as a checkpoint", path.display())
-            })?)
-        }
-        None => None,
-    };
+    let anchor = read_anchor(args.anchor_file.as_deref())?;
 
     // The pack kind is part of the contract: peek the format version so
     // each pack kind gets its own verifier and verdict shape. An unknown
