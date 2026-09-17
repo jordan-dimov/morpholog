@@ -278,7 +278,10 @@ program: reported_revenue
   transformations: 3
   intents: 3
   derived claims: 0
+  invariant checks: compiled
 ```
+
+The last line says how the runtime will check your invariants: every one here is inside the fragment the runtime can compile to SQL, so they run in the database. A programme with an invariant outside that fragment reports `interpreted` and names the invariant and the construct that kept it out; either way the rules mean the same thing.
 
 ## Make it happen
 

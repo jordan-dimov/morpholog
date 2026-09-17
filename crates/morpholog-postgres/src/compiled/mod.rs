@@ -43,6 +43,11 @@
 //! minting `new Subject()` twice; the same-candidate differential stages
 //! the body once, so that source of divergence no longer exists.)
 
+// Until the stage-1 integration reaches production, only the
+// classification is called from outside the tests; the checks
+// themselves are exercised by the differential.
+#![cfg_attr(not(test), allow(dead_code))]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
@@ -58,7 +63,7 @@ use crate::sql_quote::{quote_ident, quote_literal};
 /// Why one invariant is outside the compiled fragment. Typed so tests and
 /// callers dispatch on the variant, never on message text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CompileReason {
+pub enum CompileReason {
     /// A construct the fragment has no rendering for (`or`, `pre`, a
     /// defined call, arithmetic, ...).
     Construct { construct: &'static str },
@@ -108,9 +113,9 @@ impl std::fmt::Display for CompileReason {
 
 /// One invariant the compiler could not express in the fragment.
 #[derive(Debug, Clone)]
-pub(crate) struct CompileRefusal {
-    pub(crate) invariant: InvariantName,
-    pub(crate) reason: CompileReason,
+pub struct CompileRefusal {
+    pub invariant: InvariantName,
+    pub reason: CompileReason,
 }
 
 /// Every invariant of a programme, compiled. Programme order is preserved:
