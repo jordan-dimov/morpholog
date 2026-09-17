@@ -59,12 +59,13 @@ pub enum PgProposalOutcome {
 /// Propose a transformation against the live `morpholog.*` tables.
 ///
 /// Opens one PostgreSQL transaction at SERIALIZABLE isolation, loads
-/// the claims the transformation body reads into an in-memory
-/// [`State`] and runs the body through the synchronous kernel. When
-/// the programme's invariants compile to SQL ([`PgProgram::plan`]),
-/// the staged delta is written into the transaction and every
-/// invariant is checked in programme order against the claims table;
-/// otherwise the interpreter checks them over the loaded state. Either
+/// the claims the proposal needs into an in-memory [`State`] and runs
+/// the body through the synchronous kernel. When the programme's
+/// invariants compile to SQL ([`PgProgram::plan`]), only the body's
+/// reads are loaded, the staged delta is written into the transaction,
+/// and every invariant is checked in programme order against the
+/// claims table; otherwise the invariants' reads are loaded too and
+/// the interpreter checks them over that state. Either
 /// way the changes commit (claims, audit, outbox rows) or roll back
 /// atomically, and a rejection additionally records one row in the
 /// operational rejection log after the rollback (see
