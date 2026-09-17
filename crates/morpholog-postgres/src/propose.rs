@@ -155,9 +155,12 @@ pub async fn propose_against_pg_timed(
         true,
     )
     .await?;
+    let phases = run
+        .phases
+        .ok_or_else(|| PgError::InvalidState("a timed proposal recorded no phases".to_string()))?;
     Ok(TimedProposalOutcome {
         outcome: run.outcome,
-        phases: run.phases.unwrap_or_default(),
+        phases,
     })
 }
 

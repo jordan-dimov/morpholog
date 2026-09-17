@@ -785,7 +785,7 @@ fn in_memory_book(n: usize) -> Vec<ClaimInstance> {
         let entry = subj(&format!("bench_entry_{i}"));
         claims.push(ClaimInstance {
             predicate: "JournalEntry".into(),
-            args: vec![entry.clone(), subj("d_2026"), subj("p_bench")],
+            args: vec![entry.clone(), subj("d_2026_05_17"), subj("p_bench")],
         });
         claims.push(ClaimInstance {
             predicate: "JournalLine".into(),
@@ -854,43 +854,29 @@ fn measure_kernel(case: &str, n: usize, acts: usize, repeat: usize) -> Result<Ca
         let pre = State::from_claims(input);
         build.push(t.elapsed());
 
+        let target = ledger_posting("bench_target");
         let t = Instant::now();
         must_commit(
-            propose(
-                &transformation,
-                &ledger_posting("bench_target"),
-                &pre,
-                &invariants,
-                &definitions,
-            )?,
+            propose(&transformation, &target, &pre, &invariants, &definitions)?,
             "the target proposal",
         )?;
         one.push(t.elapsed());
 
         let t = Instant::now();
         must_commit(
-            propose(
-                &transformation,
-                &ledger_posting("bench_target"),
-                &pre,
-                &[],
-                &definitions,
-            )?,
-            "the uninvariant proposal",
+            propose(&transformation, &target, &pre, &[], &definitions)?,
+            "the proposal without invariants",
         )?;
         no_invariants.push(t.elapsed());
 
+        let batch: Vec<Transition> = (0..acts)
+            .map(|i| ledger_posting(&format!("bench_act_{i}")))
+            .collect();
         let t = Instant::now();
         let mut state = pre;
-        for i in 0..acts {
+        for act in &batch {
             state = must_commit(
-                propose(
-                    &transformation,
-                    &ledger_posting(&format!("bench_act_{i}")),
-                    &state,
-                    &invariants,
-                    &definitions,
-                )?,
+                propose(&transformation, act, &state, &invariants, &definitions)?,
                 "a sequential act",
             )?;
         }
