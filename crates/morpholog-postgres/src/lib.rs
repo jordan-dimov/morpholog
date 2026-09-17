@@ -88,6 +88,7 @@ pub use pack::{
     WindowStart, WindowVerification, export_pack, export_selective, export_window, verify_pack,
     verify_selective, verify_window,
 };
+pub use compiled::{CompileReason, CompileRefusal};
 pub use program::{Backend, PgProgram};
 pub use propose::{
     AuditedInvariantCheck, PgProposalOutcome, PgTracedOutcome, RejectionStateOutcome,

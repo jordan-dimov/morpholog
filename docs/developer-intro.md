@@ -281,7 +281,7 @@ program: reported_revenue
   invariant checks: compiled
 ```
 
-The last line says how the runtime will check your invariants: every one here is inside the fragment the runtime can compile to SQL, so they run in the database. A programme with an invariant outside that fragment reports `interpreted` and names the invariant and the construct that kept it out; either way the rules mean the same thing.
+The last line says which checker your invariants are eligible for: every one here is inside the fragment the runtime can compile to SQL. That plan is built and reported today; proposals run it in the database once the compiled path is wired in, and until then every programme is checked by the interpreter. A programme with an invariant outside the fragment reports `interpreted` and names the invariant and the construct that kept it out; either way the rules mean the same thing.
 
 ## Make it happen
 
