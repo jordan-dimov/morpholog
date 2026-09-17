@@ -90,7 +90,7 @@ pub use score::{
     SCORE_FORMAT_VERSION, SCORE_SEMANTICS, ScoreError, SliceInvariantScore, SliceScore,
     SplitBoundaryReport, SplitScore, invariants_using_pre,
 };
-pub use state::{ClaimInstance, EvalValue, IntentInstance, State};
+pub use state::{ClaimInstance, Claims, EvalValue, IntentInstance, State};
 pub use sums::lower_sum_seeds;
 pub use validate::{ValidatedProgram, ValidationContext, ValidationError, VocabularyKind};
 

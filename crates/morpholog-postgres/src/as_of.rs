@@ -15,7 +15,7 @@ use uuid::Uuid;
 /// the target's tuple, in causal order.
 ///
 /// Within each replayed transition, retractions are applied before
-/// assertions - matching the kernel's `build_candidate_state`
+/// assertions - matching the kernel's `State::with_delta`
 /// semantics. Assertions are set-valued: asserting an already-present
 /// claim is an idempotent no-op (matches the PG adapter's
 /// `INSERT ... ON CONFLICT DO NOTHING` on commit).
@@ -212,7 +212,7 @@ pub(crate) async fn reconstruct_inner(
             let asserted: Vec<ClaimInstance> = serde_json::from_value(row.asserted_claims)?;
             let retracted: Vec<ClaimInstance> = serde_json::from_value(row.retracted_claims)?;
             // Within each transition: retractions first, then
-            // assertions. Matches build_candidate_state in the kernel.
+            // assertions. Matches `State::with_delta` in the kernel.
             for r in &retracted {
                 if !predicate_in_scope_set(r.predicate.as_str(), scope_set.as_ref()) {
                     continue;

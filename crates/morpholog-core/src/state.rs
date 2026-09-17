@@ -254,7 +254,11 @@ impl State {
     /// present are no-ops, and a claim retracted and admitted in one
     /// delta ends up at the tail. Shares this state's base; copies the
     /// overlay.
-    pub fn with_delta(&self, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) -> State {
+    pub(crate) fn with_delta(
+        &self,
+        asserted: &[ClaimInstance],
+        retracted: &[ClaimInstance],
+    ) -> State {
         let threshold = (self.base.claims.len() / 8).max(COMPACTION_FLOOR);
         self.with_delta_under(asserted, retracted, threshold)
     }
@@ -294,16 +298,22 @@ impl State {
                 self.live -= 1;
             }
         }
-        for &i in self.overlay.candidates_for(claim).to_vec().iter() {
-            if !self.dead_overlay[i] && self.overlay.claims[i] == *claim {
-                self.dead_overlay[i] = true;
-                self.live -= 1;
+        let Self {
+            overlay,
+            dead_overlay,
+            live,
+            ..
+        } = self;
+        for &i in overlay.candidates_for(claim) {
+            if !dead_overlay[i] && overlay.claims[i] == *claim {
+                dead_overlay[i] = true;
+                *live -= 1;
             }
         }
     }
 
     /// Whether an exact copy of `claim` is admitted.
-    pub fn contains(&self, claim: &ClaimInstance) -> bool {
+    pub(crate) fn contains(&self, claim: &ClaimInstance) -> bool {
         self.base
             .candidates_for(claim)
             .iter()
@@ -328,16 +338,16 @@ impl State {
         predicate: &str,
     ) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
         let name = PredicateName::from(predicate);
-        let base = self.base.bucket(&name).to_vec();
-        let overlay = self.overlay.bucket(&name).to_vec();
-        base.into_iter()
+        let base = self.base.bucket(&name);
+        let overlay = self.overlay.bucket(&name);
+        base.iter()
             .filter(move |i| !self.dead_base.contains(i))
-            .map(move |i| &self.base.claims[i])
+            .map(move |&i| &self.base.claims[i])
             .chain(
                 overlay
-                    .into_iter()
-                    .filter(move |&i| !self.dead_overlay[i])
-                    .map(move |i| &self.overlay.claims[i]),
+                    .iter()
+                    .filter(move |&&i| !self.dead_overlay[i])
+                    .map(move |&i| &self.overlay.claims[i]),
             )
     }
 
