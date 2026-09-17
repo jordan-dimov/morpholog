@@ -11,8 +11,8 @@
 //! absent because no read has needed them; the shape that arrived was a
 //! single field equal to a single value.
 
-use anyhow::{Context, anyhow};
-use morpholog_core::{EvalValue, PredicateArgKind, PredicateDecl};
+use anyhow::{Context, anyhow, bail};
+use morpholog_core::{EvalValue, PredicateArgKind, PredicateDecl, Program};
 
 /// One resolved filter: which argument position to compare, and the
 /// value to compare it against, already decoded to the declared kind.
@@ -86,9 +86,43 @@ pub(crate) fn resolve(
         .collect()
 }
 
-/// Does this claim's argument list satisfy every filter? Used by the
-/// derived reader, which filters after enumeration - a derived view is
-/// computed from claims, so the work happens either way.
+/// The one reading of a `where` clause, for every surface that offers
+/// it: a programme to read declarations from, exactly one predicate,
+/// declared, then the field resolution. Refused before any database
+/// work, so the message is about the request and not about an empty
+/// result. Returns the filters and the declared arity from the same
+/// declaration, so a query is never handed an arity from a different
+/// one. No pairs, no filters.
+pub(crate) fn resolve_where(
+    program: Option<&Program>,
+    predicates: &[String],
+    pairs: &[String],
+) -> anyhow::Result<(Vec<FieldFilter>, i32)> {
+    if pairs.is_empty() {
+        return Ok((Vec::new(), 0));
+    }
+    let Some(program) = program else {
+        bail!(
+            "`where` needs the named read: a field name is resolved against a declaration, \
+             and without one there is nothing to resolve it against"
+        );
+    };
+    let [predicate] = predicates else {
+        bail!(
+            "`where` needs exactly one predicate, because the field names belong to one \
+             claim shape; got {}",
+            predicates.len()
+        );
+    };
+    let decl = program
+        .predicate(predicate)
+        .ok_or_else(|| anyhow!("predicate `{predicate}` is not declared in the programme"))?;
+    let declared_arity = i32::try_from(decl.args.len())
+        .with_context(|| format!("`{predicate}` declares too many arguments to filter"))?;
+    let filters = resolve(decl, pairs)?;
+    Ok((filters, declared_arity))
+}
+
 pub(crate) fn matches(args: &[EvalValue], filters: &[FieldFilter]) -> bool {
     filters
         .iter()

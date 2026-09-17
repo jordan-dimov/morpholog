@@ -380,24 +380,12 @@ async fn handle_derived(
             ),
         ));
     };
-    let filters = match &body.filters {
-        None => Vec::new(),
-        Some(map) if map.is_empty() => Vec::new(),
-        Some(map) => {
-            let Some(decl) = program.predicate(&body.name) else {
-                return Err(SessionFailure::request(
-                    ErrorCode::InvalidArguments,
-                    anyhow!(
-                        "`where` needs `{}` declared as a predicate to resolve field names",
-                        body.name
-                    ),
-                ));
-            };
-            let pairs: Vec<String> = map.iter().map(|(k, v)| format!("{k}={v}")).collect();
-            crate::commands::filter::resolve(decl, &pairs)
-                .map_err(|e| SessionFailure::request(ErrorCode::InvalidArguments, e))?
-        }
-    };
+    let (filters, _) = resolve_filters(
+        &body.filters,
+        true,
+        std::slice::from_ref(&body.name),
+        compiled,
+    )?;
     let as_of = parse_as_of(pool, &body.as_of).await?;
     let rows = derived_rows(pool, &program.definitions, derived, as_of, &filters)
         .await
@@ -420,43 +408,13 @@ fn resolve_filters(
     predicates: &[String],
     compiled: &CompiledProgram,
 ) -> Result<(Vec<FieldFilter>, i32), SessionFailure> {
-    let map = match filters {
-        None => return Ok((Vec::new(), 0)),
-        Some(map) if map.is_empty() => return Ok((Vec::new(), 0)),
-        Some(map) => map,
-    };
-    if !named {
-        return Err(SessionFailure::request(
-            ErrorCode::InvalidArguments,
-            anyhow!("`where` needs the named read: field names resolve against a declaration"),
-        ));
-    }
-    let [predicate] = predicates else {
-        return Err(SessionFailure::request(
-            ErrorCode::InvalidArguments,
-            anyhow!(
-                "`where` needs exactly one predicate, because the field names belong \
-                 to one claim shape; got {}",
-                predicates.len()
-            ),
-        ));
-    };
-    let Some(decl) = compiled.program().predicate(predicate) else {
-        return Err(SessionFailure::request(
-            ErrorCode::InvalidArguments,
-            anyhow!("predicate `{predicate}` is not declared in the programme"),
-        ));
-    };
-    let declared_arity = i32::try_from(decl.args.len()).map_err(|_| {
-        SessionFailure::request(
-            ErrorCode::InvalidArguments,
-            anyhow!("`{predicate}` declares too many arguments to filter"),
-        )
-    })?;
-    let pairs: Vec<String> = map.iter().map(|(k, v)| format!("{k}={v}")).collect();
-    let filters = crate::commands::filter::resolve(decl, &pairs)
-        .map_err(|e| SessionFailure::request(ErrorCode::InvalidArguments, e))?;
-    Ok((filters, declared_arity))
+    let pairs: Vec<String> = filters
+        .iter()
+        .flatten()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    crate::commands::filter::resolve_where(named.then(|| compiled.program()), predicates, &pairs)
+        .map_err(|e| SessionFailure::request(ErrorCode::InvalidArguments, e))
 }
 
 /// Parse and resolve an `as_of` coordinate. A malformed coordinate is
