@@ -1090,12 +1090,12 @@ fn score_reports_serialize_as_pinned() {
     let t2 = "01900000-0000-7000-8000-000000000002";
 
     let mut scorer = CandidateScorer::new(&candidate).unwrap();
-    scorer.observe(&flagged, &empty, t1).unwrap();
+    scorer.observe(&flagged, t1).unwrap();
     let report = scorer.into_report();
     assert_golden_bytes("score_report.json", &report);
 
     let mut scorer = CandidateScorer::new(&candidate).unwrap();
-    scorer.observe(&flagged, &empty, t1).unwrap();
+    scorer.observe(&flagged, t1).unwrap();
     // The boundary strings are rendered by the adapter's wire-time
     // authority, as the scorer renders them, so the golden pins the
     // real spelling and not one typed here.
@@ -1105,7 +1105,7 @@ fn score_reports_serialize_as_pinned() {
         resolved_transition_id: t1.to_string(),
         resolved_committed_at: morpholog_postgres::wire_time::render(&split_at),
     });
-    scorer.observe(&empty, &flagged, t2).unwrap();
+    scorer.observe(&empty, t2).unwrap();
     assert_golden_bytes("score_report_split.json", &scorer.into_report());
 
     let batch = BatchScore {

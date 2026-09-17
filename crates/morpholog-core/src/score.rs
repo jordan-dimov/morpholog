@@ -260,18 +260,15 @@ impl<'p> CandidateScorer<'p> {
         ));
     }
 
-    /// Observe one replayed transition: `pre` is the state before it, `post`
-    /// the state after. Records a fresh violation for any invariant that
-    /// holds on `pre` but not on `post`.
-    pub fn observe(
-        &mut self,
-        post: &State,
-        pre: &State,
-        transition_id: &str,
-    ) -> Result<(), EvalError> {
+    /// Observe one replayed transition: `post` is the state after it.
+    /// Records a fresh violation for any invariant that held after the
+    /// previous transition but not after this one. A candidate that
+    /// reads `pre(...)` was refused at construction, so no pre-state is
+    /// needed and the replay never has to hold two states.
+    pub fn observe(&mut self, post: &State, transition_id: &str) -> Result<(), EvalError> {
         self.transitions += 1;
         for (i, inv) in self.invariants.iter().enumerate() {
-            let post_holds = eval_invariant(inv, post, Some(pre), self.definitions)?;
+            let post_holds = eval_invariant(inv, post, None, self.definitions)?;
             if !post_holds && self.held[i] {
                 self.refused[i].push(transition_id.to_string());
             }
@@ -385,10 +382,10 @@ mod tests {
         let mut scorer = CandidateScorer::new(&program).unwrap();
         // holds -> fails -> fails -> holds -> fails: only the two
         // introducing transitions (t1, t4) count, never the inherited t2.
-        scorer.observe(&flagged(), &empty(), "t1").unwrap();
-        scorer.observe(&flagged(), &flagged(), "t2").unwrap();
-        scorer.observe(&empty(), &flagged(), "t3").unwrap();
-        scorer.observe(&flagged(), &empty(), "t4").unwrap();
+        scorer.observe(&flagged(), "t1").unwrap();
+        scorer.observe(&flagged(), "t2").unwrap();
+        scorer.observe(&empty(), "t3").unwrap();
+        scorer.observe(&flagged(), "t4").unwrap();
         let report = scorer.into_report();
 
         assert_eq!(report.transitions_replayed, 4);
@@ -405,15 +402,15 @@ mod tests {
         // t1 introduces a violation in the train slice; t2 (inherited)
         // never counts; t3 recovers; t4 introduces one in the test
         // slice. The whole-history totals cover both slices.
-        scorer.observe(&flagged(), &empty(), "t1").unwrap();
-        scorer.observe(&flagged(), &flagged(), "t2").unwrap();
+        scorer.observe(&flagged(), "t1").unwrap();
+        scorer.observe(&flagged(), "t2").unwrap();
         scorer.mark_split(SplitBoundaryReport {
             requested: "t2".to_string(),
             resolved_transition_id: "t2".to_string(),
             resolved_committed_at: "2026-01-01T00:00:00Z".to_string(),
         });
-        scorer.observe(&empty(), &flagged(), "t3").unwrap();
-        scorer.observe(&flagged(), &empty(), "t4").unwrap();
+        scorer.observe(&empty(), "t3").unwrap();
+        scorer.observe(&flagged(), "t4").unwrap();
         let report = scorer.into_report();
 
         assert_eq!(report.transitions_replayed, 4);
@@ -441,8 +438,8 @@ mod tests {
     fn a_candidate_that_always_holds_refuses_nothing() {
         let program = no_flag_program();
         let mut scorer = CandidateScorer::new(&program).unwrap();
-        scorer.observe(&empty(), &empty(), "t1").unwrap();
-        scorer.observe(&empty(), &empty(), "t2").unwrap();
+        scorer.observe(&empty(), "t1").unwrap();
+        scorer.observe(&empty(), "t2").unwrap();
         let report = scorer.into_report();
         assert_eq!(report.invariants[0].would_refuse, 0);
         assert!(report.invariants[0].refused_transitions.is_empty());
@@ -456,7 +453,7 @@ mod tests {
             args: vec![EvalValue::Decimal(Decimal::new(9, 0))],
         }]);
         let mut scorer = CandidateScorer::new(&program).unwrap();
-        scorer.observe(&other, &empty(), "t1").unwrap();
+        scorer.observe(&other, "t1").unwrap();
         let report = scorer.into_report();
         assert_eq!(report.invariants[0].would_refuse, 0);
     }

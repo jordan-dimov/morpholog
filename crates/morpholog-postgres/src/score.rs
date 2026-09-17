@@ -81,7 +81,6 @@ fn build_scorer(program: &Program) -> Result<CandidateScorer<'_>, PgError> {
 /// scores cannot diverge.
 fn fold_rows<'a>(
     replay: &mut State,
-    pre_state: &mut State,
     scorer: &mut CandidateScorer,
     rows: impl IntoIterator<Item = &'a AuditRow>,
     split: &mut Option<PendingSplit>,
@@ -94,9 +93,7 @@ fn fold_rows<'a>(
             scorer.mark_split(pending.report);
         }
         replay.apply(&row.asserted_claims, &row.retracted_claims);
-        let post_state = replay.clone();
-        scorer.observe(&post_state, pre_state, &row.transition_id.to_string())?;
-        *pre_state = post_state;
+        scorer.observe(replay, &row.transition_id.to_string())?;
     }
     Ok(())
 }
@@ -130,7 +127,6 @@ pub async fn score_candidate(
         None => None,
     };
     let mut replay = State::default();
-    let mut pre_state = State::from_claims(Vec::new());
 
     let mut cursor = None;
     loop {
@@ -138,13 +134,7 @@ pub async fn score_candidate(
         if page.is_empty() {
             break;
         }
-        fold_rows(
-            &mut replay,
-            &mut pre_state,
-            &mut scorer,
-            &page,
-            &mut pending,
-        )?;
+        fold_rows(&mut replay, &mut scorer, &page, &mut pending)?;
         if let Some(last) = page.last() {
             cursor = Some((last.committed_at, last.transition_id));
         }
@@ -217,8 +207,7 @@ pub fn score_candidate_against_pack(
     };
 
     let mut replay = State::default();
-    let mut pre_state = State::from_claims(Vec::new());
-    fold_rows(&mut replay, &mut pre_state, &mut scorer, rows, &mut pending)?;
+    fold_rows(&mut replay, &mut scorer, rows, &mut pending)?;
     if let Some(p) = pending.take() {
         scorer.mark_split(p.report);
     }
