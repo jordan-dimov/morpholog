@@ -28,7 +28,6 @@ mod compiled;
 mod compiled_differential;
 mod derived;
 mod error;
-mod hex;
 mod keys;
 mod merkle;
 mod migrations;
@@ -48,9 +47,7 @@ mod verify;
 mod witnesses;
 
 // Re-export the full public surface so `morpholog_postgres::X` paths are unchanged.
-pub use actor_policy::{
-    AUTHORITY_PREDICATE, PolicyDeclarationError, RESTRICTED_PREDICATE, validate_declarations,
-};
+pub use actor_policy::{PolicyDeclarationError, validate_declarations};
 pub use as_of::{
     list_claims_at, list_claims_at_for_predicates, reconstruct_state_at,
     resolve_transition_at_or_before,
@@ -104,9 +101,9 @@ pub use score::{
     SplitBoundary, score_candidate, score_candidate_against_pack, score_candidate_against_packs,
 };
 pub use signing::{
-    SigningError, TreeHead, generate_signing_key, parse_public_key, parse_signature,
-    render_public_key, render_signature, sign_tree_head, signing_key_from_pem, signing_key_to_pem,
-    tree_head_signing_bytes, tree_head_witness_bytes, verify_tree_head,
+    SigningError, TreeHead, generate_signing_key, parse_public_key, render_public_key,
+    render_signature, sign_tree_head, signing_key_from_pem, signing_key_to_pem,
+    tree_head_witness_bytes,
 };
 pub use transact::{AtomicAct, PgAtomicOutcome, propose_all_against_pg};
 pub use verify::{

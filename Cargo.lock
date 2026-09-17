@@ -1273,6 +1273,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "ed25519-dalek",
+ "hex",
  "jiff",
  "morpholog-core",
  "morpholog-examples",

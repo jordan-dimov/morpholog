@@ -29,6 +29,7 @@ sqlx = { version = "0.9", default-features = false, features = ["postgres", "run
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 thiserror = "2"
 sha2 = "0.11"
+hex = "0.4"
 num-bigint = "0.5"
 ed25519-dalek = { version = "3", features = ["pkcs8", "pem"] }
 pkcs8 = { version = "0.11", features = ["pem", "alloc"] }

@@ -747,7 +747,7 @@ pub fn compute_idempotency_key(
     hasher.update(intent.name.as_str().as_bytes());
     hasher.update(b"\0");
     hasher.update(&args_bytes);
-    Ok(crate::hex::encode(&hasher.finalize()))
+    Ok(hex::encode(&hasher.finalize()))
 }
 
 // ===========================================================================

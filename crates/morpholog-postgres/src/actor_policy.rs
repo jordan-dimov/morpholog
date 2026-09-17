@@ -49,10 +49,10 @@ use crate::error::classify_checked_query;
 
 /// The policy claim: this actor may only be asserted by an authorised
 /// login role.
-pub const RESTRICTED_PREDICATE: &str = "ActorAssertionRestricted";
+pub(crate) const RESTRICTED_PREDICATE: &str = "ActorAssertionRestricted";
 
 /// The grant claim: this login role may assert this actor.
-pub const AUTHORITY_PREDICATE: &str = "ActorAssertionAuthority";
+pub(crate) const AUTHORITY_PREDICATE: &str = "ActorAssertionAuthority";
 
 /// A declaration of a reserved name that the runtime cannot recognise.
 ///
