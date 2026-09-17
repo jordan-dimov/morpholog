@@ -57,16 +57,18 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_core::{
-    CompiledProgram, EvalValue, State, Subject, Transformation, Transition, enumerate_derived,
-    predicates_referenced_by_derived,
+    ClaimInstance, CompiledProgram, EvalValue, Outcome, State, Subject, Transformation, Transition,
+    enumerate_derived, predicates_referenced_by_derived, propose,
 };
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    PgAtomicOutcome, PgError, PgPool, PgProposalOutcome, Proposal, list_claims_for_predicates,
-    list_derived_at, propose_against_pg, propose_all_against_pg, reconstruct_state_at,
+    PgAtomicOutcome, PgError, PgPool, PgProposalOutcome, Proposal, coverage_replay,
+    list_claims_for_predicates, list_derived_at, propose_against_pg, propose_against_pg_timed,
+    propose_all_against_pg, reconstruct_state_at, score_candidate,
 };
 use rust_decimal::Decimal;
 use sqlx::postgres::PgPoolOptions;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -127,6 +129,21 @@ enum Command {
     /// for how argument count moves write and read cost.
     Wide(WideArgs),
 
+    /// The kernel alone, no database: build an in-memory ledger of N
+    /// entries, then time one proposal with the ledger's invariants,
+    /// the same proposal with none (body and candidate build; the
+    /// difference is invariant evaluation), and a run of sequential
+    /// acts each proposed against the candidate the act before it
+    /// produced - the in-process core of `transact`. Not destructive;
+    /// needs no `--reset`.
+    Kernel(KernelArgs),
+
+    /// Fabricate N audit transitions (the `as-of` fixture), then time
+    /// the two replays that walk the whole log: `inspect coverage` and
+    /// `evaluate` of the ledger programme against itself - the
+    /// audit-analysis arc's cost.
+    Replay(ReplayArgs),
+
     /// Run the frozen canonical case matrix across per-case ladders and
     /// print one table (markdown by default; `--format json` for
     /// machine comparison). This is the whole-suite evidence a
@@ -134,6 +151,59 @@ enum Command {
     /// discipline. Sequential and destructive; the full ladder takes
     /// tens of minutes on today's interpreted runtime.
     Suite(SuiteArgs),
+
+    /// Compare two `suite --format json` reports from the same ruler:
+    /// one row per case metric with the before and after steady
+    /// medians and their ratio, as the table a performance PR carries.
+    /// Refuses reports whose suite contracts differ.
+    Compare(CompareArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct KernelArgs {
+    /// Number of journal entries in the in-memory book (three claims
+    /// each, as the database fixtures lay them out).
+    n: usize,
+
+    /// Sequential acts in the batch run, each against the candidate the
+    /// act before it produced.
+    #[arg(long, default_value_t = 370)]
+    acts: usize,
+
+    /// Timed repetitions.
+    #[arg(long, default_value_t = 5)]
+    repeat: usize,
+}
+
+#[derive(clap::Args, Debug)]
+struct ReplayArgs {
+    /// Number of audit transitions to fabricate, as for `as-of`.
+    n: usize,
+
+    /// Percentage (0-50) of transitions that retract an earlier
+    /// transition's claims, as for `as-of`.
+    #[arg(long, default_value_t = 0)]
+    retract_fraction: usize,
+
+    /// Timed repetitions.
+    #[arg(long, default_value_t = 3)]
+    repeat: usize,
+
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
+
+    /// Required: acknowledge that the target database is truncated.
+    #[arg(long)]
+    reset: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct CompareArgs {
+    /// The baseline report (`suite --format json` output).
+    before: PathBuf,
+    /// The candidate report, from the same ruler.
+    after: PathBuf,
 }
 
 #[derive(clap::Args, Debug)]
@@ -502,6 +572,9 @@ async fn main() -> Result<()> {
         Command::Wide(args) => run_wide(args).await,
         Command::Transact(args) => run_transact(args).await,
         Command::Suite(args) => run_suite(args).await,
+        Command::Kernel(args) => run_kernel(args),
+        Command::Replay(args) => run_replay(args).await,
+        Command::Compare(args) => run_compare(&args),
     }
 }
 
@@ -517,7 +590,7 @@ const IMPLEMENTATION: &str = "interpreted";
 /// ladders, aggregation) - never by an implementation being measured.
 /// The distinction between changing the machine and changing the
 /// ruler; see docs/benchmarking.md.
-const SUITE_CONTRACT: u32 = 1;
+const SUITE_CONTRACT: u32 = 2;
 
 /// One measured metric of one case: named, unit-tagged samples in
 /// repeat order. `samples[0]` is the `first` reading - deliberately
@@ -553,18 +626,24 @@ impl Metric {
     }
 
     fn steady_median(&self) -> Option<f64> {
-        let mut rest: Vec<f64> = self.samples.get(1..).unwrap_or(&[]).to_vec();
-        if rest.is_empty() {
-            return None;
-        }
-        rest.sort_by(f64::total_cmp);
-        let mid = rest.len() / 2;
-        Some(if rest.len() % 2 == 1 {
-            rest[mid]
-        } else {
-            (rest[mid - 1] + rest[mid]) / 2.0
-        })
+        steady_median(&self.samples)
     }
+}
+
+/// The median over every sample but the first, which is the `first`
+/// reading; `None` when there is nothing after it.
+fn steady_median(samples: &[f64]) -> Option<f64> {
+    let mut rest: Vec<f64> = samples.get(1..).unwrap_or(&[]).to_vec();
+    if rest.is_empty() {
+        return None;
+    }
+    rest.sort_by(f64::total_cmp);
+    let mid = rest.len() / 2;
+    Some(if rest.len() % 2 == 1 {
+        rest[mid]
+    } else {
+        (rest[mid - 1] + rest[mid]) / 2.0
+    })
 }
 
 /// One canonical case at one ladder point - what the suite table
@@ -640,6 +719,10 @@ async fn measure_write(
         .map_err(|e| anyhow!("invalid programme: {e:?}"))?;
     let mut fixture = Vec::with_capacity(repeat);
     let mut propose = Vec::with_capacity(repeat);
+    let mut begin = Vec::with_capacity(repeat);
+    let mut load = Vec::with_capacity(repeat);
+    let mut kernel = Vec::with_capacity(repeat);
+    let mut finalise = Vec::with_capacity(repeat);
     for r in 0..repeat {
         let t = Instant::now();
         reset_db(pool).await?;
@@ -661,10 +744,15 @@ async fn measure_write(
             actor: Subject::from("bench"),
         };
         let t = Instant::now();
-        let outcome = propose_against_pg(pool, &compiled, &Proposal::gateway(&transition))
+        let timed = propose_against_pg_timed(pool, &compiled, &Proposal::gateway(&transition))
             .await
-            .context("propose_against_pg")?;
+            .context("propose_against_pg_timed")?;
         propose.push(t.elapsed());
+        begin.push(timed.phases.begin);
+        load.push(timed.phases.load);
+        kernel.push(timed.phases.kernel);
+        finalise.push(timed.phases.finalise);
+        let outcome = timed.outcome;
         if !matches!(outcome, PgProposalOutcome::Committed { .. }) {
             return Err(anyhow!(
                 "expected the target propose to commit ({}); bench fixture or \
@@ -681,8 +769,347 @@ async fn measure_write(
         metrics: vec![
             Metric::ms("fixture_build", &fixture),
             Metric::ms("propose_one", &propose),
+            Metric::ms("phase_begin_tx", &begin),
+            Metric::ms("phase_load_state", &load),
+            Metric::ms("phase_kernel", &kernel),
+            Metric::ms("phase_finalise", &finalise),
         ],
     })
+}
+
+/// The ledger book the database fixtures lay out, built in memory: one
+/// JournalEntry and two JournalLines per entry, across two accounts.
+fn in_memory_book(n: usize) -> Vec<ClaimInstance> {
+    let mut claims = Vec::with_capacity(3 * n);
+    for i in 0..n {
+        let entry = subj(&format!("bench_entry_{i}"));
+        claims.push(ClaimInstance {
+            predicate: "JournalEntry".into(),
+            args: vec![entry.clone(), subj("d_2026_05_17"), subj("p_bench")],
+        });
+        claims.push(ClaimInstance {
+            predicate: "JournalLine".into(),
+            args: vec![
+                entry.clone(),
+                subj(&format!("account_{}", i % 2)),
+                dec(100),
+                dec(0),
+            ],
+        });
+        claims.push(ClaimInstance {
+            predicate: "JournalLine".into(),
+            args: vec![
+                entry,
+                subj(&format!("account_{}", (i + 1) % 2)),
+                dec(0),
+                dec(100),
+            ],
+        });
+    }
+    claims
+}
+
+fn ledger_posting(entry: &str) -> Transition {
+    Transition {
+        transformation_name: double_entry_ledger::post_simple_entry().name.clone(),
+        args: vec![
+            subj(entry),
+            subj("d_2026_05_17"),
+            subj("p_bench"),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(42),
+        ],
+        actor: Subject::from("bench"),
+    }
+}
+
+fn must_commit(outcome: Outcome, what: &str) -> Result<State> {
+    match outcome {
+        Outcome::Accepted {
+            candidate_state, ..
+        } => Ok(candidate_state),
+        Outcome::Rejected { reason } => Err(anyhow!("{what} was refused: {reason}")),
+    }
+}
+
+/// The kernel alone over an in-memory book of `n` entries: the state
+/// build, one proposal with the ledger's invariants, the same proposal
+/// with none (the transformation body and the candidate build, so the
+/// difference is what invariant evaluation costs), and `acts`
+/// sequential proposals each against the candidate the act before it
+/// produced.
+fn measure_kernel(case: &str, n: usize, acts: usize, repeat: usize) -> Result<CaseResult> {
+    let transformation = double_entry_ledger::post_simple_entry();
+    let invariants = double_entry_ledger::all_invariants();
+    let definitions = double_entry_ledger::definitions();
+    let claims = in_memory_book(n);
+    let mut build = Vec::with_capacity(repeat);
+    let mut one = Vec::with_capacity(repeat);
+    let mut no_invariants = Vec::with_capacity(repeat);
+    let mut sequential = Vec::with_capacity(repeat);
+    for _ in 0..repeat {
+        let input = claims.clone();
+        let t = Instant::now();
+        let pre = State::from_claims(input);
+        build.push(t.elapsed());
+
+        let target = ledger_posting("bench_target");
+        let t = Instant::now();
+        must_commit(
+            propose(&transformation, &target, &pre, &invariants, &definitions)?,
+            "the target proposal",
+        )?;
+        one.push(t.elapsed());
+
+        let t = Instant::now();
+        must_commit(
+            propose(&transformation, &target, &pre, &[], &definitions)?,
+            "the proposal without invariants",
+        )?;
+        no_invariants.push(t.elapsed());
+
+        let batch: Vec<Transition> = (0..acts)
+            .map(|i| ledger_posting(&format!("bench_act_{i}")))
+            .collect();
+        let t = Instant::now();
+        let mut state = pre;
+        for act in &batch {
+            state = must_commit(
+                propose(&transformation, act, &state, &invariants, &definitions)?,
+                "a sequential act",
+            )?;
+        }
+        sequential.push(t.elapsed());
+    }
+    Ok(CaseResult {
+        case: case.to_string(),
+        implementation: IMPLEMENTATION,
+        axis: "n",
+        point: n as u64,
+        metrics: vec![
+            Metric::ms("state_build", &build),
+            Metric::ms("propose_one", &one),
+            Metric::ms("propose_no_invariants", &no_invariants),
+            Metric::ms("acts_sequential", &sequential),
+        ],
+    })
+}
+
+fn run_kernel(args: KernelArgs) -> Result<()> {
+    require_positive_repeat(args.repeat)?;
+    println!(
+        "scenario=kernel n={} acts={} repeat={}",
+        args.n, args.acts, args.repeat
+    );
+    let result = measure_kernel("kernel", args.n, args.acts, args.repeat)?;
+    print_case_human(&result);
+    Ok(())
+}
+
+/// The two replays that walk the whole audit log, over the `as-of`
+/// fixture: coverage and candidate scoring of the ledger programme.
+async fn measure_replay(
+    pool: &PgPool,
+    case: &str,
+    n: usize,
+    retract_fraction: usize,
+    repeat: usize,
+) -> Result<CaseResult> {
+    let program = double_entry_ledger::program();
+    let retract_stride = retract_stride_for(retract_fraction);
+    let t = Instant::now();
+    reset_db(pool).await?;
+    fabricate_audit_rows(pool, n, retract_stride).await?;
+    let fixture = t.elapsed();
+    analyze_audit(pool).await?;
+
+    let mut coverage = Vec::with_capacity(repeat);
+    let mut evaluate = Vec::with_capacity(repeat);
+    for _ in 0..repeat {
+        let t = Instant::now();
+        coverage_replay(pool, &program)
+            .await
+            .context("coverage_replay")?;
+        coverage.push(t.elapsed());
+
+        let t = Instant::now();
+        score_candidate(pool, &program, None)
+            .await
+            .context("score_candidate")?;
+        evaluate.push(t.elapsed());
+    }
+    Ok(CaseResult {
+        case: case.to_string(),
+        implementation: IMPLEMENTATION,
+        axis: "n",
+        point: n as u64,
+        metrics: vec![
+            Metric::ms("fixture_build", &[fixture]),
+            Metric::ms("coverage_replay", &coverage),
+            Metric::ms("evaluate_replay", &evaluate),
+        ],
+    })
+}
+
+async fn run_replay(args: ReplayArgs) -> Result<()> {
+    check_reset_ack(args.reset, &args.database_url)?;
+    require_positive_repeat(args.repeat)?;
+    if args.retract_fraction > 50 {
+        return Err(anyhow!("--retract-fraction must be between 0 and 50"));
+    }
+    let pool = connect(&args.database_url).await?;
+    println!(
+        "scenario=replay n={} retract_fraction={} repeat={}",
+        args.n, args.retract_fraction, args.repeat
+    );
+    let result =
+        measure_replay(&pool, "replay", args.n, args.retract_fraction, args.repeat).await?;
+    print_case_human(&result);
+    Ok(())
+}
+
+/// A suite report as read back from `--format json`: the same shape
+/// `SuiteReport` writes, owned, so two runs can be set side by side.
+#[derive(Debug, serde::Deserialize)]
+struct ReadReport {
+    suite_contract: u32,
+    implementation: String,
+    ladder: String,
+    cases: Vec<ReadCase>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ReadCase {
+    case: String,
+    axis: String,
+    point: u64,
+    metrics: Vec<ReadMetric>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ReadMetric {
+    name: String,
+    unit: String,
+    samples: Vec<f64>,
+}
+
+fn read_report(path: &std::path::Path) -> Result<ReadReport> {
+    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_slice(&bytes)
+        .with_context(|| format!("parsing {} as a suite report", path.display()))
+}
+
+/// Every metric of both reports, keyed by case, axis, point, metric,
+/// and unit: a key both sides have is a ratio row; a key only one side
+/// has is listed after the table, so a changed plan cannot pass as a
+/// changed number. Two rulers, two ladders, or one metric in two units
+/// are errors, not rows.
+fn render_compare(before: &ReadReport, after: &ReadReport) -> Result<String> {
+    if before.suite_contract != after.suite_contract {
+        return Err(anyhow!(
+            "the reports were measured with different rulers: suite_contract {} and {}",
+            before.suite_contract,
+            after.suite_contract
+        ));
+    }
+    if before.ladder != after.ladder {
+        return Err(anyhow!(
+            "the reports ran different ladders: {} and {}",
+            before.ladder,
+            after.ladder
+        ));
+    }
+    type Key = (String, String, u64, String);
+    let index =
+        |report: &ReadReport| -> Result<std::collections::BTreeMap<Key, (String, Option<f64>)>> {
+            let mut out = std::collections::BTreeMap::new();
+            for case in &report.cases {
+                for m in &case.metrics {
+                    let key = (
+                        case.case.clone(),
+                        case.axis.clone(),
+                        case.point,
+                        m.name.clone(),
+                    );
+                    let reading = steady_median(&m.samples).or_else(|| m.samples.first().copied());
+                    if out.insert(key.clone(), (m.unit.clone(), reading)).is_some() {
+                        return Err(anyhow!(
+                            "a report carries {} {} {} {} twice",
+                            key.0,
+                            key.1,
+                            key.2,
+                            key.3
+                        ));
+                    }
+                }
+            }
+            Ok(out)
+        };
+    let (b, a) = (index(before)?, index(after)?);
+    let mut out = String::new();
+    out.push_str(&format!(
+        "suite_contract={} ladder={} before={} after={}\n\n",
+        before.suite_contract, before.ladder, before.implementation, after.implementation
+    ));
+    out.push_str("| case | axis | point | metric | before | after | after/before | unit |\n");
+    out.push_str("|---|---|--:|---|--:|--:|--:|---|\n");
+    let mut unmatched = Vec::new();
+    for (key, (unit, before_reading)) in &b {
+        let Some((after_unit, after_reading)) = a.get(key) else {
+            unmatched.push(format!(
+                "before only: {} {} {} {} ({unit})",
+                key.0, key.1, key.2, key.3
+            ));
+            continue;
+        };
+        if after_unit != unit {
+            return Err(anyhow!(
+                "{} {} {} {} is measured in {unit} before and {after_unit} after: a changed unit is a changed ruler",
+                key.0,
+                key.1,
+                key.2,
+                key.3
+            ));
+        }
+        let ratio = match (before_reading, after_reading) {
+            (Some(b), Some(a)) if *b > 0.0 => format!("{:.2}", a / b),
+            _ => "-".to_string(),
+        };
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            key.0,
+            key.1,
+            key.2,
+            key.3,
+            format_sample(*before_reading),
+            format_sample(*after_reading),
+            ratio,
+            unit
+        ));
+    }
+    for (key, (unit, _)) in &a {
+        if !b.contains_key(key) {
+            unmatched.push(format!(
+                "after only: {} {} {} {} ({unit})",
+                key.0, key.1, key.2, key.3
+            ));
+        }
+    }
+    if !unmatched.is_empty() {
+        out.push('\n');
+        for line in unmatched {
+            out.push_str(&format!("- {line}\n"));
+        }
+    }
+    Ok(out)
+}
+
+fn run_compare(args: &CompareArgs) -> Result<()> {
+    let before = read_report(&args.before)?;
+    let after = read_report(&args.after)?;
+    print!("{}", render_compare(&before, &after)?);
+    Ok(())
 }
 
 /// A scenario's pool, on the URL's implied user like every other
@@ -1922,6 +2349,18 @@ const CASE_PROVENANCE: &[(&str, &str)] = &[
          out at 7-ary); /size sweeps rows at arity 13, /arity sweeps the \
          argument count itself",
     ),
+    (
+        "kernel",
+        "the kernel alone, no database: the interpreted core of transact \
+         (an embedder's ~370-act day proposed act by act against the \
+         candidate before it) and the same proposal without invariants, \
+         so the difference is what invariant evaluation costs",
+    ),
+    (
+        "replay",
+        "the audit-analysis arc: coverage and candidate scoring walk the \
+         whole audit log, once per row, over the as-of fixture",
+    ),
 ];
 
 #[derive(Debug, Clone)]
@@ -1954,6 +2393,14 @@ enum CaseKind {
         axis: &'static str,
         n: usize,
         arity: usize,
+    },
+    Kernel {
+        n: usize,
+        acts: usize,
+    },
+    Replay {
+        n: usize,
+        retract_fraction: usize,
     },
 }
 
@@ -2051,6 +2498,17 @@ fn suite_plan(ladder: Ladder) -> Vec<CaseSpec> {
                 axis: "n",
                 n,
                 arity: 13,
+            },
+        });
+        plan.push(CaseSpec {
+            case: "kernel/acts",
+            kind: CaseKind::Kernel { n, acts: 370 },
+        });
+        plan.push(CaseSpec {
+            case: "replay/retract",
+            kind: CaseKind::Replay {
+                n,
+                retract_fraction: 50,
             },
         });
     }
@@ -2175,6 +2633,11 @@ async fn run_case(pool: &PgPool, spec: &CaseSpec, repeat: usize) -> Result<CaseR
         CaseKind::Wide { axis, n, arity } => {
             measure_wide(pool, spec.case, axis, *n, *arity, repeat).await
         }
+        CaseKind::Kernel { n, acts } => measure_kernel(spec.case, *n, *acts, repeat),
+        CaseKind::Replay {
+            n,
+            retract_fraction,
+        } => measure_replay(pool, spec.case, *n, *retract_fraction, repeat).await,
     }
 }
 
@@ -2521,6 +2984,67 @@ mod smoke {
         std::env::var("DATABASE_URL").ok().filter(|s| !s.is_empty())
     }
 
+    /// The compare table pairs rows by case, axis, point, and metric,
+    /// reads the steady median (the first sample when there is only
+    /// one), and refuses two rulers.
+    #[test]
+    fn compare_pairs_rows_and_refuses_different_rulers() {
+        let report = |contract: u32, ladder: &str, unit: &str, samples: Vec<f64>| ReadReport {
+            suite_contract: contract,
+            implementation: "interpreted".to_string(),
+            ladder: ladder.to_string(),
+            cases: vec![ReadCase {
+                case: "write/base".to_string(),
+                axis: "n".to_string(),
+                point: 100,
+                metrics: vec![ReadMetric {
+                    name: "propose_one".to_string(),
+                    unit: unit.to_string(),
+                    samples,
+                }],
+            }],
+        };
+        let before = report(SUITE_CONTRACT, "quick", "ms", vec![9.0, 4.0, 2.0, 3.0]);
+        let mut after = report(SUITE_CONTRACT, "quick", "ms", vec![5.0, 1.5]);
+        after.cases[0].metrics.push(ReadMetric {
+            name: "phase_kernel".to_string(),
+            unit: "ms".to_string(),
+            samples: vec![1.0],
+        });
+        after.cases.push(ReadCase {
+            case: "kernel/acts".to_string(),
+            axis: "n".to_string(),
+            point: 100,
+            metrics: vec![ReadMetric {
+                name: "acts_sequential".to_string(),
+                unit: "ms".to_string(),
+                samples: vec![2.0],
+            }],
+        });
+        let table = render_compare(&before, &after).unwrap();
+        assert!(
+            table.contains("| write/base | n | 100 | propose_one | 3.00 | 1.50 | 0.50 | ms |"),
+            "{table}"
+        );
+        // A metric only the candidate has is named, inside a shared case
+        // and in a case of its own, with its axis.
+        assert!(
+            table.contains("- after only: write/base n 100 phase_kernel (ms)"),
+            "{table}"
+        );
+        assert!(
+            table.contains("- after only: kernel/acts n 100 acts_sequential (ms)"),
+            "{table}"
+        );
+
+        let other_ruler = report(SUITE_CONTRACT + 1, "quick", "ms", vec![1.0]);
+        assert!(render_compare(&before, &other_ruler).is_err());
+        let other_ladder = report(SUITE_CONTRACT, "full", "ms", vec![1.0]);
+        assert!(render_compare(&before, &other_ladder).is_err());
+        let other_unit = report(SUITE_CONTRACT, "quick", "s", vec![1.0]);
+        assert!(render_compare(&before, &other_unit).is_err());
+    }
+
     #[tokio::test]
     async fn scenarios_smoke() {
         let Some(url) = db_url() else {
@@ -2681,6 +3205,17 @@ mod smoke {
                     arity: 4,
                 },
             },
+            CaseSpec {
+                case: "kernel/acts",
+                kind: CaseKind::Kernel { n: 2, acts: 2 },
+            },
+            CaseSpec {
+                case: "replay/retract",
+                kind: CaseKind::Replay {
+                    n: 2,
+                    retract_fraction: 50,
+                },
+            },
         ];
         let cases = run_suite_specs(&pool, &plan, 2)
             .await
@@ -2739,7 +3274,7 @@ mod smoke {
             }],
         };
         let rendered = render_markdown(&report);
-        assert!(rendered.contains("suite_contract=1"));
+        assert!(rendered.contains(&format!("suite_contract={SUITE_CONTRACT}")));
         assert!(rendered.contains("requested_repeat=3"));
         // The flags travel with the number.
         assert!(rendered.contains("- `write/base` Write { n: 100, accounts: 2, noise: 0 }"));
@@ -2760,13 +3295,13 @@ mod smoke {
         assert!(!rendered.contains("benchmark-grade=false"));
     }
 
-    /// The frozen-matrix tripwire: `suite_contract=1` pins these
+    /// The frozen-matrix tripwire: `suite_contract=2` pins these
     /// fingerprints of the canonical plans. Touching `suite_plan`
     /// without bumping the contract (in its own reviewed commit) goes
     /// red here - the ruler cannot change as one innocent parameter
     /// buried in a diff.
     #[test]
-    fn the_canonical_matrix_is_frozen_under_contract_1() {
+    fn the_canonical_matrix_is_frozen_under_contract_2() {
         use sha2::{Digest, Sha256};
         let fingerprint = |ladder: Ladder| {
             let canonical: String = suite_plan(ladder)
@@ -2780,15 +3315,15 @@ mod smoke {
                 out
             })
         };
-        assert_eq!(SUITE_CONTRACT, 1, "bumping the contract re-pins these");
+        assert_eq!(SUITE_CONTRACT, 2, "bumping the contract re-pins these");
         assert_eq!(
             fingerprint(Ladder::Quick),
-            "232c3844b052140fbbefab3a568cf148f1f46b2627fe5886a5a6e3fc09d45bfa",
+            "ffd974c7fe2fa3624d92e3a94b2b8df3d43f3dd3a2e197483e66edbef369cb37",
             "the quick matrix changed without a contract bump"
         );
         assert_eq!(
             fingerprint(Ladder::Full),
-            "511cf3837651e1fdc8e5449d3462d4057e774bc87c45c84a687c1b754635b24e",
+            "d2fecec898de1d87f0ff08817f92da0867b552d78e229425bc56b1a3671a7a24",
             "the full matrix changed without a contract bump"
         );
     }
