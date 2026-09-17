@@ -46,7 +46,7 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
                 .collect(),
             file: args.file.display().to_string(),
         };
-        println!("{}", serde_json::to_string_pretty(&payload)?);
+        print_json(&payload)?;
     } else {
         for f in &collected.findings {
             match (&f.diagnostic, &f.foreign) {

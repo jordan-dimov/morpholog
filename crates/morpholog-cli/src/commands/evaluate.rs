@@ -10,12 +10,15 @@ use std::path::Path;
 use anyhow::Context;
 use morpholog_core::{BatchScore, CandidateScore, Program, invariants_using_pre};
 use morpholog_postgres::{
-    Checkpoint, EvidencePack, SplitBoundary, score_candidate, score_candidate_against_pack,
+    EvidencePack, SplitBoundary, score_candidate, score_candidate_against_pack,
     score_candidate_against_packs,
 };
 
 use crate::EvaluateArgs;
-use crate::commands::{AlreadyReported, connect, parse_or_report, print_json, validate_or_report};
+use crate::commands::{
+    AlreadyReported, connect, parse_or_report, print_json, read_anchor, read_json,
+    validate_or_report,
+};
 
 pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
@@ -69,19 +72,16 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
     print_json(&report)
 }
 
-/// Parse a `--train-until` boundary: a transition id first, else an
-/// RFC 3339 timestamp.
+/// A `--train-until` boundary is spelled exactly like `--as-of`: a
+/// transition id, else an RFC 3339 timestamp.
 fn parse_boundary(raw: &str) -> anyhow::Result<SplitBoundary> {
-    if let Ok(id) = raw.parse::<uuid::Uuid>() {
-        return Ok(SplitBoundary::Transition(id));
-    }
-    let at = raw.parse::<chrono::DateTime<chrono::Utc>>().map_err(|e| {
-        anyhow::anyhow!(
-            "--train-until takes a transition id or an RFC 3339 timestamp \
-             (e.g. 2026-07-01T00:00:00Z); `{raw}` parses as neither: {e}"
-        )
-    })?;
-    Ok(SplitBoundary::AtOrBefore(at))
+    let as_of: crate::AsOf = raw
+        .parse()
+        .map_err(|e| anyhow::anyhow!("--train-until: {e}"))?;
+    Ok(match as_of {
+        crate::AsOf::Transition(id) => SplitBoundary::Transition(id),
+        crate::AsOf::AtOrBefore(at) => SplitBoundary::AtOrBefore(at),
+    })
 }
 
 /// Score the candidate against every `*.json` evidence pack in `dir`, in one
@@ -112,11 +112,7 @@ fn score_against_packs(program: &Program, dir: &Path) -> anyhow::Result<BatchSco
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let bytes = std::fs::read(path)
-                .with_context(|| format!("reading pack file {}", path.display()))?;
-            let pack: EvidencePack = serde_json::from_slice(&bytes).with_context(|| {
-                format!("parsing pack file {} as an evidence pack", path.display())
-            })?;
+            let pack: EvidencePack = read_json(path, "pack", "an evidence pack")?;
             Ok((name, pack))
         })
         .collect::<anyhow::Result<_>>()?;
@@ -136,25 +132,8 @@ fn score_against_pack(
     anchor_path: Option<&Path>,
     split: Option<SplitBoundary>,
 ) -> anyhow::Result<CandidateScore> {
-    let bytes = std::fs::read(pack_path)
-        .with_context(|| format!("reading pack file {}", pack_path.display()))?;
-    let pack: EvidencePack = serde_json::from_slice(&bytes).with_context(|| {
-        format!(
-            "parsing pack file {} as an evidence pack",
-            pack_path.display()
-        )
-    })?;
-
-    let anchor: Option<Checkpoint> = match anchor_path {
-        Some(path) => {
-            let bytes = std::fs::read(path)
-                .with_context(|| format!("reading anchor file {}", path.display()))?;
-            Some(serde_json::from_slice(&bytes).with_context(|| {
-                format!("parsing anchor file {} as a checkpoint", path.display())
-            })?)
-        }
-        None => None,
-    };
+    let pack: EvidencePack = read_json(pack_path, "pack", "an evidence pack")?;
+    let anchor = read_anchor(anchor_path)?;
 
     score_candidate_against_pack(program, &pack, anchor.as_ref(), split)
         .context("scoring against the evidence pack failed")

@@ -3,13 +3,13 @@
 
 use anyhow::Context;
 use morpholog_postgres::{
-    Checkpoint, SignaturePolicy, TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification,
+    SignaturePolicy, TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification,
     WitnessAnchors, WitnessesReport, parse_public_key, render_public_key,
     verify_audit_tree_with_chain, verify_replay, verify_views, witnesses_report,
 };
 
 use crate::VerifyArgs;
-use crate::commands::{AlreadyReported, connect, print_json};
+use crate::commands::{AlreadyReported, connect, print_json, read_anchor};
 
 /// Run `audit verify`: replay (claims vs audit), then the tamper-evidence
 /// check (recompute the audit Merkle root against each checkpoint, and
@@ -21,16 +21,7 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
 
     let replay = verify_replay(&pool).await.context("verify_replay failed")?;
 
-    let anchor: Option<Checkpoint> = match &args.anchor_file {
-        Some(path) => {
-            let bytes = std::fs::read(path)
-                .with_context(|| format!("reading anchor file {}", path.display()))?;
-            Some(serde_json::from_slice(&bytes).with_context(|| {
-                format!("parsing anchor file {} as a checkpoint", path.display())
-            })?)
-        }
-        None => None,
-    };
+    let anchor = read_anchor(args.anchor_file.as_deref())?;
     // The verifier's signature policy rides inside the same snapshot the
     // intrinsic verdict is computed from, over the chain it just proved.
     let policy = signature_policy(

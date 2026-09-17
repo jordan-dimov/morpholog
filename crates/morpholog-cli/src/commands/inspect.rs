@@ -17,7 +17,7 @@ use crate::commands::filter::FieldFilter;
 use morpholog_postgres::ClaimFilter;
 
 use crate::commands::{
-    compile_or_report, connect, parse_or_report, print_json, validate_or_report,
+    compile_or_report, connect, emit, parse_or_report, print_json, validate_or_report,
 };
 use crate::{AsOf, Inspect};
 
@@ -293,12 +293,9 @@ async fn inspect_coverage(args: crate::InspectCoverageArgs) -> anyhow::Result<()
     let report = morpholog_postgres::coverage_replay(&pool, &parsed.program)
         .await
         .context("coverage_replay failed")?;
-    if args.json {
-        print_json(&report)
-    } else {
-        println!("{}", morpholog_core::render_coverage(&report));
-        Ok(())
-    }
+    emit(args.json, &report, || {
+        morpholog_core::render_coverage(&report)
+    })
 }
 
 /// The declared predicate names of a programme, comma-joined for the
@@ -441,12 +438,9 @@ fn inspect_controls(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
     let compiled = compile_or_report(&parsed)?;
     let matrix = morpholog_core::controls(&compiled);
-    if args.json {
-        print_json(&matrix)
-    } else {
-        println!("{}", morpholog_core::render_controls(&matrix));
-        Ok(())
-    }
+    emit(args.json, &matrix, || {
+        morpholog_core::render_controls(&matrix)
+    })
 }
 
 /// Show what a parsed programme makes impossible: its guarantees, one per
@@ -456,15 +450,9 @@ fn inspect_guarantees(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> 
     let parsed = parse_or_report(&args.file)?;
     let compiled = compile_or_report(&parsed)?;
     let guarantees = morpholog_core::guarantees(&compiled);
-    if args.json {
-        print_json(&guarantees)
-    } else {
-        println!(
-            "{}",
-            morpholog_core::render_guarantees(&compiled.program().name, &guarantees)
-        );
-        Ok(())
-    }
+    emit(args.json, &guarantees, || {
+        morpholog_core::render_guarantees(&compiled.program().name, &guarantees)
+    })
 }
 
 /// Translate resolved filters into the adapter's shape.
