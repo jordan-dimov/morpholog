@@ -70,7 +70,7 @@ use crate::definitions::DefinitionTable;
 use crate::eval::{EvalContext, EvalError, definition_call_frame, find_matches};
 use crate::fold::mentions_pre;
 use crate::ir::{Definition, InvariantOrigin, PredicateName, Program, Prop};
-use crate::lint::collect_implications;
+use crate::lint::implications_of;
 use crate::predicates_referenced_by_prop;
 use crate::state::{Bindings, State};
 
@@ -259,15 +259,8 @@ impl<'p> CoverageTracker<'p> {
             .invariants
             .iter()
             .map(|inv| {
-                let mut implications = Vec::new();
-                collect_implications(
-                    &inv.body,
-                    true,
-                    DefinitionTable::new(&program.definitions),
-                    &mut BTreeSet::new(),
-                    &mut Vec::new(),
-                    &mut implications,
-                );
+                let implications =
+                    implications_of(&inv.body, DefinitionTable::new(&program.definitions));
                 let shape = if implications.is_empty() {
                     Shape::AlwaysOn
                 } else {

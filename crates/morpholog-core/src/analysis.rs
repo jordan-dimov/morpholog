@@ -518,7 +518,10 @@ type Excluder<'a> = (
 #[derive(Default)]
 struct SelectionEvidence<'a> {
     claims: Vec<(&'a PredicateName, BTreeSet<&'a Var>)>,
+    /// Temporal variable pairs normalised to (earlier, later),
+    /// whichever way they were spelled.
     nonstrict: Vec<(&'a Var, &'a Var)>,
+    strict: Vec<(&'a Var, &'a Var)>,
     excluders: Vec<Excluder<'a>>,
 }
 
@@ -614,7 +617,8 @@ fn gather_selection_evidence<'a>(
                 match op {
                     CompareOp::Le => ev.nonstrict.push((l, r)),
                     CompareOp::Ge => ev.nonstrict.push((r, l)),
-                    CompareOp::Lt | CompareOp::Gt => {}
+                    CompareOp::Lt => ev.strict.push((l, r)),
+                    CompareOp::Gt => ev.strict.push((r, l)),
                 }
             }
         }
@@ -634,8 +638,8 @@ fn gather_selection_evidence<'a>(
                 for (predicate, vars) in inner_ev.claims {
                     let mut with_binder = vars;
                     with_binder.insert(binding);
-                    let strict: Vec<(&Var, &Var)> = collect_strict_temporal(body, definitions);
-                    ev.excluders.push((predicate, with_binder, strict));
+                    ev.excluders
+                        .push((predicate, with_binder, inner_ev.strict.clone()));
                 }
             }
         }
@@ -655,55 +659,6 @@ fn gather_selection_evidence<'a>(
         | Prop::Neq(_, _)
         | Prop::In(_, _) => {}
     }
-}
-
-/// The strict temporal variable-pair comparisons in `prop`'s
-/// conjunctive closure (descending `and`, `pre`, and `Defined`).
-fn collect_strict_temporal<'a>(
-    prop: &'a Prop,
-    definitions: DefinitionTable<'a>,
-) -> Vec<(&'a Var, &'a Var)> {
-    fn walk<'a>(
-        prop: &'a Prop,
-        definitions: DefinitionTable<'a>,
-        seen: &mut BTreeSet<DefinitionName>,
-        out: &mut Vec<(&'a Var, &'a Var)>,
-    ) {
-        match prop {
-            Prop::Compare { .. } => {
-                // Normalised to (earlier, later), whichever way spelled.
-                if let Some((op, l, r)) = temporal_var_pair(prop) {
-                    match op {
-                        CompareOp::Lt => out.push((l, r)),
-                        CompareOp::Gt => out.push((r, l)),
-                        CompareOp::Le | CompareOp::Ge => {}
-                    }
-                }
-            }
-            Prop::And(props) => {
-                for p in props {
-                    walk(p, definitions, seen, out);
-                }
-            }
-            Prop::Pre(body) => walk(body, definitions, seen, out),
-            Prop::Defined { name, .. } => definitions.enter(name, seen, |def_, seen| {
-                walk(&def_.body, definitions, seen, out);
-            }),
-            Prop::Claim { .. }
-            | Prop::Not(_)
-            | Prop::Or(_)
-            | Prop::Exists { .. }
-            | Prop::Implies { .. }
-            | Prop::Xor(_, _)
-            | Prop::Forall { .. }
-            | Prop::Eq(_, _)
-            | Prop::Neq(_, _)
-            | Prop::In(_, _) => {}
-        }
-    }
-    let mut out = Vec::new();
-    walk(prop, definitions, &mut BTreeSet::new(), &mut out);
-    out
 }
 
 /// The predicates an invariant body GUARANTEES a dated witness for -
@@ -774,7 +729,7 @@ pub(crate) fn guaranteed_dated_witnesses(
                 let earlier_side: BTreeSet<&Var> = ev
                     .nonstrict
                     .iter()
-                    .chain(collect_strict_temporal(body, definitions).iter())
+                    .chain(ev.strict.iter())
                     .map(|(earlier, _)| *earlier)
                     .collect();
                 // A claim is a dated witness only when one of ITS OWN

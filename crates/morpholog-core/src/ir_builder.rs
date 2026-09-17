@@ -370,18 +370,6 @@ fn first_wildcard(args: &[Term]) -> usize {
         .unwrap_or(args.len())
 }
 
-/// `value_of` with an explicit extraction hole - the named surface
-/// form's shape, where the hole need not be the first wildcard.
-/// `args[extract]` must be a wildcard or validation refuses.
-pub fn value_of_extracting(predicate: &str, args: Vec<Term>, extract: usize) -> ValueExpr {
-    ValueExpr::ValueOf {
-        predicate: predicate.into(),
-        args,
-        extract,
-        default: None,
-    }
-}
-
 // ============================================================
 // Stmt constructors
 // ============================================================

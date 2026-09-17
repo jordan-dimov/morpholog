@@ -305,7 +305,7 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             cx.errors
                 .push(ValidationError::ActorNotAvailable { context });
         }
-        if prop_mentions_pre(&def.body) {
+        if fold::mentions_pre(&def.body) {
             let context = cx.context.clone();
             cx.errors.push(ValidationError::PreNotAvailable { context });
         }
@@ -591,8 +591,7 @@ impl CheckCtx<'_> {
                 // loudly with guidance instead of an Undeclared that
                 // would mislead.
                 if self.definitions.contains_key(predicate.as_str()) {
-                    let context = self.context.clone();
-                    self.errors.push(ValidationError::UnresolvedDefinitionCall {
+                    self.report(|context| ValidationError::UnresolvedDefinitionCall {
                         name: predicate.to_string(),
                         context,
                     });
@@ -731,8 +730,7 @@ impl CheckCtx<'_> {
                         if let InferredKind::Known(actual) = term_kind(other)
                             && !kinds_compatible(&PredicateArgKind::Collection, &actual)
                         {
-                            let context = self.context.clone();
-                            self.errors.push(ValidationError::OperandKindMismatch {
+                            self.report(|context| ValidationError::OperandKindMismatch {
                                 operator: "in",
                                 expected: PredicateArgKind::Collection,
                                 actual,
@@ -833,8 +831,7 @@ impl CheckCtx<'_> {
         if let InferredKind::Known(actual) = inferred
             && !kinds_compatible(&expected, &actual)
         {
-            let context = self.context.clone();
-            self.errors.push(ValidationError::OperandKindMismatch {
+            self.report(|context| ValidationError::OperandKindMismatch {
                 operator,
                 expected,
                 actual,
@@ -913,9 +910,8 @@ impl CheckCtx<'_> {
         if let InferredKind::Known(actual) = inferred
             && !domain.admits(&actual)
         {
-            let context = self.context.clone();
             let suggestion = comparator_suggestion(op, &actual);
-            self.errors.push(ValidationError::OperandKindMismatch {
+            self.report(|context| ValidationError::OperandKindMismatch {
                 operator: compare_token(op, domain),
                 expected: expected.clone(),
                 actual,
@@ -991,9 +987,8 @@ impl CheckCtx<'_> {
         if let InferredKind::Known(actual) = &inferred
             && !OrderedDomain::Decimal.admits(actual)
         {
-            let context = self.context.clone();
             let suggestion = comparator_suggestion(op, actual);
-            self.errors.push(ValidationError::OperandKindMismatch {
+            self.report(|context| ValidationError::OperandKindMismatch {
                 operator: compare_token(op, OrderedDomain::Decimal),
                 expected: PredicateArgKind::Decimal,
                 actual: actual.clone(),
@@ -1049,8 +1044,7 @@ impl CheckCtx<'_> {
                     refine(self, left, specific.clone(), scope);
                     refine(self, right, specific, scope);
                 } else {
-                    let context = self.context.clone();
-                    self.errors.push(ValidationError::OperandKindMismatch {
+                    self.report(|context| ValidationError::OperandKindMismatch {
                         operator,
                         expected: a,
                         actual: b,
@@ -1111,8 +1105,7 @@ impl CheckCtx<'_> {
         let combined = match (left.0, right.0) {
             (InferredKind::Known(l), InferredKind::Known(r)) => {
                 if !kinds_compatible(&l, &r) {
-                    let context = self.context.clone();
-                    self.errors.push(mismatch(l, r, context));
+                    self.report(|context| mismatch(l, r, context));
                     None
                 } else {
                     Some(InferredKind::Known(more_specific(l, r)))
@@ -1226,8 +1219,7 @@ impl CheckCtx<'_> {
                         match arith_result_kind(*op, &a, &b) {
                             Some(kind) => InferredKind::Known(kind),
                             None => {
-                                let context = self.context.clone();
-                                self.errors.push(ValidationError::NoArithRule {
+                                self.report(|context| ValidationError::NoArithRule {
                                     operator,
                                     left: a,
                                     right: b,
@@ -1302,8 +1294,7 @@ impl CheckCtx<'_> {
                             | PredicateArgKind::Duration
                             | PredicateArgKind::Quantity(_)
                     ) {
-                        let context = self.context.clone();
-                        self.errors.push(ValidationError::UnorderedExtremum {
+                        self.report(|context| ValidationError::UnorderedExtremum {
                             op: op.as_str(),
                             actual: actual.clone(),
                             context,
@@ -1345,8 +1336,7 @@ impl CheckCtx<'_> {
                         SumSeed::Quantity(u) => PredicateArgKind::Quantity(u.clone()),
                     };
                     if seed_kind != k {
-                        let context = self.context.clone();
-                        self.errors.push(ValidationError::EmptySumUntyped {
+                        self.report(|context| ValidationError::EmptySumUntyped {
                             target: k.clone(),
                             seed: seed_kind,
                             context,
@@ -1357,8 +1347,7 @@ impl CheckCtx<'_> {
                 if let InferredKind::Known(actual) = resolved
                     && !kinds_compatible(&PredicateArgKind::Decimal, &actual)
                 {
-                    let context = self.context.clone();
-                    self.errors.push(ValidationError::OperandKindMismatch {
+                    self.report(|context| ValidationError::OperandKindMismatch {
                         operator: "sum",
                         expected: PredicateArgKind::Decimal,
                         actual,
@@ -1378,8 +1367,7 @@ impl CheckCtx<'_> {
                 // marks the extracted value, not a binding).
                 self.check_predicate_ref(predicate.as_str(), args, RefMode::Use, scope);
                 if !matches!(args.get(*extract), Some(Term::Wildcard)) {
-                    let context = self.context.clone();
-                    self.errors.push(ValidationError::InvalidValueExtraction {
+                    self.report(|context| ValidationError::InvalidValueExtraction {
                         predicate: predicate.to_string(),
                         extract: *extract,
                         context,
@@ -1397,8 +1385,7 @@ impl CheckCtx<'_> {
                         (result_kind.clone(), default_kind)
                         && !kinds_compatible(&expected, &actual)
                     {
-                        let context = self.context.clone();
-                        self.errors.push(ValidationError::OperandKindMismatch {
+                        self.report(|context| ValidationError::OperandKindMismatch {
                             operator: "value default",
                             expected,
                             actual,
@@ -1417,8 +1404,7 @@ impl CheckCtx<'_> {
             // instead of a cascade about kinds.
             ValueExpr::Call { builtin, args } => {
                 if args.len() != builtin.arity() {
-                    let context = self.context.clone();
-                    self.errors.push(ValidationError::BuiltinArity {
+                    self.report(|context| ValidationError::BuiltinArity {
                         builtin: builtin.name(),
                         expected: builtin.arity(),
                         found: args.len(),
@@ -1458,8 +1444,7 @@ impl CheckCtx<'_> {
                     | PredicateArgKind::Duration),
                 ) => InferredKind::Known(k),
                 InferredKind::Known(kind) => {
-                    let context = self.context.clone();
-                    self.errors.push(ValidationError::AbsKind { kind, context });
+                    self.report(|context| ValidationError::AbsKind { kind, context });
                     InferredKind::UnknownOrAny
                 }
                 InferredKind::UnknownOrAny => InferredKind::UnknownOrAny,
@@ -1477,8 +1462,7 @@ impl CheckCtx<'_> {
                     && s.parse::<rust_decimal::Decimal>()
                         .is_ok_and(|d| d <= rust_decimal::Decimal::ZERO)
                 {
-                    let context = self.context.clone();
-                    self.errors.push(ValidationError::RoundQuantumNotPositive {
+                    self.report(|context| ValidationError::RoundQuantumNotPositive {
                         quantum: s.clone(),
                         context,
                     });
@@ -1521,8 +1505,7 @@ impl CheckCtx<'_> {
                     && s.parse::<rust_decimal::Decimal>()
                         .is_ok_and(|d| !d.is_integer())
                 {
-                    let context = self.context.clone();
-                    self.errors.push(ValidationError::PeriodIndexNotWhole {
+                    self.report(|context| ValidationError::PeriodIndexNotWhole {
                         index: s.clone(),
                         context,
                     });
@@ -1545,8 +1528,7 @@ impl CheckCtx<'_> {
                         self.ordered_domain(name, a)
                     }
                     (InferredKind::Known(a), InferredKind::Known(b)) => {
-                        let context = self.context.clone();
-                        self.errors.push(ValidationError::OperandKindMismatch {
+                        self.report(|context| ValidationError::OperandKindMismatch {
                             operator: name,
                             expected: a,
                             actual: b,
@@ -1590,8 +1572,7 @@ impl CheckCtx<'_> {
             && parsed.months == 0
             && parsed.days == 0
         {
-            let context = self.context.clone();
-            self.errors.push(ValidationError::PeriodSpanNotPositive {
+            self.report(|context| ValidationError::PeriodSpanNotPositive {
                 builtin,
                 span: parsed.to_string(),
                 context,
@@ -1621,8 +1602,7 @@ impl CheckCtx<'_> {
         ) {
             return InferredKind::Known(kind);
         }
-        let context = self.context.clone();
-        self.errors.push(ValidationError::BuiltinKind {
+        self.report(|context| ValidationError::BuiltinKind {
             builtin,
             kind,
             context,
@@ -1632,10 +1612,15 @@ impl CheckCtx<'_> {
 
     /// A variable used where a bound value is required. Flags
     /// `UnboundVariable` if nothing has bound it at this point.
+    /// Record an error at the current context.
+    fn report(&mut self, error: impl FnOnce(ValidationContext) -> ValidationError) {
+        let context = self.context.clone();
+        self.errors.push(error(context));
+    }
+
     fn use_var(&mut self, scope: &Scope, name: &Var) {
         if !scope.bound.is_bound(name) {
-            let context = self.context.clone();
-            self.errors.push(ValidationError::UnboundVariable {
+            self.report(|context| ValidationError::UnboundVariable {
                 variable: name.to_string(),
                 context,
             });
@@ -1662,8 +1647,7 @@ impl CheckCtx<'_> {
     /// bound - the same distinction the runtime frame enforces.
     fn check_defined_call(&mut self, name: &str, args: &[Term], scope: &mut Scope) {
         let Some(def) = self.definitions.get(name).copied() else {
-            let context = self.context.clone();
-            self.errors.push(ValidationError::Undeclared {
+            self.report(|context| ValidationError::Undeclared {
                 vocabulary: VocabularyKind::Definition,
                 name: name.into(),
                 context,
@@ -1671,8 +1655,7 @@ impl CheckCtx<'_> {
             return;
         };
         if def.parameters.len() != args.len() {
-            let context = self.context.clone();
-            self.errors.push(ValidationError::ArityMismatch {
+            self.report(|context| ValidationError::ArityMismatch {
                 vocabulary: VocabularyKind::Definition,
                 name: name.into(),
                 expected: def.parameters.len(),
@@ -1705,8 +1688,7 @@ impl CheckCtx<'_> {
                         // wildcard argument supplies nothing - the
                         // same unbound-name failure the runtime
                         // reports for this call.
-                        let context = self.context.clone();
-                        self.errors.push(ValidationError::UnboundVariable {
+                        self.report(|context| ValidationError::UnboundVariable {
                             variable: def.parameters[position].to_string(),
                             context,
                         });
@@ -1717,8 +1699,7 @@ impl CheckCtx<'_> {
                         (expected, term_kind(other))
                         && !kinds_compatible(&expected_kind, &actual_kind)
                     {
-                        let context = self.context.clone();
-                        self.errors.push(ValidationError::ArgKindMismatch {
+                        self.report(|context| ValidationError::ArgKindMismatch {
                             vocabulary: VocabularyKind::Definition,
                             name: name.into(),
                             position,
@@ -1768,8 +1749,7 @@ impl CheckCtx<'_> {
             && self.derived_heads.contains(name)
             && !generated_discipline_rule
         {
-            let context = self.context.clone();
-            self.errors.push(ValidationError::DerivedInRule {
+            self.report(|context| ValidationError::DerivedInRule {
                 predicate: name.into(),
                 context,
             });
@@ -1789,18 +1769,17 @@ impl CheckCtx<'_> {
             VocabularyKind::Derived => None,
         };
         let Some(decl_args) = decl_args else {
-            let context = self.context.clone();
             // A predicate-position reference that names a definition is
             // a category error with its own guidance (definitions are
             // proposition-valued; admit/retract/value need a claim),
             // not an undeclared name.
             if vocabulary == VocabularyKind::Predicate && self.definitions.contains_key(name) {
-                self.errors.push(ValidationError::UnresolvedDefinitionCall {
+                self.report(|context| ValidationError::UnresolvedDefinitionCall {
                     name: name.into(),
                     context,
                 });
             } else {
-                self.errors.push(ValidationError::Undeclared {
+                self.report(|context| ValidationError::Undeclared {
                     vocabulary,
                     name: name.into(),
                     context,
@@ -1809,8 +1788,7 @@ impl CheckCtx<'_> {
             return;
         };
         if decl_args.len() != args.len() {
-            let context = self.context.clone();
-            self.errors.push(ValidationError::ArityMismatch {
+            self.report(|context| ValidationError::ArityMismatch {
                 vocabulary,
                 name: name.into(),
                 expected: decl_args.len(),
@@ -1818,31 +1796,9 @@ impl CheckCtx<'_> {
                 context,
             });
         }
-        self.check_args(vocabulary, name, args, decl_args, mode, scope);
-    }
-
-    /// Generic arg-list check. A literal contributes its kind; a
-    /// variable binds (`Match`) or is use-checked (`Use`) and its
-    /// kind refines; `Wildcard` is skipped; `Actor` contributes
-    /// `Subject`. Walks only `min(args, decl)`; arity is owned by
-    /// `check_reference`.
-    #[allow(clippy::too_many_arguments)]
-    fn check_args(
-        &mut self,
-        vocabulary: VocabularyKind,
-        name: &str,
-        args: &[Term],
-        decl_args: &[crate::ArgDecl],
-        mode: RefMode,
-        scope: &mut Scope,
-    ) {
-        let n = args.len().min(decl_args.len());
-        for (position, (arg, decl_arg)) in args
-            .iter()
-            .take(n)
-            .zip(decl_args.iter().take(n))
-            .enumerate()
-        {
+        // Arity is reported above; the kinds are checked over the
+        // positions both sides have.
+        for (position, (arg, decl_arg)) in args.iter().zip(decl_args).enumerate() {
             self.check_one_arg(
                 vocabulary,
                 name,
@@ -1873,12 +1829,10 @@ impl CheckCtx<'_> {
         // own refusal on every proposal.
         if matches!(resolved_term_kind(arg, &scope.kinds), InferredKind::Known(k) if k == PredicateArgKind::CalendarSpan)
         {
-            let context = self.context.clone();
-            self.errors
-                .push(ValidationError::CalendarSpanEscapesExpression {
-                    place: format!("argument #{position} of {vocabulary} `{name}`"),
-                    context,
-                });
+            self.report(|context| ValidationError::CalendarSpanEscapesExpression {
+                place: format!("argument #{position} of {vocabulary} `{name}`"),
+                context,
+            });
             return;
         }
         let actual = term_kind(arg);
@@ -1890,8 +1844,7 @@ impl CheckCtx<'_> {
             if let Err((previous, new)) =
                 scope.kinds.observe(var_name, InferredKind::Known(expected))
             {
-                let context = self.context.clone();
-                self.errors.push(ValidationError::VariableKindConflict {
+                self.report(|context| ValidationError::VariableKindConflict {
                     variable: var_name.as_str().to_string(),
                     previous,
                     new,
@@ -1903,8 +1856,7 @@ impl CheckCtx<'_> {
         } else if let InferredKind::Known(actual_kind) = actual
             && !kinds_compatible(&expected, &actual_kind)
         {
-            let context = self.context.clone();
-            self.errors.push(ValidationError::ArgKindMismatch {
+            self.report(|context| ValidationError::ArgKindMismatch {
                 vocabulary,
                 name: name.into(),
                 position,
@@ -1919,8 +1871,7 @@ impl CheckCtx<'_> {
     /// a refinement conflict, push a `VariableKindConflict`.
     fn observe_or_report(&mut self, scope: &mut Scope, name: &Var, kind: InferredKind) {
         if let Err((previous, new)) = scope.kinds.observe(name, kind) {
-            let context = self.context.clone();
-            self.errors.push(ValidationError::VariableKindConflict {
+            self.report(|context| ValidationError::VariableKindConflict {
                 variable: name.to_string(),
                 previous,
                 new,
@@ -1998,10 +1949,6 @@ fn value_mentions_actor(expr: &ValueExpr) -> bool {
     fold::any_term_in_value(expr, &|t, _| is_actor(t))
 }
 
-/// Whether a proposition contains `Prop::Pre` anywhere in its tree.
-/// Used to ban `pre(...)` inside definition bodies (bodies are
-/// context-free; a call wrapped in `pre(...)` at the use site covers
-/// the legitimate cases).
 /// Every rule name a statement carries, descending into `for` bodies - a
 /// named gate inside a loop is as identifiable as one at the top level, so
 /// it competes for the same names.
@@ -2021,10 +1968,6 @@ fn collect_rule_names<'s>(stmt: &'s Stmt, out: &mut Vec<&'s RuleName>) {
     }
 }
 
-fn prop_mentions_pre(prop: &Prop) -> bool {
-    fold::mentions_pre(prop)
-}
-
 /// Whether `name` occurs in any term position of the proposition,
 /// honouring quantifier shadowing. Used to flag a definition
 /// parameter the body never references: such a parameter can never
@@ -2038,10 +1981,6 @@ fn occurs_in_prop(name: &Var, prop: &Prop) -> bool {
     )
 }
 
-/// The arithmetic rule matrix over known operand kinds. `None` means
-/// no rule exists and authoring-time validation reports it. Mirrors
-/// the evaluator's runtime matrix exactly; the time-values test suite
-/// couples the two.
 /// Inherent kind of a `Term`. Variables are `UnknownOrAny` here;
 /// callers that want the env-resolved kind look it up separately.
 fn term_kind(term: &Term) -> InferredKind {

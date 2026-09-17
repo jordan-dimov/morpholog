@@ -274,11 +274,7 @@ fn ordered_comparison(
             ));
         }
     };
-    Ok(if holds {
-        vec![ctx.bindings.clone()]
-    } else {
-        vec![]
-    })
+    Ok(verdict(ctx.bindings, holds))
 }
 
 /// Apply a [`CompareOp`] to two operands of an ordered domain.
@@ -402,6 +398,12 @@ fn find_defined_matches(
     Ok(out)
 }
 
+/// A predicate-shaped truth: the unchanged binding set when `holds`,
+/// no bindings otherwise.
+fn verdict(base: &Bindings, holds: bool) -> Vec<Bindings> {
+    if holds { vec![base.clone()] } else { vec![] }
+}
+
 pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindings>, EvalError> {
     match p {
         Prop::Claim { predicate, args } => find_claim_matches(predicate, args, ctx),
@@ -411,11 +413,7 @@ pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
         Prop::Xor(left, right) => find_matches(&lower_xor(left, right), ctx),
         Prop::Not(inner) => {
             let m = find_matches(inner, ctx)?;
-            Ok(if m.is_empty() {
-                vec![ctx.bindings.clone()]
-            } else {
-                vec![]
-            })
+            Ok(verdict(ctx.bindings, m.is_empty()))
         }
         Prop::Pre(inner) => {
             let pre_ctx = ctx.enter_pre().ok_or(EvalError::PreStateUnavailable)?;
@@ -432,11 +430,7 @@ pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
         }
         Prop::Exists { binding: _, body } => {
             let m = find_matches(body, ctx)?;
-            Ok(if m.is_empty() {
-                vec![]
-            } else {
-                vec![ctx.bindings.clone()]
-            })
+            Ok(verdict(ctx.bindings, !m.is_empty()))
         }
         Prop::Forall {
             binding: _,
@@ -454,11 +448,7 @@ pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
         Prop::Eq(lhs, rhs) => {
             let l = eval_value(lhs, ctx)?;
             let r = eval_value(rhs, ctx)?;
-            Ok(if l == r {
-                vec![ctx.bindings.clone()]
-            } else {
-                vec![]
-            })
+            Ok(verdict(ctx.bindings, l == r))
         }
         Prop::Compare {
             op,
@@ -469,11 +459,7 @@ pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
         Prop::Neq(lhs, rhs) => {
             let l = eval_value(lhs, ctx)?;
             let r = eval_value(rhs, ctx)?;
-            Ok(if l != r {
-                vec![ctx.bindings.clone()]
-            } else {
-                vec![]
-            })
+            Ok(verdict(ctx.bindings, l != r))
         }
         Prop::In(elem, coll) => find_in_matches(elem, coll, ctx),
     }
@@ -1036,19 +1022,11 @@ pub(crate) fn find_in_matches(
         Term::Wildcard => Err(EvalError::TypeMismatch("wildcard not valid in In".into())),
         Term::Literal(_) | Term::Actor => {
             let e = resolve_term(elem, base, actor)?;
-            Ok(if items.contains(&e) {
-                vec![base.clone()]
-            } else {
-                vec![]
-            })
+            Ok(verdict(base, items.contains(&e)))
         }
         Term::Var(name) => {
             if let Some(existing) = base.get(name) {
-                Ok(if items.contains(existing) {
-                    vec![base.clone()]
-                } else {
-                    vec![]
-                })
+                Ok(verdict(base, items.contains(existing)))
             } else {
                 Ok(items
                     .into_iter()
