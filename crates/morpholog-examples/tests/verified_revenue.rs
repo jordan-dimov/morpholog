@@ -162,23 +162,17 @@ fn correction_chains_run_to_any_depth_and_stale_versions_stay_stale() {
         "CurrentVerification",
         &[asset(), period(), subj("ver_005")]
     ));
-    for stale in &chain[..4] {
+    for pair in chain.windows(2) {
+        let (prior, next) = (pair[0], pair[1]);
         assert!(
             !has_claim(
                 &state,
                 "CurrentVerification",
-                &[asset(), period(), subj(stale)]
+                &[asset(), period(), subj(prior)]
             ),
-            "{stale} must no longer be current"
+            "{prior} must no longer be current"
         );
-        assert!(has_claim(
-            &state,
-            "Supersedes",
-            &[
-                subj(chain[chain.iter().position(|v| v == stale).unwrap() + 1]),
-                subj(stale)
-            ]
-        ));
+        assert!(has_claim(&state, "Supersedes", &[subj(next), subj(prior)]));
     }
 
     // Standing attaches to the head only, whatever the depth of the
@@ -195,15 +189,15 @@ fn correction_chains_run_to_any_depth_and_stale_versions_stay_stale() {
             &state,
         );
     }
-    let granted = grant(
-        state.clone(),
+    let state = grant(
+        state,
         "ver_005",
         verified_revenue::BANK_DEBT_SERVICE,
         "credit_committee",
         "grant_head",
     );
     assert!(has_claim(
-        &granted,
+        &state,
         "AdmissibleFor",
         &[subj("ver_005"), subj(verified_revenue::BANK_DEBT_SERVICE)],
     ));
@@ -217,11 +211,26 @@ fn correction_chains_run_to_any_depth_and_stale_versions_stay_stale() {
             &state,
         );
     }
-    // Correcting the head is not a fork: the chain simply grows.
-    ex().must_accept(
+    // Correcting the head is not a fork: the chain simply grows, and the
+    // standing that attached to the old head goes with it - past
+    // decisions stand, new reliance moves to the new head.
+    let state = ex().must_accept(
         &verified_revenue::correct_independent_verification(),
         vec![asset(), period(), dec(70), subj("ver_006"), subj("ver_005")],
         state,
+    );
+    assert!(has_claim(
+        &state,
+        "CurrentVerification",
+        &[asset(), period(), subj("ver_006")]
+    ));
+    assert!(
+        !has_claim(
+            &state,
+            "AdmissibleFor",
+            &[subj("ver_005"), subj(verified_revenue::BANK_DEBT_SERVICE)],
+        ),
+        "standing on the superseded head is retracted by the correction"
     );
 }
 
