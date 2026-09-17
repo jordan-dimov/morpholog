@@ -147,6 +147,19 @@ pub(crate) async fn propose_against_pg_inner(
 pub struct RejectionStateOutcome {
     pub outcome: PgProposalOutcome,
     pub rejection_state: Option<State>,
+    pub phases: ProposalPhases,
+}
+
+/// Where one proposal's wall time went: opening the transaction,
+/// loading the scoped state, the kernel, and persisting the outcome.
+/// Measured on every proposal (four clock reads) so the bench can
+/// report a phase breakdown from the production path itself.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProposalPhases {
+    pub begin: std::time::Duration,
+    pub load: std::time::Duration,
+    pub kernel: std::time::Duration,
+    pub finalise: std::time::Duration,
 }
 
 /// [`propose_against_pg`], additionally returning the scoped
@@ -182,11 +195,15 @@ pub(crate) async fn propose_against_pg_with_rejection_state_inner(
     invariants: &[Invariant],
     definitions: &[Definition],
 ) -> Result<RejectionStateOutcome, PgError> {
+    let clock = std::time::Instant::now();
     let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &transition.actor).await?;
+    let begin = clock.elapsed();
 
     let scope = compute_load_scope(transformation, invariants, definitions);
     let state = load_state(&mut tx, &scope).await?;
+    let load = clock.elapsed() - begin;
     let outcome = propose(transformation, transition, &state, invariants, definitions)?;
+    let kernel = clock.elapsed() - begin - load;
     let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
     let pg_outcome = finalise_outcome(
         pool,
@@ -198,9 +215,16 @@ pub(crate) async fn propose_against_pg_with_rejection_state_inner(
         &login_role,
     )
     .await?;
+    let finalise = clock.elapsed() - begin - load - kernel;
     Ok(RejectionStateOutcome {
         outcome: pg_outcome,
         rejection_state,
+        phases: ProposalPhases {
+            begin,
+            load,
+            kernel,
+            finalise,
+        },
     })
 }
 
