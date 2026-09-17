@@ -22,7 +22,8 @@ use crate::{Deliverer, DeliveryOutcome, OutboxRow};
 /// once (a hand-copied list in the bench once drifted and silently
 /// stopped truncating checkpoints).
 pub const RESET_SQL: &str = "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, \
-     morpholog.audit_checkpoints, morpholog.rejections CASCADE";
+     morpholog.audit_checkpoints, morpholog.rejections, morpholog.index_requirement, \
+     morpholog.managed_index CASCADE";
 
 /// Always returns [`DeliveryOutcome::Delivered`]. The simplest
 /// happy-path deliverer for tests that want to verify the processor

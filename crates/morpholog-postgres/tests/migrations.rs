@@ -648,6 +648,26 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     {
         return Err("the derived cache must have lost its whole-array key".to_string());
     }
+
+    // Migration 015's contract: the index registry exists with its
+    // static shape, and nothing in it - the command that fills it has
+    // not run. Correctness never rests on either table.
+    for (table, key) in [
+        ("managed_index", "spec_digest"),
+        ("index_requirement", "program_identity"),
+    ] {
+        let names: Vec<String> = columns(&pool, "morpholog", table)
+            .await
+            .into_iter()
+            .map(|(name, _, _)| name)
+            .collect();
+        if !names.iter().any(|n| n == key) {
+            return Err(format!(
+                "migration 015 must create morpholog.{table} with {key}; columns: {names:?}"
+            ));
+        }
+    }
+
     Ok(())
 }
 
