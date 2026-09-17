@@ -96,5 +96,8 @@ fn a_violation_alone_is_still_a_violation() {
         claim_instance("Cap", &[subj("broken"), dec_str("10")]),
         claim_instance("Item", &[subj("broken"), dec_str("20")]),
     ]);
-    assert_eq!(eval_invariant(&p.invariants[0], &state, None, &[]), Ok(false));
+    assert_eq!(
+        eval_invariant(&p.invariants[0], &state, None, &[]),
+        Ok(false)
+    );
 }

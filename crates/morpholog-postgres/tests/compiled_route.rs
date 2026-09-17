@@ -219,7 +219,10 @@ fn entry(entry: &str) -> ClaimInstance {
 }
 
 /// Both routes, from the same seeded ledger, on a fresh balanced posting.
-async fn both_routes(pool: &PgPool, seeded: &[ClaimInstance]) -> (RouteObservation, RouteObservation) {
+async fn both_routes(
+    pool: &PgPool,
+    seeded: &[ClaimInstance],
+) -> (RouteObservation, RouteObservation) {
     let transition = Transition {
         transformation_name: "post_simple_entry".into(),
         args: vec![
@@ -261,9 +264,18 @@ async fn a_range_error_dominates_a_violation_that_sorts_earlier_on_both_routes()
         RouteObservation::Kernel(EvalError::sum_out_of_decimal_range())
     );
     assert_eq!(real, spec);
-    assert_eq!(count(&pool, "SELECT count(*) FROM morpholog.audit").await, 0);
-    assert_eq!(count(&pool, "SELECT count(*) FROM morpholog.rejections").await, 0);
-    assert_eq!(count(&pool, "SELECT count(*) FROM morpholog.outbox").await, 0);
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM morpholog.audit").await,
+        0
+    );
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM morpholog.rejections").await,
+        0
+    );
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM morpholog.outbox").await,
+        0
+    );
     assert_eq!(
         count(&pool, "SELECT count(*) FROM morpholog.claims").await,
         seeded.len() as i64,

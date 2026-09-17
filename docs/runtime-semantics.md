@@ -587,6 +587,8 @@ Invariants that contain `Pre` are *transition invariants*; the distinction is de
 
 Genesis falls out of `implies` vacuity: when a predicate has never been admitted, `pre(P(...))` matches nothing and any rule predicated on it is vacuously true. Initialisation against an empty database satisfies `move_count_strictly_increases` for free; once `MoveCount(0)` is admitted the rule kicks in. Authors who need a different genesis story write the cases as disjuncts.
 
+An implication or `forall` answers false only after every binding has evaluated: an evaluation error at any binding (a sum whose exact total no decimal can hold, say) is the result, whichever binding the state happens to present first. Error over false only; which of several errors is reported is not decided. The rule keeps a verdict from depending on claim order, and it is what lets a compiled check, which evaluates every row, report the same thing as the interpreter.
+
 Quantifier composition is non-commutative by design. `pre(forall x in S: body)` reads pre-state for both the iteration domain and the body; `forall x in S: pre(body)` iterates the post-state domain and only flips the body. The two coincide when the iteration set is fixed (a chess board always has 64 squares); they diverge for domains that grow or shrink between states (accounts, policies, claims). Choosing the right order is what makes a transition invariant honest about whether it is asking a question of the old world or the new.
 
 ## Tracing proposals
