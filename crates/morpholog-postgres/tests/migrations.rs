@@ -672,22 +672,46 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     // the command that fills it. Proved with the migration's own SQL on
     // a wrong-shaped twin, then the tables put back.
     let migration_015 = include_str!("../../morpholog-core/sql/migrations/015_managed_indexes.sql");
-    sqlx::raw_sql(
-        "DROP TABLE morpholog.index_requirement; DROP TABLE morpholog.managed_index;
-         CREATE TABLE morpholog.managed_index (something_else integer)",
-    )
-    .execute(&pool)
-    .await
-    .map_err(|e| format!("shaping the wrong twin: {e}"))?;
-    match sqlx::raw_sql(migration_015).execute(&pool).await {
-        Ok(_) => return Err("migration 015 adopted a wrong-shaped managed_index".to_string()),
-        Err(e) if e.to_string().contains("another shape") => {}
-        Err(e) => return Err(format!("migration 015 refused for the wrong reason: {e}")),
-    }
-    sqlx::raw_sql("DROP TABLE morpholog.managed_index")
+    // Two twins: the wrong columns, and - the dangerous one - the right
+    // columns without a constraint the command relies on.
+    for (label, twin) in [
+        (
+            "wrong columns",
+            "CREATE TABLE morpholog.managed_index (something_else integer)",
+        ),
+        (
+            "right columns, no unique index_name",
+            "CREATE TABLE morpholog.managed_index (
+                spec_digest text PRIMARY KEY, index_name text NOT NULL,
+                predicate_name text NOT NULL, position integer NOT NULL CHECK (position >= 0),
+                representation text NOT NULL, expression_sql text NOT NULL,
+                partial_predicate text NOT NULL, registered_at timestamptz NOT NULL DEFAULT now())",
+        ),
+    ] {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "DROP TABLE IF EXISTS morpholog.index_requirement; DROP TABLE IF EXISTS morpholog.managed_index; {twin}"
+        )))
         .execute(&pool)
         .await
-        .map_err(|e| format!("removing the wrong twin: {e}"))?;
+        .map_err(|e| format!("shaping the twin ({label}): {e}"))?;
+        match sqlx::raw_sql(migration_015).execute(&pool).await {
+            Ok(_) => {
+                return Err(format!(
+                    "migration 015 adopted a managed_index twin ({label})"
+                ));
+            }
+            Err(e) if e.to_string().contains("another shape") => {}
+            Err(e) => {
+                return Err(format!(
+                    "migration 015 refused {label} for the wrong reason: {e}"
+                ));
+            }
+        }
+        sqlx::raw_sql("DROP TABLE morpholog.managed_index")
+            .execute(&pool)
+            .await
+            .map_err(|e| format!("removing the twin ({label}): {e}"))?;
+    }
     sqlx::raw_sql(migration_015)
         .execute(&pool)
         .await

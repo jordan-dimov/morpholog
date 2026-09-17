@@ -355,9 +355,11 @@ async fn reconcile_locked(
             }
         }
         // The registry: every managed specification once, then this
-        // programme's requirement set replaced whole - on the held
-        // connection, since a one-connection pool has no other, and the
-        // session lock outlives the transaction.
+        // programme's requirement set replaced whole - every specification
+        // it desires, including one an operator's index satisfies, so a
+        // requirement outlives the index that happens to serve it. On the
+        // held connection, since a one-connection pool has no other, and
+        // the session lock outlives the transaction.
         let mut tx = sqlx::Connection::begin(&mut *conn)
             .await
             .map_err(classify)?;
@@ -394,10 +396,7 @@ async fn reconcile_locked(
         .await
         .map_err(classify_checked_query)?;
         for (spec, entry) in specs.iter().zip(&entries) {
-            if !matches!(
-                entry.action,
-                IndexAction::Keep | IndexAction::Create | IndexAction::RepairInvalid
-            ) {
+            if entry.action == IndexAction::Conflict {
                 continue;
             }
             sqlx::query!(

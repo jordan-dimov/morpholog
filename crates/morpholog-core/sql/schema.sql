@@ -298,12 +298,14 @@ CREATE INDEX outbox_pending_intent_next_attempt
     WHERE status = 'pending';
 
 
--- The registry behind `morpholog provision indexes`: which partial
--- expression indexes over `claims` Morpholog manages, and which
--- programmes require each. The indexes themselves are created by the
--- command from the specifications the SQL compiler emits; the catalogue
--- is the truth about what exists, and no correctness rests on either
--- table - the compiled checks are right without any index.
+-- The registry behind `morpholog provision indexes`. Two facts, kept
+-- apart: which partial expression indexes over `claims` Morpholog
+-- manages (and so may delete), and which programmes require which
+-- specification - whether Morpholog built the index or an operator's
+-- equivalent one satisfies it. The indexes themselves are created by
+-- the command from the specifications the SQL compiler emits; the
+-- catalogue is the truth about what exists, and no correctness rests on
+-- either table - the compiled checks are right without any index.
 CREATE TABLE managed_index (
     spec_digest        text        PRIMARY KEY,
     index_name         text        NOT NULL UNIQUE,
@@ -317,7 +319,7 @@ CREATE TABLE managed_index (
 
 CREATE TABLE index_requirement (
     program_identity   text        NOT NULL,
-    spec_digest        text        NOT NULL REFERENCES managed_index (spec_digest),
+    spec_digest        text        NOT NULL,
     program_hash       text        NOT NULL,
     reconciled_at      timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (program_identity, spec_digest)

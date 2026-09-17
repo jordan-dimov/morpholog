@@ -154,7 +154,11 @@ async fn an_equivalent_index_under_another_name_satisfies_and_is_never_pruned() 
         2,
         "ours are only the two it created"
     );
-    assert_eq!(registry_counts(&pool).await, (2, 2));
+    assert_eq!(
+        registry_counts(&pool).await,
+        (2, 3),
+        "two managed, but three required: a requirement outlives the index that serves it"
+    );
     let still_there: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'operator_made_this')",
     )
@@ -214,6 +218,49 @@ async fn a_conflicting_definition_under_our_name_applies_nothing() {
         "no other index was built"
     );
     assert_eq!(registry_counts(&pool).await, (0, 0), "no registry write");
+}
+
+/// A requirement satisfied by an operator's index is still a
+/// requirement: when that index goes and another programme has Morpholog
+/// build the same specification, the first programme's need protects it
+/// from the second's prune.
+#[tokio::test]
+async fn a_requirement_once_satisfied_externally_still_protects_the_index() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    let (_, expression, partial) = first_spec(&pool).await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE INDEX operator_made_this ON morpholog.claims USING btree (({expression})) WHERE {partial}"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    // A: the ledger, its first specification satisfied by the operator.
+    provision_indexes(&pool, &ledger(), false).await.unwrap();
+    // The operator removes their index; B, another book, has Morpholog build it.
+    sqlx::query("DROP INDEX morpholog.operator_made_this")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let another = |name: &str| {
+        let mut p = double_entry_ledger::program();
+        p.name = name.into();
+        PgProgram::new(compiled(p))
+    };
+    let built = provision_indexes(&pool, &another("another_book"), false)
+        .await
+        .unwrap();
+    assert_eq!(built.entries[0].action, IndexAction::Create, "{built:?}");
+    // B stops needing anything and prunes: A still requires all three.
+    let nobody = PgProgram::new(compiled(program("another_book").build()));
+    let pruned = provision_indexes(&pool, &nobody, true).await.unwrap();
+    assert!(pruned.pruned.is_empty(), "{pruned:?}");
+    assert_eq!(
+        catalogue_names(&pool).await.len(),
+        3,
+        "A's requirements protect every index"
+    );
 }
 
 /// A programme that stops requiring an index leaves it stale: reported,
