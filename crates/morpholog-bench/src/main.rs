@@ -63,8 +63,8 @@ use morpholog_core::{
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     PgAtomicOutcome, PgError, PgPool, PgProposalOutcome, Proposal, coverage_replay,
-    list_claims_for_predicates, list_derived_at, propose_against_pg,
-    propose_against_pg_with_phases, propose_all_against_pg, reconstruct_state_at, score_candidate,
+    list_claims_for_predicates, list_derived_at, propose_against_pg, propose_against_pg_timed,
+    propose_all_against_pg, reconstruct_state_at, score_candidate,
 };
 use rust_decimal::Decimal;
 use sqlx::postgres::PgPoolOptions;
@@ -131,16 +131,17 @@ enum Command {
 
     /// The kernel alone, no database: build an in-memory ledger of N
     /// entries, then time one proposal with the ledger's invariants,
-    /// one with none (the candidate build by itself), and a run of
-    /// sequential acts each proposed against the candidate the act
-    /// before it produced - the in-process core of `transact`. Not
-    /// destructive; needs no `--reset`.
+    /// the same proposal with none (body and candidate build; the
+    /// difference is invariant evaluation), and a run of sequential
+    /// acts each proposed against the candidate the act before it
+    /// produced - the in-process core of `transact`. Not destructive;
+    /// needs no `--reset`.
     Kernel(KernelArgs),
 
     /// Fabricate N audit transitions (the `as-of` fixture), then time
     /// the two replays that walk the whole log: `inspect coverage` and
-    /// `evaluate` of the ledger programme against itself. Where the
-    /// verification arc's cost lives.
+    /// `evaluate` of the ledger programme against itself - the
+    /// audit-analysis arc's cost.
     Replay(ReplayArgs),
 
     /// Run the frozen canonical case matrix across per-case ladders and
@@ -743,15 +744,15 @@ async fn measure_write(
             actor: Subject::from("bench"),
         };
         let t = Instant::now();
-        let (outcome, phases) =
-            propose_against_pg_with_phases(pool, &compiled, &Proposal::gateway(&transition))
-                .await
-                .context("propose_against_pg_with_phases")?;
+        let timed = propose_against_pg_timed(pool, &compiled, &Proposal::gateway(&transition))
+            .await
+            .context("propose_against_pg_timed")?;
         propose.push(t.elapsed());
-        begin.push(phases.begin);
-        load.push(phases.load);
-        kernel.push(phases.kernel);
-        finalise.push(phases.finalise);
+        begin.push(timed.phases.begin);
+        load.push(timed.phases.load);
+        kernel.push(timed.phases.kernel);
+        finalise.push(timed.phases.finalise);
+        let outcome = timed.outcome;
         if !matches!(outcome, PgProposalOutcome::Committed { .. }) {
             return Err(anyhow!(
                 "expected the target propose to commit ({}); bench fixture or \
@@ -833,9 +834,11 @@ fn must_commit(outcome: Outcome, what: &str) -> Result<State> {
 }
 
 /// The kernel alone over an in-memory book of `n` entries: the state
-/// build, one proposal with the ledger's invariants, one with none (the
-/// candidate build by itself), and `acts` sequential proposals each
-/// against the candidate the act before it produced.
+/// build, one proposal with the ledger's invariants, the same proposal
+/// with none (the transformation body and the candidate build, so the
+/// difference is what invariant evaluation costs), and `acts`
+/// sequential proposals each against the candidate the act before it
+/// produced.
 fn measure_kernel(case: &str, n: usize, acts: usize, repeat: usize) -> Result<CaseResult> {
     let transformation = double_entry_ledger::post_simple_entry();
     let invariants = double_entry_ledger::all_invariants();
@@ -843,11 +846,12 @@ fn measure_kernel(case: &str, n: usize, acts: usize, repeat: usize) -> Result<Ca
     let claims = in_memory_book(n);
     let mut build = Vec::with_capacity(repeat);
     let mut one = Vec::with_capacity(repeat);
-    let mut candidate_only = Vec::with_capacity(repeat);
+    let mut no_invariants = Vec::with_capacity(repeat);
     let mut sequential = Vec::with_capacity(repeat);
     for _ in 0..repeat {
+        let input = claims.clone();
         let t = Instant::now();
-        let pre = State::from_claims(claims.clone());
+        let pre = State::from_claims(input);
         build.push(t.elapsed());
 
         let t = Instant::now();
@@ -874,7 +878,7 @@ fn measure_kernel(case: &str, n: usize, acts: usize, repeat: usize) -> Result<Ca
             )?,
             "the uninvariant proposal",
         )?;
-        candidate_only.push(t.elapsed());
+        no_invariants.push(t.elapsed());
 
         let t = Instant::now();
         let mut state = pre;
@@ -900,7 +904,7 @@ fn measure_kernel(case: &str, n: usize, acts: usize, repeat: usize) -> Result<Ca
         metrics: vec![
             Metric::ms("state_build", &build),
             Metric::ms("propose_one", &one),
-            Metric::ms("candidate_only", &candidate_only),
+            Metric::ms("propose_no_invariants", &no_invariants),
             Metric::ms("acts_sequential", &sequential),
         ],
     })
@@ -1010,9 +1014,11 @@ fn read_report(path: &std::path::Path) -> Result<ReadReport> {
         .with_context(|| format!("parsing {} as a suite report", path.display()))
 }
 
-/// One row per metric the two reports share, keyed by case, axis,
-/// point, and metric name; a row only one side has is listed after
-/// the table so a changed plan cannot pass as a changed number.
+/// Every metric of both reports, keyed by case, axis, point, metric,
+/// and unit: a key both sides have is a ratio row; a key only one side
+/// has is listed after the table, so a changed plan cannot pass as a
+/// changed number. Two rulers, two ladders, or one metric in two units
+/// are errors, not rows.
 fn render_compare(before: &ReadReport, after: &ReadReport) -> Result<String> {
     if before.suite_contract != after.suite_contract {
         return Err(anyhow!(
@@ -1021,58 +1027,87 @@ fn render_compare(before: &ReadReport, after: &ReadReport) -> Result<String> {
             after.suite_contract
         ));
     }
-    let reading = |m: &ReadMetric| steady_median(&m.samples).or_else(|| m.samples.first().copied());
+    if before.ladder != after.ladder {
+        return Err(anyhow!(
+            "the reports ran different ladders: {} and {}",
+            before.ladder,
+            after.ladder
+        ));
+    }
+    type Key = (String, String, u64, String);
+    let index =
+        |report: &ReadReport| -> Result<std::collections::BTreeMap<Key, (String, Option<f64>)>> {
+            let mut out = std::collections::BTreeMap::new();
+            for case in &report.cases {
+                for m in &case.metrics {
+                    let key = (
+                        case.case.clone(),
+                        case.axis.clone(),
+                        case.point,
+                        m.name.clone(),
+                    );
+                    let reading = steady_median(&m.samples).or_else(|| m.samples.first().copied());
+                    if out.insert(key.clone(), (m.unit.clone(), reading)).is_some() {
+                        return Err(anyhow!(
+                            "a report carries {} {} {} {} twice",
+                            key.0,
+                            key.1,
+                            key.2,
+                            key.3
+                        ));
+                    }
+                }
+            }
+            Ok(out)
+        };
+    let (b, a) = (index(before)?, index(after)?);
     let mut out = String::new();
     out.push_str(&format!(
-        "suite_contract={} before={} ({}) after={} ({})\n\n",
-        before.suite_contract,
-        before.implementation,
-        before.ladder,
-        after.implementation,
-        after.ladder
+        "suite_contract={} ladder={} before={} after={}\n\n",
+        before.suite_contract, before.ladder, before.implementation, after.implementation
     ));
     out.push_str("| case | axis | point | metric | before | after | after/before | unit |\n");
     out.push_str("|---|---|--:|---|--:|--:|--:|---|\n");
     let mut unmatched = Vec::new();
-    for b_case in &before.cases {
-        let a_case = after
-            .cases
-            .iter()
-            .find(|c| c.case == b_case.case && c.axis == b_case.axis && c.point == b_case.point);
-        for b_metric in &b_case.metrics {
-            let a_metric = a_case.and_then(|c| c.metrics.iter().find(|m| m.name == b_metric.name));
-            let Some(a_metric) = a_metric else {
-                unmatched.push(format!(
-                    "before only: {} {} {}",
-                    b_case.case, b_case.point, b_metric.name
-                ));
-                continue;
-            };
-            let (b, a) = (reading(b_metric), reading(a_metric));
-            let ratio = match (b, a) {
-                (Some(b), Some(a)) if b > 0.0 => format!("{:.2}", a / b),
-                _ => "-".to_string(),
-            };
-            out.push_str(&format!(
-                "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
-                b_case.case,
-                b_case.axis,
-                b_case.point,
-                b_metric.name,
-                format_sample(b),
-                format_sample(a),
-                ratio,
-                b_metric.unit
+    for (key, (unit, before_reading)) in &b {
+        let Some((after_unit, after_reading)) = a.get(key) else {
+            unmatched.push(format!(
+                "before only: {} {} {} {} ({unit})",
+                key.0, key.1, key.2, key.3
+            ));
+            continue;
+        };
+        if after_unit != unit {
+            return Err(anyhow!(
+                "{} {} {} {} is measured in {unit} before and {after_unit} after: a changed unit is a changed ruler",
+                key.0,
+                key.1,
+                key.2,
+                key.3
             ));
         }
+        let ratio = match (before_reading, after_reading) {
+            (Some(b), Some(a)) if *b > 0.0 => format!("{:.2}", a / b),
+            _ => "-".to_string(),
+        };
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            key.0,
+            key.1,
+            key.2,
+            key.3,
+            format_sample(*before_reading),
+            format_sample(*after_reading),
+            ratio,
+            unit
+        ));
     }
-    for a_case in &after.cases {
-        let seen = before
-            .cases
-            .iter()
-            .any(|c| c.case == a_case.case && c.axis == a_case.axis && c.point == a_case.point);
-        if !seen {
-            unmatched.push(format!("after only: {} {}", a_case.case, a_case.point));
+    for (key, (unit, _)) in &a {
+        if !b.contains_key(key) {
+            unmatched.push(format!(
+                "after only: {} {} {} {} ({unit})",
+                key.0, key.1, key.2, key.3
+            ));
         }
     }
     if !unmatched.is_empty() {
@@ -2332,13 +2367,13 @@ const CASE_PROVENANCE: &[(&str, &str)] = &[
         "kernel",
         "the kernel alone, no database: the interpreted core of transact \
          (an embedder's ~370-act day proposed act by act against the \
-         candidate before it) and the candidate build by itself, which \
-         the layered state made free",
+         candidate before it) and the same proposal without invariants, \
+         so the difference is what invariant evaluation costs",
     ),
     (
         "replay",
-        "the verification arc's cost: coverage and candidate scoring walk \
-         the whole audit log, once per row, over the as-of fixture",
+        "the audit-analysis arc: coverage and candidate scoring walk the \
+         whole audit log, once per row, over the as-of fixture",
     ),
 ];
 
@@ -2968,37 +3003,60 @@ mod smoke {
     /// one), and refuses two rulers.
     #[test]
     fn compare_pairs_rows_and_refuses_different_rulers() {
-        let report = |contract: u32, samples: Vec<f64>| ReadReport {
+        let report = |contract: u32, ladder: &str, unit: &str, samples: Vec<f64>| ReadReport {
             suite_contract: contract,
             implementation: "interpreted".to_string(),
-            ladder: "quick".to_string(),
+            ladder: ladder.to_string(),
             cases: vec![ReadCase {
                 case: "write/base".to_string(),
                 axis: "n".to_string(),
                 point: 100,
                 metrics: vec![ReadMetric {
                     name: "propose_one".to_string(),
-                    unit: "ms".to_string(),
+                    unit: unit.to_string(),
                     samples,
                 }],
             }],
         };
-        let before = report(SUITE_CONTRACT, vec![9.0, 4.0, 2.0, 3.0]);
-        let mut after = report(SUITE_CONTRACT, vec![5.0, 1.5]);
+        let before = report(SUITE_CONTRACT, "quick", "ms", vec![9.0, 4.0, 2.0, 3.0]);
+        let mut after = report(SUITE_CONTRACT, "quick", "ms", vec![5.0, 1.5]);
+        after.cases[0].metrics.push(ReadMetric {
+            name: "phase_kernel".to_string(),
+            unit: "ms".to_string(),
+            samples: vec![1.0],
+        });
         after.cases.push(ReadCase {
-            case: "kernel/base".to_string(),
+            case: "kernel/acts".to_string(),
             axis: "n".to_string(),
             point: 100,
-            metrics: vec![],
+            metrics: vec![ReadMetric {
+                name: "acts_sequential".to_string(),
+                unit: "ms".to_string(),
+                samples: vec![2.0],
+            }],
         });
         let table = render_compare(&before, &after).unwrap();
         assert!(
             table.contains("| write/base | n | 100 | propose_one | 3.00 | 1.50 | 0.50 | ms |"),
             "{table}"
         );
-        assert!(table.contains("- after only: kernel/base 100"), "{table}");
-        let other_ruler = report(SUITE_CONTRACT + 1, vec![1.0]);
+        // A metric only the candidate has is named, inside a shared case
+        // and in a case of its own, with its axis.
+        assert!(
+            table.contains("- after only: write/base n 100 phase_kernel (ms)"),
+            "{table}"
+        );
+        assert!(
+            table.contains("- after only: kernel/acts n 100 acts_sequential (ms)"),
+            "{table}"
+        );
+
+        let other_ruler = report(SUITE_CONTRACT + 1, "quick", "ms", vec![1.0]);
         assert!(render_compare(&before, &other_ruler).is_err());
+        let other_ladder = report(SUITE_CONTRACT, "full", "ms", vec![1.0]);
+        assert!(render_compare(&before, &other_ladder).is_err());
+        let other_unit = report(SUITE_CONTRACT, "quick", "s", vec![1.0]);
+        assert!(render_compare(&before, &other_unit).is_err());
     }
 
     #[tokio::test]
