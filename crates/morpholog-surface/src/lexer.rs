@@ -41,290 +41,228 @@ use std::fmt;
 
 use crate::diagnostics::Span;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Token {
-    // ---- Top-level + predicate-declaration surface ----
-    /// `program` keyword.
-    KwProgram,
-    /// `predicate` keyword.
-    KwPredicate,
-    /// `intent` keyword (intent-declaration surface).
-    KwIntent,
-    /// Kind keyword in a predicate-arg position.
-    Kind(PredicateArgKind),
+/// The fixed vocabulary in one list. A keyword's spelling feeds both the
+/// reserved-word map and the diagnostic rendering, so a word cannot be
+/// reserved in one place and forgotten in the other; every other token
+/// states how a diagnostic names it.
+macro_rules! tokens {
+    (
+        keywords { $( $(#[$kd:meta])* $kw:ident = $kt:literal, )* }
+        symbols { $( $(#[$sd:meta])* $sy:ident = $st:literal, )* }
+        others { $( $(#[$od:meta])* $ov:ident $( ( $ot:ty ) )?, )* }
+        display |$f:ident| { $( $pat:pat => $render:expr, )* }
+    ) => {
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub enum Token {
+            $( $(#[$kd])* $kw, )*
+            $( $(#[$sd])* $sy, )*
+            $( $(#[$od])* $ov $( ( $ot ) )?, )*
+        }
 
-    // ---- Invariant declarations ----
-    /// `invariant` keyword.
-    KwInvariant,
+        impl Token {
+            /// The token a reserved word lexes to, if the word is one.
+            fn keyword(word: &str) -> Option<Token> {
+                match word {
+                    $( $kt => Some(Token::$kw), )*
+                    _ => None,
+                }
+            }
+        }
 
-    // ---- Transformations + gate statements ----
-    /// `transformation` keyword.
-    KwTransformation,
-    /// `require` statement keyword.
-    KwRequire,
-    /// `bind` statement keyword (unique-claim lookup that extends
-    /// the binding context).
-    KwBind,
-    /// `let` statement keyword (value binding).
-    KwLet,
-    /// `new` keyword (only meaningful in `let x = new Subject()`,
-    /// reserved everywhere so a variable named `new` is rejected at the
-    /// parser rather than silently shadowing the keyword).
-    KwNew,
-
-    // Reserved at the lexer so `admit`, `retract`, `emit`, and `for`
-    // lex as their own keyword tokens for the statement parser to
-    // dispatch on, rather than as `Var("admit")` and friends.
-    /// `admit` statement keyword.
-    KwAdmit,
-    /// `retract` statement keyword.
-    KwRetract,
-    /// `emit` statement keyword.
-    KwEmit,
-    /// `for` block keyword.
-    KwFor,
-
-    // ---- Derived claims ----
-    /// `derived` declaration keyword. Heads a derived-claim block:
-    /// `derived Name(keys): Indent over <expr> value <name> = <expr>+ Dedent`.
-    KwDerived,
-    KwDefine,
-    /// `over` keyword for the derived-claim domain expression.
-    KwOver,
-    // Derived-claim bodies use `value <name> = <expr>` clauses, reusing
-    // the `KwValue` token; the parser disambiguates by position.
-
-    // ---- Civil-date comparison ----
-    /// `on_or_before` infix operator for civil-date `<=`. Lowers to
-    /// `Prop::Compare` with the `Date` domain. Distinct keyword from
-    /// decimal `<=` because the comparison's domain is carried
-    /// explicitly in the IR, type-checking each operand kind separately
-    /// rather than overloading one operator by operand type. The
-    /// strict/after date comparators `before`, `after`, and
-    /// `on_or_after` complete the set; `before` and `after` are matched
-    /// contextually by the parser (not reserved), so they stay usable as
-    /// variable names.
-    KwOnOrBefore,
-    /// `on_or_after` infix operator for civil-date `>=`; lowers to
-    /// `Prop::Compare` (`Ge`, `Date`).
-    KwOnOrAfter,
-
-    // ---- Layout virtual tokens ----
-    //
-    // Not produced by the character-level recogniser; the layout pass
-    // in `layout.rs` inserts them at block boundaries and the parser
-    // matches them to recognise block structure.
-    //
-    // There is no virtual `Newline` token: each statement and top-level
-    // declaration starts with its own keyword, which anchors the
-    // boundary, so no separator is needed. This also lets parenthesised
-    // expressions span lines freely with no layout interaction.
-    //
-    /// Block-start marker. Inserted by the layout pass when a non-blank
-    /// line begins at a greater indentation than the previous one.
-    Indent,
-    /// Block-end marker. Inserted by the layout pass when a non-blank
-    /// line begins at a smaller indentation than the previous one; one
-    /// `Dedent` per indentation level closed.
-    Dedent,
-
-    // ---- Boolean composition ----
-    /// `not` prefix operator.
-    KwNot,
-    /// `and` infix operator.
-    KwAnd,
-    /// `or` infix operator. Lowers to `Prop::Or`. Sits at lower
-    /// precedence than `and`, higher than `implies`.
-    KwOr,
-    /// `xor` infix operator. Lowers to `Prop::Xor` (exactly-one). Sits
-    /// between `and` and `or` in precedence: tighter than `or`, looser
-    /// than `and`.
-    KwXor,
-    /// `implies` infix operator.
-    KwImplies,
-    /// `pre` function-call-shape primary. Lowers to `Prop::Pre`. Always
-    /// followed by `(`; the parens are mandatory. Reserved everywhere so
-    /// a variable named `pre` cannot shadow the keyword.
-    KwPre,
-
-    /// `true` or `false`: reserved but not parseable. See the
-    /// module-level note on why these are tokens rather than
-    /// identifiers.
-    ReservedBoolLit(bool),
-
-    // ---- Bounded forms + membership ----
-    /// `exists` quantifier keyword.
-    KwExists,
-    /// `forall` quantifier keyword.
-    KwForall,
-    /// `sum` aggregator keyword.
-    KwSum,
-    /// `min` function keyword (binary decimal minimum: `min(a, b)`).
-    KwMin,
-    /// `max` function keyword (binary decimal maximum: `max(a, b)`).
-    KwMax,
-    /// `abs` function keyword (unary magnitude: `abs(x)`).
-    KwAbs,
-    /// `round` function keyword (`round(x, quantum)`: nearest multiple,
-    /// halves away from zero).
-    KwRound,
-    /// `const` declaration keyword (programme-level named value,
-    /// substituted away at parse time).
-    KwConst,
-    /// `value` claim-lookup keyword.
-    KwValue,
-    /// `default` keyword (only meaningful after `value Pred(args)`
-    /// in v0; reserved at the lexer everywhere so users can't
-    /// accidentally name a variable `default`).
-    KwDefault,
-    /// `in` keyword. Dual-purpose: structural binder in
-    /// `forall x in source: body`, and membership comparator in
-    /// `x in xs`. Positional disambiguation by the parser.
-    KwIn,
-    /// `|` (pipe). Set-builder separator in aggregators:
-    /// `sum(target | body)`. Distinct from boolean composition; the
-    /// pipe never separates quantifier bindings (which use `:`).
-    Pipe,
-
-    // ---- Atoms ----
-    /// Identifier: any reserved-keyword-free word matching
-    /// `[a-zA-Z_][a-zA-Z0-9_]*`. The parser decides by position
-    /// whether it's a variable, predicate name, argument name, or
-    /// transformation name.
-    Ident(String),
-    /// Bare `_`. Distinct from identifiers because it means "match
-    /// anything at this position", not "a name".
-    Wildcard,
-    /// Decimal literal carried as a string to preserve exactness; the
-    /// runtime parses to `rust_decimal::Decimal`, never a float.
-    DecimalLit(String),
-    /// Date literal: `@YYYY-MM-DD`. The `@` sigil avoids ambiguity with
-    /// bare arithmetic on integer-looking tokens (`2026 - 05 - 22`).
-    /// String form is the inner ISO-8601 date without the `@`; the
-    /// runtime parses it via `jiff::civil::Date`. Lex validates digit
-    /// and dash shape only; real-calendar validation is at runtime.
-    DateLit(String),
-    /// Timestamp literal: `@YYYY-MM-DDTHH:MM:SS[.frac](Z|+HH:MM|-HH:MM)`.
-    /// The same `@` sigil as dates, extended to a full RFC 3339 instant;
-    /// the presence of the `T` time part is what distinguishes the two.
-    /// Lex validates both the shape and, via `jiff::Timestamp`, that
-    /// the instant is real - a `@2026-13-40T...` is a spanned lex
-    /// diagnostic, not a runtime evaluation error. (Dates keep their
-    /// validate-at-runtime precedent.) Captured without the `@`.
-    TimestampLit(String),
-    /// Subject literal: `#NAME`. The `#` sigil makes opaque symbolic
-    /// subjects visibly distinct from variables; the inner string is
-    /// the subject identifier (without the `#`). Maps to
-    /// `Value::Subject(name)`.
-    SubjectLit(String),
-
-    // ---- Punctuation ----
-    LParen,
-    RParen,
-    /// `[` / `]` - the unit brackets of a `Decimal[USD]` kind
-    /// annotation. No other production uses them in v0.
-    LBracket,
-    RBracket,
-    Colon,
-    Comma,
-    /// `..` - the rest-marker in a named-field claim pattern
-    /// (`Pred(field: x, ..)`): the unmentioned fields are wildcards.
-    DotDot,
-
-    // ---- Operators ----
-    /// `=` (Eq).
-    Eq,
-    /// `!=` (Neq).
-    Neq,
-    /// `<=`, decimal-domain (bare decimals or same-unit quantities); lowers to `Prop::Compare` (`Le`, `Decimal`).
-    /// (`on_or_before` is the civil-date surface for the same operator.)
-    Le,
-    /// `<`, decimal-domain (bare decimals or same-unit quantities); lowers to `Prop::Compare` (`Lt`, `Decimal`).
-    Lt,
-    /// `>=`, decimal-domain (bare decimals or same-unit quantities); lowers to `Prop::Compare` (`Ge`, `Decimal`).
-    Ge,
-    /// `>`, decimal-domain (bare decimals or same-unit quantities); lowers to `Prop::Compare` (`Gt`, `Decimal`).
-    Gt,
-    /// `+` (Add).
-    Plus,
-    /// `-` (Sub).
-    Minus,
-    /// `*` (Mul).
-    Star,
-    /// `/` (Div).
-    Slash,
-    /// `%` (Mod).
-    Percent,
+        impl fmt::Display for Token {
+            fn fmt(&self, $f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self {
+                    $( Token::$kw => write!($f, "`{}`", $kt), )*
+                    $( Token::$sy => write!($f, "`{}`", $st), )*
+                    $( $pat => $render, )*
+                }
+            }
+        }
+    };
 }
 
-impl fmt::Display for Token {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Token::KwProgram => write!(f, "`program`"),
-            Token::KwPredicate => write!(f, "`predicate`"),
-            Token::KwIntent => write!(f, "`intent`"),
-            Token::Kind(k) => write!(f, "kind `{k:?}`"),
-            Token::KwInvariant => write!(f, "`invariant`"),
-            Token::KwTransformation => write!(f, "`transformation`"),
-            Token::KwRequire => write!(f, "`require`"),
-            Token::KwBind => write!(f, "`bind`"),
-            Token::KwLet => write!(f, "`let`"),
-            Token::KwNew => write!(f, "`new`"),
-            Token::KwAdmit => write!(f, "`admit`"),
-            Token::KwRetract => write!(f, "`retract`"),
-            Token::KwEmit => write!(f, "`emit`"),
-            Token::KwFor => write!(f, "`for`"),
-            Token::KwDerived => write!(f, "`derived`"),
-            Token::KwDefine => write!(f, "`define`"),
-            Token::KwOver => write!(f, "`over`"),
-            Token::KwOnOrBefore => write!(f, "`on_or_before`"),
-            Token::KwOnOrAfter => write!(f, "`on_or_after`"),
-            Token::Indent => write!(f, "indent"),
-            Token::Dedent => write!(f, "dedent"),
-            Token::KwNot => write!(f, "`not`"),
-            Token::KwAnd => write!(f, "`and`"),
-            Token::KwOr => write!(f, "`or`"),
-            Token::KwXor => write!(f, "`xor`"),
-            Token::KwImplies => write!(f, "`implies`"),
-            Token::KwPre => write!(f, "`pre`"),
-            Token::ReservedBoolLit(b) => write!(f, "reserved bool literal `{b}`"),
-            Token::KwExists => write!(f, "`exists`"),
-            Token::KwForall => write!(f, "`forall`"),
-            Token::KwSum => write!(f, "`sum`"),
-            Token::KwMin => write!(f, "`min`"),
-            Token::KwMax => write!(f, "`max`"),
-            Token::KwAbs => write!(f, "`abs`"),
-            Token::KwRound => write!(f, "`round`"),
-            Token::KwConst => write!(f, "`const`"),
-            Token::KwValue => write!(f, "`value`"),
-            Token::KwDefault => write!(f, "`default`"),
-            Token::KwIn => write!(f, "`in`"),
-            Token::Pipe => write!(f, "`|`"),
-            Token::DateLit(s) => write!(f, "date literal `@{s}`"),
-            Token::TimestampLit(s) => write!(f, "timestamp literal `@{s}`"),
-            Token::SubjectLit(s) => write!(f, "subject literal `#{s}`"),
-            Token::Ident(s) => write!(f, "identifier `{s}`"),
-            Token::Wildcard => write!(f, "`_`"),
-            Token::DecimalLit(s) => write!(f, "decimal literal `{s}`"),
-            Token::LParen => write!(f, "`(`"),
-            Token::RParen => write!(f, "`)`"),
-            Token::LBracket => write!(f, "`[`"),
-            Token::RBracket => write!(f, "`]`"),
-            Token::Colon => write!(f, "`:`"),
-            Token::Comma => write!(f, "`,`"),
-            Token::DotDot => write!(f, "`..`"),
-            Token::Eq => write!(f, "`=`"),
-            Token::Neq => write!(f, "`!=`"),
-            Token::Le => write!(f, "`<=`"),
-            Token::Lt => write!(f, "`<`"),
-            Token::Ge => write!(f, "`>=`"),
-            Token::Gt => write!(f, "`>`"),
-            Token::Plus => write!(f, "`+`"),
-            Token::Minus => write!(f, "`-`"),
-            Token::Star => write!(f, "`*`"),
-            Token::Slash => write!(f, "`/`"),
-            Token::Percent => write!(f, "`%`"),
-        }
+tokens! {
+    keywords {
+        // ---- Declarations ----
+        KwProgram = "program",
+        KwPredicate = "predicate",
+        KwIntent = "intent",
+        KwInvariant = "invariant",
+        KwTransformation = "transformation",
+        /// Heads a derived-claim block:
+        /// `derived Name(keys): Indent over <expr> value <name> = <expr>+ Dedent`.
+        KwDerived = "derived",
+        KwDefine = "define",
+        /// The derived-claim domain expression.
+        KwOver = "over",
+        /// A programme-level named value, substituted away at parse time.
+        KwConst = "const",
+
+        // ---- Statements ----
+        KwRequire = "require",
+        /// Unique-claim lookup that extends the binding context.
+        KwBind = "bind",
+        KwLet = "let",
+        /// Only meaningful in `let x = new Subject()`; reserved everywhere
+        /// so a variable named `new` is rejected at the parser rather than
+        /// silently shadowing the keyword.
+        KwNew = "new",
+        KwAdmit = "admit",
+        KwRetract = "retract",
+        KwEmit = "emit",
+        KwFor = "for",
+
+        // ---- Civil-date comparison ----
+        /// Infix civil-date `<=`. Lowers to `Prop::Compare` with the
+        /// `Date` domain. A distinct keyword from decimal `<=` because
+        /// the comparison's domain is carried explicitly in the IR,
+        /// type-checking each operand kind separately rather than
+        /// overloading one operator by operand type. `before` and
+        /// `after` complete the set but are matched contextually by the
+        /// parser (not reserved), so they stay usable as variable names.
+        KwOnOrBefore = "on_or_before",
+        /// Infix civil-date `>=`; lowers to `Prop::Compare` (`Ge`, `Date`).
+        KwOnOrAfter = "on_or_after",
+
+        // ---- Boolean composition ----
+        KwNot = "not",
+        KwAnd = "and",
+        /// Lowers to `Prop::Or`. Sits at lower precedence than `and`,
+        /// higher than `implies`.
+        KwOr = "or",
+        /// Lowers to `Prop::Xor` (exactly-one). Sits between `and` and
+        /// `or` in precedence: tighter than `or`, looser than `and`.
+        KwXor = "xor",
+        KwImplies = "implies",
+        /// Function-call-shape primary lowering to `Prop::Pre`. The parens
+        /// are mandatory. Reserved everywhere so a variable named `pre`
+        /// cannot shadow the keyword.
+        KwPre = "pre",
+
+        // ---- Bounded forms, functions, and membership ----
+        KwExists = "exists",
+        KwForall = "forall",
+        KwSum = "sum",
+        /// Binary decimal minimum: `min(a, b)`.
+        KwMin = "min",
+        /// Binary decimal maximum: `max(a, b)`.
+        KwMax = "max",
+        /// Unary magnitude: `abs(x)`.
+        KwAbs = "abs",
+        /// `round(x, quantum)`: nearest multiple, halves away from zero.
+        KwRound = "round",
+        /// Claim lookup; derived-claim bodies reuse it for their
+        /// `value <name> = <expr>` clauses, disambiguated by position.
+        KwValue = "value",
+        /// Only meaningful after `value Pred(args)`; reserved everywhere
+        /// so users can't accidentally name a variable `default`.
+        KwDefault = "default",
+        /// Dual-purpose: structural binder in `forall x in source: body`,
+        /// and membership comparator in `x in xs`. Positional
+        /// disambiguation by the parser.
+        KwIn = "in",
+    }
+    symbols {
+        /// Set-builder separator in aggregators: `sum(target | body)`.
+        /// Distinct from boolean composition; the pipe never separates
+        /// quantifier bindings (which use `:`).
+        Pipe = "|",
+        /// Bare `_`. Distinct from identifiers because it means "match
+        /// anything at this position", not "a name".
+        Wildcard = "_",
+        LParen = "(",
+        RParen = ")",
+        /// The unit brackets of a `Decimal[USD]` kind annotation. No
+        /// other production uses them in v0.
+        LBracket = "[",
+        RBracket = "]",
+        Colon = ":",
+        Comma = ",",
+        /// The rest-marker in a named-field claim pattern
+        /// (`Pred(field: x, ..)`): the unmentioned fields are wildcards.
+        DotDot = "..",
+        Eq = "=",
+        Neq = "!=",
+        /// Decimal-domain comparators (bare decimals or same-unit
+        /// quantities), lowering to `Prop::Compare` with the `Decimal`
+        /// domain; `on_or_before` and `on_or_after` are the civil-date
+        /// surface for the same operators.
+        Le = "<=",
+        Lt = "<",
+        Ge = ">=",
+        Gt = ">",
+        Plus = "+",
+        Minus = "-",
+        Star = "*",
+        Slash = "/",
+        Percent = "%",
+    }
+    others {
+        /// Kind keyword in a predicate-arg position.
+        Kind(PredicateArgKind),
+        /// `true` or `false`: reserved but not parseable. See the
+        /// module-level note on why these are tokens rather than
+        /// identifiers.
+        ReservedBoolLit(bool),
+
+        // ---- Layout virtual tokens ----
+        //
+        // Not produced by the character-level recogniser; the layout pass
+        // in `layout.rs` inserts them at block boundaries and the parser
+        // matches them to recognise block structure.
+        //
+        // There is no virtual `Newline` token: each statement and top-level
+        // declaration starts with its own keyword, which anchors the
+        // boundary, so no separator is needed. This also lets parenthesised
+        // expressions span lines freely with no layout interaction.
+        //
+        /// Block-start marker. Inserted by the layout pass when a non-blank
+        /// line begins at a greater indentation than the previous one.
+        Indent,
+        /// Block-end marker. Inserted by the layout pass when a non-blank
+        /// line begins at a smaller indentation than the previous one; one
+        /// `Dedent` per indentation level closed.
+        Dedent,
+
+        // ---- Atoms ----
+        /// Identifier: any reserved-keyword-free word matching
+        /// `[a-zA-Z_][a-zA-Z0-9_]*`. The parser decides by position
+        /// whether it's a variable, predicate name, argument name, or
+        /// transformation name.
+        Ident(String),
+        /// Decimal literal carried as a string to preserve exactness; the
+        /// runtime parses to `rust_decimal::Decimal`, never a float.
+        DecimalLit(String),
+        /// Date literal: `@YYYY-MM-DD`. The `@` sigil avoids ambiguity with
+        /// bare arithmetic on integer-looking tokens (`2026 - 05 - 22`).
+        /// String form is the inner ISO-8601 date without the `@`; the
+        /// runtime parses it via `jiff::civil::Date`. Lex validates digit
+        /// and dash shape only; real-calendar validation is at runtime.
+        DateLit(String),
+        /// Timestamp literal: `@YYYY-MM-DDTHH:MM:SS[.frac](Z|+HH:MM|-HH:MM)`.
+        /// The same `@` sigil as dates, extended to a full RFC 3339 instant;
+        /// the presence of the `T` time part is what distinguishes the two.
+        /// Lex validates both the shape and, via `jiff::Timestamp`, that
+        /// the instant is real - a `@2026-13-40T...` is a spanned lex
+        /// diagnostic, not a runtime evaluation error. (Dates keep their
+        /// validate-at-runtime precedent.) Captured without the `@`.
+        TimestampLit(String),
+        /// Subject literal: `#NAME`. The `#` sigil makes opaque symbolic
+        /// subjects visibly distinct from variables; the inner string is
+        /// the subject identifier (without the `#`). Maps to
+        /// `Value::Subject(name)`.
+        SubjectLit(String),
+    }
+    display |f| {
+        Token::Kind(k) => write!(f, "kind `{k:?}`"),
+        Token::ReservedBoolLit(b) => write!(f, "reserved bool literal `{b}`"),
+        Token::Indent => write!(f, "indent"),
+        Token::Dedent => write!(f, "dedent"),
+        Token::Ident(s) => write!(f, "identifier `{s}`"),
+        Token::DecimalLit(s) => write!(f, "decimal literal `{s}`"),
+        Token::DateLit(s) => write!(f, "date literal `@{s}`"),
+        Token::TimestampLit(s) => write!(f, "timestamp literal `@{s}`"),
+        Token::SubjectLit(s) => write!(f, "subject literal `#{s}`"),
     }
 }
 
@@ -351,61 +289,25 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
     //
     // The bare `_` is matched here as Token::Wildcard; `_-prefixed`
     // identifiers (e.g. `_foo`) remain identifiers.
-    let ident_or_keyword = text::ascii::ident().map(|s: &str| match s {
-        "program" => Token::KwProgram,
-        "predicate" => Token::KwPredicate,
-        "intent" => Token::KwIntent,
-        "invariant" => Token::KwInvariant,
-        "transformation" => Token::KwTransformation,
-        "require" => Token::KwRequire,
-        "bind" => Token::KwBind,
-        "let" => Token::KwLet,
-        "new" => Token::KwNew,
-        // Reserved but not yet parseable; the parser rejects them with
-        // an unexpected-token diagnostic.
-        "admit" => Token::KwAdmit,
-        "retract" => Token::KwRetract,
-        "emit" => Token::KwEmit,
-        "for" => Token::KwFor,
-        "derived" => Token::KwDerived,
-        "define" => Token::KwDefine,
-        "over" => Token::KwOver,
-        // Civil-date <= comparator
-        "on_or_before" => Token::KwOnOrBefore,
-        "on_or_after" => Token::KwOnOrAfter,
-        "Subject" => Token::Kind(PredicateArgKind::Subject),
-        "Decimal" => Token::Kind(PredicateArgKind::Decimal),
-        "Date" => Token::Kind(PredicateArgKind::Date),
-        "Timestamp" => Token::Kind(PredicateArgKind::Timestamp),
-        "Duration" => Token::Kind(PredicateArgKind::Duration),
-        "Bool" => Token::Kind(PredicateArgKind::Bool),
-        "Collection" => Token::Kind(PredicateArgKind::Collection),
-        "Any" => Token::Kind(PredicateArgKind::Any),
-        // Operator and boolean keywords
-        "not" => Token::KwNot,
-        "and" => Token::KwAnd,
-        "or" => Token::KwOr,
-        "xor" => Token::KwXor,
-        "implies" => Token::KwImplies,
-        "pre" => Token::KwPre,
-        // Bounded forms and membership keywords
-        "exists" => Token::KwExists,
-        "forall" => Token::KwForall,
-        "sum" => Token::KwSum,
-        "min" => Token::KwMin,
-        "max" => Token::KwMax,
-        "abs" => Token::KwAbs,
-        "round" => Token::KwRound,
-        "const" => Token::KwConst,
-        "value" => Token::KwValue,
-        "default" => Token::KwDefault,
-        "in" => Token::KwIn,
-        // Reserved but not parseable; see the module-level note.
-        "true" => Token::ReservedBoolLit(true),
-        "false" => Token::ReservedBoolLit(false),
-        // Bare `_` is the wildcard, not an ident.
-        "_" => Token::Wildcard,
-        other => Token::Ident(other.to_string()),
+    let ident_or_keyword = text::ascii::ident().map(|s: &str| {
+        if let Some(keyword) = Token::keyword(s) {
+            return keyword;
+        }
+        match s {
+            "Subject" => Token::Kind(PredicateArgKind::Subject),
+            "Decimal" => Token::Kind(PredicateArgKind::Decimal),
+            "Date" => Token::Kind(PredicateArgKind::Date),
+            "Timestamp" => Token::Kind(PredicateArgKind::Timestamp),
+            "Duration" => Token::Kind(PredicateArgKind::Duration),
+            "Bool" => Token::Kind(PredicateArgKind::Bool),
+            "Collection" => Token::Kind(PredicateArgKind::Collection),
+            "Any" => Token::Kind(PredicateArgKind::Any),
+            // Reserved but not parseable; see the module-level note.
+            "true" => Token::ReservedBoolLit(true),
+            "false" => Token::ReservedBoolLit(false),
+            "_" => Token::Wildcard,
+            other => Token::Ident(other.to_string()),
+        }
     });
 
     // ---- Decimal literals ----
