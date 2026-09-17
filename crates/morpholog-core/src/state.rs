@@ -10,7 +10,8 @@
 use jiff::civil::Date;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::ir::{IntentName, PredicateName, Subject, Unit, Var};
 
@@ -98,22 +99,45 @@ pub struct ClaimInstance {
 /// PG adapter persists this set as rows in `morpholog.claims`; this
 /// in-memory representation is what the kernel evaluates against.
 ///
-/// Internally indexed by predicate name AND by `(predicate, arg
-/// position, arg value)` to support ground-argument lookup. Construct
-/// via [`State::from_claims`] or [`State::default`]; mutation is not
-/// part of the API (the indexes would otherwise go stale). The
-/// public accessors are [`State::claims`] (all admitted claims, in
-/// construction order) and [`State::claims_for`] (`O(1)` lookup of
-/// all claims for a given predicate). Argument-position lookup is
-/// internal to the kernel and used by `find_claim_matches` to narrow
-/// the candidate set when any argument is already ground.
-#[derive(Clone, Default, PartialEq, Eq)]
+/// Two layers: a base shared between a state and every state derived
+/// from it, and an overlay of what changed since. A candidate built by
+/// [`State::with_delta`] shares its pre-state's base and copies only the
+/// overlay, so building it costs the uncompacted overlay plus the act's
+/// own delta, never the base. When the overlay has grown past a
+/// fraction of the base it is folded into a fresh base, once.
+///
+/// The logical claim sequence is the base in construction order minus
+/// retractions, then the additions in order. Retracting and later
+/// re-admitting a claim appends a new entry at the tail; it never
+/// revives the old position. Two states are equal when their logical
+/// sequences are equal, whatever their layering.
+///
+/// Indexed by predicate name and by `(predicate, arg position, arg
+/// value)` so the evaluator can narrow a claim pattern to the smallest
+/// bucket a ground argument names. Construct via [`State::from_claims`]
+/// or [`State::default`]; derive a successor via [`State::with_delta`].
+#[derive(Clone, Default)]
 pub struct State {
+    base: Arc<Layer>,
+    /// Claims admitted since the base, in admission order.
+    overlay: Layer,
+    /// Parallel to `overlay.claims`: an entry retracted after it was
+    /// admitted stays in place, dead, until compaction.
+    dead_overlay: Vec<bool>,
+    /// Positions in the base retracted since it was built.
+    dead_base: HashSet<usize>,
+    /// The logical claim count.
+    live: usize,
+}
+
+/// One indexed run of claims: the base, or the overlay.
+#[derive(Clone, Default)]
+struct Layer {
     claims: Vec<ClaimInstance>,
     by_predicate: HashMap<PredicateName, PredicateIndex>,
 }
 
-/// Per-predicate index entry stored on [`State`]. Holds the
+/// Per-predicate index entry stored on a [`Layer`]. Holds the
 /// construction-order positions of every claim with this predicate,
 /// plus a secondary index keyed on `(arg position, arg value)` for
 /// ground-argument lookup.
@@ -121,92 +145,47 @@ pub struct State {
 /// `by_arg` grows lazily as predicates of varying arity are observed:
 /// position `p` gets a map only when some claim of this predicate has
 /// at least `p + 1` args.
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default)]
 struct PredicateIndex {
-    /// Indices into `State.claims` for every claim with this predicate.
+    /// Indices into `Layer.claims` for every claim with this predicate.
     all: Vec<usize>,
-    /// `by_arg[position][value]` -> indices into `State.claims` for
+    /// `by_arg[position][value]` -> indices into `Layer.claims` for
     /// claims with this predicate where `args[position] == value`.
     by_arg: Vec<HashMap<EvalValue, Vec<usize>>>,
 }
 
-impl std::fmt::Debug for State {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("State")
-            .field("claims", &self.claims)
-            .finish_non_exhaustive()
-    }
-}
-
-impl State {
-    /// Build a `State` from a vector of admitted claims. Builds two
-    /// indexes during construction: a per-predicate bucket of claim
-    /// positions, and a per-`(predicate, arg position, arg value)`
-    /// bucket of claim positions for ground-argument lookup. Both
-    /// indexes are immutable thereafter; the State itself is
-    /// immutable.
-    pub fn from_claims(claims: Vec<ClaimInstance>) -> Self {
-        let mut by_predicate: HashMap<PredicateName, PredicateIndex> = HashMap::new();
-        for (i, c) in claims.iter().enumerate() {
-            let entry = by_predicate.entry(c.predicate.clone()).or_default();
-            entry.all.push(i);
-            if entry.by_arg.len() < c.args.len() {
-                entry.by_arg.resize_with(c.args.len(), HashMap::new);
-            }
-            for (pos, value) in c.args.iter().enumerate() {
-                entry.by_arg[pos].entry(value.clone()).or_default().push(i);
-            }
+impl Layer {
+    fn from_claims(claims: Vec<ClaimInstance>) -> Self {
+        let mut layer = Layer::default();
+        for claim in claims {
+            layer.push(claim);
         }
-        Self {
-            claims,
-            by_predicate,
+        layer
+    }
+
+    fn push(&mut self, claim: ClaimInstance) {
+        let i = self.claims.len();
+        let entry = self
+            .by_predicate
+            .entry(claim.predicate.clone())
+            .or_default();
+        entry.all.push(i);
+        if entry.by_arg.len() < claim.args.len() {
+            entry.by_arg.resize_with(claim.args.len(), HashMap::new);
         }
+        for (pos, value) in claim.args.iter().enumerate() {
+            entry.by_arg[pos].entry(value.clone()).or_default().push(i);
+        }
+        self.claims.push(claim);
     }
 
-    /// All admitted claims, in the order supplied to
-    /// [`State::from_claims`]. Read-only.
-    pub fn claims(&self) -> &[ClaimInstance] {
-        &self.claims
-    }
-
-    /// Iterator over every admitted claim whose predicate name matches
-    /// `predicate`. `O(1)` to find the bucket; iteration is linear in
-    /// the bucket's size. Returns an empty iterator when no claims of
-    /// that predicate are admitted.
-    pub fn claims_for<'a>(
-        &'a self,
-        predicate: &str,
-    ) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
-        self.by_predicate
-            .get(&PredicateName::from(predicate))
-            .map(|idx| idx.all.iter().map(|&i| &self.claims[i]))
-            .into_iter()
-            .flatten()
-    }
-
-    /// Like [`State::claims_for`] but takes an owned-typed name, so the
-    /// hot evaluator path - which already holds a `PredicateName` from
-    /// the IR - looks up without allocating one per call.
-    pub(crate) fn claims_for_name<'a>(
-        &'a self,
-        predicate: &PredicateName,
-    ) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
+    fn bucket(&self, predicate: &PredicateName) -> &[usize] {
         self.by_predicate
             .get(predicate)
-            .map(|idx| idx.all.iter().map(|&i| &self.claims[i]))
-            .into_iter()
-            .flatten()
+            .map_or(&[], |idx| idx.all.as_slice())
     }
 
-    /// Indices into `claims()` for every claim where `predicate`
-    /// matches AND `args[position] == value`. `O(1)` lookup. Returns
-    /// `None` when no claim of this predicate has this value at this
-    /// position, which the caller uses to short-circuit an empty
-    /// intersection. Internal to the kernel; used by
-    /// `find_claim_matches` to narrow the candidate set when at least
-    /// one argument is already ground (a literal in the IR, or a
-    /// variable already bound in the surrounding context).
-    pub(crate) fn claim_indices_for_arg(
+    fn arg_bucket(
         &self,
         predicate: &PredicateName,
         position: usize,
@@ -219,20 +198,287 @@ impl State {
             .map(Vec::as_slice)
     }
 
-    /// Look up a claim by its `claims()` index. Used internally
-    /// alongside [`State::claim_indices_for_arg`] when iterating an
-    /// argument-position bucket.
-    pub(crate) fn claim_at(&self, index: usize) -> &ClaimInstance {
-        &self.claims[index]
+    /// The positions to check for an exact copy of `claim`: the
+    /// smallest bucket one of its arguments names, else every claim of
+    /// its predicate.
+    fn candidates_for(&self, claim: &ClaimInstance) -> &[usize] {
+        let mut best = self.bucket(&claim.predicate);
+        for (pos, value) in claim.args.iter().enumerate() {
+            match self.arg_bucket(&claim.predicate, pos, value) {
+                None => return &[],
+                Some(bucket) if bucket.len() < best.len() => best = bucket,
+                Some(_) => {}
+            }
+        }
+        best
+    }
+}
+
+/// The compaction floor: below this much churn the overlay is never
+/// folded, whatever the base's size. A performance policy, not a
+/// semantic constant; the logical state is the same either way.
+const COMPACTION_FLOOR: usize = 512;
+
+impl std::fmt::Debug for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("State")
+            .field("claims", &self.claims().to_vec())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for State {
+    fn eq(&self, other: &Self) -> bool {
+        self.live == other.live && self.claims().iter().eq(other.claims().iter())
+    }
+}
+
+impl Eq for State {}
+
+impl State {
+    /// Build a `State` from a vector of admitted claims: one base, an
+    /// empty overlay. The claims are kept in the order supplied.
+    pub fn from_claims(claims: Vec<ClaimInstance>) -> Self {
+        let live = claims.len();
+        Self {
+            base: Arc::new(Layer::from_claims(claims)),
+            overlay: Layer::default(),
+            dead_overlay: Vec::new(),
+            dead_base: HashSet::new(),
+            live,
+        }
+    }
+
+    /// The state after retracting `retracted` and then admitting
+    /// `asserted`: retracting what is absent and admitting what is
+    /// present are no-ops, and a claim retracted and admitted in one
+    /// delta ends up at the tail. Shares this state's base; copies the
+    /// overlay.
+    pub fn with_delta(&self, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) -> State {
+        let threshold = (self.base.claims.len() / 8).max(COMPACTION_FLOOR);
+        self.with_delta_under(asserted, retracted, threshold)
+    }
+
+    /// [`State::with_delta`] folding into a fresh base once the churn
+    /// (retracted base positions plus every overlay slot, dead or
+    /// alive) exceeds `threshold`, so a test can drive every layering
+    /// of one logical history.
+    pub(crate) fn with_delta_under(
+        &self,
+        asserted: &[ClaimInstance],
+        retracted: &[ClaimInstance],
+        threshold: usize,
+    ) -> State {
+        let mut next = self.clone();
+        for claim in retracted {
+            next.retract(claim);
+        }
+        for claim in asserted {
+            if !next.contains(claim) {
+                next.overlay.push(claim.clone());
+                next.dead_overlay.push(false);
+                next.live += 1;
+            }
+        }
+        let churn = next.dead_base.len() + next.overlay.claims.len();
+        if churn > threshold {
+            return State::from_claims(next.claims().to_vec());
+        }
+        next
+    }
+
+    fn retract(&mut self, claim: &ClaimInstance) {
+        let base = Arc::clone(&self.base);
+        for &i in base.candidates_for(claim) {
+            if base.claims[i] == *claim && self.dead_base.insert(i) {
+                self.live -= 1;
+            }
+        }
+        for &i in self.overlay.candidates_for(claim).to_vec().iter() {
+            if !self.dead_overlay[i] && self.overlay.claims[i] == *claim {
+                self.dead_overlay[i] = true;
+                self.live -= 1;
+            }
+        }
+    }
+
+    /// Whether an exact copy of `claim` is admitted.
+    pub fn contains(&self, claim: &ClaimInstance) -> bool {
+        self.base
+            .candidates_for(claim)
+            .iter()
+            .any(|&i| !self.dead_base.contains(&i) && self.base.claims[i] == *claim)
+            || self
+                .overlay
+                .candidates_for(claim)
+                .iter()
+                .any(|&i| !self.dead_overlay[i] && self.overlay.claims[i] == *claim)
+    }
+
+    /// All admitted claims in logical order. Read-only.
+    pub fn claims(&self) -> Claims<'_> {
+        Claims { state: self }
+    }
+
+    /// Every admitted claim whose predicate name matches `predicate`,
+    /// in logical order. `O(1)` to find the buckets; iteration is
+    /// linear in their size.
+    pub fn claims_for<'a>(
+        &'a self,
+        predicate: &str,
+    ) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
+        let name = PredicateName::from(predicate);
+        let base = self.base.bucket(&name).to_vec();
+        let overlay = self.overlay.bucket(&name).to_vec();
+        base.into_iter()
+            .filter(move |i| !self.dead_base.contains(i))
+            .map(move |i| &self.base.claims[i])
+            .chain(
+                overlay
+                    .into_iter()
+                    .filter(move |&i| !self.dead_overlay[i])
+                    .map(move |i| &self.overlay.claims[i]),
+            )
+    }
+
+    /// Like [`State::claims_for`] but takes the typed name the hot
+    /// evaluator path already holds, so no name is allocated per call.
+    pub(crate) fn claims_for_name<'a>(
+        &'a self,
+        predicate: &PredicateName,
+    ) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
+        self.base
+            .bucket(predicate)
+            .iter()
+            .filter(move |i| !self.dead_base.contains(i))
+            .map(move |&i| &self.base.claims[i])
+            .chain(
+                self.overlay
+                    .bucket(predicate)
+                    .iter()
+                    .filter(move |&&i| !self.dead_overlay[i])
+                    .map(move |&i| &self.overlay.claims[i]),
+            )
+    }
+
+    /// The claims a ground argument narrows a pattern to: every
+    /// admitted claim of `predicate` with `value` at `position`.
+    /// `None` when no claim of this predicate ever carried this value
+    /// at this position, which the caller uses to short-circuit an
+    /// empty intersection; a bucket whose every entry was retracted is
+    /// `Some` and yields nothing, which reads the same.
+    pub(crate) fn claim_candidates(
+        &self,
+        predicate: &PredicateName,
+        position: usize,
+        value: &EvalValue,
+    ) -> Option<CandidateBucket<'_>> {
+        let base = self.base.arg_bucket(predicate, position, value);
+        let overlay = self.overlay.arg_bucket(predicate, position, value);
+        if base.is_none() && overlay.is_none() {
+            return None;
+        }
+        Some(CandidateBucket {
+            state: self,
+            base: base.unwrap_or(&[]),
+            overlay: overlay.unwrap_or(&[]),
+        })
     }
 
     /// Total number of admitted claims across all predicates.
     pub fn len(&self) -> usize {
-        self.claims.len()
+        self.live
     }
 
     pub fn is_empty(&self) -> bool {
-        self.claims.is_empty()
+        self.live == 0
+    }
+}
+
+/// The admitted claims of a [`State`], in logical order.
+#[derive(Clone, Copy)]
+pub struct Claims<'a> {
+    state: &'a State,
+}
+
+impl<'a> Claims<'a> {
+    pub fn iter(&self) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
+        let state = self.state;
+        state
+            .base
+            .claims
+            .iter()
+            .enumerate()
+            .filter(move |(i, _)| !state.dead_base.contains(i))
+            .map(|(_, c)| c)
+            .chain(
+                state
+                    .overlay
+                    .claims
+                    .iter()
+                    .zip(&state.dead_overlay)
+                    .filter(|(_, dead)| !**dead)
+                    .map(|(c, _)| c),
+            )
+    }
+
+    pub fn len(&self) -> usize {
+        self.state.live
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.state.live == 0
+    }
+
+    pub fn to_vec(self) -> Vec<ClaimInstance> {
+        self.iter().cloned().collect()
+    }
+}
+
+impl std::fmt::Debug for Claims<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl<'a> IntoIterator for Claims<'a> {
+    type Item = &'a ClaimInstance;
+    type IntoIter = Box<dyn Iterator<Item = &'a ClaimInstance> + 'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(self.iter())
+    }
+}
+
+/// The admitted claims of one predicate sharing one ground argument
+/// value: what the evaluator checks a pattern against once an argument
+/// has narrowed it. Layering is the state's business; the evaluator
+/// sees an estimated size and the claims.
+pub(crate) struct CandidateBucket<'a> {
+    state: &'a State,
+    base: &'a [usize],
+    overlay: &'a [usize],
+}
+
+impl<'a> CandidateBucket<'a> {
+    /// An upper bound on the claims the bucket yields, for choosing the
+    /// smallest bucket; retracted entries still count.
+    pub(crate) fn estimate_len(&self) -> usize {
+        self.base.len() + self.overlay.len()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
+        let state = self.state;
+        self.base
+            .iter()
+            .filter(move |i| !state.dead_base.contains(i))
+            .map(move |&i| &state.base.claims[i])
+            .chain(
+                self.overlay
+                    .iter()
+                    .filter(move |&&i| !state.dead_overlay[i])
+                    .map(move |&i| &state.overlay.claims[i]),
+            )
     }
 }
 

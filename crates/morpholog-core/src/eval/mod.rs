@@ -24,7 +24,7 @@ use crate::ir::{
     ArithOp, Builtin, CompareOp, Definition, DefinitionName, OrderedDomain, PredicateName, Prop,
     Subject, Term, Value, ValueExpr, Var,
 };
-use crate::state::{Bindings, ClaimInstance, EvalValue, State};
+use crate::state::{Bindings, CandidateBucket, ClaimInstance, EvalValue, State};
 
 /// Errors raised by the evaluator and the transformation runner: an
 /// expression or transformation was structurally ill-formed and cannot
@@ -699,8 +699,8 @@ enum Candidates<'a> {
     /// A ground argument named a `(predicate, position, value)` bucket
     /// that does not exist, so no admitted claim can match.
     None,
-    /// The narrowed bucket of `State::claims()` indices to check.
-    Indexed(&'a [usize]),
+    /// The narrowed bucket of claims to check.
+    Indexed(CandidateBucket<'a>),
     /// No ground argument to narrow on; every claim of this predicate
     /// is a candidate.
     All,
@@ -735,7 +735,7 @@ fn select_candidates<'a>(
         return Err(EvalError::UnboundActor);
     }
 
-    let mut best: Option<&[usize]> = None;
+    let mut best: Option<CandidateBucket<'a>> = None;
     for (pos, term) in args.iter().enumerate() {
         let ground = match term {
             Term::Wildcard => None,
@@ -763,10 +763,10 @@ fn select_candidates<'a>(
         let Some(value) = ground else {
             continue;
         };
-        match state.claim_indices_for_arg(predicate, pos, &value) {
+        match state.claim_candidates(predicate, pos, &value) {
             None => return Ok(Candidates::None),
-            Some(bucket) => match best {
-                Some(prev) if prev.len() <= bucket.len() => {}
+            Some(bucket) => match &best {
+                Some(prev) if prev.estimate_len() <= bucket.estimate_len() => {}
                 _ => best = Some(bucket),
             },
         }
@@ -790,8 +790,7 @@ pub(crate) fn find_claim_matches(
     match select_candidates(predicate, args, ctx)? {
         Candidates::None => {}
         Candidates::Indexed(bucket) => {
-            for &i in bucket {
-                let claim = state.claim_at(i);
+            for claim in bucket.iter() {
                 if claim.args.len() != args.len() {
                     continue;
                 }
@@ -834,8 +833,7 @@ pub(crate) fn matching_claims(
     match select_candidates(predicate, args, ctx)? {
         Candidates::None => {}
         Candidates::Indexed(bucket) => {
-            for &i in bucket {
-                let claim = state.claim_at(i);
+            for claim in bucket.iter() {
                 if claim.args.len() == args.len() && claim_matches(args, &claim.args, base, actor) {
                     out.push(claim.clone());
                 }
@@ -1402,8 +1400,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             match select_candidates(predicate, args, ctx)? {
                 Candidates::None => {}
                 Candidates::Indexed(bucket) => {
-                    for &i in bucket {
-                        let claim = ctx.state.claim_at(i);
+                    for claim in bucket.iter() {
                         if claim.args.len() == args.len()
                             && claim_matches(args, &claim.args, ctx.bindings, ctx.actor)
                         {
