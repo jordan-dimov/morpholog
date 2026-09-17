@@ -101,7 +101,7 @@ pub struct ClaimInstance {
 ///
 /// Two layers: a base shared between a state and every state derived
 /// from it, and an overlay of what changed since. A candidate built by
-/// [`State::with_delta`] shares its pre-state's base and copies only the
+/// `with_delta` shares its pre-state's base and copies only the
 /// overlay, so building it costs the uncompacted overlay plus the act's
 /// own delta, never the base. When the overlay has grown past a
 /// fraction of the base it is folded into a fresh base, once.
@@ -115,7 +115,7 @@ pub struct ClaimInstance {
 /// Indexed by predicate name and by `(predicate, arg position, arg
 /// value)` so the evaluator can narrow a claim pattern to the smallest
 /// bucket a ground argument names. Construct via [`State::from_claims`]
-/// or [`State::default`]; derive a successor via [`State::with_delta`].
+/// or [`State::default`]; derive a successor via `with_delta`.
 #[derive(Clone, Default)]
 pub struct State {
     base: Arc<Layer>,
@@ -263,7 +263,7 @@ impl State {
         self.with_delta_under(asserted, retracted, threshold)
     }
 
-    /// [`State::with_delta`] folding into a fresh base once the churn
+    /// `with_delta` folding into a fresh base once the churn
     /// (retracted base positions plus every overlay slot, dead or
     /// alive) exceeds `threshold`, so a test can drive every layering
     /// of one logical history.
