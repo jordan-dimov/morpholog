@@ -62,16 +62,16 @@ async fn a_candidate_history_violates_reports_the_introducing_commit() {
     let report = score_candidate(&pool, &candidate(inv), None).await.unwrap();
 
     assert_eq!(report.transitions_replayed, 2);
-    assert_eq!(report.semantics, "fresh_state_violation_v1");
+    assert_eq!(report.semantics, "case_bound_admission_v2");
     assert!(report.program_hash.starts_with("sha256:"));
 
     let scored = &report.invariants[0];
     assert_eq!(scored.invariant, "NoEntries");
-    // The FIRST entry introduces the violation; the second inherits it
-    // (entries persist), so fresh-violation counts only the introducing
-    // commit - this is the semantics, not an under-count.
-    assert_eq!(scored.would_refuse, 1);
-    assert_eq!(scored.refused_transitions.len(), 1);
+    // Each entry is its own forbidden case, so admission under the
+    // candidate would have refused both commits: an inherited violation
+    // never hides a fresh one - this is the semantics, not an over-count.
+    assert_eq!(scored.would_refuse, 2);
+    assert_eq!(scored.refused_transitions.len(), 2);
 }
 
 #[tokio::test]
@@ -130,7 +130,7 @@ async fn pack_backed_score_reproduces_the_database_score() {
         serde_json::to_value(&online).unwrap(),
         serde_json::to_value(&offline).unwrap(),
     );
-    assert_eq!(offline.invariants[0].would_refuse, 1);
+    assert_eq!(offline.invariants[0].would_refuse, 2);
 }
 
 #[tokio::test]
@@ -235,7 +235,7 @@ async fn batch_over_packs_equals_individual_scores() {
 
     let batch = score_candidate_against_packs(&candidate, &cases).unwrap();
     assert_eq!(batch.cases.len(), 3);
-    assert_eq!(batch.semantics, "fresh_state_violation_v1");
+    assert_eq!(batch.semantics, "case_bound_admission_v2");
 
     // Each batch case equals the individual single-pack score on the
     // substantive fields (the batch hoists candidate identity).
@@ -321,9 +321,9 @@ async fn a_split_attributes_violations_to_their_introducing_slice() {
     let e0 = common::commit_entry(&pool, "e0").await;
     common::commit_entry(&pool, "e1").await;
 
-    // NoEntries is introduced by e0 - the boundary transition itself -
-    // so it counts in train and its inherited presence never recounts
-    // in test. NoE1 is introduced by e1, after the boundary.
+    // NoEntries is violated afresh by e0 - the boundary transition
+    // itself, in train - and again by e1, in test. NoE1 names e1 alone,
+    // so e0 never touches it and only the test slice charges it.
     let boundary = Some(morpholog_postgres::SplitBoundary::Transition(e0));
     let train_hit = score_candidate(&pool, &no_entries(), boundary)
         .await
@@ -333,7 +333,7 @@ async fn a_split_attributes_violations_to_their_introducing_slice() {
     assert_eq!(split.train.transitions_replayed, 1);
     assert_eq!(split.test.transitions_replayed, 1);
     assert_eq!(split.train.invariants[0].would_refuse, 1);
-    assert_eq!(split.test.invariants[0].would_refuse, 0);
+    assert_eq!(split.test.invariants[0].would_refuse, 1);
 
     let test_hit = score_candidate(&pool, &no_e1(), boundary).await.unwrap();
     let split = test_hit.split.expect("split was requested");

@@ -1809,7 +1809,7 @@ pub(crate) struct Failure {
 }
 
 impl Failure {
-    fn here(prop: &Prop, ctx: &EvalContext<'_>) -> Self {
+    pub(crate) fn here(prop: &Prop, ctx: &EvalContext<'_>) -> Self {
         Self {
             rendered: crate::format::format_prop_inline(prop),
             bindings: ctx.bindings.clone(),

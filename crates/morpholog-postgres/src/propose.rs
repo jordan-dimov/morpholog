@@ -4,10 +4,10 @@ use crate::error::{PgError, classify, classify_checked_query, classify_commit};
 use crate::program::{PgProgram, Route};
 use crate::txn::begin_authorised_proposal_tx;
 use morpholog_core::{
-    ClaimInstance, CompiledProgram, Definition, EvalError, EvalValue, IntentInstance, Invariant,
-    InvariantName, Outcome, PredicateName, RejectionReason, RuleName, StagedDelta, State, Subject,
-    TraceEntry, TracedProposal, Transformation, TransformationName, Transition, WitnessBinding,
-    propose, propose_stage_delta, propose_with_trace,
+    Admission, ClaimInstance, CompiledProgram, Definition, EffectiveDelta, EvalError, EvalValue,
+    IntentInstance, Invariant, InvariantName, Outcome, PredicateName, RejectionReason, RuleName,
+    StagedDelta, State, Subject, TraceEntry, TracedProposal, Transformation, TransformationName,
+    Transition, WitnessBinding, propose_stage_delta, propose_with, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -84,16 +84,15 @@ pub async fn propose_against_pg(
     program: &PgProgram,
     proposal: &Proposal,
 ) -> Result<PgProposalOutcome, PgError> {
-    let (transformation, invariants, definitions) =
-        resolve(program.core(), &proposal.transformation_name)?;
+    let (transformation, admission) =
+        resolve_admission(program.core(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
         program.route(),
         transformation,
         &transition,
-        invariants,
-        definitions,
+        &admission,
         false,
     )
     .await?;
@@ -127,6 +126,16 @@ pub(crate) fn resolve<'a>(
     ))
 }
 
+/// [`resolve`] plus the programme's admission rules, with the impact
+/// plans it built at construction.
+pub(crate) fn resolve_admission<'a>(
+    compiled: &'a CompiledProgram,
+    name: &TransformationName,
+) -> Result<(&'a Transformation, Admission<'a>), PgError> {
+    let (transformation, _, _) = resolve(compiled, name)?;
+    Ok((transformation, compiled.admission()))
+}
+
 /// The interpreted propose primitive for the compensation path, which
 /// proposes from a [`CompensationSpec`]'s own transformation,
 /// invariants and definitions rather than a programme object.
@@ -142,8 +151,7 @@ pub(crate) async fn propose_against_pg_inner(
         Route::Interpreted,
         transformation,
         transition,
-        invariants,
-        definitions,
+        &Admission::of(invariants, definitions),
         false,
     )
     .await?;
@@ -158,16 +166,15 @@ pub async fn propose_against_pg_timed(
     program: &PgProgram,
     proposal: &Proposal,
 ) -> Result<TimedProposalOutcome, PgError> {
-    let (transformation, invariants, definitions) =
-        resolve(program.core(), &proposal.transformation_name)?;
+    let (transformation, admission) =
+        resolve_admission(program.core(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
         program.route(),
         transformation,
         &transition,
-        invariants,
-        definitions,
+        &admission,
         true,
     )
     .await?;
@@ -244,16 +251,15 @@ pub async fn propose_against_pg_with_rejection_state(
     program: &PgProgram,
     proposal: &Proposal,
 ) -> Result<RejectionStateOutcome, PgError> {
-    let (transformation, invariants, definitions) =
-        resolve(program.core(), &proposal.transformation_name)?;
+    let (transformation, admission) =
+        resolve_admission(program.core(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
         Route::Interpreted,
         transformation,
         &transition,
-        invariants,
-        definitions,
+        &admission,
         false,
     )
     .await?;
@@ -268,10 +274,11 @@ pub(crate) async fn propose_against_pg_run(
     route: Route<'_>,
     transformation: &Transformation,
     transition: &Transition,
-    invariants: &[Invariant],
-    definitions: &[Definition],
+    admission: &Admission<'_>,
     timed: bool,
 ) -> Result<ProposalRun, PgError> {
+    let invariants = admission.invariants;
+    let definitions = admission.definitions;
     let clock = timed.then(std::time::Instant::now);
     let elapsed = |clock: Option<std::time::Instant>| {
         clock.map_or(std::time::Duration::ZERO, |c| c.elapsed())
@@ -285,7 +292,7 @@ pub(crate) async fn propose_against_pg_run(
 
     let (decided, rejection_state) = match route {
         Route::Interpreted => {
-            let outcome = propose(transformation, transition, &state, invariants, definitions)?;
+            let outcome = propose_with(transformation, transition, &state, admission)?;
             let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
             (Decided::Kernel(outcome), rejection_state)
         }
@@ -301,10 +308,18 @@ pub(crate) async fn propose_against_pg_run(
                     emitted,
                 } => {
                     let transition_id = Uuid::now_v7();
-                    write_claim_delta(&mut tx, transition_id, &asserted, &retracted).await?;
+                    // The database says what the delta changed; the
+                    // obligation is bounded to exactly that.
+                    let effective =
+                        write_claim_delta(&mut tx, transition_id, &asserted, &retracted).await?;
                     disable_jit(&mut tx).await?;
                     let violation = set
-                        .first_violation(&mut tx, Stage::Full, &asserted, &retracted)
+                        .first_violation(
+                            &mut tx,
+                            Stage::CaseBound,
+                            &effective.asserted,
+                            &effective.retracted,
+                        )
                         .await?;
                     match violation {
                         Some(v) => {
@@ -627,8 +642,10 @@ pub(crate) async fn load_state(
 }
 
 /// What a loaded state must serve: the transformation body alone,
-/// when the compiled checks read the candidate from the claims table,
-/// or the body and the interpreter's invariant evaluation.
+/// when the compiled checks read the candidate from the claims table
+/// and the table itself reports the effective delta, or the body, the
+/// interpreter's invariant evaluation, and the effective delta the
+/// interpreter computes from the state it holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Reads {
     Body,
@@ -642,9 +659,10 @@ pub(crate) enum Reads {
 ///   body (via `morpholog_core::predicates_read_by_stmt`).
 /// - With [`Reads::BodyAndInvariants`], every predicate referenced by
 ///   every invariant body (via
-///   `morpholog_core::predicates_referenced_by_prop`). The interpreter
-///   evaluates invariants against the candidate state, so any
-///   predicate an invariant inspects must be loaded.
+///   `morpholog_core::predicates_referenced_by_prop`), since the
+///   interpreter evaluates invariants against the candidate state, and
+///   every predicate the body admits, since the interpreter decides
+///   from the state it holds whether an admit changed anything.
 ///
 /// `Stmt::Assert`'s output predicate is deliberately NOT in the read
 /// set: the assert stages a new claim rather than reading existing
@@ -671,13 +689,19 @@ pub(crate) fn compute_load_scope(
         for inv in invariants {
             morpholog_core::predicates_referenced_by_prop(&inv.body, definitions, &mut scope);
         }
+        for stmt in &transformation.body {
+            morpholog_core::predicates_asserted_by_stmt(stmt, &mut scope);
+        }
     }
     scope.into_iter().collect()
 }
 
-/// One entry in an audit row's `invariants_checked` JSONB array.
-/// Recorded per committed transformation: the invariant `name` plus
-/// the `version` active at admission time.
+/// One entry in an audit row's `invariants_checked` JSONB array: an
+/// active invariant the transition was admitted under, by `name` and
+/// the `version` active at admission time. Discharged because the
+/// effective delta could not affect it, because every affected case
+/// satisfied it, or because the whole invariant was evaluated and
+/// held; the row lists every active invariant either way.
 ///
 /// Named `AuditedInvariantCheck`, not `InvariantCheck`, to disambiguate
 /// from the kernel's `TraceEntry::InvariantCheck`: this is the durable
@@ -780,15 +804,17 @@ pub(crate) async fn write_rejection(
 /// Apply an accepted delta to the claims table: retraction DELETEs,
 /// then assertion INSERTs. The claims half of [`write_accepted`],
 /// separated so a caller inside an open transaction can make the
-/// claims table the candidate state before deciding anything else
-/// (the compiled-invariant differential does exactly that, then
-/// rolls back).
+/// claims table the candidate state before deciding anything else.
+/// Returns the effective delta under core's one rule, the table
+/// answering membership: a retraction that deleted a row found the
+/// claim present, an insertion that changed nothing found it present.
 pub(crate) async fn write_claim_delta(
     tx: &mut Transaction<'_, Postgres>,
     transition_id: Uuid,
     asserted_claims: &[ClaimInstance],
     retracted_claims: &[ClaimInstance],
-) -> Result<(), PgError> {
+) -> Result<EffectiveDelta, PgError> {
+    let mut present: HashSet<ClaimInstance> = HashSet::new();
     // Retractions: dedupe, then delete each distinct claim. Exactly
     // one row per distinct retraction is expected; zero rows means a
     // persistent-state mismatch (concurrent interference, which SSI
@@ -822,6 +848,7 @@ pub(crate) async fn write_claim_delta(
                 result.rows_affected()
             )));
         }
+        present.insert(claim.clone());
     }
 
     // Assertions: ON CONFLICT DO NOTHING preserves the set-valued
@@ -829,7 +856,7 @@ pub(crate) async fn write_claim_delta(
     // idempotent no-op).
     for claim in asserted_claims {
         let args_json: serde_json::Value = serde_json::to_value(&claim.args)?;
-        sqlx::query!(
+        let result = sqlx::query!(
             "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
              VALUES ($1, $2, $3)
              ON CONFLICT (predicate_name, arguments_hash) DO NOTHING",
@@ -840,9 +867,17 @@ pub(crate) async fn write_claim_delta(
         .execute(&mut **tx)
         .await
         .map_err(classify_checked_query)?;
+        // A claim this delta retracted was re-inserted just now, so a
+        // changed row says nothing about the pre-state; only a claim
+        // the delta did not retract reports its presence here.
+        if result.rows_affected() == 0 && !present.contains(claim) {
+            present.insert(claim.clone());
+        }
     }
 
-    Ok(())
+    Ok(EffectiveDelta::of(asserted_claims, retracted_claims, |c| {
+        present.contains(c)
+    }))
 }
 
 /// Persist an accepted outcome whole: the claim delta, then the
@@ -860,7 +895,7 @@ pub(crate) async fn write_accepted(
     emitted_intents: &[IntentInstance],
     login_role: &str,
 ) -> Result<(), PgError> {
-    write_claim_delta(tx, transition_id, asserted_claims, retracted_claims).await?;
+    let _ = write_claim_delta(tx, transition_id, asserted_claims, retracted_claims).await?;
     write_acceptance_record(
         tx,
         transition_id,
@@ -876,7 +911,8 @@ pub(crate) async fn write_accepted(
 }
 
 /// The record of an admitted transition: the audit row and one outbox
-/// row per emitted intent. Written after every invariant has held,
+/// row per emitted intent. Written after every invariant's obligation
+/// has been discharged,
 /// whichever evaluator checked them; `invariants_checked` lists the
 /// whole programme's invariants either way, so the audit leaf does not
 /// depend on the route.

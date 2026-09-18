@@ -257,6 +257,29 @@ pub fn predicates_read_by_stmt(
     }
 }
 
+/// The predicates a statement admits: the assert targets, through
+/// `For` bodies. What a loaded pre-state must hold for the effective
+/// delta to be exact - an admit of a claim already present changes
+/// nothing, and only the loaded state can say so.
+pub fn predicates_asserted_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
+    match stmt {
+        Stmt::Assert(claim) => {
+            out.insert(claim.predicate.clone());
+        }
+        Stmt::For { body, .. } => {
+            for inner in body {
+                predicates_asserted_by_stmt(inner, out);
+            }
+        }
+        Stmt::Require { .. }
+        | Stmt::BindOne { .. }
+        | Stmt::Let { .. }
+        | Stmt::LetNewSubject { .. }
+        | Stmt::Retract { .. }
+        | Stmt::Emit(_) => {}
+    }
+}
+
 /// Return the names of every transformation in `program` whose body
 /// asserts `predicate`, in declaration order. This is the one-hop
 /// "what could supply this claim?" lookup the explanation engine uses

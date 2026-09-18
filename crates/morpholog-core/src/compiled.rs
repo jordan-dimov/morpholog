@@ -21,7 +21,9 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
+use crate::admission::Admission;
 use crate::definitions::DefinitionTable;
+use crate::impact::ImpactPlan;
 use crate::ir::{
     Definition, DefinitionName, DerivedClaim, IntentDecl, IntentName, Invariant, InvariantName,
     PredicateDecl, PredicateName, Program, Transformation, TransformationName,
@@ -51,6 +53,9 @@ pub struct CompiledProgram {
     /// Derived claims are keyed by their output predicate, matching
     /// [`Program::derived_claim`].
     derived_claims: HashMap<PredicateName, usize>,
+    /// One impact plan per invariant, in order, built once here so the
+    /// commit path plans nothing per proposal.
+    impact: Vec<ImpactPlan>,
 }
 
 impl CompiledProgram {
@@ -65,7 +70,9 @@ impl CompiledProgram {
     /// index guarantees.
     pub fn new(program: Program) -> Result<Self, Vec<ValidationError>> {
         program.validate()?;
+        let impact = program.invariants.iter().map(ImpactPlan::new).collect();
         Ok(Self {
+            impact,
             transformations: position_index(&program.transformations, |t| t.name.clone()),
             invariants: position_index(&program.invariants, |i| i.name.clone()),
             predicates: position_index(&program.predicates, |p| p.name.clone()),
@@ -78,6 +85,16 @@ impl CompiledProgram {
     /// Borrow the underlying validated programme.
     pub fn program(&self) -> &Program {
         &self.program
+    }
+
+    /// The rules a transition is admitted under, with the plans built
+    /// at construction.
+    pub fn admission(&self) -> Admission<'_> {
+        Admission::with_plans(
+            &self.program.invariants,
+            &self.program.definitions,
+            &self.impact,
+        )
     }
 
     /// A borrowed proof-of-validity view, for the analysis API that

@@ -13,8 +13,10 @@
 use std::collections::BTreeSet;
 
 use crate::definitions::DefinitionTable;
-use crate::eval::{EvalContext, EvalError, eval_value, find_matches};
-use crate::ir::{Definition, DerivedClaim, Invariant};
+use std::collections::BTreeMap;
+
+use crate::eval::{EvalContext, EvalError, Failure, eval_value, find_failure, find_matches};
+use crate::ir::{Definition, DerivedClaim, Invariant, Prop, Var};
 use crate::propose::WitnessBinding;
 use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 
@@ -42,6 +44,94 @@ pub fn eval_invariant(
         let matches = find_matches(&inv.body, ctx)?;
         Ok(!matches.is_empty())
     })
+}
+
+/// A case restricts a binding when every variable it fixes has that
+/// value in the binding; a binding is in scope when any case does.
+fn in_cases(binding: &Bindings, cases: &[BTreeMap<Var, EvalValue>]) -> bool {
+    cases
+        .iter()
+        .any(|case| case.iter().all(|(v, ev)| binding.get(v) == Some(ev)))
+}
+
+/// [`eval_invariant`] over the touched cases only: the top-level
+/// antecedent's bindings restricted to `cases`, every one of them
+/// evaluated so an error at any dominates false. The obligation of
+/// case-local admission, never the invariant's whole-state meaning.
+/// A shape the impact plan never bounds evaluates whole.
+pub(crate) fn eval_invariant_cases(
+    inv: &Invariant,
+    state: &State,
+    pre_state: Option<&State>,
+    definitions: &[Definition],
+    cases: &[BTreeMap<Var, EvalValue>],
+) -> Result<bool, EvalError> {
+    in_invariant_context(state, pre_state, definitions, |ctx| match &inv.body {
+        Prop::Implies { left, right }
+        | Prop::Forall {
+            source: left,
+            body: right,
+            ..
+        } => {
+            let mut holds = true;
+            for m in find_matches(left, ctx)? {
+                if !in_cases(&m, cases) {
+                    continue;
+                }
+                if find_matches(right, &ctx.with_bindings(&m))?.is_empty() {
+                    holds = false;
+                }
+            }
+            Ok(holds)
+        }
+        Prop::Not(inner) => Ok(!find_matches(inner, ctx)?.iter().any(|m| in_cases(m, cases))),
+        _ => Ok(!find_matches(&inv.body, ctx)?.is_empty()),
+    })
+}
+
+/// [`invariant_witness`] drawn from the touched cases only, so a
+/// bounded refusal never blames a case the transition did not reach.
+/// A negated top-level body witnesses nothing, as it does whole.
+pub(crate) fn invariant_witness_cases(
+    inv: &Invariant,
+    state: &State,
+    pre_state: Option<&State>,
+    definitions: &[Definition],
+    cases: &[BTreeMap<Var, EvalValue>],
+) -> Result<Vec<WitnessBinding>, EvalError> {
+    in_invariant_context(state, pre_state, definitions, |ctx| {
+        let (left, right) = match &inv.body {
+            Prop::Implies { left, right } => (left, right),
+            Prop::Forall { source, body, .. } => (source, body),
+            Prop::Not(_) => return Ok(Vec::new()),
+            _ => {
+                return Ok(find_failure(&inv.body, ctx)
+                    .map(|f| sorted_witness(f.bindings))
+                    .unwrap_or_default());
+            }
+        };
+        for m in find_matches(left, ctx)? {
+            if !in_cases(&m, cases) {
+                continue;
+            }
+            let ext = ctx.with_bindings(&m);
+            if find_matches(right, &ext)?.is_empty() {
+                let failure =
+                    find_failure(right, &ext).unwrap_or_else(|| Failure::here(right, &ext));
+                return Ok(sorted_witness(failure.bindings));
+            }
+        }
+        Ok(Vec::new())
+    })
+}
+
+fn sorted_witness(bindings: Bindings) -> Vec<WitnessBinding> {
+    let mut witness: Vec<WitnessBinding> = bindings
+        .into_iter()
+        .map(|(var, value)| WitnessBinding { var, value })
+        .collect();
+    witness.sort_by(|a, b| a.var.cmp(&b.var));
+    witness
 }
 
 /// The binding assignment that witnesses an invariant's failure: the

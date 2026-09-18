@@ -139,15 +139,16 @@ impl CompiledInvariantSet {
     }
 }
 
-/// Which check runs: the whole stage-1 query, or stage 2 bounded to the
-/// cases the delta could have changed. Production runs stage 1; stage 2
-/// stays differential-proven until its audit semantics are decided.
+/// Which check runs: the whole stage-1 query, the invariant's
+/// whole-state meaning, or stage 2 bounded to the cases the effective
+/// delta could have changed, the admission obligation production runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Stage {
-    Full,
-    /// Dormant in production until its audit semantics are decided;
-    /// the differential keeps it proven.
+    /// Kept for the differential: on governed history it must agree
+    /// with the admission obligation, and on dirty history it is the
+    /// whole-state check `evaluate` asks.
     #[cfg_attr(not(test), allow(dead_code))]
+    Full,
     CaseBound,
 }
 
@@ -195,14 +196,15 @@ impl CompiledInvariantSet {
         retracted: &[ClaimInstance],
     ) -> Result<Option<SqlViolation>, PgError> {
         for inv in &self.invariants {
-            let sql = match stage {
-                Stage::Full => inv.violation_sql(None),
+            let case_filter = match stage {
+                Stage::Full => None,
                 Stage::CaseBound => match inv.case_filter(asserted, retracted) {
                     CaseFilter::Untouched => continue,
-                    CaseFilter::Bounded(filter) => inv.violation_sql(Some(&filter)),
-                    CaseFilter::Unbounded => inv.violation_sql(None),
+                    CaseFilter::Bounded(filter) => Some(filter),
+                    CaseFilter::Unbounded => None,
                 },
             };
+            let sql = inv.violation_sql(case_filter.as_deref());
             // Audited for AssertSqlSafe: the SQL is rendered entirely by
             // this module from a validated programme - identifiers are
             // quoted, literals escaped, and the provenance comment
@@ -218,8 +220,8 @@ impl CompiledInvariantSet {
                 if range_error {
                     return Err(PgError::Kernel(EvalError::sum_out_of_decimal_range()));
                 }
-                if let Some(range_sql) = &inv.sql_range {
-                    let any = sqlx::query(sqlx::AssertSqlSafe(range_sql.clone()))
+                if let Some(range_sql) = inv.range_sql(case_filter.as_deref()) {
+                    let any = sqlx::query(sqlx::AssertSqlSafe(range_sql))
                         .fetch_optional(&mut **tx)
                         .await
                         .map_err(classify)?;
@@ -347,8 +349,6 @@ impl IndexSpec {
 
 /// How much of a compiled invariant a transition's delta touches.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// The checks themselves are dormant until the stage-1 integration
-// reaches production; the differential exercises them under test.
 pub(crate) enum CaseFilter {
     /// Delta disjoint from the invariant's occurrences: skip it entirely.
     Untouched,
@@ -385,8 +385,10 @@ pub(crate) struct CompiledInvariant {
     /// sum, asked only after the violation query returned a violation:
     /// that query stops at its first row in witness order, and the
     /// range error must dominate a violation that merely sorts earlier.
-    /// `None` when the invariant has no sum, or its violation query
-    /// already answers over the whole scope.
+    /// Without its `LIMIT`, so a case filter can bound it to the same
+    /// obligation as the violation query. `None` when the invariant has
+    /// no sum, or its violation query already answers over the whole
+    /// scope.
     sql_range: Option<String>,
     /// The indexes this invariant's SQL can seek on, in specification
     /// order.
@@ -412,9 +414,16 @@ impl CompiledInvariant {
         sql
     }
 
-    #[cfg(test)]
-    pub(crate) fn range_sql(&self) -> Option<&str> {
-        self.sql_range.as_deref()
+    /// The range query over the same obligation as the violation query:
+    /// the whole scope, or the touched cases.
+    pub(crate) fn range_sql(&self, case_filter: Option<&str>) -> Option<String> {
+        let base = self.sql_range.as_ref()?;
+        let mut sql = base.clone();
+        if let Some(filter) = case_filter {
+            let _ = write!(sql, "\n  AND ({filter})");
+        }
+        sql.push_str("\nLIMIT 1");
+        Some(sql)
     }
 
     /// Bound the check to the cases a delta could have changed: core
@@ -780,7 +789,7 @@ fn range_query(scope: &Rendered) -> Option<String> {
         return None;
     }
     Some(format!(
-        "SELECT 1\nFROM {}\nWHERE {}\nLIMIT 1",
+        "SELECT 1\nFROM {}\nWHERE {}",
         from_list(scope),
         and_all(&[scope.prefix(), scope.range_error()])
     ))

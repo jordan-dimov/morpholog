@@ -925,8 +925,10 @@ class OutboxUpdate:
 
 @dataclass(frozen=True)
 class AuditedInvariantCheck:
-    """One invariant that governed an admission: name plus the
-    version active at commit time."""
+    """One active invariant the transition was admitted under: name
+    plus the version active at commit time. Discharged because the
+    change could not affect it, because every affected case satisfied
+    it, or because the whole invariant held."""
 
     name: str
     version: int
