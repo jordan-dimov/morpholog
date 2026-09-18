@@ -8,17 +8,19 @@
 //! Sound by widening: an occurrence that cannot constrain a case
 //! variable widens the answer toward the whole invariant, never past a
 //! touched case. The shapes that bound are exactly those the compiled
-//! differential proves; a body carrying a construct outside them (a
-//! defined call, `pre`, `or`, `xor`, membership) is never untouched
-//! and never bounded.
+//! differential proves; a non-empty delta against a body carrying a
+//! construct outside them (a defined call, `pre`, `or`, `xor`,
+//! membership, or any value form but a term and a term-targeted sum)
+//! widens to the whole invariant. An empty delta touches nothing,
+//! whatever the body: the candidate is the pre-state.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rust_decimal::Decimal;
 
-use crate::fold::any_prop_node;
-use crate::ir::{Invariant, PredicateName, Prop, Term, Value, Var};
+use crate::fold::{any_prop_node, any_value_node};
+use crate::ir::{Invariant, PredicateName, Prop, Term, Value, ValueExpr, Var};
 use crate::state::{ClaimInstance, EvalValue};
 
 /// How much of an invariant a delta touches.
@@ -60,31 +62,37 @@ impl ImpactPlan {
     pub fn new(inv: &Invariant) -> Self {
         let case_vars = case_variables(&inv.body);
         let occurrences = RefCell::new(Vec::new());
-        let conservative = any_prop_node(&inv.body, &|p| match p {
-            Prop::Claim { predicate, args } => {
-                let mut guards = Vec::new();
-                let mut var_map = Vec::new();
-                for (i, term) in args.iter().enumerate() {
-                    match term {
-                        Term::Literal(v) => guards.push((i, v.clone())),
-                        Term::Var(v) if case_vars.contains(v) => var_map.push((i, v.clone())),
-                        Term::Var(_) | Term::Wildcard | Term::Actor => {}
-                    }
-                }
-                occurrences.borrow_mut().push(Occurrence {
-                    predicate: predicate.clone(),
-                    guards,
-                    var_map,
-                });
-                false
-            }
-            Prop::Defined { .. }
-            | Prop::Pre(_)
-            | Prop::Or(_)
-            | Prop::Xor(_, _)
-            | Prop::In(_, _) => true,
-            _ => false,
+        let unproved_value = any_value_node(&inv.body, &|v| match v {
+            ValueExpr::Term(_) => false,
+            ValueExpr::Sum { value, .. } => !matches!(**value, ValueExpr::Term(_)),
+            _ => true,
         });
+        let conservative = unproved_value
+            || any_prop_node(&inv.body, &|p| match p {
+                Prop::Claim { predicate, args } => {
+                    let mut guards = Vec::new();
+                    let mut var_map = Vec::new();
+                    for (i, term) in args.iter().enumerate() {
+                        match term {
+                            Term::Literal(v) => guards.push((i, v.clone())),
+                            Term::Var(v) if case_vars.contains(v) => var_map.push((i, v.clone())),
+                            Term::Var(_) | Term::Wildcard | Term::Actor => {}
+                        }
+                    }
+                    occurrences.borrow_mut().push(Occurrence {
+                        predicate: predicate.clone(),
+                        guards,
+                        var_map,
+                    });
+                    false
+                }
+                Prop::Defined { .. }
+                | Prop::Pre(_)
+                | Prop::Or(_)
+                | Prop::Xor(_, _)
+                | Prop::In(_, _) => true,
+                _ => false,
+            });
         Self {
             occurrences: occurrences.into_inner(),
             conservative,
@@ -93,6 +101,11 @@ impl ImpactPlan {
 
     /// The cases the delta can affect.
     pub fn classify(&self, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) -> Impact {
+        // Nothing changed, nothing affected: the first law, before any
+        // uncertainty about the body.
+        if asserted.is_empty() && retracted.is_empty() {
+            return Impact::Untouched;
+        }
         if self.conservative {
             return Impact::Unbounded;
         }

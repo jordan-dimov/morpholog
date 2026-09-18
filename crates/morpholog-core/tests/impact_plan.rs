@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 
 use morpholog_core::ir_builder::{
-    and, claim, defined, eq, implies, invariant, not, predicate, program, subj as lit_subject, sum,
-    term, var, wildcard,
+    add, and, claim, dec as dec_term, defined, eq, implies, invariant, not, predicate, program,
+    subj as lit_subject, sum, term, value_of, var, wildcard,
 };
 use morpholog_core::{EvalValue, Impact, ImpactPlan, Invariant};
 use morpholog_test_support::{claim_instance, dec, subj};
@@ -128,15 +128,52 @@ fn an_occurrence_binding_no_case_variable_widens_to_the_whole_invariant() {
 }
 
 #[test]
-fn a_body_outside_the_proven_shapes_is_never_untouched() {
+fn a_body_outside_the_proven_shapes_widens_on_any_change() {
     let inv = invariant(
         "via_definition",
         implies(claim("A", vec![var("x")]), defined("holds", vec![var("x")])),
     );
     let plan = ImpactPlan::new(&inv);
-    assert_eq!(plan.classify(&[], &[]), Impact::Unbounded);
     assert_eq!(
         plan.classify(&[claim_instance("Unrelated", &[subj("z")])], &[]),
+        Impact::Unbounded
+    );
+    // An empty delta touches nothing, whatever the body holds.
+    assert_eq!(plan.classify(&[], &[]), Impact::Untouched);
+}
+
+#[test]
+fn a_value_lookup_is_a_state_dependency_the_plan_never_hides() {
+    // A(x) implies value Q(x, _) = 1: a change to Q shows no claim
+    // pattern, so the plan must widen rather than call it untouched.
+    let inv = invariant(
+        "looked_up",
+        implies(
+            claim("A", vec![var("x")]),
+            eq(
+                value_of("Q", vec![var("x"), wildcard()]),
+                term(dec_term("1")),
+            ),
+        ),
+    );
+    let plan = ImpactPlan::new(&inv);
+    assert_eq!(
+        plan.classify(&[claim_instance("Q", &[subj("a"), dec(1)])], &[]),
+        Impact::Unbounded
+    );
+    // Arithmetic in a comparison is likewise outside the proven shapes.
+    let arith = invariant(
+        "computed",
+        implies(
+            claim("A", vec![var("x")]),
+            eq(
+                add(term(var("x")), term(dec_term("1"))),
+                term(dec_term("2")),
+            ),
+        ),
+    );
+    assert_eq!(
+        ImpactPlan::new(&arith).classify(&[claim_instance("A", &[subj("a")])], &[]),
         Impact::Unbounded
     );
 }
