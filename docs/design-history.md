@@ -869,7 +869,7 @@ So #277 stays open. Rung 2a has landed: the compiled route, exact semantic parit
 
 **Forced by:** #277 rung 2b's third step: the same frozen ruler again, with no instrument change, judged on the production shapes the rung-2a verdict said stage 2 owed - flat compiled scaling with state and narrowed serialisation retries.
 
-**Measured**, one host, PostgreSQL 18.6, `--repeat 5` requested (contend and import at their cap of three), the stage-1 binary at 6174bef and the rung-2b binary at 1746237 run back to back in one session so the comparison is within it; the day's machine load made every database-bound number roughly twice the previous day's, which is why the within-session ratios are the claim and yesterday's absolute figures are not repeated here.
+**Measured**, one host, PostgreSQL 18.6, `--repeat 5` requested (contend and import at their cap of three), the stage-1 binary at 6174bef and the rung-2b binary at 1746237 run back to back in one session so the comparison is within it; the day's machine load made every database-bound number roughly twice the earlier run's, which is why the within-session ratios are the claim and the earlier absolute figures are not repeated here.
 
 The quick ladder, both binaries run back to back in one session; the decomposition reads left to right: what case-local semantics bought inside the kernel, what pushing the same bounded obligation into PostgreSQL added, and the total production effect.
 
@@ -882,6 +882,8 @@ The quick ladder, both binaries run back to back in one session; the decompositi
 | contend/shared, 4 writers, commits/s | 138.09 | 154.24 | 459.40 | 201.75 | 2.28 |
 | import/core 500, journey (ms) | 4,835 | 4,134 | 2,200 | 28,555 | 0.08 |
 | read/base 1,000, scoped read (ms) | 26.33 | 26.02 | 26.84 | 27.15 | 0.99 |
+| replay/retract 1,000, coverage replay (ms) | 16.24 | 15.79 | 10.20 | 15.66 | 0.65 |
+| asof/retract 1,000, reconstruct (ms) | 13.28 | 12.54 | 13.45 | 12.74 | 1.06 |
 
 The full ladder, indexed compiled route, stage 1 against rung 2b, same session:
 
@@ -889,8 +891,8 @@ The full ladder, indexed compiled route, stage 1 against rung 2b, same session:
 |---|--:|--:|--:|
 | write/base 1,000, one proposal (ms) | 32.05 | 8.96 | 0.28 |
 | write/base 10,000 | 205.41 | 6.80 | 0.03 |
-| write/base 100,000 | 1,583 | 7.44 | 0.00 |
-| write/noise 100,000 | 1,547 | 10.90 | 0.01 |
+| write/base 100,000 | 1,583 | 7.44 | 0.005 |
+| write/noise 100,000 | 1,547 | 10.90 | 0.007 |
 | wide/size 10,000 | 2,983 | 420.88 | 0.14 |
 | wide/size 100,000 | 326,896 | 30,213 | 0.09 |
 | contend/shared, 16 writers, retries/commit | 11.03 | 0.72 | 0.07 |
@@ -899,8 +901,13 @@ The full ladder, indexed compiled route, stage 1 against rung 2b, same session:
 | import/core 1,000, journey (ms) | 59,028 | 4,572 | 0.08 |
 | import/core 3,000, journey (ms) | 63,056 | 15,800 | 0.25 |
 | read/base 100,000, scoped read (ms) | 1,245 | 1,312 | 1.05 |
+| read/grouped 100,000, scoped read (ms) | 1,295 | 1,262 | 0.97 |
+| replay/retract 100,000, coverage replay (ms) | 844.42 | 1,211 | 1.43 |
+| asof/retract 100,000, reconstruct (ms) | 1,194 | 1,286 | 1.08 |
 
-**Three conclusions, kept apart.** Semantics: inherited violations outside the transition's affected cases no longer block admission, on either evaluator. Computational scaling: an ordinary posting on the indexed compiled route costs 8.96, 6.80 and 7.44 ms at one, ten and a hundred thousand entries, against stage 1's 32, 205 and 1,583 ms in the same session, across a hundred-fold state sweep, the case-local shape rather than a better constant, and irrelevant state barely registers (write/noise at 100k: 10.90 ms). Concurrency scaling: the shared-key workload no longer carries an excess retry penalty - at sixteen writers it records 0.72 retries per commit against 2.39 for the disjoint control, at 1,882 commits per second - and the paired stage-1 comparison (11.03 retries per commit, 22 commits per second, same session) is what attributes it: narrowing the read footprint to the touched entry's rows removed the relation-wide dependency pattern stage 1 suffered under SERIALIZABLE. Import from an empty table, where stage 1's relation-wide check collapsed on a planner without statistics, now runs at about 5.3 ms per transition end to end; case-local SQL no longer depends on PostgreSQL having learned global statistics before it is viable. The interpreter gained too, most on the wide case, where evaluating one entry's obligation instead of every entry's cut a proposal to a third, and the pure kernel family four times over. The read, replay and as-of families did not move, the negative control.
+The read control did not move. Replay and as-of, also untouched by this change, sit inside the day's noise band on a throttled machine: replay at a hundred thousand moved 1.43 one way on the full ladder and 0.65 the other way at the quick ladder.
+
+**Three conclusions, kept apart.** Semantics: inherited violations outside the transition's affected cases no longer block admission, on either evaluator. Computational scaling: an ordinary posting on the indexed compiled route costs 8.96, 6.80 and 7.44 ms at one, ten and a hundred thousand entries, against stage 1's 32, 205 and 1,583 ms in the same session, across a hundred-fold state sweep, the case-local shape rather than a better constant, and irrelevant state barely registers (write/noise at 100k: 10.90 ms). Concurrency scaling: the shared-key workload no longer carries an excess retry penalty - at sixteen writers it records 0.72 retries per commit against 2.39 for the disjoint control, at 1,882 commits per second - and the paired stage-1 comparison (11.03 retries per commit, 22 commits per second, same session) is what attributes it: narrowing the read footprint to the touched entry's rows removed the relation-wide dependency pattern stage 1 suffered under SERIALIZABLE. Import from an empty table, where stage 1's relation-wide check collapsed on a planner without statistics, now runs at about 5.3 ms per transition end to end; case-local SQL no longer depends on PostgreSQL having learned global statistics before it is viable. The interpreter gained too, most on the wide case, where evaluating one entry's obligation instead of every entry's cut a proposal to a third, and the pure kernel family four times over. The read control did not move; replay and as-of, untouched by this change, sit inside the day's noise band.
 
 **The limitation, stated where the claim is.** Case locality removes scaling with unrelated state; it does not remove scaling with the size of the affected case. The wide case at a hundred thousand rows, whose invariant quantifies over rows rather than groups so every row is the affected case, still costs 30.2 s per proposal (stage 1 in the same session: 327 s).
 
