@@ -906,9 +906,9 @@ The full ladder, indexed compiled route, stage 1 against rung 2b, same session:
 
 The spike's reconciliation table closes:
 
-| Spike claim | Stage 1 in production | Rung 2b in production | Status |
+| Spike claim | Stage 1 in production (paired, this session) | Rung 2b in production | Status |
 |---|---|---|---|
-| flat state-size curve | no: linear, the interpreter's slope | yes: 8.96 / 6.80 / 7.44 ms at 1k / 10k / 100k | confirmed |
-| ~2 ms at 100k | no: 1,407 ms | 7.44 ms on a throttled machine, stage 1 at 1,583 ms beside it | confirmed as a shape; the constant is the day's |
-| reduced SERIALIZABLE retries | no: 11.35 against 9.70 per commit at 16 writers | 0.72 against stage 1's 11.03, throughput 1,882 against 22 commits/s | confirmed, strongly |
+| flat state-size curve | no: 32 / 205 / 1,583 ms at 1k / 10k / 100k, linear | yes: 8.96 / 6.80 / 7.44 ms | confirmed |
+| ~2 ms at 100k | no: 1,583 ms | 7.44 ms on a throttled machine | confirmed as a shape; the constant is the day's |
+| reduced SERIALIZABLE retries | no: 11.03 per commit at 16 writers, 22 commits/s (the rung-2a run had found stage 1 no better than the interpreter here) | 0.72 per commit, 1,882 commits/s, the disjoint control at 2.39 | confirmed, strongly |
 | indexes required | yes, strongly | yes: without them the bounded query still seeks nothing at scale | confirmed |
