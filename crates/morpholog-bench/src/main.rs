@@ -702,31 +702,33 @@ impl Implementation {
 
 /// The physical index condition is part of the configuration, and the
 /// bench establishes it itself after every logical reset and before
-/// the fixture: an unindexed configuration must find no
-/// compiler-required index, Morpholog's own or an operator's
-/// equivalent, and the indexed one must find every required index in
-/// place. Provisioning is outside every timed sample.
+/// the fixture, outside every timed sample. Every repeat starts from
+/// the same catalogue: Morpholog's own compiled indexes are dropped
+/// first (the `morpholog_ci_` namespace is Morpholog's, and `--reset`
+/// acknowledged a disposable database), so nothing left by an earlier
+/// case or programme rides along. An unindexed configuration then
+/// refuses an operator's equivalent index under another name, which
+/// would satisfy a requirement; the indexed configuration provisions
+/// every requirement fresh, accepts such an equivalent as satisfying
+/// it, and refuses a conflict.
 async fn establish(pool: &PgPool, implementation: Implementation, cores: &[Program]) -> Result<()> {
-    if !implementation.indexed() {
-        let owned: Vec<String> = sqlx::query_scalar(
-            "SELECT indexname::text FROM pg_indexes
-             WHERE schemaname = 'morpholog' AND tablename = 'claims'
-               AND indexname LIKE 'morpholog_ci_%'",
-        )
-        .fetch_all(pool)
+    let owned: Vec<String> = sqlx::query_scalar(
+        "SELECT indexname::text FROM pg_indexes
+         WHERE schemaname = 'morpholog' AND tablename = 'claims'
+           AND indexname LIKE 'morpholog_ci_%'",
+    )
+    .fetch_all(pool)
+    .await
+    .context("listing Morpholog's compiled indexes")?;
+    for name in owned {
+        // Quoted like the catalogue quotes them.
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP INDEX morpholog.\"{}\"",
+            name.replace('"', "\"\"")
+        )))
+        .execute(pool)
         .await
-        .context("listing Morpholog's compiled indexes")?;
-        for name in owned {
-            // Names matched Morpholog's own pattern; quoted like the
-            // catalogue quotes them.
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "DROP INDEX morpholog.\"{}\"",
-                name.replace('"', "\"\"")
-            )))
-            .execute(pool)
-            .await
-            .with_context(|| format!("dropping {name} for the unindexed condition"))?;
-        }
+        .with_context(|| format!("dropping {name} to start from a clean catalogue"))?;
     }
     for core in cores {
         let classified = PgProgram::new(
@@ -747,16 +749,17 @@ async fn establish(pool: &PgPool, implementation: Implementation, cores: &[Progr
         let plan = morpholog_postgres::plan_indexes(pool, &classified)
             .await
             .context("checking the index condition")?;
+        let acceptable = |action: &IndexAction| {
+            if implementation.indexed() {
+                matches!(action, IndexAction::Keep | IndexAction::SatisfiedExternally)
+            } else {
+                *action == IndexAction::Create
+            }
+        };
         let offending: Vec<String> = plan
             .entries
             .iter()
-            .filter(|e| {
-                if implementation.indexed() {
-                    e.action != IndexAction::Keep
-                } else {
-                    e.action != IndexAction::Create
-                }
-            })
+            .filter(|e| !acceptable(&e.action))
             .map(|e| format!("{} {} ({})", e.action, e.index_name, e.detail))
             .collect();
         if !offending.is_empty() {
@@ -926,9 +929,9 @@ async fn measure_write(
     let mut kernel = Vec::with_capacity(repeat);
     let mut finalise = Vec::with_capacity(repeat);
     for r in 0..repeat {
-        let t = Instant::now();
         reset_db(pool).await?;
         establish(pool, implementation, &cores).await?;
+        let t = Instant::now();
         insert_n_entries(pool, n, accounts).await?;
         insert_noise_claims(pool, noise_claims).await?;
         fixture.push(t.elapsed());
@@ -1136,9 +1139,9 @@ async fn measure_replay(
     let cores: Vec<Program> = vec![double_entry_ledger::program()];
     let program = double_entry_ledger::program();
     let retract_stride = retract_stride_for(retract_fraction);
-    let t = Instant::now();
     reset_db(pool).await?;
     establish(pool, implementation, &cores).await?;
+    let t = Instant::now();
     fabricate_audit_rows(pool, n, retract_stride).await?;
     let fixture = t.elapsed();
     analyze_audit(pool).await?;
@@ -1386,9 +1389,9 @@ async fn measure_read(
 ) -> Result<CaseResult> {
     // The programmes whose index condition this scenario establishes.
     let cores: Vec<Program> = vec![double_entry_ledger::program()];
-    let t = Instant::now();
     reset_db(pool).await?;
     establish(pool, implementation, &cores).await?;
+    let t = Instant::now();
     insert_n_entries(pool, n, accounts).await?;
     insert_noise_claims(pool, noise_claims).await?;
     let fixture = t.elapsed();
@@ -1516,9 +1519,9 @@ async fn measure_as_of(
         n as i64 / retract_stride
     };
 
-    let t = Instant::now();
     reset_db(pool).await?;
     establish(pool, implementation, &cores).await?;
+    let t = Instant::now();
     fabricate_audit_rows(pool, n, retract_stride).await?;
     let fixture = t.elapsed();
     analyze_audit(pool).await?;
@@ -1702,9 +1705,9 @@ async fn measure_contend(
     let mut rejected_s = Vec::with_capacity(repeat);
     let mut failed_s = Vec::with_capacity(repeat);
     for round in 0..repeat {
-        let t = Instant::now();
         reset_db(pool).await?;
         establish(pool, implementation, &cores).await?;
+        let t = Instant::now();
         insert_n_entries(pool, prepopulate, 2).await?;
         fixture.push(t.elapsed());
         analyze_claims(pool).await?;
@@ -1806,6 +1809,7 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
         .connect(&morpholog_postgres::with_default_user(&args.database_url))
         .await
         .context("connect to PostgreSQL")?;
+    require_migration_head(&pool).await?;
     println!(
         "scenario=contend workers={} ops_per_worker={} prepopulate={} periods={} disjoint={} max_retries={} repeat={}",
         args.workers,
@@ -2240,9 +2244,9 @@ async fn measure_wide(
     let mut build_state = Vec::with_capacity(repeat);
     let mut propose = Vec::with_capacity(repeat);
     for r in 0..repeat {
-        let t = Instant::now();
         reset_db(pool).await?;
         establish(pool, implementation, &cores).await?;
+        let t = Instant::now();
         insert_wide_rows(pool, n, arity).await?;
         fixture.push(t.elapsed());
         analyze_claims(pool).await?;
@@ -3066,6 +3070,7 @@ async fn run_suite(args: SuiteArgs) -> Result<()> {
         .connect(&morpholog_postgres::with_default_user(&args.database_url))
         .await
         .context("connect to PostgreSQL")?;
+    require_migration_head(&pool).await?;
     let pg_version: String = sqlx::query_scalar("SELECT version()")
         .fetch_one(&pool)
         .await
@@ -3469,6 +3474,37 @@ mod smoke {
             })
             .await
             .expect("contend scenario smoke, compiled");
+            run_as_of(AsOfArgs {
+                n: 4,
+                at: 1.0,
+                retract_fraction: 50,
+                database_url: url.clone(),
+                reset: true,
+                implementation,
+                repeat: 1,
+            })
+            .await
+            .expect("as-of scenario smoke, compiled");
+            run_wide(WideArgs {
+                n: 2,
+                arity: 4,
+                database_url: url.clone(),
+                reset: true,
+                implementation,
+                repeat: 1,
+            })
+            .await
+            .expect("wide scenario smoke, compiled");
+            run_replay(ReplayArgs {
+                n: 2,
+                retract_fraction: 50,
+                repeat: 1,
+                database_url: url.clone(),
+                reset: true,
+                implementation,
+            })
+            .await
+            .expect("replay scenario smoke, compiled");
         }
 
         // Back to an unindexed configuration: the indexes the last run
