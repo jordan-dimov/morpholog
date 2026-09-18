@@ -3386,6 +3386,14 @@ mod smoke {
             eprintln!("DATABASE_URL unset; skipping bench smoke test");
             return;
         };
+        // The bench refuses a database behind the migration head, as an
+        // operator's would be refused; a schema-only test database is
+        // brought to the head here, as an operator would with `migrate`.
+        let pool = connect(&url).await.expect("connect");
+        morpholog_postgres::apply_migrations(&pool)
+            .await
+            .expect("bring the test database to the migration head");
+        drop(pool);
 
         run_write(ScenarioArgs {
             n: 1,
