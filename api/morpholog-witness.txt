@@ -1,0 +1,108 @@
+pub mod morpholog_witness
+pub mod morpholog_witness::testing
+pub fn morpholog_witness::testing::request_from_der(&[u8]) -> core::result::Result<morpholog_witness::Request, morpholog_witness::WitnessError>
+pub enum morpholog_witness::Refusal
+pub morpholog_witness::Refusal::Invalid
+pub morpholog_witness::Refusal::Invalid::detail: alloc::string::String
+pub morpholog_witness::Refusal::Unsupported
+pub morpholog_witness::Refusal::Unsupported::detail: alloc::string::String
+impl core::clone::Clone for morpholog_witness::Refusal
+pub fn morpholog_witness::Refusal::clone(&self) -> morpholog_witness::Refusal
+impl core::cmp::Eq for morpholog_witness::Refusal
+impl core::cmp::PartialEq for morpholog_witness::Refusal
+pub fn morpholog_witness::Refusal::eq(&self, &morpholog_witness::Refusal) -> bool
+impl core::fmt::Debug for morpholog_witness::Refusal
+pub fn morpholog_witness::Refusal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_witness::Refusal
+impl core::marker::Freeze for morpholog_witness::Refusal
+impl core::marker::Send for morpholog_witness::Refusal
+impl core::marker::Sync for morpholog_witness::Refusal
+impl core::marker::Unpin for morpholog_witness::Refusal
+impl core::marker::UnsafeUnpin for morpholog_witness::Refusal
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_witness::Refusal
+impl core::panic::unwind_safe::UnwindSafe for morpholog_witness::Refusal
+pub enum morpholog_witness::WitnessError
+pub morpholog_witness::WitnessError::Anchors(alloc::string::String)
+impl core::error::Error for morpholog_witness::WitnessError
+impl core::fmt::Debug for morpholog_witness::WitnessError
+pub fn morpholog_witness::WitnessError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for morpholog_witness::WitnessError
+pub fn morpholog_witness::WitnessError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for morpholog_witness::WitnessError
+impl core::marker::Send for morpholog_witness::WitnessError
+impl core::marker::Sync for morpholog_witness::WitnessError
+impl core::marker::Unpin for morpholog_witness::WitnessError
+impl core::marker::UnsafeUnpin for morpholog_witness::WitnessError
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_witness::WitnessError
+impl core::panic::unwind_safe::UnwindSafe for morpholog_witness::WitnessError
+pub enum morpholog_witness::WitnessStatus
+pub morpholog_witness::WitnessStatus::Invalid
+pub morpholog_witness::WitnessStatus::Invalid::detail: alloc::string::String
+pub morpholog_witness::WitnessStatus::Unsupported
+pub morpholog_witness::WitnessStatus::Unsupported::detail: alloc::string::String
+pub morpholog_witness::WitnessStatus::Untrusted
+pub morpholog_witness::WitnessStatus::Untrusted::attested_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub morpholog_witness::WitnessStatus::Untrusted::reason: alloc::string::String
+pub morpholog_witness::WitnessStatus::Untrusted::signer: alloc::string::String
+pub morpholog_witness::WitnessStatus::Unverified
+pub morpholog_witness::WitnessStatus::Unverified::attested_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub morpholog_witness::WitnessStatus::Verified
+pub morpholog_witness::WitnessStatus::Verified::attested_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+impl core::clone::Clone for morpholog_witness::WitnessStatus
+pub fn morpholog_witness::WitnessStatus::clone(&self) -> morpholog_witness::WitnessStatus
+impl core::cmp::Eq for morpholog_witness::WitnessStatus
+impl core::cmp::PartialEq for morpholog_witness::WitnessStatus
+pub fn morpholog_witness::WitnessStatus::eq(&self, &morpholog_witness::WitnessStatus) -> bool
+impl core::fmt::Debug for morpholog_witness::WitnessStatus
+pub fn morpholog_witness::WitnessStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_witness::WitnessStatus
+impl core::marker::Freeze for morpholog_witness::WitnessStatus
+impl core::marker::Send for morpholog_witness::WitnessStatus
+impl core::marker::Sync for morpholog_witness::WitnessStatus
+impl core::marker::Unpin for morpholog_witness::WitnessStatus
+impl core::marker::UnsafeUnpin for morpholog_witness::WitnessStatus
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_witness::WitnessStatus
+impl core::panic::unwind_safe::UnwindSafe for morpholog_witness::WitnessStatus
+pub struct morpholog_witness::Anchors(_)
+impl morpholog_witness::Anchors
+pub fn morpholog_witness::Anchors::from_pem(&[u8]) -> core::result::Result<Self, morpholog_witness::WitnessError>
+pub fn morpholog_witness::Anchors::is_empty(&self) -> bool
+pub fn morpholog_witness::Anchors::len(&self) -> usize
+impl core::marker::Freeze for morpholog_witness::Anchors
+impl core::marker::Send for morpholog_witness::Anchors
+impl core::marker::Sync for morpholog_witness::Anchors
+impl core::marker::Unpin for morpholog_witness::Anchors
+impl core::marker::UnsafeUnpin for morpholog_witness::Anchors
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_witness::Anchors
+impl core::panic::unwind_safe::UnwindSafe for morpholog_witness::Anchors
+pub struct morpholog_witness::Checked
+pub morpholog_witness::Checked::attested_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+impl core::clone::Clone for morpholog_witness::Checked
+pub fn morpholog_witness::Checked::clone(&self) -> morpholog_witness::Checked
+impl core::cmp::Eq for morpholog_witness::Checked
+impl core::cmp::PartialEq for morpholog_witness::Checked
+pub fn morpholog_witness::Checked::eq(&self, &morpholog_witness::Checked) -> bool
+impl core::fmt::Debug for morpholog_witness::Checked
+pub fn morpholog_witness::Checked::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_witness::Checked
+impl core::marker::Freeze for morpholog_witness::Checked
+impl core::marker::Send for morpholog_witness::Checked
+impl core::marker::Sync for morpholog_witness::Checked
+impl core::marker::Unpin for morpholog_witness::Checked
+impl core::marker::UnsafeUnpin for morpholog_witness::Checked
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_witness::Checked
+impl core::panic::unwind_safe::UnwindSafe for morpholog_witness::Checked
+pub struct morpholog_witness::Request
+pub morpholog_witness::Request::der: alloc::vec::Vec<u8>
+impl !core::marker::Freeze for morpholog_witness::Request
+impl core::marker::Send for morpholog_witness::Request
+impl core::marker::Sync for morpholog_witness::Request
+impl core::marker::Unpin for morpholog_witness::Request
+impl core::marker::UnsafeUnpin for morpholog_witness::Request
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_witness::Request
+impl core::panic::unwind_safe::UnwindSafe for morpholog_witness::Request
+pub const morpholog_witness::REPLY_CONTENT_TYPE: &str
+pub const morpholog_witness::REQUEST_CONTENT_TYPE: &str
+pub fn morpholog_witness::build_request(&[u8]) -> morpholog_witness::Request
+pub fn morpholog_witness::check_response(&morpholog_witness::Request, &[u8], &[u8]) -> core::result::Result<morpholog_witness::Checked, morpholog_witness::Refusal>
+pub fn morpholog_witness::verify_rfc3161(&[u8], &[u8], core::option::Option<&morpholog_witness::Anchors>) -> morpholog_witness::WitnessStatus
