@@ -13,7 +13,7 @@
 //! and never bounded.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rust_decimal::Decimal;
 
@@ -96,7 +96,10 @@ impl ImpactPlan {
         if self.conservative {
             return Impact::Unbounded;
         }
+        // Occurrence order, deduplicated through the set so a large delta
+        // stays linear in its distinct cases.
         let mut cases: Vec<BTreeMap<Var, EvalValue>> = Vec::new();
+        let mut seen: HashSet<BTreeMap<Var, EvalValue>> = HashSet::new();
         let mut touched = false;
         for claim in asserted.iter().chain(retracted) {
             for occ in &self.occurrences {
@@ -126,7 +129,7 @@ impl ImpactPlan {
                         _ => {}
                     }
                 }
-                if !contradictory && !cases.contains(&case) {
+                if !contradictory && seen.insert(case.clone()) {
                     cases.push(case);
                 }
             }
