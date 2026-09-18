@@ -813,7 +813,7 @@ The review then found the hole the plan had carried from the spike: PostgreSQL's
 
 **Measured**, one host, one PostgreSQL 18.6, one benchmark binary for every run, commands in the PR:
 
-The quick ladder, all three configurations, steady median of five, one proposal (ms):
+The quick ladder, all three configurations, steady median with `--repeat 5` requested (contend and import carry their canonical cap of three samples; every other row five), one proposal (ms):
 
 | case, point | interpreted | compiled, no index | compiled, indexed |
 |---|--:|--:|--:|
@@ -824,7 +824,7 @@ The quick ladder, all three configurations, steady median of five, one proposal 
 | contend/shared, 4 workers, retries/commit | 1.84 | 2.48 | 1.81 |
 | import/core 500, journey | 1,944 | 28,879 | 28,515 |
 
-The full ladder, interpreter against the indexed compiled route, steady median of five:
+The full ladder, interpreter against the indexed compiled route, steady median with `--repeat 5` requested (contend and import three samples; every other row five):
 
 | case, point | interpreted | compiled, indexed | ratio |
 |---|--:|--:|--:|
@@ -842,7 +842,7 @@ The full ladder, interpreter against the indexed compiled route, steady median o
 | read families, all points | flat | flat | 0.96 to 1.07 |
 | fixture build, all write and read points | - | - | 1.18 to 1.41 |
 
-**The decision it changed.** The spike's proposition was that compilation plus something to seek on is the unit that pays. Half of it held in the strongest form: compilation without indexes is strongly superlinear over the measured range and far behind the interpreter, so the unindexed configuration is a quick-ladder decomposition only. The other half did not hold as expected: with indexes, stage 1 tracks the interpreter on the ledger write path to within a sixth at every size from a thousand to a hundred thousand entries, both linear with the same slope, and reduces no retries under contention (throughput up by half at sixteen shared writers because each proposal is cheaper, retries per commit up a sixth). It wins where the interpreter's in-memory evaluation is the expensive part, two and a half times on the thirteen-ary wide case at a hundred thousand rows, and both evaluators are superlinear there because that invariant quantifies over rows rather than groups. The spike's flat state-size curve and its ten-fold reduction in serialisation retries were stage-2 effects, the case-bound check that reads only what the delta could have changed; stage 1 proves every invariant over the whole relation on every proposal, so its cost is linear in state and its read footprint under SERIALIZABLE is the whole predicate. Import gained nothing from indexes for a different reason, verified directly: a table growing from empty carries the statistics of the empty table until it is analysed, and the same violation query scanned by primary key before one ANALYZE and sought the provisioned indexes after it. The import ruler stays as it is, because that is what a fresh deployment sees; the diagnostic stands beside it.
+**The decision it changed.** The spike's proposition was that compilation plus something to seek on is the unit that pays. Indexes turned out necessary but not sufficient: compilation without indexes is strongly superlinear over the measured range and far behind the interpreter, so the unindexed configuration is a quick-ladder decomposition only. The other half did not hold as expected: with indexes, stage 1 tracks the interpreter on the ledger write path to within a sixth at every size from a thousand to a hundred thousand entries, both linear with the same slope, and reduces no retries under contention (throughput up by half at sixteen shared writers because each proposal is cheaper, retries per commit up a sixth). It wins where the interpreter's in-memory evaluation is the expensive part, two and a half times on the thirteen-ary wide case at a hundred thousand rows, and both evaluators are superlinear there because that invariant quantifies over rows rather than groups. The spike's flat state-size curve and its ten-fold reduction in serialisation retries were stage-2 effects, the case-bound check that reads only what the delta could have changed; stage 1 proves every invariant over the whole relation on every proposal, so its cost is linear in state and its read footprint under SERIALIZABLE is the whole predicate. Import gained nothing from indexes for a different reason, verified directly: a table growing from empty carries the statistics of the empty table until it is analysed, and the same violation query scanned by primary key before one ANALYZE and sought the provisioned indexes after it. The import ruler stays as it is, because that is what a fresh deployment sees; the diagnostic stands beside it.
 
 So #277 stays open. Rung 2a has landed: the compiled route, exact semantic parity including the decimal range, runtime-owned indexes, the plan-shape gate and the three-way instrument, with stage 1 as the semantics-equivalent production baseline. Rung 2b is stage 2: the meaning of `invariants_checked` for an invariant proven irrelevant to the delta and not executed, the precedence of a range error found outside the touched case, then the same frozen ruler again.
 

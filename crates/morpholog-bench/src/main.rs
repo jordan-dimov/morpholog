@@ -929,12 +929,15 @@ async fn measure_write(
     let mut kernel = Vec::with_capacity(repeat);
     let mut finalise = Vec::with_capacity(repeat);
     for r in 0..repeat {
+        let t = Instant::now();
         reset_db(pool).await?;
+        let reset_took = t.elapsed();
+        // The index condition is established outside the sample.
         establish(pool, implementation, &cores).await?;
         let t = Instant::now();
         insert_n_entries(pool, n, accounts).await?;
         insert_noise_claims(pool, noise_claims).await?;
-        fixture.push(t.elapsed());
+        fixture.push(reset_took + t.elapsed());
         analyze_claims(pool).await?;
 
         let transition = Transition {
@@ -1139,11 +1142,14 @@ async fn measure_replay(
     let cores: Vec<Program> = vec![double_entry_ledger::program()];
     let program = double_entry_ledger::program();
     let retract_stride = retract_stride_for(retract_fraction);
+    let t = Instant::now();
     reset_db(pool).await?;
+    let reset_took = t.elapsed();
+    // The index condition is established outside the sample.
     establish(pool, implementation, &cores).await?;
     let t = Instant::now();
     fabricate_audit_rows(pool, n, retract_stride).await?;
-    let fixture = t.elapsed();
+    let fixture = reset_took + t.elapsed();
     analyze_audit(pool).await?;
 
     let mut coverage = Vec::with_capacity(repeat);
@@ -1389,12 +1395,15 @@ async fn measure_read(
 ) -> Result<CaseResult> {
     // The programmes whose index condition this scenario establishes.
     let cores: Vec<Program> = vec![double_entry_ledger::program()];
+    let t = Instant::now();
     reset_db(pool).await?;
+    let reset_took = t.elapsed();
+    // The index condition is established outside the sample.
     establish(pool, implementation, &cores).await?;
     let t = Instant::now();
     insert_n_entries(pool, n, accounts).await?;
     insert_noise_claims(pool, noise_claims).await?;
-    let fixture = t.elapsed();
+    let fixture = reset_took + t.elapsed();
     analyze_claims(pool).await?;
 
     let derived = double_entry_ledger::trial_balance_row();
@@ -1519,11 +1528,14 @@ async fn measure_as_of(
         n as i64 / retract_stride
     };
 
+    let t = Instant::now();
     reset_db(pool).await?;
+    let reset_took = t.elapsed();
+    // The index condition is established outside the sample.
     establish(pool, implementation, &cores).await?;
     let t = Instant::now();
     fabricate_audit_rows(pool, n, retract_stride).await?;
-    let fixture = t.elapsed();
+    let fixture = reset_took + t.elapsed();
     analyze_audit(pool).await?;
 
     // Pick the target transition by causal offset; clamp so
@@ -1705,11 +1717,14 @@ async fn measure_contend(
     let mut rejected_s = Vec::with_capacity(repeat);
     let mut failed_s = Vec::with_capacity(repeat);
     for round in 0..repeat {
+        let t = Instant::now();
         reset_db(pool).await?;
+        let reset_took = t.elapsed();
+        // The index condition is established outside the sample.
         establish(pool, implementation, &cores).await?;
         let t = Instant::now();
         insert_n_entries(pool, prepopulate, 2).await?;
-        fixture.push(t.elapsed());
+        fixture.push(reset_took + t.elapsed());
         analyze_claims(pool).await?;
 
         let (total, elapsed) = contend_burst(
@@ -2244,11 +2259,14 @@ async fn measure_wide(
     let mut build_state = Vec::with_capacity(repeat);
     let mut propose = Vec::with_capacity(repeat);
     for r in 0..repeat {
+        let t = Instant::now();
         reset_db(pool).await?;
+        let reset_took = t.elapsed();
+        // The index condition is established outside the sample.
         establish(pool, implementation, &cores).await?;
         let t = Instant::now();
         insert_wide_rows(pool, n, arity).await?;
-        fixture.push(t.elapsed());
+        fixture.push(reset_took + t.elapsed());
         analyze_claims(pool).await?;
 
         let t = Instant::now();
@@ -3391,10 +3409,34 @@ mod smoke {
             eprintln!("DATABASE_URL unset; skipping bench smoke test");
             return;
         };
-        // The bench refuses a database behind the migration head, as an
-        // operator's would be refused; a schema-only test database is
-        // brought to the head here, as an operator would with `migrate`.
+        // A database behind the migration head is refused by name, as an
+        // operator's would be: the head's record is removed, the refusal
+        // proven, and the database brought back to the head as an
+        // operator would with `migrate`.
         let pool = connect(&url).await.expect("connect");
+        sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
+            .bind(morpholog_postgres::head_version())
+            .execute(&pool)
+            .await
+            .expect("remove the head's record");
+        let behind = run_write(ScenarioArgs {
+            n: 1,
+            accounts: 2,
+            noise_claims: 0,
+            database_url: url.clone(),
+            reset: true,
+            implementation: Implementation::Interpreted,
+            repeat: 1,
+        })
+        .await;
+        let message = format!(
+            "{:?}",
+            behind.expect_err("a database behind the head is refused")
+        );
+        assert!(
+            message.contains("behind the Morpholog migration head"),
+            "the refusal names the remedy: {message}"
+        );
         morpholog_postgres::apply_migrations(&pool)
             .await
             .expect("bring the test database to the migration head");
@@ -3474,6 +3516,20 @@ mod smoke {
             })
             .await
             .expect("contend scenario smoke, compiled");
+            run_contend(ContendArgs {
+                workers: 2,
+                ops_per_worker: 2,
+                prepopulate: 0,
+                periods: 2,
+                disjoint: true,
+                max_retries: 20,
+                database_url: url.clone(),
+                reset: true,
+                implementation,
+                repeat: 1,
+            })
+            .await
+            .expect("predicate-disjoint contend scenario smoke, compiled");
             run_as_of(AsOfArgs {
                 n: 4,
                 at: 1.0,
@@ -3717,6 +3773,17 @@ mod smoke {
                 },
             },
         ];
+        for implementation in [Implementation::Compiled, Implementation::CompiledIndexed] {
+            let cases = run_suite_specs(implementation, &pool, &plan, 1)
+                .await
+                .expect("suite smoke plan, compiled");
+            assert!(
+                cases
+                    .iter()
+                    .all(|c| c.implementation == implementation.label()),
+                "every row carries the configuration's label"
+            );
+        }
         let cases = run_suite_specs(Implementation::Interpreted, &pool, &plan, 2)
             .await
             .expect("suite smoke plan");

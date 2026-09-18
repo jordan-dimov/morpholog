@@ -98,11 +98,11 @@ The bench **truncates the entire `morpholog` schema before each run**. The requi
 
 ## Observations
 
-### Three-way verdict on the compiled route (2026-09-18, `suite --repeat 5`, PostgreSQL 18.6, one binary)
+### Three-way verdict on the compiled route (2026-09-18, `suite --repeat 5` requested, PostgreSQL 18.6, one binary)
 
 The first run of the `--implementation` axis: the interpreter, the compiled invariant route with no compiler-required index, and the compiled route with its indexes provisioned, under the unchanged contract-2 ruler. Shapes, not numbers, are the claim; the numbers are here so the shapes can be checked.
 
-The quick ladder, all three configurations, steady median of five, one proposal (ms):
+The quick ladder, all three configurations, steady median with `--repeat 5` requested (contend and import carry their canonical cap of three samples; every other row five), one proposal (ms):
 
 | case, point | interpreted | compiled, no index | compiled, indexed |
 |---|--:|--:|--:|
@@ -113,7 +113,7 @@ The quick ladder, all three configurations, steady median of five, one proposal 
 | contend/shared, 4 workers, retries/commit | 1.84 | 2.48 | 1.81 |
 | import/core 500, journey | 1,944 | 28,879 | 28,515 |
 
-The full ladder, interpreter against the indexed compiled route, steady median of five:
+The full ladder, interpreter against the indexed compiled route, steady median with `--repeat 5` requested (contend and import three samples; every other row five):
 
 | case, point | interpreted | compiled, indexed | ratio |
 |---|--:|--:|--:|
@@ -131,7 +131,7 @@ The full ladder, interpreter against the indexed compiled route, steady median o
 | read families, all points | flat | flat | 0.96 to 1.07 |
 | fixture build, all write and read points | - | - | 1.18 to 1.41 |
 
-- **Compilation without indexes is strongly superlinear over the measured range and far behind the interpreter** (74x slower at 1,000 entries for a 10x size step). The unindexed configuration is measured at the quick ladder only; one proposal at 100k would take hours. The spike's proposition, that compilation plus something to seek on is the unit that pays, holds in its strongest form.
+- **Compilation without indexes is strongly superlinear over the measured range and far behind the interpreter** (74x slower at 1,000 entries for a 10x size step). The unindexed configuration is measured at the quick ladder only; one proposal at 100k would take hours. Indexes are necessary but not sufficient: unindexed compilation is far worse than the interpreter, indexed stage 1 restores the ledger path to roughly the interpreter's cost, and stage 2 is what produced the spike's flat scaling.
 - **Stage 1 with indexes tracks the interpreter, both linear, same slope.** The spike's flat ~2 ms curve at 100k and its ten-fold retry reduction were stage-2 effects (the case-bound check); production runs stage 1, which proves every invariant over the whole relation on every proposal. Under shared contention throughput rises by half because each proposal is cheaper; retries per commit do not fall.
 - **Import gains nothing from indexes on a table growing from empty**, and loses at 1,000: the statistics are the empty table's until something analyses it (verified: the same violation query scans by primary key before one `ANALYZE` and seeks the provisioned indexes after). At 3,000 autovacuum has caught up and the journey is within a quarter. The ruler stays as it is; this is what a fresh deployment sees.
 - **Controls:** the read, replay and kernel families are flat across configurations; the indexed configuration's one collateral cost is fixture building, up a fifth to two fifths from index maintenance on bulk inserts.
