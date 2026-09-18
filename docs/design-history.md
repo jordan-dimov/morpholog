@@ -811,18 +811,19 @@ The review then found the hole the plan had carried from the spike: PostgreSQL's
 
 **Landed:** one selector on the bench, `--implementation`, choosing which of three execution configurations a run measures: the kernel interpreter, the compiled route with no compiler-required index present, and the compiled route with every index it names provisioned. The value labels every row; the default keeps an unflagged command's historical meaning. The physical index condition is part of the configuration, and the bench establishes it itself after every logical reset and before the fixture, outside every sample: an unindexed run drops Morpholog's own compiled indexes and refuses to run when an operator's equivalent would serve a requirement; an indexed run provisions every requirement and refuses a conflict; a compiled run refuses a programme the production route would interpret, naming the refusals; the database must be at the migration head. The matrix, sizes, ladders and aggregation did not move, so the suite contract did not either.
 
-**Measured**, one host, one PostgreSQL 18.6, one benchmark binary for every run, commands in the PR:
+**Measured**, one host, one PostgreSQL 18.6, commands in the PR; the full ladder from one binary and the quick ladder from the same branch three commits on, after the fixture timer was moved off the index-condition step, with the measured execution path untouched between:
 
 The quick ladder, all three configurations, steady median with `--repeat 5` requested (contend and import carry their canonical cap of three samples; every other row five), one proposal (ms):
 
 | case, point | interpreted | compiled, no index | compiled, indexed |
 |---|--:|--:|--:|
-| write/base 100 | 3.30 | 8.28 | 3.06 |
-| write/base 1,000 | 14.99 | 609.78 | 16.27 |
-| write/noise 1,000 | 16.72 | 871.95 | 21.19 |
-| contend/shared, 4 workers, commits/s | 274.76 | 77.32 | 299.67 |
-| contend/shared, 4 workers, retries/commit | 1.84 | 2.48 | 1.81 |
-| import/core 500, journey | 1,944 | 28,879 | 28,515 |
+| write/base 100 | 3.47 | 11.66 | 4.18 |
+| write/base 1,000 | 14.92 | 592.88 | 12.60 |
+| write/noise 1,000 | 16.72 | 836.11 | 15.17 |
+| contend/shared, 4 workers, commits/s | 281.18 | 76.56 | 371.68 |
+| contend/shared, 4 workers, retries/commit | 1.96 | 2.19 | 1.73 |
+| import/core 500, journey | 1,880 | 27,773 | 21,739 |
+| write/base 1,000, fixture build | 28.88 | 29.30 | 38.15 |
 
 The full ladder, interpreter against the indexed compiled route, steady median with `--repeat 5` requested (contend and import three samples; every other row five):
 
@@ -840,7 +841,6 @@ The full ladder, interpreter against the indexed compiled route, steady median w
 | import/core 1,000, journey (ms) | 6,639 | 59,347 | 8.94 |
 | import/core 3,000, journey (ms) | 51,270 | 63,264 | 1.23 |
 | read families, all points | flat | flat | 0.96 to 1.07 |
-| fixture build, all write and read points | - | - | 1.18 to 1.41 |
 
 **The decision it changed.** The spike's proposition was that compilation plus something to seek on is the unit that pays. Indexes turned out necessary but not sufficient: compilation without indexes is strongly superlinear over the measured range and far behind the interpreter, so the unindexed configuration is a quick-ladder decomposition only. The other half did not hold as expected: with indexes, stage 1 tracks the interpreter on the ledger write path to within a sixth at every size from a thousand to a hundred thousand entries, both linear with the same slope, and reduces no retries under contention (throughput up by half at sixteen shared writers because each proposal is cheaper, retries per commit up a sixth). It wins where the interpreter's in-memory evaluation is the expensive part, two and a half times on the thirteen-ary wide case at a hundred thousand rows, and both evaluators are superlinear there because that invariant quantifies over rows rather than groups. The spike's flat state-size curve and its ten-fold reduction in serialisation retries were stage-2 effects, the case-bound check that reads only what the delta could have changed; stage 1 proves every invariant over the whole relation on every proposal, so its cost is linear in state and its read footprint under SERIALIZABLE is the whole predicate. Import gained nothing from indexes for a different reason, verified directly: a table growing from empty carries the statistics of the empty table until it is analysed, and the same violation query scanned by primary key before one ANALYZE and sought the provisioned indexes after it. The import ruler stays as it is, because that is what a fresh deployment sees; the diagnostic stands beside it.
 
