@@ -60,6 +60,55 @@ pub(crate) fn any_prop_node_in_value(expr: &ValueExpr, f: &impl Fn(&Prop) -> boo
     }
 }
 
+/// True when any value-expression node reachable from the proposition
+/// satisfies `f`: comparison operands, `sum` targets and the values
+/// inside their bodies, transitively.
+pub(crate) fn any_value_node(prop: &Prop, f: &impl Fn(&ValueExpr) -> bool) -> bool {
+    match prop {
+        Prop::Claim { .. } | Prop::Defined { .. } | Prop::In(_, _) => false,
+        Prop::And(items) | Prop::Or(items) => items.iter().any(|p| any_value_node(p, f)),
+        Prop::Not(p) | Prop::Pre(p) | Prop::Exists { body: p, .. } => any_value_node(p, f),
+        Prop::Implies { left, right } | Prop::Xor(left, right) => {
+            any_value_node(left, f) || any_value_node(right, f)
+        }
+        Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
+            any_value_node_in_value(left, f) || any_value_node_in_value(right, f)
+        }
+        Prop::Forall { source, body, .. } => any_value_node(source, f) || any_value_node(body, f),
+    }
+}
+
+fn any_value_node_in_value(expr: &ValueExpr, f: &impl Fn(&ValueExpr) -> bool) -> bool {
+    if f(expr) {
+        return true;
+    }
+    match expr {
+        ValueExpr::Term(_) => false,
+        ValueExpr::ValueOf { default, .. } => default
+            .as_ref()
+            .is_some_and(|d| any_value_node_in_value(d, f)),
+        ValueExpr::Sum {
+            value,
+            body,
+            seed: _,
+        } => any_value_node_in_value(value, f) || any_value_node(body, f),
+        ValueExpr::Extremum { body, .. } => any_value_node(body, f),
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => {
+            any_value_node(when, f)
+                || any_value_node_in_value(then, f)
+                || any_value_node_in_value(otherwise, f)
+        }
+        ValueExpr::Arith { left, right, .. } => {
+            any_value_node_in_value(left, f) || any_value_node_in_value(right, f)
+        }
+        ValueExpr::Call { args, .. } => args.iter().any(|a| any_value_node_in_value(a, f)),
+    }
+}
+
 /// Does the proposition contain `pre(...)` anywhere, including inside
 /// a comparison operand or `sum` body?
 pub(crate) fn mentions_pre(prop: &Prop) -> bool {

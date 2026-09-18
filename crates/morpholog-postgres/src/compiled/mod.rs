@@ -46,12 +46,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use rust_decimal::Decimal;
-
 use morpholog_core::{
-    ClaimInstance, EvalError, EvalValue, Invariant, InvariantName, OrderedDomain, PredicateArgKind,
-    PredicateDecl, PredicateName, Prop, SumSeed, Term, ValidatedProgram, Value, ValueExpr, Var,
-    WitnessBinding,
+    ClaimInstance, EvalError, EvalValue, Impact, ImpactPlan, Invariant, InvariantName,
+    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Prop, SumSeed, Term,
+    ValidatedProgram, Value, ValueExpr, Var, WitnessBinding,
 };
 use sqlx::{Postgres, Row, Transaction};
 
@@ -369,19 +367,6 @@ struct ColRef {
     kind: PredicateArgKind,
 }
 
-/// A claim pattern occurring anywhere in the body: which delta claims can
-/// affect this invariant, and how their constants bound the antecedent.
-#[derive(Debug, Clone)]
-struct OccurrenceBinder {
-    predicate: PredicateName,
-    /// Literal guards: a delta claim mismatching one cannot affect this
-    /// occurrence.
-    guards: Vec<(usize, Value)>,
-    /// Occurrence position -> antecedent variable (only vars the witness
-    /// columns carry; others merely widen the case).
-    var_map: Vec<(usize, Var)>,
-}
-
 #[derive(Debug)]
 pub(crate) struct CompiledInvariant {
     pub(crate) name: InvariantName,
@@ -390,7 +375,9 @@ pub(crate) struct CompiledInvariant {
     /// full tagged value as `w_<var>`, decoded through `EvalValue`'s own
     /// serde - the one wire contract, no second kind decoder.
     pub(crate) witness_vars: Vec<Var>,
-    occurrences: Vec<OccurrenceBinder>,
+    /// Which cases a delta touches, from core's one impact authority;
+    /// `case_cols` renders its bindings onto the antecedent's columns.
+    plan: ImpactPlan,
     case_cols: BTreeMap<Var, ColRef>,
     sql_select_from_where: String,
     sql_order_limit: String,
@@ -430,49 +417,35 @@ impl CompiledInvariant {
         self.sql_range.as_deref()
     }
 
-    /// Bound the check to the cases a delta could have changed. Sound by
-    /// widening: a binder that cannot constrain a variable widens toward
-    /// full stage 1, never narrows past a touched case.
+    /// Bound the check to the cases a delta could have changed: core
+    /// decides the cases, this renders them. A bound value the SQL
+    /// cannot compare widens to the whole invariant, never narrows.
     pub(crate) fn case_filter(
         &self,
         asserted: &[ClaimInstance],
         retracted: &[ClaimInstance],
     ) -> CaseFilter {
+        let cases = match self.plan.classify(asserted, retracted) {
+            Impact::Untouched => return CaseFilter::Untouched,
+            Impact::Unbounded => return CaseFilter::Unbounded,
+            Impact::Bounded(cases) => cases,
+        };
         let mut disjuncts: BTreeSet<String> = BTreeSet::new();
-        let mut touched = false;
-        for claim in asserted.iter().chain(retracted) {
-            for occ in &self.occurrences {
-                if occ.predicate != claim.predicate {
-                    continue;
-                }
-                if !occ.guards.iter().all(|(pos, lit)| {
-                    claim
-                        .args
-                        .get(*pos)
-                        .is_some_and(|ev| literal_matches(lit, ev))
-                }) {
-                    continue;
-                }
-                touched = true;
-                if occ.var_map.is_empty() {
+        for case in &cases {
+            let mut parts = Vec::new();
+            for (var, ev) in case {
+                let Some(col) = self.case_cols.get(var) else {
                     return CaseFilter::Unbounded;
+                };
+                match const_eq(col, ev) {
+                    Some(sql) => parts.push(sql),
+                    None => return CaseFilter::Unbounded,
                 }
-                let mut parts = Vec::new();
-                for (pos, var) in &occ.var_map {
-                    let col = &self.case_cols[var];
-                    let Some(ev) = claim.args.get(*pos) else {
-                        return CaseFilter::Unbounded;
-                    };
-                    match const_eq(col, ev) {
-                        Some(sql) => parts.push(sql),
-                        None => return CaseFilter::Unbounded,
-                    }
-                }
-                disjuncts.insert(parts.join(" AND "));
             }
+            disjuncts.insert(parts.join(" AND "));
         }
-        if !touched {
-            return CaseFilter::Untouched;
+        if disjuncts.is_empty() {
+            return CaseFilter::Bounded("(false)".to_string());
         }
         let filter = disjuncts.into_iter().collect::<Vec<_>>().join(") OR (");
         CaseFilter::Bounded(format!("({filter})"))
@@ -523,14 +496,9 @@ pub(crate) fn compile_invariants(
 
 type Env = BTreeMap<Var, ColRef>;
 
-/// (predicate, literal guards, var positions) as collected during the
-/// walk, before restriction to the antecedent's columns.
-type RawOccurrence = (PredicateName, Vec<(usize, Value)>, Vec<(usize, Var)>);
-
 struct Ctx<'a> {
     decls: &'a BTreeMap<&'a str, &'a PredicateDecl>,
     counter: usize,
-    occurrences: Vec<RawOccurrence>,
     /// Every (predicate, position, representation) the rendered SQL
     /// filters or joins on - the index specification, collected where
     /// the extractor is emitted so both come from the same object.
@@ -665,7 +633,6 @@ fn compile_invariant(
     let mut ctx = Ctx {
         decls,
         counter: 0,
-        occurrences: Vec::new(),
         required: BTreeSet::new(),
         pending_sums: Vec::new(),
     };
@@ -717,24 +684,12 @@ fn compile_invariant(
         Prop::Not(_) => Vec::new(),
         _ => case_cols.keys().cloned().collect(),
     };
-    let occurrences = ctx
-        .occurrences
-        .into_iter()
-        .map(|(predicate, guards, var_map)| OccurrenceBinder {
-            predicate,
-            guards,
-            var_map: var_map
-                .into_iter()
-                .filter(|(_, v)| case_cols.contains_key(v))
-                .collect(),
-        })
-        .collect();
-
+    let plan = ImpactPlan::new(inv);
     Ok(CompiledInvariant {
         name: inv.name.clone(),
         version: inv.version,
         witness_vars,
-        occurrences,
+        plan,
         case_cols,
         sql_select_from_where: select_from_where,
         sql_order_limit: order_limit,
@@ -1061,16 +1016,6 @@ fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
     }
 }
 
-fn literal_matches(lit: &Value, ev: &EvalValue) -> bool {
-    match (lit, ev) {
-        (Value::Subject(a), EvalValue::Subject(b)) => a == b,
-        (Value::Decimal(a), EvalValue::Decimal(b)) => a.parse::<Decimal>().is_ok_and(|a| a == *b),
-        // Guard kinds the fragment cannot compare: treat as matching, which
-        // only widens the touched-case set.
-        _ => true,
-    }
-}
-
 fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, CompileReason> {
     match prop {
         Prop::Claim { predicate, args } => render_claim(predicate, args, env, ctx),
@@ -1201,8 +1146,6 @@ fn render_claim(
         "{alias}.predicate_name = {}",
         quote_literal(predicate.as_str())
     )];
-    let mut guards = Vec::new();
-    let mut var_map = Vec::new();
     for (i, term) in args.iter().enumerate() {
         let kind = decl.args.get(i).map(|a| a.kind.clone()).ok_or_else(|| {
             CompileReason::UnvalidatedShape {
@@ -1224,10 +1167,8 @@ fn render_claim(
                 let (lit, repr) = literal_sql(v)?;
                 where_.push(format!("({}) = {}", col_sql(&col, repr), lit));
                 ctx.required.insert((predicate.clone(), i, repr));
-                guards.push((i, v.clone()));
             }
             Term::Var(v) => {
-                var_map.push((i, v.clone()));
                 if let Some(bound) = env.get(v) {
                     where_.push(col_eq(bound, &col)?);
                     let repr = repr_for(&col.kind)?;
@@ -1245,7 +1186,6 @@ fn render_claim(
             }
         }
     }
-    ctx.occurrences.push((predicate.clone(), guards, var_map));
     Ok(Rendered {
         from: vec![(alias.clone(), format!("morpholog.claims {alias}"))],
         where_,

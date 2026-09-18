@@ -852,3 +852,10 @@ So #277 stays open. Rung 2a has landed: the compiled route, exact semantic parit
 | ~2 ms at 100k | no: 1,407 ms against 1,460 ms interpreted | spike: yes | pending rung 2b |
 | reduced SERIALIZABLE retries | no: 11.35 against 9.70 per commit at 16 writers; throughput up by half | spike: yes | attributable to the case-bound check |
 | indexes required | yes, strongly | yes | confirmed |
+
+### One authority for the cases a delta touches
+
+**Forced by:** #277 rung 2b's first step. The benchmark verdict attributed the spike's flat scaling and narrowed contention to the case-bound stage 2, and the review settled that case-bound admission must live in core so that whether inherited dirt blocks a transition never depends on compilation eligibility. The analysis both evaluators will bound by had to exist once, in core, before either changed.
+
+**Landed:** the compiler's occurrence binder moved into core as `ImpactPlan`, built once per invariant from the IR through the shared fold, knowing nothing of SQL. Applied to a delta it answers untouched, bounded to partial bindings of the invariant's case variables, or unbounded, widening exactly as the binder did: an occurrence that cannot constrain a case variable widens to the whole invariant, and a non-empty delta against a body carrying an unproved construct, including a value lookup, arithmetic or any value form but a term and a term-targeted sum, widens to unbounded; an empty delta touches nothing, whatever the body, because the candidate is the pre-state. The compiler renders a bounded answer onto its antecedent columns, widening further only where SQL cannot compare a bound value. No behaviour changed: the stage-2 pins hold byte for byte, the differential agrees over the corpus and over dirty history in its pinned direction, and breaking the case-variable analysis in core reddens the compiler's pin by name. The kernel does not consume the plan yet; that is the next step, atomic with the compiled route.
+

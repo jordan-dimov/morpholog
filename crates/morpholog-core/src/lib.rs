@@ -39,6 +39,7 @@ mod eval;
 mod explain;
 mod fold;
 mod guarantees;
+mod impact;
 mod ir;
 mod lint;
 mod propose;
@@ -71,6 +72,7 @@ pub use explain::{
     Rejection, TransitionRef, Verdict, explain,
 };
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
+pub use impact::{Impact, ImpactPlan};
 pub use ir::{
     ArgDecl, ArithOp, Builtin, Claim, CompareOp, Definition, DefinitionName, DefinitionOrigin,
     DerivedClaim, DerivedValue, Discipline, ExtremumOp, Intent, IntentDecl, IntentName, Invariant,
