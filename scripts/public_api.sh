@@ -69,9 +69,12 @@ for crate in "${CRATES[@]}"; do
     }
     if [ "$mode" = update ]; then
         cp "$tmp/$crate.txt" "api/$crate.txt"
-    elif ! diff -u "api/$crate.txt" "$tmp/$crate.txt" > "$tmp/$crate.diff" 2>&1; then
+    elif [ ! -e "api/$crate.txt" ]; then
+        echo "error: $crate is on the list but api/$crate.txt does not exist" >&2
         failed+=("$crate")
-        cat "$tmp/$crate.diff"
+    elif ! diff -u "api/$crate.txt" "$tmp/$crate.txt" > "$tmp/$crate.diff"; then
+        failed+=("$crate")
+        cat "$tmp/$crate.diff" >&2
     fi
 done
 
