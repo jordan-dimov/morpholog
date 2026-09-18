@@ -57,14 +57,14 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_core::{
-    ClaimInstance, CompiledProgram, EvalValue, Outcome, State, Subject, Transformation, Transition,
-    enumerate_derived, predicates_referenced_by_derived, propose,
+    ClaimInstance, CompiledProgram, EvalValue, Outcome, Program, State, Subject, Transformation,
+    Transition, enumerate_derived, predicates_referenced_by_derived, propose,
 };
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    PgAtomicOutcome, PgError, PgPool, PgProgram, PgProposalOutcome, Proposal, coverage_replay,
-    list_claims_for_predicates, list_derived_at, propose_against_pg, propose_against_pg_timed,
-    propose_all_against_pg, reconstruct_state_at, score_candidate,
+    IndexAction, InvariantPlan, PgAtomicOutcome, PgError, PgPool, PgProgram, PgProposalOutcome,
+    Proposal, coverage_replay, list_claims_for_predicates, list_derived_at, propose_against_pg,
+    propose_against_pg_timed, propose_all_against_pg, reconstruct_state_at, score_candidate,
 };
 use rust_decimal::Decimal;
 use sqlx::postgres::PgPoolOptions;
@@ -173,6 +173,12 @@ struct KernelArgs {
     /// Timed repetitions.
     #[arg(long, default_value_t = 5)]
     repeat: usize,
+
+    /// The label the rows carry. The kernel family runs the in-memory
+    /// interpreter whatever is selected; the selector exists so one
+    /// suite run labels every row alike.
+    #[arg(long, value_enum, default_value = "interpreted")]
+    implementation: Implementation,
 }
 
 #[derive(clap::Args, Debug)]
@@ -196,6 +202,13 @@ struct ReplayArgs {
     /// Required: acknowledge that the target database is truncated.
     #[arg(long)]
     reset: bool,
+
+    /// The execution configuration to measure: the interpreter, the
+    /// compiled invariant route with no compiler-required index, or
+    /// the compiled route with its indexes provisioned. The bench
+    /// establishes the index condition itself, outside every sample.
+    #[arg(long, value_enum, default_value = "interpreted")]
+    implementation: Implementation,
 }
 
 #[derive(clap::Args, Debug)]
@@ -261,6 +274,13 @@ struct ScenarioArgs {
     #[arg(long)]
     reset: bool,
 
+    /// The execution configuration to measure: the interpreter, the
+    /// compiled invariant route with no compiler-required index, or
+    /// the compiled route with its indexes provisioned. The bench
+    /// establishes the index condition itself, outside every sample.
+    #[arg(long, value_enum, default_value = "interpreted")]
+    implementation: Implementation,
+
     /// Timed repetitions. Every repeat starts from the same logical
     /// pre-state (mutating scenarios rebuild their fixture); the first
     /// sample reports as `first`, the median over the rest as `steady
@@ -314,6 +334,13 @@ struct AsOfArgs {
     /// other scenarios.
     #[arg(long)]
     reset: bool,
+
+    /// The execution configuration to measure: the interpreter, the
+    /// compiled invariant route with no compiler-required index, or
+    /// the compiled route with its indexes provisioned. The bench
+    /// establishes the index condition itself, outside every sample.
+    #[arg(long, value_enum, default_value = "interpreted")]
+    implementation: Implementation,
 
     /// Timed repetitions over the immutable fabricated log; `first` +
     /// `steady median` reporting, same contract as the other scenarios.
@@ -382,6 +409,13 @@ struct ContendArgs {
     #[arg(long)]
     reset: bool,
 
+    /// The execution configuration to measure: the interpreter, the
+    /// compiled invariant route with no compiler-required index, or
+    /// the compiled route with its indexes provisioned. The bench
+    /// establishes the index condition itself, outside every sample.
+    #[arg(long, value_enum, default_value = "interpreted")]
+    implementation: Implementation,
+
     /// Timed repetitions; each repeat rebuilds the prepopulated fixture
     /// so every burst races over the same logical pre-state.
     #[arg(long, default_value_t = 1)]
@@ -406,6 +440,13 @@ struct ImportArgs {
     /// scenarios.
     #[arg(long)]
     reset: bool,
+
+    /// The execution configuration to measure: the interpreter, the
+    /// compiled invariant route with no compiler-required index, or
+    /// the compiled route with its indexes provisioned. The bench
+    /// establishes the index condition itself, outside every sample.
+    #[arg(long, value_enum, default_value = "interpreted")]
+    implementation: Implementation,
 
     /// Timed repetitions; each repeat re-truncates so every journey
     /// starts from the same empty book.
@@ -435,6 +476,13 @@ struct WideArgs {
     /// scenarios.
     #[arg(long)]
     reset: bool,
+
+    /// The execution configuration to measure: the interpreter, the
+    /// compiled invariant route with no compiler-required index, or
+    /// the compiled route with its indexes provisioned. The bench
+    /// establishes the index condition itself, outside every sample.
+    #[arg(long, value_enum, default_value = "interpreted")]
+    implementation: Implementation,
 
     /// Timed repetitions; each repeat rebuilds the fixture so the
     /// proposal always lands on the same logical pre-state.
@@ -470,6 +518,13 @@ struct SuiteArgs {
     /// scenarios.
     #[arg(long)]
     reset: bool,
+
+    /// The execution configuration to measure: the interpreter, the
+    /// compiled invariant route with no compiler-required index, or
+    /// the compiled route with its indexes provisioned. The bench
+    /// establishes the index condition itself, outside every sample.
+    #[arg(long, value_enum, default_value = "interpreted")]
+    implementation: Implementation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -519,6 +574,13 @@ struct TransactArgs {
 
     #[arg(long)]
     reset: bool,
+
+    /// The execution configuration to measure: the interpreter, the
+    /// compiled invariant route with no compiler-required index, or
+    /// the compiled route with its indexes provisioned. The bench
+    /// establishes the index condition itself, outside every sample.
+    #[arg(long, value_enum, default_value = "interpreted")]
+    implementation: Implementation,
 
     #[arg(long, default_value_t = 3)]
     repeat: usize,
@@ -582,12 +644,150 @@ async fn main() -> Result<()> {
 // Measurement layer
 // ============================================================
 
-/// The implementation column of every result row. Every scenario pins
-/// the interpreter by construction (`PgProgram::interpreted`), whatever
-/// the programme is eligible for, so this label stays true; the
-/// compiled route will be measured under its own value, and the table
-/// contract does not change.
-const IMPLEMENTATION: &str = "interpreted";
+/// The execution configuration a run measures, and the implementation
+/// column of every result row. Three configurations of one runtime:
+/// the kernel interpreter; the compiled invariant route with no
+/// compiler-required index present; the compiled route with every
+/// index it names provisioned. Selecting one is a change to the
+/// machine under measurement, never to the ruler, so the suite
+/// contract does not move with it. The default keeps an unflagged
+/// command's historical meaning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Implementation {
+    Interpreted,
+    Compiled,
+    CompiledIndexed,
+}
+
+impl Implementation {
+    fn label(self) -> &'static str {
+        match self {
+            Implementation::Interpreted => "interpreted",
+            Implementation::Compiled => "compiled",
+            Implementation::CompiledIndexed => "compiled-indexed",
+        }
+    }
+
+    fn indexed(self) -> bool {
+        matches!(self, Implementation::CompiledIndexed)
+    }
+
+    /// The programme object a scenario proposes through. A compiled
+    /// configuration refuses a programme the production route would
+    /// interpret: a measurement labelled compiled must be one.
+    fn program(self, core: Program) -> Result<PgProgram> {
+        let compiled =
+            CompiledProgram::new(core).map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+        match self {
+            Implementation::Interpreted => Ok(PgProgram::interpreted(compiled)),
+            Implementation::Compiled | Implementation::CompiledIndexed => {
+                let program = PgProgram::new(compiled);
+                match program.plan() {
+                    InvariantPlan::Compiled { .. } => Ok(program),
+                    InvariantPlan::Interpreted { refusals } => Err(anyhow!(
+                        "`{}` requested but the programme `{}` would be interpreted: {}",
+                        self.label(),
+                        program.core().program().name,
+                        refusals
+                            .iter()
+                            .map(|r| format!("{}: {}", r.invariant, r.reason))
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    )),
+                }
+            }
+        }
+    }
+}
+
+/// The physical index condition is part of the configuration, and the
+/// bench establishes it itself after every logical reset and before
+/// the fixture, outside every timed sample. Every repeat starts from
+/// the same catalogue: Morpholog's own compiled indexes are dropped
+/// first (the `morpholog_ci_` namespace is Morpholog's, and `--reset`
+/// acknowledged a disposable database), so nothing left by an earlier
+/// case or programme rides along. An unindexed configuration then
+/// refuses an operator's equivalent index under another name, which
+/// would satisfy a requirement; the indexed configuration provisions
+/// every requirement fresh, accepts such an equivalent as satisfying
+/// it, and refuses a conflict.
+async fn establish(pool: &PgPool, implementation: Implementation, cores: &[Program]) -> Result<()> {
+    let owned: Vec<String> = sqlx::query_scalar(
+        "SELECT indexname::text FROM pg_indexes
+         WHERE schemaname = 'morpholog' AND tablename = 'claims'
+           AND indexname LIKE 'morpholog_ci_%'",
+    )
+    .fetch_all(pool)
+    .await
+    .context("listing Morpholog's compiled indexes")?;
+    for name in owned {
+        // Quoted like the catalogue quotes them.
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DROP INDEX morpholog.\"{}\"",
+            name.replace('"', "\"\"")
+        )))
+        .execute(pool)
+        .await
+        .with_context(|| format!("dropping {name} to start from a clean catalogue"))?;
+    }
+    for core in cores {
+        let classified = PgProgram::new(
+            CompiledProgram::new(core.clone()).map_err(|e| anyhow!("invalid programme: {e:?}"))?,
+        );
+        if implementation.indexed() {
+            let report = morpholog_postgres::provision_indexes(pool, &classified, false)
+                .await
+                .context("provisioning the indexed condition")?;
+            if !report.applied {
+                return Err(anyhow!(
+                    "the indexed condition could not be established for `{}`: {:?}",
+                    report.program_identity,
+                    report.entries
+                ));
+            }
+        }
+        let plan = morpholog_postgres::plan_indexes(pool, &classified)
+            .await
+            .context("checking the index condition")?;
+        let acceptable = |action: &IndexAction| {
+            if implementation.indexed() {
+                matches!(action, IndexAction::Keep | IndexAction::SatisfiedExternally)
+            } else {
+                *action == IndexAction::Create
+            }
+        };
+        let offending: Vec<String> = plan
+            .entries
+            .iter()
+            .filter(|e| !acceptable(&e.action))
+            .map(|e| format!("{} {} ({})", e.action, e.index_name, e.detail))
+            .collect();
+        if !offending.is_empty() {
+            return Err(anyhow!(
+                "the `{}` condition is not what the database holds for `{}`: {}",
+                implementation.label(),
+                plan.program_identity,
+                offending.join("; ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The bench establishes index conditions through the registry, so the
+/// database must be at the migration head; say so rather than fail
+/// inside provisioning.
+async fn require_migration_head(pool: &PgPool) -> Result<()> {
+    let status = morpholog_postgres::migration_status(pool)
+        .await
+        .context("reading the migration status")?;
+    if !status.is_current() {
+        return Err(anyhow!(
+            "the database schema is behind the Morpholog migration head; run `morpholog migrate`"
+        ));
+    }
+    Ok(())
+}
 
 /// Bumped only when benchmark semantics change (cases, fixtures,
 /// ladders, aggregation) - never by an implementation being measured.
@@ -710,6 +910,7 @@ fn require_positive_repeat(repeat: usize) -> Result<()> {
 /// (N entries, K accounts, the noise rows), then times one fresh
 /// proposal on top of it.
 async fn measure_write(
+    implementation: Implementation,
     pool: &PgPool,
     case: &str,
     n: usize,
@@ -717,11 +918,10 @@ async fn measure_write(
     noise_claims: usize,
     repeat: usize,
 ) -> Result<CaseResult> {
+    // The programmes whose index condition this scenario establishes.
+    let cores: Vec<Program> = vec![double_entry_ledger::program()];
     let transformation = double_entry_ledger::post_simple_entry();
-    let compiled = PgProgram::interpreted(
-        CompiledProgram::new(double_entry_ledger::program())
-            .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
-    );
+    let compiled = implementation.program(double_entry_ledger::program())?;
     let mut fixture = Vec::with_capacity(repeat);
     let mut propose = Vec::with_capacity(repeat);
     let mut begin = Vec::with_capacity(repeat);
@@ -731,9 +931,13 @@ async fn measure_write(
     for r in 0..repeat {
         let t = Instant::now();
         reset_db(pool).await?;
+        let reset_took = t.elapsed();
+        // The index condition is established outside the sample.
+        establish(pool, implementation, &cores).await?;
+        let t = Instant::now();
         insert_n_entries(pool, n, accounts).await?;
         insert_noise_claims(pool, noise_claims).await?;
-        fixture.push(t.elapsed());
+        fixture.push(reset_took + t.elapsed());
         analyze_claims(pool).await?;
 
         let transition = Transition {
@@ -768,7 +972,7 @@ async fn measure_write(
     }
     Ok(CaseResult {
         case: case.to_string(),
-        implementation: IMPLEMENTATION,
+        implementation: implementation.label(),
         axis: "n",
         point: n as u64,
         metrics: vec![
@@ -844,7 +1048,13 @@ fn must_commit(outcome: Outcome, what: &str) -> Result<State> {
 /// difference is what invariant evaluation costs), and `acts`
 /// sequential proposals each against the candidate the act before it
 /// produced.
-fn measure_kernel(case: &str, n: usize, acts: usize, repeat: usize) -> Result<CaseResult> {
+fn measure_kernel(
+    implementation: Implementation,
+    case: &str,
+    n: usize,
+    acts: usize,
+    repeat: usize,
+) -> Result<CaseResult> {
     let transformation = double_entry_ledger::post_simple_entry();
     let invariants = double_entry_ledger::all_invariants();
     let definitions = double_entry_ledger::definitions();
@@ -889,7 +1099,7 @@ fn measure_kernel(case: &str, n: usize, acts: usize, repeat: usize) -> Result<Ca
     }
     Ok(CaseResult {
         case: case.to_string(),
-        implementation: IMPLEMENTATION,
+        implementation: implementation.label(),
         axis: "n",
         point: n as u64,
         metrics: vec![
@@ -907,7 +1117,13 @@ fn run_kernel(args: KernelArgs) -> Result<()> {
         "scenario=kernel n={} acts={} repeat={}",
         args.n, args.acts, args.repeat
     );
-    let result = measure_kernel("kernel", args.n, args.acts, args.repeat)?;
+    let result = measure_kernel(
+        args.implementation,
+        "kernel",
+        args.n,
+        args.acts,
+        args.repeat,
+    )?;
     print_case_human(&result);
     Ok(())
 }
@@ -915,18 +1131,25 @@ fn run_kernel(args: KernelArgs) -> Result<()> {
 /// The two replays that walk the whole audit log, over the `as-of`
 /// fixture: coverage and candidate scoring of the ledger programme.
 async fn measure_replay(
+    implementation: Implementation,
     pool: &PgPool,
     case: &str,
     n: usize,
     retract_fraction: usize,
     repeat: usize,
 ) -> Result<CaseResult> {
+    // The programmes whose index condition this scenario establishes.
+    let cores: Vec<Program> = vec![double_entry_ledger::program()];
     let program = double_entry_ledger::program();
     let retract_stride = retract_stride_for(retract_fraction);
     let t = Instant::now();
     reset_db(pool).await?;
+    let reset_took = t.elapsed();
+    // The index condition is established outside the sample.
+    establish(pool, implementation, &cores).await?;
+    let t = Instant::now();
     fabricate_audit_rows(pool, n, retract_stride).await?;
-    let fixture = t.elapsed();
+    let fixture = reset_took + t.elapsed();
     analyze_audit(pool).await?;
 
     let mut coverage = Vec::with_capacity(repeat);
@@ -946,7 +1169,7 @@ async fn measure_replay(
     }
     Ok(CaseResult {
         case: case.to_string(),
-        implementation: IMPLEMENTATION,
+        implementation: implementation.label(),
         axis: "n",
         point: n as u64,
         metrics: vec![
@@ -964,12 +1187,20 @@ async fn run_replay(args: ReplayArgs) -> Result<()> {
         return Err(anyhow!("--retract-fraction must be between 0 and 50"));
     }
     let pool = connect(&args.database_url).await?;
+    require_migration_head(&pool).await?;
     println!(
         "scenario=replay n={} retract_fraction={} repeat={}",
         args.n, args.retract_fraction, args.repeat
     );
-    let result =
-        measure_replay(&pool, "replay", args.n, args.retract_fraction, args.repeat).await?;
+    let result = measure_replay(
+        args.implementation,
+        &pool,
+        "replay",
+        args.n,
+        args.retract_fraction,
+        args.repeat,
+    )
+    .await?;
     print_case_human(&result);
     Ok(())
 }
@@ -1130,11 +1361,13 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
     require_positive_k(&args)?;
     require_positive_repeat(args.repeat)?;
     let pool = connect(&args.database_url).await?;
+    require_migration_head(&pool).await?;
     println!(
         "scenario=write n={} accounts={} noise_claims={} repeat={}",
         args.n, args.accounts, args.noise_claims, args.repeat
     );
     let result = measure_write(
+        args.implementation,
         &pool,
         "write",
         args.n,
@@ -1152,6 +1385,7 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
 /// the three phases of the read path timed separately, semantics
 /// identical to `list_derived` (the split is diagnostic).
 async fn measure_read(
+    implementation: Implementation,
     pool: &PgPool,
     case: &str,
     n: usize,
@@ -1159,11 +1393,17 @@ async fn measure_read(
     noise_claims: usize,
     repeat: usize,
 ) -> Result<CaseResult> {
+    // The programmes whose index condition this scenario establishes.
+    let cores: Vec<Program> = vec![double_entry_ledger::program()];
     let t = Instant::now();
     reset_db(pool).await?;
+    let reset_took = t.elapsed();
+    // The index condition is established outside the sample.
+    establish(pool, implementation, &cores).await?;
+    let t = Instant::now();
     insert_n_entries(pool, n, accounts).await?;
     insert_noise_claims(pool, noise_claims).await?;
-    let fixture = t.elapsed();
+    let fixture = reset_took + t.elapsed();
     analyze_claims(pool).await?;
 
     let derived = double_entry_ledger::trial_balance_row();
@@ -1218,7 +1458,7 @@ async fn measure_read(
     }
     Ok(CaseResult {
         case: case.to_string(),
-        implementation: IMPLEMENTATION,
+        implementation: implementation.label(),
         axis: "n",
         point: n as u64,
         metrics: vec![
@@ -1237,11 +1477,13 @@ async fn run_read(args: ScenarioArgs) -> Result<()> {
     require_positive_k(&args)?;
     require_positive_repeat(args.repeat)?;
     let pool = connect(&args.database_url).await?;
+    require_migration_head(&pool).await?;
     println!(
         "scenario=read n={} accounts={} noise_claims={} repeat={}",
         args.n, args.accounts, args.noise_claims, args.repeat
     );
     let result = measure_read(
+        args.implementation,
         &pool,
         "read",
         args.n,
@@ -1269,6 +1511,7 @@ fn retract_stride_for(retract_fraction: usize) -> i64 {
 /// repeats; one `reconstruct_state_at` plus one `list_derived_at` per
 /// repeat against the `--at`-selected target.
 async fn measure_as_of(
+    implementation: Implementation,
     pool: &PgPool,
     case: &str,
     n: usize,
@@ -1276,6 +1519,8 @@ async fn measure_as_of(
     retract_fraction: usize,
     repeat: usize,
 ) -> Result<CaseResult> {
+    // The programmes whose index condition this scenario establishes.
+    let cores: Vec<Program> = vec![double_entry_ledger::program()];
     let retract_stride = retract_stride_for(retract_fraction);
     let retract_count = if retract_stride == 0 {
         0
@@ -1285,8 +1530,12 @@ async fn measure_as_of(
 
     let t = Instant::now();
     reset_db(pool).await?;
+    let reset_took = t.elapsed();
+    // The index condition is established outside the sample.
+    establish(pool, implementation, &cores).await?;
+    let t = Instant::now();
     fabricate_audit_rows(pool, n, retract_stride).await?;
-    let fixture = t.elapsed();
+    let fixture = reset_took + t.elapsed();
     analyze_audit(pool).await?;
 
     // Pick the target transition by causal offset; clamp so
@@ -1330,7 +1579,7 @@ async fn measure_as_of(
     }
     Ok(CaseResult {
         case: case.to_string(),
-        implementation: IMPLEMENTATION,
+        implementation: implementation.label(),
         axis: "n",
         point: n as u64,
         metrics: vec![
@@ -1367,11 +1616,13 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
         ));
     }
     let pool = connect(&args.database_url).await?;
+    require_migration_head(&pool).await?;
     println!(
         "scenario=as-of n={} at={} retract_fraction={} repeat={}",
         args.n, args.at, args.retract_fraction, args.repeat
     );
     let result = measure_as_of(
+        args.implementation,
         &pool,
         "asof",
         args.n,
@@ -1387,7 +1638,9 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
 /// One concurrent burst: W workers, `ops` operations each, against a
 /// freshly-built pre-state. Returns the summed tally and the elapsed
 /// wall time of the concurrent phase.
+#[allow(clippy::too_many_arguments)]
 async fn contend_burst(
+    implementation: Implementation,
     pool: &PgPool,
     workers: usize,
     ops_per_worker: usize,
@@ -1402,6 +1655,7 @@ async fn contend_burst(
         let pool = pool.clone();
         handles.push(tokio::spawn(async move {
             contend_worker(
+                implementation,
                 pool,
                 w,
                 ops_per_worker,
@@ -1434,6 +1688,7 @@ async fn contend_burst(
 /// instead of reporting.
 #[allow(clippy::too_many_arguments)]
 async fn measure_contend(
+    implementation: Implementation,
     pool: &PgPool,
     case: &str,
     workers: usize,
@@ -1445,6 +1700,14 @@ async fn measure_contend(
     repeat: usize,
     require_clean: bool,
 ) -> Result<CaseResult> {
+    // The programmes whose index condition this scenario establishes.
+    let cores: Vec<Program> = if disjoint {
+        (0..periods)
+            .map(|p| synthetic_program(&format!("Bench_{p}")))
+            .collect()
+    } else {
+        vec![double_entry_ledger::program()]
+    };
     let total_ops = (workers * ops_per_worker) as u64;
     let mut fixture = Vec::with_capacity(repeat);
     let mut elapsed_s = Vec::with_capacity(repeat);
@@ -1456,11 +1719,16 @@ async fn measure_contend(
     for round in 0..repeat {
         let t = Instant::now();
         reset_db(pool).await?;
+        let reset_took = t.elapsed();
+        // The index condition is established outside the sample.
+        establish(pool, implementation, &cores).await?;
+        let t = Instant::now();
         insert_n_entries(pool, prepopulate, 2).await?;
-        fixture.push(t.elapsed());
+        fixture.push(reset_took + t.elapsed());
         analyze_claims(pool).await?;
 
         let (total, elapsed) = contend_burst(
+            implementation,
             pool,
             workers,
             ops_per_worker,
@@ -1519,7 +1787,7 @@ async fn measure_contend(
     }
     Ok(CaseResult {
         case: case.to_string(),
-        implementation: IMPLEMENTATION,
+        implementation: implementation.label(),
         axis: "workers",
         point: workers as u64,
         metrics: vec![
@@ -1556,6 +1824,7 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
         .connect(&morpholog_postgres::with_default_user(&args.database_url))
         .await
         .context("connect to PostgreSQL")?;
+    require_migration_head(&pool).await?;
     println!(
         "scenario=contend workers={} ops_per_worker={} prepopulate={} periods={} disjoint={} max_retries={} repeat={}",
         args.workers,
@@ -1567,6 +1836,7 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
         args.repeat
     );
     let result = measure_contend(
+        args.implementation,
         &pool,
         "contend",
         args.workers,
@@ -1603,7 +1873,9 @@ struct Tally {
 /// (`Bench_{worker_id mod periods}`), so `--periods >= workers` makes the
 /// workers genuinely disjoint. Either workload carries the SERIALIZABLE
 /// retry loop a real embedder owns (see [`one_op`]).
+#[allow(clippy::too_many_arguments)]
 async fn contend_worker(
+    implementation: Implementation,
     pool: PgPool,
     worker_id: usize,
     ops: usize,
@@ -1621,10 +1893,7 @@ async fn contend_worker(
         // in the ledger workload here partitions by *predicate*.
         let predicate = format!("Bench_{}", worker_id % periods);
         let transformation = synthetic_bump(&predicate);
-        let compiled = PgProgram::interpreted(
-            CompiledProgram::new(synthetic_program(&predicate))
-                .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
-        );
+        let compiled = implementation.program(synthetic_program(&predicate))?;
         for op in 0..ops {
             let transition = Transition {
                 transformation_name: transformation.name.clone(),
@@ -1644,10 +1913,7 @@ async fn contend_worker(
         }
     } else {
         let transformation = double_entry_ledger::post_simple_entry();
-        let compiled = PgProgram::interpreted(
-            CompiledProgram::new(double_entry_ledger::program())
-                .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
-        );
+        let compiled = implementation.program(double_entry_ledger::program())?;
         let period = format!("p_contend_{}", worker_id % periods);
         for op in 0..ops {
             let transition = Transition {
@@ -1765,21 +2031,27 @@ fn synthetic_program(predicate: &str) -> morpholog_core::Program {
 /// roughly quadratic in N - the decile split (mean of the first vs
 /// last tenth of per-commit latencies) is the growth signal. Every
 /// repeat re-truncates: the whole 0->N journey IS the sample.
-async fn measure_import(pool: &PgPool, case: &str, n: usize, repeat: usize) -> Result<CaseResult> {
+async fn measure_import(
+    implementation: Implementation,
+    pool: &PgPool,
+    case: &str,
+    n: usize,
+    repeat: usize,
+) -> Result<CaseResult> {
+    // The programmes whose index condition this scenario establishes.
+    let cores: Vec<Program> = vec![double_entry_ledger::program()];
     if n == 0 {
         return Err(anyhow!("import requires n >= 1"));
     }
     let transformation = double_entry_ledger::post_simple_entry();
-    let compiled = PgProgram::interpreted(
-        CompiledProgram::new(double_entry_ledger::program())
-            .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
-    );
+    let compiled = implementation.program(double_entry_ledger::program())?;
     let mut total_s = Vec::with_capacity(repeat);
     let mut rows_per_s = Vec::with_capacity(repeat);
     let mut first_decile = Vec::with_capacity(repeat);
     let mut last_decile = Vec::with_capacity(repeat);
     for r in 0..repeat {
         reset_db(pool).await?;
+        establish(pool, implementation, &cores).await?;
         // The empty book is this scenario's fixture; refresh stats so
         // the first commits are not planned against the previous
         // case's leftovers.
@@ -1825,7 +2097,7 @@ async fn measure_import(pool: &PgPool, case: &str, n: usize, repeat: usize) -> R
     }
     Ok(CaseResult {
         case: case.to_string(),
-        implementation: IMPLEMENTATION,
+        implementation: implementation.label(),
         axis: "n",
         point: n as u64,
         metrics: vec![
@@ -1841,8 +2113,9 @@ async fn run_import(args: ImportArgs) -> Result<()> {
     check_reset_ack(args.reset, &args.database_url)?;
     require_positive_repeat(args.repeat)?;
     let pool = connect(&args.database_url).await?;
+    require_migration_head(&pool).await?;
     println!("scenario=import n={} repeat={}", args.n, args.repeat);
-    let result = measure_import(&pool, "import", args.n, args.repeat).await?;
+    let result = measure_import(args.implementation, &pool, "import", args.n, args.repeat).await?;
     print_case_human(&result);
     Ok(())
 }
@@ -1962,6 +2235,7 @@ async fn insert_wide_rows(pool: &PgPool, n: usize, arity: usize) -> Result<()> {
 /// is the payload), then one proposal through the grouped-sum
 /// invariant.
 async fn measure_wide(
+    implementation: Implementation,
     pool: &PgPool,
     case: &str,
     axis: &'static str,
@@ -1975,9 +2249,9 @@ async fn measure_wide(
         ));
     }
     let program = wide_program(arity);
-    let compiled = PgProgram::interpreted(
-        CompiledProgram::new(program).map_err(|e| anyhow!("invalid wide programme: {e:?}"))?,
-    );
+    let compiled = implementation.program(program.clone())?;
+    // The programmes whose index condition this scenario establishes.
+    let cores: Vec<Program> = vec![program];
     let footprint = vec!["WideLine".to_string()];
 
     let mut fixture = Vec::with_capacity(repeat);
@@ -1987,8 +2261,12 @@ async fn measure_wide(
     for r in 0..repeat {
         let t = Instant::now();
         reset_db(pool).await?;
+        let reset_took = t.elapsed();
+        // The index condition is established outside the sample.
+        establish(pool, implementation, &cores).await?;
+        let t = Instant::now();
         insert_wide_rows(pool, n, arity).await?;
-        fixture.push(t.elapsed());
+        fixture.push(reset_took + t.elapsed());
         analyze_claims(pool).await?;
 
         let t = Instant::now();
@@ -2028,7 +2306,7 @@ async fn measure_wide(
     }
     Ok(CaseResult {
         case: case.to_string(),
-        implementation: IMPLEMENTATION,
+        implementation: implementation.label(),
         axis,
         point: if axis == "arity" {
             arity as u64
@@ -2048,11 +2326,21 @@ async fn run_wide(args: WideArgs) -> Result<()> {
     check_reset_ack(args.reset, &args.database_url)?;
     require_positive_repeat(args.repeat)?;
     let pool = connect(&args.database_url).await?;
+    require_migration_head(&pool).await?;
     println!(
         "scenario=wide n={} arity={} repeat={}",
         args.n, args.arity, args.repeat
     );
-    let result = measure_wide(&pool, "wide", "n", args.n, args.arity, args.repeat).await?;
+    let result = measure_wide(
+        args.implementation,
+        &pool,
+        "wide",
+        "n",
+        args.n,
+        args.arity,
+        args.repeat,
+    )
+    .await?;
     print_case_human(&result);
     Ok(())
 }
@@ -2603,18 +2891,52 @@ fn suite_plan(ladder: Ladder) -> Vec<CaseSpec> {
 /// Run one canonical case. Import and contend cap their repeats (the
 /// journeys are long and each rebuilds its pre-state); the canonical
 /// contend rows require a clean burst.
-async fn run_case(pool: &PgPool, spec: &CaseSpec, repeat: usize) -> Result<CaseResult> {
+async fn run_case(
+    implementation: Implementation,
+    pool: &PgPool,
+    spec: &CaseSpec,
+    repeat: usize,
+) -> Result<CaseResult> {
     match &spec.kind {
         CaseKind::Write { n, accounts, noise } => {
-            measure_write(pool, spec.case, *n, *accounts, *noise, repeat).await
+            measure_write(
+                implementation,
+                pool,
+                spec.case,
+                *n,
+                *accounts,
+                *noise,
+                repeat,
+            )
+            .await
         }
         CaseKind::Read { n, accounts, noise } => {
-            measure_read(pool, spec.case, *n, *accounts, *noise, repeat).await
+            measure_read(
+                implementation,
+                pool,
+                spec.case,
+                *n,
+                *accounts,
+                *noise,
+                repeat,
+            )
+            .await
         }
         CaseKind::AsOf {
             n,
             retract_fraction,
-        } => measure_as_of(pool, spec.case, *n, 1.0, *retract_fraction, repeat).await,
+        } => {
+            measure_as_of(
+                implementation,
+                pool,
+                spec.case,
+                *n,
+                1.0,
+                *retract_fraction,
+                repeat,
+            )
+            .await
+        }
         CaseKind::Contend {
             workers,
             ops,
@@ -2628,6 +2950,7 @@ async fn run_case(pool: &PgPool, spec: &CaseSpec, repeat: usize) -> Result<CaseR
             // exhaustion at an arbitrary cap is a config artifact (the
             // first full-ladder run lost 1 op in 200 to exactly that).
             measure_contend(
+                implementation,
                 pool,
                 spec.case,
                 *workers,
@@ -2641,19 +2964,34 @@ async fn run_case(pool: &PgPool, spec: &CaseSpec, repeat: usize) -> Result<CaseR
             )
             .await
         }
-        CaseKind::Import { n } => measure_import(pool, spec.case, *n, repeat.min(3)).await,
-        CaseKind::Wide { axis, n, arity } => {
-            measure_wide(pool, spec.case, axis, *n, *arity, repeat).await
+        CaseKind::Import { n } => {
+            measure_import(implementation, pool, spec.case, *n, repeat.min(3)).await
         }
-        CaseKind::Kernel { n, acts } => measure_kernel(spec.case, *n, *acts, repeat),
+        CaseKind::Wide { axis, n, arity } => {
+            measure_wide(implementation, pool, spec.case, axis, *n, *arity, repeat).await
+        }
+        CaseKind::Kernel { n, acts } => {
+            measure_kernel(implementation, spec.case, *n, *acts, repeat)
+        }
         CaseKind::Replay {
             n,
             retract_fraction,
-        } => measure_replay(pool, spec.case, *n, *retract_fraction, repeat).await,
+        } => {
+            measure_replay(
+                implementation,
+                pool,
+                spec.case,
+                *n,
+                *retract_fraction,
+                repeat,
+            )
+            .await
+        }
     }
 }
 
 async fn run_suite_specs(
+    implementation: Implementation,
     pool: &PgPool,
     specs: &[CaseSpec],
     repeat: usize,
@@ -2661,7 +2999,7 @@ async fn run_suite_specs(
     let mut results = Vec::with_capacity(specs.len());
     for (i, spec) in specs.iter().enumerate() {
         eprintln!("[{}/{}] {} ...", i + 1, specs.len(), spec.case);
-        let result = run_case(pool, spec, repeat)
+        let result = run_case(implementation, pool, spec, repeat)
             .await
             .with_context(|| format!("suite case {}", spec.case))?;
         results.push(result);
@@ -2750,6 +3088,7 @@ async fn run_suite(args: SuiteArgs) -> Result<()> {
         .connect(&morpholog_postgres::with_default_user(&args.database_url))
         .await
         .context("connect to PostgreSQL")?;
+    require_migration_head(&pool).await?;
     let pg_version: String = sqlx::query_scalar("SELECT version()")
         .fetch_one(&pool)
         .await
@@ -2763,10 +3102,10 @@ async fn run_suite(args: SuiteArgs) -> Result<()> {
             params: format!("{:?}", spec.kind),
         })
         .collect();
-    let cases = run_suite_specs(&pool, &specs, args.repeat).await?;
+    let cases = run_suite_specs(args.implementation, &pool, &specs, args.repeat).await?;
     let report = SuiteReport {
         suite_contract: SUITE_CONTRACT,
-        implementation: IMPLEMENTATION,
+        implementation: args.implementation.label(),
         ladder: match args.ladder {
             Ladder::Quick => "quick",
             Ladder::Full => "full",
@@ -2841,7 +3180,9 @@ async fn transact_once(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn measure_transact(
+    implementation: Implementation,
     pool: &PgPool,
     acts: usize,
     prepopulate: usize,
@@ -2850,10 +3191,9 @@ async fn measure_transact(
     writer_pause: Duration,
     repeat: usize,
 ) -> Result<CaseResult> {
-    let compiled = std::sync::Arc::new(PgProgram::interpreted(
-        CompiledProgram::new(double_entry_ledger::program())
-            .map_err(|e| anyhow!("invalid programme: {e:?}"))?,
-    ));
+    // The programmes whose index condition this scenario establishes.
+    let cores: Vec<Program> = vec![double_entry_ledger::program()];
+    let compiled = std::sync::Arc::new(implementation.program(double_entry_ledger::program())?);
     let mut atomic = Vec::with_capacity(repeat);
     let mut sequential = Vec::with_capacity(repeat);
     let mut batch_retries = Vec::with_capacity(repeat);
@@ -2863,6 +3203,7 @@ async fn measure_transact(
     for round in 0..repeat {
         // The batch, with the writers racing it for as long as it runs.
         reset_db(pool).await?;
+        establish(pool, implementation, &cores).await?;
         insert_n_entries(pool, prepopulate, 2).await?;
         analyze_claims(pool).await?;
         let proposals: Vec<Proposal> = (0..acts)
@@ -2912,6 +3253,7 @@ async fn measure_transact(
 
         // The same acts one by one, from the same book, uncontended.
         reset_db(pool).await?;
+        establish(pool, implementation, &cores).await?;
         insert_n_entries(pool, prepopulate, 2).await?;
         analyze_claims(pool).await?;
         let t = Instant::now();
@@ -2935,7 +3277,7 @@ async fn measure_transact(
             "transact"
         }
         .to_string(),
-        implementation: IMPLEMENTATION,
+        implementation: implementation.label(),
         axis: "acts",
         point: acts as u64,
         metrics: vec![
@@ -2956,11 +3298,13 @@ async fn run_transact(args: TransactArgs) -> Result<()> {
         return Err(anyhow!("--acts must be at least 1"));
     }
     let pool = connect(&args.database_url).await?;
+    require_migration_head(&pool).await?;
     println!(
         "scenario=transact acts={} prepopulate={} writers={} repeat={}",
         args.acts, args.prepopulate, args.writers, args.repeat
     );
     let result = measure_transact(
+        args.implementation,
         &pool,
         args.acts,
         args.prepopulate,
@@ -3065,6 +3409,38 @@ mod smoke {
             eprintln!("DATABASE_URL unset; skipping bench smoke test");
             return;
         };
+        // A database behind the migration head is refused by name, as an
+        // operator's would be: the head's record is removed, the refusal
+        // proven, and the database brought back to the head as an
+        // operator would with `migrate`.
+        let pool = connect(&url).await.expect("connect");
+        sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
+            .bind(morpholog_postgres::head_version())
+            .execute(&pool)
+            .await
+            .expect("remove the head's record");
+        let behind = run_write(ScenarioArgs {
+            n: 1,
+            accounts: 2,
+            noise_claims: 0,
+            database_url: url.clone(),
+            reset: true,
+            implementation: Implementation::Interpreted,
+            repeat: 1,
+        })
+        .await;
+        let message = format!(
+            "{:?}",
+            behind.expect_err("a database behind the head is refused")
+        );
+        assert!(
+            message.contains("behind the Morpholog migration head"),
+            "the refusal names the remedy: {message}"
+        );
+        morpholog_postgres::apply_migrations(&pool)
+            .await
+            .expect("bring the test database to the migration head");
+        drop(pool);
 
         run_write(ScenarioArgs {
             n: 1,
@@ -3072,10 +3448,168 @@ mod smoke {
             noise_claims: 1,
             database_url: url.clone(),
             reset: true,
+            implementation: Implementation::Interpreted,
             repeat: 2,
         })
         .await
         .expect("write scenario smoke");
+
+        // The compiled configurations, on every proposal-bearing
+        // scenario the ledger drives, so SQL drift on either route and
+        // the index-condition machinery are caught here too.
+        for implementation in [Implementation::Compiled, Implementation::CompiledIndexed] {
+            run_write(ScenarioArgs {
+                n: 1,
+                accounts: 2,
+                noise_claims: 1,
+                database_url: url.clone(),
+                reset: true,
+                implementation,
+                repeat: 2,
+            })
+            .await
+            .expect("write scenario smoke, compiled");
+            run_read(ScenarioArgs {
+                n: 1,
+                accounts: 2,
+                noise_claims: 1,
+                database_url: url.clone(),
+                reset: true,
+                implementation,
+                repeat: 2,
+            })
+            .await
+            .expect("read scenario smoke, compiled");
+            run_import(ImportArgs {
+                n: 2,
+                database_url: url.clone(),
+                reset: true,
+                implementation,
+                repeat: 1,
+            })
+            .await
+            .expect("import scenario smoke, compiled");
+            run_transact(TransactArgs {
+                acts: 2,
+                prepopulate: 1,
+                writers: 0,
+                max_retries: 20,
+                writer_pause_ms: 5,
+                database_url: url.clone(),
+                reset: true,
+                implementation,
+                repeat: 2,
+            })
+            .await
+            .expect("transact scenario smoke, compiled");
+            run_contend(ContendArgs {
+                workers: 2,
+                ops_per_worker: 2,
+                prepopulate: 1,
+                periods: 1,
+                disjoint: false,
+                max_retries: 20,
+                database_url: url.clone(),
+                reset: true,
+                implementation,
+                repeat: 1,
+            })
+            .await
+            .expect("contend scenario smoke, compiled");
+            run_contend(ContendArgs {
+                workers: 2,
+                ops_per_worker: 2,
+                prepopulate: 0,
+                periods: 2,
+                disjoint: true,
+                max_retries: 20,
+                database_url: url.clone(),
+                reset: true,
+                implementation,
+                repeat: 1,
+            })
+            .await
+            .expect("predicate-disjoint contend scenario smoke, compiled");
+            run_as_of(AsOfArgs {
+                n: 4,
+                at: 1.0,
+                retract_fraction: 50,
+                database_url: url.clone(),
+                reset: true,
+                implementation,
+                repeat: 1,
+            })
+            .await
+            .expect("as-of scenario smoke, compiled");
+            run_wide(WideArgs {
+                n: 2,
+                arity: 4,
+                database_url: url.clone(),
+                reset: true,
+                implementation,
+                repeat: 1,
+            })
+            .await
+            .expect("wide scenario smoke, compiled");
+            run_replay(ReplayArgs {
+                n: 2,
+                retract_fraction: 50,
+                repeat: 1,
+                database_url: url.clone(),
+                reset: true,
+                implementation,
+            })
+            .await
+            .expect("replay scenario smoke, compiled");
+        }
+
+        // Back to an unindexed configuration: the indexes the last run
+        // provisioned must be gone before its fixture is built.
+        run_write(ScenarioArgs {
+            n: 1,
+            accounts: 2,
+            noise_claims: 0,
+            database_url: url.clone(),
+            reset: true,
+            implementation: Implementation::Compiled,
+            repeat: 1,
+        })
+        .await
+        .expect("write scenario smoke, unindexed after indexed");
+
+        // An operator's equivalent index contaminates the unindexed
+        // condition; the bench refuses rather than measure it.
+        let pool = connect(&url).await.expect("connect");
+        sqlx::raw_sql(
+            "CREATE INDEX bench_smoke_external ON morpholog.claims \
+             USING btree (((arguments -> 0 ->> 'value')::text)) \
+             WHERE predicate_name = 'JournalEntry'",
+        )
+        .execute(&pool)
+        .await
+        .expect("external index");
+        let refused = run_write(ScenarioArgs {
+            n: 1,
+            accounts: 2,
+            noise_claims: 0,
+            database_url: url.clone(),
+            reset: true,
+            implementation: Implementation::Compiled,
+            repeat: 1,
+        })
+        .await;
+        sqlx::raw_sql("DROP INDEX morpholog.bench_smoke_external")
+            .execute(&pool)
+            .await
+            .expect("drop external index");
+        let message = format!(
+            "{:?}",
+            refused.expect_err("an external equivalent is refused")
+        );
+        assert!(
+            message.contains("not what the database holds"),
+            "the refusal names the condition: {message}"
+        );
 
         run_read(ScenarioArgs {
             n: 1,
@@ -3083,6 +3617,7 @@ mod smoke {
             noise_claims: 1,
             database_url: url.clone(),
             reset: true,
+            implementation: Implementation::Interpreted,
             repeat: 2,
         })
         .await
@@ -3096,6 +3631,7 @@ mod smoke {
             writer_pause_ms: 5,
             database_url: url.clone(),
             reset: true,
+            implementation: Implementation::Interpreted,
             repeat: 2,
         })
         .await
@@ -3107,6 +3643,7 @@ mod smoke {
             retract_fraction: 0,
             database_url: url.clone(),
             reset: true,
+            implementation: Implementation::Interpreted,
             repeat: 2,
         })
         .await
@@ -3120,6 +3657,7 @@ mod smoke {
             retract_fraction: 50,
             database_url: url.clone(),
             reset: true,
+            implementation: Implementation::Interpreted,
             repeat: 1,
         })
         .await
@@ -3134,6 +3672,7 @@ mod smoke {
             max_retries: 20,
             database_url: url.clone(),
             reset: true,
+            implementation: Implementation::Interpreted,
             repeat: 2,
         })
         .await
@@ -3150,6 +3689,7 @@ mod smoke {
             max_retries: 20,
             database_url: url.clone(),
             reset: true,
+            implementation: Implementation::Interpreted,
             repeat: 1,
         })
         .await
@@ -3159,6 +3699,7 @@ mod smoke {
             n: 2,
             database_url: url.clone(),
             reset: true,
+            implementation: Implementation::Interpreted,
             repeat: 2,
         })
         .await
@@ -3169,6 +3710,7 @@ mod smoke {
             arity: 13,
             database_url: url.clone(),
             reset: true,
+            implementation: Implementation::Interpreted,
             repeat: 2,
         })
         .await
@@ -3231,13 +3773,24 @@ mod smoke {
                 },
             },
         ];
-        let cases = run_suite_specs(&pool, &plan, 2)
+        for implementation in [Implementation::Compiled, Implementation::CompiledIndexed] {
+            let cases = run_suite_specs(implementation, &pool, &plan, 1)
+                .await
+                .expect("suite smoke plan, compiled");
+            assert!(
+                cases
+                    .iter()
+                    .all(|c| c.implementation == implementation.label()),
+                "every row carries the configuration's label"
+            );
+        }
+        let cases = run_suite_specs(Implementation::Interpreted, &pool, &plan, 2)
             .await
             .expect("suite smoke plan");
         assert_eq!(cases.len(), plan.len(), "every smoke case reports");
         let report = SuiteReport {
             suite_contract: SUITE_CONTRACT,
-            implementation: IMPLEMENTATION,
+            implementation: "interpreted",
             ladder: "smoke",
             requested_repeat: 2,
             pg_version: "smoke".to_string(),
@@ -3267,7 +3820,7 @@ mod smoke {
     fn markdown_renderer_shape() {
         let report = SuiteReport {
             suite_contract: SUITE_CONTRACT,
-            implementation: IMPLEMENTATION,
+            implementation: "interpreted",
             ladder: "unit",
             requested_repeat: 3,
             pg_version: "PostgreSQL test".to_string(),
@@ -3278,7 +3831,7 @@ mod smoke {
             }],
             cases: vec![CaseResult {
                 case: "write/base".to_string(),
-                implementation: IMPLEMENTATION,
+                implementation: "interpreted",
                 axis: "n",
                 point: 100,
                 metrics: vec![

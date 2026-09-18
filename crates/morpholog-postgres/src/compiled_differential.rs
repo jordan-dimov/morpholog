@@ -27,10 +27,12 @@
 //!   required (the full check can trip an earlier pre-existing
 //!   violation the case-bound check lawfully skips).
 //!
-//! Probes whose argument vector carries the range-extreme witness may
-//! raise the kernel's named out-of-range refusals; those probes are
-//! skipped, not compared - PG numeric is wider than the kernel's
-//! decimal, the recorded `ArithOutOfRange` parity gap.
+//! Kernel errors are verdicts too. An error while the kernel checks
+//! the invariants (a sum whose exact total no decimal can hold) must
+//! come back from both compiled stages as the same typed error, and the
+//! hostile sweep refuses to pass without reaching one. Only an error in
+//! the body itself, on a range-extreme argument, is skipped: no
+//! compiled check runs for a body the kernel could not stage.
 
 use std::fmt::Write as _;
 

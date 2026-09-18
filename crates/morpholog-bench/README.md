@@ -35,9 +35,19 @@ The `contend` fixture posts uniquely-keyed entries concurrently. In the default 
 # Use a throwaway database - the bench TRUNCATES it. Never your dev DB.
 createdb morpholog_bench
 psql morpholog_bench -f crates/morpholog-core/sql/schema.sql
+# the bench refuses a database behind the migration head; record the versions:
+cargo run -p morpholog-cli --release -- migrate --database-url postgres:///morpholog_bench
 
 DATABASE_URL=postgres:///morpholog_bench \
   cargo run -p morpholog-bench --release -- write 100000 --reset
+
+# the same write under the compiled invariant route, unprovisioned and
+# then with the indexes the compiler names (the bench establishes the
+# index condition itself; see docs/benchmarking.md):
+DATABASE_URL=postgres:///morpholog_bench \
+  cargo run -p morpholog-bench --release -- write 100000 --reset --implementation compiled
+DATABASE_URL=postgres:///morpholog_bench \
+  cargo run -p morpholog-bench --release -- write 100000 --reset --implementation compiled-indexed
 
 DATABASE_URL=postgres:///morpholog_bench \
   cargo run -p morpholog-bench --release -- read 100000 --accounts 100 --reset
@@ -87,6 +97,45 @@ Every scenario takes `--repeat R`: repeats start from the same logical pre-state
 The bench **truncates the entire `morpholog` schema before each run**. The required `--reset` flag is the acknowledgement: without it the binary refuses to start, so the `DATABASE_URL` env-var fallback cannot silently destroy a database a shell already happens to point at.
 
 ## Observations
+
+### Three-way verdict on the compiled route (2026-09-18, `suite --repeat 5` requested, PostgreSQL 18.6, one binary)
+
+The first run of the `--implementation` axis: the interpreter, the compiled invariant route with no compiler-required index, and the compiled route with its indexes provisioned, under the unchanged contract-2 ruler. Shapes, not numbers, are the claim; the numbers are here so the shapes can be checked. Two builds of one branch produced them: the full ladder from the binary at c3d7aab, the quick ladder from the binary at cf1506c; the commits between changed only how the bench establishes the index condition and where its fixture timer starts, never the measured execution path, and the quick ladder reproduced the earlier quick run within noise.
+
+The quick ladder, all three configurations, steady median with `--repeat 5` requested (contend and import carry their canonical cap of three samples; every other row five), one proposal (ms):
+
+| case, point | interpreted | compiled, no index | compiled, indexed |
+|---|--:|--:|--:|
+| write/base 100 | 3.47 | 11.66 | 4.18 |
+| write/base 1,000 | 14.92 | 592.88 | 12.60 |
+| write/noise 1,000 | 16.72 | 836.11 | 15.17 |
+| contend/shared, 4 workers, commits/s | 281.18 | 76.56 | 371.68 |
+| contend/shared, 4 workers, retries/commit | 1.96 | 2.19 | 1.73 |
+| import/core 500, journey | 1,880 | 27,773 | 21,739 |
+| write/base 1,000, fixture build | 28.88 | 29.30 | 38.15 |
+
+The full ladder, interpreter against the indexed compiled route, steady median with `--repeat 5` requested (contend and import three samples; every other row five):
+
+| case, point | interpreted | compiled, indexed | ratio |
+|---|--:|--:|--:|
+| write/base 1,000, propose (ms) | 15.75 | 13.35 | 0.85 |
+| write/base 10,000 | 134.81 | 126.59 | 0.94 |
+| write/base 100,000 | 1,460 | 1,407 | 0.96 |
+| write/noise 100,000 | 1,291 | 1,270 | 0.98 |
+| wide/size 10,000 | 3,688 | 2,519 | 0.68 |
+| wide/size 100,000 | 765,488 | 319,378 | 0.42 |
+| contend/shared 16 workers, commits/s | 18.97 | 28.24 | 1.49 |
+| contend/shared 16 workers, retries/commit | 9.70 | 11.35 | 1.17 |
+| contend/disjoint 16 workers, commits/s | 2,000 | 1,773 | 0.89 |
+| import/core 1,000, journey (ms) | 6,639 | 59,347 | 8.94 |
+| import/core 3,000, journey (ms) | 51,270 | 63,264 | 1.23 |
+| read families, all points | flat | flat | 0.96 to 1.07 |
+
+- **Compilation without indexes is strongly superlinear over the measured range and far behind the interpreter** (74x slower at 1,000 entries for a 10x size step). The unindexed configuration is measured at the quick ladder only; one proposal at 100k would take hours. Indexes are necessary but not sufficient: unindexed compilation is far worse than the interpreter, indexed stage 1 restores the ledger path to roughly the interpreter's cost, and stage 2 is what produced the spike's flat scaling.
+- **Stage 1 with indexes tracks the interpreter, both linear, same slope.** The spike's flat ~2 ms curve at 100k and its ten-fold retry reduction were stage-2 effects (the case-bound check); production runs stage 1, which proves every invariant over the whole relation on every proposal. Under shared contention throughput rises by half because each proposal is cheaper; retries per commit do not fall.
+- **Import gains nothing from indexes on a table growing from empty**, and loses at 1,000: the statistics are the empty table's until something analyses it (verified: the same violation query scans by primary key before one `ANALYZE` and seeks the provisioned indexes after). At 3,000 autovacuum has caught up and the journey is within a quarter. The ruler stays as it is; this is what a fresh deployment sees.
+- **Controls:** the read, replay and kernel families are flat across configurations; the indexed configuration's one collateral cost is fixture building, up a fifth to a third at 1,000 entries from index maintenance on bulk inserts, measured with the index condition established outside the timer.
+
 
 Indicative, not benchmark-grade; reproduce locally for any decision that depends on the numbers.
 

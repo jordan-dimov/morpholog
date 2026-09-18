@@ -805,3 +805,50 @@ Raising the substrate floor to 18 prompted a deliberate survey of what 18 buys M
 
 The review then found the hole the plan had carried from the spike: PostgreSQL's `numeric` is wider than the kernel's decimal, so a compiled sum could admit a candidate the kernel refuses with a range error, and both nets skipped exactly that case. Closing it turned up a kernel defect first. Implication and `forall` returned at the first failing binding, so whether a range error at a later binding surfaced depended on claim order alone - the order-dependence the sum accumulator's own doctrine forbids. The kernel rule is now error over false: false only after every binding has evaluated, an evaluation error at any binding the result, pinned for both operators under both claim orders. On the compiled side the representability test is data, never a thrown error, because a raising function can promise nothing about the order the planner evaluates rows in: each sum is one LATERAL total computed once per row, the violation query returns a range flag placed where the kernel evaluates the sum (reached only past the preceding conjuncts, dominating the comparison once reached), the query keeps its witness order and its index, and on a violation the runner asks one unordered existence query whether any row in scope has a range error - the violation that merely sorts earlier must not win. The test is the whole decimal domain, normalised scale at most 28 and normalised coefficient under 2^96, so a cancelling excess passes as the kernel's wide accumulator passes it. Sums compile only where both evaluators share an evaluation boundary: the closing comparison of a top-level antecedent, negation or claim-free consequent, one per scope, never under a nested scope; the gallery lost no compiled programme to the narrowing. The decisive test seeds one unbalanced entry and one overflowing entry and requires both routes to return the same typed kernel error with nothing recorded. The permanent differential had skipped a kernel evaluation error before any compiled check ran, so it could not have caught a regression here; it now carries the error through and requires both stages to report the same typed error, with a hostile fragment that reaches a range error at depth one, one whose oversized total compares as holding so only the range test can report it, and a floor that refuses to pass without reaching one. No migration.
 
+### The benchmark changed the decision
+
+**Forced by:** #277 rung 2's fourth step. The plan built once beside the programme, the indexes it names, and the production compiled route had all landed without a measurement of the route under the frozen ruler; the spike's verdict was the only evidence, and it had been taken with stage 2 running.
+
+**Landed:** one selector on the bench, `--implementation`, choosing which of three execution configurations a run measures: the kernel interpreter, the compiled route with no compiler-required index present, and the compiled route with every index it names provisioned. The value labels every row; the default keeps an unflagged command's historical meaning. The physical index condition is part of the configuration, and the bench establishes it itself after every logical reset and before the fixture, outside every sample: an unindexed run drops Morpholog's own compiled indexes and refuses to run when an operator's equivalent would serve a requirement; an indexed run provisions every requirement and refuses a conflict; a compiled run refuses a programme the production route would interpret, naming the refusals; the database must be at the migration head. The matrix, sizes, ladders and aggregation did not move, so the suite contract did not either.
+
+**Measured**, one host, one PostgreSQL 18.6, commands in the PR; the full ladder from one binary and the quick ladder from the same branch three commits on, after the fixture timer was moved off the index-condition step, with the measured execution path untouched between:
+
+The quick ladder, all three configurations, steady median with `--repeat 5` requested (contend and import carry their canonical cap of three samples; every other row five), one proposal (ms):
+
+| case, point | interpreted | compiled, no index | compiled, indexed |
+|---|--:|--:|--:|
+| write/base 100 | 3.47 | 11.66 | 4.18 |
+| write/base 1,000 | 14.92 | 592.88 | 12.60 |
+| write/noise 1,000 | 16.72 | 836.11 | 15.17 |
+| contend/shared, 4 workers, commits/s | 281.18 | 76.56 | 371.68 |
+| contend/shared, 4 workers, retries/commit | 1.96 | 2.19 | 1.73 |
+| import/core 500, journey | 1,880 | 27,773 | 21,739 |
+| write/base 1,000, fixture build | 28.88 | 29.30 | 38.15 |
+
+The full ladder, interpreter against the indexed compiled route, steady median with `--repeat 5` requested (contend and import three samples; every other row five):
+
+| case, point | interpreted | compiled, indexed | ratio |
+|---|--:|--:|--:|
+| write/base 1,000, propose (ms) | 15.75 | 13.35 | 0.85 |
+| write/base 10,000 | 134.81 | 126.59 | 0.94 |
+| write/base 100,000 | 1,460 | 1,407 | 0.96 |
+| write/noise 100,000 | 1,291 | 1,270 | 0.98 |
+| wide/size 10,000 | 3,688 | 2,519 | 0.68 |
+| wide/size 100,000 | 765,488 | 319,378 | 0.42 |
+| contend/shared 16 workers, commits/s | 18.97 | 28.24 | 1.49 |
+| contend/shared 16 workers, retries/commit | 9.70 | 11.35 | 1.17 |
+| contend/disjoint 16 workers, commits/s | 2,000 | 1,773 | 0.89 |
+| import/core 1,000, journey (ms) | 6,639 | 59,347 | 8.94 |
+| import/core 3,000, journey (ms) | 51,270 | 63,264 | 1.23 |
+| read families, all points | flat | flat | 0.96 to 1.07 |
+
+**The decision it changed.** The spike's proposition was that compilation plus something to seek on is the unit that pays. Indexes turned out necessary but not sufficient: compilation without indexes is strongly superlinear over the measured range and far behind the interpreter, so the unindexed configuration is a quick-ladder decomposition only. The other half did not hold as expected: with indexes, stage 1 tracks the interpreter on the ledger write path to within a sixth at every size from a thousand to a hundred thousand entries, both linear with the same slope, and reduces no retries under contention (throughput up by half at sixteen shared writers because each proposal is cheaper, retries per commit up a sixth). It wins where the interpreter's in-memory evaluation is the expensive part, two and a half times on the thirteen-ary wide case at a hundred thousand rows, and both evaluators are superlinear there because that invariant quantifies over rows rather than groups. The spike's flat state-size curve and its ten-fold reduction in serialisation retries were stage-2 effects, the case-bound check that reads only what the delta could have changed; stage 1 proves every invariant over the whole relation on every proposal, so its cost is linear in state and its read footprint under SERIALIZABLE is the whole predicate. Import gained nothing from indexes for a different reason, verified directly: a table growing from empty carries the statistics of the empty table until it is analysed, and the same violation query scanned by primary key before one ANALYZE and sought the provisioned indexes after it. The import ruler stays as it is, because that is what a fresh deployment sees; the diagnostic stands beside it.
+
+So #277 stays open. Rung 2a has landed: the compiled route, exact semantic parity including the decimal range, runtime-owned indexes, the plan-shape gate and the three-way instrument, with stage 1 as the semantics-equivalent production baseline. Rung 2b is stage 2: the meaning of `invariants_checked` for an invariant proven irrelevant to the delta and not executed, the precedence of a range error found outside the touched case, then the same frozen ruler again.
+
+| Spike claim | Stage 1 in production | Stage 2 evidence | Status |
+|---|---|---|---|
+| flat state-size curve | no: linear, the interpreter's slope | spike: yes | pending rung 2b |
+| ~2 ms at 100k | no: 1,407 ms against 1,460 ms interpreted | spike: yes | pending rung 2b |
+| reduced SERIALIZABLE retries | no: 11.35 against 9.70 per commit at 16 writers; throughput up by half | spike: yes | attributable to the case-bound check |
+| indexes required | yes, strongly | yes | confirmed |

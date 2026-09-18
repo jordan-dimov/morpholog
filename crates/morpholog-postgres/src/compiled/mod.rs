@@ -181,6 +181,14 @@ impl CompiledInvariantSet {
     /// The commit path and the differential both run checks through
     /// here, so the differential proves the runner that admits
     /// transitions.
+    ///
+    /// Two range mechanisms, neither redundant. The `range_error` column
+    /// keeps the accept path correct: an oversized total that compares as
+    /// holding produces no violation row, so only the flag can turn that
+    /// row into an error without a second query on every acceptance. The
+    /// whole-scope range query keeps the refusal path correct: the
+    /// violation query stops at its first row in witness order, and the
+    /// error must dominate a violation that merely sorts earlier.
     pub(crate) async fn first_violation(
         &self,
         tx: &mut Transaction<'_, Postgres>,
