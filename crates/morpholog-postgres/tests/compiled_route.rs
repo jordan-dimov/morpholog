@@ -519,3 +519,49 @@ async fn a_compiled_batch_checks_each_act_against_the_acts_before_it() {
         3
     );
 }
+
+/// A retract followed by a re-admit of the same claim in one delta
+/// changes nothing, on both routes: the compiled route reads the
+/// delta back from the table as one deletion and one insertion and
+/// must net them, or it would revalidate a dirty case the kernel
+/// leaves untouched.
+#[tokio::test]
+async fn a_retract_and_readmit_touches_nothing_on_both_routes() {
+    let source = "program churn_ledger
+predicate Entry(e: Subject)
+predicate Line(e: Subject, side: Subject, dr: Decimal, cr: Decimal)
+invariant balanced:
+    Entry(e) implies sum(d | Line(e, _, d, _)) = sum(c | Line(e, _, _, c))
+transformation churn(e, side, dr, cr):
+    retract Line(e, side, dr, cr)
+    admit Line(e, side, dr, cr)
+";
+    let program = morpholog_surface::parse_program(source).expect("parses");
+    let compiled = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
+    assert!(matches!(compiled.plan(), InvariantPlan::Compiled { .. }));
+    let interpreted = PgProgram::interpreted(CompiledProgram::new(program).unwrap());
+    // One dirty entry; churning its line repairs nothing and changes nothing.
+    let seeded = vec![
+        ClaimInstance {
+            predicate: "Entry".into(),
+            args: vec![subj("legacy")],
+        },
+        ClaimInstance {
+            predicate: "Line".into(),
+            args: vec![subj("legacy"), subj("cash"), dec(100), dec(0)],
+        },
+    ];
+    let transition = Transition {
+        transformation_name: "churn".into(),
+        args: vec![subj("legacy"), subj("cash"), dec(100), dec(0)],
+        actor: Subject::from("route_test"),
+    };
+    let pool = test_pool().await;
+    let spec = observe(&pool, &interpreted, &seeded, &transition).await;
+    assert!(
+        matches!(&spec, RouteObservation::Decided(o) if o.outcome.starts_with("committed")),
+        "{spec:?}"
+    );
+    let real = observe(&pool, &compiled, &seeded, &transition).await;
+    assert_eq!(real, spec);
+}

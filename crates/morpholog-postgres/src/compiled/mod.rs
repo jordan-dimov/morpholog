@@ -349,8 +349,6 @@ impl IndexSpec {
 
 /// How much of a compiled invariant a transition's delta touches.
 #[derive(Debug, Clone, PartialEq, Eq)]
-// The checks themselves are dormant until the stage-1 integration
-// reaches production; the differential exercises them under test.
 pub(crate) enum CaseFilter {
     /// Delta disjoint from the invariant's occurrences: skip it entirely.
     Untouched,

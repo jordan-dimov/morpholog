@@ -1090,8 +1090,8 @@ fn score_reports_serialize_as_pinned() {
     let t2 = "01900000-0000-7000-8000-000000000002";
 
     let flag_claim = flagged.claims().iter().next().unwrap().clone();
-    let admitted = effective_delta(&empty, &flagged, std::slice::from_ref(&flag_claim), &[]);
-    let retracted = effective_delta(&flagged, &empty, &[], std::slice::from_ref(&flag_claim));
+    let admitted = effective_delta(&empty, std::slice::from_ref(&flag_claim), &[]);
+    let retracted = effective_delta(&flagged, &[], std::slice::from_ref(&flag_claim));
 
     let mut scorer = CandidateScorer::new(&candidate).unwrap();
     scorer.observe_transition(&flagged, &admitted, t1).unwrap();

@@ -596,7 +596,7 @@ pub(crate) fn finish_staged_inner(
 
     let candidate = pre_state.with_delta(&asserted, &retracted);
     let definitions = admission.definitions;
-    let effective = effective_delta(pre_state, &candidate, &asserted, &retracted);
+    let effective = effective_delta(pre_state, &asserted, &retracted);
 
     for (inv, plan) in admission.invariants.iter().zip(admission.plans()) {
         // Case-local revalidation: only the obligation the delta raises

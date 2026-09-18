@@ -40,13 +40,13 @@ pub const SCORE_FORMAT_VERSION: u32 = 1;
 /// Names the exact scoring rule, so the report is self-describing.
 pub const SCORE_SEMANTICS: &str = "case_bound_admission_v2";
 
-/// A candidate the scorer cannot evaluate under v1 semantics.
+/// A candidate the scorer cannot evaluate.
 #[derive(Debug, thiserror::Error)]
 pub enum ScoreError {
     /// One or more candidate invariants use `pre(...)` - transition-
-    /// relational, not scorable under the state fresh-violation rule.
+    /// relational, and admission of one needs the pre-state as well.
     #[error(
-        "`evaluate` v1 scores state invariants only; these use pre(...) \
+        "`evaluate` scores state invariants only; these use pre(...) \
          (transition-relational, deferred): {}",
         .0.join(", ")
     )]
@@ -91,8 +91,8 @@ pub struct CandidateScore {
 
 /// The train/test attribution of one replay. One continuous replay:
 /// the rule state entering the first test transition is the state the
-/// training slice built, and each fresh violation is attributed to
-/// the slice containing the transition that introduced it.
+/// training slice built, and each refusal is attributed to the slice
+/// containing the transition admission would have refused.
 #[derive(Debug, Clone, Serialize)]
 pub struct SplitScore {
     pub boundary: SplitBoundaryReport,
@@ -120,7 +120,7 @@ pub struct SliceScore {
     pub invariants: Vec<SliceInvariantScore>,
 }
 
-/// Per candidate invariant, the fresh violations introduced inside one
+/// Per candidate invariant, the refusals inside one
 /// slice. `initially_holds` stays on the whole-history entry - it
 /// describes the empty initial state, which no slice owns.
 #[derive(Debug, Clone, Serialize)]
@@ -144,7 +144,7 @@ pub struct InvariantScore {
     /// candidate, which a discovery loop would otherwise read alike.
     pub initially_holds: bool,
     pub would_refuse: u64,
-    /// The `transition_id`s of the fresh violations, in replay order. The
+    /// The `transition_id`s admission would have refused, in replay order. The
     /// harness joins these against its own labels. Small for a good
     /// candidate; bounding it is a deferred throughput concern.
     pub refused_transitions: Vec<String>,
@@ -394,7 +394,7 @@ mod tests {
             .filter(|c| !post.claims().iter().any(|p| p == *c))
             .cloned()
             .collect();
-        let effective = crate::admission::effective_delta(pre, post, &asserted, &retracted);
+        let effective = crate::admission::effective_delta(pre, &asserted, &retracted);
         scorer.observe_transition(post, &effective, id).unwrap();
     }
 

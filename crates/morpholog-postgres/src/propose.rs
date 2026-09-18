@@ -806,7 +806,8 @@ pub(crate) async fn write_rejection(
 /// separated so a caller inside an open transaction can make the
 /// claims table the candidate state before deciding anything else.
 /// Returns the effective delta as the table reports it: an assertion
-/// the table already held changed nothing.
+/// the table already held changed nothing, and a claim deleted and
+/// inserted again is present on both sides.
 pub(crate) async fn write_claim_delta(
     tx: &mut Transaction<'_, Postgres>,
     transition_id: Uuid,
@@ -870,6 +871,16 @@ pub(crate) async fn write_claim_delta(
             effective.asserted.push(claim.clone());
         }
     }
+    // Row effects, netted: a claim retracted and re-admitted in one
+    // delta was deleted and inserted, and is present on both sides.
+    let churned: Vec<ClaimInstance> = effective
+        .retracted
+        .iter()
+        .filter(|c| effective.asserted.contains(c))
+        .cloned()
+        .collect();
+    effective.asserted.retain(|c| !churned.contains(c));
+    effective.retracted.retain(|c| !churned.contains(c));
 
     Ok(effective)
 }

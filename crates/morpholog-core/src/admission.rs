@@ -78,21 +78,22 @@ impl EffectiveDelta {
 }
 
 /// The effective delta of staging `asserted` and `retracted` over
-/// `pre`, given the `candidate` that staging produced.
+/// `pre`, from the pre-state alone: retractions apply first, then
+/// admissions, so a claim retracted and re-admitted in one delta is
+/// present on both sides and counts on neither.
 pub fn effective_delta(
     pre: &State,
-    candidate: &State,
     asserted: &[ClaimInstance],
     retracted: &[ClaimInstance],
 ) -> EffectiveDelta {
     let mut out = EffectiveDelta::default();
     for claim in asserted {
-        if !pre.contains(claim) && candidate.contains(claim) && !out.asserted.contains(claim) {
+        if !pre.contains(claim) && !out.asserted.contains(claim) {
             out.asserted.push(claim.clone());
         }
     }
     for claim in retracted {
-        if pre.contains(claim) && !candidate.contains(claim) && !out.retracted.contains(claim) {
+        if pre.contains(claim) && !asserted.contains(claim) && !out.retracted.contains(claim) {
             out.retracted.push(claim.clone());
         }
     }
