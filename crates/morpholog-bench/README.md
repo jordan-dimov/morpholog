@@ -98,6 +98,53 @@ The bench **truncates the entire `morpholog` schema before each run**. The requi
 
 ## Observations
 
+### Rung 2b: case-local admission, paired against stage 1 (2026-09-18, `suite --repeat 5` requested, PostgreSQL 18.6)
+
+The same ruler again after case-local admission landed (#365), with the stage-1 binary (6174bef) and the rung-2b binary (1746237) run back to back in one session. The machine was thermally throttled that day, so every absolute number is roughly twice the earlier run's, the read families included; the within-session ratios are the claim and the earlier table is historical context, not a baseline.
+
+The quick ladder, both binaries run back to back in one session; the decomposition reads left to right: what case-local semantics bought inside the kernel, what pushing the same bounded obligation into PostgreSQL added, and the total production effect.
+
+| case, point | stage 1 interpreted | rung 2b interpreted | rung 2b compiled, indexed | stage 1 compiled, indexed | 2b/1 production |
+|---|--:|--:|--:|--:|--:|
+| write/base 1,000, one proposal (ms) | 32.67 | 30.25 | 7.46 | 28.60 | 0.26 |
+| write/noise 1,000, one proposal (ms) | 33.69 | 31.25 | 8.37 | 26.70 | 0.31 |
+| wide/size 1,000, one proposal (ms) | 92.76 | 32.17 | 27.53 | 73.16 | 0.38 |
+| contend/shared, 4 writers, retries/commit | 2.29 | 1.66 | 0.59 | 1.77 | 0.33 |
+| contend/shared, 4 writers, commits/s | 138.09 | 154.24 | 459.40 | 201.75 | 2.28 |
+| import/core 500, journey (ms) | 4,835 | 4,134 | 2,200 | 28,555 | 0.08 |
+| read/base 1,000, scoped read (ms) | 26.33 | 26.02 | 26.84 | 27.15 | 0.99 |
+| replay/retract 1,000, coverage replay (ms) | 16.24 | 15.79 | 10.20 | 15.66 | 0.65 |
+| asof/retract 1,000, reconstruct (ms) | 13.28 | 12.54 | 13.45 | 12.74 | 1.06 |
+
+The full ladder, indexed compiled route, stage 1 against rung 2b, same session:
+
+| case, point | stage 1 | rung 2b | ratio |
+|---|--:|--:|--:|
+| write/base 1,000, one proposal (ms) | 32.05 | 8.96 | 0.28 |
+| write/base 10,000 | 205.41 | 6.80 | 0.03 |
+| write/base 100,000 | 1,583 | 7.44 | 0.005 |
+| write/noise 100,000 | 1,547 | 10.90 | 0.007 |
+| wide/size 10,000 | 2,983 | 420.88 | 0.14 |
+| wide/size 100,000 | 326,896 | 30,213 | 0.09 |
+| contend/shared, 16 writers, retries/commit | 11.03 | 0.72 | 0.07 |
+| contend/shared, 16 writers, commits/s | 22.23 | 1,882 | 84.67 |
+| contend/disjoint, 16 writers, commits/s | 1,969 | 1,854 | 0.94 |
+| import/core 1,000, journey (ms) | 59,028 | 4,572 | 0.08 |
+| import/core 3,000, journey (ms) | 63,056 | 15,800 | 0.25 |
+| read/base 100,000, scoped read (ms) | 1,245 | 1,312 | 1.05 |
+| read/grouped 100,000, scoped read (ms) | 1,295 | 1,262 | 0.97 |
+| replay/retract 100,000, coverage replay (ms) | 844.42 | 1,211 | 1.43 |
+| asof/retract 100,000, reconstruct (ms) | 1,194 | 1,286 | 1.08 |
+
+The read control did not move. Replay and as-of, also untouched by this change, sit inside the day's noise band on a throttled machine: replay at a hundred thousand moved 1.43 one way on the full ladder and 0.65 the other way at the quick ladder.
+
+- **Semantics:** inherited violations outside the transition's affected cases no longer block admission, on either evaluator.
+- **Computational scaling:** an ordinary posting on the indexed compiled route is flat across a hundred-fold state sweep, the case-local shape rather than a better constant; irrelevant state barely registers.
+- **Concurrency scaling:** the shared-key workload no longer carries an excess retry penalty (0.72 retries per commit at sixteen writers against 2.39 for the disjoint control), and the paired stage-1 comparison (11.03 retries, 22 commits per second) attributes it: narrowing the read footprint to the touched entry removed the relation-wide dependency pattern stage 1 suffered under SERIALIZABLE.
+- **Import** from an empty table no longer depends on PostgreSQL having learned global statistics: about 5.3 ms per transition end to end at 3,000.
+- **The limitation, stated with the claim:** case locality removes scaling with unrelated state; it does not remove scaling with the size of the affected case. The wide case at 100k rows, whose invariant quantifies over rows so every row is the affected case, still costs 30.2 s per proposal (stage 1: 327 s).
+- **Controls:** the read control did not move; replay and as-of, untouched by this change, sit inside the day's noise band, replay at 100k moving 1.43 one way on the full ladder and 0.65 the other at the quick ladder.
+
 ### Three-way verdict on the compiled route (2026-09-18, `suite --repeat 5` requested, PostgreSQL 18.6, one binary)
 
 The first run of the `--implementation` axis: the interpreter, the compiled invariant route with no compiler-required index, and the compiled route with its indexes provisioned, under the unchanged contract-2 ruler. Shapes, not numbers, are the claim; the numbers are here so the shapes can be checked. Two builds of one branch produced them: the full ladder from the binary at c3d7aab, the quick ladder from the binary at cf1506c; the commits between changed only how the bench establishes the index condition and where its fixture timer starts, never the measured execution path, and the quick ladder reproduced the earlier quick run within noise.
