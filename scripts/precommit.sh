@@ -58,6 +58,12 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 step 'RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps --all-features --locked'
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --all-features --locked
 
+# Never skipped: it needs nothing outside this repository but a pinned
+# toolchain and tool, and it names the install command when either is
+# missing.
+step 'public Rust API snapshots (scripts/public_api.sh)'
+./scripts/public_api.sh
+
 step 'declared Rust floor (cargo check on rust-version)'
 floor=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["rust-version"])')
 # `rust-version` is two-part ("1.95") while rustup installs three-part

@@ -1,0 +1,183 @@
+pub mod morpholog_surface
+pub mod morpholog_surface::layout
+pub fn morpholog_surface::layout::apply_layout(&str, alloc::vec::Vec<morpholog_surface::lexer::SpannedToken>) -> core::result::Result<alloc::vec::Vec<morpholog_surface::lexer::SpannedToken>, alloc::vec::Vec<morpholog_surface::Diagnostic>>
+pub mod morpholog_surface::lexer
+pub enum morpholog_surface::lexer::Token
+pub morpholog_surface::lexer::Token::Colon
+pub morpholog_surface::lexer::Token::Comma
+pub morpholog_surface::lexer::Token::DateLit(alloc::string::String)
+pub morpholog_surface::lexer::Token::DecimalLit(alloc::string::String)
+pub morpholog_surface::lexer::Token::Dedent
+pub morpholog_surface::lexer::Token::DotDot
+pub morpholog_surface::lexer::Token::Eq
+pub morpholog_surface::lexer::Token::Ge
+pub morpholog_surface::lexer::Token::Gt
+pub morpholog_surface::lexer::Token::Ident(alloc::string::String)
+pub morpholog_surface::lexer::Token::Indent
+pub morpholog_surface::lexer::Token::Kind(morpholog_core::ir::PredicateArgKind)
+pub morpholog_surface::lexer::Token::KwAbs
+pub morpholog_surface::lexer::Token::KwAdmit
+pub morpholog_surface::lexer::Token::KwAnd
+pub morpholog_surface::lexer::Token::KwBind
+pub morpholog_surface::lexer::Token::KwConst
+pub morpholog_surface::lexer::Token::KwDefault
+pub morpholog_surface::lexer::Token::KwDefine
+pub morpholog_surface::lexer::Token::KwDerived
+pub morpholog_surface::lexer::Token::KwEmit
+pub morpholog_surface::lexer::Token::KwExists
+pub morpholog_surface::lexer::Token::KwFor
+pub morpholog_surface::lexer::Token::KwForall
+pub morpholog_surface::lexer::Token::KwImplies
+pub morpholog_surface::lexer::Token::KwIn
+pub morpholog_surface::lexer::Token::KwIntent
+pub morpholog_surface::lexer::Token::KwInvariant
+pub morpholog_surface::lexer::Token::KwLet
+pub morpholog_surface::lexer::Token::KwMax
+pub morpholog_surface::lexer::Token::KwMin
+pub morpholog_surface::lexer::Token::KwNew
+pub morpholog_surface::lexer::Token::KwNot
+pub morpholog_surface::lexer::Token::KwOnOrAfter
+pub morpholog_surface::lexer::Token::KwOnOrBefore
+pub morpholog_surface::lexer::Token::KwOr
+pub morpholog_surface::lexer::Token::KwOver
+pub morpholog_surface::lexer::Token::KwPre
+pub morpholog_surface::lexer::Token::KwPredicate
+pub morpholog_surface::lexer::Token::KwProgram
+pub morpholog_surface::lexer::Token::KwRequire
+pub morpholog_surface::lexer::Token::KwRetract
+pub morpholog_surface::lexer::Token::KwRound
+pub morpholog_surface::lexer::Token::KwSum
+pub morpholog_surface::lexer::Token::KwTransformation
+pub morpholog_surface::lexer::Token::KwValue
+pub morpholog_surface::lexer::Token::KwXor
+pub morpholog_surface::lexer::Token::LBracket
+pub morpholog_surface::lexer::Token::LParen
+pub morpholog_surface::lexer::Token::Le
+pub morpholog_surface::lexer::Token::Lt
+pub morpholog_surface::lexer::Token::Minus
+pub morpholog_surface::lexer::Token::Neq
+pub morpholog_surface::lexer::Token::Percent
+pub morpholog_surface::lexer::Token::Pipe
+pub morpholog_surface::lexer::Token::Plus
+pub morpholog_surface::lexer::Token::RBracket
+pub morpholog_surface::lexer::Token::RParen
+pub morpholog_surface::lexer::Token::ReservedBoolLit(bool)
+pub morpholog_surface::lexer::Token::Slash
+pub morpholog_surface::lexer::Token::Star
+pub morpholog_surface::lexer::Token::SubjectLit(alloc::string::String)
+pub morpholog_surface::lexer::Token::TimestampLit(alloc::string::String)
+pub morpholog_surface::lexer::Token::Wildcard
+impl core::clone::Clone for morpholog_surface::lexer::Token
+pub fn morpholog_surface::lexer::Token::clone(&self) -> morpholog_surface::lexer::Token
+impl core::cmp::Eq for morpholog_surface::lexer::Token
+impl core::cmp::PartialEq for morpholog_surface::lexer::Token
+pub fn morpholog_surface::lexer::Token::eq(&self, &morpholog_surface::lexer::Token) -> bool
+impl core::fmt::Debug for morpholog_surface::lexer::Token
+pub fn morpholog_surface::lexer::Token::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for morpholog_surface::lexer::Token
+pub fn morpholog_surface::lexer::Token::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_surface::lexer::Token
+impl core::marker::Freeze for morpholog_surface::lexer::Token
+impl core::marker::Send for morpholog_surface::lexer::Token
+impl core::marker::Sync for morpholog_surface::lexer::Token
+impl core::marker::Unpin for morpholog_surface::lexer::Token
+impl core::marker::UnsafeUnpin for morpholog_surface::lexer::Token
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_surface::lexer::Token
+impl core::panic::unwind_safe::UnwindSafe for morpholog_surface::lexer::Token
+pub fn morpholog_surface::lexer::lex(&str) -> core::result::Result<alloc::vec::Vec<morpholog_surface::lexer::SpannedToken>, alloc::vec::Vec<chumsky::error::Rich<'_, char>>>
+pub fn morpholog_surface::lexer::token_stream(&[morpholog_surface::lexer::SpannedToken]) -> impl chumsky::input::ValueInput<'_, Token = morpholog_surface::lexer::Token, Span = chumsky::span::SimpleSpan>
+pub type morpholog_surface::lexer::SpannedToken = (morpholog_surface::lexer::Token, morpholog_surface::Span)
+pub enum morpholog_surface::DeclKind
+pub morpholog_surface::DeclKind::Definition
+pub morpholog_surface::DeclKind::DerivedClaim
+pub morpholog_surface::DeclKind::Intent
+pub morpholog_surface::DeclKind::Invariant
+pub morpholog_surface::DeclKind::Predicate
+pub morpholog_surface::DeclKind::Transformation
+impl core::clone::Clone for morpholog_surface::DeclKind
+pub fn morpholog_surface::DeclKind::clone(&self) -> morpholog_surface::DeclKind
+impl core::cmp::Eq for morpholog_surface::DeclKind
+impl core::cmp::PartialEq for morpholog_surface::DeclKind
+pub fn morpholog_surface::DeclKind::eq(&self, &morpholog_surface::DeclKind) -> bool
+impl core::fmt::Debug for morpholog_surface::DeclKind
+pub fn morpholog_surface::DeclKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for morpholog_surface::DeclKind
+pub fn morpholog_surface::DeclKind::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for morpholog_surface::DeclKind
+impl core::marker::StructuralPartialEq for morpholog_surface::DeclKind
+impl core::marker::Freeze for morpholog_surface::DeclKind
+impl core::marker::Send for morpholog_surface::DeclKind
+impl core::marker::Sync for morpholog_surface::DeclKind
+impl core::marker::Unpin for morpholog_surface::DeclKind
+impl core::marker::UnsafeUnpin for morpholog_surface::DeclKind
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_surface::DeclKind
+impl core::panic::unwind_safe::UnwindSafe for morpholog_surface::DeclKind
+pub enum morpholog_surface::Severity
+pub morpholog_surface::Severity::Error
+pub morpholog_surface::Severity::Hint
+impl core::clone::Clone for morpholog_surface::Severity
+pub fn morpholog_surface::Severity::clone(&self) -> morpholog_surface::Severity
+impl core::cmp::Eq for morpholog_surface::Severity
+impl core::cmp::PartialEq for morpholog_surface::Severity
+pub fn morpholog_surface::Severity::eq(&self, &morpholog_surface::Severity) -> bool
+impl core::fmt::Debug for morpholog_surface::Severity
+pub fn morpholog_surface::Severity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for morpholog_surface::Severity
+pub fn morpholog_surface::Severity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_surface::Severity
+impl core::marker::StructuralPartialEq for morpholog_surface::Severity
+impl core::marker::Freeze for morpholog_surface::Severity
+impl core::marker::Send for morpholog_surface::Severity
+impl core::marker::Sync for morpholog_surface::Severity
+impl core::marker::Unpin for morpholog_surface::Severity
+impl core::marker::UnsafeUnpin for morpholog_surface::Severity
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_surface::Severity
+impl core::panic::unwind_safe::UnwindSafe for morpholog_surface::Severity
+pub struct morpholog_surface::Diagnostic
+pub morpholog_surface::Diagnostic::message: alloc::string::String
+pub morpholog_surface::Diagnostic::primary: morpholog_surface::Span
+pub morpholog_surface::Diagnostic::secondary: alloc::vec::Vec<(morpholog_surface::Span, alloc::string::String)>
+pub morpholog_surface::Diagnostic::severity: morpholog_surface::Severity
+impl morpholog_surface::Diagnostic
+pub fn morpholog_surface::Diagnostic::error(impl core::convert::Into<alloc::string::String>, morpholog_surface::Span) -> Self
+pub fn morpholog_surface::Diagnostic::hint(impl core::convert::Into<alloc::string::String>, morpholog_surface::Span) -> Self
+pub fn morpholog_surface::Diagnostic::render(&self, &str, &str) -> alloc::string::String
+pub fn morpholog_surface::Diagnostic::with_secondary(self, morpholog_surface::Span, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for morpholog_surface::Diagnostic
+pub fn morpholog_surface::Diagnostic::clone(&self) -> morpholog_surface::Diagnostic
+impl core::cmp::Eq for morpholog_surface::Diagnostic
+impl core::cmp::PartialEq for morpholog_surface::Diagnostic
+pub fn morpholog_surface::Diagnostic::eq(&self, &morpholog_surface::Diagnostic) -> bool
+impl core::fmt::Debug for morpholog_surface::Diagnostic
+pub fn morpholog_surface::Diagnostic::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_surface::Diagnostic
+impl core::marker::Freeze for morpholog_surface::Diagnostic
+impl core::marker::Send for morpholog_surface::Diagnostic
+impl core::marker::Sync for morpholog_surface::Diagnostic
+impl core::marker::Unpin for morpholog_surface::Diagnostic
+impl core::marker::UnsafeUnpin for morpholog_surface::Diagnostic
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_surface::Diagnostic
+impl core::panic::unwind_safe::UnwindSafe for morpholog_surface::Diagnostic
+pub struct morpholog_surface::SourceMap
+impl morpholog_surface::SourceMap
+pub fn morpholog_surface::SourceMap::decl_span(&self, morpholog_surface::DeclKind, &str) -> core::option::Option<morpholog_surface::Span>
+pub fn morpholog_surface::SourceMap::span_for_error(&self, &morpholog_core::validate::ValidationError) -> core::option::Option<morpholog_surface::Span>
+pub fn morpholog_surface::SourceMap::span_for_lint(&self, &morpholog_core::lint::Lint) -> core::option::Option<morpholog_surface::Span>
+pub fn morpholog_surface::SourceMap::statement_span(&self, &str, usize) -> core::option::Option<morpholog_surface::Span>
+impl core::default::Default for morpholog_surface::SourceMap
+pub fn morpholog_surface::SourceMap::default() -> morpholog_surface::SourceMap
+impl core::fmt::Debug for morpholog_surface::SourceMap
+pub fn morpholog_surface::SourceMap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for morpholog_surface::SourceMap
+impl core::marker::Send for morpholog_surface::SourceMap
+impl core::marker::Sync for morpholog_surface::SourceMap
+impl core::marker::Unpin for morpholog_surface::SourceMap
+impl core::marker::UnsafeUnpin for morpholog_surface::SourceMap
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_surface::SourceMap
+impl core::panic::unwind_safe::UnwindSafe for morpholog_surface::SourceMap
+pub fn morpholog_surface::line_col(&str, usize) -> (usize, usize)
+pub fn morpholog_surface::parse_expression(&str) -> core::result::Result<morpholog_core::ir::Prop, alloc::vec::Vec<morpholog_surface::Diagnostic>>
+pub fn morpholog_surface::parse_program(&str) -> core::result::Result<morpholog_core::ir::Program, alloc::vec::Vec<morpholog_surface::Diagnostic>>
+pub fn morpholog_surface::parse_program_with_sources(&str) -> core::result::Result<(morpholog_core::ir::Program, morpholog_surface::SourceMap), alloc::vec::Vec<morpholog_surface::Diagnostic>>
+pub fn morpholog_surface::parse_value_expr(&str) -> core::result::Result<morpholog_core::ir::ValueExpr, alloc::vec::Vec<morpholog_surface::Diagnostic>>
+pub type morpholog_surface::Span = core::ops::range::Range<usize>

@@ -94,6 +94,36 @@ jobs:
       - name: cargo check on the floor
         run: cargo check --workspace --all-targets --all-features --locked
 
+  public-api:
+    name: public Rust API
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      # The pins live in the script alone; read them rather than copy.
+      - name: Read the pins
+        id: pins
+        run: |
+          echo "nightly=$(sed -n 's/^NIGHTLY=//p' scripts/public_api.sh)" >> "$GITHUB_OUTPUT"
+          echo "tool=$(sed -n 's/^CARGO_PUBLIC_API_VERSION=//p' scripts/public_api.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Install the pinned nightly for rustdoc JSON
+        run: rustup toolchain install "${{ steps.pins.outputs.nightly }}" --profile minimal
+
+      - name: Install cargo-public-api
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-public-api@${{ steps.pins.outputs.tool }}
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: public-api
+
+      - name: Public API snapshots match
+        run: ./scripts/public_api.sh
+
   audit:
     name: cargo audit
     runs-on: ubuntu-latest

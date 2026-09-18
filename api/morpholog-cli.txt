@@ -1,0 +1,251 @@
+pub mod morpholog_cli
+pub mod morpholog_cli::envelopes
+pub enum morpholog_cli::envelopes::ErrorCode
+pub morpholog_cli::envelopes::ErrorCode::ActorAssertionUnauthorised
+pub morpholog_cli::envelopes::ErrorCode::CommitOutcomeUnknown
+pub morpholog_cli::envelopes::ErrorCode::DuplicateIntent
+pub morpholog_cli::envelopes::ErrorCode::InvalidArguments
+pub morpholog_cli::envelopes::ErrorCode::InvalidRequest
+pub morpholog_cli::envelopes::ErrorCode::KernelError
+pub morpholog_cli::envelopes::ErrorCode::NotCommitted
+pub morpholog_cli::envelopes::ErrorCode::SerializationFailure
+pub morpholog_cli::envelopes::ErrorCode::UnknownOperation
+pub morpholog_cli::envelopes::ErrorCode::UnknownTransformation
+impl morpholog_cli::envelopes::ErrorCode
+pub const morpholog_cli::envelopes::ErrorCode::ALL: &'static [morpholog_cli::envelopes::ErrorCode]
+impl core::clone::Clone for morpholog_cli::envelopes::ErrorCode
+pub fn morpholog_cli::envelopes::ErrorCode::clone(&self) -> morpholog_cli::envelopes::ErrorCode
+impl core::cmp::Eq for morpholog_cli::envelopes::ErrorCode
+impl core::cmp::PartialEq for morpholog_cli::envelopes::ErrorCode
+pub fn morpholog_cli::envelopes::ErrorCode::eq(&self, &morpholog_cli::envelopes::ErrorCode) -> bool
+impl core::convert::From<morpholog_cli::envelopes::ProposeCode> for morpholog_cli::envelopes::ErrorCode
+pub fn morpholog_cli::envelopes::ErrorCode::from(morpholog_cli::envelopes::ProposeCode) -> Self
+impl core::fmt::Debug for morpholog_cli::envelopes::ErrorCode
+pub fn morpholog_cli::envelopes::ErrorCode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_cli::envelopes::ErrorCode
+impl core::marker::StructuralPartialEq for morpholog_cli::envelopes::ErrorCode
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::ErrorCode
+pub fn morpholog_cli::envelopes::ErrorCode::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::ErrorCode
+impl core::marker::Send for morpholog_cli::envelopes::ErrorCode
+impl core::marker::Sync for morpholog_cli::envelopes::ErrorCode
+impl core::marker::Unpin for morpholog_cli::envelopes::ErrorCode
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::ErrorCode
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::ErrorCode
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::ErrorCode
+pub enum morpholog_cli::envelopes::ProposeCode
+pub morpholog_cli::envelopes::ProposeCode::ActorAssertionUnauthorised
+pub morpholog_cli::envelopes::ProposeCode::CommitOutcomeUnknown
+pub morpholog_cli::envelopes::ProposeCode::DuplicateIntent
+pub morpholog_cli::envelopes::ProposeCode::InvalidArguments
+pub morpholog_cli::envelopes::ProposeCode::InvalidRequest
+pub morpholog_cli::envelopes::ProposeCode::KernelError
+pub morpholog_cli::envelopes::ProposeCode::NotCommitted
+pub morpholog_cli::envelopes::ProposeCode::SerializationFailure
+pub morpholog_cli::envelopes::ProposeCode::UnknownTransformation
+impl morpholog_cli::envelopes::ProposeCode
+pub const morpholog_cli::envelopes::ProposeCode::ALL: &'static [morpholog_cli::envelopes::ProposeCode]
+impl core::clone::Clone for morpholog_cli::envelopes::ProposeCode
+pub fn morpholog_cli::envelopes::ProposeCode::clone(&self) -> morpholog_cli::envelopes::ProposeCode
+impl core::cmp::Eq for morpholog_cli::envelopes::ProposeCode
+impl core::cmp::PartialEq for morpholog_cli::envelopes::ProposeCode
+pub fn morpholog_cli::envelopes::ProposeCode::eq(&self, &morpholog_cli::envelopes::ProposeCode) -> bool
+impl core::convert::From<morpholog_cli::envelopes::ProposeCode> for morpholog_cli::envelopes::ErrorCode
+pub fn morpholog_cli::envelopes::ErrorCode::from(morpholog_cli::envelopes::ProposeCode) -> Self
+impl core::fmt::Debug for morpholog_cli::envelopes::ProposeCode
+pub fn morpholog_cli::envelopes::ProposeCode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_cli::envelopes::ProposeCode
+impl core::marker::StructuralPartialEq for morpholog_cli::envelopes::ProposeCode
+impl core::marker::Freeze for morpholog_cli::envelopes::ProposeCode
+impl core::marker::Send for morpholog_cli::envelopes::ProposeCode
+impl core::marker::Sync for morpholog_cli::envelopes::ProposeCode
+impl core::marker::Unpin for morpholog_cli::envelopes::ProposeCode
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::ProposeCode
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::ProposeCode
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::ProposeCode
+pub struct morpholog_cli::envelopes::AtomicError
+pub morpholog_cli::envelopes::AtomicError::code: morpholog_cli::envelopes::ErrorCode
+pub morpholog_cli::envelopes::AtomicError::error: alloc::string::String
+pub morpholog_cli::envelopes::AtomicError::status: &'static str
+impl morpholog_cli::envelopes::AtomicError
+pub fn morpholog_cli::envelopes::AtomicError::new(morpholog_cli::envelopes::ErrorCode, alloc::string::String) -> Self
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::AtomicError
+pub fn morpholog_cli::envelopes::AtomicError::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::AtomicError
+impl core::marker::Send for morpholog_cli::envelopes::AtomicError
+impl core::marker::Sync for morpholog_cli::envelopes::AtomicError
+impl core::marker::Unpin for morpholog_cli::envelopes::AtomicError
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::AtomicError
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::AtomicError
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::AtomicError
+pub struct morpholog_cli::envelopes::CheckDiagnostic
+pub morpholog_cli::envelopes::CheckDiagnostic::column: core::option::Option<usize>
+pub morpholog_cli::envelopes::CheckDiagnostic::end: core::option::Option<usize>
+pub morpholog_cli::envelopes::CheckDiagnostic::line: core::option::Option<usize>
+pub morpholog_cli::envelopes::CheckDiagnostic::message: alloc::string::String
+pub morpholog_cli::envelopes::CheckDiagnostic::severity: &'static str
+pub morpholog_cli::envelopes::CheckDiagnostic::start: core::option::Option<usize>
+impl morpholog_cli::envelopes::CheckDiagnostic
+pub fn morpholog_cli::envelopes::CheckDiagnostic::new(&'static str, alloc::string::String, core::option::Option<morpholog_surface::diagnostics::Span>, &str) -> Self
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::CheckDiagnostic
+pub fn morpholog_cli::envelopes::CheckDiagnostic::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::CheckDiagnostic
+impl core::marker::Send for morpholog_cli::envelopes::CheckDiagnostic
+impl core::marker::Sync for morpholog_cli::envelopes::CheckDiagnostic
+impl core::marker::Unpin for morpholog_cli::envelopes::CheckDiagnostic
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::CheckDiagnostic
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::CheckDiagnostic
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::CheckDiagnostic
+pub struct morpholog_cli::envelopes::CheckReport
+pub morpholog_cli::envelopes::CheckReport::diagnostics: alloc::vec::Vec<morpholog_cli::envelopes::CheckDiagnostic>
+pub morpholog_cli::envelopes::CheckReport::file: alloc::string::String
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::CheckReport
+pub fn morpholog_cli::envelopes::CheckReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::CheckReport
+impl core::marker::Send for morpholog_cli::envelopes::CheckReport
+impl core::marker::Sync for morpholog_cli::envelopes::CheckReport
+impl core::marker::Unpin for morpholog_cli::envelopes::CheckReport
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::CheckReport
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::CheckReport
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::CheckReport
+pub struct morpholog_cli::envelopes::ErrorReceipt
+pub morpholog_cli::envelopes::ErrorReceipt::code: morpholog_cli::envelopes::ErrorCode
+pub morpholog_cli::envelopes::ErrorReceipt::error: alloc::string::String
+pub morpholog_cli::envelopes::ErrorReceipt::row: u64
+pub morpholog_cli::envelopes::ErrorReceipt::status: &'static str
+impl morpholog_cli::envelopes::ErrorReceipt
+pub fn morpholog_cli::envelopes::ErrorReceipt::new(morpholog_cli::envelopes::ErrorCode, alloc::string::String, u64) -> Self
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::ErrorReceipt
+pub fn morpholog_cli::envelopes::ErrorReceipt::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::ErrorReceipt
+impl core::marker::Send for morpholog_cli::envelopes::ErrorReceipt
+impl core::marker::Sync for morpholog_cli::envelopes::ErrorReceipt
+impl core::marker::Unpin for morpholog_cli::envelopes::ErrorReceipt
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::ErrorReceipt
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::ErrorReceipt
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::ErrorReceipt
+pub struct morpholog_cli::envelopes::HashReport
+pub morpholog_cli::envelopes::HashReport::hash: alloc::string::String
+pub morpholog_cli::envelopes::HashReport::program: alloc::string::String
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::HashReport
+pub fn morpholog_cli::envelopes::HashReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::HashReport
+impl core::marker::Send for morpholog_cli::envelopes::HashReport
+impl core::marker::Sync for morpholog_cli::envelopes::HashReport
+impl core::marker::Unpin for morpholog_cli::envelopes::HashReport
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::HashReport
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::HashReport
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::HashReport
+pub struct morpholog_cli::envelopes::InitReport
+pub morpholog_cli::envelopes::InitReport::least_privilege: core::option::Option<morpholog_cli::envelopes::LeastPrivilegeReport>
+pub morpholog_cli::envelopes::InitReport::schema: &'static str
+pub morpholog_cli::envelopes::InitReport::status: &'static str
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::InitReport
+pub fn morpholog_cli::envelopes::InitReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::InitReport
+impl core::marker::Send for morpholog_cli::envelopes::InitReport
+impl core::marker::Sync for morpholog_cli::envelopes::InitReport
+impl core::marker::Unpin for morpholog_cli::envelopes::InitReport
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::InitReport
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::InitReport
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::InitReport
+pub struct morpholog_cli::envelopes::LeastPrivilegeReport
+pub morpholog_cli::envelopes::LeastPrivilegeReport::next_steps: alloc::vec::Vec<alloc::string::String>
+pub morpholog_cli::envelopes::LeastPrivilegeReport::reader_role: &'static str
+pub morpholog_cli::envelopes::LeastPrivilegeReport::writer_role: &'static str
+impl morpholog_cli::envelopes::LeastPrivilegeReport
+pub fn morpholog_cli::envelopes::LeastPrivilegeReport::applied() -> Self
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::LeastPrivilegeReport
+pub fn morpholog_cli::envelopes::LeastPrivilegeReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::LeastPrivilegeReport
+impl core::marker::Send for morpholog_cli::envelopes::LeastPrivilegeReport
+impl core::marker::Sync for morpholog_cli::envelopes::LeastPrivilegeReport
+impl core::marker::Unpin for morpholog_cli::envelopes::LeastPrivilegeReport
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::LeastPrivilegeReport
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::LeastPrivilegeReport
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::LeastPrivilegeReport
+pub struct morpholog_cli::envelopes::NamedClaim
+pub morpholog_cli::envelopes::NamedClaim::args: serde_json::map::Map<alloc::string::String, serde_json::value::Value>
+pub morpholog_cli::envelopes::NamedClaim::predicate: morpholog_core::ir::PredicateName
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::NamedClaim
+pub fn morpholog_cli::envelopes::NamedClaim::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::NamedClaim
+impl core::marker::Send for morpholog_cli::envelopes::NamedClaim
+impl core::marker::Sync for morpholog_cli::envelopes::NamedClaim
+impl core::marker::Unpin for morpholog_cli::envelopes::NamedClaim
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::NamedClaim
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::NamedClaim
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::NamedClaim
+pub struct morpholog_cli::envelopes::RefreshDerivedReport
+pub morpholog_cli::envelopes::RefreshDerivedReport::derived_claim_count: usize
+pub morpholog_cli::envelopes::RefreshDerivedReport::derived_predicate_count: usize
+pub morpholog_cli::envelopes::RefreshDerivedReport::model_hash: alloc::string::String
+pub morpholog_cli::envelopes::RefreshDerivedReport::refresh_id: uuid::Uuid
+pub morpholog_cli::envelopes::RefreshDerivedReport::source_claim_count: usize
+pub morpholog_cli::envelopes::RefreshDerivedReport::source_snapshot_committed_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+pub morpholog_cli::envelopes::RefreshDerivedReport::source_snapshot_transition_id: core::option::Option<uuid::Uuid>
+impl core::convert::From<&morpholog_postgres::derived::RefreshSummary> for morpholog_cli::envelopes::RefreshDerivedReport
+pub fn morpholog_cli::envelopes::RefreshDerivedReport::from(&morpholog_postgres::derived::RefreshSummary) -> Self
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::RefreshDerivedReport
+pub fn morpholog_cli::envelopes::RefreshDerivedReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::RefreshDerivedReport
+impl core::marker::Send for morpholog_cli::envelopes::RefreshDerivedReport
+impl core::marker::Sync for morpholog_cli::envelopes::RefreshDerivedReport
+impl core::marker::Unpin for morpholog_cli::envelopes::RefreshDerivedReport
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::RefreshDerivedReport
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::RefreshDerivedReport
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::RefreshDerivedReport
+pub struct morpholog_cli::envelopes::RejectedWithExplanation<'a, E>
+impl<'a, E> morpholog_cli::envelopes::RejectedWithExplanation<'a, E>
+pub fn morpholog_cli::envelopes::RejectedWithExplanation<'a, E>::new(&'a str, core::option::Option<&'a str>, &'a [morpholog_core::propose::WitnessBinding], E) -> Self
+impl<'a, E> serde_core::ser::Serialize for morpholog_cli::envelopes::RejectedWithExplanation<'a, E> where E: serde_core::ser::Serialize
+pub fn morpholog_cli::envelopes::RejectedWithExplanation<'a, E>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'a, E> core::marker::Freeze for morpholog_cli::envelopes::RejectedWithExplanation<'a, E> where E: core::marker::Freeze
+impl<'a, E> core::marker::Send for morpholog_cli::envelopes::RejectedWithExplanation<'a, E> where E: core::marker::Send
+impl<'a, E> core::marker::Sync for morpholog_cli::envelopes::RejectedWithExplanation<'a, E> where E: core::marker::Sync
+impl<'a, E> core::marker::Unpin for morpholog_cli::envelopes::RejectedWithExplanation<'a, E> where E: core::marker::Unpin
+impl<'a, E> core::marker::UnsafeUnpin for morpholog_cli::envelopes::RejectedWithExplanation<'a, E> where E: core::marker::UnsafeUnpin
+impl<'a, E> core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::RejectedWithExplanation<'a, E> where E: core::panic::unwind_safe::RefUnwindSafe
+impl<'a, E> core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::RejectedWithExplanation<'a, E> where E: core::panic::unwind_safe::UnwindSafe
+pub struct morpholog_cli::envelopes::SessionReady
+pub morpholog_cli::envelopes::SessionReady::model_hash: alloc::string::String
+pub morpholog_cli::envelopes::SessionReady::morpholog_version: &'static str
+pub morpholog_cli::envelopes::SessionReady::program: alloc::string::String
+pub morpholog_cli::envelopes::SessionReady::protocol: u32
+pub morpholog_cli::envelopes::SessionReady::status: &'static str
+impl morpholog_cli::envelopes::SessionReady
+pub fn morpholog_cli::envelopes::SessionReady::new(alloc::string::String, alloc::string::String) -> Self
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::SessionReady
+pub fn morpholog_cli::envelopes::SessionReady::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::SessionReady
+impl core::marker::Send for morpholog_cli::envelopes::SessionReady
+impl core::marker::Sync for morpholog_cli::envelopes::SessionReady
+impl core::marker::Unpin for morpholog_cli::envelopes::SessionReady
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::SessionReady
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::SessionReady
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::SessionReady
+pub struct morpholog_cli::envelopes::Traced<R, T>
+pub morpholog_cli::envelopes::Traced::result: R
+pub morpholog_cli::envelopes::Traced::trace: T
+impl<R, T> serde_core::ser::Serialize for morpholog_cli::envelopes::Traced<R, T> where R: serde_core::ser::Serialize, T: serde_core::ser::Serialize
+pub fn morpholog_cli::envelopes::Traced<R, T>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<R, T> core::marker::Freeze for morpholog_cli::envelopes::Traced<R, T> where R: core::marker::Freeze, T: core::marker::Freeze
+impl<R, T> core::marker::Send for morpholog_cli::envelopes::Traced<R, T> where R: core::marker::Send, T: core::marker::Send
+impl<R, T> core::marker::Sync for morpholog_cli::envelopes::Traced<R, T> where R: core::marker::Sync, T: core::marker::Sync
+impl<R, T> core::marker::Unpin for morpholog_cli::envelopes::Traced<R, T> where R: core::marker::Unpin, T: core::marker::Unpin
+impl<R, T> core::marker::UnsafeUnpin for morpholog_cli::envelopes::Traced<R, T> where R: core::marker::UnsafeUnpin, T: core::marker::UnsafeUnpin
+impl<R, T> core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::Traced<R, T> where R: core::panic::unwind_safe::RefUnwindSafe, T: core::panic::unwind_safe::RefUnwindSafe
+impl<R, T> core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::Traced<R, T> where R: core::panic::unwind_safe::UnwindSafe, T: core::panic::unwind_safe::UnwindSafe
+pub struct morpholog_cli::envelopes::TracedError
+impl morpholog_cli::envelopes::TracedError
+pub fn morpholog_cli::envelopes::TracedError::new(alloc::string::String) -> Self
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::TracedError
+pub fn morpholog_cli::envelopes::TracedError::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::TracedError
+impl core::marker::Send for morpholog_cli::envelopes::TracedError
+impl core::marker::Sync for morpholog_cli::envelopes::TracedError
+impl core::marker::Unpin for morpholog_cli::envelopes::TracedError
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::TracedError
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::TracedError
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::TracedError
+pub fn morpholog_cli::envelopes::audit_row_named(&morpholog_postgres::audit::AuditRow, alloc::vec::Vec<morpholog_cli::envelopes::NamedClaim>, alloc::vec::Vec<morpholog_cli::envelopes::NamedClaim>) -> serde_json::error::Result<serde_json::value::Value>

@@ -11,6 +11,7 @@ the source.
 - **Rust 1.95+** (edition 2024). Stable toolchain; `rustup default stable` suffices.
 - **PostgreSQL 18+**, system-wide on Ubuntu or equivalent. PG-only; portability is not a goal. The adapter uses SSI, JSONB, and generated columns.
 - **`cargo-audit`** for the dependency-vulnerability check: `cargo install cargo-audit`.
+- **A pinned nightly and `cargo-public-api`** for the public-API check, which precommit never skips. The exact pins live in [`scripts/public_api.sh`](scripts/public_api.sh), and the script prints both install commands if either is missing. Nightly is used only to render rustdoc JSON; the compiler contract stays stable and the declared floor.
 - **`sqlx-cli`** (only when adding or changing a SQL query): the adapter's queries are compile-time-checked against the schema via a committed offline cache, and regenerating it uses the version-matched CLI: `cargo install sqlx-cli --version 0.9.0 --no-default-features --features postgres,rustls`. A normal build needs neither the CLI nor a database (see below).
 - **Python 3** (optional): the precommit script runs the generated-client template tests, and (with `DATABASE_URL`) the worked embedder end to end; both are skipped with a note when `python3` is absent. CI pins the generated client's declared floor; any local Python 3 is a smoke test.
 
@@ -71,6 +72,10 @@ python3 -m unittest discover crates/morpholog-cli/templates/python_client/tests
 ```
 
 The PG-backed test suites share one schema and truncate it between tests; they must run serially (`--test-threads=1`). The `morpholog-bench` entry is its N=1 compatibility smoke test, not a scale run.
+
+### Public Rust API
+
+The public surface of every library crate is committed as text under [`api/`](api/), one file per crate, rendered by `cargo public-api`. `./scripts/public_api.sh` regenerates each snapshot and fails on any difference, in precommit and in CI. When you change a public item on purpose (a signature, a field, a variant, a new `pub`), run `./scripts/public_api.sh --update` and commit the snapshot with the change: the diff of `api/` is how the PR says it changed the API, and a reviewer reads it. The crate list in the script is explicit, so an internal crate never joins the contract by accident.
 
 ### Compile-time-checked SQL
 
