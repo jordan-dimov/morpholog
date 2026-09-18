@@ -20,12 +20,10 @@
 //!   first failing rule's name, version, and witness VARIABLE SET are
 //!   strict; witness values are observational (a symmetric self-join
 //!   names the violating pair in a different order).
-//! - **Dirty history** (rows the kernel never admitted): full SQL
-//!   remains verdict- and identity-equivalent to the kernel; the
-//!   case-bound check may ACCEPT where they refuse - never the
-//!   reverse - and when both reject, matching rule identity is not
-//!   required (the full check can trip an earlier pre-existing
-//!   violation the case-bound check lawfully skips).
+//! - **Dirty history** (rows the kernel never admitted): admission is
+//!   case-local everywhere, so the kernel and the case-bound check
+//!   still agree; the full check is the whole-state question
+//!   `evaluate` asks of the rule and may refuse where they admit.
 //!
 //! Kernel errors are verdicts too. An error while the kernel checks
 //! the invariants (a sum whose exact total no decimal can hold) must
@@ -38,7 +36,7 @@ use std::fmt::Write as _;
 
 use morpholog_core::{
     CompiledProgram, EvalError, EvalValue, Outcome, Program, RejectionReason, StagedDelta, Subject,
-    Transition, finish_staged_delta, propose_stage_delta,
+    Transition, finish_staged_delta_with, propose_stage_delta,
 };
 use uuid::Uuid;
 
@@ -146,10 +144,10 @@ async fn probe_raw(
     // table is about to receive. An error while the kernel checks the
     // invariants (a sum past the decimal range) is a verdict the
     // compiled checks must reproduce as the same typed error.
-    let kernel = finish_staged_delta(staged, &state, invariants, definitions);
+    let kernel = finish_staged_delta_with(staged, &state, &compiled.admission());
 
     let transition_id = Uuid::now_v7();
-    write_claim_delta(&mut tx, transition_id, &asserted, &retracted)
+    let effective = write_claim_delta(&mut tx, transition_id, &asserted, &retracted)
         .await
         .map_err(ProbeFailure::Pg)?;
 
@@ -158,7 +156,12 @@ async fn probe_raw(
         .first_violation(&mut tx, Stage::Full, &asserted, &retracted)
         .await;
     let stage2 = sql_set
-        .first_violation(&mut tx, Stage::CaseBound, &asserted, &retracted)
+        .first_violation(
+            &mut tx,
+            Stage::CaseBound,
+            &effective.asserted,
+            &effective.retracted,
+        )
         .await;
 
     // Observationally inert: every probe rolls back, whatever it saw.
@@ -624,7 +627,7 @@ async fn an_overflow_that_compares_as_holding_is_the_kernels_error_on_both_stage
 }
 
 #[tokio::test]
-async fn dirty_history_diverges_only_in_the_pinned_direction() {
+async fn dirty_history_blocks_only_the_writes_that_touch_it() {
     let program = morpholog_examples::double_entry_ledger::program();
     let validated = program.validated().expect("ledger validates");
     let sql_set = compile_invariants(validated).expect("ledger is whole-in-fragment");
@@ -675,19 +678,24 @@ async fn dirty_history_diverges_only_in_the_pinned_direction() {
         ),
     };
 
-    // Full SQL stays verdict- and identity-equivalent to the kernel:
-    // name, version, and witness variable set - the same strength the
-    // governed contract demands, because stage 1 is the
-    // semantics-equivalent compiler on EVERY history.
-    let kernel_rule = assert_stage1_keeps_kernel_identity(&obs);
-    assert_eq!(kernel_rule, "balanced_posted_entry");
-
-    // The case-bound check lawfully ACCEPTS the non-worsening write -
-    // the deliberate, pinned divergence direction.
+    // Admission is case-local everywhere: the kernel and the case-bound
+    // check both admit the non-worsening write beside inherited dirt.
+    // The whole-state check, which is what `evaluate` asks of the rule,
+    // refuses it, and that is the one place the three lawfully differ.
+    assert!(
+        matches!(obs.kernel, Some(Outcome::Accepted { .. })),
+        "the kernel admits the non-worsening write; got {:?}",
+        obs.kernel
+    );
     assert!(
         obs.stage2.is_none(),
-        "the case-bound check must admit the non-worsening write; got {:?}",
+        "the case-bound check admits the non-worsening write; got {:?}",
         summarise(&obs.stage2)
+    );
+    assert_eq!(
+        summarise(&obs.stage1).as_deref(),
+        Some("balanced_posted_entry v1"),
+        "the whole-state check refuses on the inherited entry"
     );
 
     // A WORSENING write still refuses everywhere: the divergence never
@@ -709,10 +717,7 @@ async fn dirty_history_diverges_only_in_the_pinned_direction() {
         panic!("expected an observed probe for the worsening write")
     };
     assert_stage1_keeps_kernel_identity(&obs);
-    assert!(
-        obs.stage2.is_some(),
-        "the case-bound check refuses the worsening write - divergence is one-directional"
-    );
+    governed_contract(&obs).expect("the worsening write refuses everywhere, with one identity");
 }
 
 /// On any history, stage 1 keeps the kernel's full rejection identity:

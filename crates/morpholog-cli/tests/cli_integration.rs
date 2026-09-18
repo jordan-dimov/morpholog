@@ -1078,7 +1078,7 @@ async fn evaluate_scores_a_candidate_against_history() {
     );
     let report: Value = serde_json::from_str(&stdout).expect("report is JSON");
     assert_eq!(report["score_format_version"], 1);
-    assert_eq!(report["semantics"], "fresh_state_violation_v1");
+    assert_eq!(report["semantics"], "case_bound_admission_v2");
     assert!(
         report["program_hash"]
             .as_str()
@@ -1088,8 +1088,10 @@ async fn evaluate_scores_a_candidate_against_history() {
     );
     let inv = &report["invariants"][0];
     assert_eq!(inv["invariant"], "no_entries");
-    // The first entry introduces the violation; the second inherits it.
-    assert_eq!(inv["would_refuse"], 1, "got: {stdout}");
+    // Each posting introduces its own forbidden entry, so admission
+    // would have refused both; an inherited violation elsewhere does
+    // not hide the fresh one.
+    assert_eq!(inv["would_refuse"], 2, "got: {stdout}");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1118,12 +1120,12 @@ async fn evaluate_train_until_reports_per_slice_scores() {
         boundary.to_string(),
         "got: {stdout}"
     );
-    // The first entry introduces the violation inside the train slice;
-    // the test slice inherits it and reports clean.
+    // Each slice's posting introduces its own forbidden entry, so each
+    // slice charges its own.
     assert_eq!(split["train"]["transitions_replayed"], 1);
     assert_eq!(split["test"]["transitions_replayed"], 1);
     assert_eq!(split["train"]["invariants"][0]["would_refuse"], 1);
-    assert_eq!(split["test"]["invariants"][0]["would_refuse"], 0);
+    assert_eq!(split["test"]["invariants"][0]["would_refuse"], 1);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1208,8 +1210,8 @@ async fn evaluate_against_a_pack_needs_no_database() {
         "pack-mode evaluate should pass with no DB; {stderr}\n{stdout}"
     );
     let report: Value = serde_json::from_str(&stdout).expect("report is JSON");
-    assert_eq!(report["semantics"], "fresh_state_violation_v1");
-    assert_eq!(report["invariants"][0]["would_refuse"], 1, "got: {stdout}");
+    assert_eq!(report["semantics"], "case_bound_admission_v2");
+    assert_eq!(report["invariants"][0]["would_refuse"], 2, "got: {stdout}");
 
     // A tampered pack is refused, not scored.
     let mut tampered: Value = serde_json::from_str(&pack_stdout).unwrap();
@@ -1264,7 +1266,7 @@ async fn evaluate_packs_batches_offline_sorted_by_file_name() {
         "batch evaluate should pass with no DB; {stderr}\n{stdout}"
     );
     let report: Value = serde_json::from_str(&stdout).expect("report is JSON");
-    assert_eq!(report["semantics"], "fresh_state_violation_v1");
+    assert_eq!(report["semantics"], "case_bound_admission_v2");
     let cases = report["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 3);
     // Deterministic, by file name, regardless of creation order.

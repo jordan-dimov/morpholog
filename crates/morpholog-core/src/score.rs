@@ -8,30 +8,27 @@
 //! whole point of scoring it. This module asks, per candidate invariant:
 //! which already-admitted commits would it have refused?
 //!
-//! **Fresh-violation semantics.** A transition "would be refused" iff the
-//! invariant's post-state violates it AND its pre-state held - the commit
-//! *introduced* a fresh violation. This is the commit-gate counterfactual:
-//! a rule is not charged for a violation it inherited from earlier state
-//! (the case-bound, inconsistency-tolerant rule the runtime already obeys).
-//! A bad subject's claim would otherwise violate a `forall` at every later
-//! transition; flagging only the introducing one is what correlates with
-//! the bad record.
+//! **Case-bound admission semantics.** A transition "would be refused"
+//! iff the obligation admission raises for it fails: the cases its
+//! effective delta could affect, evaluated on the post-state, exactly
+//! as the commit gate evaluates them. A rule is not charged for a
+//! violation it inherited from earlier state, and an untouched
+//! invariant is never evaluated - the counterfactual is the gate's own
+//! rule, so a fresh violation beside an inherited one is seen.
 //!
-//! **v1 scores state invariants only.** The fresh-violation check carries
-//! "held entering the next transition" forward as the previous transition's
-//! post-state result - valid only when the invariant is a state predicate.
-//! An invariant using `pre(...)` is transition-relational (it compares two
-//! states), so "held on the prior state" is not the same proposition, and
-//! the carry would manufacture a false signal. Such candidates are rejected
-//! up front; scoring them is deferred to a distinct transition-relational
-//! semantics.
+//! **State invariants only.** Admission of an invariant using
+//! `pre(...)` needs the pre-state as well; the replay carries one, but
+//! scoring such candidates is deferred to a distinct transition-
+//! relational semantics rather than half-supported here.
 
 use serde::Serialize;
 
-use crate::derive::eval_invariant;
+use crate::admission::EffectiveDelta;
+use crate::derive::{eval_invariant, eval_invariant_cases};
 use crate::eval::EvalError;
 use crate::fold::mentions_pre;
 use crate::format::canonical_hash;
+use crate::impact::{Impact, ImpactPlan};
 use crate::ir::{Definition, Invariant, Program};
 use crate::state::State;
 
@@ -41,7 +38,7 @@ use crate::state::State;
 /// bump it.
 pub const SCORE_FORMAT_VERSION: u32 = 1;
 /// Names the exact scoring rule, so the report is self-describing.
-pub const SCORE_SEMANTICS: &str = "fresh_state_violation_v1";
+pub const SCORE_SEMANTICS: &str = "case_bound_admission_v2";
 
 /// A candidate the scorer cannot evaluate under v1 semantics.
 #[derive(Debug, thiserror::Error)]
@@ -188,12 +185,13 @@ pub enum CaseOutcome {
     },
 }
 
-/// Accumulates fresh-violation counts as committed history is replayed
-/// forward. The driver folds the audit log and calls [`observe_post`] with
-/// the state after each transition; the kernel evaluation lives here so it
-/// is testable without a database.
+/// Scores one candidate programme over a replayed history. The driver
+/// folds the audit log and calls [`observe_transition`] with each
+/// post-state and the effective delta that produced it, in canonical
+/// order, then [`into_report`].
 ///
-/// [`observe_post`]: CandidateScorer::observe_post
+/// [`observe_transition`]: CandidateScorer::observe_transition
+/// [`into_report`]: CandidateScorer::into_report
 pub struct CandidateScorer<'p> {
     program_name: String,
     program_hash: String,
@@ -202,12 +200,8 @@ pub struct CandidateScorer<'p> {
     /// Whether each invariant held on the empty initial state, reported as
     /// `initially_holds`.
     initially_held: Vec<bool>,
-    /// Whether each invariant held entering the next transition. Seeded on
-    /// the empty pre-state; carried forward so each transition costs one
-    /// evaluation per invariant (valid because v1 rejects `pre(...)`, so
-    /// every invariant is a state predicate, and the driver observes every
-    /// transition contiguously).
-    held: Vec<bool>,
+    /// One impact plan per invariant, built once.
+    plans: Vec<ImpactPlan>,
     refused: Vec<Vec<String>>,
     transitions: u64,
     /// Where the training slice ended, when the driver marked a split:
@@ -235,8 +229,8 @@ impl<'p> CandidateScorer<'p> {
             program_hash: canonical_hash(program),
             invariants: &program.invariants,
             definitions: &program.definitions,
-            initially_held: held.clone(),
-            held,
+            initially_held: held,
+            plans: program.invariants.iter().map(ImpactPlan::new).collect(),
             refused,
             transitions: 0,
             split_mark: None,
@@ -260,36 +254,30 @@ impl<'p> CandidateScorer<'p> {
         ));
     }
 
-    /// Observe one replayed transition: `post` is the state after it.
-    /// Records a fresh violation for any invariant that held after the
-    /// previous transition but not after this one. A candidate that
-    /// reads `pre(...)` was refused at construction, so no pre-state is
-    /// needed and the replay never has to hold two states.
-    pub fn observe_post(&mut self, post: &State, transition_id: &str) -> Result<(), EvalError> {
-        self.transitions += 1;
-        for (i, inv) in self.invariants.iter().enumerate() {
-            let post_holds = eval_invariant(inv, post, None, self.definitions)?;
-            if !post_holds && self.held[i] {
-                self.refused[i].push(transition_id.to_string());
-            }
-            self.held[i] = post_holds;
-        }
-        Ok(())
-    }
-
-    /// [`observe_post`] with the pre-state the driver used to carry. It
-    /// is never read - the scorer refuses a candidate that reads
-    /// `pre(...)` - and kept only so an embedder's driver keeps compiling.
-    ///
-    /// [`observe_post`]: CandidateScorer::observe_post
-    #[deprecated(note = "use observe_post; the pre-state is never read")]
-    pub fn observe(
+    /// Observe one committed transition: the state it left and the
+    /// effective delta it made. Each candidate invariant is charged with
+    /// this transition iff the obligation admission would raise for it
+    /// fails on the post-state.
+    pub fn observe_transition(
         &mut self,
         post: &State,
-        _pre: &State,
+        effective: &EffectiveDelta,
         transition_id: &str,
     ) -> Result<(), EvalError> {
-        self.observe_post(post, transition_id)
+        self.transitions += 1;
+        for (i, (inv, plan)) in self.invariants.iter().zip(&self.plans).enumerate() {
+            let held = match plan.classify(&effective.asserted, &effective.retracted) {
+                Impact::Untouched => continue,
+                Impact::Unbounded => eval_invariant(inv, post, None, self.definitions)?,
+                Impact::Bounded(cases) => {
+                    eval_invariant_cases(inv, post, None, self.definitions, &cases)?
+                }
+            };
+            if !held {
+                self.refused[i].push(transition_id.to_string());
+            }
+        }
+        Ok(())
     }
 
     pub fn into_report(self) -> CandidateScore {
@@ -391,16 +379,35 @@ mod tests {
         State::from_claims(Vec::new())
     }
 
+    /// Drive the scorer from one state to the next, as the replay
+    /// driver does: the effective delta is what changed between them.
+    fn step(scorer: &mut CandidateScorer<'_>, pre: &State, post: &State, id: &str) {
+        let asserted: Vec<ClaimInstance> = post
+            .claims()
+            .iter()
+            .filter(|c| !pre.claims().iter().any(|p| p == *c))
+            .cloned()
+            .collect();
+        let retracted: Vec<ClaimInstance> = pre
+            .claims()
+            .iter()
+            .filter(|c| !post.claims().iter().any(|p| p == *c))
+            .cloned()
+            .collect();
+        let effective = crate::admission::effective_delta(pre, post, &asserted, &retracted);
+        scorer.observe_transition(post, &effective, id).unwrap();
+    }
+
     #[test]
     fn fresh_violation_counted_once_then_again_when_it_reappears() {
         let program = no_flag_program();
         let mut scorer = CandidateScorer::new(&program).unwrap();
         // holds -> fails -> fails -> holds -> fails: only the two
         // introducing transitions (t1, t4) count, never the inherited t2.
-        scorer.observe_post(&flagged(), "t1").unwrap();
-        scorer.observe_post(&flagged(), "t2").unwrap();
-        scorer.observe_post(&empty(), "t3").unwrap();
-        scorer.observe_post(&flagged(), "t4").unwrap();
+        step(&mut scorer, &empty(), &flagged(), "t1");
+        step(&mut scorer, &flagged(), &flagged(), "t2");
+        step(&mut scorer, &flagged(), &empty(), "t3");
+        step(&mut scorer, &empty(), &flagged(), "t4");
         let report = scorer.into_report();
 
         assert_eq!(report.transitions_replayed, 4);
@@ -417,15 +424,15 @@ mod tests {
         // t1 introduces a violation in the train slice; t2 (inherited)
         // never counts; t3 recovers; t4 introduces one in the test
         // slice. The whole-history totals cover both slices.
-        scorer.observe_post(&flagged(), "t1").unwrap();
-        scorer.observe_post(&flagged(), "t2").unwrap();
+        step(&mut scorer, &empty(), &flagged(), "t1");
+        step(&mut scorer, &flagged(), &flagged(), "t2");
         scorer.mark_split(SplitBoundaryReport {
             requested: "t2".to_string(),
             resolved_transition_id: "t2".to_string(),
             resolved_committed_at: "2026-01-01T00:00:00Z".to_string(),
         });
-        scorer.observe_post(&empty(), "t3").unwrap();
-        scorer.observe_post(&flagged(), "t4").unwrap();
+        step(&mut scorer, &flagged(), &empty(), "t3");
+        step(&mut scorer, &empty(), &flagged(), "t4");
         let report = scorer.into_report();
 
         assert_eq!(report.transitions_replayed, 4);
@@ -453,8 +460,8 @@ mod tests {
     fn a_candidate_that_always_holds_refuses_nothing() {
         let program = no_flag_program();
         let mut scorer = CandidateScorer::new(&program).unwrap();
-        scorer.observe_post(&empty(), "t1").unwrap();
-        scorer.observe_post(&empty(), "t2").unwrap();
+        step(&mut scorer, &empty(), &empty(), "t1");
+        step(&mut scorer, &empty(), &empty(), "t2");
         let report = scorer.into_report();
         assert_eq!(report.invariants[0].would_refuse, 0);
         assert!(report.invariants[0].refused_transitions.is_empty());
@@ -468,7 +475,7 @@ mod tests {
             args: vec![EvalValue::Decimal(Decimal::new(9, 0))],
         }]);
         let mut scorer = CandidateScorer::new(&program).unwrap();
-        scorer.observe_post(&other, "t1").unwrap();
+        step(&mut scorer, &empty(), &other, "t1");
         let report = scorer.into_report();
         assert_eq!(report.invariants[0].would_refuse, 0);
     }
@@ -538,7 +545,7 @@ mod tests {
         let program = no_flag_program();
         let report = CandidateScorer::new(&program).unwrap().into_report();
         assert_eq!(report.score_format_version, SCORE_FORMAT_VERSION);
-        assert_eq!(report.semantics, "fresh_state_violation_v1");
+        assert_eq!(report.semantics, "case_bound_admission_v2");
         assert!(report.program_hash.starts_with("sha256:"));
         // Stable: the same programme hashes identically.
         let again = CandidateScorer::new(&no_flag_program())

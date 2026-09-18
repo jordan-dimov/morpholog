@@ -16,7 +16,7 @@ use crate::txn::{TxIsolation, begin_isolated_tx};
 use chrono::{DateTime, Utc};
 use morpholog_core::{
     BatchScore, CandidateScore, CandidateScorer, CaseOutcome, CaseResult, EvalError, Program,
-    SCORE_FORMAT_VERSION, SCORE_SEMANTICS, ScoreError, SplitBoundaryReport, State,
+    SCORE_FORMAT_VERSION, SCORE_SEMANTICS, ScoreError, SplitBoundaryReport, State, effective_delta,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -92,8 +92,11 @@ fn fold_rows<'a>(
         if let Some(pending) = split.take_if(|p| (row.committed_at, row.transition_id) > p.cursor) {
             scorer.mark_split(pending.report);
         }
-        replay.apply(&row.asserted_claims, &row.retracted_claims);
-        scorer.observe_post(replay, &row.transition_id.to_string())?;
+        let mut post = replay.clone();
+        post.apply(&row.asserted_claims, &row.retracted_claims);
+        let effective = effective_delta(replay, &post, &row.asserted_claims, &row.retracted_claims);
+        *replay = post;
+        scorer.observe_transition(replay, &effective, &row.transition_id.to_string())?;
     }
     Ok(())
 }

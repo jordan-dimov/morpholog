@@ -15,7 +15,7 @@
 
 use morpholog_core::{
     ClaimInstance, IntentInstance, Outcome, RejectionReason, StagedDelta, Subject, Transformation,
-    Transition, WitnessBinding, propose, propose_stage_delta,
+    Transition, WitnessBinding, propose_stage_delta, propose_with,
 };
 use serde::Serialize;
 use sqlx::{Postgres, Transaction};
@@ -90,8 +90,9 @@ pub async fn propose_all_against_pg(
         .iter()
         .map(|p| resolve(compiled, &p.transformation_name).map(|(t, _, _)| (t, p.transition())))
         .collect::<Result<_, _>>()?;
-    let invariants = &compiled.program().invariants;
-    let definitions = &compiled.program().definitions;
+    let admission = compiled.admission();
+    let invariants = admission.invariants;
+    let definitions = admission.definitions;
     let route = program.route();
 
     let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &acts[0].1.actor).await?;
@@ -119,7 +120,7 @@ pub async fn propose_all_against_pg(
         let transition_id = Uuid::now_v7();
         let (asserted_claims, retracted_claims, emitted_intents) = match route {
             Route::Interpreted => {
-                match propose(transformation, transition, &state, invariants, definitions)? {
+                match propose_with(transformation, transition, &state, &admission)? {
                     Outcome::Accepted {
                         asserted_claims,
                         retracted_claims,
@@ -156,9 +157,16 @@ pub async fn propose_all_against_pg(
                         retracted,
                         emitted,
                     } => {
-                        write_claim_delta(&mut tx, transition_id, &asserted, &retracted).await?;
+                        let effective =
+                            write_claim_delta(&mut tx, transition_id, &asserted, &retracted)
+                                .await?;
                         if let Some(v) = set
-                            .first_violation(&mut tx, Stage::Full, &asserted, &retracted)
+                            .first_violation(
+                                &mut tx,
+                                Stage::CaseBound,
+                                &effective.asserted,
+                                &effective.retracted,
+                            )
                             .await?
                         {
                             let reason = RejectionReason::Invariant {

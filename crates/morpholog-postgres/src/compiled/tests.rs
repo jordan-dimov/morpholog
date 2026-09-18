@@ -51,7 +51,7 @@ LIMIT 1"#
     // Asked only once the query above returned a violation: any entry
     // in scope whose total no decimal can hold.
     assert_eq!(
-        set.invariants[1].range_sql(),
+        set.invariants[1].range_sql(None).as_deref(),
         Some(
             r#"SELECT 1
 FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((t1.arguments -> 2 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value')) l2, LATERAL (SELECT COALESCE(sum((t3.arguments -> 3 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t3.arguments -> 0 ->> 'value')) l4
@@ -59,7 +59,12 @@ WHERE (t0.predicate_name = 'JournalEntry' AND ((NOT (min_scale(l2.s) <= 28 AND a
 LIMIT 1"#
         )
     );
-    assert_eq!(set.invariants[0].range_sql(), None);
+    assert_eq!(set.invariants[0].range_sql(None), None);
+    // Bounded to the obligation, like the violation query.
+    let bounded = set.invariants[1]
+        .range_sql(Some("((t0.arguments -> 0 ->> 'value') = 'e42')"))
+        .unwrap();
+    assert!(bounded.ends_with("\n  AND (((t0.arguments -> 0 ->> 'value') = 'e42'))\nLIMIT 1"));
 }
 
 #[test]

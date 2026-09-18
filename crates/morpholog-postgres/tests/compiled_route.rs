@@ -238,20 +238,23 @@ fn entry(entry: &str) -> ClaimInstance {
     }
 }
 
-/// Both routes, from the same seeded ledger, on a fresh balanced posting.
+/// Both routes, from the same seeded ledger, on a balanced posting of
+/// `amount` to `entry_id`.
 async fn both_routes(
     pool: &PgPool,
     seeded: &[ClaimInstance],
+    entry_id: &str,
+    amount: i64,
 ) -> (RouteObservation, RouteObservation) {
     let transition = Transition {
         transformation_name: "post_simple_entry".into(),
         args: vec![
-            subj("fresh"),
+            subj(entry_id),
             subj("d_2026_05_17"),
             subj("p_2026_05"),
             subj("account_cash"),
             subj("account_revenue"),
-            dec(10),
+            dec(amount),
         ],
         actor: Subject::from("route_test"),
     };
@@ -263,11 +266,13 @@ async fn both_routes(
 }
 
 /// One entry breaks the balance, another's total is more than any
-/// decimal holds. The violation sorts first in witness order; the
-/// range error must still be the answer on both routes, with nothing
-/// recorded anywhere.
+/// decimal holds. Admission is case-local on both routes: a posting
+/// elsewhere is admitted despite both; a posting onto the overflowing
+/// entry is the range error, with nothing recorded anywhere; a posting
+/// onto the unbalanced entry is that entry's refusal, never the other
+/// entry's error.
 #[tokio::test]
-async fn a_range_error_dominates_a_violation_that_sorts_earlier_on_both_routes() {
+async fn admission_is_case_local_on_both_routes() {
     let pool = test_pool().await;
     let seeded = vec![
         entry("e0"),
@@ -278,7 +283,15 @@ async fn a_range_error_dominates_a_violation_that_sorts_earlier_on_both_routes()
         line("e1", "account_revenue", dec(0), max()),
         line("e1", "account_revenue", dec(0), dec(1)),
     ];
-    let (spec, real) = both_routes(&pool, &seeded).await;
+
+    let (spec, real) = both_routes(&pool, &seeded, "fresh", 10).await;
+    assert!(
+        matches!(&spec, RouteObservation::Decided(o) if o.outcome.starts_with("committed")),
+        "inherited dirt elsewhere does not block: {spec:?}"
+    );
+    assert_eq!(real, spec);
+
+    let (spec, real) = both_routes(&pool, &seeded, "e1", 10).await;
     assert_eq!(
         spec,
         RouteObservation::Kernel(EvalError::sum_out_of_decimal_range())
@@ -299,8 +312,16 @@ async fn a_range_error_dominates_a_violation_that_sorts_earlier_on_both_routes()
     assert_eq!(
         count(&pool, "SELECT count(*) FROM morpholog.claims").await,
         seeded.len() as i64,
-        "the fresh posting's delta rolled back"
+        "the posting's delta rolled back"
     );
+
+    let (spec, real) = both_routes(&pool, &seeded, "e0", 10).await;
+    assert!(
+        matches!(&spec, RouteObservation::Decided(o)
+            if o.outcome.contains("balanced_posted_entry") && o.outcome.contains("witness vars [\"entry\"]")),
+        "touching the unbalanced entry refuses on it: {spec:?}"
+    );
+    assert_eq!(real, spec);
 }
 
 /// The kernel accumulates wider than a decimal and tests only the
@@ -318,7 +339,9 @@ async fn an_excess_that_cancels_is_representable_on_both_routes() {
         line("e1", "account_revenue", dec(0), dec(1)),
         line("e1", "account_revenue", dec(0), dec(-1)),
     ];
-    let (spec, real) = both_routes(&pool, &seeded).await;
+    // A posting of nothing onto the entry raises its obligation: the
+    // totals stay at the maximum, and both routes admit.
+    let (spec, real) = both_routes(&pool, &seeded, "e1", 0).await;
     assert!(
         matches!(&spec, RouteObservation::Decided(o) if o.outcome.starts_with("committed")),
         "{spec:?}"
@@ -382,6 +405,8 @@ async fn a_failing_compiled_check_is_an_operational_error_never_a_decision() {
 
     // A line whose amount is not a number. Nothing the codec would
     // write; a corrupt row is the one way to make a correct query fail.
+    // Admission being case-local, only a posting onto that entry reads
+    // it.
     let corrupted = sqlx::query(
         "UPDATE morpholog.claims
             SET arguments = jsonb_set(arguments, '{2,value}', '\"abc\"')
@@ -396,7 +421,8 @@ async fn a_failing_compiled_check_is_an_operational_error_never_a_decision() {
     let audit_before = count(&pool, "SELECT count(*) FROM morpholog.audit").await;
     let claims_before = count(&pool, "SELECT count(*) FROM morpholog.claims").await;
 
-    let second = propose_against_pg(&pool, &program, &posting("e2", 50)).await;
+    // A posting onto the corrupt entry: its obligation reads the row.
+    let second = propose_against_pg(&pool, &program, &split_posting("e1", 10, 6, 4)).await;
     assert!(
         matches!(second, Err(PgError::Database(_))),
         "a check that cannot run is an error, got {second:?}"

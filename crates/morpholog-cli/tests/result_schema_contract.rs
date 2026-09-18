@@ -32,7 +32,7 @@ use morpholog_core::ir_builder::{
 use morpholog_core::{
     BatchScore, CandidateScorer, CaseOutcome, CaseResult, ClaimInstance, CoverageTracker,
     EvalValue, IntentInstance, SplitBoundaryReport, State, Subject, Transition, WitnessBinding,
-    explain,
+    effective_delta, explain,
 };
 use morpholog_postgres::{
     AtomicAct, AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, CheckpointWitnesses,
@@ -1089,13 +1089,17 @@ fn score_reports_serialize_as_pinned() {
     let t1 = "01900000-0000-7000-8000-000000000001";
     let t2 = "01900000-0000-7000-8000-000000000002";
 
+    let flag_claim = flagged.claims().iter().next().unwrap().clone();
+    let admitted = effective_delta(&empty, &flagged, std::slice::from_ref(&flag_claim), &[]);
+    let retracted = effective_delta(&flagged, &empty, &[], std::slice::from_ref(&flag_claim));
+
     let mut scorer = CandidateScorer::new(&candidate).unwrap();
-    scorer.observe_post(&flagged, t1).unwrap();
+    scorer.observe_transition(&flagged, &admitted, t1).unwrap();
     let report = scorer.into_report();
     assert_golden_bytes("score_report.json", &report);
 
     let mut scorer = CandidateScorer::new(&candidate).unwrap();
-    scorer.observe_post(&flagged, t1).unwrap();
+    scorer.observe_transition(&flagged, &admitted, t1).unwrap();
     // The boundary strings are rendered by the adapter's wire-time
     // authority, as the scorer renders them, so the golden pins the
     // real spelling and not one typed here.
@@ -1105,7 +1109,7 @@ fn score_reports_serialize_as_pinned() {
         resolved_transition_id: t1.to_string(),
         resolved_committed_at: morpholog_postgres::wire_time::render(&split_at),
     });
-    scorer.observe_post(&empty, t2).unwrap();
+    scorer.observe_transition(&empty, &retracted, t2).unwrap();
     assert_golden_bytes("score_report_split.json", &scorer.into_report());
 
     let batch = BatchScore {

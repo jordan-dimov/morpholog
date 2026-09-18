@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::admission::{Admission, effective_delta};
 use crate::definitions::DefinitionTable;
 use crate::derive::eval_invariant;
 use crate::eval::{
@@ -21,6 +22,7 @@ use crate::eval::{
     matching_claims, resolve_term, unsatisfied_positive_claims,
 };
 use crate::format;
+use crate::impact::Impact;
 use crate::ir::{
     Claim, Definition, Intent, Invariant, InvariantName, PredicateName, RuleName, Stmt, Subject,
     Term, Transformation, TransformationName, Var,
@@ -410,7 +412,31 @@ pub(crate) fn propose_inner(
     trace: &mut TraceSink<'_>,
 ) -> Result<Outcome, EvalError> {
     let staged = stage_delta_inner(transformation, transition, pre_state, definitions, trace)?;
-    finish_staged_inner(staged, pre_state, invariants, definitions, trace)
+    finish_staged_inner(
+        staged,
+        pre_state,
+        &Admission::of(invariants, definitions),
+        trace,
+    )
+}
+
+/// [`propose`] under rules whose impact plans were built once: what a
+/// programme object lends, so the commit path plans nothing per call.
+pub fn propose_with(
+    transformation: &Transformation,
+    transition: &Transition,
+    pre_state: &State,
+    admission: &Admission<'_>,
+) -> Result<Outcome, EvalError> {
+    let mut trace = TraceSink::Off;
+    let staged = stage_delta_inner(
+        transformation,
+        transition,
+        pre_state,
+        admission.definitions,
+        &mut trace,
+    )?;
+    finish_staged_inner(staged, pre_state, admission, &mut trace)
 }
 
 /// A transformation body's outcome before any invariant has been
@@ -462,10 +488,19 @@ pub fn finish_staged_delta(
     finish_staged_inner(
         staged,
         pre_state,
-        invariants,
-        definitions,
+        &Admission::of(invariants, definitions),
         &mut TraceSink::Off,
     )
+}
+
+/// [`finish_staged_delta`] under rules whose impact plans were built
+/// once.
+pub fn finish_staged_delta_with(
+    staged: StagedDelta,
+    pre_state: &State,
+    admission: &Admission<'_>,
+) -> Result<Outcome, EvalError> {
+    finish_staged_inner(staged, pre_state, admission, &mut TraceSink::Off)
 }
 
 pub(crate) fn stage_delta_inner(
@@ -547,8 +582,7 @@ pub(crate) fn stage_delta_inner(
 pub(crate) fn finish_staged_inner(
     staged: StagedDelta,
     pre_state: &State,
-    invariants: &[Invariant],
-    definitions: &[Definition],
+    admission: &Admission<'_>,
     trace: &mut TraceSink<'_>,
 ) -> Result<Outcome, EvalError> {
     let (asserted, retracted, emitted) = match staged {
@@ -561,12 +595,28 @@ pub(crate) fn finish_staged_inner(
     };
 
     let candidate = pre_state.with_delta(&asserted, &retracted);
+    let definitions = admission.definitions;
+    let effective = effective_delta(pre_state, &candidate, &asserted, &retracted);
 
-    for inv in invariants {
-        // Pass both pre_state and candidate. Invariants that contain
-        // `Prop::Pre` flip into pre-state lookup for the wrapped
-        // subtree; invariants that don't are unaffected.
-        let held = eval_invariant(inv, &candidate, Some(pre_state), definitions)?;
+    for (inv, plan) in admission.invariants.iter().zip(admission.plans()) {
+        // Case-local revalidation: only the obligation the delta raises
+        // is evaluated. Invariants that contain `Prop::Pre` flip into
+        // pre-state lookup for the wrapped subtree.
+        let cases = match plan.classify(&effective.asserted, &effective.retracted) {
+            Impact::Untouched => continue,
+            Impact::Unbounded => None,
+            Impact::Bounded(cases) => Some(cases),
+        };
+        let held = match &cases {
+            None => eval_invariant(inv, &candidate, Some(pre_state), definitions)?,
+            Some(cases) => crate::derive::eval_invariant_cases(
+                inv,
+                &candidate,
+                Some(pre_state),
+                definitions,
+                cases,
+            )?,
+        };
         if trace.is_on() {
             trace.push(TraceEntry::InvariantCheck {
                 name: inv.name.clone(),
@@ -575,9 +625,21 @@ pub(crate) fn finish_staged_inner(
             });
         }
         if !held {
-            // Diagnosed only now: the accepting path never pays for it.
-            let witness =
-                crate::derive::invariant_witness(inv, &candidate, Some(pre_state), definitions)?;
+            // Diagnosed only now, and only within the obligation: the
+            // accepting path never pays for it, and a bounded refusal
+            // never blames a case the transition did not reach.
+            let witness = match &cases {
+                None => {
+                    crate::derive::invariant_witness(inv, &candidate, Some(pre_state), definitions)?
+                }
+                Some(cases) => crate::derive::invariant_witness_cases(
+                    inv,
+                    &candidate,
+                    Some(pre_state),
+                    definitions,
+                    cases,
+                )?,
+            };
             return Ok(Outcome::Rejected {
                 reason: RejectionReason::Invariant {
                     name: inv.name.clone(),

@@ -10,7 +10,7 @@ use morpholog_core::ir_builder::{
     and, claim, cond, dec, duration_le, invariant, le, mul, predicate, program, qty, sum, term,
     transformation, value_of, var, wildcard,
 };
-use morpholog_core::{Outcome, State, Term, ValidationError, lower_sum_seeds};
+use morpholog_core::{Outcome, State, Term, ValidationError, eval_invariant, lower_sum_seeds};
 use morpholog_test_support::{claim_instance, dec_str, propose_with_test_actor, subj};
 
 fn capped_program(target_factor: Term) -> morpholog_core::Program {
@@ -70,20 +70,23 @@ fn a_context_bound_variable_resolves_inside_the_target() {
         claim_instance("Scale", &[dec_str("3")]),
         claim_instance("Cap", &[dec_str("10")]),
     ]);
-    let outcome =
-        propose_with_test_actor(&p.transformations[0], vec![], &state, &p.invariants, &[])
-            .expect("evaluates cleanly");
-    assert!(matches!(outcome, Outcome::Accepted { .. }), "{outcome:?}");
+    // The invariant's whole-state meaning: what the state satisfies,
+    // asked of the rule itself (a proposal that changes nothing is
+    // admitted whatever the state holds).
+    assert_eq!(
+        eval_invariant(&p.invariants[0], &state, None, &[]),
+        Ok(true)
+    );
 
     let tight = State::from_claims(vec![
         claim_instance("Loss", &[subj("w1"), dec_str("2")]),
         claim_instance("Scale", &[dec_str("3")]),
         claim_instance("Cap", &[dec_str("1")]),
     ]);
-    let outcome =
-        propose_with_test_actor(&p.transformations[0], vec![], &tight, &p.invariants, &[])
-            .expect("evaluates cleanly");
-    assert!(matches!(outcome, Outcome::Rejected { .. }), "{outcome:?}");
+    assert_eq!(
+        eval_invariant(&p.invariants[0], &tight, None, &[]),
+        Ok(false)
+    );
 }
 
 /// The empty sum's typed zero, for each target shape whose kind is

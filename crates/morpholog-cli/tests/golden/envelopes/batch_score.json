@@ -1,6 +1,6 @@
 {
   "score_format_version": 1,
-  "semantics": "fresh_state_violation_v1",
+  "semantics": "case_bound_admission_v2",
   "program": "candidate",
   "program_hash": "sha256:e69aa18def1afcc3a76c26d2bf458fca6f4955c32852bfc85b2a37e47a1b98f4",
   "cases": [
