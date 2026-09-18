@@ -1077,7 +1077,7 @@ async fn evaluate_scores_a_candidate_against_history() {
         "evaluate should succeed; {stderr}\n{stdout}"
     );
     let report: Value = serde_json::from_str(&stdout).expect("report is JSON");
-    assert_eq!(report["score_format_version"], 1);
+    assert_eq!(report["score_format_version"], 2);
     assert_eq!(report["semantics"], "case_bound_admission_v2");
     assert!(
         report["program_hash"]

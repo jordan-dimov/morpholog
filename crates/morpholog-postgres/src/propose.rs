@@ -805,16 +805,16 @@ pub(crate) async fn write_rejection(
 /// then assertion INSERTs. The claims half of [`write_accepted`],
 /// separated so a caller inside an open transaction can make the
 /// claims table the candidate state before deciding anything else.
-/// Returns the effective delta as the table reports it: an assertion
-/// the table already held changed nothing, and a claim deleted and
-/// inserted again is present on both sides.
+/// Returns the effective delta under core's one rule, the table
+/// answering membership: a retraction that deleted a row found the
+/// claim present, an insertion that changed nothing found it present.
 pub(crate) async fn write_claim_delta(
     tx: &mut Transaction<'_, Postgres>,
     transition_id: Uuid,
     asserted_claims: &[ClaimInstance],
     retracted_claims: &[ClaimInstance],
 ) -> Result<EffectiveDelta, PgError> {
-    let mut effective = EffectiveDelta::default();
+    let mut present: HashSet<ClaimInstance> = HashSet::new();
     // Retractions: dedupe, then delete each distinct claim. Exactly
     // one row per distinct retraction is expected; zero rows means a
     // persistent-state mismatch (concurrent interference, which SSI
@@ -848,7 +848,7 @@ pub(crate) async fn write_claim_delta(
                 result.rows_affected()
             )));
         }
-        effective.retracted.push(claim.clone());
+        present.insert(claim.clone());
     }
 
     // Assertions: ON CONFLICT DO NOTHING preserves the set-valued
@@ -867,22 +867,17 @@ pub(crate) async fn write_claim_delta(
         .execute(&mut **tx)
         .await
         .map_err(classify_checked_query)?;
-        if result.rows_affected() == 1 {
-            effective.asserted.push(claim.clone());
+        // A claim this delta retracted was re-inserted just now, so a
+        // changed row says nothing about the pre-state; only a claim
+        // the delta did not retract reports its presence here.
+        if result.rows_affected() == 0 && !present.contains(claim) {
+            present.insert(claim.clone());
         }
     }
-    // Row effects, netted: a claim retracted and re-admitted in one
-    // delta was deleted and inserted, and is present on both sides.
-    let churned: Vec<ClaimInstance> = effective
-        .retracted
-        .iter()
-        .filter(|c| effective.asserted.contains(c))
-        .cloned()
-        .collect();
-    effective.asserted.retain(|c| !churned.contains(c));
-    effective.retracted.retain(|c| !churned.contains(c));
 
-    Ok(effective)
+    Ok(EffectiveDelta::of(asserted_claims, retracted_claims, |c| {
+        present.contains(c)
+    }))
 }
 
 /// Persist an accepted outcome whole: the claim delta, then the
@@ -916,7 +911,8 @@ pub(crate) async fn write_accepted(
 }
 
 /// The record of an admitted transition: the audit row and one outbox
-/// row per emitted intent. Written after every invariant has held,
+/// row per emitted intent. Written after every invariant's obligation
+/// has been discharged,
 /// whichever evaluator checked them; `invariants_checked` lists the
 /// whole programme's invariants either way, so the audit leaf does not
 /// depend on the route.

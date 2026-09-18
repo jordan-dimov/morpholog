@@ -75,27 +75,39 @@ impl EffectiveDelta {
     pub fn is_empty(&self) -> bool {
         self.asserted.is_empty() && self.retracted.is_empty()
     }
+
+    /// The one rule, over whatever knows the pre-state's membership:
+    /// retractions apply first, then admissions, so an admission is
+    /// effective only when the claim was absent, and a retraction only
+    /// when the claim was present and is not re-admitted in the same
+    /// delta. A claim retracted and re-admitted is present on both
+    /// sides and counts on neither.
+    pub fn of(
+        asserted: &[ClaimInstance],
+        retracted: &[ClaimInstance],
+        present: impl Fn(&ClaimInstance) -> bool,
+    ) -> Self {
+        let mut out = EffectiveDelta::default();
+        for claim in asserted {
+            if !present(claim) && !out.asserted.contains(claim) {
+                out.asserted.push(claim.clone());
+            }
+        }
+        for claim in retracted {
+            if present(claim) && !asserted.contains(claim) && !out.retracted.contains(claim) {
+                out.retracted.push(claim.clone());
+            }
+        }
+        out
+    }
 }
 
 /// The effective delta of staging `asserted` and `retracted` over
-/// `pre`, from the pre-state alone: retractions apply first, then
-/// admissions, so a claim retracted and re-admitted in one delta is
-/// present on both sides and counts on neither.
+/// `pre`, the pre-state answering membership.
 pub fn effective_delta(
     pre: &State,
     asserted: &[ClaimInstance],
     retracted: &[ClaimInstance],
 ) -> EffectiveDelta {
-    let mut out = EffectiveDelta::default();
-    for claim in asserted {
-        if !pre.contains(claim) && !out.asserted.contains(claim) {
-            out.asserted.push(claim.clone());
-        }
-    }
-    for claim in retracted {
-        if pre.contains(claim) && !asserted.contains(claim) && !out.retracted.contains(claim) {
-            out.retracted.push(claim.clone());
-        }
-    }
-    out
+    EffectiveDelta::of(asserted, retracted, |c| pre.contains(c))
 }

@@ -565,3 +565,48 @@ transformation churn(e, side, dr, cr):
     let real = observe(&pool, &compiled, &seeded, &transition).await;
     assert_eq!(real, spec);
 }
+
+/// The same churn as one act of an atomic batch: the batch route nets
+/// its row effects too.
+#[tokio::test]
+async fn a_retract_and_readmit_touches_nothing_in_a_batch_on_both_routes() {
+    let source = "program churn_ledger
+predicate Entry(e: Subject)
+predicate Line(e: Subject, side: Subject, dr: Decimal, cr: Decimal)
+invariant balanced:
+    Entry(e) implies sum(d | Line(e, _, d, _)) = sum(c | Line(e, _, _, c))
+transformation churn(e, side, dr, cr):
+    retract Line(e, side, dr, cr)
+    admit Line(e, side, dr, cr)
+";
+    let program = morpholog_surface::parse_program(source).expect("parses");
+    let compiled = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
+    let interpreted = PgProgram::interpreted(CompiledProgram::new(program).unwrap());
+    let seeded = vec![
+        ClaimInstance {
+            predicate: "Entry".into(),
+            args: vec![subj("legacy")],
+        },
+        ClaimInstance {
+            predicate: "Line".into(),
+            args: vec![subj("legacy"), subj("cash"), dec(100), dec(0)],
+        },
+    ];
+    let act = Proposal::gateway(&Transition {
+        transformation_name: "churn".into(),
+        args: vec![subj("legacy"), subj("cash"), dec(100), dec(0)],
+        actor: Subject::from("route_test"),
+    });
+    let pool = test_pool().await;
+    for program in [&interpreted, &compiled] {
+        reset_db(&pool).await;
+        seed(&pool, &seeded).await;
+        let outcome = propose_all_against_pg(&pool, program, std::slice::from_ref(&act))
+            .await
+            .unwrap();
+        assert!(
+            matches!(outcome, PgAtomicOutcome::Committed { .. }),
+            "{outcome:?}"
+        );
+    }
+}
