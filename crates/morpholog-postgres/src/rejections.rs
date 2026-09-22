@@ -1,5 +1,5 @@
 use crate::error::{PgError, classify_checked_query};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use morpholog_core::{EvalValue, Subject, TransformationName, WitnessBinding};
 use serde::Serialize;
 use sqlx::PgPool;
@@ -33,7 +33,7 @@ pub struct RejectionRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub witness: Option<Vec<WitnessBinding>>,
     #[serde(with = "crate::wire_time")]
-    pub rejected_at: DateTime<Utc>,
+    pub rejected_at: Timestamp,
 }
 
 /// Return every recorded rejection from `morpholog.rejections`,
@@ -82,7 +82,7 @@ pub async fn list_rejection_rows(pool: &PgPool, limit: u32) -> Result<Vec<Reject
                     .witness
                     .map(serde_json::from_value::<Vec<WitnessBinding>>)
                     .transpose()?,
-                rejected_at: row.rejected_at,
+                rejected_at: row.rejected_at.into(),
             })
         })
         .collect()

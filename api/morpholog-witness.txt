@@ -41,13 +41,13 @@ pub morpholog_witness::WitnessStatus::Invalid::detail: alloc::string::String
 pub morpholog_witness::WitnessStatus::Unsupported
 pub morpholog_witness::WitnessStatus::Unsupported::detail: alloc::string::String
 pub morpholog_witness::WitnessStatus::Untrusted
-pub morpholog_witness::WitnessStatus::Untrusted::attested_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub morpholog_witness::WitnessStatus::Untrusted::attested_at: jiff::timestamp::Timestamp
 pub morpholog_witness::WitnessStatus::Untrusted::reason: alloc::string::String
 pub morpholog_witness::WitnessStatus::Untrusted::signer: alloc::string::String
 pub morpholog_witness::WitnessStatus::Unverified
-pub morpholog_witness::WitnessStatus::Unverified::attested_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub morpholog_witness::WitnessStatus::Unverified::attested_at: jiff::timestamp::Timestamp
 pub morpholog_witness::WitnessStatus::Verified
-pub morpholog_witness::WitnessStatus::Verified::attested_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub morpholog_witness::WitnessStatus::Verified::attested_at: jiff::timestamp::Timestamp
 impl core::clone::Clone for morpholog_witness::WitnessStatus
 pub fn morpholog_witness::WitnessStatus::clone(&self) -> morpholog_witness::WitnessStatus
 impl core::cmp::Eq for morpholog_witness::WitnessStatus
@@ -76,7 +76,7 @@ impl core::marker::UnsafeUnpin for morpholog_witness::Anchors
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_witness::Anchors
 impl core::panic::unwind_safe::UnwindSafe for morpholog_witness::Anchors
 pub struct morpholog_witness::Checked
-pub morpholog_witness::Checked::attested_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub morpholog_witness::Checked::attested_at: jiff::timestamp::Timestamp
 impl core::clone::Clone for morpholog_witness::Checked
 pub fn morpholog_witness::Checked::clone(&self) -> morpholog_witness::Checked
 impl core::cmp::Eq for morpholog_witness::Checked

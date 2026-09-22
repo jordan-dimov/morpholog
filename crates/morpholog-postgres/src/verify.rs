@@ -6,7 +6,8 @@ use crate::error::{PgError, classify, classify_checked_query};
 use crate::propose::REJECTION_KIND_INVARIANT;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use crate::witnesses::WitnessesReport;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
+use jiff_sqlx::ToSqlx;
 use morpholog_core::{
     ClaimInstance, CoverageReport, CoverageTracker, PredicateName, Program, State,
 };
@@ -247,9 +248,9 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
         transformation_name: String,
         asserted_claims: serde_json::Value,
         retracted_claims: serde_json::Value,
-        committed_at: DateTime<Utc>,
+        committed_at: Timestamp,
     }
-    let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
+    let mut cursor: Option<(Timestamp, Uuid)> = None;
     loop {
         let rows: Vec<Row> = match &cursor {
             None => {
@@ -275,7 +276,7 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
                      ORDER BY committed_at, transition_id
                      LIMIT $1",
                     REPLAY_CHUNK,
-                    after_at,
+                    after_at.to_sqlx(),
                     *after_id,
                 )
                 .fetch_all(&mut *tx)
@@ -349,9 +350,9 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
         transformation_name: String,
         kind: String,
         rule: String,
-        rejected_at: DateTime<Utc>,
+        rejected_at: Timestamp,
     }
-    let mut rej_cursor: Option<(DateTime<Utc>, Uuid)> = None;
+    let mut rej_cursor: Option<(Timestamp, Uuid)> = None;
     loop {
         let rows: Vec<RejRow> = match &rej_cursor {
             None => {
@@ -375,7 +376,7 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
                      ORDER BY rejected_at, rejection_id
                      LIMIT $1",
                     REPLAY_CHUNK,
-                    after_at,
+                    after_at.to_sqlx(),
                     *after_id,
                 )
                 .fetch_all(&mut *tx)

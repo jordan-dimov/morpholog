@@ -58,6 +58,31 @@ fn frozen_v1_leaf_hash_pins_the_canonical_encoding() {
     );
 }
 
+/// A pack is hashed as written, so a leaf can see digits finer than
+/// the database keeps; they floor to the microsecond, before 1970 too.
+#[test]
+fn a_sub_microsecond_instant_hashes_as_its_floored_microsecond() {
+    let leaf = |at: &str| {
+        audit_leaf_hash(&AuditRow {
+            committed_at: at.parse().unwrap(),
+            ..fixed_row()
+        })
+        .unwrap()
+    };
+    assert_eq!(
+        leaf("1969-12-31T23:59:59.999999500Z"),
+        leaf("1969-12-31T23:59:59.999999Z")
+    );
+    assert_eq!(
+        leaf("1970-01-01T00:00:00.000000500Z"),
+        leaf("1970-01-01T00:00:00Z")
+    );
+    assert_eq!(
+        leaf("1969-12-31T23:59:58.9999995Z"),
+        leaf("1969-12-31T23:59:58.999999Z")
+    );
+}
+
 /// [`fixed_row`] with a gateway attestation - the attested twin,
 /// hashing under the attested leaf encoding.
 fn attested_fixed_row() -> AuditRow {

@@ -7,7 +7,6 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use chrono::{TimeZone, Utc};
 use morpholog_witness::{
     Anchors, Refusal, WitnessStatus, build_request, check_response, verify_rfc3161,
 };
@@ -35,7 +34,7 @@ fn a_digicert_token_over_the_genesis_head_verifies_against_its_chain() {
     assert_eq!(
         status,
         WitnessStatus::Verified {
-            attested_at: Utc.with_ymd_and_hms(2026, 9, 16, 10, 20, 5).unwrap(),
+            attested_at: "2026-09-16T10:20:05Z".parse::<jiff::Timestamp>().unwrap(),
         }
     );
 }
@@ -148,7 +147,7 @@ fn check_response_accepts_the_recorded_pair_and_refuses_a_foreign_nonce() {
     .unwrap();
     assert_eq!(
         checked.attested_at,
-        Utc.with_ymd_and_hms(2026, 9, 16, 10, 20, 5).unwrap()
+        "2026-09-16T10:20:05Z".parse::<jiff::Timestamp>().unwrap()
     );
 
     let other =

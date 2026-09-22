@@ -17,7 +17,6 @@
 
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     OutboxUpdate, PgError, PgPool, PgProposalOutcome, begin_compensation, complete_compensation,
@@ -121,11 +120,11 @@ async fn fetch_status_and_compensation(
     pool: &PgPool,
     intent_id: Uuid,
 ) -> (
-    String,                // status
-    Option<String>,        // locked_by
-    Option<DateTime<Utc>>, // lock_expires_at
-    Option<Uuid>,          // compensation_transition_id
-    Option<String>,        // failure_reason
+    String,                       // status
+    Option<String>,               // locked_by
+    Option<jiff_sqlx::Timestamp>, // lock_expires_at
+    Option<Uuid>,                 // compensation_transition_id
+    Option<String>,               // failure_reason
 ) {
     sqlx::query_as(
         "SELECT status, locked_by, lock_expires_at, compensation_transition_id, failure_reason

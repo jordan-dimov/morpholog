@@ -9,7 +9,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use jiff::{SignedDuration, Timestamp};
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     OutboxUpdate, PgError, PgPool, PgProposalOutcome, list_pending_outbox, mark_outbox_delivered,
@@ -78,15 +78,15 @@ async fn fetch_row(
     pool: &PgPool,
     intent_id: Uuid,
 ) -> (
-    String,                // status
-    i32,                   // attempt_count
-    Option<DateTime<Utc>>, // delivered_at
-    Option<DateTime<Utc>>, // failed_at
-    Option<String>,        // failure_reason
-    Option<DateTime<Utc>>, // next_attempt_at
-    Option<Uuid>,          // compensation_transition_id
-    Option<String>,        // locked_by
-    Option<DateTime<Utc>>, // lock_expires_at
+    String,                       // status
+    i32,                          // attempt_count
+    Option<jiff_sqlx::Timestamp>, // delivered_at
+    Option<jiff_sqlx::Timestamp>, // failed_at
+    Option<String>,               // failure_reason
+    Option<jiff_sqlx::Timestamp>, // next_attempt_at
+    Option<Uuid>,                 // compensation_transition_id
+    Option<String>,               // locked_by
+    Option<jiff_sqlx::Timestamp>, // lock_expires_at
 ) {
     sqlx::query_as(
         "SELECT status, attempt_count, delivered_at, failed_at, failure_reason,
@@ -150,7 +150,7 @@ async fn mark_outbox_transient_attempt_schedules_retry_and_releases_lease() {
     let intent_id = enqueue_one_pending(&pool).await;
     force_lease(&pool, intent_id, "worker_a", 30).await;
 
-    let next = Utc::now() + ChronoDuration::seconds(60);
+    let next = Timestamp::now() + SignedDuration::from_secs(60);
     let result = mark_outbox_transient_attempt(&pool, intent_id, "worker_a", next)
         .await
         .unwrap();
@@ -161,7 +161,13 @@ async fn mark_outbox_transient_attempt_schedules_retry_and_releases_lease() {
     assert_eq!(row.1, 1, "attempt_count incremented");
     assert!(row.5.is_some(), "next_attempt_at must be set");
     assert!(
-        (row.5.unwrap() - next).num_seconds().abs() < 2,
+        row.5
+            .unwrap()
+            .to_jiff()
+            .duration_since(next)
+            .as_secs()
+            .abs()
+            < 2,
         "next_attempt_at must roughly match the requested instant"
     );
     assert!(row.7.is_none(), "lease released");
@@ -180,7 +186,7 @@ async fn mark_outbox_transient_attempt_accepts_past_next_attempt_at() {
     let intent_id = enqueue_one_pending(&pool).await;
     force_lease(&pool, intent_id, "worker_a", 30).await;
 
-    let past = Utc::now() - ChronoDuration::seconds(5);
+    let past = Timestamp::now() - SignedDuration::from_secs(5);
     let result = mark_outbox_transient_attempt(&pool, intent_id, "worker_a", past)
         .await
         .expect("past next_attempt_at must be accepted");

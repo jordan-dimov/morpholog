@@ -11,7 +11,7 @@
 //! should not import them - they are decision-pinned stubs, not
 //! deployable deliverers.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::{Deliverer, DeliveryOutcome, OutboxRow};
 
@@ -44,7 +44,7 @@ impl Deliverer for AlwaysDelivers {
 /// deliverer-chosen retry instant.
 #[derive(Debug, Clone, Copy)]
 pub struct AlwaysTransient {
-    pub next_attempt_at: DateTime<Utc>,
+    pub next_attempt_at: Timestamp,
 }
 
 impl Deliverer for AlwaysTransient {

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use morpholog_core::{EvalError, Subject, TransformationName};
 use uuid::Uuid;
 /// Errors returned by the PostgreSQL adapter.
@@ -103,7 +103,7 @@ pub enum PgError {
     /// supplied a time, not an id, and the remedy differs (pick a later
     /// instant vs fix a wrong id).
     #[error("no transition committed at or before {0}")]
-    NoTransitionAtOrBefore(DateTime<Utc>),
+    NoTransitionAtOrBefore(Timestamp),
     /// `pg_stat_activity` hides sessions from this role, so the audit
     /// resume horizon cannot be computed soundly - a hidden writer
     /// would silently fall out of the minimum and the tail could skip
@@ -254,7 +254,7 @@ pub enum PgError {
         public_key: String,
         tree_size: i64,
         committed_beyond_horizon: i64,
-        horizon: DateTime<Utc>,
+        horizon: Timestamp,
     },
 }
 /// Is this SQLSTATE the PostgreSQL serialization-failure code

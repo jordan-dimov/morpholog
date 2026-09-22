@@ -31,8 +31,9 @@
 //! revocable; it does not conjure a root of trust - the first authorisation
 //! is trusted the way the schema is.
 
-use chrono::{DateTime, Utc};
 use ed25519_dalek::SigningKey;
+use jiff::Timestamp;
+use jiff_sqlx::ToSqlx;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use sqlx::PgPool;
@@ -348,11 +349,11 @@ fn stored_digest(text: &str) -> Result<Digest, PgError> {
 /// the last row's coordinates.
 async fn collect_leaves(
     conn: &mut sqlx::PgConnection,
-    horizon: Option<DateTime<Utc>>,
+    horizon: Option<Timestamp>,
     max: Option<i64>,
-) -> Result<(Vec<[u8; 32]>, Option<(Uuid, DateTime<Utc>)>), PgError> {
+) -> Result<(Vec<[u8; 32]>, Option<(Uuid, Timestamp)>), PgError> {
     let mut leaves = Vec::new();
-    let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
+    let mut cursor: Option<(Timestamp, Uuid)> = None;
     let mut last = None;
     loop {
         let page = list_audit_rows_page(conn, cursor, horizon, REPLAY_CHUNK).await?;
@@ -614,9 +615,9 @@ pub async fn create_checkpoint(
         root_hash.to_string(),
         prev_hash.map(|d| d.to_string()),
         cp_hash.to_string(),
-        horizon,
+        horizon.to_sqlx(),
         last_tid,
-        last_at,
+        last_at.map(ToSqlx::to_sqlx),
         sqlx::types::Json(&signatures) as _,
     )
     .execute(&mut *tx)
@@ -665,7 +666,7 @@ fn signer_authority_violation(
 fn truncated_prefix_diagnosis(
     refusal: PgError,
     committed_beyond_horizon: i64,
-    horizon: DateTime<Utc>,
+    horizon: Timestamp,
 ) -> PgError {
     match refusal {
         PgError::SigningKeyUnauthorised {
@@ -691,14 +692,14 @@ fn truncated_prefix_diagnosis(
 async fn with_horizon_diagnosis(
     refusal: PgError,
     conn: &mut sqlx::PgConnection,
-    horizon: DateTime<Utc>,
+    horizon: Timestamp,
 ) -> Result<PgError, PgError> {
     // `>=` mirrors the pager's strict `<` clamp: a row at the horizon is
     // withheld. count(*) is never NULL, so the override is sound.
     let committed_beyond_horizon = sqlx::query!(
         r#"SELECT count(*) AS "committed_beyond_horizon!"
            FROM morpholog.audit WHERE committed_at >= $1"#,
-        horizon,
+        horizon.to_sqlx(),
     )
     .fetch_one(conn)
     .await
@@ -1057,7 +1058,7 @@ async fn load_audit_rows(
     max: i64,
 ) -> Result<Vec<AuditRow>, PgError> {
     let mut rows = Vec::new();
-    let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
+    let mut cursor: Option<(Timestamp, Uuid)> = None;
     while (rows.len() as i64) < max {
         let page = list_audit_rows_page(conn, cursor, None, REPLAY_CHUNK).await?;
         if page.is_empty() {

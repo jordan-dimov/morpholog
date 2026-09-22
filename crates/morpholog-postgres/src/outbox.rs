@@ -1,6 +1,7 @@
 use crate::error::{PgError, classify_checked_query};
 use crate::propose::{PgProposalOutcome, propose_against_pg_inner};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
+use jiff_sqlx::ToSqlx;
 use morpholog_core::{Definition, EvalValue, Invariant, Subject, Transformation, Transition};
 use serde::Serialize;
 use sqlx::PgPool;
@@ -99,20 +100,20 @@ pub struct OutboxRow {
     pub status: OutboxStatus,
     pub attempt_count: i32,
     #[serde(with = "crate::wire_time")]
-    pub enqueued_at: DateTime<Utc>,
+    pub enqueued_at: Timestamp,
     #[serde(with = "crate::wire_time::option")]
-    pub last_attempt_at: Option<DateTime<Utc>>,
+    pub last_attempt_at: Option<Timestamp>,
     #[serde(with = "crate::wire_time::option")]
-    pub delivered_at: Option<DateTime<Utc>>,
+    pub delivered_at: Option<Timestamp>,
     #[serde(with = "crate::wire_time::option")]
-    pub failed_at: Option<DateTime<Utc>>,
+    pub failed_at: Option<Timestamp>,
     pub failure_reason: Option<String>,
     #[serde(with = "crate::wire_time::option")]
-    pub next_attempt_at: Option<DateTime<Utc>>,
+    pub next_attempt_at: Option<Timestamp>,
     pub compensation_transition_id: Option<Uuid>,
     pub locked_by: Option<String>,
     #[serde(with = "crate::wire_time::option")]
-    pub lock_expires_at: Option<DateTime<Utc>>,
+    pub lock_expires_at: Option<Timestamp>,
 }
 /// Outcome of a state-mutating helper on a leased outbox row.
 ///
@@ -203,15 +204,15 @@ pub(crate) struct OutboxRowRaw {
     idempotency_key: String,
     status: String,
     attempt_count: i32,
-    enqueued_at: DateTime<Utc>,
-    last_attempt_at: Option<DateTime<Utc>>,
-    delivered_at: Option<DateTime<Utc>>,
-    failed_at: Option<DateTime<Utc>>,
+    enqueued_at: Timestamp,
+    last_attempt_at: Option<jiff_sqlx::Timestamp>,
+    delivered_at: Option<jiff_sqlx::Timestamp>,
+    failed_at: Option<jiff_sqlx::Timestamp>,
     failure_reason: Option<String>,
-    next_attempt_at: Option<DateTime<Utc>>,
+    next_attempt_at: Option<jiff_sqlx::Timestamp>,
     compensation_transition_id: Option<Uuid>,
     locked_by: Option<String>,
-    lock_expires_at: Option<DateTime<Utc>>,
+    lock_expires_at: Option<jiff_sqlx::Timestamp>,
 }
 pub(crate) fn decode_outbox_row(row: OutboxRowRaw) -> Result<OutboxRow, PgError> {
     Ok(OutboxRow {
@@ -225,14 +226,14 @@ pub(crate) fn decode_outbox_row(row: OutboxRowRaw) -> Result<OutboxRow, PgError>
         status: row.status.parse().map_err(PgError::InvalidState)?,
         attempt_count: row.attempt_count,
         enqueued_at: row.enqueued_at,
-        last_attempt_at: row.last_attempt_at,
-        delivered_at: row.delivered_at,
-        failed_at: row.failed_at,
+        last_attempt_at: row.last_attempt_at.map(Into::into),
+        delivered_at: row.delivered_at.map(Into::into),
+        failed_at: row.failed_at.map(Into::into),
         failure_reason: row.failure_reason,
-        next_attempt_at: row.next_attempt_at,
+        next_attempt_at: row.next_attempt_at.map(Into::into),
         compensation_transition_id: row.compensation_transition_id,
         locked_by: row.locked_by,
-        lock_expires_at: row.lock_expires_at,
+        lock_expires_at: row.lock_expires_at.map(Into::into),
     })
 }
 // ===========================================================================
@@ -304,7 +305,7 @@ pub async fn mark_outbox_transient_attempt(
     pool: &PgPool,
     intent_id: Uuid,
     worker_id: &str,
-    next_attempt_at: DateTime<Utc>,
+    next_attempt_at: Timestamp,
 ) -> Result<OutboxUpdate, PgError> {
     let rows = sqlx::query!(
         "UPDATE morpholog.outbox
@@ -319,7 +320,7 @@ pub async fn mark_outbox_transient_attempt(
            AND lock_expires_at > now()",
         intent_id,
         worker_id,
-        next_attempt_at,
+        next_attempt_at.to_sqlx(),
     )
     .execute(pool)
     .await
@@ -473,7 +474,7 @@ pub async fn claim_pending_outbox_row(
     worker_id: &str,
     intent_type: &str,
     lease_duration: std::time::Duration,
-    claim_before: DateTime<Utc>,
+    claim_before: Timestamp,
 ) -> Result<Option<OutboxRow>, PgError> {
     let lease_secs = lease_duration_to_secs(lease_duration)?;
     let row_opt = sqlx::query_as!(
@@ -504,7 +505,7 @@ pub async fn claim_pending_outbox_row(
         worker_id,
         lease_secs,
         intent_type,
-        claim_before,
+        claim_before.to_sqlx(),
     )
     .fetch_optional(pool)
     .await
@@ -558,7 +559,7 @@ pub async fn release_outbox_claim(
 pub async fn earliest_pending_retry(
     pool: &PgPool,
     intent_type: &str,
-) -> Result<Option<DateTime<Utc>>, PgError> {
+) -> Result<Option<Timestamp>, PgError> {
     let row = sqlx::query!(
         "SELECT min(next_attempt_at) AS earliest
          FROM morpholog.outbox
@@ -571,7 +572,7 @@ pub async fn earliest_pending_retry(
     .fetch_optional(pool)
     .await
     .map_err(classify_checked_query)?;
-    Ok(row.and_then(|r| r.earliest))
+    Ok(row.and_then(|r| r.earliest.map(Into::into)))
 }
 pub(crate) fn lease_duration_to_secs(lease_duration: std::time::Duration) -> Result<i64, PgError> {
     let lease_secs: i64 = lease_duration
@@ -755,7 +756,7 @@ pub enum DeliveryOutcome {
     /// deliverer is responsible for backoff policy (constant,
     /// exponential, jittered, etc.); the processor stores
     /// whatever instant the deliverer chose.
-    Transient { next_attempt_at: DateTime<Utc> },
+    Transient { next_attempt_at: Timestamp },
     /// Delivery failed in a way that should not be retried (the
     /// counterparty rejected the request authoritatively, the
     /// recipient does not exist, etc.). The processor marks the
@@ -827,7 +828,7 @@ pub enum ProcessOutcome {
     /// with the supplied retry instant.
     TransientRetry {
         intent_id: Uuid,
-        next_attempt_at: DateTime<Utc>,
+        next_attempt_at: Timestamp,
     },
     /// Delivery returned `NonRetryable` and no [`CompensationSpec`]
     /// was supplied; the row is `failed`.
@@ -899,7 +900,7 @@ pub async fn process_one_outbox_row<D>(
     lease_duration: std::time::Duration,
     deliverer: &D,
     compensation: Option<&CompensationSpec>,
-    claim_before: DateTime<Utc>,
+    claim_before: Timestamp,
 ) -> Result<ProcessOutcome, PgError>
 where
     D: Deliverer,

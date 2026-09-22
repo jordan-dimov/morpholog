@@ -1,6 +1,7 @@
 use crate::audit::{REPLAY_CHUNK, audit_cursor_for};
 use crate::error::{PgError, classify, classify_checked_query};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
+use jiff_sqlx::ToSqlx;
 use morpholog_core::{ClaimInstance, State};
 use sqlx::PgPool;
 use std::collections::HashSet;
@@ -113,7 +114,7 @@ pub async fn list_claims_at_for_predicates(
 /// reconstruct at or before that instant.
 pub async fn resolve_transition_at_or_before<'e, E>(
     executor: E,
-    at: DateTime<Utc>,
+    at: Timestamp,
 ) -> Result<Uuid, PgError>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
@@ -123,7 +124,7 @@ where
          WHERE committed_at <= $1
          ORDER BY committed_at DESC, transition_id DESC
          LIMIT 1",
-        at,
+        at.to_sqlx(),
     )
     .fetch_optional(executor)
     .await
@@ -163,10 +164,10 @@ pub(crate) async fn reconstruct_inner(
         transition_id: Uuid,
         asserted_claims: serde_json::Value,
         retracted_claims: serde_json::Value,
-        committed_at: DateTime<Utc>,
+        committed_at: Timestamp,
     }
     let mut state = State::default();
-    let mut cursor: Option<(DateTime<Utc>, Uuid)> = None;
+    let mut cursor: Option<(Timestamp, Uuid)> = None;
     loop {
         let rows: Vec<Row> = match &cursor {
             None => {
@@ -177,7 +178,7 @@ pub(crate) async fn reconstruct_inner(
                      WHERE (committed_at, transition_id) <= ($1, $2)
                      ORDER BY committed_at, transition_id
                      LIMIT $3",
-                    target_committed_at,
+                    target_committed_at.to_sqlx(),
                     target_transition_id,
                     REPLAY_CHUNK,
                 )
@@ -193,10 +194,10 @@ pub(crate) async fn reconstruct_inner(
                        AND (committed_at, transition_id) > ($4, $5)
                      ORDER BY committed_at, transition_id
                      LIMIT $3",
-                    target_committed_at,
+                    target_committed_at.to_sqlx(),
                     target_transition_id,
                     REPLAY_CHUNK,
-                    after_at,
+                    after_at.to_sqlx(),
                     *after_id,
                 )
                 .fetch_all(&mut *conn)

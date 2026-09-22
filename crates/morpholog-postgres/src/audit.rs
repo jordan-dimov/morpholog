@@ -2,7 +2,8 @@ use crate::attestation::AuditAttestation;
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::propose::AuditedInvariantCheck;
 use crate::txn::{TxIsolation, begin_isolated_tx};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
+use jiff_sqlx::ToSqlx;
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Subject, TransformationName};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
@@ -25,7 +26,7 @@ pub struct AuditRow {
     pub retracted_claims: Vec<ClaimInstance>,
     pub emitted_intents: Vec<IntentInstance>,
     #[serde(with = "crate::wire_time")]
-    pub committed_at: DateTime<Utc>,
+    pub committed_at: Timestamp,
     /// How the actor identity was established. Absent on rows written
     /// before attestation existed; those rows keep the original Merkle
     /// leaf encoding, so the field's presence selects the leaf version.
@@ -82,7 +83,7 @@ pub(crate) struct AuditRowRaw {
     asserted_claims: serde_json::Value,
     retracted_claims: serde_json::Value,
     emitted_intents: serde_json::Value,
-    committed_at: DateTime<Utc>,
+    committed_at: Timestamp,
     // Nullable by column attribute even though the named constraint
     // refuses new NULLs: a database upgraded from before attestation
     // lawfully holds NULL on its historical rows, and fresh and
@@ -164,8 +165,8 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
 /// end and forfeits the lossless-resume guarantee.
 pub async fn list_audit_rows_page(
     conn: &mut sqlx::PgConnection,
-    cursor: Option<(DateTime<Utc>, Uuid)>,
-    horizon: Option<DateTime<Utc>>,
+    cursor: Option<(Timestamp, Uuid)>,
+    horizon: Option<Timestamp>,
     limit: i64,
 ) -> Result<Vec<AuditRow>, PgError> {
     let rows = match (&cursor, &horizon) {
@@ -196,7 +197,7 @@ pub async fn list_audit_rows_page(
                  ORDER BY committed_at, transition_id
                  LIMIT $1",
                 limit,
-                at,
+                at.to_sqlx(),
                 *id,
             )
             .fetch_all(&mut *conn)
@@ -214,7 +215,7 @@ pub async fn list_audit_rows_page(
                  ORDER BY committed_at, transition_id
                  LIMIT $1",
                 limit,
-                *h,
+                h.to_sqlx(),
             )
             .fetch_all(&mut *conn)
             .await
@@ -232,9 +233,9 @@ pub async fn list_audit_rows_page(
                  ORDER BY committed_at, transition_id
                  LIMIT $1",
                 limit,
-                at,
+                at.to_sqlx(),
                 *id,
-                *h,
+                h.to_sqlx(),
             )
             .fetch_all(&mut *conn)
             .await
@@ -253,8 +254,8 @@ pub async fn list_audit_rows_page(
 /// skipped - see [`audit_resume_watermark`] for the proof.
 pub struct AuditTail<'p> {
     tx: Transaction<'p, Postgres>,
-    horizon: DateTime<Utc>,
-    cursor: Option<(DateTime<Utc>, Uuid)>,
+    horizon: Timestamp,
+    cursor: Option<(Timestamp, Uuid)>,
     done: bool,
 }
 /// Open an audit tail, optionally resuming strictly after a
@@ -313,7 +314,7 @@ impl AuditTail<'_> {
 pub async fn audit_cursor_for(
     conn: &mut sqlx::PgConnection,
     transition_id: Uuid,
-) -> Result<(DateTime<Utc>, Uuid), PgError> {
+) -> Result<(Timestamp, Uuid), PgError> {
     let row = sqlx::query!(
         "SELECT committed_at FROM morpholog.audit WHERE transition_id = $1",
         transition_id,
@@ -322,7 +323,7 @@ pub async fn audit_cursor_for(
     .await
     .map_err(classify_checked_query)?;
     match row {
-        Some(row) => Ok((row.committed_at, transition_id)),
+        Some(row) => Ok((row.committed_at.into(), transition_id)),
         None => Err(PgError::TransitionNotFound(transition_id)),
     }
 }
@@ -409,7 +410,7 @@ pub async fn audit_cursor_for(
 pub async fn audit_resume_watermark(
     pool: &PgPool,
     writers: Option<&[String]>,
-) -> Result<DateTime<Utc>, PgError> {
+) -> Result<Timestamp, PgError> {
     if let Some(asserted) = writers {
         return audit_resume_watermark_asserted(pool, asserted).await;
     }
@@ -438,7 +439,7 @@ pub async fn audit_resume_watermark(
     if row.hidden > 0 {
         return Err(PgError::StatVisibility { hidden: row.hidden });
     }
-    Ok(row.horizon)
+    Ok(row.horizon.into())
 }
 
 /// The assertion-mode horizon: census, filter, and minimum in one
@@ -447,7 +448,7 @@ pub async fn audit_resume_watermark(
 async fn audit_resume_watermark_asserted(
     pool: &PgPool,
     asserted: &[String],
-) -> Result<DateTime<Utc>, PgError> {
+) -> Result<Timestamp, PgError> {
     if asserted.is_empty() {
         return Err(PgError::WriterAssertionEmpty);
     }
@@ -506,5 +507,5 @@ async fn audit_resume_watermark_asserted(
     if row.hidden > 0 {
         return Err(PgError::WriterSessionsHidden { hidden: row.hidden });
     }
-    Ok(row.horizon)
+    Ok(row.horizon.into())
 }

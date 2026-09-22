@@ -1,0 +1,3 @@
+# Adapter instants are jiff timestamps. Built-in type names are upper-case.
+[macros.type-overrides]
+'TIMESTAMPTZ' = "jiff_sqlx::Timestamp"

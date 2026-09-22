@@ -10,11 +10,12 @@ repository.workspace = true
 morpholog-postgres = { path = "../morpholog-postgres" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 uuid = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 serde_json = { workspace = true }
 rand = { workspace = true }
 
 [dev-dependencies]
+jiff-sqlx = { workspace = true }
 morpholog-core = { path = "../morpholog-core" }
 morpholog-examples = { path = "../morpholog-examples" }
 morpholog-test-support = { path = "../morpholog-test-support" }

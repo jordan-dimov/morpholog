@@ -113,7 +113,7 @@ mod tests {
             asserted_claims: asserted,
             retracted_claims: retracted,
             emitted_intents: vec![],
-            committed_at: chrono::Utc::now(),
+            committed_at: jiff::Timestamp::now(),
             attestation: None,
             parameters: None,
         }
