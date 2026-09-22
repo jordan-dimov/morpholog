@@ -121,7 +121,9 @@ Spread between the eight runs of each millisecond row, (max - min) / median:
 | uncapped | 12.3% | 48.4% | 229% |
 | capped at 3000 MHz | 11.9% | 24.4% | 91% |
 
-Capping leaves typical run-to-run noise where it was - that noise is not thermal - and halves the tail, where the misleading outliers live. It stays opt-in: in the uncapped A/A session interleaving kept the two sides' comparison under control, and the default is faster. Reach for the cap when a claim rests on a row with a noisy tail. Absolute numbers also moved with the power state alone: the same quick-suite run took about 22 seconds on battery in the balanced profile and about 10.5 seconds on mains in performance, which is why the runner records both for every run.
+Capping leaves typical run-to-run noise where it was - that noise is not thermal - and halves the tail, where the misleading outliers live. It stays opt-in: in the uncapped A/A session interleaving kept the two sides' comparison under control, and the default is faster. Reach for the cap when a claim rests on a row with a noisy tail.
+
+A fourth uncapped session on a warmer machine (27% of run time throttled against 19%) came out `clean` with six rows called changed, all in the candidate's favour, while the candidate side had throttled 2.8 points less - inside the 5-point threshold. A clean session can still carry a handful of same-direction calls, which is why a lone call is something to look at and the claim comes from curves and controls. The package temperature also swung by more than 15 C within a second at idle, so runs started at up to 73 C despite the gate's 60 C: on this sensor the gate avoids starting in a hot spell, it cannot hold the start temperature steady. Absolute numbers also moved with the power state alone: the same quick-suite run took about 22 seconds on battery in the balanced profile and about 10.5 seconds on mains in performance, which is why the runner records both for every run.
 
 ### A/A: the run is the unit of evidence (2026-09-22, `suite --ladder quick --repeat 5`, PostgreSQL 18.6)
 
