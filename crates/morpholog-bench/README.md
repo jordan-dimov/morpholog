@@ -89,6 +89,11 @@ DATABASE_URL=postgres:///morpholog_bench \
 cargo run -p morpholog-bench --release -- compare --before a1.json a2.json a3.json a4.json \
   --after b1.json b2.json b3.json b4.json
 
+# the whole comparison in one command: baseline rev against the working tree,
+# built separately, four runs a side interleaved, provenance recorded, then
+# compare (--max-mhz caps the clock for the session; it needs sudo):
+DATABASE_URL=postgres:///morpholog_bench ./scripts/bench_ab.sh main
+
 # end-to-end CLI latency a subprocess embedder pays (not in-process):
 DATABASE_URL=postgres:///morpholog_bench ./scripts/embedder_latency.sh 50
 ```
@@ -100,6 +105,23 @@ Every scenario takes `--repeat R`: repeats start from the same logical pre-state
 The bench **truncates the entire `morpholog` schema before each run**. The required `--reset` flag is the acknowledgement: without it the binary refuses to start, so the `DATABASE_URL` env-var fallback cannot silently destroy a database a shell already happens to point at.
 
 ## Observations
+
+### The interleaved runner, and what a clock cap buys (2026-09-22, `scripts/bench_ab.sh HEAD`, `suite --ladder quick --repeat 5`, PostgreSQL 18.6)
+
+Three A/A sessions of the runner on one laptop (Core Ultra 7 155H), each building the same commit twice into separate target directories. The two builds came out byte-identical (same sha256), so the comparison really was one binary against itself.
+
+- **Every run throttled.** With the counters read per run, the first session showed every run throttled at a package temperature of 45 C. That was not a sensor fault: under a 4-core load this machine draws about 40 W and sits at 100 C within a second, the cores 10-25% below their maximum clock. It turbos to its temperature limit by design. So the runner compares how much each side throttled rather than treating any throttling as contamination.
+- **Uncapped, performance profile, on mains power:** 17.3% of the baseline's run time throttled, 20.5% of the candidate's. 155 of 156 rows `within noise`. The session took 3 minutes with warm build caches.
+- **Capped at 3000 MHz (`--max-mhz 3000`):** 0.0% throttled on both sides, 153 of 156 rows `within noise`, everything 1.4 to 1.5 times slower.
+
+Spread between the eight runs of each millisecond row, (max - min) / median:
+
+| session | median row | 90th percentile row | worst row |
+|---|--:|--:|--:|
+| uncapped | 12.3% | 48.4% | 229% |
+| capped at 3000 MHz | 11.9% | 24.4% | 91% |
+
+Capping leaves typical run-to-run noise where it was - that noise is not thermal - and halves the tail, where the misleading outliers live. It stays opt-in: interleaving already keeps the comparison fair uncapped, and the default is faster. Reach for the cap when a claim rests on a row with a noisy tail. Absolute numbers also moved with the power state alone: the same quick-suite run took about 22 seconds on battery in the balanced profile and about 10.5 seconds on mains in performance, which is why the runner records both for every run.
 
 ### A/A: the run is the unit of evidence (2026-09-22, `suite --ladder quick --repeat 5`, PostgreSQL 18.6)
 
