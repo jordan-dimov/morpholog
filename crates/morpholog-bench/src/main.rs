@@ -152,9 +152,10 @@ enum Command {
     /// tens of minutes on today's interpreted runtime.
     Suite(SuiteArgs),
 
-    /// Compare two `suite --format json` reports from the same ruler:
-    /// one row per case metric with the before and after steady
-    /// medians and their ratio, as the table a performance PR carries.
+    /// Compare baseline and candidate runs of `suite --format json`
+    /// from the same ruler: one row per case metric with the median of
+    /// each side's runs, their ratio, and whether the runs separate, as
+    /// the table a performance PR carries.
     /// Refuses reports whose suite contracts differ.
     Compare(CompareArgs),
 }
@@ -213,10 +214,14 @@ struct ReplayArgs {
 
 #[derive(clap::Args, Debug)]
 struct CompareArgs {
-    /// The baseline report (`suite --format json` output).
-    before: PathBuf,
-    /// The candidate report, from the same ruler.
-    after: PathBuf,
+    /// The baseline runs: one or more `suite --format json` reports.
+    /// A verdict needs four runs a side, interleaved with the
+    /// candidate's; see docs/benchmarking.md.
+    #[arg(long, num_args = 1.., required = true)]
+    before: Vec<PathBuf>,
+    /// The candidate runs, from the same ruler.
+    #[arg(long, num_args = 1.., required = true)]
+    after: Vec<PathBuf>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -836,16 +841,20 @@ impl Metric {
 /// The median over every sample but the first, which is the `first`
 /// reading; `None` when there is nothing after it.
 fn steady_median(samples: &[f64]) -> Option<f64> {
-    let mut rest: Vec<f64> = samples.get(1..).unwrap_or(&[]).to_vec();
-    if rest.is_empty() {
+    median(samples.get(1..).unwrap_or(&[]))
+}
+
+fn median(values: &[f64]) -> Option<f64> {
+    let mut sorted = values.to_vec();
+    if sorted.is_empty() {
         return None;
     }
-    rest.sort_by(f64::total_cmp);
-    let mid = rest.len() / 2;
-    Some(if rest.len() % 2 == 1 {
-        rest[mid]
+    sorted.sort_by(f64::total_cmp);
+    let mid = sorted.len() / 2;
+    Some(if sorted.len() % 2 == 1 {
+        sorted[mid]
     } else {
-        (rest[mid - 1] + rest[mid]) / 2.0
+        (sorted[mid - 1] + sorted[mid]) / 2.0
     })
 }
 
@@ -1207,7 +1216,7 @@ async fn run_replay(args: ReplayArgs) -> Result<()> {
 
 /// A suite report as read back from `--format json`: the same shape
 /// `SuiteReport` writes, owned, so two runs can be set side by side.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, PartialEq, serde::Deserialize)]
 struct ReadReport {
     suite_contract: u32,
     implementation: String,
@@ -1215,7 +1224,7 @@ struct ReadReport {
     cases: Vec<ReadCase>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, PartialEq, serde::Deserialize)]
 struct ReadCase {
     case: String,
     axis: String,
@@ -1223,7 +1232,7 @@ struct ReadCase {
     metrics: Vec<ReadMetric>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, PartialEq, serde::Deserialize)]
 struct ReadMetric {
     name: String,
     unit: String,
@@ -1236,63 +1245,67 @@ fn read_report(path: &std::path::Path) -> Result<ReadReport> {
         .with_context(|| format!("parsing {} as a suite report", path.display()))
 }
 
-/// Every metric of both reports, keyed by case, axis, point, metric,
-/// and unit: a key both sides have is a ratio row; a key only one side
-/// has is listed after the table, so a changed plan cannot pass as a
-/// changed number. Two rulers, two ladders, or one metric in two units
-/// are errors, not rows.
-fn render_compare(before: &ReadReport, after: &ReadReport) -> Result<String> {
-    if before.suite_contract != after.suite_contract {
-        return Err(anyhow!(
-            "the reports were measured with different rulers: suite_contract {} and {}",
-            before.suite_contract,
-            after.suite_contract
-        ));
+type Key = (String, String, u64, String);
+
+/// Every metric of both sides, keyed by case, axis, point, metric, and
+/// unit: a key both sides have is a ratio row; a key only one side has
+/// is listed after the table, so a changed plan cannot pass as a changed
+/// number. Two rulers, two ladders, or one metric in two units are
+/// errors, not rows.
+///
+/// Each side is one or more runs of the suite, and the run is the unit
+/// of evidence: repeats inside one run share a process, a fixture and a
+/// buffer cache, and agree with each other far more closely than two
+/// runs of the same binary do.
+fn render_compare(before: &[ReadReport], after: &[ReadReport]) -> Result<String> {
+    let (Some(first), Some(_)) = (before.first(), after.first()) else {
+        return Err(anyhow!("each side needs at least one report"));
+    };
+    for report in before.iter().chain(after) {
+        if report.suite_contract != first.suite_contract {
+            return Err(anyhow!(
+                "the reports were measured with different rulers: suite_contract {} and {}",
+                first.suite_contract,
+                report.suite_contract
+            ));
+        }
+        if report.ladder != first.ladder {
+            return Err(anyhow!(
+                "the reports ran different ladders: {} and {}",
+                first.ladder,
+                report.ladder
+            ));
+        }
     }
-    if before.ladder != after.ladder {
-        return Err(anyhow!(
-            "the reports ran different ladders: {} and {}",
-            before.ladder,
-            after.ladder
-        ));
+    let all: Vec<&ReadReport> = before.iter().chain(after).collect();
+    for (i, report) in all.iter().enumerate() {
+        if all[i + 1..].contains(report) {
+            return Err(anyhow!(
+                "the same run is given twice: one run counted twice is not two runs"
+            ));
+        }
     }
-    type Key = (String, String, u64, String);
-    let index =
-        |report: &ReadReport| -> Result<std::collections::BTreeMap<Key, (String, Option<f64>)>> {
-            let mut out = std::collections::BTreeMap::new();
-            for case in &report.cases {
-                for m in &case.metrics {
-                    let key = (
-                        case.case.clone(),
-                        case.axis.clone(),
-                        case.point,
-                        m.name.clone(),
-                    );
-                    let reading = steady_median(&m.samples).or_else(|| m.samples.first().copied());
-                    if out.insert(key.clone(), (m.unit.clone(), reading)).is_some() {
-                        return Err(anyhow!(
-                            "a report carries {} {} {} {} twice",
-                            key.0,
-                            key.1,
-                            key.2,
-                            key.3
-                        ));
-                    }
-                }
-            }
-            Ok(out)
-        };
-    let (b, a) = (index(before)?, index(after)?);
+    let (b, a) = (
+        side_readings("before", before)?,
+        side_readings("after", after)?,
+    );
     let mut out = String::new();
     out.push_str(&format!(
-        "suite_contract={} ladder={} before={} after={}\n\n",
-        before.suite_contract, before.ladder, before.implementation, after.implementation
+        "suite_contract={} ladder={} before={} ({} runs) after={} ({} runs)\n\n",
+        first.suite_contract,
+        first.ladder,
+        before[0].implementation,
+        before.len(),
+        after[0].implementation,
+        after.len()
     ));
-    out.push_str("| case | axis | point | metric | before | after | after/before | unit |\n");
-    out.push_str("|---|---|--:|---|--:|--:|--:|---|\n");
+    out.push_str(
+        "| case | axis | point | metric | before | after | after/before | verdict | unit |\n",
+    );
+    out.push_str("|---|---|--:|---|--:|--:|--:|---|---|\n");
     let mut unmatched = Vec::new();
-    for (key, (unit, before_reading)) in &b {
-        let Some((after_unit, after_reading)) = a.get(key) else {
+    for (key, (unit, before_runs)) in &b {
+        let Some((after_unit, after_runs)) = a.get(key) else {
             unmatched.push(format!(
                 "before only: {} {} {} {} ({unit})",
                 key.0, key.1, key.2, key.3
@@ -1308,19 +1321,21 @@ fn render_compare(before: &ReadReport, after: &ReadReport) -> Result<String> {
                 key.3
             ));
         }
+        let (before_reading, after_reading) = (median(before_runs), median(after_runs));
         let ratio = match (before_reading, after_reading) {
-            (Some(b), Some(a)) if *b > 0.0 => format!("{:.2}", a / b),
+            (Some(b), Some(a)) if b > 0.0 => format!("{:.2}", a / b),
             _ => "-".to_string(),
         };
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             key.0,
             key.1,
             key.2,
             key.3,
-            format_sample(*before_reading),
-            format_sample(*after_reading),
+            format_sample(before_reading),
+            format_sample(after_reading),
             ratio,
+            verdict(before_runs, after_runs),
             unit
         ));
     }
@@ -1341,10 +1356,105 @@ fn render_compare(before: &ReadReport, after: &ReadReport) -> Result<String> {
     Ok(out)
 }
 
+/// One reading per run for every metric of one side - the run's steady
+/// median, or its only sample - with the metric's unit. The runs of a
+/// side must measure one implementation and carry the same rows.
+fn side_readings(
+    side: &str,
+    runs: &[ReadReport],
+) -> Result<std::collections::BTreeMap<Key, (String, Vec<f64>)>> {
+    let mut out: std::collections::BTreeMap<Key, (String, Vec<f64>)> =
+        std::collections::BTreeMap::new();
+    let mut rows_per_run = Vec::new();
+    for report in runs {
+        if report.implementation != runs[0].implementation {
+            return Err(anyhow!(
+                "the {side} runs measured different implementations: {} and {}",
+                runs[0].implementation,
+                report.implementation
+            ));
+        }
+        let mut rows = std::collections::BTreeSet::new();
+        for case in &report.cases {
+            for m in &case.metrics {
+                let key = (
+                    case.case.clone(),
+                    case.axis.clone(),
+                    case.point,
+                    m.name.clone(),
+                );
+                if !rows.insert(key.clone()) {
+                    return Err(anyhow!(
+                        "a report carries {} {} {} {} twice",
+                        key.0,
+                        key.1,
+                        key.2,
+                        key.3
+                    ));
+                }
+                let entry = out
+                    .entry(key.clone())
+                    .or_insert_with(|| (m.unit.clone(), Vec::new()));
+                if entry.0 != m.unit {
+                    return Err(anyhow!(
+                        "{} {} {} {} is measured in two units among the {side} runs",
+                        key.0,
+                        key.1,
+                        key.2,
+                        key.3
+                    ));
+                }
+                if let Some(reading) =
+                    steady_median(&m.samples).or_else(|| m.samples.first().copied())
+                {
+                    entry.1.push(reading);
+                }
+            }
+        }
+        rows_per_run.push(rows);
+    }
+    if rows_per_run.iter().any(|rows| rows.len() != out.len()) {
+        return Err(anyhow!(
+            "the {side} runs do not carry the same rows: a changed plan, not a changed number"
+        ));
+    }
+    Ok(out)
+}
+
+/// Whether one side's runs lie wholly beyond the other's. At least four
+/// runs a side are required: fewer says too little about how much runs
+/// vary, however many the other side has. With four or more a side,
+/// complete separation has a probability of at most `2 / C(8, 4)`, under
+/// 3%, if nothing changed and the runs were taken in interleaved order -
+/// the exact Mann-Whitney tail at its extreme. The rule is per row and
+/// not adjusted for how many rows a suite has. The words are
+/// direction-neutral because some metrics are throughputs.
+fn verdict(before: &[f64], after: &[f64]) -> &'static str {
+    if before.len() < 4 || after.len() < 4 {
+        return "too few runs";
+    }
+    let low = |xs: &[f64]| xs.iter().copied().fold(f64::INFINITY, f64::min);
+    let high = |xs: &[f64]| xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if high(after) < low(before) {
+        "lower"
+    } else if low(after) > high(before) {
+        "higher"
+    } else {
+        "within noise"
+    }
+}
+
 fn run_compare(args: &CompareArgs) -> Result<()> {
-    let before = read_report(&args.before)?;
-    let after = read_report(&args.after)?;
-    print!("{}", render_compare(&before, &after)?);
+    let read = |paths: &[PathBuf]| {
+        paths
+            .iter()
+            .map(|p| read_report(p))
+            .collect::<Result<Vec<_>>>()
+    };
+    print!(
+        "{}",
+        render_compare(&read(&args.before)?, &read(&args.after)?)?
+    );
     Ok(())
 }
 
@@ -3342,25 +3452,35 @@ mod smoke {
         std::env::var("DATABASE_URL").ok().filter(|s| !s.is_empty())
     }
 
-    /// The compare table pairs rows by case, axis, point, and metric,
-    /// reads the steady median (the first sample when there is only
-    /// one), and refuses two rulers.
-    #[test]
-    fn compare_pairs_rows_and_refuses_different_rulers() {
-        let report = |contract: u32, ladder: &str, unit: &str, samples: Vec<f64>| ReadReport {
-            suite_contract: contract,
-            implementation: "interpreted".to_string(),
-            ladder: ladder.to_string(),
+    fn one_case_report(implementation: &str, samples: Vec<f64>) -> ReadReport {
+        ReadReport {
+            suite_contract: SUITE_CONTRACT,
+            implementation: implementation.to_string(),
+            ladder: "quick".to_string(),
             cases: vec![ReadCase {
                 case: "write/base".to_string(),
                 axis: "n".to_string(),
                 point: 100,
                 metrics: vec![ReadMetric {
                     name: "propose_one".to_string(),
-                    unit: unit.to_string(),
+                    unit: "ms".to_string(),
                     samples,
                 }],
             }],
+        }
+    }
+
+    /// The compare table pairs rows by case, axis, point, and metric,
+    /// reads each run's steady median (the first sample when there is
+    /// only one), and refuses two rulers.
+    #[test]
+    fn compare_pairs_rows_and_refuses_different_rulers() {
+        let report = |contract: u32, ladder: &str, unit: &str, samples: Vec<f64>| {
+            let mut report = one_case_report("interpreted", samples);
+            report.suite_contract = contract;
+            report.ladder = ladder.to_string();
+            report.cases[0].metrics[0].unit = unit.to_string();
+            report
         };
         let before = report(SUITE_CONTRACT, "quick", "ms", vec![9.0, 4.0, 2.0, 3.0]);
         let mut after = report(SUITE_CONTRACT, "quick", "ms", vec![5.0, 1.5]);
@@ -3379,9 +3499,12 @@ mod smoke {
                 samples: vec![2.0],
             }],
         });
-        let table = render_compare(&before, &after).unwrap();
+        let before = [before];
+        let table = render_compare(&before, &[after]).unwrap();
         assert!(
-            table.contains("| write/base | n | 100 | propose_one | 3.00 | 1.50 | 0.50 | ms |"),
+            table.contains(
+                "| write/base | n | 100 | propose_one | 3.00 | 1.50 | 0.50 | too few runs | ms |"
+            ),
             "{table}"
         );
         // A metric only the candidate has is named, inside a shared case
@@ -3396,11 +3519,80 @@ mod smoke {
         );
 
         let other_ruler = report(SUITE_CONTRACT + 1, "quick", "ms", vec![1.0]);
-        assert!(render_compare(&before, &other_ruler).is_err());
+        assert!(render_compare(&before, &[other_ruler]).is_err());
         let other_ladder = report(SUITE_CONTRACT, "full", "ms", vec![1.0]);
-        assert!(render_compare(&before, &other_ladder).is_err());
+        assert!(render_compare(&before, &[other_ladder]).is_err());
         let other_unit = report(SUITE_CONTRACT, "quick", "s", vec![1.0]);
-        assert!(render_compare(&before, &other_unit).is_err());
+        assert!(render_compare(&before, &[other_unit]).is_err());
+    }
+
+    /// Two runs of one binary disagree far more than the repeats inside
+    /// either run do - an A/A pair called about one row in ten changed
+    /// when the repeats were the evidence. So the run is the unit: one run
+    /// a side proves nothing however cleanly its repeats separate, and
+    /// four runs a side that separate do.
+    #[test]
+    fn compare_judges_runs_not_the_repeats_inside_them() {
+        let run = |steady: f64| {
+            one_case_report(
+                "interpreted",
+                vec![99.0, steady, steady + 0.1, steady, steady + 0.1],
+            )
+        };
+        let row = |table: String| {
+            table
+                .lines()
+                .find(|l| l.starts_with("| write/base"))
+                .unwrap()
+                .to_string()
+        };
+        assert!(
+            row(render_compare(&[run(10.0)], &[run(12.0)]).unwrap()).contains("| too few runs |")
+        );
+        let before = [run(10.0), run(10.4), run(10.2), run(10.6)];
+        let slower = [run(12.0), run(12.6), run(12.2), run(12.4)];
+        let overlapping = [run(10.1), run(10.5), run(9.9), run(10.3)];
+        assert!(row(render_compare(&before, &slower).unwrap()).contains("| higher |"));
+        assert!(row(render_compare(&slower, &before).unwrap()).contains("| lower |"));
+        assert!(row(render_compare(&before, &overlapping).unwrap()).contains("| within noise |"));
+        let mut changed_plan = run(10.0);
+        changed_plan.cases[0].point = 1000;
+        assert!(render_compare(&[run(10.0), changed_plan], &slower).is_err());
+        assert!(
+            render_compare(
+                &[run(10.0), one_case_report("compiled", vec![1.0])],
+                &slower
+            )
+            .is_err()
+        );
+        // One run named four times is one run.
+        let err = render_compare(&[run(10.0), run(10.0), run(10.0), run(10.0)], &slower)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("the same run is given twice"), "{err}");
+    }
+
+    /// The separation test itself: four runs a side, and complete
+    /// separation, nothing less.
+    #[test]
+    fn the_verdict_calls_a_change_only_when_chance_cannot_explain_it() {
+        let before = [10.0, 11.0, 10.5, 10.2];
+        assert_eq!(verdict(&before, &[8.0, 8.4, 8.1, 8.9]), "lower");
+        assert_eq!(verdict(&before, &[12.0, 11.5, 13.0, 12.2]), "higher");
+        assert_eq!(verdict(&before, &[9.0, 10.3, 8.8, 9.1]), "within noise");
+        // Four runs a side, whatever the other side has: many candidate
+        // runs say nothing about how much the baseline varies.
+        assert_eq!(
+            verdict(&[10.0, 11.0, 10.5], &[1.0, 1.1, 1.2]),
+            "too few runs"
+        );
+        assert_eq!(
+            verdict(&[10.0, 11.0, 10.5], &[1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6]),
+            "too few runs"
+        );
+        assert_eq!(verdict(&[], &[1.0]), "too few runs");
+        // Equal readings on both sides are not a separation.
+        assert_eq!(verdict(&before, &[10.0, 9.0, 9.5, 9.7]), "within noise");
     }
 
     #[tokio::test]
