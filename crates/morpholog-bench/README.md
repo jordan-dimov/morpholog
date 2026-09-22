@@ -83,9 +83,9 @@ DATABASE_URL=postgres:///morpholog_bench \
   cargo run -p morpholog-bench --release -- replay 100000 --retract-fraction 50 --repeat 3 --reset
 
 # baseline and candidate side by side, from `suite --format json` runs taken
-# on the same host under the same contract; each row says whether the runs
-# separate by more than chance, which takes four runs a side
-# (see docs/benchmarking.md):
+# on the same host under the same contract, at least four a side, interleaved
+# in balanced order (a1 b1 b2 a2 a3 b3 b4 a4); each row says whether the runs
+# separate (see docs/benchmarking.md):
 cargo run -p morpholog-bench --release -- compare --before a1.json a2.json a3.json a4.json \
   --after b1.json b2.json b3.json b4.json
 

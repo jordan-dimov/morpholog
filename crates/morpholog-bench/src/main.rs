@@ -154,8 +154,8 @@ enum Command {
 
     /// Compare baseline and candidate runs of `suite --format json`
     /// from the same ruler: one row per case metric with the median of
-    /// each side's runs, their ratio, and whether the runs separate by
-    /// more than chance, as the table a performance PR carries.
+    /// each side's runs, their ratio, and whether the runs separate, as
+    /// the table a performance PR carries.
     /// Refuses reports whose suite contracts differ.
     Compare(CompareArgs),
 }
@@ -215,7 +215,8 @@ struct ReplayArgs {
 #[derive(clap::Args, Debug)]
 struct CompareArgs {
     /// The baseline runs: one or more `suite --format json` reports.
-    /// A verdict needs several runs a side; see docs/benchmarking.md.
+    /// A verdict needs four runs a side, interleaved with the
+    /// candidate's; see docs/benchmarking.md.
     #[arg(long, num_args = 1.., required = true)]
     before: Vec<PathBuf>,
     /// The candidate runs, from the same ruler.
@@ -1215,7 +1216,7 @@ async fn run_replay(args: ReplayArgs) -> Result<()> {
 
 /// A suite report as read back from `--format json`: the same shape
 /// `SuiteReport` writes, owned, so two runs can be set side by side.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, PartialEq, serde::Deserialize)]
 struct ReadReport {
     suite_contract: u32,
     implementation: String,
@@ -1223,7 +1224,7 @@ struct ReadReport {
     cases: Vec<ReadCase>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, PartialEq, serde::Deserialize)]
 struct ReadCase {
     case: String,
     axis: String,
@@ -1231,7 +1232,7 @@ struct ReadCase {
     metrics: Vec<ReadMetric>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, PartialEq, serde::Deserialize)]
 struct ReadMetric {
     name: String,
     unit: String,
@@ -1273,6 +1274,14 @@ fn render_compare(before: &[ReadReport], after: &[ReadReport]) -> Result<String>
                 "the reports ran different ladders: {} and {}",
                 first.ladder,
                 report.ladder
+            ));
+        }
+    }
+    let all: Vec<&ReadReport> = before.iter().chain(after).collect();
+    for (i, report) in all.iter().enumerate() {
+        if all[i + 1..].contains(report) {
+            return Err(anyhow!(
+                "the same run is given twice: one run counted twice is not two runs"
             ));
         }
     }
@@ -1412,16 +1421,16 @@ fn side_readings(
     Ok(out)
 }
 
-/// Whether the candidate's runs differ from the baseline's by more than
-/// chance. A change is called only when every run on one side lies
-/// beyond every run on the other and that complete separation has a
-/// probability of at most 5% when nothing changed - `2 / C(m + n, m)`,
-/// the exact Mann-Whitney tail at its extreme, so four runs a side is
-/// the least that can show one. The words are direction-neutral because
-/// some metrics are throughputs.
+/// Whether one side's runs lie wholly beyond the other's. At least four
+/// runs a side are required: fewer says too little about how much runs
+/// vary, however many the other side has. With four or more a side,
+/// complete separation has a probability of at most `2 / C(8, 4)`, under
+/// 3%, if nothing changed and the runs were taken in interleaved order -
+/// the exact Mann-Whitney tail at its extreme. The rule is per row and
+/// not adjusted for how many rows a suite has. The words are
+/// direction-neutral because some metrics are throughputs.
 fn verdict(before: &[f64], after: &[f64]) -> &'static str {
-    let (m, n) = (before.len(), after.len());
-    if m == 0 || n == 0 || 2.0 / binomial(m + n, m) > 0.05 {
+    if before.len() < 4 || after.len() < 4 {
         return "too few runs";
     }
     let low = |xs: &[f64]| xs.iter().copied().fold(f64::INFINITY, f64::min);
@@ -1433,10 +1442,6 @@ fn verdict(before: &[f64], after: &[f64]) -> &'static str {
     } else {
         "within noise"
     }
-}
-
-fn binomial(n: usize, k: usize) -> f64 {
-    (1..=k).fold(1.0, |acc, i| acc * (n + 1 - i) as f64 / i as f64)
 }
 
 fn run_compare(args: &CompareArgs) -> Result<()> {
@@ -3560,25 +3565,30 @@ mod smoke {
             )
             .is_err()
         );
+        // One run named four times is one run.
+        let err = render_compare(&[run(10.0), run(10.0), run(10.0), run(10.0)], &slower)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("the same run is given twice"), "{err}");
     }
 
-    /// The separation test itself: complete separation that chance alone
-    /// would rarely produce, and nothing less.
+    /// The separation test itself: four runs a side, and complete
+    /// separation, nothing less.
     #[test]
     fn the_verdict_calls_a_change_only_when_chance_cannot_explain_it() {
         let before = [10.0, 11.0, 10.5, 10.2];
         assert_eq!(verdict(&before, &[8.0, 8.4, 8.1, 8.9]), "lower");
         assert_eq!(verdict(&before, &[12.0, 11.5, 13.0, 12.2]), "higher");
         assert_eq!(verdict(&before, &[9.0, 10.3, 8.8, 9.1]), "within noise");
-        // Complete separation of three against three happens one time in
-        // ten by chance alone.
+        // Four runs a side, whatever the other side has: many candidate
+        // runs say nothing about how much the baseline varies.
         assert_eq!(
             verdict(&[10.0, 11.0, 10.5], &[1.0, 1.1, 1.2]),
             "too few runs"
         );
         assert_eq!(
-            verdict(&[10.0, 11.0, 10.5], &[1.0, 1.1, 1.2, 1.3, 1.4]),
-            "lower"
+            verdict(&[10.0, 11.0, 10.5], &[1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6]),
+            "too few runs"
         );
         assert_eq!(verdict(&[], &[1.0]), "too few runs");
         // Equal readings on both sides are not a separation.
