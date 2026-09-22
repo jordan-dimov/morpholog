@@ -236,8 +236,12 @@ fn push_transition_fields(
     Ok(())
 }
 
+/// Floors to the microsecond, as the leaf always has. A row read from
+/// the database is whole microseconds already, but a pack is hashed as
+/// written, and truncating toward zero would move the leaf of an
+/// instant just before 1970.
 fn committed_at_micros(ts: Timestamp) -> i64 {
-    ts.as_microsecond()
+    ts.as_second() * 1_000_000 + i64::from(ts.subsec_nanosecond()).div_euclid(1_000)
 }
 
 /// The leaf hash of one audit row.
