@@ -336,8 +336,9 @@ pub async fn audit_cursor_for(
 /// whose row will sort below rows already emitted; a cursor that
 /// advanced past that slot would skip the row forever. The horizon
 /// closes the race from the other side: it is the minimum
-/// `xact_start` over every open transaction in this database (or
-/// `now()` when none is open), computed BEFORE the read snapshot.
+/// `xact_start` over every other open transaction in this database
+/// except autovacuum's (see below), or `now()` when there is none,
+/// computed BEFORE the read snapshot.
 /// Any row invisible to the snapshot belongs to a writer that either
 /// was in flight here (so its `committed_at` = its `xact_start` >=
 /// the minimum, excluded by the `< horizon` clamp) or started later

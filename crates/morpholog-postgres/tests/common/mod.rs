@@ -298,48 +298,61 @@ pub async fn make_checkpoint(pool: &PgPool) -> morpholog_postgres::Checkpoint {
     make_checkpoint_at(pool, rows).await
 }
 
-/// A checkpoint covering exactly `tree_size` rows, retried through the
-/// straggler drain. A checkpoint is bounded by the resume watermark, so
-/// a transaction still winding down elsewhere - a previous test's pool
-/// closing under a slow instrumented build - can leave the newest rows
-/// withheld, correctly, and a test asserting the size then fails for a
-/// reason that is not its own. Twice in one week under llvm-cov.
+/// A checkpoint covering exactly `tree_size` rows. A checkpoint is
+/// bounded by the resume watermark, so a transaction still winding down
+/// elsewhere - a previous test's pool closing under a slow instrumented
+/// build - can leave the newest rows withheld, correctly, and a test
+/// asserting the size then fails for a reason that is not its own. So
+/// other transactions are drained before every attempt. A short
+/// checkpoint that was created is final: it is persisted, and a retry
+/// would only chain onto it, so that case fails at once, naming who held
+/// the watermark back. Only an attempt that created nothing is retried.
 pub async fn make_checkpoint_at(pool: &PgPool, tree_size: i64) -> morpholog_postgres::Checkpoint {
     use morpholog_postgres::CheckpointOutcome::{Created, NoNewRows};
     for attempt in 0..3 {
-        // Drained before every attempt: a checkpoint over too few rows is
-        // still created, and every later one would chain onto it.
         drain_open_transactions(pool).await;
         match morpholog_postgres::create_checkpoint(pool, None, None)
             .await
             .unwrap()
         {
             Created(c) | NoNewRows(c) if c.tree_size == tree_size => return c,
-            other => {
-                if attempt == 2 {
-                    panic!("expected a checkpoint at tree size {tree_size}, got {other:?}")
-                }
-                // Name the straggler while it is still there: the next
-                // occurrence of the withheld-row flake should say who.
-                let census: Vec<(i32, String, String)> = sqlx::query_as(
-                    "SELECT pid, coalesce(state, '?'), left(coalesce(query, ''), 120)
-                     FROM pg_stat_activity
-                     WHERE datname = current_database()
-                       AND pid != pg_backend_pid()
-                       AND xact_start IS NOT NULL
-                       AND backend_type IS DISTINCT FROM 'autovacuum worker'",
-                )
-                .fetch_all(pool)
-                .await
-                .expect("census open transactions");
+            Created(c) => panic!(
+                "a checkpoint at tree size {} was persisted where {tree_size} was wanted; \
+                 a retry would chain onto it. Open transactions lowering the watermark: {:?}",
+                c.tree_size,
+                open_transaction_census(pool).await
+            ),
+            NoNewRows(c) => {
+                let census = open_transaction_census(pool).await;
+                assert!(
+                    attempt < 2,
+                    "expected a checkpoint at tree size {tree_size}, still at {}; \
+                     open transactions: {census:?}",
+                    c.tree_size
+                );
                 eprintln!(
-                    "checkpoint covered fewer rows than committed (wanted {tree_size}, got \
-                     {other:?}); open transactions lowering the watermark: {census:?}"
+                    "no checkpoint beyond tree size {} (wanted {tree_size}); retrying. \
+                     Open transactions lowering the watermark: {census:?}",
+                    c.tree_size
                 );
             }
         }
     }
     unreachable!("the loop returns or panics")
+}
+
+async fn open_transaction_census(pool: &PgPool) -> Vec<(i32, String, String)> {
+    sqlx::query_as(
+        "SELECT pid, coalesce(state, '?'), left(coalesce(query, ''), 120)
+         FROM pg_stat_activity
+         WHERE datname = current_database()
+           AND pid != pg_backend_pid()
+           AND xact_start IS NOT NULL
+           AND backend_type IS DISTINCT FROM 'autovacuum worker'",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("census open transactions")
 }
 
 /// Round-trip a serialisable value through a JSON edit - the tamper
