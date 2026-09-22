@@ -425,7 +425,7 @@ async fn a_boundary_before_all_history_is_an_error_not_an_empty_slice() {
     reset_db(&pool).await;
     common::commit_entry(&pool, "e0").await;
 
-    let dawn = chrono::DateTime::from_timestamp(0, 0).unwrap();
+    let dawn = jiff::Timestamp::UNIX_EPOCH;
     let err = score_candidate(
         &pool,
         &no_entries(),

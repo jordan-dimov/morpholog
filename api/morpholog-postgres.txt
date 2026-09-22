@@ -37,7 +37,7 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::testing::AlwaysNonRetryab
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::testing::AlwaysNonRetryable
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::testing::AlwaysNonRetryable
 pub struct morpholog_postgres::testing::AlwaysTransient
-pub morpholog_postgres::testing::AlwaysTransient::next_attempt_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub morpholog_postgres::testing::AlwaysTransient::next_attempt_at: jiff::timestamp::Timestamp
 impl core::clone::Clone for morpholog_postgres::testing::AlwaysTransient
 pub fn morpholog_postgres::testing::AlwaysTransient::clone(&self) -> morpholog_postgres::testing::AlwaysTransient
 impl core::fmt::Debug for morpholog_postgres::testing::AlwaysTransient
@@ -55,12 +55,31 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::testing::Alway
 pub const morpholog_postgres::testing::RESET_SQL: &str
 pub mod morpholog_postgres::wire_time
 pub mod morpholog_postgres::wire_time::option
-pub fn morpholog_postgres::wire_time::option::deserialize<'de, D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>, <D as serde_core::de::Deserializer>::Error>
-pub fn morpholog_postgres::wire_time::option::serialize<S: serde_core::ser::Serializer>(&core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
-pub fn morpholog_postgres::wire_time::deserialize<'de, D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<chrono::datetime::DateTime<chrono::offset::utc::Utc>, <D as serde_core::de::Deserializer>::Error>
-pub fn morpholog_postgres::wire_time::parse(&str) -> chrono::format::ParseResult<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
-pub fn morpholog_postgres::wire_time::render(&chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> alloc::string::String
-pub fn morpholog_postgres::wire_time::serialize<S: serde_core::ser::Serializer>(&chrono::datetime::DateTime<chrono::offset::utc::Utc>, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
+pub fn morpholog_postgres::wire_time::option::deserialize<'de, D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<core::option::Option<jiff::timestamp::Timestamp>, <D as serde_core::de::Deserializer>::Error>
+pub fn morpholog_postgres::wire_time::option::serialize<S: serde_core::ser::Serializer>(&core::option::Option<jiff::timestamp::Timestamp>, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
+pub struct morpholog_postgres::wire_time::ParseError(_)
+impl core::clone::Clone for morpholog_postgres::wire_time::ParseError
+pub fn morpholog_postgres::wire_time::ParseError::clone(&self) -> morpholog_postgres::wire_time::ParseError
+impl core::cmp::Eq for morpholog_postgres::wire_time::ParseError
+impl core::cmp::PartialEq for morpholog_postgres::wire_time::ParseError
+pub fn morpholog_postgres::wire_time::ParseError::eq(&self, &morpholog_postgres::wire_time::ParseError) -> bool
+impl core::error::Error for morpholog_postgres::wire_time::ParseError
+impl core::fmt::Debug for morpholog_postgres::wire_time::ParseError
+pub fn morpholog_postgres::wire_time::ParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for morpholog_postgres::wire_time::ParseError
+pub fn morpholog_postgres::wire_time::ParseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::wire_time::ParseError
+impl core::marker::Freeze for morpholog_postgres::wire_time::ParseError
+impl core::marker::Send for morpholog_postgres::wire_time::ParseError
+impl core::marker::Sync for morpholog_postgres::wire_time::ParseError
+impl core::marker::Unpin for morpholog_postgres::wire_time::ParseError
+impl core::marker::UnsafeUnpin for morpholog_postgres::wire_time::ParseError
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::wire_time::ParseError
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::wire_time::ParseError
+pub fn morpholog_postgres::wire_time::deserialize<'de, D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<jiff::timestamp::Timestamp, <D as serde_core::de::Deserializer>::Error>
+pub fn morpholog_postgres::wire_time::parse(&str) -> core::result::Result<jiff::timestamp::Timestamp, morpholog_postgres::wire_time::ParseError>
+pub fn morpholog_postgres::wire_time::render(&jiff::timestamp::Timestamp) -> alloc::string::String
+pub fn morpholog_postgres::wire_time::serialize<S: serde_core::ser::Serializer>(&jiff::timestamp::Timestamp, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 pub enum morpholog_postgres::ActorAttestation
 pub morpholog_postgres::ActorAttestation::Gateway
 pub morpholog_postgres::ActorAttestation::Gateway::actor: morpholog_core::ir::Subject
@@ -156,7 +175,7 @@ pub morpholog_postgres::DeliveryOutcome::Delivered
 pub morpholog_postgres::DeliveryOutcome::NonRetryable
 pub morpholog_postgres::DeliveryOutcome::NonRetryable::reason: alloc::string::String
 pub morpholog_postgres::DeliveryOutcome::Transient
-pub morpholog_postgres::DeliveryOutcome::Transient::next_attempt_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub morpholog_postgres::DeliveryOutcome::Transient::next_attempt_at: jiff::timestamp::Timestamp
 impl core::clone::Clone for morpholog_postgres::DeliveryOutcome
 pub fn morpholog_postgres::DeliveryOutcome::clone(&self) -> morpholog_postgres::DeliveryOutcome
 impl core::cmp::Eq for morpholog_postgres::DeliveryOutcome
@@ -340,7 +359,7 @@ pub morpholog_postgres::PgError::Encoding(serde_json::error::Error)
 pub morpholog_postgres::PgError::InvalidState(alloc::string::String)
 pub morpholog_postgres::PgError::Kernel(morpholog_core::eval::EvalError)
 pub morpholog_postgres::PgError::NoCheckpoint
-pub morpholog_postgres::PgError::NoTransitionAtOrBefore(chrono::datetime::DateTime<chrono::offset::utc::Utc>)
+pub morpholog_postgres::PgError::NoTransitionAtOrBefore(jiff::timestamp::Timestamp)
 pub morpholog_postgres::PgError::RejectionLogFailure(alloc::boxed::Box<morpholog_postgres::PgError>)
 pub morpholog_postgres::PgError::SchemaBehind
 pub morpholog_postgres::PgError::SchemaBehind::detail: alloc::string::String
@@ -352,7 +371,7 @@ pub morpholog_postgres::PgError::SigningKeyUnauthorised::purpose: alloc::string:
 pub morpholog_postgres::PgError::SigningKeyUnauthorised::tree_size: i64
 pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix
 pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix::committed_beyond_horizon: i64
-pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix::horizon: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix::horizon: jiff::timestamp::Timestamp
 pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix::key_id: alloc::string::String
 pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix::public_key: alloc::string::String
 pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix::purpose: alloc::string::String
@@ -450,7 +469,7 @@ pub morpholog_postgres::ProcessOutcome::LeaseLost::intent_id: uuid::Uuid
 pub morpholog_postgres::ProcessOutcome::NoRowAvailable
 pub morpholog_postgres::ProcessOutcome::TransientRetry
 pub morpholog_postgres::ProcessOutcome::TransientRetry::intent_id: uuid::Uuid
-pub morpholog_postgres::ProcessOutcome::TransientRetry::next_attempt_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub morpholog_postgres::ProcessOutcome::TransientRetry::next_attempt_at: jiff::timestamp::Timestamp
 impl core::clone::Clone for morpholog_postgres::ProcessOutcome
 pub fn morpholog_postgres::ProcessOutcome::clone(&self) -> morpholog_postgres::ProcessOutcome
 impl core::cmp::Eq for morpholog_postgres::ProcessOutcome
@@ -542,7 +561,7 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::SigningError
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::SigningError
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::SigningError
 pub enum morpholog_postgres::SplitBoundary
-pub morpholog_postgres::SplitBoundary::AtOrBefore(chrono::datetime::DateTime<chrono::offset::utc::Utc>)
+pub morpholog_postgres::SplitBoundary::AtOrBefore(jiff::timestamp::Timestamp)
 pub morpholog_postgres::SplitBoundary::Transition(uuid::Uuid)
 impl core::clone::Clone for morpholog_postgres::SplitBoundary
 pub fn morpholog_postgres::SplitBoundary::clone(&self) -> morpholog_postgres::SplitBoundary
@@ -803,7 +822,7 @@ pub morpholog_postgres::AuditRow::actor: morpholog_core::ir::Subject
 pub morpholog_postgres::AuditRow::arguments: alloc::vec::Vec<morpholog_core::state::EvalValue>
 pub morpholog_postgres::AuditRow::asserted_claims: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
 pub morpholog_postgres::AuditRow::attestation: core::option::Option<morpholog_postgres::AuditAttestation>
-pub morpholog_postgres::AuditRow::committed_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub morpholog_postgres::AuditRow::committed_at: jiff::timestamp::Timestamp
 pub morpholog_postgres::AuditRow::emitted_intents: alloc::vec::Vec<morpholog_core::state::IntentInstance>
 pub morpholog_postgres::AuditRow::invariant_epoch: i32
 pub morpholog_postgres::AuditRow::invariants_checked: alloc::vec::Vec<morpholog_postgres::AuditedInvariantCheck>
@@ -1109,17 +1128,17 @@ pub struct morpholog_postgres::OutboxRow
 pub morpholog_postgres::OutboxRow::arguments: alloc::vec::Vec<morpholog_core::state::EvalValue>
 pub morpholog_postgres::OutboxRow::attempt_count: i32
 pub morpholog_postgres::OutboxRow::compensation_transition_id: core::option::Option<uuid::Uuid>
-pub morpholog_postgres::OutboxRow::delivered_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
-pub morpholog_postgres::OutboxRow::enqueued_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
-pub morpholog_postgres::OutboxRow::failed_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+pub morpholog_postgres::OutboxRow::delivered_at: core::option::Option<jiff::timestamp::Timestamp>
+pub morpholog_postgres::OutboxRow::enqueued_at: jiff::timestamp::Timestamp
+pub morpholog_postgres::OutboxRow::failed_at: core::option::Option<jiff::timestamp::Timestamp>
 pub morpholog_postgres::OutboxRow::failure_reason: core::option::Option<alloc::string::String>
 pub morpholog_postgres::OutboxRow::idempotency_key: alloc::string::String
 pub morpholog_postgres::OutboxRow::intent_id: uuid::Uuid
 pub morpholog_postgres::OutboxRow::intent_type: alloc::string::String
-pub morpholog_postgres::OutboxRow::last_attempt_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
-pub morpholog_postgres::OutboxRow::lock_expires_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+pub morpholog_postgres::OutboxRow::last_attempt_at: core::option::Option<jiff::timestamp::Timestamp>
+pub morpholog_postgres::OutboxRow::lock_expires_at: core::option::Option<jiff::timestamp::Timestamp>
 pub morpholog_postgres::OutboxRow::locked_by: core::option::Option<alloc::string::String>
-pub morpholog_postgres::OutboxRow::next_attempt_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+pub morpholog_postgres::OutboxRow::next_attempt_at: core::option::Option<jiff::timestamp::Timestamp>
 pub morpholog_postgres::OutboxRow::status: morpholog_postgres::OutboxStatus
 pub morpholog_postgres::OutboxRow::transition_id: uuid::Uuid
 impl core::clone::Clone for morpholog_postgres::OutboxRow
@@ -1279,7 +1298,7 @@ pub morpholog_postgres::RefreshSummary::model_hash: alloc::string::String
 pub morpholog_postgres::RefreshSummary::read: core::time::Duration
 pub morpholog_postgres::RefreshSummary::refresh_id: uuid::Uuid
 pub morpholog_postgres::RefreshSummary::source_claim_count: usize
-pub morpholog_postgres::RefreshSummary::source_snapshot_committed_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+pub morpholog_postgres::RefreshSummary::source_snapshot_committed_at: core::option::Option<jiff::timestamp::Timestamp>
 pub morpholog_postgres::RefreshSummary::source_snapshot_transition_id: core::option::Option<uuid::Uuid>
 pub morpholog_postgres::RefreshSummary::write: core::time::Duration
 impl core::clone::Clone for morpholog_postgres::RefreshSummary
@@ -1303,7 +1322,7 @@ pub morpholog_postgres::RejectionRow::arguments: alloc::vec::Vec<morpholog_core:
 pub morpholog_postgres::RejectionRow::invariant_version: core::option::Option<i64>
 pub morpholog_postgres::RejectionRow::kind: alloc::string::String
 pub morpholog_postgres::RejectionRow::reason: alloc::string::String
-pub morpholog_postgres::RejectionRow::rejected_at: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub morpholog_postgres::RejectionRow::rejected_at: jiff::timestamp::Timestamp
 pub morpholog_postgres::RejectionRow::rejection_id: uuid::Uuid
 pub morpholog_postgres::RejectionRow::rule: alloc::string::String
 pub morpholog_postgres::RejectionRow::transformation_name: morpholog_core::ir::TransformationName
@@ -1588,7 +1607,7 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::Witness
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::Witness
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::Witness
 pub struct morpholog_postgres::WitnessVerdict
-pub morpholog_postgres::WitnessVerdict::attested_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+pub morpholog_postgres::WitnessVerdict::attested_at: core::option::Option<jiff::timestamp::Timestamp>
 pub morpholog_postgres::WitnessVerdict::detail: core::option::Option<alloc::string::String>
 pub morpholog_postgres::WitnessVerdict::scheme: morpholog_postgres::WitnessScheme
 pub morpholog_postgres::WitnessVerdict::status: morpholog_postgres::WitnessStanding
@@ -1612,7 +1631,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::WitnessVerd
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::WitnessVerdict
 pub struct morpholog_postgres::WitnessesReport
 pub morpholog_postgres::WitnessesReport::checkpoints: alloc::vec::Vec<morpholog_postgres::CheckpointWitnesses>
-pub morpholog_postgres::WitnessesReport::earliest_attested_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+pub morpholog_postgres::WitnessesReport::earliest_attested_at: core::option::Option<jiff::timestamp::Timestamp>
 impl morpholog_postgres::WitnessesReport
 pub fn morpholog_postgres::WitnessesReport::any_invalid(&self) -> bool
 impl core::clone::Clone for morpholog_postgres::WitnessesReport
@@ -1646,14 +1665,14 @@ impl morpholog_postgres::Deliverer for morpholog_postgres::testing::AlwaysTransi
 pub async fn morpholog_postgres::testing::AlwaysTransient::deliver(&self, &morpholog_postgres::OutboxRow) -> morpholog_postgres::DeliveryOutcome
 pub async fn morpholog_postgres::apply_migrations(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::attach_witness(&sqlx_postgres::PgPool, i64, &morpholog_postgres::Digest, morpholog_postgres::Witness) -> core::result::Result<morpholog_postgres::Checkpoint, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::audit_cursor_for(&mut sqlx_postgres::connection::PgConnection, uuid::Uuid) -> core::result::Result<(chrono::datetime::DateTime<chrono::offset::utc::Utc>, uuid::Uuid), morpholog_postgres::PgError>
-pub async fn morpholog_postgres::audit_resume_watermark(&sqlx_postgres::PgPool, core::option::Option<&[alloc::string::String]>) -> core::result::Result<chrono::datetime::DateTime<chrono::offset::utc::Utc>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::audit_cursor_for(&mut sqlx_postgres::connection::PgConnection, uuid::Uuid) -> core::result::Result<(jiff::timestamp::Timestamp, uuid::Uuid), morpholog_postgres::PgError>
+pub async fn morpholog_postgres::audit_resume_watermark(&sqlx_postgres::PgPool, core::option::Option<&[alloc::string::String]>) -> core::result::Result<jiff::timestamp::Timestamp, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::begin_audit_tail<'p>(&'p sqlx_postgres::PgPool, core::option::Option<uuid::Uuid>, core::option::Option<&[alloc::string::String]>) -> core::result::Result<morpholog_postgres::AuditTail<'p>, morpholog_postgres::PgError>
 pub fn morpholog_postgres::compute_idempotency_key(uuid::Uuid, &morpholog_core::state::IntentInstance) -> core::result::Result<alloc::string::String, serde_json::error::Error>
 pub async fn morpholog_postgres::coverage_replay(&sqlx_postgres::PgPool, &morpholog_core::ir::Program) -> core::result::Result<morpholog_core::coverage::CoverageReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::create_checkpoint(&sqlx_postgres::PgPool, core::option::Option<&morpholog_postgres::CheckpointSigner>, core::option::Option<&[alloc::string::String]>) -> core::result::Result<morpholog_postgres::CheckpointOutcome, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::drop_schema(&sqlx_postgres::PgPool) -> core::result::Result<bool, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::earliest_pending_retry(&sqlx_postgres::PgPool, &str) -> core::result::Result<core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::earliest_pending_retry(&sqlx_postgres::PgPool, &str) -> core::result::Result<core::option::Option<jiff::timestamp::Timestamp>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::export_pack(&sqlx_postgres::PgPool, core::option::Option<i64>) -> core::result::Result<morpholog_postgres::EvidencePack, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::export_selective(&sqlx_postgres::PgPool, core::option::Option<i64>, &[uuid::Uuid]) -> core::result::Result<morpholog_postgres::SelectiveEvidencePack, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::export_window(&sqlx_postgres::PgPool, morpholog_postgres::WindowStart, core::option::Option<i64>) -> core::result::Result<morpholog_postgres::WindowEvidencePack, morpholog_postgres::PgError>
@@ -1661,7 +1680,7 @@ pub fn morpholog_postgres::generate_signing_key() -> ed25519_dalek::signing::Sig
 pub fn morpholog_postgres::head_version() -> i32
 pub async fn morpholog_postgres::initialise_schema(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::InitOutcome, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_audit_rows(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::list_audit_rows_page(&mut sqlx_postgres::connection::PgConnection, core::option::Option<(chrono::datetime::DateTime<chrono::offset::utc::Utc>, uuid::Uuid)>, core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>, i64) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::list_audit_rows_page(&mut sqlx_postgres::connection::PgConnection, core::option::Option<(jiff::timestamp::Timestamp, uuid::Uuid)>, core::option::Option<jiff::timestamp::Timestamp>, i64) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_claims(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_core::state::ClaimInstance>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_claims_at(&sqlx_postgres::PgPool, uuid::Uuid) -> core::result::Result<alloc::vec::Vec<morpholog_core::state::ClaimInstance>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_claims_at_for_predicates(&sqlx_postgres::PgPool, uuid::Uuid, &[alloc::string::String]) -> core::result::Result<alloc::vec::Vec<morpholog_core::state::ClaimInstance>, morpholog_postgres::PgError>
@@ -1678,7 +1697,7 @@ pub async fn morpholog_postgres::migration_status(&sqlx_postgres::PgPool) -> cor
 pub fn morpholog_postgres::parse_public_key(&str) -> core::result::Result<ed25519_dalek::verifying::VerifyingKey, morpholog_postgres::SigningError>
 pub fn morpholog_postgres::parse_signature(&str) -> core::result::Result<ed25519::Signature, morpholog_postgres::SigningError>
 pub async fn morpholog_postgres::plan_indexes(&sqlx_postgres::PgPool, &morpholog_postgres::PgProgram) -> core::result::Result<morpholog_postgres::ProvisionReport, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::process_one_outbox_row<D>(&sqlx_postgres::PgPool, &str, &str, core::time::Duration, &D, core::option::Option<&morpholog_postgres::CompensationSpec>, chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> core::result::Result<morpholog_postgres::ProcessOutcome, morpholog_postgres::PgError> where D: morpholog_postgres::Deliverer
+pub async fn morpholog_postgres::process_one_outbox_row<D>(&sqlx_postgres::PgPool, &str, &str, core::time::Duration, &D, core::option::Option<&morpholog_postgres::CompensationSpec>, jiff::timestamp::Timestamp) -> core::result::Result<morpholog_postgres::ProcessOutcome, morpholog_postgres::PgError> where D: morpholog_postgres::Deliverer
 pub async fn morpholog_postgres::propose_against_pg(&sqlx_postgres::PgPool, &morpholog_postgres::PgProgram, &morpholog_postgres::Proposal) -> core::result::Result<morpholog_postgres::PgProposalOutcome, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::propose_against_pg_timed(&sqlx_postgres::PgPool, &morpholog_postgres::PgProgram, &morpholog_postgres::Proposal) -> core::result::Result<morpholog_postgres::TimedProposalOutcome, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::propose_against_pg_with_rejection_state(&sqlx_postgres::PgPool, &morpholog_postgres::PgProgram, &morpholog_postgres::Proposal) -> core::result::Result<morpholog_postgres::RejectionStateOutcome, morpholog_postgres::PgError>
@@ -1692,7 +1711,7 @@ pub async fn morpholog_postgres::refresh_derived(&sqlx_postgres::PgPool, morphol
 pub fn morpholog_postgres::render_public_key(&ed25519_dalek::verifying::VerifyingKey) -> alloc::string::String
 pub fn morpholog_postgres::render_signature(&ed25519::Signature) -> alloc::string::String
 pub fn morpholog_postgres::render_views(morpholog_core::validate::ValidatedProgram<'_>, &str, &str) -> core::result::Result<morpholog_postgres::RenderedViews, alloc::vec::Vec<morpholog_postgres::ViewRefusal>>
-pub async fn morpholog_postgres::resolve_transition_at_or_before<'e, E>(E, chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> core::result::Result<uuid::Uuid, morpholog_postgres::PgError> where E: sqlx_core::executor::Executor<'e, Database = sqlx_postgres::database::Postgres>
+pub async fn morpholog_postgres::resolve_transition_at_or_before<'e, E>(E, jiff::timestamp::Timestamp) -> core::result::Result<uuid::Uuid, morpholog_postgres::PgError> where E: sqlx_core::executor::Executor<'e, Database = sqlx_postgres::database::Postgres>
 pub async fn morpholog_postgres::score_candidate(&sqlx_postgres::PgPool, &morpholog_core::ir::Program, core::option::Option<morpholog_postgres::SplitBoundary>) -> core::result::Result<morpholog_core::score::CandidateScore, morpholog_postgres::PgError>
 pub fn morpholog_postgres::score_candidate_against_pack(&morpholog_core::ir::Program, &morpholog_postgres::EvidencePack, core::option::Option<&morpholog_postgres::Checkpoint>, core::option::Option<morpholog_postgres::SplitBoundary>) -> core::result::Result<morpholog_core::score::CandidateScore, morpholog_postgres::PgError>
 pub fn morpholog_postgres::score_candidate_against_packs(&morpholog_core::ir::Program, &[(alloc::string::String, morpholog_postgres::EvidencePack)]) -> core::result::Result<morpholog_core::score::BatchScore, morpholog_postgres::PgError>

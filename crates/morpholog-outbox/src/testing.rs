@@ -7,7 +7,7 @@
 
 #![allow(clippy::expect_used)]
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -29,12 +29,12 @@ pub struct MockClock {
 }
 
 struct MockClockState {
-    fixed_now: Mutex<DateTime<Utc>>,
+    fixed_now: Mutex<Timestamp>,
     sleeps: Mutex<Vec<Duration>>,
 }
 
 impl MockClock {
-    pub fn new(starting_now: DateTime<Utc>) -> Self {
+    pub fn new(starting_now: Timestamp) -> Self {
         Self {
             state: Arc::new(MockClockState {
                 fixed_now: Mutex::new(starting_now),
@@ -60,12 +60,12 @@ impl MockClock {
     /// against a moving clock.
     pub fn advance(&self, delta: Duration) {
         let mut now = self.state.fixed_now.lock().expect("MockClock now poisoned");
-        *now += chrono::Duration::from_std(delta).expect("delta overflow");
+        *now = now.checked_add(delta).expect("delta overflow");
     }
 }
 
 impl Clock for MockClock {
-    fn now(&self) -> DateTime<Utc> {
+    fn now(&self) -> Timestamp {
         *self.state.fixed_now.lock().expect("MockClock now poisoned")
     }
     fn sleep_for(&self, duration: Duration) -> impl Future<Output = ()> + Send {

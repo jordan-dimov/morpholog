@@ -13,7 +13,7 @@ use crate::checkpoints::{Checkpoint, TreeVerification};
 use crate::error::{PgError, classify};
 use crate::pack::{EvidencePack, verify_pack};
 use crate::txn::{TxIsolation, begin_isolated_tx};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use morpholog_core::{
     BatchScore, CandidateScore, CandidateScorer, CaseOutcome, CaseResult, EvalError, Program,
     SCORE_FORMAT_VERSION, SCORE_SEMANTICS, ScoreError, SplitBoundaryReport, State, effective_delta,
@@ -32,7 +32,7 @@ pub enum SplitBoundary {
     Transition(Uuid),
     /// Split after the last transition committed at or before this
     /// instant.
-    AtOrBefore(DateTime<Utc>),
+    AtOrBefore(Timestamp),
 }
 
 impl SplitBoundary {
@@ -48,11 +48,11 @@ impl SplitBoundary {
 /// A resolved boundary waiting to be marked: the cursor to compare
 /// rows against, and the report the scorer records at the mark.
 struct PendingSplit {
-    cursor: (DateTime<Utc>, Uuid),
+    cursor: (Timestamp, Uuid),
     report: SplitBoundaryReport,
 }
 
-fn pending_split(boundary: SplitBoundary, cursor: (DateTime<Utc>, Uuid)) -> PendingSplit {
+fn pending_split(boundary: SplitBoundary, cursor: (Timestamp, Uuid)) -> PendingSplit {
     PendingSplit {
         cursor,
         report: SplitBoundaryReport {

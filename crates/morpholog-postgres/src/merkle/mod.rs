@@ -19,7 +19,7 @@
 //! This module is pure and synchronous: leaf encoding + tree hashing,
 //! no I/O.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use sha2::{Digest as _, Sha256};
 
 use crate::audit::AuditRow;
@@ -236,8 +236,8 @@ fn push_transition_fields(
     Ok(())
 }
 
-fn committed_at_micros(ts: DateTime<Utc>) -> i64 {
-    ts.timestamp_micros()
+fn committed_at_micros(ts: Timestamp) -> i64 {
+    ts.as_microsecond()
 }
 
 /// The leaf hash of one audit row.

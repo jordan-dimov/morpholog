@@ -11,7 +11,8 @@
 
 use std::time::Duration;
 
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use jiff::{SignedDuration, Timestamp};
+use jiff_sqlx::ToSqlx;
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     OutboxUpdate, PgError, PgPool, PgProposalOutcome, claim_pending_outbox_row,
@@ -64,10 +65,10 @@ async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
 
 /// Directly set the next_attempt_at on a pending row (used to
 /// simulate a row whose backoff has not yet elapsed).
-async fn set_next_attempt_at(pool: &PgPool, intent_id: Uuid, when: DateTime<Utc>) {
+async fn set_next_attempt_at(pool: &PgPool, intent_id: Uuid, when: Timestamp) {
     sqlx::query("UPDATE morpholog.outbox SET next_attempt_at=$2 WHERE intent_id=$1")
         .bind(intent_id)
-        .bind(when)
+        .bind(when.to_sqlx())
         .execute(pool)
         .await
         .unwrap();
@@ -111,7 +112,7 @@ async fn claim_returns_first_pending_row_and_sets_lease() {
     reset_db(&pool).await;
     let enqueued = enqueue_pending(&pool, "entry_001").await;
 
-    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Timestamp::now())
         .await
         .unwrap()
         .expect("must return Some when a pending row is available");
@@ -123,13 +124,13 @@ async fn claim_returns_first_pending_row_and_sets_lease() {
         .lock_expires_at
         .expect("lock_expires_at must be populated");
     assert!(
-        lease_until > Utc::now(),
+        lease_until > Timestamp::now(),
         "lease must be in the future, got {lease_until}"
     );
     assert!(
-        lease_until - Utc::now() <= ChronoDuration::seconds(31),
+        lease_until.duration_since(Timestamp::now()) <= SignedDuration::from_secs(31),
         "lease must be roughly the requested duration, got {} seconds",
-        (lease_until - Utc::now()).num_seconds()
+        lease_until.duration_since(Timestamp::now()).as_secs()
     );
 }
 
@@ -138,7 +139,7 @@ async fn claim_returns_none_when_no_pending_row_exists() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Timestamp::now())
         .await
         .unwrap();
     assert!(
@@ -160,7 +161,7 @@ async fn claim_respects_intent_type_filter() {
         "worker_wire",
         "WireTransferRequested",
         LEASE,
-        Utc::now(),
+        Timestamp::now(),
     )
     .await
     .unwrap();
@@ -180,7 +181,7 @@ async fn claim_returns_oldest_pending_row_first() {
     tokio::time::sleep(Duration::from_millis(15)).await;
     let _second = enqueue_pending(&pool, "entry_002").await;
 
-    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Timestamp::now())
         .await
         .unwrap()
         .expect("must return the oldest pending row");
@@ -197,9 +198,14 @@ async fn claim_skips_row_with_future_next_attempt_at() {
     let intent_id = enqueue_pending(&pool, "entry_001").await;
     // Simulate a row that was tried, failed transiently, and
     // scheduled to retry well in the future.
-    set_next_attempt_at(&pool, intent_id, Utc::now() + ChronoDuration::hours(1)).await;
+    set_next_attempt_at(
+        &pool,
+        intent_id,
+        Timestamp::now() + SignedDuration::from_hours(1),
+    )
+    .await;
 
-    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Timestamp::now())
         .await
         .unwrap();
     assert!(
@@ -215,7 +221,7 @@ async fn claim_reclaims_row_whose_lease_has_expired() {
     let intent_id = enqueue_pending(&pool, "entry_001").await;
     force_expired_lease(&pool, intent_id, "worker_crashed").await;
 
-    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
+    let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Timestamp::now())
         .await
         .unwrap()
         .expect("expired-lease row must be reclaimable");
@@ -228,7 +234,7 @@ async fn claim_reclaims_row_whose_lease_has_expired() {
     );
     let lease_until = claimed.lock_expires_at.unwrap();
     assert!(
-        lease_until > Utc::now(),
+        lease_until > Timestamp::now(),
         "reclaim must set a fresh future lease, not preserve the expired one"
     );
 }
@@ -238,10 +244,11 @@ async fn release_returns_row_to_pending_and_clears_lease() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     let intent_id = enqueue_pending(&pool, "entry_001").await;
-    let _claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
-        .await
-        .unwrap()
-        .expect("claim must succeed");
+    let _claimed =
+        claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Timestamp::now())
+            .await
+            .unwrap()
+            .expect("claim must succeed");
 
     let result = release_outbox_claim(&pool, intent_id, "worker_a")
         .await
@@ -253,10 +260,11 @@ async fn release_returns_row_to_pending_and_clears_lease() {
     assert!(locked_by.is_none(), "lease must be cleared");
 
     // And the row is once again claimable by a different worker.
-    let reclaimed = claim_pending_outbox_row(&pool, "worker_b", INTENT_TYPE, LEASE, Utc::now())
-        .await
-        .unwrap()
-        .expect("released row must be re-claimable");
+    let reclaimed =
+        claim_pending_outbox_row(&pool, "worker_b", INTENT_TYPE, LEASE, Timestamp::now())
+            .await
+            .unwrap()
+            .expect("released row must be re-claimable");
     assert_eq!(reclaimed.intent_id, intent_id);
     assert_eq!(reclaimed.locked_by, Some("worker_b".to_string()));
 }
@@ -271,9 +279,15 @@ async fn claim_rejects_sub_second_lease_duration() {
 
     // A zero-duration lease would expire before the worker could
     // ever call mark_*, leaving the row effectively un-updatable.
-    let zero = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, Duration::ZERO, Utc::now())
-        .await
-        .expect_err("zero-second lease must be rejected explicitly");
+    let zero = claim_pending_outbox_row(
+        &pool,
+        "worker_a",
+        INTENT_TYPE,
+        Duration::ZERO,
+        Timestamp::now(),
+    )
+    .await
+    .expect_err("zero-second lease must be rejected explicitly");
     assert!(matches!(zero, PgError::InvalidState(_)));
 
     // Sub-second durations get truncated by as_secs() to 0 and are
@@ -283,7 +297,7 @@ async fn claim_rejects_sub_second_lease_duration() {
         "worker_a",
         INTENT_TYPE,
         Duration::from_millis(500),
-        Utc::now(),
+        Timestamp::now(),
     )
     .await
     .expect_err("sub-second lease must be rejected explicitly");
@@ -295,10 +309,11 @@ async fn release_returns_lease_lost_when_worker_does_not_hold_lease() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     let intent_id = enqueue_pending(&pool, "entry_001").await;
-    let _claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Utc::now())
-        .await
-        .unwrap()
-        .expect("claim must succeed");
+    let _claimed =
+        claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, Timestamp::now())
+            .await
+            .unwrap()
+            .expect("claim must succeed");
 
     let result = release_outbox_claim(&pool, intent_id, "worker_b_imposter")
         .await
@@ -324,9 +339,9 @@ async fn claim_before_excludes_rows_scheduled_after_the_boundary() {
     let intent_id = enqueue_pending(&pool, "entry_001").await;
 
     // Schedule the row for "now plus a tiny window".
-    let scheduled = Utc::now() + ChronoDuration::milliseconds(50);
+    let scheduled = Timestamp::now() + SignedDuration::from_millis(50);
     sqlx::query("UPDATE morpholog.outbox SET next_attempt_at = $1 WHERE intent_id = $2")
-        .bind(scheduled)
+        .bind(scheduled.to_sqlx())
         .bind(intent_id)
         .execute(&pool)
         .await
@@ -336,7 +351,7 @@ async fn claim_before_excludes_rows_scheduled_after_the_boundary() {
     // row's next_attempt_at > claim_before, so the claim must
     // return None even though wall-clock has presumably moved
     // forward by the time the query runs.
-    let pass_start = scheduled - ChronoDuration::milliseconds(1);
+    let pass_start = scheduled - SignedDuration::from_millis(1);
     let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, pass_start)
         .await
         .unwrap();

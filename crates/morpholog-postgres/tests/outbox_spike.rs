@@ -355,7 +355,7 @@ async fn outbox_spike_marks_delivered_on_success() {
         "no rows should be pending after successful delivery"
     );
 
-    let (status, delivered_at): (String, Option<chrono::DateTime<chrono::Utc>>) =
+    let (status, delivered_at): (String, Option<jiff_sqlx::Timestamp>) =
         sqlx::query_as("SELECT status, delivered_at FROM morpholog.outbox LIMIT 1")
             .fetch_one(&pool)
             .await

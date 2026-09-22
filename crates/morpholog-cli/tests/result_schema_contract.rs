@@ -24,7 +24,6 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use chrono::TimeZone;
 use morpholog_core::ir_builder::{
     assert_, claim, implies, invariant, not, params, predicate, program, require, transformation,
     var,
@@ -544,7 +543,7 @@ fn rejection_rows_serialize_as_pinned() {
         invariant_version: Some(1),
         reason: "invariant `line_net_is_the_rounded_recompute` violated".to_string(),
         witness: Some(witness_sample()),
-        rejected_at: chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap(),
+        rejected_at: "2026-06-01T12:00:00Z".parse::<jiff::Timestamp>().unwrap(),
     };
     assert_golden("rejection_row.json", &to_value(&base));
     // A gate refusal, which has no witness and no version: the key is
@@ -637,7 +636,7 @@ fn outbox_row_serializes_as_pinned() {
         idempotency_key: "k1".to_string(),
         status: morpholog_postgres::OutboxStatus::Pending,
         attempt_count: 0,
-        enqueued_at: chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap(),
+        enqueued_at: "2026-06-01T12:00:00Z".parse::<jiff::Timestamp>().unwrap(),
         last_attempt_at: None,
         delivered_at: None,
         failed_at: None,
@@ -645,7 +644,7 @@ fn outbox_row_serializes_as_pinned() {
         next_attempt_at: None,
         compensation_transition_id: None,
         locked_by: Some("worker-1".to_string()),
-        lock_expires_at: Some(chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 30).unwrap()),
+        lock_expires_at: Some("2026-06-01T12:00:30Z".parse::<jiff::Timestamp>().unwrap()),
     };
     assert_golden("outbox_row.json", &to_value(&row));
     // The claim/update wrappers, built exactly as commands/outbox.rs
@@ -685,7 +684,7 @@ fn audit_rows_serialize_as_pinned() {
             name: "AccountOpened".into(),
             args: vec![EvalValue::Subject(Subject::from("acct_1"))],
         }],
-        committed_at: chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap(),
+        committed_at: "2026-06-01T12:00:00Z".parse::<jiff::Timestamp>().unwrap(),
         attestation: None,
         parameters: None,
     };
@@ -1020,9 +1019,7 @@ fn claim_arrays_serialize_as_pinned() {
 fn refresh_derived_reports_serialize_as_pinned() {
     use morpholog_cli::envelopes::RefreshDerivedReport;
 
-    let committed_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:00Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
+    let committed_at = "2026-06-01T12:00:00Z".parse::<jiff::Timestamp>().unwrap();
     assert_golden(
         "refresh_derived_report.json",
         &to_value(&RefreshDerivedReport {
@@ -1164,7 +1161,7 @@ fn sample_audit_row() -> AuditRow {
         asserted_claims: vec![kitchen_sink_claim()],
         retracted_claims: vec![],
         emitted_intents: vec![],
-        committed_at: chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap(),
+        committed_at: "2026-06-01T12:00:00Z".parse::<jiff::Timestamp>().unwrap(),
         attestation: None,
         parameters: None,
     }
@@ -1299,9 +1296,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
 
     // The witness axis: what each stored witness proves, on the live
     // report and on the pack report that carries it beside the verdict.
-    let attested = chrono::Utc
-        .with_ymd_and_hms(2026, 9, 16, 10, 20, 5)
-        .unwrap();
+    let attested = "2026-09-16T10:20:05Z".parse::<jiff::Timestamp>().unwrap();
     let witnesses_report = WitnessesReport {
         checkpoints: vec![CheckpointWitnesses {
             tree_size: 2,

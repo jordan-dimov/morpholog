@@ -24,6 +24,7 @@ use cryptographic_message_syntax::asn1::rfc5652::{
     OID_ID_SIGNED_DATA, SignedData as Asn1SignedData,
 };
 use cryptographic_message_syntax::{CmsError, SignedData, SignerInfo};
+use jiff::Timestamp;
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha384, Sha512};
 use x509_certificate::rfc5280::{AlgorithmIdentifier, Extension};
@@ -104,18 +105,18 @@ impl Anchors {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WitnessStatus {
     /// Genuine, over this head, and signed by an anchor or a chain to one.
-    Verified { attested_at: DateTime<Utc> },
+    Verified { attested_at: Timestamp },
     /// Genuine and over this head, but no certification path from the
     /// signer to a supplied anchor validates; `reason` says where it
     /// failed.
     Untrusted {
-        attested_at: DateTime<Utc>,
+        attested_at: Timestamp,
         signer: String,
         reason: String,
     },
     /// Genuine and over this head; no trust material was supplied, so
     /// nothing is said about the signer.
-    Unverified { attested_at: DateTime<Utc> },
+    Unverified { attested_at: Timestamp },
     /// A primitive this implementation lacks stands between the verifier
     /// and a judgement. Not a verdict on the proof.
     Unsupported { detail: String },
@@ -140,7 +141,7 @@ pub fn verify_rfc3161(proof: &[u8], payload: &[u8], anchors: Option<&Anchors>) -
         &examined.signer,
         &examined.carried,
         anchors,
-        examined.attested_at,
+        examined.validity_at,
     ) {
         Ok(()) => WitnessStatus::Verified {
             attested_at: examined.attested_at,
@@ -208,7 +209,7 @@ pub enum Refusal {
 /// What a self-checked response established.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Checked {
-    pub attested_at: DateTime<Utc>,
+    pub attested_at: Timestamp,
 }
 
 /// Self-check an authority's response before storing it: everything
@@ -232,7 +233,10 @@ pub fn check_response(
 }
 
 struct Examined {
-    attested_at: DateTime<Utc>,
+    attested_at: Timestamp,
+    /// The same instant in the certificate library's clock type, for
+    /// judging certificate validity.
+    validity_at: DateTime<Utc>,
     signer: CapturedX509Certificate,
     carried: Vec<CapturedX509Certificate>,
 }
@@ -310,7 +314,14 @@ fn examine(
             return Err(invalid("the response's nonce is not the request's"));
         }
     }
-    let attested_at: DateTime<Utc> = tst.gen_time.clone().into();
+    let validity_at: DateTime<Utc> = tst.gen_time.clone().into();
+    let attested_at = Timestamp::new(
+        validity_at.timestamp(),
+        i32::try_from(validity_at.timestamp_subsec_nanos()).unwrap_or(i32::MAX),
+    )
+    .map_err(|_| WitnessStatus::Unsupported {
+        detail: format!("the token's time `{validity_at}` is not a representable instant"),
+    })?;
 
     let sd = SignedData::try_from(&asn1_sd).map_err(classify_cms)?;
     // RFC 3161 section 2.4.2: the token carries the authority's signature
@@ -355,6 +366,7 @@ fn examine(
     }
     Ok(Examined {
         attested_at,
+        validity_at,
         signer,
         carried: sd.certificates().cloned().collect(),
     })

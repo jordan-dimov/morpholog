@@ -16,7 +16,6 @@
 //!   operational failure; each subcommand's doc comment states its
 //!   own mapping.
 
-use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -784,7 +783,7 @@ pub(crate) enum AsOf {
     /// State immediately after this committed transition.
     Transition(Uuid),
     /// State at the last transition committed at or before this instant.
-    AtOrBefore(DateTime<Utc>),
+    AtOrBefore(jiff::Timestamp),
 }
 
 impl std::str::FromStr for AsOf {
@@ -794,8 +793,8 @@ impl std::str::FromStr for AsOf {
         if let Ok(tid) = Uuid::parse_str(s) {
             return Ok(AsOf::Transition(tid));
         }
-        if let Ok(at) = DateTime::parse_from_rfc3339(s) {
-            return Ok(AsOf::AtOrBefore(at.with_timezone(&Utc)));
+        if let Ok(at) = morpholog_postgres::wire_time::parse(s) {
+            return Ok(AsOf::AtOrBefore(at));
         }
         Err(format!(
             "expected a transition_id (UUID) or an RFC 3339 timestamp \

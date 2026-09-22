@@ -15,7 +15,8 @@ use common::{commit_simple_entry, reset_db, test_pool};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{Duration as ChronoDuration, Utc};
+use jiff::{SignedDuration, Timestamp};
+use jiff_sqlx::ToSqlx;
 use morpholog_outbox::OutboxWorker;
 use morpholog_outbox::testing::{FixedJitter, MockClock};
 use morpholog_postgres::{Deliverer, DeliveryOutcome, OutboxRow, testing::AlwaysDelivers};
@@ -67,7 +68,7 @@ async fn worker_returns_immediately_when_shutdown_is_set_at_start() {
     let (shutdown_tx, shutdown_rx) = watch::channel(true);
     drop(shutdown_tx); // not modified after this
 
-    let clock = MockClock::new(Utc::now());
+    let clock = MockClock::new(Timestamp::now());
     let worker = OutboxWorker::new(
         pool,
         "worker_a",
@@ -90,7 +91,7 @@ async fn worker_drains_pending_rows_and_then_observes_shutdown() {
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let shutdown_tx = Arc::new(shutdown_tx);
-    let clock = MockClock::new(Utc::now());
+    let clock = MockClock::new(Timestamp::now());
     let worker = OutboxWorker::new(
         pool.clone(),
         "worker_a",
@@ -143,7 +144,7 @@ async fn worker_applies_jitter_factor_to_base_interval() {
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let shutdown_tx_for_task = shutdown_tx.clone();
-    let clock = MockClock::new(Utc::now());
+    let clock = MockClock::new(Timestamp::now());
 
     let worker = OutboxWorker::new(
         pool,
@@ -197,7 +198,7 @@ async fn two_workers_concurrent_do_not_double_claim_a_row() {
         "worker_a",
         INTENT_TYPE,
         AlwaysDelivers,
-        MockClock::new(Utc::now()),
+        MockClock::new(Timestamp::now()),
         FixedJitter::new(1.0),
     )
     .with_base_interval(Duration::from_millis(20));
@@ -206,7 +207,7 @@ async fn two_workers_concurrent_do_not_double_claim_a_row() {
         "worker_b",
         INTENT_TYPE,
         AlwaysDelivers,
-        MockClock::new(Utc::now()),
+        MockClock::new(Timestamp::now()),
         FixedJitter::new(1.0),
     )
     .with_base_interval(Duration::from_millis(20));
@@ -255,16 +256,16 @@ async fn worker_smart_sleeps_until_soonest_next_attempt_at_when_no_work_is_due()
     // sleep means the test cannot race past next_attempt_at even
     // on a slow CI box.
     commit_simple_entry(&pool, "entry_001", "p_worker").await;
-    let future_retry = Utc::now() + ChronoDuration::seconds(30);
+    let future_retry = Timestamp::now() + SignedDuration::from_secs(30);
     sqlx::query("UPDATE morpholog.outbox SET next_attempt_at=$1 WHERE intent_type=$2")
-        .bind(future_retry)
+        .bind(future_retry.to_sqlx())
         .bind(INTENT_TYPE)
         .execute(&pool)
         .await
         .unwrap();
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let clock = MockClock::new(Utc::now());
+    let clock = MockClock::new(Timestamp::now());
 
     let worker = OutboxWorker::new(
         pool,
@@ -315,7 +316,7 @@ async fn worker_uses_base_interval_when_no_pending_retries_exist() {
     // jitter_factor.
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let clock = MockClock::new(Utc::now());
+    let clock = MockClock::new(Timestamp::now());
 
     let worker = OutboxWorker::new(
         pool,
@@ -350,7 +351,7 @@ async fn worker_terminates_when_shutdown_channel_closes() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let clock = MockClock::new(Utc::now());
+    let clock = MockClock::new(Timestamp::now());
 
     let worker = OutboxWorker::new(
         pool,
@@ -398,7 +399,7 @@ async fn with_base_interval_panics_on_zero() {
         "worker_a",
         INTENT_TYPE,
         AlwaysDelivers,
-        MockClock::new(Utc::now()),
+        MockClock::new(Timestamp::now()),
         FixedJitter::new(1.0),
     )
     .with_base_interval(Duration::ZERO);
@@ -413,7 +414,7 @@ async fn with_jitter_panics_on_equal_bounds() {
         "worker_a",
         INTENT_TYPE,
         AlwaysDelivers,
-        MockClock::new(Utc::now()),
+        MockClock::new(Timestamp::now()),
         FixedJitter::new(1.0),
     )
     .with_jitter(0.5, 0.5);

@@ -9,7 +9,7 @@ impl core::fmt::Debug for morpholog_outbox::clock::RealClock
 pub fn morpholog_outbox::clock::RealClock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for morpholog_outbox::clock::RealClock
 impl morpholog_outbox::clock::Clock for morpholog_outbox::clock::RealClock
-pub fn morpholog_outbox::clock::RealClock::now(&self) -> chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub fn morpholog_outbox::clock::RealClock::now(&self) -> jiff::timestamp::Timestamp
 pub fn morpholog_outbox::clock::RealClock::sleep_for(&self, core::time::Duration) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 impl core::marker::Freeze for morpholog_outbox::clock::RealClock
 impl core::marker::Send for morpholog_outbox::clock::RealClock
@@ -19,13 +19,13 @@ impl core::marker::UnsafeUnpin for morpholog_outbox::clock::RealClock
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_outbox::clock::RealClock
 impl core::panic::unwind_safe::UnwindSafe for morpholog_outbox::clock::RealClock
 pub trait morpholog_outbox::clock::Clock: core::marker::Send + core::marker::Sync + 'static
-pub fn morpholog_outbox::clock::Clock::now(&self) -> chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub fn morpholog_outbox::clock::Clock::now(&self) -> jiff::timestamp::Timestamp
 pub fn morpholog_outbox::clock::Clock::sleep_for(&self, core::time::Duration) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 impl morpholog_outbox::clock::Clock for morpholog_outbox::clock::RealClock
-pub fn morpholog_outbox::clock::RealClock::now(&self) -> chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub fn morpholog_outbox::clock::RealClock::now(&self) -> jiff::timestamp::Timestamp
 pub fn morpholog_outbox::clock::RealClock::sleep_for(&self, core::time::Duration) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 impl morpholog_outbox::clock::Clock for morpholog_outbox::testing::MockClock
-pub fn morpholog_outbox::testing::MockClock::now(&self) -> chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub fn morpholog_outbox::testing::MockClock::now(&self) -> jiff::timestamp::Timestamp
 pub fn morpholog_outbox::testing::MockClock::sleep_for(&self, core::time::Duration) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub mod morpholog_outbox::jitter
 pub struct morpholog_outbox::jitter::RandJitter
@@ -73,12 +73,12 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_outbox::testing::FixedJi
 pub struct morpholog_outbox::testing::MockClock
 impl morpholog_outbox::testing::MockClock
 pub fn morpholog_outbox::testing::MockClock::advance(&self, core::time::Duration)
-pub fn morpholog_outbox::testing::MockClock::new(chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> Self
+pub fn morpholog_outbox::testing::MockClock::new(jiff::timestamp::Timestamp) -> Self
 pub fn morpholog_outbox::testing::MockClock::sleeps(&self) -> alloc::vec::Vec<core::time::Duration>
 impl core::clone::Clone for morpholog_outbox::testing::MockClock
 pub fn morpholog_outbox::testing::MockClock::clone(&self) -> morpholog_outbox::testing::MockClock
 impl morpholog_outbox::clock::Clock for morpholog_outbox::testing::MockClock
-pub fn morpholog_outbox::testing::MockClock::now(&self) -> chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub fn morpholog_outbox::testing::MockClock::now(&self) -> jiff::timestamp::Timestamp
 pub fn morpholog_outbox::testing::MockClock::sleep_for(&self, core::time::Duration) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 impl core::marker::Freeze for morpholog_outbox::testing::MockClock
 impl core::marker::Send for morpholog_outbox::testing::MockClock
@@ -128,7 +128,7 @@ impl core::fmt::Debug for morpholog_outbox::clock::RealClock
 pub fn morpholog_outbox::clock::RealClock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for morpholog_outbox::clock::RealClock
 impl morpholog_outbox::clock::Clock for morpholog_outbox::clock::RealClock
-pub fn morpholog_outbox::clock::RealClock::now(&self) -> chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub fn morpholog_outbox::clock::RealClock::now(&self) -> jiff::timestamp::Timestamp
 pub fn morpholog_outbox::clock::RealClock::sleep_for(&self, core::time::Duration) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 impl core::marker::Freeze for morpholog_outbox::clock::RealClock
 impl core::marker::Send for morpholog_outbox::clock::RealClock
@@ -155,13 +155,13 @@ impl core::marker::UnsafeUnpin for morpholog_outbox::StdoutDeliverer
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_outbox::StdoutDeliverer
 impl core::panic::unwind_safe::UnwindSafe for morpholog_outbox::StdoutDeliverer
 pub trait morpholog_outbox::Clock: core::marker::Send + core::marker::Sync + 'static
-pub fn morpholog_outbox::Clock::now(&self) -> chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub fn morpholog_outbox::Clock::now(&self) -> jiff::timestamp::Timestamp
 pub fn morpholog_outbox::Clock::sleep_for(&self, core::time::Duration) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 impl morpholog_outbox::clock::Clock for morpholog_outbox::clock::RealClock
-pub fn morpholog_outbox::clock::RealClock::now(&self) -> chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub fn morpholog_outbox::clock::RealClock::now(&self) -> jiff::timestamp::Timestamp
 pub fn morpholog_outbox::clock::RealClock::sleep_for(&self, core::time::Duration) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 impl morpholog_outbox::clock::Clock for morpholog_outbox::testing::MockClock
-pub fn morpholog_outbox::testing::MockClock::now(&self) -> chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub fn morpholog_outbox::testing::MockClock::now(&self) -> jiff::timestamp::Timestamp
 pub fn morpholog_outbox::testing::MockClock::sleep_for(&self, core::time::Duration) -> impl core::future::future::Future<Output = ()> + core::marker::Send
 pub trait morpholog_outbox::JitterRng: core::marker::Send + core::marker::Sync + 'static
 pub fn morpholog_outbox::JitterRng::jitter_factor(&self, f64, f64) -> f64

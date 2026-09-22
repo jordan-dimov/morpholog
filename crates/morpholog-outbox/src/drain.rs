@@ -1,4 +1,4 @@
-use chrono::Utc;
+use jiff::Timestamp;
 use morpholog_postgres::{
     CompensationSpec, Deliverer, PgError, PgPool, ProcessOutcome, process_one_outbox_row,
 };
@@ -14,7 +14,7 @@ use std::time::Duration;
 /// [`ProcessOutcome::NoRowAvailable`]. The NoRowAvailable result
 /// itself is NOT appended - it is a stop signal, not work.
 ///
-/// **Pass-boundary semantics**: the drain captures `Utc::now()`
+/// **Pass-boundary semantics**: the drain captures `Timestamp::now()`
 /// once at the top and uses it as the `claim_before` upper bound
 /// for every iteration. Rows scheduled to become due *during* the
 /// pass (e.g., a deliverer that returns
@@ -54,7 +54,7 @@ pub async fn process_available_outbox_rows<D>(
 where
     D: Deliverer,
 {
-    let pass_start = Utc::now();
+    let pass_start = Timestamp::now();
     let mut outcomes = Vec::new();
     loop {
         let outcome = process_one_outbox_row(

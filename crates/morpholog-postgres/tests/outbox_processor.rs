@@ -25,7 +25,7 @@
 
 use std::time::Duration;
 
-use chrono::{Duration as ChronoDuration, Utc};
+use jiff::{SignedDuration, Timestamp};
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, PgPool, PgProposalOutcome,
@@ -175,7 +175,7 @@ async fn process_one_outbox_row_returns_no_row_available_when_empty() {
         LEASE,
         &AlwaysDelivers,
         None,
-        Utc::now(),
+        Timestamp::now(),
     )
     .await
     .unwrap();
@@ -195,7 +195,7 @@ async fn process_one_outbox_row_marks_delivered_on_success() {
         LEASE,
         &AlwaysDelivers,
         None,
-        Utc::now(),
+        Timestamp::now(),
     )
     .await
     .unwrap();
@@ -215,7 +215,7 @@ async fn process_one_outbox_row_schedules_retry_on_transient() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     let _ = commit_post_simple_entry(&pool, "entry_001").await;
-    let next = Utc::now() + ChronoDuration::seconds(120);
+    let next = Timestamp::now() + SignedDuration::from_secs(120);
 
     let outcome = process_one_outbox_row(
         &pool,
@@ -226,7 +226,7 @@ async fn process_one_outbox_row_schedules_retry_on_transient() {
             next_attempt_at: next,
         },
         None,
-        Utc::now(),
+        Timestamp::now(),
     )
     .await
     .unwrap();
@@ -235,7 +235,7 @@ async fn process_one_outbox_row_schedules_retry_on_transient() {
             next_attempt_at, ..
         } => {
             assert!(
-                (next_attempt_at - next).num_seconds().abs() < 2,
+                next_attempt_at.duration_since(next).as_secs().abs() < 2,
                 "next_attempt_at returned in ProcessOutcome must match what the deliverer requested"
             );
         }
@@ -243,7 +243,7 @@ async fn process_one_outbox_row_schedules_retry_on_transient() {
     }
 
     // The row is back to `pending` with next_attempt_at set.
-    let (status, next_attempt_at): (String, Option<chrono::DateTime<chrono::Utc>>) =
+    let (status, next_attempt_at): (String, Option<jiff_sqlx::Timestamp>) =
         sqlx::query_as("SELECT status, next_attempt_at FROM morpholog.outbox LIMIT 1")
             .fetch_one(&pool)
             .await
@@ -265,7 +265,7 @@ async fn process_one_outbox_row_marks_failed_when_no_compensation_spec() {
         LEASE,
         &AlwaysNonRetryable::new("no compensation wired"),
         None,
-        Utc::now(),
+        Timestamp::now(),
     )
     .await
     .unwrap();
@@ -306,7 +306,7 @@ async fn process_one_outbox_row_compensates_on_nonretryable_with_spec() {
         LEASE,
         &AlwaysNonRetryable::new("counterparty bank rejected wire: AML routing lock"),
         Some(&spec),
-        Utc::now(),
+        Timestamp::now(),
     )
     .await
     .unwrap();
@@ -358,7 +358,7 @@ async fn process_one_outbox_row_marks_compensation_failed_when_compensation_reje
         LEASE,
         &AlwaysNonRetryable::new("delivery failed"),
         Some(&spec),
-        Utc::now(),
+        Timestamp::now(),
     )
     .await
     .unwrap();
@@ -422,7 +422,7 @@ async fn process_one_outbox_row_returns_lease_lost_when_delivery_lease_expires()
             outcome: DeliveryOutcome::Delivered,
         },
         None,
-        Utc::now(),
+        Timestamp::now(),
     )
     .await
     .unwrap();
@@ -435,7 +435,7 @@ async fn process_one_outbox_row_returns_lease_lost_when_delivery_lease_expires()
     // under the expired lease (an expired-lease reclaim by the
     // next claim would set things right, but that has not yet
     // happened in this test).
-    let (status, delivered_at): (String, Option<chrono::DateTime<chrono::Utc>>) =
+    let (status, delivered_at): (String, Option<jiff_sqlx::Timestamp>) =
         sqlx::query_as("SELECT status, delivered_at FROM morpholog.outbox LIMIT 1")
             .fetch_one(&pool)
             .await
@@ -469,7 +469,7 @@ async fn process_one_outbox_row_returns_lease_lost_on_failed_branch_when_lease_e
             },
         },
         Some(&spec),
-        Utc::now(),
+        Timestamp::now(),
     )
     .await
     .unwrap();
@@ -534,7 +534,7 @@ async fn compensation_refuses_to_commit_under_an_unreadable_policy_claim() {
         LEASE,
         &AlwaysNonRetryable::new("counterparty rejected"),
         Some(&spec),
-        Utc::now(),
+        Timestamp::now(),
     )
     .await;
     assert!(
