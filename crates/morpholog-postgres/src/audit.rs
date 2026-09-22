@@ -337,8 +337,9 @@ pub async fn audit_cursor_for(
 /// whose row will sort below rows already emitted; a cursor that
 /// advanced past that slot would skip the row forever. The horizon
 /// closes the race from the other side: it is the minimum
-/// `xact_start` over every open transaction in this database (or
-/// `now()` when none is open), computed BEFORE the read snapshot.
+/// `xact_start` over every other open transaction in this database
+/// except autovacuum's (see below), or `now()` when there is none,
+/// computed BEFORE the read snapshot.
 /// Any row invisible to the snapshot belongs to a writer that either
 /// was in flight here (so its `committed_at` = its `xact_start` >=
 /// the minimum, excluded by the `< horizon` clamp) or started later
@@ -357,9 +358,15 @@ pub async fn audit_cursor_for(
 ///   with `max_prepared_transactions = 0` and the adapter never
 ///   prepares.
 ///
-/// Liveness: the horizon trails the oldest open transaction in the
-/// database, whatever it is doing - a stuck session stalls the tail;
-/// it never loses rows.
+/// Autovacuum workers are left out: they hold transactions for as long
+/// as a vacuum runs and never write audit. The test is `IS DISTINCT
+/// FROM`, not `<>`, because a session this role cannot see has a null
+/// `backend_type`, and `<>` would drop it from the minimum and from the
+/// hidden count alike.
+///
+/// Liveness: the horizon trails the oldest other open transaction in
+/// the database, whatever it is doing - a stuck session stalls the
+/// tail; it never loses rows.
 ///
 /// # The writer assertion (`writers: Some(..)`)
 ///
@@ -423,7 +430,8 @@ pub async fn audit_resume_watermark(
                   count(*) FILTER (WHERE query = '<insufficient privilege>') AS "hidden!"
            FROM pg_stat_activity
            WHERE datname = current_database()
-             AND pid <> pg_backend_pid()"#,
+             AND pid <> pg_backend_pid()
+             AND backend_type IS DISTINCT FROM 'autovacuum worker'"#,
     )
     .fetch_one(pool)
     .await

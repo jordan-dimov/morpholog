@@ -173,6 +173,50 @@ async fn the_watermark_withholds_an_in_flight_writers_row_instead_of_losing_it()
     assert_eq!(page[0].actor.as_str(), "in_flight");
 }
 
+// A reader that cannot see another session's transaction cannot know
+// the horizon, so it is refused rather than handed one that ignores the
+// session. Visibility follows the current role, so a pool that sets an
+// unprivileged role stands in for a second login.
+#[tokio::test]
+async fn a_session_the_reader_cannot_see_refuses_the_watermark() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    if !session_is_superuser(&pool).await {
+        eprintln!("skipping: needs a superuser test role to SET ROLE");
+        return;
+    }
+    let roles = ["mtest344_reader"];
+    recreate_roles(&pool, &roles, &["CREATE ROLE mtest344_reader NOLOGIN"]).await;
+
+    let mut writer = pool.begin().await.unwrap();
+    sqlx::query("SELECT txid_current()")
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+
+    let url = morpholog_postgres::with_default_user(&std::env::var("DATABASE_URL").unwrap());
+    let reader = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|conn, _| {
+            Box::pin(async move {
+                sqlx::Executor::execute(conn, "SET ROLE mtest344_reader").await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    let outcome = audit_resume_watermark(&reader, None).await;
+    reader.close().await;
+    writer.rollback().await.unwrap();
+    drop_roles_if_present(&pool, &roles).await;
+
+    assert!(
+        matches!(outcome, Err(PgError::StatVisibility { hidden }) if hidden >= 1),
+        "a hidden open transaction must refuse the horizon, got {outcome:?}"
+    );
+}
+
 // ============================================================
 // The writer assertion - the managed-Postgres opt-in. The horizon is
 // computed over the asserted roles' sessions only, after a same-
