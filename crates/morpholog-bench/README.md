@@ -121,7 +121,7 @@ Spread between the eight runs of each millisecond row, (max - min) / median:
 | uncapped | 12.3% | 48.4% | 229% |
 | capped at 3000 MHz | 11.9% | 24.4% | 91% |
 
-Capping leaves typical run-to-run noise where it was - that noise is not thermal - and halves the tail, where the misleading outliers live. It stays opt-in: interleaving already keeps the comparison fair uncapped, and the default is faster. Reach for the cap when a claim rests on a row with a noisy tail. Absolute numbers also moved with the power state alone: the same quick-suite run took about 22 seconds on battery in the balanced profile and about 10.5 seconds on mains in performance, which is why the runner records both for every run.
+Capping leaves typical run-to-run noise where it was - that noise is not thermal - and halves the tail, where the misleading outliers live. It stays opt-in: in the uncapped A/A session interleaving kept the two sides' comparison under control, and the default is faster. Reach for the cap when a claim rests on a row with a noisy tail. Absolute numbers also moved with the power state alone: the same quick-suite run took about 22 seconds on battery in the balanced profile and about 10.5 seconds on mains in performance, which is why the runner records both for every run.
 
 ### A/A: the run is the unit of evidence (2026-09-22, `suite --ladder quick --repeat 5`, PostgreSQL 18.6)
 

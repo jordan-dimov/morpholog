@@ -34,8 +34,10 @@
 # Exit status: 0 when the session completed clean; 1 when the runner, a
 # build or a run failed; 2 when the session completed but its evidence is
 # suspect - the machine's configuration changed mid-session, the sides
-# throttled unevenly, or throttling could not be observed. The compare
-# table is printed in every completed case.
+# throttled unevenly, or the throttle counters or the package temperature
+# could not be observed. The compare table is printed in every completed
+# case. A clock cap that could not be restored makes the exit 1 whatever
+# else happened, with the command to restore it.
 #
 # Manual and exploratory, like the scale bench: never a CI step.
 #
@@ -102,12 +104,15 @@ whole() { [[ "$1" =~ ^[0-9]+$ ]]; }
 # each side, so an odd count cannot be balanced.
 whole "$RUNS" && ((RUNS >= 4 && RUNS % 2 == 0)) ||
     fail "--runs must be an even number of at least 4 (got '$RUNS')"
-for pair in "idle-above:$IDLE_ABOVE" "cool-below:$COOL_BELOW" "quiet-for:$QUIET_FOR" \
-    "quiet-timeout:$QUIET_TIMEOUT" "uneven-throttle:$UNEVEN_THROTTLE"; do
-    whole "${pair#*:}" || fail "--${pair%%:*} takes a whole number (got '${pair#*:}')"
-done
-((IDLE_ABOVE <= 100)) || fail "--idle-above is a percentage (got '$IDLE_ABOVE')"
-[[ -z "$MAX_MHZ" ]] || whole "$MAX_MHZ" || fail "--max-mhz takes a clock in MHz (got '$MAX_MHZ')"
+in_range() {
+    whole "$2" && (($2 >= $3 && $2 <= $4)) ||
+        fail "--$1 takes a whole number from $3 to $4 (got '$2')"
+}
+in_range idle-above "$IDLE_ABOVE" 1 100
+in_range cool-below "$COOL_BELOW" 1 110
+in_range quiet-for "$QUIET_FOR" 1 3600
+in_range quiet-timeout "$QUIET_TIMEOUT" "$QUIET_FOR" 86400
+in_range uneven-throttle "$UNEVEN_THROTTLE" 1 50
 
 # The runner owns how the evidence is produced: the output format, the
 # reset acknowledgement, and the one database.
@@ -132,13 +137,20 @@ $UNTRACKED"
 FREQ_FILES=(/sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq)
 if [[ -n "$MAX_MHZ" ]]; then
     [[ -e "${FREQ_FILES[0]}" ]] || fail "--max-mhz needs cpufreq, which this machine does not expose"
+    mhz_bound() { sort -n /sys/devices/system/cpu/cpu*/cpufreq/"$1" | sed -n "$2" | awk '{ print int($1 / 1000) }'; }
+    in_range max-mhz "$MAX_MHZ" "$(mhz_bound cpuinfo_min_freq 1p)" "$(mhz_bound cpuinfo_max_freq '$p')"
     say "--max-mhz needs sudo to cap the clock; authenticating now, before the builds"
     sudo -v || fail "sudo is required for --max-mhz"
 fi
 
 ROOT="target/bench-ab"
-SESSION="$ROOT/$(date -u +%Y%m%dT%H%M%SZ)"
 WORKTREE="$ROOT/baseline-src"
+mkdir -p "$ROOT"
+# The worktree, the build directories and the clock limits are shared by
+# every session, so only one may run at a time.
+exec 9> "$ROOT/.lock"
+flock -n 9 || fail "another bench_ab session is running (it holds $ROOT/.lock)"
+SESSION="$ROOT/$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$SESSION"
 
 ORIGINAL_MAX=()
@@ -147,19 +159,31 @@ remove_worktree() {
         git worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
     fi
 }
+# A long session can outlive sudo's credential cache, so this asks again
+# if it must, and reads every limit back rather than trusting the write.
 restore_clock() {
-    local i
+    [[ ${#ORIGINAL_MAX[@]} -gt 0 ]] || return 0
+    local i restored=yes
+    sudo -v || true
     for i in "${!ORIGINAL_MAX[@]}"; do
-        echo "${ORIGINAL_MAX[$i]}" | sudo tee "${FREQ_FILES[$i]}" >/dev/null || true
+        echo "${ORIGINAL_MAX[$i]}" | sudo tee "${FREQ_FILES[$i]}" >/dev/null 2>&1 || true
+        [[ "$(cat "${FREQ_FILES[$i]}")" == "${ORIGINAL_MAX[$i]}" ]] || restored=no
     done
-    if [[ ${#ORIGINAL_MAX[@]} -gt 0 ]]; then
-        say "clock limits restored"
-    fi
     ORIGINAL_MAX=()
+    if [[ "$restored" == yes ]]; then
+        say "clock limits restored"
+        return 0
+    fi
+    echo "WARNING: the clock limits were NOT restored and the machine is still capped." >&2
+    echo "Restore them with:" >&2
+    echo "  while read -r f v; do echo \"\$v\" | sudo tee \"\$f\" >/dev/null; done < $SESSION/clock_limits_before.tsv" >&2
+    return 1
 }
 cleanup() {
+    local status=$?
     remove_worktree
-    restore_clock
+    restore_clock || status=1
+    exit "$status"
 }
 trap cleanup EXIT
 remove_worktree
@@ -191,12 +215,16 @@ cp "$ROOT/build-candidate/release/morpholog-bench" "$SESSION/candidate-morpholog
 # An edit landing between the patch and the build would put source into
 # the binary that the patch does not record.
 [[ "$(git rev-parse HEAD)" == "$CANDIDATE_HEAD" &&
-    "$(git diff --binary HEAD | sha256sum | cut -d' ' -f1)" == "$PATCH_SHA" ]] ||
+    "$(git diff --binary HEAD | sha256sum | cut -d' ' -f1)" == "$PATCH_SHA" &&
+    -z "$(git ls-files --others --exclude-standard)" ]] ||
     fail "the working tree changed while the candidate was being built"
 
 if [[ -n "$MAX_MHZ" ]]; then
     sudo -v || fail "sudo is required for --max-mhz"
-    for f in "${FREQ_FILES[@]}"; do ORIGINAL_MAX+=("$(cat "$f")"); done
+    for f in "${FREQ_FILES[@]}"; do
+        ORIGINAL_MAX+=("$(cat "$f")")
+        printf '%s\t%s\n' "$f" "${ORIGINAL_MAX[-1]}" >> "$SESSION/clock_limits_before.tsv"
+    done
     for f in "${FREQ_FILES[@]}"; do
         echo $((MAX_MHZ * 1000)) | sudo tee "$f" >/dev/null || fail "could not cap $f"
     done
@@ -262,22 +290,31 @@ throttled_between() {
         print m
     }'
 }
-# Percentage of CPU time idle over one second, from /proc/stat.
-idle_pct() {
-    local a b
-    a="$(head -1 /proc/stat)"
-    sleep 1
-    b="$(head -1 /proc/stat)"
-    awk -v a="$a" -v b="$b" 'BEGIN {
-        n = split(a, x, " "); split(b, y, " "); total = 0
-        for (i = 2; i <= n; i++) total += y[i] - x[i]
-        idle = (y[5] - x[5]) + (y[6] - x[6])
-        printf "%d", (total > 0 ? 100 * idle / total : 0)
+# Percentage of CPU time idle between two /proc/stat "cpu" lines. The
+# total is user through steal: guest time is already inside user and
+# nice. I/O wait is busy, not idle - a neighbour waiting on the disk
+# disturbs a database benchmark as much as one using the CPU.
+idle_between() {
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        split(a, x, " "); split(b, y, " "); total = 0
+        for (i = 2; i <= 9; i++) total += y[i] - x[i]
+        printf "%d", (total > 0 ? 100 * (y[5] - x[5]) / total : 0)
     }'
 }
+idle_pct() {
+    local a
+    a="$(head -1 /proc/stat)"
+    sleep 1
+    idle_between "$a" "$(head -1 /proc/stat)"
+}
+
+# Power source, platform profile, governors and clock cap, observed at
+# the start and the end of every run: a change during a run that is put
+# back before the next one would otherwise be invisible.
+machine_state() { echo "$(power_source)/$(platform_profile)/$(governors)/$(clock_cap)"; }
 
 wait_for_quiet() {
-    local quiet=0 waited=0 idle temp
+    local quiet=0 waited=0 idle=NA temp=NA
     while ((waited < QUIET_TIMEOUT)); do
         idle="$(idle_pct)"
         whole "$idle" || fail "could not measure CPU idle time (got '$idle')"
@@ -299,6 +336,8 @@ ${QUIET_FOR}s within ${QUIET_TIMEOUT}s; idle ${idle}%, package ${temp} C"
 PG_VERSION="$(psql "$DATABASE_URL" -Atc 'SHOW server_version' 2>/dev/null || echo NA)"
 OBSERVABLE=yes
 if [[ "$(throttle_ms)" == NA ]]; then OBSERVABLE=no; fi
+TEMP_OBSERVABLE=yes
+if [[ "$(pkg_temp)" == NA ]]; then TEMP_OBSERVABLE=no; fi
 {
     echo "baseline_rev=$BASELINE_REV"
     echo "baseline_sha=$BASELINE_SHA"
@@ -313,6 +352,7 @@ if [[ "$(throttle_ms)" == NA ]]; then OBSERVABLE=no; fi
     echo "quiet_gate=idle>=${IDLE_ABOVE}% package<${COOL_BELOW}C for ${QUIET_FOR}s, timeout ${QUIET_TIMEOUT}s"
     echo "uneven_throttle_points=$UNEVEN_THROTTLE"
     echo "throttle_counters_observable=$OBSERVABLE"
+    echo "package_temperature_observable=$TEMP_OBSERVABLE"
     echo "cpu=$(awk -F': ' '/^model name/ { print $2; exit }' /proc/cpuinfo)"
     echo "kernel=$(uname -r)"
     echo "postgresql=$PG_VERSION"
@@ -321,7 +361,7 @@ if [[ "$(throttle_ms)" == NA ]]; then OBSERVABLE=no; fi
 } > "$SESSION/session.txt"
 
 MANIFEST="$SESSION/manifest.tsv"
-printf 'seq\tpair\tposition\tlabel\tstarted\tduration_ms\tpower\tprofile\tgovernors\tclock_cap_mhz\tpkg_temp_start\tpkg_temp_end\tthrottled_ms\treport_sha256\n' > "$MANIFEST"
+printf 'seq\tpair\tposition\tlabel\tstarted\tduration_ms\tmachine_start\tmachine_end\tpkg_temp_start\tpkg_temp_end\tthrottled_ms\treport_sha256\n' > "$MANIFEST"
 
 seq=0
 machine_states=()
@@ -338,8 +378,7 @@ for ((pair = 1; pair <= RUNS; pair++)); do
         if [[ "$side" == b ]]; then binary="$SESSION/candidate-morpholog-bench"; fi
 
         wait_for_quiet
-        power="$(power_source)" profile="$(platform_profile)" gov="$(governors)" cap="$(clock_cap)"
-        machine_states+=("$power $profile $gov $cap")
+        machine_start="$(machine_state)"
         temp_start="$(pkg_temp)"
         counters_start="$(throttle_ms)"
         started="$(date -Is)"
@@ -350,6 +389,8 @@ for ((pair = 1; pair <= RUNS; pair++)); do
             fail "run $label failed; see $SESSION/$label.err:
 $(tail -5 "$SESSION/$label.err")"
         duration_ms=$((($(date +%s%N) - t0) / 1000000))
+        machine_end="$(machine_state)"
+        machine_states+=("$machine_start" "$machine_end")
         throttled="$(throttled_between "$counters_start" "$(throttle_ms)")"
         run_ms[$side]=$((${run_ms[$side]} + duration_ms))
         if [[ "$throttled" == NA ]]; then
@@ -357,9 +398,9 @@ $(tail -5 "$SESSION/$label.err")"
         else
             throttled_total[$side]=$((${throttled_total[$side]} + throttled))
         fi
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-            "$seq" "$pair" "$position" "$label" "$started" "$duration_ms" "$power" \
-            "$profile" "$gov" "$cap" "$temp_start" "$(pkg_temp)" "$throttled" \
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$seq" "$pair" "$position" "$label" "$started" "$duration_ms" "$machine_start" \
+            "$machine_end" "$temp_start" "$(pkg_temp)" "$throttled" \
             "$(sha "$SESSION/$label.json")" >> "$MANIFEST"
     done
 done
@@ -371,6 +412,9 @@ SHARE_B="$(share "${throttled_total[b]}" "${run_ms[b]}")"
 FLAGS=()
 if [[ "$(printf '%s\n' "${machine_states[@]}" | sort -u | wc -l)" -gt 1 ]]; then
     FLAGS+=(machine_changed)
+fi
+if [[ "$TEMP_OBSERVABLE" == no ]]; then
+    FLAGS+=(temperature_observability_unavailable)
 fi
 if [[ "$unobservable" == yes ]]; then
     FLAGS+=(throttle_observability_unavailable)
@@ -386,7 +430,8 @@ if [[ ${#FLAGS[@]} -gt 0 ]]; then STATUS="$(IFS=,; echo "${FLAGS[*]}")"; fi
     echo "finished=$(date -Is)"
     echo "session_status=$STATUS"
 } >> "$SESSION/session.txt"
-restore_clock
+RESTORED=yes
+restore_clock || RESTORED=no
 
 before=() after=()
 for ((pair = 1; pair <= RUNS; pair++)); do
@@ -401,6 +446,9 @@ echo "throttled: baseline ${SHARE_A}% of run time, candidate ${SHARE_B}%"
 echo
 cat "$SESSION/compare.md"
 
+if [[ "$RESTORED" == no ]]; then
+    exit 1
+fi
 if [[ "$STATUS" != clean ]]; then
     say "the evidence is suspect ($STATUS); see $MANIFEST"
     exit 2
