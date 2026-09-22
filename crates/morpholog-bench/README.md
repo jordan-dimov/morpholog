@@ -82,9 +82,12 @@ cargo run -p morpholog-bench --release -- kernel 10000 --acts 370 --repeat 5
 DATABASE_URL=postgres:///morpholog_bench \
   cargo run -p morpholog-bench --release -- replay 100000 --retract-fraction 50 --repeat 3 --reset
 
-# baseline and candidate side by side, from two `suite --format json` reports
-# taken on the same host under the same contract:
-cargo run -p morpholog-bench --release -- compare before.json after.json
+# baseline and candidate side by side, from `suite --format json` runs taken
+# on the same host under the same contract; each row says whether the runs
+# separate by more than chance, which takes four runs a side
+# (see docs/benchmarking.md):
+cargo run -p morpholog-bench --release -- compare --before a1.json a2.json a3.json a4.json \
+  --after b1.json b2.json b3.json b4.json
 
 # end-to-end CLI latency a subprocess embedder pays (not in-process):
 DATABASE_URL=postgres:///morpholog_bench ./scripts/embedder_latency.sh 50
@@ -97,6 +100,12 @@ Every scenario takes `--repeat R`: repeats start from the same logical pre-state
 The bench **truncates the entire `morpholog` schema before each run**. The required `--reset` flag is the acknowledgement: without it the binary refuses to start, so the `DATABASE_URL` env-var fallback cannot silently destroy a database a shell already happens to point at.
 
 ## Observations
+
+### A/A: the run is the unit of evidence (2026-09-22, `suite --ladder quick --repeat 5`, PostgreSQL 18.6)
+
+The same binary (sha256 `e18f9e3c...`, commit `2d0473d`), run twice 23 seconds apart on a quiet machine (load under 1.0, no throttling events during the run), then compared with a separation test over each run's repeats. Of the 76 rows with enough repeats to judge, 8 were called changed, in both directions and across unrelated families - roughly three times what chance allows. `write/base` at 1,000 read 43.0 ms and then 30.4 ms, a ratio of 0.71 that would have read as a 29% win. Repeats inside one run agree with each other far more than two runs do, so `compare` judges runs, never repeats.
+
+Judged over runs instead: eight runs of one binary (sha256 `8afcdfee...`), interleaved as two labels x1 y1 x2 y2 x3 y3 x4 y4, no throttling events, compared four against four. One row of 156 was called changed - `kernel/acts` at 1,000, 172.8 against 176.7 ms, a ratio of 1.02 - and the other 155 read `within noise`, every family judged, the capped-repeat ones included.
 
 ### Rung 2b: case-local admission, paired against stage 1 (2026-09-18, `suite --repeat 5` requested, PostgreSQL 18.6)
 
