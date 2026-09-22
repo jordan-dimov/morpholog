@@ -39,7 +39,8 @@ use sha2::{Digest as _, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::audit::{AuditRow, REPLAY_CHUNK, list_audit_rows_page};
+use crate::audit::AuditRow;
+use crate::audit_pages::AuditPages;
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::merkle::{Digest, Hash, audit_leaf_hash, merkle_root};
 use crate::signing;
@@ -353,24 +354,19 @@ async fn collect_leaves(
     max: Option<i64>,
 ) -> Result<(Vec<[u8; 32]>, Option<(Uuid, Timestamp)>), PgError> {
     let mut leaves = Vec::new();
-    let mut cursor: Option<(Timestamp, Uuid)> = None;
     let mut last = None;
+    let mut pages = AuditPages::new(horizon);
     loop {
-        let page = list_audit_rows_page(conn, cursor, horizon, REPLAY_CHUNK).await?;
+        let page = pages.next(conn).await?;
         if page.is_empty() {
             break;
         }
-        let short = (page.len() as i64) < REPLAY_CHUNK;
         for row in &page {
             leaves.push(audit_leaf_hash(row)?);
             last = Some((row.transition_id, row.committed_at));
-            cursor = Some((row.committed_at, row.transition_id));
             if max.is_some_and(|m| leaves.len() as i64 >= m) {
                 return Ok((leaves, last));
             }
-        }
-        if short {
-            break;
         }
     }
     Ok((leaves, last))
@@ -1058,14 +1054,13 @@ async fn load_audit_rows(
     max: i64,
 ) -> Result<Vec<AuditRow>, PgError> {
     let mut rows = Vec::new();
-    let mut cursor: Option<(Timestamp, Uuid)> = None;
+    let mut pages = AuditPages::new(None);
     while (rows.len() as i64) < max {
-        let page = list_audit_rows_page(conn, cursor, None, REPLAY_CHUNK).await?;
+        let page = pages.next(conn).await?;
         if page.is_empty() {
             break;
         }
         for row in page {
-            cursor = Some((row.committed_at, row.transition_id));
             rows.push(row);
             if rows.len() as i64 >= max {
                 break;

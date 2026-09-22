@@ -8,7 +8,8 @@
 //! and a portable evidence pack (offline, no connection).
 
 use crate::as_of::resolve_transition_at_or_before;
-use crate::audit::{AuditRow, REPLAY_CHUNK, audit_cursor_for, list_audit_rows_page};
+use crate::audit::{AuditRow, audit_cursor_for};
+use crate::audit_pages::AuditPages;
 use crate::checkpoints::{Checkpoint, TreeVerification};
 use crate::error::{PgError, classify};
 use crate::pack::{EvidencePack, verify_pack};
@@ -131,19 +132,13 @@ pub async fn score_candidate(
     };
     let mut replay = State::default();
 
-    let mut cursor = None;
+    let mut pages = AuditPages::new(None);
     loop {
-        let page = list_audit_rows_page(&mut tx, cursor, None, REPLAY_CHUNK).await?;
+        let page = pages.next(&mut tx).await?;
         if page.is_empty() {
             break;
         }
         fold_rows(&mut replay, &mut scorer, &page, &mut pending)?;
-        if let Some(last) = page.last() {
-            cursor = Some((last.committed_at, last.transition_id));
-        }
-        if page.len() < REPLAY_CHUNK as usize {
-            break;
-        }
     }
     tx.commit().await.map_err(classify)?;
     // A boundary at or past the end of history: an empty test slice.

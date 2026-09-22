@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT transition_id, transformation_name,\n                            asserted_claims, retracted_claims, committed_at\n                     FROM morpholog.audit\n                     ORDER BY committed_at, transition_id\n                     LIMIT $1",
+  "query": "SELECT transition_id, transformation_name,\n                        asserted_claims, retracted_claims, committed_at\n                 FROM morpholog.audit\n                 WHERE (committed_at, transition_id) > ($2, $3)\n                   AND (committed_at, transition_id) <= ($4, $5)\n                 ORDER BY committed_at, transition_id\n                 LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -61,7 +61,11 @@
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int8",
+        "Timestamptz",
+        "Uuid",
+        "Timestamptz",
+        "Uuid"
       ]
     },
     "nullable": [
@@ -72,5 +76,5 @@
       false
     ]
   },
-  "hash": "ee6cd6d21f3ee972b810b8db48f6efed9a1cb828d31cb3bd0464a9cc5bf8212b"
+  "hash": "8c8edeefc1750315cec2871177b0a943d81b9ccb6d63406293c280937140eb3d"
 }

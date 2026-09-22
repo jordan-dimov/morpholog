@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT transition_id, transformation_name,\n                            asserted_claims, retracted_claims, committed_at\n                     FROM morpholog.audit\n                     WHERE (committed_at, transition_id) > ($2, $3)\n                     ORDER BY committed_at, transition_id\n                     LIMIT $1",
+  "query": "SELECT transition_id, transformation_name,\n                        asserted_claims, retracted_claims, committed_at\n                 FROM morpholog.audit\n                 WHERE (committed_at, transition_id) <= ($2, $3)\n                 ORDER BY committed_at, transition_id\n                 LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -74,5 +74,5 @@
       false
     ]
   },
-  "hash": "a69b7557775cff121c39ceb85da50d37ed14102d354f2db81ebf17326c850104"
+  "hash": "1bbc02c55155c995cc74fc9aa6f232efd5c0ba9343566f948bf79c706923d328"
 }

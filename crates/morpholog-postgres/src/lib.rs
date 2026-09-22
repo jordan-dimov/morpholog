@@ -17,6 +17,7 @@ mod actor_policy;
 mod as_of;
 mod attestation;
 mod audit;
+mod audit_pages;
 mod checkpoints;
 mod claims;
 // Test-gated in rung 1 of the compiled-invariant arc: the compiler's

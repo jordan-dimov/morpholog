@@ -1,4 +1,5 @@
-use crate::audit::{REPLAY_CHUNK, audit_cursor_for};
+use crate::audit::audit_cursor_for;
+use crate::audit_pages::ReplayPages;
 use crate::error::{PgError, classify, classify_checked_query};
 use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
@@ -147,69 +148,18 @@ pub(crate) async fn reconstruct_inner(
     // Resolve the target transition's (committed_at, transition_id)
     // tuple. Missing target -> TransitionNotFound; this is the
     // contract that lets every other unknown id also be an error.
-    let (target_committed_at, target_transition_id) =
-        audit_cursor_for(&mut *conn, transition_id).await?;
+    let target = audit_cursor_for(&mut *conn, transition_id).await?;
     // Precompute the scope as a HashSet so each in-loop membership
     // check is O(1) regardless of footprint size or audit-log length.
     let scope_set: Option<HashSet<&str>> =
         predicates.map(|preds| preds.iter().map(String::as_str).collect());
-    // Replay every transition with a `(committed_at, transition_id)`
-    // tuple less than or equal to the target's. PostgreSQL row
-    // comparison (`(a, b) <= (c, d)`) is lexicographic; ordering by
-    // the same two columns guarantees a deterministic replay. Keyset
-    // pages inside the caller's snapshot keep memory at one chunk
-    // regardless of log length - the same shape as every other
-    // replay-order read.
-    struct Row {
-        transition_id: Uuid,
-        asserted_claims: serde_json::Value,
-        retracted_claims: serde_json::Value,
-        committed_at: Timestamp,
-    }
     let mut state = State::default();
-    let mut cursor: Option<(Timestamp, Uuid)> = None;
+    let mut pages = ReplayPages::new(Some(target));
     loop {
-        let rows: Vec<Row> = match &cursor {
-            None => {
-                sqlx::query_as!(
-                    Row,
-                    "SELECT transition_id, asserted_claims, retracted_claims, committed_at
-                     FROM morpholog.audit
-                     WHERE (committed_at, transition_id) <= ($1, $2)
-                     ORDER BY committed_at, transition_id
-                     LIMIT $3",
-                    target_committed_at.to_sqlx(),
-                    target_transition_id,
-                    REPLAY_CHUNK,
-                )
-                .fetch_all(&mut *conn)
-                .await
-            }
-            Some((after_at, after_id)) => {
-                sqlx::query_as!(
-                    Row,
-                    "SELECT transition_id, asserted_claims, retracted_claims, committed_at
-                     FROM morpholog.audit
-                     WHERE (committed_at, transition_id) <= ($1, $2)
-                       AND (committed_at, transition_id) > ($4, $5)
-                     ORDER BY committed_at, transition_id
-                     LIMIT $3",
-                    target_committed_at.to_sqlx(),
-                    target_transition_id,
-                    REPLAY_CHUNK,
-                    after_at.to_sqlx(),
-                    *after_id,
-                )
-                .fetch_all(&mut *conn)
-                .await
-            }
-        }
-        .map_err(classify)?;
-        let Some(last) = rows.last() else {
+        let rows = pages.next(&mut *conn).await?;
+        if rows.is_empty() {
             break;
-        };
-        cursor = Some((last.committed_at, last.transition_id));
-        let exhausted = (rows.len() as i64) < REPLAY_CHUNK;
+        }
         for row in rows {
             let in_scope = |claims: serde_json::Value| -> Result<Vec<ClaimInstance>, PgError> {
                 let mut claims: Vec<ClaimInstance> = serde_json::from_value(claims)?;
@@ -223,9 +173,6 @@ pub(crate) async fn reconstruct_inner(
             // The kernel's own order within a transition: retractions
             // first, then assertions.
             state.apply(&asserted, &retracted);
-        }
-        if exhausted {
-            break;
         }
     }
     Ok(state)

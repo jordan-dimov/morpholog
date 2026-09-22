@@ -244,6 +244,8 @@ pub async fn list_audit_rows_page(
     .map_err(classify)?;
     rows.into_iter().map(decode_audit_row).collect()
 }
+use crate::audit_pages::AuditPages;
+
 /// A streaming audit tail: the lossless-resume recipe with its
 /// load-bearing order baked in, so a caller cannot get it wrong.
 /// [`begin_audit_tail`] resolves the resume cursor, computes the
@@ -254,9 +256,7 @@ pub async fn list_audit_rows_page(
 /// skipped - see [`audit_resume_watermark`] for the proof.
 pub struct AuditTail<'p> {
     tx: Transaction<'p, Postgres>,
-    horizon: Timestamp,
-    cursor: Option<(Timestamp, Uuid)>,
-    done: bool,
+    pages: AuditPages,
 }
 /// Open an audit tail, optionally resuming strictly after a
 /// previously seen transition (unknown ids are
@@ -280,9 +280,7 @@ pub async fn begin_audit_tail<'p>(
     let tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
     Ok(AuditTail {
         tx,
-        horizon,
-        cursor,
-        done: false,
+        pages: AuditPages::new(Some(horizon)).after(cursor),
     })
 }
 impl AuditTail<'_> {
@@ -290,20 +288,7 @@ impl AuditTail<'_> {
     /// transition_id)` order; empty when the tail has reached the
     /// horizon. One page sits in memory at a time.
     pub async fn next_page(&mut self) -> Result<Vec<AuditRow>, PgError> {
-        if self.done {
-            return Ok(Vec::new());
-        }
-        let page =
-            list_audit_rows_page(&mut self.tx, self.cursor, Some(self.horizon), REPLAY_CHUNK)
-                .await?;
-        match page.last() {
-            Some(last) => {
-                self.cursor = Some((last.committed_at, last.transition_id));
-                self.done = (page.len() as i64) < REPLAY_CHUNK;
-            }
-            None => self.done = true,
-        }
-        Ok(page)
+        self.pages.next(&mut self.tx).await
     }
 }
 /// Resolve a transition id to the `(committed_at, transition_id)`
