@@ -110,8 +110,12 @@ async fn the_scoped_load_orders_by_the_key() {
 /// condition.
 async fn generic_plan(pool: &PgPool, sql: &str, args: &str) -> (Vec<String>, Vec<String>) {
     let mut tx = pool.begin().await.unwrap();
+    // As in `node_types`: with the unordered scans off, an ordered index
+    // walk is the only plan, whatever the table's size.
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-        "SET LOCAL plan_cache_mode = force_generic_plan; PREPARE audit_page AS {sql}"
+        "SET LOCAL plan_cache_mode = force_generic_plan; \
+         SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off; \
+         PREPARE audit_page AS {sql}"
     )))
     .execute(&mut *tx)
     .await
