@@ -2,8 +2,12 @@
 //! edges, over rows whose timestamps tie. The tied rows' ids sort in the
 //! opposite order to their insertion, so a query that dropped the
 //! `transition_id` tie-break would return them in insertion order and
-//! fail here, rather than pass by accident. `DATABASE_URL`-gated like
-//! every PG suite.
+//! fail here, rather than pass by accident. The connections run with
+//! index scans off: the audit index returns tied rows in id order by
+//! itself, which would hide a query that lost its tie-break. That the
+//! index is used is pinned apart, in `tests/plan_shapes.rs`; here the
+//! order must come from the query. `DATABASE_URL`-gated like every PG
+//! suite.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -17,7 +21,19 @@ async fn pool() -> PgPool {
     let url = std::env::var("DATABASE_URL").expect(
         "DATABASE_URL must be set for the audit paging tests (e.g. postgres:///morpholog_dev)",
     );
-    let pool = PgPool::connect(&crate::with_default_user(&url))
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .after_connect(|conn, _| {
+            Box::pin(async move {
+                sqlx::raw_sql(
+                    "SET enable_indexscan = off; SET enable_indexonlyscan = off; \
+                     SET enable_bitmapscan = off",
+                )
+                .execute(conn)
+                .await?;
+                Ok(())
+            })
+        })
+        .connect(&crate::with_default_user(&url))
         .await
         .expect("failed to connect to PostgreSQL test database");
     sqlx::raw_sql(crate::testing::RESET_SQL)
