@@ -105,8 +105,9 @@ async fn the_scoped_load_orders_by_the_key() {
     );
 }
 
-/// The generic plan of one prepared query - the plan a statement keeps
-/// once it is cached - as its node types and every index condition.
+/// The generic plan of one prepared query - the plan PostgreSQL may use
+/// for a cached prepared statement - as its node types and every index
+/// condition.
 async fn generic_plan(pool: &PgPool, sql: &str, args: &str) -> (Vec<String>, Vec<String>) {
     let mut tx = pool.begin().await.unwrap();
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
@@ -154,11 +155,13 @@ async fn generic_plan(pool: &PgPool, sql: &str, args: &str) -> (Vec<String>, Vec
 }
 
 /// Every audit walk pages the `(committed_at, transition_id)` index in
-/// order, and each bound it reads to is an index condition in the plan
-/// the statement keeps once cached. A single query with the bounds behind
-/// flags turns them into a filter, which is why each bound has its own
-/// query. The texts are the production ones, copied: `audit_pages` holds
-/// the replay projection's, `list_audit_rows_page` the full row's.
+/// order, and each bound it reads to is an index condition in the generic
+/// plan PostgreSQL may use for a cached prepared statement. A single query
+/// with the bounds behind flags turns them into a filter, which is why
+/// each bound has its own query. The texts are copies of the production
+/// ones, kept in step by hand (`sqlx::query!` takes a literal):
+/// `audit_pages::replay_page` holds the replay projection's,
+/// `list_audit_rows_page` the full row's, and each points back here.
 #[tokio::test]
 async fn every_audit_walk_is_an_index_walk_with_its_bounds_as_index_conditions() {
     let pool = test_pool().await;

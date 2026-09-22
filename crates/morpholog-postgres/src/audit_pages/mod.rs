@@ -142,6 +142,8 @@ impl AuditPages {
     }
 }
 
+// These query texts are mirrored in tests/plan_shapes.rs, which pins their
+// plans; a change here belongs there too.
 async fn replay_page(
     conn: &mut sqlx::PgConnection,
     cursor: Option<(Timestamp, Uuid)>,

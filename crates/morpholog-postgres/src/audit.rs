@@ -163,6 +163,8 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
 /// `horizon` is the frontier-completeness clamp from
 /// [`audit_resume_watermark`]; passing `None` reads to the snapshot's
 /// end and forfeits the lossless-resume guarantee.
+// These query texts are mirrored in tests/plan_shapes.rs, which pins their
+// plans; a change here belongs there too.
 pub async fn list_audit_rows_page(
     conn: &mut sqlx::PgConnection,
     cursor: Option<(Timestamp, Uuid)>,
