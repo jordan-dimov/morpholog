@@ -2,7 +2,7 @@ use crate::as_of::reconstruct_state_at_for_predicates;
 use crate::claims::{decode_claim_rows, list_claims_for_predicates};
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::txn::{TxIsolation, begin_isolated_tx};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use morpholog_core::{
     ClaimInstance, Definition, DerivedClaim, State, ValidatedProgram, enumerate_derived,
     predicates_referenced_by_derived,
@@ -70,7 +70,7 @@ pub struct RefreshSummary {
     /// coarse freshness marker, not a lossless audit-resume coordinate
     /// (see the field doc on `morpholog_read.derived_refreshes`).
     pub source_snapshot_transition_id: Option<Uuid>,
-    pub source_snapshot_committed_at: Option<DateTime<Utc>>,
+    pub source_snapshot_committed_at: Option<Timestamp>,
     pub read: Duration,
     pub compute: Duration,
     pub write: Duration,
@@ -231,7 +231,7 @@ pub async fn refresh_derived(
         source_claim_count,
         derived_claim_count: rows.len(),
         source_snapshot_transition_id: snapshot_tid,
-        source_snapshot_committed_at: snapshot_at,
+        source_snapshot_committed_at: snapshot_at.map(Into::into),
         read,
         compute,
         write,

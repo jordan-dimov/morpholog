@@ -78,7 +78,7 @@ fn parse_boundary(raw: &str) -> anyhow::Result<SplitBoundary> {
     if let Ok(id) = raw.parse::<uuid::Uuid>() {
         return Ok(SplitBoundary::Transition(id));
     }
-    let at = raw.parse::<chrono::DateTime<chrono::Utc>>().map_err(|e| {
+    let at = morpholog_postgres::wire_time::parse(raw).map_err(|e| {
         anyhow::anyhow!(
             "--train-until takes a transition id or an RFC 3339 timestamp \
              (e.g. 2026-07-01T00:00:00Z); `{raw}` parses as neither: {e}"

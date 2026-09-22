@@ -11,8 +11,8 @@
 mod common;
 use common::{drop_roles_if_present, recreate_roles, reset_db, session_is_superuser, test_pool};
 
-use chrono::{DateTime, Utc};
 use common::{dec, subj};
+use jiff::Timestamp;
 use morpholog_core::Program;
 use morpholog_postgres::{
     PgError, PgPool, PgProposalOutcome, audit_cursor_for, audit_resume_watermark,
@@ -124,10 +124,12 @@ async fn the_watermark_withholds_an_in_flight_writers_row_instead_of_losing_it()
     // flight; committed_at takes the schema default, A's now() = A's
     // transaction start.
     let mut writer = pool.begin().await.unwrap();
-    let (writer_start,): (DateTime<Utc>,) = sqlx::query_as("SELECT transaction_timestamp()")
-        .fetch_one(&mut *writer)
-        .await
-        .unwrap();
+    let writer_start: Timestamp =
+        sqlx::query_scalar::<_, jiff_sqlx::Timestamp>("SELECT transaction_timestamp()")
+            .fetch_one(&mut *writer)
+            .await
+            .unwrap()
+            .to_jiff();
     common::insert_in_flight_audit_row(&mut writer, Uuid::now_v7()).await;
 
     // The horizon, computed while A is in flight, clamps at or below
@@ -300,10 +302,12 @@ async fn the_asserted_horizon_ignores_sessions_outside_the_assertion() {
     // exactly the managed-host shape, where the ignored sessions are
     // the platform's.
     let mut writer = pool.begin().await.unwrap();
-    let (writer_start,): (DateTime<Utc>,) = sqlx::query_as("SELECT transaction_timestamp()")
-        .fetch_one(&mut *writer)
-        .await
-        .unwrap();
+    let writer_start: Timestamp =
+        sqlx::query_scalar::<_, jiff_sqlx::Timestamp>("SELECT transaction_timestamp()")
+            .fetch_one(&mut *writer)
+            .await
+            .unwrap()
+            .to_jiff();
     let horizon = audit_resume_watermark(&pool, Some(&["mtest209_idle".to_string()]))
         .await
         .expect("an idle asserted role with no unasserted census entries passes");
@@ -329,10 +333,12 @@ async fn the_asserted_watermark_still_withholds_the_asserted_writers_in_flight_r
     let me = common::session_user(&pool).await;
 
     let mut writer = pool.begin().await.unwrap();
-    let (writer_start,): (DateTime<Utc>,) = sqlx::query_as("SELECT transaction_timestamp()")
-        .fetch_one(&mut *writer)
-        .await
-        .unwrap();
+    let writer_start: Timestamp =
+        sqlx::query_scalar::<_, jiff_sqlx::Timestamp>("SELECT transaction_timestamp()")
+            .fetch_one(&mut *writer)
+            .await
+            .unwrap()
+            .to_jiff();
     common::insert_in_flight_audit_row(&mut writer, Uuid::now_v7()).await;
 
     let horizon = audit_resume_watermark(&pool, Some(std::slice::from_ref(&me)))

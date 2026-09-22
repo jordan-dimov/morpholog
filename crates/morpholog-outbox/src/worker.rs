@@ -196,7 +196,7 @@ where
             return Ok(base_dur);
         };
         let now = self.clock.now();
-        let Ok(until) = (next - now).to_std() else {
+        let Ok(until) = Duration::try_from(next.duration_since(now)) else {
             return Ok(base_dur);
         };
         Ok(std::cmp::min(base_dur, until))

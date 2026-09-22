@@ -5,7 +5,7 @@
 //! to that head - and never part of it: only an `invalid` witness is a
 //! judgement, and only that fails the command.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use morpholog_witness::{Anchors, WitnessStatus, verify_rfc3161};
 use serde::Serialize;
 
@@ -24,7 +24,7 @@ pub struct WitnessVerdict {
     pub status: WitnessStanding,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "crate::wire_time::option")]
-    pub attested_at: Option<DateTime<Utc>>,
+    pub attested_at: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
@@ -55,7 +55,7 @@ pub struct WitnessesReport {
     pub checkpoints: Vec<CheckpointWitnesses>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(with = "crate::wire_time::option")]
-    pub earliest_attested_at: Option<DateTime<Utc>>,
+    pub earliest_attested_at: Option<Timestamp>,
 }
 
 impl WitnessesReport {

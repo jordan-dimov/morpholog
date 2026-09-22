@@ -25,7 +25,7 @@
 //! mark a row `failed` and stop there.
 
 use anyhow::{Context, anyhow};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use morpholog_postgres::{
     OutboxUpdate, claim_pending_outbox_row, mark_outbox_delivered, mark_outbox_failed,
     mark_outbox_transient_attempt, release_outbox_claim,
@@ -52,9 +52,15 @@ pub(crate) async fn claim(args: OutboxClaimArgs) -> anyhow::Result<()> {
         .unwrap_or_else(|| Uuid::now_v7().to_string());
     let lease = Duration::from_secs(args.lease_seconds);
     let pool = connect(&args.db.database_url).await?;
-    let row = claim_pending_outbox_row(&pool, &worker_id, &args.intent_type, lease, Utc::now())
-        .await
-        .context("claim_pending_outbox_row failed")?;
+    let row = claim_pending_outbox_row(
+        &pool,
+        &worker_id,
+        &args.intent_type,
+        lease,
+        Timestamp::now(),
+    )
+    .await
+    .context("claim_pending_outbox_row failed")?;
     // Wrap consistently in `{"row": ...}`. `locked_by` and
     // `lock_expires_at` already live inside the row, so we do not
     // surface the worker_id or lease end-time separately.
@@ -115,9 +121,9 @@ pub(crate) async fn complete(args: OutboxCompleteArgs) -> anyhow::Result<()> {
                 .retry_after_seconds
                 .ok_or_else(|| anyhow!("--outcome transient requires --retry-after-seconds N"))?;
             let retry_after = Duration::from_secs(secs);
-            let next_attempt_at: DateTime<Utc> = Utc::now()
-                + chrono::Duration::from_std(retry_after)
-                    .context("retry-after-seconds overflowed chrono::Duration")?;
+            let next_attempt_at = Timestamp::now()
+                .checked_add(retry_after)
+                .context("retry-after-seconds is beyond the representable calendar")?;
             mark_outbox_transient_attempt(&pool, args.intent_id, &args.worker_id, next_attempt_at)
                 .await
                 .context("mark_outbox_transient_attempt failed")?

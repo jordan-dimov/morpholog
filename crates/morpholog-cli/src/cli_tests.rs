@@ -139,7 +139,7 @@ fn inspect_claims_with_as_of_timestamp_parses() {
     let Some(AsOf::AtOrBefore(at)) = args.as_of else {
         panic!("expected the at-or-before form, got {:?}", args.as_of);
     };
-    assert_eq!(at.to_rfc3339(), "2026-06-30T12:00:00+00:00");
+    assert_eq!(at.to_string(), "2026-06-30T12:00:00Z");
 }
 
 /// A bare date is rejected: the coordinate must be explicit about

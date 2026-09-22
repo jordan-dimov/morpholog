@@ -16,7 +16,7 @@ use common::{commit_simple_entry, reset_db, test_pool};
 
 use std::time::Duration;
 
-use chrono::{Duration as ChronoDuration, Utc};
+use jiff::{SignedDuration, Timestamp};
 use morpholog_outbox::process_available_outbox_rows;
 use morpholog_postgres::{
     Deliverer, DeliveryOutcome, OutboxRow, PgPool, ProcessOutcome,
@@ -90,7 +90,7 @@ async fn drain_does_not_redeliver_transient_row_in_same_pass() {
     // back in `pending` but not due. The drain must terminate
     // after two TransientRetry outcomes; it must NOT re-claim the
     // same rows endlessly.
-    let later = Utc::now() + ChronoDuration::hours(1);
+    let later = Timestamp::now() + SignedDuration::from_hours(1);
 
     let outcomes = process_available_outbox_rows(
         &pool,
@@ -138,7 +138,7 @@ async fn drain_pass_boundary_blocks_subsecond_retries_until_next_pass() {
     impl Deliverer for SubsecondTransient {
         async fn deliver(&self, _row: &OutboxRow) -> DeliveryOutcome {
             DeliveryOutcome::Transient {
-                next_attempt_at: Utc::now() + ChronoDuration::milliseconds(1),
+                next_attempt_at: Timestamp::now() + SignedDuration::from_millis(1),
             }
         }
     }

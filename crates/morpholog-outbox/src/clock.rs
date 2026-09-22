@@ -2,7 +2,7 @@
 //! testable without relying on wall-clock sleeps.
 //!
 //! Production uses [`RealClock`] which delegates to
-//! `chrono::Utc::now` and `tokio::time::sleep`. Tests can use
+//! `jiff::Timestamp::now` and `tokio::time::sleep`. Tests can use
 //! [`crate::testing::MockClock`],
 //! which records each `sleep_for` call into an inspectable buffer
 //! and never actually sleeps. With this split, tests can assert
@@ -10,7 +10,7 @@
 //! zero wall-clock time elapsed, and they remain deterministic
 //! under CI load.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use std::future::Future;
 use std::time::Duration;
 
@@ -23,7 +23,7 @@ use std::time::Duration;
 /// `sleep_for` blocks real time (production) or returns ready
 /// immediately (tests).
 pub trait Clock: Send + Sync + 'static {
-    fn now(&self) -> DateTime<Utc>;
+    fn now(&self) -> Timestamp;
     fn sleep_for(&self, duration: Duration) -> impl Future<Output = ()> + Send;
 }
 
@@ -32,8 +32,8 @@ pub trait Clock: Send + Sync + 'static {
 pub struct RealClock;
 
 impl Clock for RealClock {
-    fn now(&self) -> DateTime<Utc> {
-        Utc::now()
+    fn now(&self) -> Timestamp {
+        Timestamp::now()
     }
     fn sleep_for(&self, duration: Duration) -> impl Future<Output = ()> + Send {
         tokio::time::sleep(duration)
@@ -51,9 +51,9 @@ mod tests {
     #[tokio::test]
     async fn real_clock_tracks_wall_time_and_sleeps() {
         let clock = RealClock;
-        let before = Utc::now();
+        let before = Timestamp::now();
         let now = clock.now();
-        let after = Utc::now();
+        let after = Timestamp::now();
         assert!(before <= now && now <= after, "now() is the wall clock");
 
         let started = std::time::Instant::now();

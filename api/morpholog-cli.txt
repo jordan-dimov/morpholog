@@ -182,7 +182,7 @@ pub morpholog_cli::envelopes::RefreshDerivedReport::derived_predicate_count: usi
 pub morpholog_cli::envelopes::RefreshDerivedReport::model_hash: alloc::string::String
 pub morpholog_cli::envelopes::RefreshDerivedReport::refresh_id: uuid::Uuid
 pub morpholog_cli::envelopes::RefreshDerivedReport::source_claim_count: usize
-pub morpholog_cli::envelopes::RefreshDerivedReport::source_snapshot_committed_at: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+pub morpholog_cli::envelopes::RefreshDerivedReport::source_snapshot_committed_at: core::option::Option<jiff::timestamp::Timestamp>
 pub morpholog_cli::envelopes::RefreshDerivedReport::source_snapshot_transition_id: core::option::Option<uuid::Uuid>
 impl core::convert::From<&morpholog_postgres::derived::RefreshSummary> for morpholog_cli::envelopes::RefreshDerivedReport
 pub fn morpholog_cli::envelopes::RefreshDerivedReport::from(&morpholog_postgres::derived::RefreshSummary) -> Self
