@@ -253,7 +253,8 @@ pub async fn drain_open_transactions(pool: &PgPool) {
             "SELECT count(*) FROM pg_stat_activity
              WHERE datname = current_database()
                AND pid != pg_backend_pid()
-               AND xact_start IS NOT NULL",
+               AND xact_start IS NOT NULL
+               AND backend_type IS DISTINCT FROM 'autovacuum worker'",
         )
         .fetch_one(pool)
         .await
@@ -270,7 +271,8 @@ pub async fn drain_open_transactions(pool: &PgPool) {
          FROM pg_stat_activity
          WHERE datname = current_database()
            AND pid != pg_backend_pid()
-           AND xact_start IS NOT NULL",
+           AND xact_start IS NOT NULL
+           AND backend_type IS DISTINCT FROM 'autovacuum worker'",
     )
     .fetch_all(pool)
     .await
@@ -305,6 +307,9 @@ pub async fn make_checkpoint(pool: &PgPool) -> morpholog_postgres::Checkpoint {
 pub async fn make_checkpoint_at(pool: &PgPool, tree_size: i64) -> morpholog_postgres::Checkpoint {
     use morpholog_postgres::CheckpointOutcome::{Created, NoNewRows};
     for attempt in 0..3 {
+        // Drained before every attempt: a checkpoint over too few rows is
+        // still created, and every later one would chain onto it.
+        drain_open_transactions(pool).await;
         match morpholog_postgres::create_checkpoint(pool, None, None)
             .await
             .unwrap()
@@ -321,7 +326,8 @@ pub async fn make_checkpoint_at(pool: &PgPool, tree_size: i64) -> morpholog_post
                      FROM pg_stat_activity
                      WHERE datname = current_database()
                        AND pid != pg_backend_pid()
-                       AND xact_start IS NOT NULL",
+                       AND xact_start IS NOT NULL
+                       AND backend_type IS DISTINCT FROM 'autovacuum worker'",
                 )
                 .fetch_all(pool)
                 .await
@@ -330,7 +336,6 @@ pub async fn make_checkpoint_at(pool: &PgPool, tree_size: i64) -> morpholog_post
                     "checkpoint covered fewer rows than committed (wanted {tree_size}, got \
                      {other:?}); open transactions lowering the watermark: {census:?}"
                 );
-                drain_open_transactions(pool).await;
             }
         }
     }

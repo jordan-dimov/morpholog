@@ -356,9 +356,15 @@ pub async fn audit_cursor_for(
 ///   with `max_prepared_transactions = 0` and the adapter never
 ///   prepares.
 ///
-/// Liveness: the horizon trails the oldest open transaction in the
-/// database, whatever it is doing - a stuck session stalls the tail;
-/// it never loses rows.
+/// Autovacuum workers are left out: they hold transactions for as long
+/// as a vacuum runs and never write audit. The test is `IS DISTINCT
+/// FROM`, not `<>`, because a session this role cannot see has a null
+/// `backend_type`, and `<>` would drop it from the minimum and from the
+/// hidden count alike.
+///
+/// Liveness: the horizon trails the oldest other open transaction in
+/// the database, whatever it is doing - a stuck session stalls the
+/// tail; it never loses rows.
 ///
 /// # The writer assertion (`writers: Some(..)`)
 ///
@@ -422,7 +428,8 @@ pub async fn audit_resume_watermark(
                   count(*) FILTER (WHERE query = '<insufficient privilege>') AS "hidden!"
            FROM pg_stat_activity
            WHERE datname = current_database()
-             AND pid <> pg_backend_pid()"#,
+             AND pid <> pg_backend_pid()
+             AND backend_type IS DISTINCT FROM 'autovacuum worker'"#,
     )
     .fetch_one(pool)
     .await
