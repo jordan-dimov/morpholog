@@ -43,6 +43,53 @@ fn pack_verdict(stdout: &str) -> Value {
     report["verdict"].clone()
 }
 
+/// A complete-prefix pack's lines: the manifest, the checkpoints, then the
+/// rows.
+fn pack_lines(pack: &str) -> Vec<Value> {
+    pack.lines()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("{e}: {line}")))
+        .collect()
+}
+
+fn pack_from_lines(lines: &[Value]) -> String {
+    lines.iter().map(|line| format!("{line}\n")).collect()
+}
+
+/// Where the rows start: after the manifest and its checkpoints.
+fn first_row(lines: &[Value]) -> usize {
+    1 + lines[0]["checkpoint_count"].as_u64().unwrap() as usize
+}
+
+/// The same complete prefix as one JSON document, the form packs took
+/// before they were written a line at a time.
+fn as_single_document(pack: &str) -> String {
+    let lines = pack_lines(pack);
+    let rows = first_row(&lines);
+    serde_json::json!({
+        "manifest": {
+            "pack_format_version": 1,
+            "tree_size": lines[0]["tree_size"],
+            "root_hash": lines[0]["root_hash"],
+            "checkpoint_hash": lines[0]["checkpoint_hash"],
+        },
+        "checkpoints": lines[1..rows],
+        "rows": lines[rows..],
+    })
+    .to_string()
+}
+
+fn gzip(bytes: &[u8]) -> Vec<u8> {
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, bytes).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn temp_file(contents: &[u8]) -> tempfile::NamedTempFile {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut file, contents).unwrap();
+    file
+}
+
 fn run_cli_no_db(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     let output = Command::new(common::bin())
         .args(args)
@@ -835,9 +882,20 @@ async fn evidence_export_then_verify_offline() {
 
     let (status, pack_stdout, stderr) = run_cli(&["audit", "export"]);
     assert!(status.success(), "evidence export should succeed; {stderr}");
-    let pack: Value = serde_json::from_str(&pack_stdout).expect("pack is JSON");
-    assert_eq!(pack["manifest"]["tree_size"], 2, "{pack_stdout}");
-    assert_eq!(pack["rows"].as_array().unwrap().len(), 2);
+    // Each line is exactly one of the pinned shapes: the manifest, the
+    // checkpoints, then the rows.
+    let lines = pack_lines(&pack_stdout);
+    let rows = first_row(&lines);
+    let manifest: morpholog_postgres::PrefixPackManifest =
+        serde_json::from_value(lines[0].clone()).expect("line 1 is the manifest");
+    assert_eq!(manifest.tree_size, 2, "{pack_stdout}");
+    for line in &lines[1..rows] {
+        serde_json::from_value::<morpholog_postgres::Checkpoint>(line.clone()).unwrap();
+    }
+    for line in &lines[rows..] {
+        serde_json::from_value::<morpholog_postgres::AuditRow>(line.clone()).unwrap();
+    }
+    assert_eq!(lines.len() - rows, 2, "{pack_stdout}");
     let mut packfile = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut packfile, pack_stdout.as_bytes()).unwrap();
     let pack_path = packfile.path().to_str().unwrap();
@@ -857,10 +915,9 @@ async fn evidence_export_then_verify_offline() {
     assert_eq!(pack_verdict(&stdout)["status"], "intact", "got: {stdout}");
 
     // Edit a row in the pack file: verify must catch it and exit non-zero.
-    let mut tampered_json: Value = serde_json::from_str(&pack_stdout).unwrap();
-    tampered_json["rows"][0]["transformation_name"] = serde_json::json!("tampered");
-    let mut tamperedfile = tempfile::NamedTempFile::new().unwrap();
-    std::io::Write::write_all(&mut tamperedfile, tampered_json.to_string().as_bytes()).unwrap();
+    let mut tampered = lines.clone();
+    tampered[first_row(&lines)]["transformation_name"] = serde_json::json!("tampered");
+    let tamperedfile = temp_file(pack_from_lines(&tampered).as_bytes());
     let (status, stdout, _stderr) = run_cli_no_db(&[
         "audit",
         "verify-pack",
@@ -871,6 +928,74 @@ async fn evidence_export_then_verify_offline() {
         "a tampered pack must exit non-zero: {stdout}"
     );
     assert_eq!(pack_verdict(&stdout)["status"], "tampered", "got: {stdout}");
+}
+
+/// Attacker capability: control of the pack file's bytes, compressed or
+/// not. Whatever the compression, the verifier sees every byte: what does
+/// not decode is a malformed pack, a verdict, and data hidden in a second
+/// compressed member is read like any other.
+#[tokio::test(flavor = "current_thread")]
+async fn verify_pack_reads_gzip_and_refuses_what_does_not_decode() {
+    reset_db().await;
+    post_balanced_entry("gz1", 100);
+    post_balanced_entry("gz2", 200);
+    let (status, _, stderr) = run_cli(&["audit", "checkpoint"]);
+    assert!(status.success(), "{stderr}");
+    let (status, pack, stderr) = run_cli(&["audit", "export"]);
+    assert!(status.success(), "{stderr}");
+    let verdict_of = |bytes: &[u8]| {
+        let file = temp_file(bytes);
+        let (_, stdout, stderr) =
+            run_cli_no_db(&["audit", "verify-pack", file.path().to_str().unwrap()]);
+        let verdict = pack_verdict(&stdout);
+        (verdict["status"].as_str().unwrap().to_string(), stderr)
+    };
+
+    let compressed = gzip(pack.as_bytes());
+    let document = as_single_document(&pack);
+    for (what, bytes) in [
+        ("a compressed pack", compressed.clone()),
+        ("a single-document pack", document.clone().into_bytes()),
+        (
+            "a compressed single-document pack",
+            gzip(document.as_bytes()),
+        ),
+        ("a pack split across two gzip members", {
+            let (head, tail) = pack.as_bytes().split_at(pack.len() / 2);
+            [gzip(head), gzip(tail)].concat()
+        }),
+    ] {
+        assert_eq!(verdict_of(&bytes).0, "intact", "{what}");
+    }
+
+    let mut corrupted = compressed.clone();
+    let middle = corrupted.len() / 2;
+    corrupted[middle] ^= 0xff;
+    let mut extra_row = pack.clone();
+    extra_row.push_str(pack.lines().last().unwrap());
+    extra_row.push('\n');
+    for (what, bytes) in [
+        (
+            "a truncated gzip stream",
+            compressed[..compressed.len() - 12].to_vec(),
+        ),
+        ("a corrupted gzip stream", corrupted),
+        (
+            "bytes after the gzip stream",
+            [compressed.clone(), b"not gzip".to_vec()].concat(),
+        ),
+        ("a row hidden in a second gzip member", {
+            [
+                compressed.clone(),
+                gzip(pack.lines().last().unwrap().as_bytes()),
+            ]
+            .concat()
+        }),
+        ("an extra row, compressed", gzip(extra_row.as_bytes())),
+    ] {
+        let (status, stderr) = verdict_of(&bytes);
+        assert_eq!(status, "malformed_pack", "{what}: {stderr}");
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -964,22 +1089,24 @@ async fn evidence_selective_export_then_verify_offline() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn evidence_verify_names_an_unknown_future_pack_version() {
-    // A v4 pack must be named as too new, never misread as a malformed v1.
-    let mut packfile = tempfile::NamedTempFile::new().unwrap();
-    std::io::Write::write_all(
-        &mut packfile,
-        br#"{"manifest": {"pack_format_version": 4}}"#,
-    )
-    .unwrap();
-    let (status, stdout, _stderr) =
-        run_cli_no_db(&["audit", "verify-pack", packfile.path().to_str().unwrap()]);
-    assert!(!status.success());
-    let verdict = pack_verdict(&stdout);
-    assert_eq!(verdict["status"], "malformed_pack", "got: {stdout}");
-    assert!(
-        verdict["detail"].as_str().unwrap().contains("newer"),
-        "got: {stdout}"
-    );
+    // A pack newer than this binary must be named as too new, never
+    // misread as a malformed older one, in either the single-document or
+    // the line-by-line spelling.
+    for newer in [
+        &br#"{"manifest": {"pack_format_version": 5}}"#[..],
+        &b"{\"pack_format_version\": 5, \"pack_kind\": \"prefix\"}\n{}\n"[..],
+    ] {
+        let packfile = temp_file(newer);
+        let (status, stdout, _stderr) =
+            run_cli_no_db(&["audit", "verify-pack", packfile.path().to_str().unwrap()]);
+        assert!(!status.success());
+        let verdict = pack_verdict(&stdout);
+        assert_eq!(verdict["status"], "malformed_pack", "got: {stdout}");
+        assert!(
+            verdict["detail"].as_str().unwrap().contains("newer"),
+            "got: {stdout}"
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1180,10 +1307,10 @@ async fn evaluate_against_a_pack_needs_no_database() {
     assert_eq!(report["invariants"][0]["would_refuse"], 2, "got: {stdout}");
 
     // A tampered pack is refused, not scored.
-    let mut tampered: Value = serde_json::from_str(&pack_stdout).unwrap();
-    tampered["rows"][0]["transformation_name"] = serde_json::json!("tampered");
-    let mut tamperedfile = tempfile::NamedTempFile::new().unwrap();
-    std::io::Write::write_all(&mut tamperedfile, tampered.to_string().as_bytes()).unwrap();
+    let mut tampered = pack_lines(&pack_stdout);
+    let row = first_row(&tampered);
+    tampered[row]["transformation_name"] = serde_json::json!("tampered");
+    let tamperedfile = temp_file(pack_from_lines(&tampered).as_bytes());
     let (status, _stdout, stderr) = run_cli_no_db(&[
         "evaluate",
         candfile.path().to_str().unwrap(),
@@ -1198,7 +1325,7 @@ const CANDIDATE_NO_ENTRIES: &str = "program candidate\n\n\
      predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)\n\n\
      invariant no_entries:\n    not (exists e: JournalEntry(e, _, _))\n";
 
-/// Build a one-firm-year pack and write it to `dir/<name>.json`.
+/// Build a one-firm-year pack and write it to `dir/<name>.ndjson`.
 async fn write_case_pack(dir: &std::path::Path, name: &str, amount: i64) {
     reset_db().await;
     post_balanced_entry(name, amount);
@@ -1206,7 +1333,7 @@ async fn write_case_pack(dir: &std::path::Path, name: &str, amount: i64) {
     assert!(s.success(), "checkpoint {name}: {e}");
     let (s, pack, e) = run_cli(&["audit", "export"]);
     assert!(s.success(), "export {name}: {e}");
-    std::fs::write(dir.join(format!("{name}.json")), pack).unwrap();
+    std::fs::write(dir.join(format!("{name}.ndjson")), pack).unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1216,6 +1343,19 @@ async fn evaluate_packs_batches_offline_sorted_by_file_name() {
     write_case_pack(dir.path(), "c", 100).await;
     write_case_pack(dir.path(), "a", 200).await;
     write_case_pack(dir.path(), "b", 300).await;
+    // One pack of each form: line by line, compressed, and a single
+    // document.
+    let b = dir.path().join("b.ndjson");
+    std::fs::write(
+        dir.path().join("b.ndjson.gz"),
+        gzip(&std::fs::read(&b).unwrap()),
+    )
+    .unwrap();
+    std::fs::remove_file(&b).unwrap();
+    let c = dir.path().join("c.ndjson");
+    let document = as_single_document(&std::fs::read_to_string(&c).unwrap());
+    std::fs::write(dir.path().join("c.json"), document).unwrap();
+    std::fs::remove_file(&c).unwrap();
 
     let mut candfile = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut candfile, CANDIDATE_NO_ENTRIES.as_bytes()).unwrap();
@@ -1236,9 +1376,12 @@ async fn evaluate_packs_batches_offline_sorted_by_file_name() {
     let cases = report["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 3);
     // Deterministic, by file name, regardless of creation order.
-    assert_eq!(cases[0]["pack"], "a.json");
-    assert_eq!(cases[1]["pack"], "b.json");
+    assert_eq!(cases[0]["pack"], "a.ndjson");
+    assert_eq!(cases[1]["pack"], "b.ndjson.gz");
     assert_eq!(cases[2]["pack"], "c.json");
+    for case in cases {
+        assert_eq!(case["status"], "scored", "{stdout}");
+    }
     assert_eq!(cases[0]["status"], "scored");
     assert_eq!(cases[0]["invariants"][0]["would_refuse"], 1, "{stdout}");
 }
@@ -1260,7 +1403,10 @@ async fn evaluate_packs_aborts_on_an_unparseable_file() {
         dir.path().to_str().unwrap(),
     ]);
     assert!(!status.success(), "an unparseable pack file must abort");
-    assert!(stderr.contains("parsing pack file"), "got: {stderr}");
+    assert!(
+        stderr.contains("is not a complete-prefix evidence pack"),
+        "got: {stderr}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3710,10 +3856,9 @@ async fn verify_pack_reports_witnesses_only_when_asked() {
     assert!(status.success(), "{stderr}");
 
     // The same pack with the recorded token grafted onto its checkpoint.
-    let mut pack: Value = serde_json::from_str(&pack_stdout).unwrap();
-    pack["checkpoints"][0]["witnesses"] = Value::Array(vec![recorded_witness_json()]);
-    let mut packfile = tempfile::NamedTempFile::new().unwrap();
-    std::io::Write::write_all(&mut packfile, pack.to_string().as_bytes()).unwrap();
+    let mut lines = pack_lines(&pack_stdout);
+    lines[1]["witnesses"] = Value::Array(vec![recorded_witness_json()]);
+    let packfile = temp_file(pack_from_lines(&lines).as_bytes());
     let path = packfile.path().to_str().unwrap();
 
     // Not asked: the report, with no witnesses in it.
@@ -4209,4 +4354,74 @@ async fn transact_prints_the_one_decision_and_writes_all_or_nothing() {
         claims_after, 2,
         "the first act did not survive the second's refusal"
     );
+}
+
+/// A resource bound, not an attacker: verifying a complete-prefix pack
+/// holds about one row at a time, so a pack several times larger than all
+/// the memory the verifier may allocate still verifies. That is what lets
+/// a stranger check a long history on an ordinary laptop.
+#[tokio::test(flavor = "current_thread")]
+async fn a_pack_larger_than_the_verifiers_memory_still_verifies() {
+    const ROWS: i64 = 40_000;
+    const LIMIT_KIB: u64 = 64 * 1024;
+    reset_db().await;
+    let pool = morpholog_postgres::PgPool::connect(&database_url())
+        .await
+        .unwrap();
+    // Hand-written rows attest themselves, as every audit row must.
+    sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor, invariant_epoch,
+            invariants_checked, asserted_claims, retracted_claims, emitted_intents,
+            attestation, parameters)
+         SELECT gen_random_uuid(), 'note',
+                jsonb_build_array(jsonb_build_object(
+                    'type', 'subject', 'value', repeat(md5(i::text), 128))),
+                '{\"type\":\"subject\",\"value\":\"alex\"}'::jsonb, 1,
+                '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb,
+                '[\"note\"]'::jsonb
+         FROM generate_series(1, $1) AS i",
+    )
+    .bind(ROWS)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (status, _, stderr) = run_cli(&["audit", "checkpoint"]);
+    assert!(status.success(), "{stderr}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pack.ndjson");
+    let export = Command::new(common::bin())
+        .args(["audit", "export", "--database-url", &database_url()])
+        .stdout(std::fs::File::create(&path).unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        export.status.success(),
+        "{}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+    let size = std::fs::metadata(&path).unwrap().len();
+    assert!(
+        size > 2 * LIMIT_KIB * 1024,
+        "the pack ({size} bytes) must dwarf the allowance"
+    );
+
+    let verify = Command::new("sh")
+        .args([
+            "-c",
+            &format!("ulimit -d {LIMIT_KIB} && exec \"$0\" audit verify-pack \"$1\""),
+            common::bin(),
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&verify.stdout);
+    assert!(
+        verify.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&verify.stderr)
+    );
+    assert_eq!(pack_verdict(&stdout)["status"], "intact", "{stdout}");
 }

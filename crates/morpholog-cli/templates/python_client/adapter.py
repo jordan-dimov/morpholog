@@ -16,10 +16,12 @@ generated halves of the package meet only at that seam.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
-from typing import Callable, TypeVar
+import tempfile
+from typing import IO, Callable, TypeVar
 
 from . import envelopes
 
@@ -179,14 +181,21 @@ class Morpholog:
     # ------------------------------------------------------------
 
     def _run(
-        self, args: list[str], stdin: str | None = None, *, timeout: float | None
+        self,
+        args: list[str],
+        stdin: str | None = None,
+        *,
+        timeout: float | None,
+        stdout: IO[bytes] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Every invocation lands here. A timeout is operational, not a
-        decided outcome, so it raises ``MorphologError``."""
+        decided outcome, so it raises ``MorphologError``. ``stdout``, when
+        given, receives the output instead of memory."""
         try:
             return subprocess.run(
                 [self.binary, *args],
-                capture_output=True,
+                stdout=subprocess.PIPE if stdout is None else stdout,
+                stderr=subprocess.PIPE,
                 text=True,
                 input=stdin,
                 timeout=timeout,
@@ -800,15 +809,38 @@ class Morpholog:
         args += self._repeat("--witness", witnesses)
         return envelopes.Checkpoint.from_json(self._json(*args))
 
-    def audit_export(self, tree_size: int | None = None) -> envelopes.EvidencePack:
-        """Export a complete-prefix evidence pack covering the latest
-        checkpoint, or the one at ``tree_size``. The pack carries the
-        full audit prefix - confidential data, not selective
-        disclosure."""
+    def audit_export(
+        self, path: str, tree_size: int | None = None, timeout: float | None = None
+    ) -> envelopes.PrefixPackManifest:
+        """Write a complete-prefix evidence pack covering the latest
+        checkpoint, or the one at ``tree_size``, to ``path``, and return its
+        manifest. The pack goes to a file beside ``path`` and replaces
+        ``path`` only once the export has succeeded, so a failed export
+        leaves no partial pack. It carries the full audit prefix -
+        confidential data, not selective disclosure. It compresses well
+        with gzip, and ``audit_verify_pack`` reads it either way.
+        ``timeout`` bounds this one call and defaults to unbounded: a long
+        history is the legitimate long-running case."""
         args = ["audit", "export", "--database-url", self.database_url]
         if tree_size is not None:
             args.extend(["--tree-size", str(tree_size)])
-        return envelopes.EvidencePack.from_json(self._json(*args))
+        directory = os.path.dirname(os.path.abspath(path))
+        fd, partial = tempfile.mkstemp(dir=directory, prefix=".morpholog-export-")
+        try:
+            with os.fdopen(fd, "wb") as out:
+                proc = self._run(args, timeout=timeout, stdout=out)
+            if proc.returncode != 0:
+                raise MorphologError(
+                    f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}"
+                )
+            with open(partial, "rb") as written:
+                manifest = envelopes.PrefixPackManifest.from_json(json.loads(written.readline()))
+            os.replace(partial, path)
+            return manifest
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(partial)
+            raise
 
     def audit_verify_pack(
         self,

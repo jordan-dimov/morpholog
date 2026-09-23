@@ -9,14 +9,14 @@ use std::path::Path;
 use anyhow::Context;
 use morpholog_core::{BatchScore, CandidateScore, Program, invariants_using_pre};
 use morpholog_postgres::{
-    EvidencePack, SplitBoundary, score_candidate, score_candidate_against_pack,
+    EvidencePack, SplitBoundary, read_prefix_stream, score_candidate, score_candidate_against_pack,
     score_candidate_against_packs,
 };
 
 use crate::EvaluateArgs;
+use crate::commands::evidence::{PackInput, open_pack};
 use crate::commands::{
-    AlreadyReported, connect, parse_or_report, print_json, read_anchor, read_json,
-    validate_or_report,
+    AlreadyReported, connect, parse_or_report, print_json, read_anchor, validate_or_report,
 };
 
 pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
@@ -85,8 +85,9 @@ fn parse_boundary(raw: &str) -> anyhow::Result<SplitBoundary> {
     Ok(SplitBoundary::AtOrBefore(at))
 }
 
-/// Score the candidate against every `*.json` evidence pack in `dir`,
-/// offline, in file-name order. An unreadable or unparseable file aborts
+/// Score the candidate against every evidence pack in `dir` (`.json` or
+/// `.ndjson`, either gzip-compressed or not), offline, in file-name order,
+/// reading one pack at a time. An unreadable or unparseable file aborts
 /// the batch, since the directory is controlled input. A pack that parses
 /// but does not verify is a per-case failure in the report.
 fn score_against_packs(program: &Program, dir: &Path) -> anyhow::Result<BatchScore> {
@@ -98,29 +99,43 @@ fn score_against_packs(program: &Program, dir: &Path) -> anyhow::Result<BatchSco
         let path = entry
             .with_context(|| format!("reading an entry in {}", dir.display()))?
             .path();
-        if path.extension().is_some_and(|ext| ext == "json") {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+        if name.is_some_and(|n| {
+            [".json", ".ndjson", ".json.gz", ".ndjson.gz"]
+                .iter()
+                .any(|ext| n.ends_with(ext))
+        }) {
             paths.push(path);
         }
     }
     paths.sort();
-
-    let named: Vec<(String, EvidencePack)> = paths
-        .iter()
-        .map(|path| {
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let pack: EvidencePack = read_json(path, "pack", "an evidence pack")?;
-            Ok((name, pack))
-        })
-        .collect::<anyhow::Result<_>>()?;
-
-    if named.is_empty() {
-        anyhow::bail!("no `*.json` evidence packs found in {}", dir.display());
+    if paths.is_empty() {
+        anyhow::bail!("no evidence packs found in {}", dir.display());
     }
 
-    score_candidate_against_packs(program, &named).context("scoring against the packs failed")
+    let named = paths.iter().map(|path| {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Ok::<_, anyhow::Error>((name, read_complete_prefix(path)?))
+    });
+    score_candidate_against_packs(program, named).context("scoring against the packs failed")
+}
+
+/// A complete-prefix pack in either form, whole in memory, since scoring
+/// replays every row.
+fn read_complete_prefix(path: &Path) -> anyhow::Result<EvidencePack> {
+    let not_a_pack = || format!("{} is not a complete-prefix evidence pack", path.display());
+    match open_pack(path)? {
+        PackInput::Stream(input) => read_prefix_stream(input).with_context(not_a_pack),
+        PackInput::Document(bytes) => serde_json::from_slice(&bytes).with_context(not_a_pack),
+        PackInput::Newer(n) => Err(anyhow::anyhow!(
+            "pack_format_version {n} is newer than this binary understands"
+        ))
+        .with_context(not_a_pack),
+        PackInput::Unreadable(detail) => Err(anyhow::anyhow!(detail)).with_context(not_a_pack),
+    }
 }
 
 /// Read an evidence pack (and optional external anchor) and score the
@@ -131,7 +146,7 @@ fn score_against_pack(
     anchor_path: Option<&Path>,
     split: Option<SplitBoundary>,
 ) -> anyhow::Result<CandidateScore> {
-    let pack: EvidencePack = read_json(pack_path, "pack", "an evidence pack")?;
+    let pack = read_complete_prefix(pack_path)?;
     let anchor = read_anchor(anchor_path)?;
 
     score_candidate_against_pack(program, &pack, anchor.as_ref(), split)

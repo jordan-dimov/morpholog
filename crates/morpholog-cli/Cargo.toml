@@ -27,6 +27,8 @@ base64 = { workspace = true }
 # The timestamp-authority exchange, rustls only: no OpenSSL, no async
 # client stack for one POST per checkpoint.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
+# Evidence packs may arrive gzip-compressed; pure Rust.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [dev-dependencies]
 # Tests only: the binary stays file-path-driven and bundles no

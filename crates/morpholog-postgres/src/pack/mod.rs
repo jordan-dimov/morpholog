@@ -204,6 +204,10 @@ pub enum PackError {
     /// A row could not be re-encoded to recompute its leaf hash.
     #[error("could not recompute a leaf hash from the pack: {0}")]
     Encoding(#[from] serde_json::Error),
+    /// Reading the pack failed for a reason of the reader's own, not of
+    /// the pack's bytes.
+    #[error("reading the pack failed: {0}")]
+    Read(std::io::Error),
 }
 
 /// Verify an evidence pack offline, with no database.
@@ -228,20 +232,38 @@ pub fn verify_pack(
 /// The v1 envelope rules, checked before any cryptography. Stricter than
 /// the live verifier on purpose: a pack is untrusted JSON.
 fn validate_envelope(pack: &EvidencePack) -> Result<(), PackError> {
+    let covering = validate_prefix_chain(&pack.checkpoints)?;
+    // Exactly the rows the covering checkpoint commits to: extra rows would
+    // ride along unproven.
+    if pack.rows.len() as i64 != covering.tree_size {
+        return Err(row_count_disagrees(pack.rows.len(), covering.tree_size));
+    }
+    let m = &pack.manifest;
+    if m.pack_format_version != PACK_FORMAT_V1 {
+        return Err(PackError::Malformed {
+            detail: format!("unsupported pack_format_version {}", m.pack_format_version),
+        });
+    }
+    manifest_agrees(covering, m.tree_size, &m.root_hash, &m.checkpoint_hash)
+}
+
+/// The chain rules every complete-prefix pack obeys; returns the covering
+/// checkpoint.
+fn validate_prefix_chain(checkpoints: &[Checkpoint]) -> Result<&Checkpoint, PackError> {
     let malformed = |detail: String| PackError::Malformed { detail };
 
-    let Some(covering) = pack.checkpoints.last() else {
+    let Some(covering) = checkpoints.last() else {
         return Err(malformed("the checkpoint chain is empty".into()));
     };
     // The database enforces `tree_size >= 0`; a pack must be checked.
-    if let Some(bad) = pack.checkpoints.iter().find(|c| c.tree_size < 0) {
+    if let Some(bad) = checkpoints.iter().find(|c| c.tree_size < 0) {
         return Err(malformed(format!(
             "checkpoint tree_size is negative: {}",
             bad.tree_size
         )));
     }
     // Strictly increasing sizes, so the covering checkpoint is the last.
-    for pair in pack.checkpoints.windows(2) {
+    for pair in checkpoints.windows(2) {
         if pair[1].tree_size <= pair[0].tree_size {
             return Err(malformed(format!(
                 "checkpoint sizes are not strictly increasing: {} then {}",
@@ -249,30 +271,31 @@ fn validate_envelope(pack: &EvidencePack) -> Result<(), PackError> {
             )));
         }
     }
-    // Exactly the rows the covering checkpoint commits to: extra rows would
-    // ride along unproven.
-    if pack.rows.len() as i64 != covering.tree_size {
-        return Err(malformed(format!(
-            "pack carries {} rows but the covering checkpoint commits to {}",
-            pack.rows.len(),
-            covering.tree_size
-        )));
+    Ok(covering)
+}
+
+fn row_count_disagrees(rows: usize, tree_size: i64) -> PackError {
+    PackError::Malformed {
+        detail: format!(
+            "pack carries {rows} rows but the covering checkpoint commits to {tree_size}"
+        ),
     }
-    // The crypto ignores the manifest, but people read it, so it must not lie.
-    let m = &pack.manifest;
-    if m.pack_format_version != PACK_FORMAT_V1 {
-        return Err(malformed(format!(
-            "unsupported pack_format_version {}",
-            m.pack_format_version
-        )));
-    }
-    if m.tree_size != covering.tree_size
-        || m.root_hash != covering.root_hash
-        || m.checkpoint_hash != covering.checkpoint_hash
+}
+
+/// The crypto ignores the manifest, but people read it, so it must not lie.
+fn manifest_agrees(
+    covering: &Checkpoint,
+    tree_size: i64,
+    root_hash: &Digest,
+    checkpoint_hash: &Digest,
+) -> Result<(), PackError> {
+    if tree_size != covering.tree_size
+        || *root_hash != covering.root_hash
+        || *checkpoint_hash != covering.checkpoint_hash
     {
-        return Err(malformed(
-            "manifest disagrees with the covering checkpoint".into(),
-        ));
+        return Err(PackError::Malformed {
+            detail: "manifest disagrees with the covering checkpoint".into(),
+        });
     }
     Ok(())
 }
@@ -946,8 +969,30 @@ fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackE
     Ok(())
 }
 
+mod prefix_stream;
+pub use prefix_stream::{
+    PrefixExport, PrefixPackManifest, PrefixStreamReport, begin_prefix_export, read_prefix_stream,
+    streamed_pack_version, verify_prefix_stream,
+};
+
 #[cfg(test)]
 mod tests;
+
+/// A single-document pack's `manifest.pack_format_version`, read without
+/// building the whole document in memory.
+pub fn pack_format_version(bytes: &[u8]) -> Option<u64> {
+    #[derive(Deserialize)]
+    struct Probe {
+        manifest: ProbeManifest,
+    }
+    #[derive(Deserialize)]
+    struct ProbeManifest {
+        pack_format_version: u64,
+    }
+    serde_json::from_slice::<Probe>(bytes)
+        .ok()
+        .map(|probe| probe.manifest.pack_format_version)
+}
 
 /// The role rebindings among a pack's rows, in log order, given the
 /// verdict that pack received. Only an intact verdict establishes the

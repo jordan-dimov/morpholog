@@ -531,9 +531,10 @@ pub(crate) struct EvaluateArgs {
     #[arg(long)]
     pub(crate) pack: Option<std::path::PathBuf>,
 
-    /// Batch mode: score offline against every `*.json` evidence pack in
-    /// this directory, in one process, returning one JSON report with a
-    /// case per pack. No connection is opened. Anchors are single-pack only.
+    /// Batch mode: score offline against every evidence pack in this
+    /// directory (`.json` or `.ndjson`, gzip-compressed or not), one at a
+    /// time in one process, returning one JSON report with a case per pack.
+    /// No connection is opened. Anchors are single-pack only.
     #[arg(long, conflicts_with = "pack")]
     pub(crate) packs: Option<std::path::PathBuf>,
 
@@ -622,9 +623,10 @@ pub(crate) enum AuditCmd {
     /// head recorded earlier or a submission that failed then.
     Witness(WitnessArgs),
 
-    /// Export a portable evidence pack as JSON (redirect to a file).
+    /// Export a portable evidence pack (redirect to a file).
     ///
-    /// A complete checkpointed prefix by default; with
+    /// A complete checkpointed prefix by default, written one line at a
+    /// time (pipe it through `gzip` to make it small); with
     /// `--from-anchor`/`--from-tree-size` the window between that
     /// earlier checkpoint and the covering one, proving it extends the
     /// earlier anchor; with `--transition` a selective pack of just
@@ -640,7 +642,7 @@ pub(crate) enum AuditCmd {
     /// `--anchor-file` if given. This is the check a recipient runs:
     /// the database that produced the pack is not consulted, and
     /// cannot be. Exits one on any tamper, divergence, or malformed
-    /// pack.
+    /// pack. Reads a gzip-compressed pack as it is.
     VerifyPack(EvidenceVerifyArgs),
 
     /// Generate an Ed25519 audit-signing keypair.
@@ -692,7 +694,8 @@ pub(crate) struct EvidenceExportArgs {
 /// anchor. No connection string - the offline guarantee is in the shape.
 #[derive(clap::Args, Debug)]
 pub(crate) struct EvidenceVerifyArgs {
-    /// Path to a pack JSON file (as printed by `audit export`).
+    /// Path to a pack file (as written by `audit export`), plain or
+    /// gzip-compressed.
     pub(crate) pack_file: std::path::PathBuf,
 
     /// Path to a checkpoint JSON file (as printed by `audit checkpoint`), held

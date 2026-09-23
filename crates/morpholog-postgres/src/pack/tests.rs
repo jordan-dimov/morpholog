@@ -714,3 +714,168 @@ fn a_selective_pack_rejects_unknown_fields() {
     v["surprise"] = serde_json::json!("not part of the proof");
     assert!(serde_json::from_value::<SelectiveEvidencePack>(v).is_err());
 }
+
+// Complete-prefix packs as NDJSON. Attacker capability modelled: full
+// control of the pack file (reorder, drop, add, edit or truncate lines, or
+// append data); the verifier holds nothing but the file and an optional
+// anchor.
+
+/// A genuine streamed pack over `n` rows, checkpointed at `sizes`.
+fn streamed_pack(n: usize, sizes: &[usize]) -> (Vec<String>, Vec<Checkpoint>) {
+    let rows = rows_tagged(n, 'a');
+    let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+    let mut chain: Vec<Checkpoint> = Vec::new();
+    for &size in sizes {
+        let cp = real_checkpoint(&leaves, size, chain.last());
+        chain.push(cp);
+    }
+    let covering = chain.last().unwrap();
+    let manifest = PrefixPackManifest {
+        pack_format_version: 4,
+        pack_kind: "prefix".into(),
+        tree_size: covering.tree_size,
+        root_hash: covering.root_hash,
+        checkpoint_hash: covering.checkpoint_hash,
+        checkpoint_count: chain.len() as u64,
+    };
+    let mut lines = vec![serde_json::to_string(&manifest).unwrap()];
+    lines.extend(chain.iter().map(|c| serde_json::to_string(c).unwrap()));
+    lines.extend(rows.iter().map(|r| serde_json::to_string(r).unwrap()));
+    (lines, chain)
+}
+
+fn bytes(lines: &[String]) -> Vec<u8> {
+    lines
+        .iter()
+        .flat_map(|l| format!("{l}\n").into_bytes())
+        .collect()
+}
+
+fn stream_verdict(
+    input: &[u8],
+    anchor: Option<&Checkpoint>,
+) -> Result<TreeVerification, PackError> {
+    verify_prefix_stream(input, anchor).map(|report| report.verdict)
+}
+
+fn stream_malformed(input: &[u8], detail_contains: &str) {
+    match stream_verdict(input, None) {
+        Err(PackError::Malformed { detail }) => assert!(
+            detail.contains(detail_contains),
+            "expected detail to mention {detail_contains:?}, got {detail:?}"
+        ),
+        other => panic!("expected Malformed ({detail_contains}), got {other:?}"),
+    }
+}
+
+/// Line 1, the chain, then the rows, in the header's own counts.
+const HEADER: usize = 1 + 2;
+
+#[test]
+fn a_streamed_pack_verifies_and_agrees_with_the_same_rows_as_one_document() {
+    let (lines, chain) = streamed_pack(5, &[2, 5]);
+    let report = verify_prefix_stream(&bytes(&lines)[..], None).unwrap();
+    let rows: Vec<AuditRow> = lines[HEADER..]
+        .iter()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let covering = chain.last().unwrap();
+    let document = EvidencePack {
+        manifest: manifest_for(covering),
+        checkpoints: chain.clone(),
+        rows,
+    };
+    assert!(matches!(report.verdict, TreeVerification::Intact { .. }));
+    assert_eq!(report.verdict, verify_pack(&document, None).unwrap());
+    assert_eq!(report.checkpoints, chain);
+    assert_eq!(streamed_pack_version(lines[0].as_bytes()), Some(4));
+    let one_document = serde_json::to_string(&document).unwrap();
+    assert_eq!(streamed_pack_version(one_document.as_bytes()), None);
+    assert_eq!(pack_format_version(one_document.as_bytes()), Some(1));
+}
+
+#[test]
+fn every_break_in_the_line_format_is_malformed() {
+    let (lines, _) = streamed_pack(5, &[2, 5]);
+    let edit = |f: &dyn Fn(&mut Vec<String>)| {
+        let mut l = lines.clone();
+        f(&mut l);
+        bytes(&l)
+    };
+
+    stream_malformed(
+        &edit(&|l| l[0] = l[0].replace("\"prefix\"", "\"window\"")),
+        "not a complete-prefix pack",
+    );
+    stream_malformed(
+        &edit(&|l| l[0] = l[0].replacen('{', "{\"extra\":1,", 1)),
+        "the manifest that does not parse",
+    );
+    stream_malformed(
+        &edit(&|l| l[0] = l[0].replace("\"checkpoint_count\":2", "\"checkpoint_count\":3")),
+        "a checkpoint that does not parse",
+    );
+    stream_malformed(
+        &edit(&|l| l.swap(HEADER + 1, HEADER + 2)),
+        "not in strictly increasing log order",
+    );
+    stream_malformed(
+        &edit(&|l| l[HEADER + 2] = l[HEADER + 1].clone()),
+        "not in strictly increasing log order",
+    );
+    stream_malformed(
+        &edit(&|l| {
+            l.pop();
+        }),
+        "pack carries 4 rows but the covering checkpoint commits to 5",
+    );
+    stream_malformed(
+        &edit(&|l| l.push(l[HEADER].clone())),
+        "data after the 5 rows",
+    );
+    stream_malformed(&edit(&|l| l.push(String::new())), "data after the 5 rows");
+    stream_malformed(
+        &edit(&|l| l.insert(HEADER, String::new())),
+        "an audit row that does not parse",
+    );
+
+    let mut unterminated = bytes(&lines);
+    unterminated.pop();
+    stream_malformed(&unterminated, "does not end in a newline");
+    let full = bytes(&lines);
+    stream_malformed(&full[..full.len() - 20], "does not end in a newline");
+    stream_malformed(
+        &full[..lines[0].len() + 1],
+        "the pack ends where a checkpoint was expected",
+    );
+    stream_malformed(b"", "the pack ends where the manifest was expected");
+}
+
+/// A break in the format outranks a verdict already reached about the
+/// rows before it: the file as a whole proves nothing.
+#[test]
+fn a_late_break_in_the_format_outranks_an_earlier_tamper() {
+    let (lines, chain) = streamed_pack(5, &[2, 5]);
+    let mut tampered = lines.clone();
+    tampered[HEADER] = tampered[HEADER].replace("\"Xa\"", "\"forged\"");
+    assert!(matches!(
+        stream_verdict(&bytes(&tampered), None).unwrap(),
+        TreeVerification::Tampered { tree_size: 2, .. }
+    ));
+    let mut and_extra = tampered.clone();
+    and_extra.push(tampered[HEADER].clone());
+    stream_malformed(&bytes(&and_extra), "data after the 5 rows");
+
+    let mut foreign = chain[0].clone();
+    foreign.checkpoint_hash = digest(&format!("sha256:{}", "e".repeat(64)));
+    assert!(matches!(
+        stream_verdict(&bytes(&lines), Some(&foreign)).unwrap(),
+        TreeVerification::AnchorMismatch { .. }
+    ));
+    let mut late = bytes(&lines);
+    late.extend_from_slice(b"{}\n");
+    match verify_prefix_stream(&late[..], Some(&foreign)) {
+        Err(PackError::Malformed { .. }) => {}
+        other => panic!("a malformed pack must outrank the anchor mismatch, got {other:?}"),
+    }
+}

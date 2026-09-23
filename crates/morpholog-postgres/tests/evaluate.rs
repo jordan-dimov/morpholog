@@ -231,7 +231,9 @@ async fn batch_over_packs_equals_individual_scores() {
     }
     let candidate = no_entries();
 
-    let batch = score_candidate_against_packs(&candidate, &cases).unwrap();
+    let batch =
+        score_candidate_against_packs(&candidate, cases.clone().into_iter().map(Ok::<_, PgError>))
+            .unwrap();
     assert_eq!(batch.cases.len(), 3);
     assert_eq!(batch.semantics, "case_bound_admission_v2");
 
@@ -272,7 +274,11 @@ async fn a_tampered_pack_fails_only_its_own_case() {
     v["rows"][0]["transformation_name"] = serde_json::json!("tampered");
     let p1_bad: EvidencePack = serde_json::from_value(v).unwrap();
 
-    let batch = score_candidate_against_packs(&no_entries(), &[(n0, p0), (n1, p1_bad)]).unwrap();
+    let batch = score_candidate_against_packs(
+        &no_entries(),
+        [(n0, p0), (n1, p1_bad)].map(Ok::<_, PgError>),
+    )
+    .unwrap();
     assert!(matches!(batch.cases[0].outcome, CaseOutcome::Scored { .. }));
     match &batch.cases[1].outcome {
         CaseOutcome::Failed { error } => assert!(error.contains("does not verify")),
@@ -291,7 +297,7 @@ async fn a_pre_candidate_fails_the_whole_batch_once() {
             claim("JournalEntry", vec![var("e"), wildcard(), wildcard()]),
         )),
     ));
-    let err = score_candidate_against_packs(&pre_candidate, &[case]).unwrap_err();
+    let err = score_candidate_against_packs(&pre_candidate, [Ok::<_, PgError>(case)]).unwrap_err();
     assert!(matches!(err, PgError::InvalidState(msg) if msg.contains("pre(...)")));
 }
 
