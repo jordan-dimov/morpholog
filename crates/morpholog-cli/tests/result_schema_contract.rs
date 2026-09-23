@@ -1197,9 +1197,17 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
     );
     assert_golden(
         "transact_error.json",
-        &to_value(&morpholog_cli::envelopes::AtomicError::new(
+        &to_value(&morpholog_cli::envelopes::RequestError::new(
             morpholog_cli::envelopes::ErrorCode::SerializationFailure,
             "the proposal could not be decided: restart the transaction".to_string(),
+        )),
+    );
+    // One-shot `propose` states a known non-commit the same way.
+    assert_golden(
+        "propose_error_not_committed.json",
+        &to_value(&morpholog_cli::envelopes::RequestError::new(
+            morpholog_cli::envelopes::ErrorCode::NotCommitted,
+            "the proposal was not committed: failed to connect to PostgreSQL".to_string(),
         )),
     );
     let mut in_session = to_value(&PgAtomicOutcome::Rejected {
@@ -1858,6 +1866,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("transact_committed.json", "atomic_outcome"),
         ("transact_rejected.json", "atomic_outcome"),
         ("transact_error.json", "atomic_outcome"),
+        ("propose_error_not_committed.json", "request_error"),
         ("transact_rejected_session.json", "atomic_outcome"),
         (
             "session_error_receipt_commit_outcome_unknown.json",

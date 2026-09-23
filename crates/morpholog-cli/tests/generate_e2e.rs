@@ -197,6 +197,58 @@ print("ok")
     );
 }
 
+/// The generated client against the real binary: a known non-commit on
+/// every commitful surface reaches the caller as a coded refusal, never as
+/// an unknown outcome. A database that does not exist fails the
+/// connection at once, so nothing here needs one. The batch is refused at
+/// the connection, before its first row, on one NDJSON line.
+#[test]
+fn the_client_reads_the_real_binary_s_known_non_commits_as_refusals() {
+    let out = tempfile::tempdir().unwrap();
+    assert!(generate(&trade_lifecycle(), out.path()).status.success());
+    let probe = r#"
+import sys
+sys.path.insert(0, sys.argv[1])
+from morpholog_client import Morpholog, MorphologRequestError, envelopes
+client = Morpholog(sys.argv[2], "postgres:///morpholog_no_such_database", binary=sys.argv[3])
+row = {"transformation": "capture_trade", "actor": "trader", "args_named": {}}
+calls = {
+    "propose": lambda: client.propose("capture_trade", "trader", {}),
+    "transact": lambda: client.transact([row]),
+    "propose_batch": lambda: client.propose_batch([row, row]),
+}
+for name, call in calls.items():
+    try:
+        call()
+    except MorphologRequestError as exc:
+        known = exc.code in envelopes.NOTHING_RECORDED_CODES
+        print(name, "refused" if known else "WRONG", exc.code)
+        continue
+    except Exception as exc:
+        print(name, "WRONG", type(exc).__name__, exc)
+        continue
+    print(name, "WRONG no error")
+"#;
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            probe,
+            out.path().to_str().unwrap(),
+            trade_lifecycle().to_str().unwrap(),
+            bin(),
+        ])
+        .output()
+        .expect("python3 runs the emitted package");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for name in ["propose", "transact", "propose_batch"] {
+        assert!(
+            stdout.contains(&format!("{name} refused")),
+            "{name} should be a coded refusal:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 fn refusal_fixture(source: &str) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("model.morph");

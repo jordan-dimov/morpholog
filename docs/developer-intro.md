@@ -660,15 +660,33 @@ In Python, the whole integration is this:
 import json
 import subprocess
 
+class OutcomeUnknown(Exception):
+    """It may have committed: read the record before trying again."""
+
+# The codes that mean nothing was recorded (the generated client ships
+# this list as NOTHING_RECORDED_CODES). Any other code - a newer one
+# included - says nothing, so it is unknown.
+NOTHING_RECORDED = {
+    "actor_assertion_unauthorised", "duplicate_intent", "invalid_arguments",
+    "invalid_request", "kernel_error", "not_committed",
+    "serialization_failure", "unknown_transformation",
+}
+
 def propose(transformation: str, actor: str, args: dict) -> dict:
     result = subprocess.run(
         ["morpholog", "propose", "revenue.morph", transformation,
          "--actor", actor, "--args-named", json.dumps(args)],
         capture_output=True, text=True,
     )
-    if not result.stdout.strip():
-        raise RuntimeError(result.stderr)   # operational failure, not a refusal
-    return json.loads(result.stdout)        # committed or rejected, either way a receipt
+    try:
+        receipt = json.loads(result.stdout)
+    except ValueError:
+        raise OutcomeUnknown(result.stderr)       # no statement at all
+    if receipt.get("status") in ("committed", "rejected"):
+        return receipt                            # a decided outcome, either way
+    if receipt.get("status") == "error" and receipt.get("code") in NOTHING_RECORDED:
+        raise RuntimeError(receipt["error"])      # the binary says nothing was committed
+    raise OutcomeUnknown(result.stderr)
 
 receipt = propose("report_revenue", "verifier_anna", {
     "asset": "battery_07", "period": "q1_2026",
@@ -681,11 +699,13 @@ if receipt["status"] == "rejected":
 
 A business refusal is data, not an exception. That is why the snippet does not
 pass `check=True`: a refusal exits non-zero but still writes the receipt to
-stdout, and `check=True` would raise before you ever read it. The
-discrimination rule is the one load-bearing line: every *decided* result
-arrives on stdout (stderr may carry advisory lines, like the rule's source
-location on a refusal); **empty stdout** is the only operational failure. Your endpoint
-turns the rejection into a 422 with the reason attached. A worked version of
+stdout, and `check=True` would raise before you ever read it. The rule that
+carries the weight is what counts as an answer. A committed or rejected
+receipt is one. So is an error object whose `code` says nothing was
+committed. Anything else - nothing on stdout, output that does not parse, a
+process that was killed - may have happened after the commit was sent, so it
+means "go and look", never "nothing changed". Your endpoint turns the
+rejection into a 422 with the reason attached. A worked version of
 exactly this pattern, driving a commodity-trade lifecycle end to end, lives in
 [`../examples/etrm_embedder/`](../examples/etrm_embedder/), with the full
 contract in [`embedder-integration.md`](embedder-integration.md).

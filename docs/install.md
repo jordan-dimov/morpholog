@@ -166,6 +166,25 @@ reports it. The rejection-witness migration is named only by a *refusal*, so
 **accepted proposals keep working** and the trouble surfaces well after the
 upgrade.
 
+## Several projects on one machine
+
+A `morpholog` on `PATH` serves every project on the machine. Migrate one
+project's database with a newer binary and the older projects' binary
+refuses that database until they upgrade too - safely, but by surprise. So
+keep one binary per version, side by side, and point each project at the
+one its generated client was built for:
+
+```bash
+mkdir -p ~/.local/lib/morpholog/v0.0.11
+tar -xzf "morpholog-v0.0.11-$TARGET.tar.gz" --strip-components=1 -C ~/.local/lib/morpholog/v0.0.11
+export MORPHOLOG_BIN=~/.local/lib/morpholog/v0.0.11/morpholog   # per project
+```
+
+The generated Python client reads `MORPHOLOG_BIN` before `PATH`. It does
+not check the binary's version itself, and a client generated for an older
+binary can refuse a newer binary's output as contract drift, so upgrade the
+binary and regenerate the client together.
+
 From here: the [developer introduction](developer-intro.md) builds a
 governed model from scratch; [`embedder-integration.md`](embedder-integration.md)
 is the integration contract.

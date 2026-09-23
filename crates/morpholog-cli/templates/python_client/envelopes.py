@@ -179,12 +179,18 @@ class Rejected:
 
 @dataclass(frozen=True)
 class Errored:
+    """A traced proposal whose transformation raised a kernel error:
+    nothing was committed, and ``code`` is always ``kernel_error``."""
+
+    code: str
     error: str
 
     @classmethod
     def from_json(cls, payload: object) -> Errored:
-        data = _strict("errored result", payload, {"status", "error"})
-        return cls(error=data["error"])
+        data = _strict("errored result", payload, {"status", "code", "error"})
+        if data["code"] != "kernel_error":
+            raise EnvelopeError(f"errored result: unexpected code {data['code']!r}")
+        return cls(code=str(data["code"]), error=str(data["error"]))
 
 
 def parse_run_outcome(payload: object) -> Committed | Rejected:
@@ -724,6 +730,50 @@ class SessionReady:
             program=str(data["program"]),
             protocol=int(str(data["protocol"])),
         )
+
+
+#: The codes a proposal can fail with - the schema's
+#: ``propose_error_code``, which a test holds this set to. Only one of
+#: these, other than ``commit_outcome_unknown``, lets a caller treat a
+#: proposal as not committed; any other code is read as unknown.
+PROPOSE_ERROR_CODES = frozenset(
+    {
+        "actor_assertion_unauthorised",
+        "commit_outcome_unknown",
+        "duplicate_intent",
+        "invalid_arguments",
+        "invalid_request",
+        "kernel_error",
+        "not_committed",
+        "serialization_failure",
+        "unknown_transformation",
+    }
+)
+
+
+#: The codes that say nothing was recorded: every published code but
+#: ``commit_outcome_unknown``. A caller that hand-rolls its own handling
+#: should treat a proposal as not committed on one of these and on
+#: nothing else.
+NOTHING_RECORDED_CODES = PROPOSE_ERROR_CODES - {"commit_outcome_unknown"}
+
+
+@dataclass(frozen=True)
+class RequestError:
+    """The error object a one-shot ``propose`` or ``transact`` prints when
+    the request as a whole failed, and the object a batch prints when it
+    was refused before its first row. It is the binary's own statement;
+    the client never infers one."""
+
+    code: str
+    error: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> RequestError:
+        data = _strict("request error", payload, {"code", "error", "status"})
+        if data["status"] != "error":
+            raise EnvelopeError(f"request error: unexpected status {data['status']!r}")
+        return cls(code=str(data["code"]), error=str(data["error"]))
 
 
 @dataclass(frozen=True)

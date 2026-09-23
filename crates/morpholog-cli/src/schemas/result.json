@@ -219,7 +219,7 @@
         "row": { "type": "integer", "minimum": 1 }
       }
     },
-    "atomic_error": {
+    "request_error": {
       "type": "object",
       "additionalProperties": false,
       "required": ["status", "code", "error"],
@@ -233,15 +233,16 @@
       "oneOf": [
         { "$ref": "#/$defs/atomic_committed" },
         { "$ref": "#/$defs/atomic_rejected" },
-        { "$ref": "#/$defs/atomic_error" }
+        { "$ref": "#/$defs/request_error" }
       ]
     },
     "errored": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "error"],
+      "required": ["status", "code", "error"],
       "properties": {
         "status": { "const": "errored" },
+        "code": { "const": "kernel_error" },
         "error": { "type": "string" }
       }
     },

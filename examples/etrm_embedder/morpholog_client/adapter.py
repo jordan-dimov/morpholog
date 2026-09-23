@@ -3,8 +3,10 @@
 The load-bearing rule is output discrimination: every DECIDED result
 arrives on stdout - a committed or rejected outcome (exit 1 flags the
 rejection, but the receipt is still the result), a schema, an outbox
-row, a check report. Empty stdout is the only operational failure,
-and it raises ``MorphologError`` instead of returning an outcome.
+row, a check report. For a read, empty stdout is an operational failure
+and raises ``MorphologError``. For a proposal, only the binary's own
+statement - a decided envelope or a coded error object - settles the
+outcome; anything else raises ``MorphologOutcomeUnknown``.
 
 This module never imports the generated ``models``; ``submit`` is
 duck-typed on the two class attributes every generated request model
@@ -22,6 +24,7 @@ from typing import Callable, TypeVar
 from . import envelopes
 
 _Verdict = TypeVar("_Verdict")
+_T = TypeVar("_T")
 
 
 # Flags whose VALUE is a credential. It must never appear in a raised
@@ -44,9 +47,13 @@ def _redact_argv(args: list[str]) -> str:
     return " ".join(parts)
 
 
-#: The one-shot ``propose`` exit for a commit whose outcome the runtime
-#: could not prove. Not 2, which is a command-line usage error.
-EXIT_COMMIT_OUTCOME_UNKNOWN = 3
+def _text(output: str | bytes | None) -> str:
+    """Output captured from a killed child arrives as bytes."""
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", "replace")
+    return output
 
 
 class MorphologError(RuntimeError):
@@ -67,7 +74,7 @@ class MorphologRequestError(MorphologError):
     re-submittable as is - ``retriable`` says so; ``not_committed`` once
     its cause is fixed; every other code is the request's own fault.
     ``row`` is the session request number, or ``None`` for a one-shot
-    ``transact``."""
+    ``propose``, ``transact`` or a batch refused before its first row."""
 
     def __init__(self, code: str, error: str, row: int | None = None) -> None:
         where = f"session request {row}" if row is not None else "request"
@@ -85,7 +92,47 @@ class MorphologTimeout(MorphologError):
     """The binary did not finish within the client's timeout and was
     killed. Operational for a read; for a proposal the caller must not
     assume nothing changed, since the kill can land after COMMIT was
-    sent - ``propose`` re-raises it as ``MorphologOutcomeUnknown``."""
+    sent - ``propose`` re-raises it as ``MorphologOutcomeUnknown``.
+    ``stdout`` and ``stderr`` hold what the binary printed before it
+    was killed, which a batch needs to know which rows finished."""
+
+    def __init__(self, message: str, stdout: str = "", stderr: str = "") -> None:
+        super().__init__(message)
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class MorphologBatchIncomplete(MorphologError):
+    """A batch without a trustworthy receipt for every row. ``receipts``
+    are the rows that finished, each decided as its receipt says. The
+    rows in ``unknown_rows`` may have committed: read the record before
+    re-submitting them. The rows in ``not_attempted`` never ran.
+
+    If the binary stopped - killed, timed out, crashed, or aborted
+    without a receipt - one row was in flight, so ``unknown_rows`` holds
+    that row and ``not_attempted`` the rest. If instead a receipt could
+    not be trusted - a line that does not parse, an out-of-order row, an
+    unpublished code, or a clean exit short of receipts - the binary may
+    have gone on, so every row from there is unknown and none is known
+    not to have run. Rows are 1-based positions in the list passed to
+    ``propose_batch``."""
+
+    def __init__(
+        self,
+        receipts: list[envelopes.BatchReceipt],
+        unknown_rows: list[int],
+        not_attempted: list[int],
+        detail: str,
+    ) -> None:
+        super().__init__(
+            f"batch incomplete: {len(receipts)} row(s) finished, "
+            f"{len(unknown_rows)} unknown from row {unknown_rows[0]} - read the "
+            f"record before re-submitting them, {len(not_attempted)} not attempted:"
+            f"\n{detail}"
+        )
+        self.receipts = receipts
+        self.unknown_rows = unknown_rows
+        self.not_attempted = not_attempted
 
 
 class MorphologOutcomeUnknown(MorphologError):
@@ -144,9 +191,11 @@ class Morpholog:
                 input=stdin,
                 timeout=timeout,
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             raise MorphologTimeout(
-                f"`{self.binary} {_redact_argv(args)}` timed out after {timeout}s"
+                f"`{self.binary} {_redact_argv(args)}` timed out after {timeout}s",
+                stdout=_text(exc.stdout),
+                stderr=self._redact_stderr(_text(exc.stderr)),
             ) from None
 
     def _redact_stderr(self, stderr: str) -> str:
@@ -257,12 +306,11 @@ class Morpholog:
     ) -> envelopes.Committed | envelopes.Rejected:
         """Propose a change by transformation name: it commits only if
         everything it touches still obeys every rule; a refusal is a lawful outcome, returned as
-        ``Rejected``. A database failure before anything was recorded is
-        an operational ``MorphologError`` (nothing changed); a commit
-        whose outcome the runtime could not prove, or a client timeout
-        that killed the binary after the proposal was submitted, raises
-        ``MorphologOutcomeUnknown`` - read the record before
-        re-submitting."""
+        ``Rejected``. When the binary says nothing was committed, it
+        raises ``MorphologRequestError`` with the binary's code. Anything
+        else - a commit whose outcome the runtime could not prove, a
+        timeout, a crash, silence - raises ``MorphologOutcomeUnknown``:
+        read the record before re-submitting."""
         args = [
             "propose", self.file, transformation,
             "--actor", actor,
@@ -271,28 +319,7 @@ class Morpholog:
         ]
         if explain_on_reject:
             args.append("--explain-on-reject")
-        # A timeout kills the child, which may already have sent COMMIT:
-        # the same standing as exit 3. Then the exit code is checked
-        # before the empty-stdout rule, because an unknown commit prints
-        # nothing on stdout too and must never read as an ordinary
-        # operational failure.
-        try:
-            proc = self._run(args, timeout=self.timeout)
-        except MorphologTimeout as exc:
-            raise MorphologOutcomeUnknown(
-                "the proposal timed out after it was submitted; the commit outcome "
-                f"is unknown - read the record before re-submitting. ({exc})"
-            ) from None
-        if proc.returncode == EXIT_COMMIT_OUTCOME_UNKNOWN:
-            raise MorphologOutcomeUnknown(
-                "the commit outcome is unknown - read the record before "
-                f"re-submitting:\n{self._redact_stderr(proc.stderr)}"
-            )
-        if not proc.stdout.strip():
-            raise MorphologError(
-                f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}"
-            )
-        return envelopes.parse_run_outcome(json.loads(proc.stdout))
+        return self._commit(args, None, self.timeout, envelopes.parse_run_outcome)
 
     def submit(
         self, request: object, actor: str, explain_on_reject: bool = False
@@ -316,31 +343,92 @@ class Morpholog:
         """Admit many rows in one invocation (`propose --batch -`).
 
         Each row is a dict with ``transformation``, ``actor``, and one
-        of ``args``/``args_named``. Returns one ``BatchReceipt`` per
-        processed row; a non-zero exit is operational (the batch
-        aborted) and raises with the receipts that did arrive named in
-        the error. ``explain_on_reject`` attaches the same-snapshot why
-        to every rejected row, as on ``propose``. ``timeout`` bounds
-        this one call and defaults to unbounded, ignoring the
-        client-wide timeout - a large import is the legitimate
-        long-running case.
+        of ``args``/``args_named``. Returns one ``BatchReceipt`` per row
+        when every row has one. If the binary refused the batch before
+        its first row, raises ``MorphologRequestError``: nothing ran.
+        If the batch ended early for any other reason - a timeout, a
+        crash, a kill - raises ``MorphologBatchIncomplete`` with the
+        receipts that arrived, the row that may have committed, and the
+        rows that never ran. ``explain_on_reject`` attaches the
+        same-snapshot why to every rejected row, as on ``propose``.
+        ``timeout`` bounds this one call and defaults to unbounded,
+        ignoring the client-wide timeout - a large import is the
+        legitimate long-running case.
         """
         ndjson = "".join(json.dumps(row) + "\n" for row in rows)
         args = ["propose", self.file, "--batch", "-", "--database-url", self.database_url]
         if explain_on_reject:
             args.append("--explain-on-reject")
-        proc = self._run(args, stdin=ndjson, timeout=timeout)
-        receipts = [
-            envelopes.BatchReceipt.from_json(json.loads(line))
-            for line in proc.stdout.splitlines()
-            if line.strip()
-        ]
-        if proc.returncode != 0:
+        try:
+            proc = self._run(args, stdin=ndjson, timeout=timeout)
+            stdout, stderr, how = proc.stdout, proc.stderr, f"exit {proc.returncode}"
+            clean = proc.returncode == 0
+        except MorphologTimeout as exc:
+            stdout, stderr, how, clean = exc.stdout, exc.stderr, str(exc), False
+        # Only whole lines count: text after the last newline is a line
+        # the binary had not finished writing.
+        lines = [line for line in stdout.split("\n")[:-1] if line.strip()]
+        receipts: list[envelopes.BatchReceipt] = []
+        # Whether a whole line could not be trusted, as opposed to the
+        # output simply ending: only an ending says the rest never ran.
+        untrusted = False
+        for index, line in enumerate(lines):
+            try:
+                payload = json.loads(line)
+            except ValueError:
+                untrusted = True
+                break
+            if index == 0 and isinstance(payload, dict) and "row" not in payload:
+                self._refused_before_the_first_row(payload, stderr)
+            try:
+                receipt = envelopes.BatchReceipt.from_json(payload)
+            except envelopes.EnvelopeError:
+                untrusted = True
+                break
+            # Receipts arrive in row order; anything else is not one.
+            if receipt.row != len(receipts) + 1:
+                untrusted = True
+                break
+            # A code this client does not know says nothing about the row.
+            outcome = receipt.outcome
+            if (
+                isinstance(outcome, envelopes.BatchError)
+                and outcome.code not in envelopes.PROPOSE_ERROR_CODES
+            ):
+                untrusted = True
+                break
+            receipts.append(receipt)
+        if not rows:
+            # No rows, so no receipts - but only a clean, silent exit
+            # says the empty batch ran.
+            if clean and not lines:
+                return receipts
             raise MorphologError(
-                f"batch aborted after {len(receipts)} receipt(s):\n"
-                f"{self._redact_stderr(proc.stderr)}"
+                f"an empty batch did not complete ({how}):\n{self._redact_stderr(stderr)}"
             )
-        return receipts
+        if len(receipts) == len(rows):
+            return receipts
+        first = len(receipts) + 1
+        rest = list(range(first, len(rows) + 1))
+        stopped = not clean and not untrusted
+        raise MorphologBatchIncomplete(
+            receipts,
+            rest[:1] if stopped else rest,
+            rest[1:] if stopped else [],
+            f"{how}\n{self._redact_stderr(stderr)}",
+        )
+
+    def _refused_before_the_first_row(self, payload: object, stderr: str) -> None:
+        """A batch refused as a whole prints one error object with no
+        ``row``: nothing ran. Only a published code other than
+        ``commit_outcome_unknown`` says so; anything else is left to the
+        caller to read as an incomplete batch."""
+        try:
+            error = envelopes.RequestError.from_json(payload)
+        except envelopes.EnvelopeError:
+            return
+        if error.code in envelopes.NOTHING_RECORDED_CODES:
+            raise MorphologRequestError(error.code, error.error)
 
     def transact(
         self, acts: list[dict[str, object]], timeout: float | None = None
@@ -359,27 +447,54 @@ class Morpholog:
         defaults to unbounded, as for a batch."""
         ndjson = "".join(json.dumps(act) + "\n" for act in acts)
         args = ["transact", self.file, "--acts", "-", "--database-url", self.database_url]
+        return self._commit(args, ndjson, timeout, envelopes.parse_atomic_outcome)
+
+    def _commit(
+        self,
+        args: list[str],
+        stdin: str | None,
+        timeout: float | None,
+        parse: Callable[[object], _T],
+    ) -> _T:
+        """Run a proposal and return its decided outcome. Only the
+        binary's own statement settles it: a decided envelope, or an
+        error object carrying a published code. Everything else - a
+        timeout, a crash, a signal, silence, output that does not parse
+        - is unknown, whatever the exit code, because the process may
+        have died after COMMIT was sent."""
+
+        def unknown(why: str, stderr: str = "") -> MorphologOutcomeUnknown:
+            detail = f":\n{self._redact_stderr(stderr)}" if stderr.strip() else ""
+            return MorphologOutcomeUnknown(
+                f"`{_redact_argv(args)}`: {why}; the commit outcome is unknown - "
+                f"read the record before re-submitting{detail}"
+            )
+
         try:
-            proc = self._run(args, stdin=ndjson, timeout=timeout)
+            proc = self._run(args, stdin=stdin, timeout=timeout)
         except MorphologTimeout as exc:
-            raise MorphologOutcomeUnknown(
-                "the atomic batch timed out after it was submitted; the commit outcome "
-                f"is unknown - read the record before re-submitting. ({exc})"
+            raise unknown(str(exc), exc.stderr) from None
+        try:
+            payload = json.loads(proc.stdout)
+        except ValueError:
+            raise unknown(
+                f"the binary exited {proc.returncode} without a statement on stdout",
+                proc.stderr,
             ) from None
-        if proc.returncode == EXIT_COMMIT_OUTCOME_UNKNOWN:
-            raise MorphologOutcomeUnknown(
-                "the commit outcome is unknown - read the record before "
-                f"re-submitting:\n{self._redact_stderr(proc.stderr)}"
-            )
-        if not proc.stdout.strip():
-            raise MorphologError(
-                f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}"
-            )
-        payload = json.loads(proc.stdout)
         if isinstance(payload, dict) and payload.get("status") == "error":
-            data = envelopes._strict("atomic error", payload, {"status", "code", "error"})
-            raise MorphologRequestError(str(data["code"]), str(data["error"]))
-        return envelopes.parse_atomic_outcome(payload)
+            try:
+                error = envelopes.RequestError.from_json(payload)
+            except envelopes.EnvelopeError as exc:
+                raise unknown(f"an error object outside the contract ({exc})") from None
+            if error.code == "commit_outcome_unknown":
+                raise unknown(error.error, proc.stderr)
+            if error.code not in envelopes.NOTHING_RECORDED_CODES:
+                raise unknown(f"an unpublished error code {error.code!r}", proc.stderr)
+            raise MorphologRequestError(error.code, error.error)
+        try:
+            return parse(payload)
+        except Exception as exc:
+            raise unknown(f"an outcome this client does not understand ({exc})") from None
 
     def explain(
         self, transformation: str, actor: str, args_named: dict[str, object]

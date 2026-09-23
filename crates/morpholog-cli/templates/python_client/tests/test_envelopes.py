@@ -9,7 +9,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from _support import add_client_to_path, golden
+from _support import GOLDEN_DIR, add_client_to_path, golden
 
 add_client_to_path()
 
@@ -82,6 +82,35 @@ class RunOutcomes(unittest.TestCase):
         self.assertIsInstance(committed.result, envelopes.Committed)
         errored = envelopes.TracedEnvelope.from_json(golden("traced_errored.json"))
         self.assertIsInstance(errored.result, envelopes.Errored)
+        # A kernel error is coded like every other known non-commit, and
+        # keeps its trace.
+        self.assertEqual(errored.result.code, "kernel_error")
+        self.assertTrue(errored.trace)
+
+    def test_a_one_shot_error_object_parses_and_its_codes_are_the_schema_s(self):
+        error = envelopes.RequestError.from_json(golden("propose_error_not_committed.json"))
+        self.assertEqual(error.code, "not_committed")
+        schema = json.loads(
+            (GOLDEN_DIR.parents[2] / "src" / "schemas" / "result.json").read_text()
+        )
+        published = set(schema["$defs"]["propose_error_code"]["enum"])
+        self.assertEqual(envelopes.PROPOSE_ERROR_CODES, published)
+        self.assertEqual(
+            envelopes.NOTHING_RECORDED_CODES, published - {"commit_outcome_unknown"}
+        )
+
+    def test_the_developer_intro_recipe_lists_the_same_codes(self):
+        # The hand-written recipe in the developer introduction carries its
+        # own copy of the list; it must not drift from the client's.
+        intro = (GOLDEN_DIR.parents[4] / "docs" / "developer-intro.md").read_text()
+        start = intro.index("NOTHING_RECORDED = {")
+        literal = intro[start + len("NOTHING_RECORDED = ") : intro.index("}", start) + 1]
+        self.assertEqual(eval(literal), set(envelopes.NOTHING_RECORDED_CODES))
+
+    def test_a_traced_error_with_another_code_is_drift(self):
+        payload = dict(golden("traced_errored.json")["result"], code="not_committed")
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.Errored.from_json(payload)
 
     def test_a_trace_is_typed_steps_not_raw_dicts(self):
         # The trace used to arrive as list[object] - a pinned wrapper around

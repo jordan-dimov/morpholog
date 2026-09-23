@@ -5,10 +5,10 @@ use anyhow::Context;
 use morpholog_postgres::{PgAtomicOutcome, Proposal, propose_all_against_pg};
 
 use crate::TransactArgs;
-use crate::commands::propose::{BatchRow, RowError, classify_pg_error, decode_row};
-use crate::commands::{
-    AlreadyReported, CommitOutcomeUnknown, compile_or_report, connect, parse_or_report, print_json,
+use crate::commands::propose::{
+    BatchRow, RowError, classify_pg_error, decode_row, load, not_committed, report_request_failure,
 };
+use crate::commands::{AlreadyReported, connect, print_json};
 use morpholog_cli::envelopes;
 
 /// One act: the batch row shape, but strict. A misspelt field refuses the
@@ -66,17 +66,23 @@ pub(crate) fn decode_acts(
 /// print one outcome object. Exit codes follow `propose`: 0 committed,
 /// 1 refused or a known error, 3 when the commit outcome is unknown.
 pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
-    let parsed = parse_or_report(&args.file)?;
-    let program = morpholog_postgres::PgProgram::new(compile_or_report(&parsed)?);
+    let program = match load(&args.file) {
+        Ok((_, program)) => program,
+        Err(failure) => return report_request_failure(failure),
+    };
     let compiled = program.core();
     let input = if args.acts == std::path::Path::new("-") {
         let mut buf = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
-            .context("failed to read acts from stdin")?;
-        buf
+            .context("failed to read acts from stdin")
+            .map(|_| buf)
     } else {
         std::fs::read_to_string(&args.acts)
-            .with_context(|| format!("failed to read acts from {}", args.acts.display()))?
+            .with_context(|| format!("failed to read acts from {}", args.acts.display()))
+    };
+    let input = match input {
+        Ok(input) => input,
+        Err(e) => return report_request_failure(not_committed(&args.file, e)),
     };
     // Blank lines are skipped, as in a batch. An act is numbered by its
     // position among the acts, as refusals are; the file line is kept too.
@@ -95,10 +101,13 @@ pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
         .collect();
     let proposals = match rows.and_then(|rows| decode_acts(&args.file, compiled, rows)) {
         Ok(proposals) => proposals,
-        Err(failure) => return report_failure(failure),
+        Err(failure) => return report_request_failure(failure),
     };
 
-    let pool = connect(&args.db.database_url).await?;
+    let pool = match connect(&args.db.database_url).await {
+        Ok(pool) => pool,
+        Err(e) => return report_request_failure(not_committed(&args.file, e)),
+    };
     match propose_all_against_pg(&pool, &program, &proposals).await {
         Ok(outcome) => {
             print_json(&outcome)?;
@@ -107,24 +116,6 @@ pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
                 PgAtomicOutcome::Rejected { .. } => Err(AlreadyReported.into()),
             }
         }
-        Err(err) => report_failure(classify_pg_error(err)),
+        Err(err) => report_request_failure(classify_pg_error(err)),
     }
-}
-
-/// A coded failure prints the error object and exits by its code. An
-/// operational one (a rejection the log could not record) prints only a
-/// diagnostic, with nothing on stdout.
-fn report_failure(failure: RowError) -> anyhow::Result<()> {
-    let RowError { code, reason } = failure;
-    let Some(code) = code else {
-        return Err(reason);
-    };
-    print_json(&envelopes::AtomicError::new(
-        code.into(),
-        format!("{reason:#}"),
-    ))?;
-    if code == envelopes::ProposeCode::CommitOutcomeUnknown {
-        return Err(CommitOutcomeUnknown(format!("{reason:#}")).into());
-    }
-    Err(AlreadyReported.into())
 }

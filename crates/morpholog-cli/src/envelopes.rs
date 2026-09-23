@@ -111,16 +111,18 @@ impl ErrorReceipt {
     }
 }
 
-/// `transact`'s error object: an error for the whole batch. Same stable
-/// `code` as a receipt, but no `row`, since the batch is one request.
+/// The error object of a one-shot `propose` or `transact`, and of a batch
+/// refused before its first row: the request as a whole failed. Same
+/// stable `code` as a receipt, but no `row`. A caller may treat the
+/// request as not committed only on one of these, never on silence.
 #[derive(Serialize)]
-pub struct AtomicError {
+pub struct RequestError {
     pub code: ErrorCode,
     pub error: String,
     pub status: &'static str,
 }
 
-impl AtomicError {
+impl RequestError {
     pub fn new(code: ErrorCode, error: String) -> Self {
         Self {
             code,
@@ -168,8 +170,10 @@ pub enum ProposeCode {
     InvalidArguments,
     InvalidRequest,
     KernelError,
-    /// The database refused or failed before the proposal was durably
-    /// recorded: nothing changed. Re-submit once the cause is fixed.
+    /// No proposal commit became durable: the binary knows nothing
+    /// changed. It says nothing about whether a decision was reached (a
+    /// rejection whose record failed is this code too). Re-submit once
+    /// the cause is fixed.
     NotCommitted,
     SerializationFailure,
     UnknownTransformation,
@@ -308,9 +312,11 @@ pub struct Traced<R, T> {
 }
 
 /// The errored `result` inside a traced envelope: the transformation raised
-/// a kernel error. The constructor sets `status`, so it cannot be misspelled.
+/// a kernel error, so nothing was committed. The constructor sets `status`
+/// and `code`, so neither can be misspelled.
 #[derive(Serialize)]
 pub struct TracedError {
+    code: ErrorCode,
     error: String,
     status: &'static str,
 }
@@ -318,6 +324,7 @@ pub struct TracedError {
 impl TracedError {
     pub fn new(error: String) -> Self {
         Self {
+            code: ErrorCode::KernelError,
             error,
             status: "errored",
         }

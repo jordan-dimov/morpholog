@@ -146,7 +146,14 @@ A kernel error under `--trace` (a transformation that raised `EvalError` mid-exe
 
 The traced and untraced envelopes are intentionally asymmetric; the embedder should decide at request time which it wants, not auto-discriminate.
 
-Exit codes: `0` on a committed outcome; `1` on a rejected outcome or any operational failure (parse, validation, unknown transformation, decoder error, a database error before anything was recorded - stderr says "the proposal was not committed"); `2` on a command-line usage error; `3` on the one failure a caller must treat differently - the commit outcome is unknown, because the database connection failed while COMMIT was in flight without a server verdict. A rejection at 1 prints its envelope on stdout; an operational failure at 1, a usage error at 2, and the unknown commit at 3 print nothing there. A caller tells "nothing changed" from "read the record before re-submitting" by the exit code, never by parsing prose. The generated client raises `MorphologOutcomeUnknown` on 3, and on a client-side timeout of a proposal, since the killed binary may already have sent COMMIT.
+**What settles a proposal is what the binary prints on stdout, not its exit code.** It prints one of three things:
+- a committed or rejected envelope (exit `0` or `1`);
+- an error object, `{"status": "error", "code": ..., "error": ...}` (`request_error` in the schema), for every failure it knows did not commit: a programme that does not parse or validate, an unknown transformation, arguments that do not decode, a failed connection, a database error before anything was recorded, a rejection that could not be recorded. The code is one of the proposal-row codes below; `not_committed` means no proposal commit became durable. Exit `1`;
+- the same object with `commit_outcome_unknown` when COMMIT failed without a server verdict. Exit `3`: read the record before re-submitting.
+
+Anything else - nothing on stdout, output that does not parse, a crash, a signal, a usage error (exit `2`) - means the binary could not say what happened, so treat the outcome as unknown. The process may have died after COMMIT was sent. The prose on stderr is for a person; never parse it. The generated client applies exactly this rule: `MorphologRequestError` only for a published code other than `commit_outcome_unknown`, and `MorphologOutcomeUnknown` for everything else, a client-side timeout included.
+
+Pin the binary your client was generated for: set `MORPHOLOG_BIN` per project, and keep versioned binaries side by side (see `docs/install.md`). Nothing checks the version at run time, and an older generated client can reject a newer binary's objects as contract drift.
 
 A rejected envelope carries `rule`: the refused rule's stable identifier - an invariant's name, or a named gate's. Hold that, not `reason`. The reason string is prose for a human and includes rendered expression text, so anything asserting on it breaks the moment a rule is reworded; `rule` is the author's own name and does not move. The key is **absent** for a gate with no name, never filled with the expression, so a value read from `rule` is always safe to compare.
 
@@ -234,7 +241,7 @@ The blessed read for downstream projectors (forced by the first real one: an ETR
 
 **`attestation`** records how the actor identity was established. Gateway mode - `{"mode":"gateway","authenticated_by":"<role>"}` - means the PostgreSQL-authenticated login role of the proposing connection asserted the actor; it proves who asserted, never that the named actor authorised anything. The value is resolved by the runtime from the connection itself, never supplied by the caller, and it is covered by the Merkle leaf: rewriting or stripping it after the fact breaks `verify`. Rows written before attestation existed carry none and keep their original leaf encoding, so existing checkpoints and packs stay valid. Operational notes for that boundary: a generated client from before the field existed refuses the first attested row by design (the drift tripwire - regenerate the client), and an offline verifier binary from before the field existed recomputes the wrong leaves for attested rows and reports a root mismatch on genuine history - upgrade the verifier before believing it.
 
-**`parameters`** names the row's own signature: the transformation's parameter names in declaration order, one per argument, stamped by the runtime at commit. A row is therefore readable with no client-side vocabulary at all, and stays so after the act that wrote it is retired from the programme - zip `parameters` with `arguments` and the call reads as it was made, including what it did *not* contain, which is the claim an audit product most needs to keep honest. The names are inside the Merkle leaf (the self-describing encoding, content-derived like the original and the attested ones), so a renamed parameter in an exported pack is tamper, not a display quirk. Rows written before names were stamped carry no `parameters` and hash as they always did; the migration never backfills them, and the same one-way boundary as attestation refuses any new unstamped row. `--named` does not touch `arguments`: the names are historical row data, not something the programme supplied, so the bare row is already self-describing and no second keyed representation is emitted.
+**`parameters`** names the row's own signature: the transformation's parameter names in declaration order, one per argument, stamped by the runtime at commit. A row is therefore readable with no client-side vocabulary at all, and stays so after the act that wrote it is retired from the programme - zip `parameters` with `arguments` and the call reads as it was made, including what it did *not* contain, which is the claim an audit product most needs to keep honest. The names are inside the Merkle leaf (the self-describing encoding, content-derived like the original and the attested ones), so a renamed parameter in an exported pack is tamper, not a display quirk. Rows written before names were stamped - before migration 014, which arrived in v0.0.11 - carry no `parameters` and hash as they always did; the migration never backfills them, and the same one-way boundary as attestation refuses any new unstamped row. `--named` does not touch `arguments`: the names are historical row data, not something the programme supplied, so the bare row is already self-describing and no second keyed representation is emitted.
 
 ### Restricting who may assert an actor
 
@@ -253,7 +260,7 @@ predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
 
 Keep the two apart. If the grants did the arming, retracting the last grant would return the actor to unrestricted at exactly the moment you are revoking access. Here it **locks the actor out**; returning it to unrestricted means retracting the arming claim, which is its own governed act.
 
-Refusal surfaces as an operational failure on `propose` (non-zero exit, nothing on stdout), a per-row error receipt in `--batch`, and the `actor_assertion_unauthorised` code in a session - a receipt, so the session stays healthy.
+Refusal surfaces as the `actor_assertion_unauthorised` code everywhere: in `propose`'s error object (exit 1), in a per-row error receipt in `--batch`, and in a session receipt, so the session stays healthy.
 
 An admitted policy claim whose shape the runtime cannot read stops every durable proposal with an error, rather than being ignored. That is deliberate and it is where the fail-closed guarantee actually lives: `check` and the library facades refuse a misshapen DECLARATION early, but compensation reaches the kernel with a decomposed transformation and no programme, so only a check keyed off the claims themselves covers every path.
 
@@ -293,8 +300,9 @@ What this document promises:
 - Compiled invariant checks: when `check -v` reports `invariant checks: compiled`, a proposal loads only what the transformation body reads and checks each invariant in the database over the cases the written change touches; otherwise the interpreter checks them in memory. Same decisions, same envelopes, same audit record either way; only the cost differs. Trace and explain-on-reject always run the interpreter.
 - Index provisioning: `provision indexes <file.morph>` reconciles the partial expression indexes a programme's compiled invariants can seek on (`--dry-run` prints the plan, `--prune` drops managed indexes no programme requires; a conflict under Morpholog's own index name exits non-zero for an operator). Correctness never depends on it: the checks are right without any index, only slower.
 - Exit-code semantics for `propose`, `explain`, `audit verify`, and `audit verify-pack` (a divergence, tamper, malformed pack, or invalid witness is a decided verdict on stdout at exit one, not an operational failure; `propose` exits 3, and only 3, when the commit outcome is unknown).
+- A known non-commit is always stated: `propose`, `transact` and a batch refused before its first row print a `request_error` object with a published code, and a caller treats nothing else as "not committed".
 - The proposal-row error codes `not_committed` and `commit_outcome_unknown` on the batch and session receipts, and the rule that the rows after either still run.
-- `transact`: the `atomic_outcome` union (`atomic_committed` with one `atomic_act` per act, `atomic_rejected` naming the act, `atomic_error` with the proposal-row code), all-or-nothing semantics, act-order audit replay, and the rule that an unknown outcome is never retried blind.
+- `transact`: the `atomic_outcome` union (`atomic_committed` with one `atomic_act` per act, `atomic_rejected` naming the act, `request_error` with the proposal-row code), all-or-nothing semantics, act-order audit replay, and the rule that an unknown outcome is never retried blind.
 
 What is deliberately left open, pending the worked example that forces the shape:
 
@@ -424,16 +432,29 @@ processing continues; `code` is the same stable set a session error
 receipt carries (`invalid_request`, `actor_assertion_unauthorised`,
 `serialization_failure`, ...) minus the session-only `unknown_operation`,
 so a control test matches a refusal by code through both batch and
-session, never by prose. A single `propose` still reports these as
-prose on stderr. `--explain-on-reject` composes per row, exactly as in
+session, never by prose. A single `propose` prints the same codes in its
+error object. `--explain-on-reject` composes per row, exactly as in
 single proposals. A summary line lands on stderr.
 
 **Exit code contract - deliberately different from a single `propose`.**
 A single `propose` exits 1 on a rejection; a batch exits 0 whenever every
 row was processed, because partial admission is an import's normal
 outcome - the receipts are the result, not the exit code. Non-zero is
-reserved for what cannot be a receipt: unreadable input, a programme
-that fails validation, a broken stream. A serialization conflict
+reserved for what cannot be a receipt: a batch refused before its first
+row (unreadable input, a programme that fails validation, a failed
+connection), which prints one error object with no `row` - nothing ran;
+a broken stream; or a receipt the binary could not write after its row's
+proposal returned, which leaves that row without one. Each receipt is
+flushed as soon as its row is done, so a caller whose batch dies - a
+crash, a kill, its own timeout - holds the receipt of every row that
+finished. The first row without a receipt may have committed; the rows
+after it never ran. That holds only when the output simply stops. A
+receipt the caller cannot trust - a line that does not parse, a row out of
+order, a code it does not know - says nothing about what the binary did
+next, so every row from there is unknown. The generated client's
+`propose_batch` raises `MorphologBatchIncomplete` with exactly that split:
+the receipts, the `unknown_rows`, and the rows `not_attempted`, which is
+empty unless the output stopped. A serialization conflict
 (SQLSTATE 40001) surfaces in that row's error receipt, and so does the
 database refusing or failing a row before anything was recorded
 (`not_committed`: nothing changed, re-submit once the cause is fixed)
@@ -473,13 +494,14 @@ One JSON object on stdout, the `atomic_outcome` union:
   undecodable act (`invalid_request`, `invalid_arguments`,
   `unknown_transformation`, named by position), `serialization_failure`
   (the one code that is safe to re-submit, as a whole batch),
-  `not_committed` (the database refused or failed before anything was
-  recorded; nothing changed, re-submit once the cause is fixed), or
-  `commit_outcome_unknown` (COMMIT failed without a server verdict).
-  Exit 1, except `commit_outcome_unknown`, which exits 3 as on
-  `propose`. Unlike `propose`, the coded object is printed even on a
-  known error, so a caller never parses prose to learn whether
-  re-submitting is safe.
+  `not_committed` (nothing was committed: the programme did not parse,
+  the acts could not be read, the connection failed, or the database
+  refused before anything was recorded; re-submit once the cause is
+  fixed), or `commit_outcome_unknown` (COMMIT failed without a server
+  verdict). Exit 1, except `commit_outcome_unknown`, which exits 3 as on
+  `propose`. As on `propose`, every known error prints the coded
+  object, so a caller never parses prose to learn whether re-submitting
+  is safe, and no object means the outcome is unknown.
 
 **An unknown outcome is not retriable.** Atomicity means zero or all
 acts committed; if all committed and only the acknowledgement was
@@ -500,8 +522,8 @@ coded receipt, and the session stays in step. The generated client has
 `transact(acts)` on both the one-shot client and the session,
 returning `AtomicCommitted` or `AtomicRejected` - both lawful
 outcomes - and raising `MorphologRequestError` with the code for a
-known error, `MorphologOutcomeUnknown` for exit 3 or a timeout after
-submission.
+known error, `MorphologOutcomeUnknown` for `commit_outcome_unknown`, a
+timeout after submission, or no statement at all.
 
 **Sizing.** The bench's `transact` scenario times N acts as one
 decision against the same N one by one, with optional concurrent
@@ -606,12 +628,14 @@ must never parse prose. `serialization_failure` is safe to re-submit
 on as is; `not_committed` (the database refused or failed before
 anything was recorded - nothing changed) once its cause is fixed;
 `commit_outcome_unknown` (COMMIT failed without a server verdict)
-only after reading the record. The session stays healthy after every
-coded receipt. What aborts the process with a non-zero exit and no
-receipt is a failure that cannot be a receipt: a broken stream, an
-operational failure on a read, or a rejection that was decided but
-could not be recorded in the operational log - a receipt code would
-misdescribe a decided verdict. The batch aborts on the same failure.
+only after reading the record. A rejection that was decided but could
+not be recorded in the operational log is `not_committed` too: the
+rollback came first, so nothing became durable. The session stays
+healthy after every coded receipt. What aborts the process with a
+non-zero exit and no receipt is a failure that cannot be a receipt: a
+broken stream, an operational failure on a read, or a proposal's
+receipt that could not be written after the proposal returned - that
+one leaves the outcome unknown. The batch aborts on the same failure.
 
 **A lost response is an unknown outcome.** Once a propose request has
 been written, a session that dies, hangs, or answers garbage leaves
