@@ -103,28 +103,35 @@ class MorphologTimeout(MorphologError):
 
 
 class MorphologBatchIncomplete(MorphologError):
-    """A batch ended before every row had its receipt: it was killed,
-    timed out, crashed, or stopped saying what a row did. ``receipts``
-    are the rows that finished, each decided as its receipt says.
-    ``unknown_row`` is the row in flight when it ended - it may have
-    committed, so read the record before re-submitting it. The rows in
-    ``not_attempted`` never ran. Rows are 1-based positions in the list
-    passed to ``propose_batch``."""
+    """A batch without a trustworthy receipt for every row. ``receipts``
+    are the rows that finished, each decided as its receipt says. The
+    rows in ``unknown_rows`` may have committed: read the record before
+    re-submitting them. The rows in ``not_attempted`` never ran.
+
+    If the binary stopped - killed, timed out, crashed, or aborted
+    without a receipt - one row was in flight, so ``unknown_rows`` holds
+    that row and ``not_attempted`` the rest. If instead a receipt could
+    not be trusted - a line that does not parse, an out-of-order row, an
+    unpublished code, or a clean exit short of receipts - the binary may
+    have gone on, so every row from there is unknown and none is known
+    not to have run. Rows are 1-based positions in the list passed to
+    ``propose_batch``."""
 
     def __init__(
         self,
         receipts: list[envelopes.BatchReceipt],
-        unknown_row: int,
+        unknown_rows: list[int],
         not_attempted: list[int],
         detail: str,
     ) -> None:
         super().__init__(
-            f"batch incomplete: {len(receipts)} row(s) finished, row {unknown_row} "
-            f"is unknown - read the record before re-submitting it, "
-            f"{len(not_attempted)} row(s) not attempted:\n{detail}"
+            f"batch incomplete: {len(receipts)} row(s) finished, "
+            f"{len(unknown_rows)} unknown from row {unknown_rows[0]} - read the "
+            f"record before re-submitting them, {len(not_attempted)} not attempted:"
+            f"\n{detail}"
         )
         self.receipts = receipts
-        self.unknown_row = unknown_row
+        self.unknown_rows = unknown_rows
         self.not_attempted = not_attempted
 
 
@@ -362,19 +369,25 @@ class Morpholog:
         # the binary had not finished writing.
         lines = [line for line in stdout.split("\n")[:-1] if line.strip()]
         receipts: list[envelopes.BatchReceipt] = []
+        # Whether a whole line could not be trusted, as opposed to the
+        # output simply ending: only an ending says the rest never ran.
+        untrusted = False
         for index, line in enumerate(lines):
             try:
                 payload = json.loads(line)
             except ValueError:
+                untrusted = True
                 break
             if index == 0 and isinstance(payload, dict) and "row" not in payload:
                 self._refused_before_the_first_row(payload, stderr)
             try:
                 receipt = envelopes.BatchReceipt.from_json(payload)
             except envelopes.EnvelopeError:
+                untrusted = True
                 break
             # Receipts arrive in row order; anything else is not one.
             if receipt.row != len(receipts) + 1:
+                untrusted = True
                 break
             # A code this client does not know says nothing about the row.
             outcome = receipt.outcome
@@ -382,6 +395,7 @@ class Morpholog:
                 isinstance(outcome, envelopes.BatchError)
                 and outcome.code not in envelopes.PROPOSE_ERROR_CODES
             ):
+                untrusted = True
                 break
             receipts.append(receipt)
         if not rows:
@@ -394,11 +408,13 @@ class Morpholog:
             )
         if len(receipts) == len(rows):
             return receipts
-        unknown_row = len(receipts) + 1
+        first = len(receipts) + 1
+        rest = list(range(first, len(rows) + 1))
+        stopped = not clean and not untrusted
         raise MorphologBatchIncomplete(
             receipts,
-            unknown_row,
-            list(range(unknown_row + 1, len(rows) + 1)),
+            rest[:1] if stopped else rest,
+            rest[1:] if stopped else [],
             f"{how}\n{self._redact_stderr(stderr)}",
         )
 

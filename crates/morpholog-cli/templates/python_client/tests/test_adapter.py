@@ -205,7 +205,7 @@ class AdapterDiscrimination(unittest.TestCase):
         with self.assertRaises(MorphologBatchIncomplete) as caught:
             self.client.propose_batch([row, row, row])
         self.assertEqual([r.row for r in caught.exception.receipts], [1])
-        self.assertEqual(caught.exception.unknown_row, 2)
+        self.assertEqual(caught.exception.unknown_rows, [2])
         self.assertEqual(caught.exception.not_attempted, [3])
         self.assertFalse(caught.exception.retriable)
         self.assertIn("aborted at row 2", str(caught.exception))
@@ -218,7 +218,7 @@ class AdapterDiscrimination(unittest.TestCase):
         with self.assertRaises(MorphologBatchIncomplete) as caught:
             self.client.propose_batch([row, row, row])
         self.assertEqual([r.row for r in caught.exception.receipts], [1])
-        self.assertEqual(caught.exception.unknown_row, 2)
+        self.assertEqual(caught.exception.unknown_rows, [2])
         self.assertEqual(caught.exception.not_attempted, [3])
 
     def test_a_timed_out_batch_keeps_the_receipts_that_arrived(self):
@@ -227,7 +227,7 @@ class AdapterDiscrimination(unittest.TestCase):
         with self.assertRaises(MorphologBatchIncomplete) as caught:
             self.client.propose_batch([row, row], timeout=0.5)
         self.assertEqual([r.row for r in caught.exception.receipts], [1])
-        self.assertEqual(caught.exception.unknown_row, 2)
+        self.assertEqual(caught.exception.unknown_rows, [2])
         self.assertEqual(caught.exception.not_attempted, [])
         self.assertIn("timed out", str(caught.exception))
 
@@ -256,7 +256,7 @@ class AdapterDiscrimination(unittest.TestCase):
             os.environ["STUB_STDOUT"] = stdout
             with self.assertRaises(MorphologBatchIncomplete) as caught:
                 self.client.propose_batch([row, row])
-            self.assertEqual(caught.exception.unknown_row, 2)
+            self.assertEqual(caught.exception.unknown_rows, [2])
 
     def test_a_timeout_never_keeps_the_password_it_captured(self):
         self._mode("echo_conninfo_then_hang")
@@ -293,7 +293,26 @@ class AdapterDiscrimination(unittest.TestCase):
         row = {"transformation": "t", "actor": "a", "args_named": {}}
         with self.assertRaises(MorphologBatchIncomplete) as caught:
             self.client.propose_batch([row, row])
-        self.assertEqual(caught.exception.unknown_row, 2)
+        self.assertEqual(caught.exception.unknown_rows, [2])
+        # A receipt the client cannot trust says nothing about the rows
+        # after it: the binary may have gone on, so none is claimed as
+        # never run.
+        os.environ["STUB_STDOUT"] = (
+            '{"row": 1, "status": "rejected", "reason": "closed"}\n'
+            '{"row": 2, "status": "error", "code": "a_future_code", "error": "x"}\n'
+            '{"row": 3, "status": "committed", "asserted_claims": [], '
+            '"retracted_claims": [], "emitted_intents": []}\n'
+        )
+        self.addCleanup(os.environ.pop, "STUB_EXIT", None)
+        for exit_code in ("0", "1"):
+            # Even when the binary then exits non-zero, the untrusted row
+            # came first, so the rows after it are unknown, not unrun.
+            os.environ["STUB_EXIT"] = exit_code
+            with self.assertRaises(MorphologBatchIncomplete, msg=exit_code) as drift:
+                self.client.propose_batch([row, row, row, row])
+            self.assertEqual(drift.exception.unknown_rows, [2, 3, 4], exit_code)
+            self.assertEqual(drift.exception.not_attempted, [], exit_code)
+        os.environ["STUB_EXIT"] = "0"
         # An explicit unknown receipt is still a receipt.
         os.environ["STUB_STDOUT"] = (
             '{"row": 1, "status": "error", "code": "commit_outcome_unknown", "error": "x"}\n'

@@ -10,8 +10,9 @@
 //!   back to the `DATABASE_URL` environment variable; if neither is
 //!   supplied, clap errors before any work happens.
 //! - Results go to stdout (pretty-printed JSON, or prose where a
-//!   subcommand documents it); diagnostics and operational errors go
-//!   to stderr.
+//!   subcommand documents it); diagnostics go to stderr. A proposal's
+//!   known failure is a result too: it prints a coded error object on
+//!   stdout as well as prose on stderr.
 //! - Exit codes distinguish success, business rejection, and
 //!   operational failure; each subcommand's doc comment states its
 //!   own mapping.

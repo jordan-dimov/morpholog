@@ -448,9 +448,13 @@ proposal returned, which leaves that row without one. Each receipt is
 flushed as soon as its row is done, so a caller whose batch dies - a
 crash, a kill, its own timeout - holds the receipt of every row that
 finished. The first row without a receipt may have committed; the rows
-after it never ran. The generated client's `propose_batch` raises
-`MorphologBatchIncomplete` with exactly that split: the receipts, the
-`unknown_row`, and the rows `not_attempted`. A serialization conflict
+after it never ran. That holds only when the output simply stops. A
+receipt the caller cannot trust - a line that does not parse, a row out of
+order, a code it does not know - says nothing about what the binary did
+next, so every row from there is unknown. The generated client's
+`propose_batch` raises `MorphologBatchIncomplete` with exactly that split:
+the receipts, the `unknown_rows`, and the rows `not_attempted`, which is
+empty unless the output stopped. A serialization conflict
 (SQLSTATE 40001) surfaces in that row's error receipt, and so does the
 database refusing or failing a row before anything was recorded
 (`not_committed`: nothing changed, re-submit once the cause is fixed)

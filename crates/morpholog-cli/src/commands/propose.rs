@@ -23,6 +23,7 @@ use morpholog_cli::envelopes;
 pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     let (parsed, program) = match load(&args.file) {
         Ok(loaded) => loaded,
+        Err(failure) if args.batch.is_some() => return report_batch_refusal(failure),
         Err(failure) => return report_request_failure(failure),
     };
     if let Some(batch_path) = &args.batch {
@@ -241,6 +242,28 @@ pub(crate) fn report_request_failure(failure: RowError) -> anyhow::Result<()> {
     Err(AlreadyReported.into())
 }
 
+/// Report a batch refused before its first row: the same object as a
+/// one-shot failure, framed as one NDJSON line like a row receipt, so a
+/// caller reading the batch line by line can read it.
+fn report_batch_refusal(failure: RowError) -> anyhow::Result<()> {
+    let RowError { code, reason } = failure;
+    let Some(code) = code else {
+        return Err(reason);
+    };
+    let mut out = std::io::stdout().lock();
+    writeln!(
+        out,
+        "{}",
+        serde_json::to_string(&envelopes::RequestError::new(
+            code.into(),
+            format!("{reason:#}"),
+        ))?
+    )?;
+    out.flush()?;
+    eprintln!("Error: {reason:?}");
+    Err(AlreadyReported.into())
+}
+
 /// A setup failure before any proposal was made: nothing was committed.
 /// Diagnostics for a programme that did not parse or validate are already
 /// on stderr, so the reason points there.
@@ -345,11 +368,11 @@ async fn run_batch(
     };
     let input = match input {
         Ok(input) => input,
-        Err(e) => return report_request_failure(not_committed(&args.file, e)),
+        Err(e) => return report_batch_refusal(not_committed(&args.file, e)),
     };
     let pool = match connect(&args.db.database_url).await {
         Ok(pool) => pool,
-        Err(e) => return report_request_failure(not_committed(&args.file, e)),
+        Err(e) => return report_batch_refusal(not_committed(&args.file, e)),
     };
     let mut out = std::io::stdout().lock();
     let (mut committed, mut rejected, mut errored, mut rows) = (0u64, 0u64, 0u64, 0u64);

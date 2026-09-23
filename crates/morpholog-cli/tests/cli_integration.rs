@@ -3224,7 +3224,9 @@ async fn batch_with_unreadable_input_exits_nonzero() {
     assert!(!status.success());
     assert!(stderr.contains("failed to read batch rows"), "{stderr}");
     // One error object for the whole batch, with no `row`: no row was
-    // attempted, and the binary says so.
+    // attempted, and the binary says so. One line, framed like a receipt,
+    // because a batch is read line by line.
+    assert_eq!(stdout.lines().count(), 1, "one NDJSON line: {stdout:?}");
     let error: Value = serde_json::from_str(&stdout).expect("one error object on stdout");
     assert_eq!(error["code"], "not_committed", "{stdout}");
     assert!(error.get("row").is_none(), "{stdout}");
