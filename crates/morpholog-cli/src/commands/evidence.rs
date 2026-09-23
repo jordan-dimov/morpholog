@@ -68,7 +68,7 @@ pub(crate) async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
 /// `audit verify-pack`: check a pack offline. A prefix pack recomputes its
 /// root from every row; a window pack checks a consistency proof and
 /// per-row inclusion proofs; `pack_format_version` says which. Prints one
-/// JSON verdict and exits 1 on any tamper, divergence or malformed pack,
+/// JSON report and exits 1 on any tamper, divergence or malformed pack,
 /// like `audit verify`.
 pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     let bytes = std::fs::read(&args.pack_file)

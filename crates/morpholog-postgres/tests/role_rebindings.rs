@@ -133,6 +133,19 @@ async fn a_recreated_role_is_reported_and_the_tree_stays_intact() {
         matches!(&from_pack, RoleRebindings::Evaluated { changes, .. } if changes.len() == 1),
         "{from_pack:?}"
     );
+    // The verifier accepts rows in any file order, so the finding reads
+    // them in log order too.
+    let mut shuffled = pack.clone();
+    shuffled.rows.reverse();
+    assert!(matches!(
+        verify_pack(&shuffled, None).unwrap(),
+        TreeVerification::Intact { .. }
+    ));
+    assert_eq!(
+        pack_role_rebindings(&serde_json::to_vec(&shuffled).unwrap(), true),
+        from_pack,
+        "a shuffled pack reports the same change, in the same direction"
+    );
 
     let selective = export_selective(&pool, None, &[first, second])
         .await

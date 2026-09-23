@@ -958,7 +958,7 @@ fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackE
 #[cfg(test)]
 mod tests;
 
-/// The role rebindings among a pack's rows, in their order. `established`
+/// The role rebindings among a pack's rows, in log order. `established`
 /// is whether the pack's verdict was intact: rows a failed verdict did not
 /// establish support no finding. Bytes that are not a pack this binary
 /// reads have no rows to compare.
@@ -981,7 +981,7 @@ pub fn pack_role_rebindings(bytes: &[u8], established: bool) -> RoleRebindings {
             serde_json::from_slice::<EvidencePack>(bytes).map(|p| p.rows),
         ),
     };
-    let Ok(rows) = rows else {
+    let Some(rows) = rows.ok().and_then(|rows| canonically_sorted(&rows).ok()) else {
         return RoleRebindings::NotEvaluated;
     };
     let mut fold = RebindingFold::default();

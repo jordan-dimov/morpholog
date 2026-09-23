@@ -162,9 +162,9 @@ fn judge(
     }
 }
 
-/// `audit verify-pack` with the witness axis requested: the pack's own
-/// verdict beside what its checkpoints' witnesses prove. Only on request;
-/// otherwise the bare verdict is emitted.
+/// `audit verify-pack`'s report: the pack's own verdict, the role
+/// rebindings among its rows, and, only on request, what its checkpoints'
+/// witnesses prove.
 #[derive(Debug, Clone, Serialize)]
 pub struct PackVerificationReport {
     pub verdict: PackVerdict,
