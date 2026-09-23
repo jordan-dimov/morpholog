@@ -356,8 +356,8 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
 /// `reconstruct_state_at_for_predicates` returns - that function is
 /// `pub(crate)` and not reachable from integration tests. The
 /// partial-state contract (only requested predicates in the
-/// reconstructed state) is enforced internally by the
-/// `predicate_in_scope_set` check in the replay loop and validated
+/// reconstructed state) is enforced internally by the scope check
+/// in the replay loop and validated
 /// here only indirectly via correct output. A regression that
 /// accidentally loaded everything would still produce correct
 /// output for the trial balance (the JournalLines would still be

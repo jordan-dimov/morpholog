@@ -17,10 +17,9 @@ pub struct PgProgram {
 
 pub(crate) enum InvariantBackend {
     Compiled(CompiledInvariantSet),
-    /// At least one invariant is outside the fragment.
-    Refused(Vec<CompileRefusal>),
-    /// The interpreter by construction, eligibility never consulted.
-    Pinned,
+    /// The invariants that kept the programme out of the fragment;
+    /// empty when the interpreter was chosen without asking.
+    Interpreted(Vec<CompileRefusal>),
 }
 
 /// The plan for checking a programme's invariants, as `check -v`
@@ -63,7 +62,7 @@ impl PgProgram {
     pub fn new(core: CompiledProgram) -> Self {
         let backend = match compile_invariants(core.validated()) {
             Ok(set) => InvariantBackend::Compiled(set),
-            Err(refusals) => InvariantBackend::Refused(refusals),
+            Err(refusals) => InvariantBackend::Interpreted(refusals),
         };
         Self { core, backend }
     }
@@ -76,7 +75,7 @@ impl PgProgram {
     pub fn interpreted(core: CompiledProgram) -> Self {
         Self {
             core,
-            backend: InvariantBackend::Pinned,
+            backend: InvariantBackend::Interpreted(Vec::new()),
         }
     }
 
@@ -90,7 +89,7 @@ impl PgProgram {
     pub(crate) fn route(&self) -> Route<'_> {
         match &self.backend {
             InvariantBackend::Compiled(set) => Route::Compiled(set),
-            InvariantBackend::Refused(_) | InvariantBackend::Pinned => Route::Interpreted,
+            InvariantBackend::Interpreted(_) => Route::Interpreted,
         }
     }
 
@@ -115,7 +114,7 @@ impl PgProgram {
     pub(crate) fn required_indexes(&self) -> Vec<IndexSpec> {
         match &self.backend {
             InvariantBackend::Compiled(set) => set.required_indexes(),
-            InvariantBackend::Refused(_) | InvariantBackend::Pinned => Vec::new(),
+            InvariantBackend::Interpreted(_) => Vec::new(),
         }
     }
 
@@ -124,8 +123,7 @@ impl PgProgram {
             InvariantBackend::Compiled(set) => InvariantPlan::Compiled {
                 invariants: set.invariants.len(),
             },
-            InvariantBackend::Refused(refusals) => InvariantPlan::Interpreted { refusals },
-            InvariantBackend::Pinned => InvariantPlan::Interpreted { refusals: &[] },
+            InvariantBackend::Interpreted(refusals) => InvariantPlan::Interpreted { refusals },
         }
     }
 }

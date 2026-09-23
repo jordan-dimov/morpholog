@@ -149,8 +149,6 @@ pub(crate) async fn reconstruct_inner(
     // tuple. Missing target -> TransitionNotFound; this is the
     // contract that lets every other unknown id also be an error.
     let target = audit_cursor_for(&mut *conn, transition_id).await?;
-    // Precompute the scope as a HashSet so each in-loop membership
-    // check is O(1) regardless of footprint size or audit-log length.
     let scope_set: Option<HashSet<&str>> =
         predicates.map(|preds| preds.iter().map(String::as_str).collect());
     let mut state = State::default();
@@ -164,7 +162,7 @@ pub(crate) async fn reconstruct_inner(
             let in_scope = |claims: serde_json::Value| -> Result<Vec<ClaimInstance>, PgError> {
                 let mut claims: Vec<ClaimInstance> = serde_json::from_value(claims)?;
                 if let Some(scope) = scope_set.as_ref() {
-                    claims.retain(|c| predicate_in_scope_set(c.predicate.as_str(), Some(scope)));
+                    claims.retain(|c| scope.contains(c.predicate.as_str()));
                 }
                 Ok(claims)
             };
@@ -176,14 +174,4 @@ pub(crate) async fn reconstruct_inner(
         }
     }
     Ok(state)
-}
-/// Predicate-scope check. `None` (full reconstruction) accepts
-/// everything; `Some(set)` accepts only predicates whose name is in
-/// the set. The set is precomputed once per reconstruction in
-/// [`reconstruct_inner`], so each check is O(1).
-pub(crate) fn predicate_in_scope_set(predicate: &str, scope: Option<&HashSet<&str>>) -> bool {
-    match scope {
-        None => true,
-        Some(set) => set.contains(predicate),
-    }
 }

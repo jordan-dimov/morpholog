@@ -263,36 +263,19 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
                 .map(|c| c.predicate.clone())
                 .collect();
             replay.apply(&asserted, &retracted);
-            // Observe only when this transition can fire something, or
-            // when pre(...) tracking forces the previous state to stay
-            // current - the one case that keeps a second state, cloned
-            // from what changed since the replay's last compaction.
-            let relevant = tracker.delta_is_relevant(&delta);
-            if relevant || needs_pre {
-                tracker
-                    .observe(
-                        &replay,
-                        &pre_state,
-                        &delta,
-                        &transition_id.to_string(),
-                        &transformation_name,
-                    )
-                    .map_err(PgError::Kernel)?;
-                if needs_pre {
-                    pre_state = replay.clone();
-                }
-            } else {
-                // Nothing to evaluate; the states are unread, but the
-                // transition still counts and the usage table grows.
-                tracker
-                    .observe(
-                        &pre_state,
-                        &pre_state,
-                        &delta,
-                        &transition_id.to_string(),
-                        &transformation_name,
-                    )
-                    .map_err(PgError::Kernel)?;
+            // Rules the change cannot fire are skipped inside observe;
+            // the transition still counts.
+            tracker
+                .observe(
+                    &replay,
+                    &pre_state,
+                    &delta,
+                    &transition_id.to_string(),
+                    &transformation_name,
+                )
+                .map_err(PgError::Kernel)?;
+            if needs_pre {
+                pre_state = replay.clone();
             }
         }
     }

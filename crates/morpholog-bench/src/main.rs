@@ -58,7 +58,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_core::{
     ClaimInstance, CompiledProgram, EvalValue, Outcome, Program, State, Subject, Transformation,
-    Transition, enumerate_derived, predicates_referenced_by_derived, propose,
+    TransformationName, Transition, enumerate_derived, predicates_referenced_by_derived, propose,
 };
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
@@ -591,16 +591,6 @@ struct TransactArgs {
     repeat: usize,
 }
 
-fn require_reset_ack(args: &ScenarioArgs) -> Result<()> {
-    check_reset_ack(args.reset, &args.database_url)
-}
-
-fn require_reset_ack_as_of(args: &AsOfArgs) -> Result<()> {
-    check_reset_ack(args.reset, &args.database_url)
-}
-
-/// Shared body for `--reset` acknowledgement, called from each
-/// scenario-specific guard.
 fn check_reset_ack(reset: bool, database_url: &str) -> Result<()> {
     if !reset {
         return Err(anyhow!(
@@ -929,7 +919,6 @@ async fn measure_write(
 ) -> Result<CaseResult> {
     // The programmes whose index condition this scenario establishes.
     let cores: Vec<Program> = vec![double_entry_ledger::program()];
-    let transformation = double_entry_ledger::post_simple_entry();
     let compiled = implementation.program(double_entry_ledger::program())?;
     let mut fixture = Vec::with_capacity(repeat);
     let mut propose = Vec::with_capacity(repeat);
@@ -949,18 +938,7 @@ async fn measure_write(
         fixture.push(reset_took + t.elapsed());
         analyze_claims(pool).await?;
 
-        let transition = Transition {
-            transformation_name: transformation.name.clone(),
-            args: vec![
-                subj(&format!("entry_bench_target_{r}")),
-                subj("d_2026_05_17"),
-                subj("p_bench"),
-                subj("account_cash"),
-                subj("account_revenue"),
-                dec(42),
-            ],
-            actor: Subject::from("bench"),
-        };
+        let transition = ledger_posting(&format!("entry_bench_target_{r}"), "p_bench");
         let t = Instant::now();
         let timed = propose_against_pg_timed(pool, &compiled, &Proposal::gateway(&transition))
             .await
@@ -1027,13 +1005,13 @@ fn in_memory_book(n: usize) -> Vec<ClaimInstance> {
     claims
 }
 
-fn ledger_posting(entry: &str) -> Transition {
+fn ledger_posting(entry: &str, period: &str) -> Transition {
     Transition {
-        transformation_name: double_entry_ledger::post_simple_entry().name.clone(),
+        transformation_name: TransformationName::from("post_simple_entry"),
         args: vec![
             subj(entry),
             subj("d_2026_05_17"),
-            subj("p_bench"),
+            subj(period),
             subj("account_cash"),
             subj("account_revenue"),
             dec(42),
@@ -1078,7 +1056,7 @@ fn measure_kernel(
         let pre = State::from_claims(input);
         build.push(t.elapsed());
 
-        let target = ledger_posting("bench_target");
+        let target = ledger_posting("bench_target", "p_bench");
         let t = Instant::now();
         must_commit(
             propose(&transformation, &target, &pre, &invariants, &definitions)?,
@@ -1094,7 +1072,7 @@ fn measure_kernel(
         no_invariants.push(t.elapsed());
 
         let batch: Vec<Transition> = (0..acts)
-            .map(|i| ledger_posting(&format!("bench_act_{i}")))
+            .map(|i| ledger_posting(&format!("bench_act_{i}"), "p_bench"))
             .collect();
         let t = Instant::now();
         let mut state = pre;
@@ -1467,7 +1445,7 @@ async fn connect(url: &str) -> Result<PgPool> {
 }
 
 async fn run_write(args: ScenarioArgs) -> Result<()> {
-    require_reset_ack(&args)?;
+    check_reset_ack(args.reset, &args.database_url)?;
     require_positive_k(&args)?;
     require_positive_repeat(args.repeat)?;
     let pool = connect(&args.database_url).await?;
@@ -1583,7 +1561,7 @@ async fn measure_read(
 }
 
 async fn run_read(args: ScenarioArgs) -> Result<()> {
-    require_reset_ack(&args)?;
+    check_reset_ack(args.reset, &args.database_url)?;
     require_positive_k(&args)?;
     require_positive_repeat(args.repeat)?;
     let pool = connect(&args.database_url).await?;
@@ -1704,7 +1682,7 @@ async fn measure_as_of(
 }
 
 async fn run_as_of(args: AsOfArgs) -> Result<()> {
-    require_reset_ack_as_of(&args)?;
+    check_reset_ack(args.reset, &args.database_url)?;
     require_positive_repeat(args.repeat)?;
     if args.n == 0 {
         return Err(anyhow!(
@@ -2022,22 +2000,11 @@ async fn contend_worker(
             .await?;
         }
     } else {
-        let transformation = double_entry_ledger::post_simple_entry();
         let compiled = implementation.program(double_entry_ledger::program())?;
         let period = format!("p_contend_{}", worker_id % periods);
         for op in 0..ops {
-            let transition = Transition {
-                transformation_name: transformation.name.clone(),
-                args: vec![
-                    subj(&format!("entry_r{round}_w{worker_id}_op{op}")),
-                    subj("d_2026_05_17"),
-                    subj(&period),
-                    subj("account_cash"),
-                    subj("account_revenue"),
-                    dec(42),
-                ],
-                actor: Subject::from("bench"),
-            };
+            let transition =
+                ledger_posting(&format!("entry_r{round}_w{worker_id}_op{op}"), &period);
             let label = format!("ledger worker {worker_id} op {op}");
             one_op(
                 &pool,
@@ -2153,7 +2120,6 @@ async fn measure_import(
     if n == 0 {
         return Err(anyhow!("import requires n >= 1"));
     }
-    let transformation = double_entry_ledger::post_simple_entry();
     let compiled = implementation.program(double_entry_ledger::program())?;
     let mut total_s = Vec::with_capacity(repeat);
     let mut rows_per_s = Vec::with_capacity(repeat);
@@ -2170,18 +2136,7 @@ async fn measure_import(
         let mut per_commit = Vec::with_capacity(n);
         let journey = Instant::now();
         for i in 0..n {
-            let transition = Transition {
-                transformation_name: transformation.name.clone(),
-                args: vec![
-                    subj(&format!("entry_import_r{r}_{i}")),
-                    subj("d_2026_05_17"),
-                    subj("p_import"),
-                    subj("account_cash"),
-                    subj("account_revenue"),
-                    dec(42),
-                ],
-                actor: Subject::from("bench"),
-            };
+            let transition = ledger_posting(&format!("entry_import_r{r}_{i}"), "p_import");
             let t = Instant::now();
             let outcome = propose_against_pg(pool, &compiled, &Proposal::gateway(&transition))
                 .await
