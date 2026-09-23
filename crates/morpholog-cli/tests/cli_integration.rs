@@ -3215,7 +3215,7 @@ async fn batch_rejected_rows_carry_explanations_when_asked() {
 // non-zero.
 #[tokio::test]
 async fn batch_with_unreadable_input_exits_nonzero() {
-    let (status, _stdout, stderr) = run_cli(&[
+    let (status, stdout, stderr) = run_cli(&[
         "propose",
         &ledger_morph(),
         "--batch",
@@ -3223,6 +3223,142 @@ async fn batch_with_unreadable_input_exits_nonzero() {
     ]);
     assert!(!status.success());
     assert!(stderr.contains("failed to read batch rows"), "{stderr}");
+    // One error object for the whole batch, with no `row`: no row was
+    // attempted, and the binary says so.
+    let error: Value = serde_json::from_str(&stdout).expect("one error object on stdout");
+    assert_eq!(error["code"], "not_committed", "{stdout}");
+    assert!(error.get("row").is_none(), "{stdout}");
+}
+
+/// Every failure before the adapter call prints a coded error object, so a
+/// caller never has to infer "nothing committed" from silence.
+#[tokio::test]
+async fn a_one_shot_failure_before_the_proposal_is_a_coded_error_object() {
+    let dir = tempfile::tempdir().unwrap();
+    let broken = dir.path().join("broken.morph");
+    std::fs::write(&broken, "program broken\ninvariant x:\n").unwrap();
+    let cases: Vec<(&str, Vec<String>, &str)> = vec![
+        (
+            "unknown transformation",
+            vec![
+                "propose".into(),
+                ledger_morph(),
+                "no_such_act".into(),
+                "--actor".into(),
+                "alex".into(),
+                "--args".into(),
+                "[]".into(),
+            ],
+            "unknown_transformation",
+        ),
+        (
+            "malformed arguments",
+            vec![
+                "propose".into(),
+                ledger_morph(),
+                "post_simple_entry".into(),
+                "--actor".into(),
+                "alex".into(),
+                "--args".into(),
+                "not json".into(),
+            ],
+            "invalid_arguments",
+        ),
+        (
+            "a programme that does not parse",
+            vec![
+                "propose".into(),
+                broken.display().to_string(),
+                "x".into(),
+                "--actor".into(),
+                "alex".into(),
+                "--args".into(),
+                "[]".into(),
+            ],
+            "not_committed",
+        ),
+        (
+            "transact, a programme that does not parse",
+            vec![
+                "transact".into(),
+                broken.display().to_string(),
+                "--acts".into(),
+                "/nonexistent".into(),
+            ],
+            "not_committed",
+        ),
+    ];
+    for (what, args, code) in cases {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (status, stdout, stderr) = run_cli(&args);
+        assert_eq!(status.code(), Some(1), "{what}: {stderr}");
+        let error: Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("{what}: no error object on stdout ({e}): {stdout:?}"));
+        assert_eq!(error["status"], "error", "{what}: {stdout}");
+        assert_eq!(error["code"], code, "{what}: {stdout}");
+        assert!(
+            !stderr.trim().is_empty(),
+            "{what}: a person still gets prose"
+        );
+    }
+
+    // A connection that fails is a known non-commit too.
+    let output = Command::new(common::bin())
+        .args([
+            "propose",
+            &ledger_morph(),
+            "post_simple_entry",
+            "--actor",
+            "alex",
+            "--args",
+            &ledger_args_json("e1", "2026-04-15", "q1_2026", "100"),
+            "--database-url",
+            "postgres:///morpholog_no_such_database",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let error: Value = serde_json::from_slice(&output.stdout).expect("an error object");
+    assert_eq!(error["code"], "not_committed");
+}
+
+/// A batch receipt reaches the caller as soon as its row is done, not when
+/// the process exits: a caller that kills a long batch still holds every
+/// receipt for the rows that finished.
+#[tokio::test(flavor = "current_thread")]
+async fn batch_receipts_are_visible_before_the_batch_ends() {
+    reset_db().await;
+    let rows: String = (0..400)
+        .map(|i| posting_row(None, &format!("flush_{i}")) + "\n")
+        .collect();
+    let mut child = Command::new(common::bin())
+        .args([
+            "propose",
+            &ledger_morph(),
+            "--batch",
+            "-",
+            "--database-url",
+            &database_url(),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(child.stdin.as_mut().unwrap(), rows.as_bytes()).unwrap();
+    drop(child.stdin.take());
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut first = String::new();
+    std::io::BufRead::read_line(&mut stdout, &mut first).unwrap();
+    let still_running = child.try_wait().unwrap().is_none();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let receipt: Value = serde_json::from_str(&first).expect("a whole receipt line");
+    assert_eq!(receipt["row"], 1, "{first}");
+    assert!(
+        still_running,
+        "the first receipt should arrive while later rows are still running"
+    );
 }
 
 // --trace is single-run diagnostics; clap refuses the combination.
@@ -3873,10 +4009,13 @@ async fn a_refused_delta_write_is_a_known_non_commit_on_every_surface() {
         .await
         .unwrap();
 
-    // One-shot: nothing on stdout, exit 1 (not 3), the prose says so.
+    // One-shot: the coded error object on stdout, exit 1 (not 3), and
+    // the same prose on stderr.
     let (status, stdout, stderr) = one_shot;
     assert_eq!(status.code(), Some(1), "{stderr}");
-    assert!(stdout.trim().is_empty(), "{stdout}");
+    let error: Value = serde_json::from_str(&stdout).expect("a coded error object on stdout");
+    assert_eq!(error["status"], "error", "{stdout}");
+    assert_eq!(error["code"], "not_committed", "{stdout}");
     assert!(
         stderr.contains("the proposal was not committed"),
         "{stderr}"

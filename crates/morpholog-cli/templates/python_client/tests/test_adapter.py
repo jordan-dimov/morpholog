@@ -1,6 +1,8 @@
 """The subprocess adapter against a stub binary, pinning the
-discrimination rule: decided results arrive on stdout even at exit 1;
-empty stdout is the only operational failure."""
+discrimination rule: decided results arrive on stdout even at exit 1.
+For a read, empty stdout is an operational failure. For a proposal,
+only the binary's own statement - a decided envelope or a coded error
+object - settles the outcome; anything else is unknown."""
 
 import json
 import os
@@ -17,6 +19,7 @@ add_client_to_path()
 from python_client import envelopes
 from python_client.adapter import (
     Morpholog,
+    MorphologBatchIncomplete,
     MorphologError,
     MorphologOutcomeUnknown,
     MorphologRequestError,
@@ -35,6 +38,24 @@ if mode == "operational_failure":
 if mode == "not_committed_exit_1":
     print("Error: the proposal was not committed: check constraint", file=sys.stderr)
     sys.exit(1)
+if mode == "not_committed_object":
+    print('{"status": "error", "code": "not_committed", "error": "check constraint"}')
+    print("Error: the proposal was not committed: check constraint", file=sys.stderr)
+    sys.exit(1)
+if mode == "killed":
+    sys.stdout.flush()
+    os.kill(os.getpid(), 9)
+if mode == "stdout_then_exit":
+    sys.stdout.write(os.environ["STUB_STDOUT"])
+    sys.stdout.flush()
+    sys.exit(int(os.environ.get("STUB_EXIT", "0")))
+if mode == "batch_receipt_then_killed":
+    print('{"row": 1, "status": "rejected", "reason": "closed period"}', flush=True)
+    os.kill(os.getpid(), 9)
+if mode == "batch_receipt_then_hang":
+    print('{"row": 1, "status": "rejected", "reason": "closed period"}', flush=True)
+    import time
+    time.sleep(30)
 if mode == "commit_outcome_unknown_exit_3":
     print("Error: the commit outcome is unknown - read the record", file=sys.stderr)
     sys.exit(3)
@@ -155,29 +176,120 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertNotIn("--reset", argv)
             self.assertNotIn("--i-know-this-deletes-data", argv)
 
-    def test_empty_stdout_raises_with_the_stderr_text(self):
+    def test_empty_stdout_on_a_read_is_operational_and_on_a_proposal_is_unknown(self):
         self._mode("operational_failure")
-        with self.assertRaises(MorphologError) as caught:
+        with self.assertRaises(MorphologError) as read:
+            self.client.claims("Entry")
+        self.assertNotIsInstance(read.exception, MorphologOutcomeUnknown)
+        self.assertIn("failed to connect", str(read.exception))
+        with self.assertRaises(MorphologOutcomeUnknown) as proposal:
             self.client.propose("t", "alex", {"x": "1"})
-        self.assertIn("failed to connect", str(caught.exception))
+        self.assertIn("failed to connect", str(proposal.exception))
 
     def test_batch_returns_one_receipt_per_row(self):
         self._mode("batch_ok")
-        receipts = self.client.propose_batch(
-            [{"transformation": "t", "actor": "a", "args_named": {}}]
-        )
+        row = {"transformation": "t", "actor": "a", "args_named": {}}
+        receipts = self.client.propose_batch([row, row])
         self.assertEqual([r.row for r in receipts], [1, 2])
         self.assertIsInstance(receipts[0].outcome, envelopes.Rejected)
         self.assertIsInstance(receipts[1].outcome, envelopes.BatchError)
 
-    def test_an_aborted_batch_raises_naming_the_receipts_that_arrived(self):
+    def test_an_aborted_batch_names_what_finished_what_is_unknown_and_what_never_ran(self):
         self._mode("batch_aborted")
-        with self.assertRaises(MorphologError) as caught:
-            self.client.propose_batch(
-                [{"transformation": "t", "actor": "a", "args_named": {}}]
-            )
-        self.assertIn("1 receipt", str(caught.exception))
+        row = {"transformation": "t", "actor": "a", "args_named": {}}
+        with self.assertRaises(MorphologBatchIncomplete) as caught:
+            self.client.propose_batch([row, row, row])
+        self.assertEqual([r.row for r in caught.exception.receipts], [1])
+        self.assertEqual(caught.exception.unknown_row, 2)
+        self.assertEqual(caught.exception.not_attempted, [3])
+        self.assertFalse(caught.exception.retriable)
         self.assertIn("aborted at row 2", str(caught.exception))
+
+    def test_a_killed_batch_keeps_the_receipts_that_arrived(self):
+        # The binary flushes each receipt; a kill after row 1 leaves row 1
+        # decided, row 2 unknown and row 3 never run.
+        self._mode("batch_receipt_then_killed")
+        row = {"transformation": "t", "actor": "a", "args_named": {}}
+        with self.assertRaises(MorphologBatchIncomplete) as caught:
+            self.client.propose_batch([row, row, row])
+        self.assertEqual([r.row for r in caught.exception.receipts], [1])
+        self.assertEqual(caught.exception.unknown_row, 2)
+        self.assertEqual(caught.exception.not_attempted, [3])
+
+    def test_a_timed_out_batch_keeps_the_receipts_that_arrived(self):
+        self._mode("batch_receipt_then_hang")
+        row = {"transformation": "t", "actor": "a", "args_named": {}}
+        with self.assertRaises(MorphologBatchIncomplete) as caught:
+            self.client.propose_batch([row, row], timeout=0.5)
+        self.assertEqual([r.row for r in caught.exception.receipts], [1])
+        self.assertEqual(caught.exception.unknown_row, 2)
+        self.assertEqual(caught.exception.not_attempted, [])
+        self.assertIn("timed out", str(caught.exception))
+
+    def test_a_batch_refused_before_its_first_row_ran_nothing(self):
+        self._mode("stdout_then_exit")
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        self.addCleanup(os.environ.pop, "STUB_EXIT", None)
+        os.environ["STUB_STDOUT"] = (
+            '{"status": "error", "code": "not_committed", "error": "no connection"}\n'
+        )
+        os.environ["STUB_EXIT"] = "1"
+        row = {"transformation": "t", "actor": "a", "args_named": {}}
+        with self.assertRaises(MorphologRequestError) as caught:
+            self.client.propose_batch([row, row])
+        self.assertEqual(caught.exception.code, "not_committed")
+
+    def test_a_batch_short_of_receipts_is_incomplete_even_at_exit_0(self):
+        # A clean exit with a missing receipt is a broken promise, never a
+        # short list; so is a last line the binary did not finish.
+        self._mode("stdout_then_exit")
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        self.addCleanup(os.environ.pop, "STUB_EXIT", None)
+        row = {"transformation": "t", "actor": "a", "args_named": {}}
+        first = '{"row": 1, "status": "rejected", "reason": "closed"}\n'
+        for stdout in (first, first + '{"row": 2, "status": "rej'):
+            os.environ["STUB_STDOUT"] = stdout
+            with self.assertRaises(MorphologBatchIncomplete) as caught:
+                self.client.propose_batch([row, row])
+            self.assertEqual(caught.exception.unknown_row, 2)
+
+    def test_a_proposal_is_not_committed_only_when_the_binary_says_so(self):
+        # The doctrine line: no exit code, stderr text, silence or signal
+        # proves a non-commit. Only a strictly parsed error object with a
+        # published code other than commit_outcome_unknown does.
+        self._mode("not_committed_object")
+        with self.assertRaises(MorphologRequestError) as said:
+            self.client.propose("post", "alex", {})
+        self.assertEqual(said.exception.code, "not_committed")
+        self.assertNotIsInstance(said.exception, MorphologOutcomeUnknown)
+
+        self._mode("killed")
+        with self.assertRaises(MorphologOutcomeUnknown):
+            self.client.propose("post", "alex", {})
+
+        self._mode("stdout_then_exit")
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        self.addCleanup(os.environ.pop, "STUB_EXIT", None)
+        silent = [
+            ("", "0"),
+            ("", "1"),
+            ("", "2"),
+            ("not json", "1"),
+            ('{"status": "error", "code": "not_committed"', "1"),
+            ('{"status": "error", "code": "a_future_code", "error": "x"}', "1"),
+            ('{"status": "error", "error": "no code"}', "1"),
+            ('{"status": "error", "code": "commit_outcome_unknown", "error": "x"}', "3"),
+            ('{"status": "surprise"}', "0"),
+        ]
+        for stdout, exit_code in silent:
+            os.environ["STUB_STDOUT"] = stdout
+            os.environ["STUB_EXIT"] = exit_code
+            for call in (
+                lambda: self.client.propose("post", "alex", {}),
+                lambda: self.client.transact([{"transformation": "t", "actor": "a"}]),
+            ):
+                with self.assertRaises(MorphologOutcomeUnknown, msg=f"{stdout!r} exit {exit_code}"):
+                    call()
 
     def test_as_of_threads_through_both_claims_reads(self):
         # The flag lands on the CLI argv exactly when supplied, on both
@@ -377,26 +489,20 @@ class AdapterDiscrimination(unittest.TestCase):
         with self.assertRaises(MorphologOutcomeUnknown):
             self.client.transact(acts, timeout=0.2)
 
-    def test_the_one_shot_exit_codes_say_what_the_runtime_knows(self):
-        # 1 with nothing on stdout is an ordinary operational failure -
-        # here a database refusal before anything was recorded; 3 is the
-        # one exit that means "read the record"; 2 is a usage error and
-        # must never be mistaken for an unknown commit.
-        self._mode("not_committed_exit_1")
-        with self.assertRaises(MorphologError) as err:
-            self.client.propose("post", "alex", {})
-        self.assertNotIsInstance(err.exception, MorphologOutcomeUnknown)
-        self.assertIn("not committed", str(err.exception))
-
-        self._mode("commit_outcome_unknown_exit_3")
-        with self.assertRaises(MorphologOutcomeUnknown) as unknown:
-            self.client.propose("post", "alex", {})
-        self.assertIn("read the record", str(unknown.exception))
-
-        self._mode("usage_error_exit_2")
-        with self.assertRaises(MorphologError) as usage:
-            self.client.propose("post", "alex", {})
-        self.assertNotIsInstance(usage.exception, MorphologOutcomeUnknown)
+    def test_a_binary_that_only_explains_on_stderr_leaves_the_outcome_unknown(self):
+        # An older binary said "not committed" in prose only, and a usage
+        # error says nothing about the database. Neither is a statement
+        # the client can rely on, so both read as unknown; exit 3 always
+        # did.
+        for mode in (
+            "not_committed_exit_1",
+            "usage_error_exit_2",
+            "commit_outcome_unknown_exit_3",
+        ):
+            self._mode(mode)
+            with self.assertRaises(MorphologOutcomeUnknown, msg=mode) as unknown:
+                self.client.propose("post", "alex", {})
+            self.assertIn("read the record", str(unknown.exception))
 
     def test_verify_flags_land_on_argv_exactly_when_supplied(self):
         # The verdict-affecting verify flags: each appears exactly when
@@ -654,7 +760,8 @@ class AdapterDiscrimination(unittest.TestCase):
         self._mode("record_argv_empty")
         with recording_argv() as argv_after:
 
-            rows = [{"transformation": "t", "actor": "a", "args_named": {}}]
+            # No rows, so no receipts is the complete answer.
+            rows: list[dict[str, object]] = []
             argv = argv_after(
                 lambda: self.client.propose_batch(rows, explain_on_reject=True)
             )

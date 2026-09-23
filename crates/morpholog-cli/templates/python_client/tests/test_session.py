@@ -126,6 +126,8 @@ for request in sys.stdin:
         say(json.dumps({"act": 1, "reason": "require `Account(account)` failed", "row": n, "status": "rejected"}))
     elif mode == "empty_batch_receipt":
         say(json.dumps({"code": "invalid_request", "error": "an atomic batch needs at least one act", "row": n, "status": "error"}))
+    elif mode == "unpublished_code_receipt":
+        say(json.dumps({"code": "a_future_code", "error": "x", "row": n, "status": "error"}))
     elif mode == "not_committed_receipt":
         say(json.dumps({"code": "not_committed", "error": "the proposal was not committed: check constraint", "row": n, "status": "error"}))
     elif mode == "bogus_rows":
@@ -314,6 +316,16 @@ class TranscriptConversation(SessionHarness):
                 s.propose("open_account", "teller", {"account": "a", "opened_on": "2026-01-15"})
             self.assertEqual(refused.exception.code, "not_committed")
             self.assertNotIsInstance(refused.exception, MorphologOutcomeUnknown)
+            self.assertIsNone(s._poisoned)
+
+
+    def test_an_unpublished_code_on_a_proposal_is_outcome_unknown(self):
+        # Only a published code can say a proposal did not commit. The
+        # receipt arrived in step, so the session stays usable.
+        with self.session("unpublished_code_receipt") as s:
+            with self.assertRaises(MorphologOutcomeUnknown) as unknown:
+                s.propose("open_account", "teller", {"account": "a", "opened_on": "2026-01-15"})
+            self.assertIn("a_future_code", str(unknown.exception))
             self.assertIsNone(s._poisoned)
 
 

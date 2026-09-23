@@ -429,6 +429,13 @@ class Session:
                     raise MorphologOutcomeUnknown(
                         f"session request {receipt.row}: {receipt.error}"
                     )
+                if commitful and receipt.code not in envelopes.PROPOSE_ERROR_CODES:
+                    # Only a published code can say a proposal did not
+                    # commit; an unrecognised one says nothing either way.
+                    raise MorphologOutcomeUnknown(
+                        f"session request {receipt.row}: unpublished error code "
+                        f"{receipt.code!r}: {receipt.error}"
+                    )
                 raise MorphologRequestError(receipt.code, receipt.error, receipt.row)
             try:
                 return decode(payload, expected_row)

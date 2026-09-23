@@ -13,9 +13,11 @@
 //!
 //! The process aborts, non-zero, only on a failure that cannot be a
 //! receipt: a broken stream, an operational failure on a read, or a
-//! decided rejection that could not be recorded. To a caller with a
-//! request in flight, an abort means the outcome is unknown; the generated
-//! client reports it as such and never retries silently.
+//! proposal's receipt that could not be serialised after the adapter
+//! returned. To a caller with a request in flight, an abort means the
+//! outcome is unknown; the generated client reports it as such and never
+//! retries silently. Everything the binary knows did not commit is a coded
+//! receipt, never an abort.
 //!
 //! The programme is fixed at start; the ready line's `model_hash` tells a
 //! caller which one. Editing the file never changes a running session, so

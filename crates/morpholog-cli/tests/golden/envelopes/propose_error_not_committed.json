@@ -1,0 +1,5 @@
+{
+  "code": "not_committed",
+  "error": "the proposal was not committed: failed to connect to PostgreSQL",
+  "status": "error"
+}

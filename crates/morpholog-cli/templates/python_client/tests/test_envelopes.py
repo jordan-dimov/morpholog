@@ -9,7 +9,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from _support import add_client_to_path, golden
+from _support import GOLDEN_DIR, add_client_to_path, golden
 
 add_client_to_path()
 
@@ -82,6 +82,19 @@ class RunOutcomes(unittest.TestCase):
         self.assertIsInstance(committed.result, envelopes.Committed)
         errored = envelopes.TracedEnvelope.from_json(golden("traced_errored.json"))
         self.assertIsInstance(errored.result, envelopes.Errored)
+        # A kernel error is coded like every other known non-commit, and
+        # keeps its trace.
+        self.assertEqual(errored.result.code, "kernel_error")
+        self.assertTrue(errored.trace)
+
+    def test_a_one_shot_error_object_parses_and_its_codes_are_the_schema_s(self):
+        error = envelopes.RequestError.from_json(golden("propose_error_not_committed.json"))
+        self.assertEqual(error.code, "not_committed")
+        schema = json.loads(
+            (GOLDEN_DIR.parents[2] / "src" / "schemas" / "result.json").read_text()
+        )
+        published = set(schema["$defs"]["propose_error_code"]["enum"])
+        self.assertEqual(envelopes.PROPOSE_ERROR_CODES, published)
 
     def test_a_trace_is_typed_steps_not_raw_dicts(self):
         # The trace used to arrive as list[object] - a pinned wrapper around

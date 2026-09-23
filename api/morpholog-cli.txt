@@ -65,21 +65,6 @@ impl core::marker::Unpin for morpholog_cli::envelopes::ProposeCode
 impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::ProposeCode
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::ProposeCode
 impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::ProposeCode
-pub struct morpholog_cli::envelopes::AtomicError
-pub morpholog_cli::envelopes::AtomicError::code: morpholog_cli::envelopes::ErrorCode
-pub morpholog_cli::envelopes::AtomicError::error: alloc::string::String
-pub morpholog_cli::envelopes::AtomicError::status: &'static str
-impl morpholog_cli::envelopes::AtomicError
-pub fn morpholog_cli::envelopes::AtomicError::new(morpholog_cli::envelopes::ErrorCode, alloc::string::String) -> Self
-impl serde_core::ser::Serialize for morpholog_cli::envelopes::AtomicError
-pub fn morpholog_cli::envelopes::AtomicError::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
-impl core::marker::Freeze for morpholog_cli::envelopes::AtomicError
-impl core::marker::Send for morpholog_cli::envelopes::AtomicError
-impl core::marker::Sync for morpholog_cli::envelopes::AtomicError
-impl core::marker::Unpin for morpholog_cli::envelopes::AtomicError
-impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::AtomicError
-impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::AtomicError
-impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::AtomicError
 pub struct morpholog_cli::envelopes::CheckDiagnostic
 pub morpholog_cli::envelopes::CheckDiagnostic::column: core::option::Option<usize>
 pub morpholog_cli::envelopes::CheckDiagnostic::end: core::option::Option<usize>
@@ -209,6 +194,21 @@ impl<'a, E> core::marker::Unpin for morpholog_cli::envelopes::RejectedWithExplan
 impl<'a, E> core::marker::UnsafeUnpin for morpholog_cli::envelopes::RejectedWithExplanation<'a, E> where E: core::marker::UnsafeUnpin
 impl<'a, E> core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::RejectedWithExplanation<'a, E> where E: core::panic::unwind_safe::RefUnwindSafe
 impl<'a, E> core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::RejectedWithExplanation<'a, E> where E: core::panic::unwind_safe::UnwindSafe
+pub struct morpholog_cli::envelopes::RequestError
+pub morpholog_cli::envelopes::RequestError::code: morpholog_cli::envelopes::ErrorCode
+pub morpholog_cli::envelopes::RequestError::error: alloc::string::String
+pub morpholog_cli::envelopes::RequestError::status: &'static str
+impl morpholog_cli::envelopes::RequestError
+pub fn morpholog_cli::envelopes::RequestError::new(morpholog_cli::envelopes::ErrorCode, alloc::string::String) -> Self
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::RequestError
+pub fn morpholog_cli::envelopes::RequestError::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::RequestError
+impl core::marker::Send for morpholog_cli::envelopes::RequestError
+impl core::marker::Sync for morpholog_cli::envelopes::RequestError
+impl core::marker::Unpin for morpholog_cli::envelopes::RequestError
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::RequestError
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::RequestError
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::RequestError
 pub struct morpholog_cli::envelopes::SessionReady
 pub morpholog_cli::envelopes::SessionReady::model_hash: alloc::string::String
 pub morpholog_cli::envelopes::SessionReady::morpholog_version: &'static str
