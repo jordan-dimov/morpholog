@@ -107,11 +107,14 @@ enum Command {
     /// (`--args-named` for a field-keyed object, `--args` for the
     /// tagged positional form). On commit, prints the outcome as JSON
     /// and exits zero; on a refusal, prints the reason and exits one
-    /// (a lawful answer, on the record); on any other error - bad
-    /// args, unknown transformation, connection failure - prints to
-    /// stderr and exits one. `--batch -` admits NDJSON rows from
-    /// stdin, one receipt per row; `--explain-on-reject` attaches the
-    /// structured explanation to refusals.
+    /// (a lawful answer, on the record). On an error it knows committed
+    /// nothing - bad args, unknown transformation, connection failure -
+    /// it prints a coded error object and exits one. If COMMIT failed
+    /// without a verdict, it prints the `commit_outcome_unknown` object
+    /// and exits three: read the record before re-submitting. No object
+    /// on stdout means the outcome is unknown. `--batch -` admits NDJSON
+    /// rows from stdin, one receipt per row; `--explain-on-reject`
+    /// attaches the structured explanation to refusals.
     Propose(ProposeArgs),
 
     /// Serve propose and the page reads over stdio, resident.

@@ -749,6 +749,13 @@ PROPOSE_ERROR_CODES = frozenset(
 )
 
 
+#: The codes that say nothing was recorded: every published code but
+#: ``commit_outcome_unknown``. A caller that hand-rolls its own handling
+#: should treat a proposal as not committed on one of these and on
+#: nothing else.
+NOTHING_RECORDED_CODES = PROPOSE_ERROR_CODES - {"commit_outcome_unknown"}
+
+
 @dataclass(frozen=True)
 class RequestError:
     """The error object a one-shot ``propose`` or ``transact`` prints when

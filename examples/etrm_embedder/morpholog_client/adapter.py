@@ -188,7 +188,7 @@ class Morpholog:
             raise MorphologTimeout(
                 f"`{self.binary} {_redact_argv(args)}` timed out after {timeout}s",
                 stdout=_text(exc.stdout),
-                stderr=_text(exc.stderr),
+                stderr=self._redact_stderr(_text(exc.stderr)),
             ) from None
 
     def _redact_stderr(self, stderr: str) -> str:
@@ -355,8 +355,9 @@ class Morpholog:
         try:
             proc = self._run(args, stdin=ndjson, timeout=timeout)
             stdout, stderr, how = proc.stdout, proc.stderr, f"exit {proc.returncode}"
+            clean = proc.returncode == 0
         except MorphologTimeout as exc:
-            stdout, stderr, how = exc.stdout, exc.stderr, str(exc)
+            stdout, stderr, how, clean = exc.stdout, exc.stderr, str(exc), False
         # Only whole lines count: text after the last newline is a line
         # the binary had not finished writing.
         lines = [line for line in stdout.split("\n")[:-1] if line.strip()]
@@ -375,7 +376,22 @@ class Morpholog:
             # Receipts arrive in row order; anything else is not one.
             if receipt.row != len(receipts) + 1:
                 break
+            # A code this client does not know says nothing about the row.
+            outcome = receipt.outcome
+            if (
+                isinstance(outcome, envelopes.BatchError)
+                and outcome.code not in envelopes.PROPOSE_ERROR_CODES
+            ):
+                break
             receipts.append(receipt)
+        if not rows:
+            # No rows, so no receipts - but only a clean, silent exit
+            # says the empty batch ran.
+            if clean and not lines:
+                return receipts
+            raise MorphologError(
+                f"an empty batch did not complete ({how}):\n{self._redact_stderr(stderr)}"
+            )
         if len(receipts) == len(rows):
             return receipts
         unknown_row = len(receipts) + 1
@@ -395,7 +411,7 @@ class Morpholog:
             error = envelopes.RequestError.from_json(payload)
         except envelopes.EnvelopeError:
             return
-        if error.code in envelopes.PROPOSE_ERROR_CODES and error.code != "commit_outcome_unknown":
+        if error.code in envelopes.NOTHING_RECORDED_CODES:
             raise MorphologRequestError(error.code, error.error)
 
     def transact(
@@ -456,7 +472,7 @@ class Morpholog:
                 raise unknown(f"an error object outside the contract ({exc})") from None
             if error.code == "commit_outcome_unknown":
                 raise unknown(error.error, proc.stderr)
-            if error.code not in envelopes.PROPOSE_ERROR_CODES:
+            if error.code not in envelopes.NOTHING_RECORDED_CODES:
                 raise unknown(f"an unpublished error code {error.code!r}", proc.stderr)
             raise MorphologRequestError(error.code, error.error)
         try:

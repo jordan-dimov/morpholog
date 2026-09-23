@@ -52,6 +52,11 @@ if mode == "stdout_then_exit":
 if mode == "batch_receipt_then_killed":
     print('{"row": 1, "status": "rejected", "reason": "closed period"}', flush=True)
     os.kill(os.getpid(), 9)
+if mode == "echo_conninfo_then_hang":
+    i = sys.argv.index("--database-url")
+    print(f"connecting to {sys.argv[i + 1]}", file=sys.stderr, flush=True)
+    import time
+    time.sleep(30)
 if mode == "batch_receipt_then_hang":
     print('{"row": 1, "status": "rejected", "reason": "closed period"}', flush=True)
     import time
@@ -252,6 +257,49 @@ class AdapterDiscrimination(unittest.TestCase):
             with self.assertRaises(MorphologBatchIncomplete) as caught:
                 self.client.propose_batch([row, row])
             self.assertEqual(caught.exception.unknown_row, 2)
+
+    def test_a_timeout_never_keeps_the_password_it_captured(self):
+        self._mode("echo_conninfo_then_hang")
+        secret = "postgres://user:hunter2@db.internal/ledger"
+        client = Morpholog("model.morph", secret, binary=str(self.stub), timeout=0.5)
+        with self.assertRaises(MorphologTimeout) as caught:
+            client.claims("Entry")
+        self.assertNotIn("hunter2", caught.exception.stderr)
+        self.assertIn("<redacted>", caught.exception.stderr)
+
+    def test_an_empty_batch_succeeds_only_on_a_clean_silent_exit(self):
+        self._mode("stdout_then_exit")
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        self.addCleanup(os.environ.pop, "STUB_EXIT", None)
+        os.environ["STUB_STDOUT"] = ""
+        os.environ["STUB_EXIT"] = "0"
+        self.assertEqual(self.client.propose_batch([]), [])
+        for stdout, exit_code in (("", "1"), ("garbage\n", "0")):
+            os.environ["STUB_STDOUT"] = stdout
+            os.environ["STUB_EXIT"] = exit_code
+            with self.assertRaises(MorphologError, msg=f"{stdout!r} exit {exit_code}"):
+                self.client.propose_batch([])
+        self._mode("hang")
+        with self.assertRaises(MorphologError):
+            self.client.propose_batch([], timeout=0.2)
+
+    def test_a_batch_row_with_an_unpublished_code_is_where_certainty_ends(self):
+        self._mode("stdout_then_exit")
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        os.environ["STUB_STDOUT"] = (
+            '{"row": 1, "status": "rejected", "reason": "closed"}\n'
+            '{"row": 2, "status": "error", "code": "a_future_code", "error": "x"}\n'
+        )
+        row = {"transformation": "t", "actor": "a", "args_named": {}}
+        with self.assertRaises(MorphologBatchIncomplete) as caught:
+            self.client.propose_batch([row, row])
+        self.assertEqual(caught.exception.unknown_row, 2)
+        # An explicit unknown receipt is still a receipt.
+        os.environ["STUB_STDOUT"] = (
+            '{"row": 1, "status": "error", "code": "commit_outcome_unknown", "error": "x"}\n'
+        )
+        receipts = self.client.propose_batch([row])
+        self.assertEqual(receipts[0].outcome.code, "commit_outcome_unknown")
 
     def test_a_proposal_is_not_committed_only_when_the_binary_says_so(self):
         # The doctrine line: no exit code, stderr text, silence or signal

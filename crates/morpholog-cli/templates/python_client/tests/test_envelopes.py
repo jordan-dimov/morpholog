@@ -95,6 +95,9 @@ class RunOutcomes(unittest.TestCase):
         )
         published = set(schema["$defs"]["propose_error_code"]["enum"])
         self.assertEqual(envelopes.PROPOSE_ERROR_CODES, published)
+        self.assertEqual(
+            envelopes.NOTHING_RECORDED_CODES, published - {"commit_outcome_unknown"}
+        )
 
     def test_a_trace_is_typed_steps_not_raw_dicts(self):
         # The trace used to arrive as list[object] - a pinned wrapper around
