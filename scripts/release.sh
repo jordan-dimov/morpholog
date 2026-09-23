@@ -152,8 +152,10 @@ step tag_release Tagged \
 # and published them - whether a release already exists does not matter.
 run=""
 for _ in $(seq 30); do
-    run="$(gh run list --workflow release --branch "$TAG" --json databaseId,headSha \
-        | jq -r --arg sha "$SHA" '[.[] | select(.headSha == $sha)][0].databaseId // empty')"
+    # The push to main runs the same workflow on the same commit, for the
+    # rolling build; the tag's run is the one named after the tag.
+    run="$(gh run list --workflow release --commit "$SHA" --json databaseId,headBranch \
+        | jq -r --arg tag "$TAG" '[.[] | select(.headBranch == $tag)][0].databaseId // empty')"
     [ -n "$run" ] && break
     sleep 10
 done
@@ -189,7 +191,9 @@ for platform in $(jq -r '.[] | select(.predicate == "PlatformDeclared") | .args[
         tmp="$(mktemp -d)"
         gh release download "$TAG" -p "$archive" -O - > "$tmp/$archive"
         gh release download "$TAG" -p "$archive.sha256" -O - > "$tmp/$archive.sha256"
-        (cd "$tmp" && sha256sum -c --quiet "$archive.sha256" && tar xzf "$archive")
+        # macOS has shasum, not sha256sum; both read the same checksum file.
+        if command -v sha256sum > /dev/null; then sum=(sha256sum); else sum=(shasum -a 256); fi
+        (cd "$tmp" && "${sum[@]}" -c --quiet "$archive.sha256" && tar xzf "$archive")
         reported="$(find "$tmp" -name morpholog -type f -exec {} --version \;)"
         rm -rf "$tmp"
         [ "$reported" = "morpholog-cli $VERSION" ] \
