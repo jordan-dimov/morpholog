@@ -1,25 +1,15 @@
-//! Body-level `let` - parse-time substitution for `define` and
-//! `invariant` bodies.
+//! Body-level `let` in `define` and `invariant` bodies, substituted away at parse time.
 //!
-//! A body `let` is an algebraic abbreviation, not a runtime binding:
-//! its value is inlined at every use site before the IR exists, so
-//! variables inside the value are ordinary Morpholog variables and
-//! acquire exactly the meaning they have after substitution at the
-//! use site (a value mentioning `x` used inside `exists x: ...` reads
-//! the quantified `x` - deliberate, and pinned by test). The kernel
-//! never sees a body `let`; the formatter emits the desugared form;
-//! `canonical_hash` is identical for sugared and hand-desugared
-//! sources - rules identity, not file identity.
+//! A body `let` is an abbreviation, not a runtime binding: its value is inlined at every use.
+//! Variables inside it mean whatever they mean at the use site, so a value mentioning `x` used
+//! inside `exists x: ...` reads the quantified `x`, on purpose. The kernel never sees the `let`,
+//! so the sugared and hand-inlined forms hash the same.
 //!
-//! Refusals are parser-side by necessity (nothing remains in the IR
-//! to blame) and deliberate: duplicate names, parameter collisions,
-//! quantifier-binder collisions (refused rather than shadowed),
-//! `actor` as a name, self- and forward-references (a let may use
-//! earlier lets only), computed values in term-only positions, dead
-//! bindings (transitively - a let used only by another dead let is
-//! dead), and expansion past a node budget (substitution multiplies
-//! nodes; a doubling chain grows exponentially while staying shallow,
-//! which the kernel's depth guard cannot see).
+//! Every refusal must happen here, since nothing is left in the IR to blame: duplicate names,
+//! collisions with parameters or quantifier binders, `actor` as a name, references to itself or
+//! later lets, computed values in term-only positions, unused lets, and expansion past a size
+//! budget. The budget matters because a chain of lets that each double the previous one grows
+//! exponentially while staying shallow.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -32,9 +22,7 @@ use super::walk::{
 
 use crate::diagnostics::Span;
 
-/// One parsed `let name = (value)` line, spans kept for refusals.
-/// `noun` is the diagnostic word - "let" here, "const" when the
-/// programme-level pass reuses this machinery.
+/// One parsed `let name = (value)` line. `noun` is the word diagnostics use: "let" or "const".
 #[derive(Debug)]
 pub(crate) struct LetBinding {
     pub(crate) name: String,
@@ -43,16 +31,12 @@ pub(crate) struct LetBinding {
     pub(crate) noun: &'static str,
 }
 
-/// The expansion ceiling: substitution may not grow a body past this
-/// many IR nodes. Far above any hand-authored rule; low enough that a
-/// doubling chain refuses in milliseconds instead of exhausting
-/// memory.
+/// Substitution may not grow a body past this many IR nodes. Far above any hand-written rule,
+/// low enough that a doubling chain fails fast instead of exhausting memory.
 const MAX_BODY_NODES: usize = 16_384;
 
-/// Apply a body's `let` prefix to its proposition. Returns the
-/// substituted proposition plus every refusal found; on any refusal
-/// the returned proposition is best-effort and the caller must treat
-/// the parse as failed.
+/// Apply a body's `let` prefix to its proposition, returning it with every refusal. After any
+/// refusal the proposition is unreliable and the caller must treat the parse as failed.
 pub(crate) fn apply(
     bindings: Vec<LetBinding>,
     parameters: &[String],
@@ -63,8 +47,7 @@ pub(crate) fn apply(
         return (body, errors);
     }
 
-    // Name-level refusals first: actor, duplicates, parameter and
-    // quantifier-binder collisions.
+    // Name refusals: actor, duplicates, parameter and quantifier-binder collisions.
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     let mut binders = BTreeSet::new();
     binders_in_prop(&body, &mut binders);
@@ -113,11 +96,8 @@ pub(crate) fn apply(
         return (body, errors);
     }
 
-    // Order refusals: a value may reference EARLIER lets only. Without
-    // this, substitution order would accidentally resolve a forward
-    // reference whenever the later let also appears in the body, and
-    // report it dead otherwise - legality must not hinge on an
-    // unrelated use. Self-reference is the degenerate case.
+    // A value may refer only to earlier lets. Otherwise a forward reference would work or not
+    // depending on whether the body happened to use the later let too.
     let declaration_index: BTreeMap<&str, usize> = bindings
         .iter()
         .enumerate()
@@ -148,10 +128,8 @@ pub(crate) fn apply(
         return (body, errors);
     }
 
-    // Liveness, backwards: a let is live when the body uses it, or a
-    // LATER live let's value uses it. Anything else is dead and
-    // refused - including a chain whose head is only used by its own
-    // dead tail.
+    // A let is used if the body uses it or a later used let does. A chain used only by its
+    // own unused tail is unused too.
     let mut live_names: BTreeSet<String> = BTreeSet::new();
     vars_in_prop(&body, &mut live_names);
     let mut live = vec![false; bindings.len()];
@@ -170,12 +148,8 @@ pub(crate) fn apply(
         return (body, errors);
     }
 
-    // Expansion, one visit per value: resolve each value once against
-    // the already-expanded earlier lets it actually references (the
-    // order check above guarantees earlier-only), then substitute the
-    // lets the body directly references. Expanded values are closed -
-    // they contain no let names - so a long chain costs one
-    // substitution per link, never a rewrite of every later value.
+    // Expand each value once against the earlier, already-expanded lets, then substitute into
+    // the body. Expanded values hold no let names, so a long chain costs one step per link.
     let mut expanded: Vec<Option<ValueExpr>> = vec![None; bindings.len()];
     for (i, b) in bindings.iter().enumerate() {
         let mut value = b.value.clone();
@@ -186,9 +160,7 @@ pub(crate) fn apply(
             if let Some(&j) = declaration_index.get(name.as_str())
                 && let Some(prior) = expanded[j].as_ref()
             {
-                // Diagnostics blame the REFERENCED let - it owns the
-                // computed value hitting a term slot, and its
-                // expansion is what grows the tree.
+                // Blame the referenced let: its value is what lands in the slot or grows the tree.
                 budgeted_substitute_value(
                     &mut value,
                     &Var::from(name.as_str()),
@@ -240,10 +212,8 @@ pub(super) fn budgeted_substitute_prop(
     if count_prop(target, name, false) == 0 {
         return;
     }
-    // Budget on value-position occurrences only: a term-slot use is a
-    // 1-for-1 term swap or a refusal, never growth - counting it would
-    // inflate the projection and let the budget error mask the more
-    // specific term-slot diagnostic.
+    // Count only value-position uses. A term-slot use never grows the tree, and counting it
+    // could hide the more specific term-slot error behind a budget error.
     let growth_sites = count_prop(target, name, true);
     let projected = prop_nodes(target) + growth_sites * value_nodes.saturating_sub(1);
     if projected > MAX_BODY_NODES {
@@ -287,8 +257,7 @@ pub(super) fn budgeted_substitute_value(
     substitute_in_value(target, name, value, binding, errors);
 }
 
-/// A computed value can only stand where a value expression stands; a
-/// term-only position takes it solely when the value IS a plain term.
+/// The value as a plain term, if it is one. Only a plain term can fill a term-only position.
 fn substitutable_term(value: &ValueExpr) -> Option<Term> {
     match value {
         ValueExpr::Term(t) => Some(t.clone()),
@@ -442,8 +411,7 @@ pub(super) fn substitute_in_value(
                 substitute_in_value(d, name, value, binding, errors);
             }
         }
-        // Builtin arguments are ordinary value positions: a computed
-        // let inlines whole, no term-slot restriction.
+        // Builtin arguments are value positions, so any value can go in.
         ValueExpr::Call { args, .. } => {
             for a in args {
                 substitute_in_value(a, name, value, binding, errors);
@@ -453,14 +421,11 @@ pub(super) fn substitute_in_value(
 }
 
 // ------------------------------------------------------------
-// Read-only walks: binder names, variable references, node counts.
-// Exhaustive matches, no wildcard arms - a new IR variant must
-// declare its behaviour here.
+// Read-only walks.
 // ------------------------------------------------------------
 
-/// Occurrences of `name` in the tree; with `growth_only`, only those in
-/// value position, where substitution can enlarge the tree. Slot
-/// occurrences swap one term for another or are refused.
+/// Occurrences of `name` in the tree. With `growth_only`, only those in value position, where
+/// substitution can grow the tree.
 fn count_prop(prop: &Prop, name: &Var, growth_only: bool) -> usize {
     let mut n = 0;
     walk_prop(prop, &mut |node| {

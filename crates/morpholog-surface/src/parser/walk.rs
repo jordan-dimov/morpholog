@@ -1,10 +1,6 @@
-//! One structural descent over the kernel IR for the surface passes
-//! that only observe a tree: which names it binds, which it reads, how
-//! many nodes it has. Every node arrives with its position, so a pass
-//! that cares whether a variable stands in a value or in a relational
-//! slot reads that off the node instead of walking again. Passes that
-//! rewrite or judge (substitution, the const subset) keep their own
-//! match: there the match is the rule.
+//! One read-only walk over the kernel IR, for passes that ask which names a tree binds or reads,
+//! or how big it is. Each node says whether it is in value position or a term slot. Passes that
+//! rewrite or judge a tree (substitution, const checks) keep their own match.
 
 use std::collections::BTreeSet;
 
@@ -14,9 +10,8 @@ pub(super) enum Node<'a> {
     Prop(&'a Prop),
     /// A value expression, including a bare term in value position.
     Value(&'a ValueExpr),
-    /// A term in a relational slot - a claim or call argument, a
-    /// membership operand, an extremum target, a lookup key - where a
-    /// substituted value cannot grow the tree.
+    /// A term in a slot that takes only terms: a claim or call argument, an `in` operand, an
+    /// extremum target, a lookup key. Substitution there cannot grow the tree.
     Slot(&'a Term),
     /// A quantifier introducing this name for its body.
     Binder(&'a Var),
@@ -128,9 +123,7 @@ fn slots<'a>(args: &'a [Term], visit: &mut dyn FnMut(Node<'a>)) {
     }
 }
 
-/// The variable a node reads, if any, and whether it stands in value
-/// position (where a substituted expression can grow the tree) rather
-/// than a relational slot.
+/// The variable a node reads, if any, and whether it is in value position.
 pub(super) fn read_var<'a>(node: &Node<'a>) -> Option<(&'a Var, bool)> {
     match node {
         Node::Slot(Term::Var(v)) => Some((v, false)),

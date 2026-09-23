@@ -1,41 +1,12 @@
-//! Programme-level `const` - parse-time substitution across every
-//! body in the file.
+//! Programme-level `const`: a named value substituted into every body at parse time.
 //!
-//! A `const name = (value)` names one figure the whole rulebook
-//! shares - a rounding quantum, a conversion divisor - and is
-//! substituted away before the IR exists, exactly like body-level
-//! `let` ([`super::lets`]): the kernel never sees it, the formatter
-//! emits the inlined form, and `canonical_hash` is identical for the
-//! named and hand-inlined spellings. What `const` adds over `let` is
-//! REACH: it substitutes into invariant and define bodies, derived
-//! `over` and `value` clauses, and transformation statements - the
-//! contexts that have no local-naming alternative.
+//! `const name = (value)` names one figure the whole rulebook shares, such as a rounding
+//! quantum. Like a body `let` ([`super::lets`]) it is gone before the IR exists, so naming a value
+//! or inlining it by hand hashes the same. Unlike a `let`, it reaches every body in the file.
 //!
-//! Two properties keep a const honest, both review-forced:
-//!
-//! CLOSED INITIALISERS - a const is built from literals and earlier
-//! consts only. A free variable would capture whichever local exists
-//! at each use site (an unhygienic macro, not a constant); `actor`
-//! varies per proposal; `sum`/`value` read state. All refused.
-//!
-//! NO PATTERN POSITIONS - a const name may not stand where arguments
-//! bind relationally (claim patterns, defined calls, `bind`).
-//! Substituting there would silently turn a binding into a literal
-//! filter, shrinking a rule's universe from hundreds of lines away -
-//! the exact distant disagreement const exists to prevent. The
-//! body-`let` precedent does not transfer: a let is adjacent to what
-//! it rewrites, a const is not. Constructive and resolved slots
-//! (admit/emit/retract arguments, `value` lookup keys, sum targets)
-//! stay ordinary uses - none of them bind.
-//!
-//! The remaining refusals, per the shadowing-is-refused doctrine:
-//! duplicate consts; `actor` as a name; self- and forward-references
-//! among consts (earlier-only, like lets); a const name colliding
-//! with ANY parameter, quantifier binder, statement binding
-//! (`let`/`for`/`new Subject()`), derived key, or body-level `let`
-//! anywhere in the programme; computed consts in the constructive
-//! term slots; and a const no body uses (dead vocabulary,
-//! transitively).
+//! A const is built only from literals and earlier consts, and may not appear where arguments
+//! bind (claim patterns, definition calls, `bind`). Its name may not collide with any local
+//! anywhere in the programme, and an unused const is refused.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -50,10 +21,8 @@ use super::walk::{
 };
 use crate::diagnostics::Span;
 
-/// The declarations a const pass reads and rewrites, borrowed from the
-/// parser's collected programme plus the body-`let` names the earlier
-/// per-body pass consumed (they are substituted away by now, so the
-/// collision check needs them carried forward).
+/// The declarations the const pass rewrites, plus the body `let` names it checks for collisions
+/// (the lets themselves are already substituted away).
 pub(crate) struct ConstTargets<'a> {
     pub(crate) definitions: &'a mut [(morpholog_core::Definition, Span)],
     pub(crate) invariants: &'a mut [(Invariant, Span)],
@@ -62,9 +31,8 @@ pub(crate) struct ConstTargets<'a> {
     pub(crate) body_let_names: &'a [(String, Span)],
 }
 
-/// Apply the programme's `const` declarations to every body. Returns
-/// every refusal found; on any refusal the bodies are best-effort and
-/// the caller must treat the parse as failed.
+/// Apply the programme's `const` declarations to every body and return every refusal. After any
+/// refusal the bodies are unreliable and the caller must treat the parse as failed.
 pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(Span, String)> {
     let mut errors: Vec<(Span, String)> = Vec::new();
     if consts.is_empty() {
@@ -90,9 +58,7 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
         }
     }
 
-    // Collisions: a programme-wide name must be programme-wide
-    // unambiguous. Locals of every flavour count; claim-pattern
-    // variables deliberately do not.
+    // A programme-wide name must not clash with any local. Claim-pattern variables do not count.
     let const_names: BTreeSet<&str> = consts.iter().map(|c| c.name.as_str()).collect();
     let mut locals: Vec<(String, &'static str)> = Vec::new();
     for (d, _) in targets.definitions.iter() {
@@ -150,8 +116,7 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
         return errors;
     }
 
-    // Order refusals among consts: earlier-only, never resolved by
-    // substitution order.
+    // A const may refer only to earlier consts.
     let declaration_index: BTreeMap<&str, usize> = consts
         .iter()
         .enumerate()
@@ -182,12 +147,8 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
         return errors;
     }
 
-    // Closed initialisers: a const is built from literals and earlier
-    // consts, nothing else. A free variable would capture whichever
-    // local exists at each use site (an unhygienic macro, not a
-    // constant); `actor` varies per proposal; a wildcard is not a
-    // value; and `sum`/`value` read STATE - a figure that changes with
-    // the ledger is a rule's job, not a const's.
+    // Only literals and earlier consts. A free variable would pick up whatever local exists at
+    // each use site; `actor` changes per proposal; `sum` and `value` read state.
     for c in &consts {
         refuse_open_initialiser(c, &const_names, &mut errors);
     }
@@ -195,13 +156,9 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
         return errors;
     }
 
-    // Pattern positions: a const name may not stand where arguments
-    // bind relationally - a claim pattern, a defined call (unbound
-    // parameters are generators), or a `bind` pattern. Substituting
-    // there would silently turn a binding into a literal filter,
-    // shrinking a rule's universe from hundreds of lines away.
-    // Constructive and ground slots (admit/emit/retract arguments,
-    // `value` lookup keys, sum targets) stay ordinary uses.
+    // Where arguments bind (claim patterns, definition calls, `bind`), a const would silently
+    // turn a binding into a filter, changing a rule from far away. Slots that do not bind, such
+    // as `admit` arguments or `value` lookup keys, are ordinary uses.
     for (d, span) in targets.definitions.iter() {
         walk_prop(&d.body, &mut |n| {
             refuse_pattern_node(&n, &const_names, span, &mut errors)
@@ -233,8 +190,7 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
         return errors;
     }
 
-    // Liveness across the whole programme, backwards through the
-    // consts: used by any body, or by a later live const.
+    // A const is used if a body uses it or a later used const does.
     let mut live_names: BTreeSet<String> = BTreeSet::new();
     for (d, _) in targets.definitions.iter() {
         vars_in_prop(&d.body, &mut live_names);
@@ -507,17 +463,12 @@ fn refuse_open_initialiser(
                 walk(left, c, const_names, errors);
                 walk(right, c, const_names, errors);
             }
-            // A builtin is a pure function of its arguments, so a
-            // call over literals and earlier consts is itself const:
-            // recurse and let the arguments answer.
+            // A builtin is pure, so it is constant when its arguments are.
             ValueExpr::Call { args, .. } => {
                 for a in args {
                     walk(a, c, const_names, errors);
                 }
             }
-            // `if` evaluates a proposition, which is deliberately
-            // outside the constant-expression subset - a const is
-            // literals and earlier consts, never a decision.
             ValueExpr::Cond { .. } => errors.push((
                 c.span.clone(),
                 format!(
@@ -526,8 +477,7 @@ fn refuse_open_initialiser(
                     c.name
                 ),
             )),
-            // Named individually: a diagnostic that lists constructs the
-            // author did not write sends them looking for the wrong line.
+            // Name only the construct the author wrote.
             ValueExpr::Sum { .. } | ValueExpr::Extremum { .. } | ValueExpr::ValueOf { .. } => {
                 let construct = match expr {
                     ValueExpr::Sum { .. } => "`sum`",
@@ -575,10 +525,8 @@ fn refuse_pattern_slot(
     }
 }
 
-/// A const standing in a claim pattern would silently filter where the
-/// author expects a binding. Defined calls are still claim-shaped when
-/// this pass runs (resolution comes later); they get the same wording so
-/// a pipeline reorder cannot diverge the diagnostic.
+/// Refuse a const in a claim pattern, where it would filter instead of bind. Definition calls
+/// are not resolved yet when this runs; if that changes, they get the same message.
 fn refuse_pattern_node(
     node: &Node<'_>,
     const_names: &BTreeSet<&str>,

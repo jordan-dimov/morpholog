@@ -1,11 +1,7 @@
 //! Diagnostics produced by the parser.
 //!
-//! Spans are byte offsets into the source string; rendering through
-//! `ariadne` turns them into line/column references with caret
-//! highlighting. The diagnostic type itself is `ariadne`-free so
-//! callers that want plain text (CLI JSON, test assertions) can use
-//! it directly without pulling in the rendering library at their
-//! call site.
+//! Spans are byte offsets into the source. The type itself does not depend on `ariadne`, so
+//! plain-text callers (CLI JSON, tests) can use it; [`Diagnostic::render`] draws the carets.
 
 use std::fmt;
 use std::ops::Range;
@@ -17,22 +13,16 @@ pub type Span = Range<usize>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     Error,
-    /// Lint-grade: the finding deserves attention but does not fail
-    /// the check (unless promoted). The parser never produces hints;
-    /// the CLI renders [`morpholog_core::Lint`] findings at this
-    /// severity through the same diagnostic shape.
+    /// Worth attention but does not fail the check unless promoted. The parser never produces
+    /// hints; the CLI uses this for [`morpholog_core::Lint`] findings.
     Hint,
 }
 
-/// One diagnostic emitted by the parser. Multiple diagnostics may
-/// be returned from a single `parse_program` call: the parser
-/// recovers at the next `predicate` or `program` keyword and keeps
-/// going, so a `.morph` file with two malformed declarations yields
-/// two diagnostics in one run.
+/// One diagnostic emitted by the parser. One `parse_program` call can return several: the
+/// parser skips to the next top-level declaration after an error and keeps going.
 ///
-/// `secondary_spans` carry related source locations for cases like
-/// "predicate `Foo` declared at line 3, also declared at line 8":
-/// both spans surface, the primary one carries the message.
+/// `secondary` holds related locations, such as the earlier declaration of a duplicate name.
+/// The primary span carries the message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub severity: Severity,
@@ -65,22 +55,15 @@ impl Diagnostic {
         self
     }
 
-    /// Render this diagnostic as a human-readable string with
-    /// `ariadne`-style line/column markers. The CLI uses this when
-    /// emitting to stderr; tests use the unrendered fields for
-    /// structural assertions.
+    /// Render this diagnostic as human-readable text with `ariadne` line/column markers.
     pub fn render(&self, source_name: &str, source: &str) -> String {
         use ariadne::{Color, Label, Report, ReportKind, Source};
-        // Lowercase custom kinds, so the rendered header reads
-        // `error: ...` / `hint: ...` - the same prefix the plain-line
-        // fallback prints when a finding has no source span.
+        // Lowercase, to match the `error:` / `hint:` prefix printed for findings with no span.
         let (kind, color) = match self.severity {
             Severity::Error => (ReportKind::Custom("error", Color::Red), Color::Red),
             Severity::Hint => (ReportKind::Custom("hint", Color::Yellow), Color::Yellow),
         };
-        // The primary label points, it does not repeat: the header
-        // already holds the message, and repeating a teaching-length
-        // message under the carets doubles the noise.
+        // The header already shows the message; repeating it under the carets is noise.
         let mut report = Report::build(kind, (source_name, self.primary.clone()))
             .with_message(&self.message)
             .with_label(
@@ -124,14 +107,11 @@ impl fmt::Display for Severity {
     }
 }
 
-/// 1-based line and column for a byte offset into `source`. Columns
-/// count bytes, which matches what editors and `ariadne` show for
-/// ASCII-dominated `.morph` text. Offsets past the end clamp to it.
+/// 1-based line and column for a byte offset into `source`. Columns count bytes, which matches
+/// editors and `ariadne` for mostly-ASCII `.morph` text. Offsets past the end clamp to it.
 ///
-/// Deliberately O(prefix) per call: the CLI renders a bounded set of
-/// findings once per invocation over kilobyte-scale sources, so a
-/// precomputed offset index would be surface without a workload. The
-/// index earns its place with the LSP, whose lookups are repeated.
+/// Scans the prefix on every call. That is fine for a handful of findings over a small file; an
+/// editor making many lookups would want a precomputed line index.
 pub fn line_col(source: &str, offset: usize) -> (usize, usize) {
     let offset = offset.min(source.len());
     let prefix = &source[..offset];

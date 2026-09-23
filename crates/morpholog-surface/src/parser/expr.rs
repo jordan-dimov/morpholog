@@ -1,16 +1,9 @@
-//! Expression-level parsing: the recursive proposition parser
-//! (`expression_parser`) and value-expression parser
-//! (`value_expr_parser`), plus the public entry points `parse_expression`
-//! (returns a [`Prop`]) and `parse_value_expr` (returns a [`ValueExpr`]).
+//! Expression parsing: propositions ([`Prop`], via `parse_expression`) and value expressions
+//! ([`ValueExpr`], via `parse_value_expr`).
 //!
-//! The two sorts are mutually recursive - a comparison relates two value
-//! expressions, a `sum` ranges over a proposition - so the productions
-//! split into prop-productions and value-productions that reference each
-//! other. The programme-facing default is the proposition parser:
-//! invariant and `require` bodies are propositions. Value expressions
-//! appear only nested (a comparator operand, a `let` value, a `sum`
-//! target, a `for` collection, a derived-claim value expression), and the
-//! narrower `parse_value_expr` serves those positions and their tests.
+//! The two grammars refer to each other: a comparison relates two values, and a `sum` ranges
+//! over a proposition. Invariant and `require` bodies are propositions; values only appear
+//! nested inside something else.
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
@@ -21,16 +14,9 @@ use morpholog_core::{
 
 use super::field_table::{FieldTable, Vocabulary, resolve_named, resolve_named_value};
 
-/// Build a `Prop::Compare` from a factored operator and domain. The
-/// parser's flat `CmpOp` (op-and-domain in one token) maps onto the IR's
-/// factored shape here; the inverse mapping is `format::compare_token`.
-/// The `duration(PT6H)` constructor: an ISO-8601 duration in exact
-/// time units, written without quotes - the payload lexes as a plain
-/// identifier, since ISO durations always start with `P`. Validated
-/// here via jiff so a malformed literal is a parse diagnostic with a
-/// span, not a runtime evaluation error. `duration` itself is
-/// contextual (matched only when followed by `(`), so it remains
-/// usable as an ordinary variable name.
+/// The `duration(PT6H)` constructor: an ISO 8601 duration in exact time units. The payload lexes
+/// as an identifier because it starts with `P`. A malformed one is a parse error with a span.
+/// `duration` is only special before `(`, so it stays usable as a variable name.
 pub(super) fn duration_ctor<'a, I>()
 -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
 where
@@ -55,23 +41,17 @@ where
         })
 }
 
-/// The `span(P3M)` constructor: a calendar span in date units (Y/M/W/D),
-/// in the `duration(PT6H)` mould - the payload lexes as a plain
-/// identifier (ISO periods always start with `P`), and `span` is
-/// contextual (matched only when followed by `(`), so it remains
-/// usable as an ordinary variable name. Validated here through the
-/// kernel's own grammar (`morpholog_core::calendar`), so the parse
-/// diagnostic and the evaluator cannot drift. Value-position only:
-/// a span shifts a date inside arithmetic and is never a claim or
-/// intent argument, so `term_parser` deliberately does not carry it.
+/// The `span(P3M)` constructor: a calendar span in date units (Y/M/W/D), shaped like
+/// `duration(...)`. Validated with the kernel's own `morpholog_core::calendar` grammar so the
+/// two cannot disagree. Only valid as a value: a span shifts a date and is never a claim or intent
+/// argument, so `term_parser` leaves it out.
 pub(super) fn span_ctor<'a, I>() -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
     let payload = choice((
         select! { Token::Ident(s) => s },
-        // A bare number (`span(3)`) is a shape mistake worth its own
-        // hint; capture it so the diagnostic names the fix.
+        // Accept `span(3)` here so the diagnostic can name the fix.
         select! { Token::DecimalLit(s) => s },
     ));
     select! { Token::Ident(s) if s == "span" => () }
@@ -88,6 +68,7 @@ where
         })
 }
 
+/// Build a `Prop::Compare`. The inverse is `format::compare_token`.
 fn compare(op: CompareOp, domain: OrderedDomain, lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     Prop::Compare {
         op,
@@ -100,12 +81,10 @@ fn compare(op: CompareOp, domain: OrderedDomain, lhs: ValueExpr, rhs: ValueExpr)
 use crate::diagnostics::Diagnostic;
 use crate::lexer::{Token, lex, token_stream};
 
-/// Parse a standalone proposition. The programme-facing default:
-/// invariant and `require` bodies are propositions.
+/// Parse a standalone proposition, such as an invariant or `require` body.
 pub fn parse_expression(source: &str) -> Result<Prop, Vec<Diagnostic>> {
     let tokens = lex_or_diagnostics(source)?;
-    // No programme in hand, so no declared fields: a named pattern here
-    // refuses with the undeclared-head message.
+    // No programme, so no declared fields: a named pattern is refused as undeclared.
     let table = FieldTable::empty();
     let stream = token_stream(&tokens);
     let (parsed, errs) = expression_parser(&table)
@@ -115,9 +94,7 @@ pub fn parse_expression(source: &str) -> Result<Prop, Vec<Diagnostic>> {
     finish(parsed, errs, source)
 }
 
-/// Parse a standalone value expression. Serves the value-position tests
-/// and any value-position production; a value expression is never a
-/// Morpholog body on its own, only nested.
+/// Parse a standalone value expression. In a programme values only appear nested.
 pub fn parse_value_expr(source: &str) -> Result<ValueExpr, Vec<Diagnostic>> {
     let tokens = lex_or_diagnostics(source)?;
     let table = FieldTable::empty();
@@ -129,9 +106,7 @@ pub fn parse_value_expr(source: &str) -> Result<ValueExpr, Vec<Diagnostic>> {
     finish(parsed, errs, source)
 }
 
-/// Lex `source`, mapping a lex failure to diagnostics and an empty token
-/// stream to an "expected expression" diagnostic. Shared by both entry
-/// points.
+/// Lex `source`, turning a lex failure or empty input into diagnostics.
 fn lex_or_diagnostics(source: &str) -> Result<Vec<crate::lexer::SpannedToken>, Vec<Diagnostic>> {
     let tokens = lex(source).map_err(super::lex_error_diagnostics)?;
     if tokens.is_empty() {
@@ -144,8 +119,7 @@ fn lex_or_diagnostics(source: &str) -> Result<Vec<crate::lexer::SpannedToken>, V
     Ok(tokens)
 }
 
-/// Turn a chumsky parse result into `Result<T, Vec<Diagnostic>>`. Shared
-/// by both entry points.
+/// Turn a chumsky parse result into `Result<T, Vec<Diagnostic>>`.
 fn finish<T>(
     parsed: Option<T>,
     errs: Vec<Rich<'_, Token>>,
@@ -167,11 +141,8 @@ fn finish<T>(
     Ok(parsed)
 }
 
-/// A numeric literal, optionally followed by an identifier read as a
-/// unit: `25000 USD` is a quantity literal, a bare `25000` a plain
-/// decimal. An ill-typed contextual keyword after a bare number (e.g.
-/// a time comparator) reads as a unit and fails downstream -
-/// acceptable, since that expression was already ill-typed.
+/// A number with an optional unit: `25000 USD` is a quantity, `25000` a decimal. A contextual
+/// comparator after a bare number reads as a unit, but that expression was ill-typed anyway.
 fn decimal_or_quantity_term<'a, I>() -> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
@@ -189,9 +160,8 @@ where
         })
 }
 
-/// A `Term` is the limited atom that claim-call args and `In` operands
-/// accept: variables (including the special `actor`), wildcards, and
-/// decimal / quantity / timestamp / date / duration / subject literals.
+/// A term: the only thing claim-call arguments and `in` operands accept. Variables, `actor`,
+/// wildcards, and literals.
 pub(super) fn term_parser<'a, I>() -> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
@@ -205,8 +175,7 @@ where
         decimal_or_quantity_term(),
         timestamp_lit.map(|s| Term::Literal(Value::Timestamp(s))),
         date_lit.map(|s| Term::Literal(Value::Date(s))),
-        // Before bare idents so `duration(...)` is the constructor,
-        // not a variable followed by a stray paren.
+        // Before bare idents, so `duration(...)` is the constructor.
         duration_ctor().map(|s| Term::Literal(Value::Duration(s))),
         subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
         ident.map(|name| {
@@ -227,10 +196,9 @@ enum PatternItem {
     Rest(SimpleSpan),
 }
 
-/// The two lawful pattern-argument shapes. The shape rules (no mixing,
-/// no duplicate field, `..` last) are refused here because they need no
-/// declarations; resolving a named shape to positions happens at the
-/// enclosing site, which knows its vocabulary (predicate or intent).
+/// The two valid pattern-argument shapes. Shape rules (no mixing, no duplicate field, `..`
+/// last) are checked here; mapping names to positions needs the declarations, so the enclosing
+/// statement or expression does it.
 pub(super) enum PatternArgs {
     Positional(Vec<Term>),
     Named {
@@ -322,11 +290,9 @@ fn classify_pattern_items(
     PatternArgs::Named { entries, rest }
 }
 
-/// Resolve pattern arguments to the positional vector at an enclosing
-/// site: positional passes through; named resolves against the site's
-/// vocabulary, emitting any refusals and falling back to the entries'
-/// terms in written order (the parse is already failing - the filler
-/// only keeps downstream shape).
+/// Resolve pattern arguments to positional terms. Named arguments are looked up in `vocabulary`;
+/// on failure the refusals are emitted and the terms are returned in written order, only to keep
+/// the already-failing parse going.
 pub(super) fn resolve_pattern(
     head: &str,
     args: PatternArgs,
@@ -351,12 +317,9 @@ pub(super) fn resolve_pattern(
     }
 }
 
-/// Build the recursive proposition parser. Increasing precedence:
-/// implies (lowest) -> or -> and -> not -> comparison -> prop atom. A
-/// comparison relates two value expressions; the value-expression
-/// grammar is built inside this closure (also `recursive`) and the two
-/// reference each other - a `sum` target's body is a proposition, a
-/// comparator operand is a value expression.
+/// Build the recursive proposition parser. Precedence from loosest to tightest: quantifiers,
+/// `implies`, `or`, `xor`, `and`, `not`, comparisons. The value grammar is built inside it,
+/// since the two refer to each other.
 pub(super) fn expression_parser<'a, I>(
     table: &'a FieldTable,
 ) -> impl Parser<'a, I, Prop, extra::Err<Rich<'a, Token>>> + Clone
@@ -366,18 +329,9 @@ where
     recursive(move |expression| {
         let ident = select! { Token::Ident(s) => s };
 
-        // The value-expression grammar. Built here, inside the
-        // proposition closure, so a `sum` body can reference the
-        // proposition parser (`expression`) and a comparator operand
-        // (below) can reference this. `arith` is the value-expression
-        // entry point used everywhere a value is required.
         let arith = value_arith_parser(expression.clone(), table);
 
-        // A prop-only atom: a claim call (with parens) or `pre(...)`.
-        // These are the propositions that are not value expressions, so
-        // they appear at the comparison level without a comparator. A
-        // bare `Ident` (no parens) is a value `Term::Var`, not a claim,
-        // and a parenthesised proposition is handled separately.
+        // A claim call needs parentheses; a bare identifier is a variable.
         let claim_call = ident
             .then(pattern_args_parser().delimited_by(just(Token::LParen), just(Token::RParen)))
             .validate(move |(name, args), e, emitter| {
@@ -395,11 +349,7 @@ where
                 }
             });
 
-        // pre wrapper: `pre ( <prop> )`. Flips the wrapped subtree's
-        // state lookup from the default (post / candidate) to
-        // pre-transition. Parens are mandatory; the lexer reserves `pre`
-        // everywhere so a bare `pre` surfaces as an unexpected-token
-        // diagnostic rather than a silent Var("pre").
+        // `pre(<prop>)`: evaluate the inner proposition against the state before the transition.
         let pre_expr = just(Token::KwPre)
             .ignore_then(
                 expression
@@ -412,36 +362,13 @@ where
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
-        // comparison ::= arith (cmp_op arith)+, or a prop-only atom
-        // (claim / pre / parenthesised prop).
+        // comparison ::= arith (cmp_op arith)+
         //
-        // Surface forms and their IR lowering:
-        //   - `=` -> Prop::Eq(ValueExpr, ValueExpr)
-        //   - `<=` -> Prop::Compare { Le, Decimal, .. }
-        //   - `on_or_before` -> Prop::Compare { Le, Date, .. }
-        //   - `!=` -> Prop::Neq(ValueExpr, ValueExpr) - symmetric with `=`
-        //   - `in` -> Prop::In(Term, Term) - both sides must be Terms
+        // A bare value is not a proposition, so a comparator is required. `in` accepts any value
+        // here, then insists both sides are terms, for a clearer error.
         //
-        // `<=` and `on_or_before` are distinct surface forms because the
-        // comparison's domain is carried explicitly in `Prop::Compare`;
-        // the surface picks it by keyword rather than overloading one
-        // operator by operand kind.
-        //
-        // The value-comparison alternative parses an `arith` then
-        // *requires* a comparator (a bare value expression is not a
-        // proposition). Prop-only atoms (claim, pre, parens) cover the
-        // no-comparator case. For `!=` and `in` we accept any value
-        // expression on either side, then require a bare term for `in`,
-        // emitting a clean diagnostic otherwise. This `in` is the
-        // membership comparator; the structural `in` of `forall x in
-        // source:` is consumed by the forall production before reaching
-        // this level.
-        //
-        // A range reads as spoken: `0 <= rate <= 1` chains, lowering
-        // to the same `Prop::And` of pairwise comparisons the spelled
-        // out `and` form produces - no new IR. Only the ordered
-        // comparators chain, and every link must point the same way;
-        // a mixed-direction chain is refused rather than guessed at.
+        // `0 <= rate <= 1` chains into an `and` of pairwise comparisons. Only ordered comparators
+        // chain, all pointing the same way; a mixed chain is refused rather than guessed at.
         let value_comparison = arith
             .clone()
             .then(
@@ -456,10 +383,8 @@ where
                         .to(CmpOp::Compare(CompareOp::Le, OrderedDomain::Date)),
                     just(Token::KwOnOrAfter)
                         .to(CmpOp::Compare(CompareOp::Ge, OrderedDomain::Date)),
-                    // The remaining comparators are contextual: matched
-                    // here, but left as ordinary identifiers everywhere
-                    // else so a variable may still be named `before` or
-                    // `after` (the worked examples do exactly that).
+                    // Contextual: identifiers everywhere else, so `before` and `after` stay
+                    // usable as variable names.
                     contextual_cmp("before", CompareOp::Lt, OrderedDomain::Date),
                     contextual_cmp("after", CompareOp::Gt, OrderedDomain::Date),
                     contextual_cmp("at_or_before", CompareOp::Le, OrderedDomain::Timestamp),
@@ -527,10 +452,7 @@ where
                 Prop::And(props)
             });
 
-        // The comparison level: a value comparison, or a prop-only atom
-        // standing alone. Order matters: try the value comparison first
-        // so `amount <= 100` does not stall on the claim-call attempt;
-        // claim / pre / parenthesised-prop cover the no-comparator case.
+        // Value comparison first, so `amount <= 100` is not tried as a claim call.
         let comparison = choice((value_comparison, claim_call, pre_expr, parenthesised_prop));
 
         // not_expr ::= "not" not_expr | comparison
@@ -543,8 +465,7 @@ where
             ))
         });
 
-        // and_expr ::= not_expr ("and" not_expr)*  (left-assoc,
-        // flattened into a single Prop::And(Vec<Prop>))
+        // and_expr ::= not_expr ("and" not_expr)*, flattened into one Prop::And
         let and_expr = not_expr
             .clone()
             .then(
@@ -557,9 +478,8 @@ where
                 if rest.is_empty() {
                     first
                 } else {
-                    // Splice direct And children so a chained comparison
-                    // or a parenthesised conjunction composes into the
-                    // same flat vec its spelled-out form parses to.
+                    // Flatten nested Ands, so a chained comparison or parenthesised
+                    // conjunction gives the same IR as its spelled-out form.
                     let mut all = Vec::with_capacity(rest.len() + 1);
                     for prop in std::iter::once(first).chain(rest) {
                         match prop {
@@ -571,25 +491,16 @@ where
                 }
             });
 
-        // xor_expr ::= and_expr ("xor" and_expr)*  (left-assoc, binary)
+        // xor_expr ::= and_expr ("xor" and_expr)*
         //
-        // `xor` sits between `and` and `or`: tighter than `or`, looser
-        // than `and`, so `a and b xor c and d` parses as
-        // `(a and b) xor (c and d)` - the natural "exactly one of these
-        // two" reading. Unlike `and`/`or` it does not flatten (xor is
-        // binary); a chain `a xor b xor c` nests left-associatively into
-        // `Xor(Xor(a, b), c)`.
+        // `a and b xor c and d` reads as "exactly one of these two". Xor is binary, so a chain
+        // nests to the left: `Xor(Xor(a, b), c)`.
         let xor_expr = and_expr.clone().foldl(
             just(Token::KwXor).ignore_then(and_expr.clone()).repeated(),
             |left, right| Prop::Xor(Box::new(left), Box::new(right)),
         );
 
-        // or_expr ::= xor_expr ("or" xor_expr)*  (left-assoc,
-        // flattened into a single Prop::Or(Vec<Prop>))
-        //
-        // Standard logical precedence: `and` tighter than `xor` tighter
-        // than `or` tighter than `implies`, so `a and b or c implies d`
-        // parses as `((a and b) or c) implies d`.
+        // or_expr ::= xor_expr ("or" xor_expr)*, flattened into one Prop::Or
         let or_expr = xor_expr
             .clone()
             .then(
@@ -616,7 +527,6 @@ where
                 just(Token::KwImplies)
                     .ignore_then(
                         or_expr.clone().then(
-                            // Allow chained `implies` via recursion: a implies b implies c.
                             just(Token::KwImplies)
                                 .ignore_then(or_expr)
                                 .repeated()
@@ -629,7 +539,6 @@ where
                 match rest_opt {
                     None => first,
                     Some((second, more)) => {
-                        // Right-associate: build chain from the right.
                         let mut chain = vec![first, second];
                         chain.extend(more);
                         let mut iter = chain.into_iter().rev();
@@ -646,13 +555,8 @@ where
 
         // expression ::= quantifier | implies
         //
-        // Quantifiers sit at the very top of the grammar - higher than
-        // `implies` - so their bodies greedily consume the rest of the
-        // expression after the colon. In `forall x in xs: A and B` the
-        // body is the whole conjunction, not just `A`, matching
-        // mathematical convention. Compose with outer expressions by
-        // parenthesising: `(forall x in xs: body) and outer`.
-        //
+        // A quantifier body runs to the end of the expression: in `forall x in xs: A and B` it is
+        // the whole conjunction. Parenthesise to combine: `(forall x in xs: body) and outer`.
         let quantifier_body = super::indented_or_inline(expression.clone());
 
         let exists_expr = just(Token::KwExists)
@@ -673,27 +577,9 @@ where
                 }
             });
 
-        // Restricted source parser for `forall x in <source>:`.
-        //
-        // The kernel's `Prop::Forall { source, .. }` requires a
-        // predicate-shaped source so `find_matches` can produce binding
-        // extensions. Per the surface doctrine the parser must refuse
-        // what the kernel cannot evaluate, so the unparenthesised source
-        // grammar admits only:
-        //   - bare variable (Ident, no `(`)   -> auto-lifted to In below
-        //   - claim call (Ident "(" terms ")") -> used as-is
-        //   - parenthesised proposition        -> used as-is
-        //
-        // Value-shaped primaries (literals, wildcards, `sum(...)`,
-        // `value Foo(...)`) are excluded and surface as parse errors;
-        // wrapping in parens (`(sum(...))`) signals the user took
-        // responsibility - but a parenthesised proposition is what is
-        // accepted, so a value inside parens still fails downstream.
-        //
-        // A bare identifier source lifts to `In(Var(binding), source)`;
-        // anything already predicate-shaped is used as-is. The
-        // `ForallSource` transient distinguishes the two before the
-        // lift, so the source need not be re-inspected as a Prop.
+        // The source of `forall x in <source>:` must be something the kernel can enumerate
+        // bindings from: a bare variable (lifted to `x in var`), a claim call, or a parenthesised
+        // proposition. Literals, `sum` and `value` are parse errors.
         let forall_bare_source = ident.then(
             pattern_args_parser()
                 .delimited_by(just(Token::LParen), just(Token::RParen))
@@ -741,9 +627,6 @@ where
                         "`actor` cannot be a quantifier binder: `actor` is reserved as the special term that resolves to the proposing transition's actor; references inside the body would resolve to that term, not the bound variable",
                     ));
                 }
-                // A bare-term source (variable or `actor`) is lifted to
-                // an In-proposition binding the variable; anything
-                // already predicate-shaped is used as-is.
                 let source_prop = match source {
                     ForallSource::BareTerm(t) => Prop::In(Term::Var(binding.clone().into()), t),
                     ForallSource::Prop(p) => p,
@@ -759,18 +642,15 @@ where
     })
 }
 
-/// A parsed `forall` source before the auto-lift decision. A bare term
-/// (variable or `actor`) becomes `In(Var(binding), term)`; a claim or
-/// parenthesised proposition is used as the source proposition as-is.
+/// A parsed `forall` source. A bare term becomes `In(Var(binding), term)`; a proposition is
+/// used as it is.
 enum ForallSource {
     BareTerm(Term),
     Prop(Prop),
 }
 
-/// Build the recursive value-expression parser used as a standalone
-/// entry point (`parse_value_expr`). Mirrors the value grammar nested
-/// inside [`expression_parser`], but builds its own proposition parser
-/// for `sum` bodies via `expression_parser()`.
+/// Build the value-expression parser on its own, with its own proposition parser for `sum`
+/// bodies. [`expression_parser`] builds the same grammar inside itself.
 pub(super) fn value_expr_parser<'a, I>(
     table: &'a FieldTable,
 ) -> impl Parser<'a, I, ValueExpr, extra::Err<Rich<'a, Token>>> + Clone
@@ -780,12 +660,8 @@ where
     value_arith_parser(expression_parser(table), table)
 }
 
-/// Build the value-expression arithmetic chain: `primary (("+" | "-")
-/// primary)*`, left-associative. `primary` covers a parenthesised value
-/// expression, a `sum` aggregator (whose body is a proposition, parsed
-/// by `prop`), a `value` lookup (whose `default` is a value expression),
-/// literals, wildcards, and bare variables / `actor`. Shared by the
-/// nested value grammar inside [`expression_parser`] and the standalone
+/// Build the value-expression grammar, with `prop` parsing the propositions nested inside it
+/// (`sum`, `min`/`max` aggregate and `if` bodies). Shared by [`expression_parser`] and
 /// [`value_expr_parser`].
 fn value_arith_parser<'a, I, P>(
     prop: P,
@@ -817,10 +693,7 @@ where
             subject_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Subject(s.into()))));
         let wildcard_as_value = just(Token::Wildcard).to(ValueExpr::Term(Term::Wildcard));
 
-        // A bare identifier is a value variable (or `actor`). A
-        // following `(` would make it a claim, which is not a value
-        // expression - so the value grammar never accepts `Foo(args)`
-        // (the prop grammar does). A bare ident is `Term::Var`.
+        // A variable or `actor`. `Foo(args)` is a claim, which only the proposition grammar takes.
         let bare_ident = ident.map(|name| {
             if name == "actor" {
                 ValueExpr::Term(Term::Actor)
@@ -829,16 +702,9 @@ where
             }
         });
 
-        // sum aggregator: `sum ( <target> | <body-prop> )`
-        //
-        // The target is a full value expression consuming the body's
-        // bindings: a variable (`sum(amount | ...)`), a decimal literal
-        // counting matches (`sum(1 | ...)`), or a computed quantity
-        // (`sum(probability * loss | ...)`). The only `|` the value
-        // grammar carries sits inside an aggregate's own parentheses
-        // (`min(x | ...)`), so the separator stays unambiguous. A bare
-        // `actor` target is still rejected here: the actor is a
-        // subject, not a summable value.
+        // `sum(<target> | <prop>)`. The target is any value over the body's bindings:
+        // `sum(amount | ...)`, `sum(1 | ...)` to count, `sum(probability * loss | ...)`. The `|`
+        // is unambiguous because values only use it inside an aggregate's own parentheses.
         let sum_expr = just(Token::KwSum)
             .ignore_then(
                 value
@@ -869,11 +735,8 @@ where
                 }
             });
 
-        // value lookup: `value <Ident> ( <args> )` with optional
-        // `default <value>` suffix. Positional extracts the first
-        // wildcard; the named form marks the hole with `field: _`
-        // (exactly one), so the extracted field need not come first,
-        // and `..` elides the unconstrained coordinates.
+        // `value Pred(args) [default <value>]` reads the field marked `_`. Positionally that is
+        // the first wildcard; in named form exactly one `field: _`, and `..` skips the rest.
         let value_lookup = just(Token::KwValue)
             .ignore_then(ident)
             .then(pattern_args_parser().delimited_by(just(Token::LParen), just(Token::RParen)))
@@ -894,9 +757,7 @@ where
                                 for (span, message) in refusals {
                                     emitter.emit(Rich::custom(span, message));
                                 }
-                                // The parse is already failing; keep
-                                // the written terms so diagnostics
-                                // downstream have a shape to hold.
+                                // Already failing; keep the written terms for later diagnostics.
                                 let terms: Vec<Term> =
                                     entries.into_iter().map(|(_, _, term)| term).collect();
                                 let extract = terms
@@ -916,15 +777,9 @@ where
                 }
             });
 
-        // `min` and `max` open two different things, told apart by what
-        // follows the target: a `,` gives the binary form that caps one
-        // value against another, a `|` gives the aggregate that ranges
-        // over the bindings a body defines. The keyword is consumed once
-        // and the inner shape decides, so neither form has to unwind a
-        // half-parsed call to try the other.
-        // The extremum target stays a variable or literal: no worked
-        // example has forced a computed target here, and the sum
-        // generalisation deliberately does not ride along.
+        // `min(a, b)` compares two values; `min(x | body)` aggregates over the body's bindings.
+        // The separator after the first operand decides. Unlike `sum`, the aggregate target is
+        // only a variable or literal: nothing has needed more.
         let extremum_target = choice((
             ident.map(|name| Term::Var(name.into())),
             decimal_or_quantity_term(),
@@ -961,8 +816,6 @@ where
                     body: Box::new(body),
                 }
             }
-            // Two values is a call, not an aggregate: the same token
-            // spells both, and which one it is depends on what follows.
             MinMaxShape::Binary((lhs, rhs)) => ValueExpr::Call {
                 builtin: match op {
                     ExtremumOp::Min => Builtin::Min,
@@ -972,8 +825,7 @@ where
             },
         });
 
-        // abs function: `abs ( <value> )`. Unary magnitude of a signed
-        // value, the natural form for a two-sided bound (`abs(x) <= limit`).
+        // `abs(<value>)`, as in the two-sided bound `abs(x) <= limit`.
         let abs_expr = just(Token::KwAbs)
             .ignore_then(
                 value
@@ -985,9 +837,8 @@ where
                 args: vec![operand],
             });
 
-        // round function: `round ( <value> , <value> )`. Nearest
-        // multiple of the quantum, exact halves away from zero; the
-        // money form is `round(raw, 0.01)`.
+        // `round(<value>, <quantum>)`: nearest multiple, halves away from zero, as in
+        // `round(raw, 0.01)`.
         let round_expr = just(Token::KwRound)
             .ignore_then(
                 value
@@ -1001,12 +852,8 @@ where
                 args: vec![v, quantum],
             });
 
-        // The conditional: `if ( <prop> , <value> , <value> )`. The
-        // value selected by whether the proposition holds. Contextual
-        // like `duration` - a constructor only when `if` is followed
-        // by `(` - so `if` stays a legal variable name. Function-
-        // shaped like `round`: self-delimiting, no precedence tier,
-        // no dangling else.
+        // `if(<prop>, <then>, <else>)`. Written as a call, so it needs no precedence rules and
+        // `if` stays a legal variable name.
         let if_expr = select! { Token::Ident(s) if s == "if" => () }
             .ignore_then(
                 prop.clone()
@@ -1022,13 +869,8 @@ where
                 otherwise: Box::new(otherwise),
             });
 
-        // The period builtins: `period_index ( <value> , <value> ,
-        // <value> )` - anchor date, calendar span, position date - and
-        // `period_start_of ( <value> , <value> , <value> )` - anchor
-        // date, calendar span, period index. One call shape, inverse
-        // directions. Contextual like `if` and `duration`,
-        // function-shaped like `round`: self-delimiting, no
-        // precedence tier.
+        // `period_index(anchor, span, date)` and its inverse `period_start_of(anchor, span,
+        // index)`. Contextual, like `if`.
         let period_builtin_expr = select! {
             Token::Ident(s) if s == "period_index" => Builtin::PeriodIndex,
             Token::Ident(s) if s == "period_start_of" => Builtin::PeriodStartOf,
@@ -1059,8 +901,7 @@ where
             decimal_as_value,
             timestamp_as_value,
             date_as_value,
-            // Before bare idents: `duration(...)` / `span(...)` are
-            // the constructors.
+            // Before bare idents, so these are the constructors.
             duration_as_value,
             span_as_value,
             subject_as_value,
@@ -1068,11 +909,7 @@ where
             bare_ident,
         ));
 
-        // factor ::= primary (("*" | "/" | "%") primary)*  (left-assoc)
-        //
-        // The multiplicative layer binds tighter than `+`/`-`, so
-        // `a + b * c` parses as `Add(a, Mul(b, c))` and `a + b % c` as
-        // `Add(a, Mod(b, c))`.
+        // factor ::= primary (("*" | "/" | "%") primary)*  (left-assoc, tighter than `+`/`-`)
         let mul_op = choice((
             just(Token::Star).to(ArithOp::Mul),
             just(Token::Slash).to(ArithOp::Div),
@@ -1090,8 +927,6 @@ where
                 });
 
         // arith ::= factor (("+" | "-") factor)*  (left-assoc)
-        //
-        // foldl builds the left-associative tree: a + b + c -> Add(Add(a, b), c).
         let arith_op = choice((
             just(Token::Plus).to(ArithOp::Add),
             just(Token::Minus).to(ArithOp::Sub),
@@ -1107,30 +942,19 @@ where
     })
 }
 
-/// Discriminator for the comparison operators. Internal to the
-/// parser; the surface uses `=`, `!=`, `<=`, `in`, `on_or_before`
-/// directly. The ordered comparators all lower to `Prop::Compare`,
-/// so they carry their `(op, domain)` pair from the token choice -
-/// the one place the comparator vocabulary is spelled out.
+/// A parsed comparison operator.
 #[derive(Debug, Clone, Copy)]
 enum CmpOp {
     Eq,
     Neq,
-    /// An ordered comparison with its domain picked by surface
-    /// keyword (`<=` decimal, `on_or_before` date, `at_or_before`
-    /// timestamp, `no_longer_than` duration...), never by operand
-    /// kind. Operand kinds are enforced against the domain twice:
-    /// refused by name at authoring, `TypeMismatch` at evaluation.
+    /// An ordered comparison. The word picks the domain (`<=` decimal, `on_or_before` date,
+    /// `at_or_before` timestamp, `no_longer_than` duration), never the operand kinds.
     Compare(CompareOp, OrderedDomain),
-    /// Membership comparator (`x in xs`) -> `Prop::In(Term, Term)`,
-    /// term-only on both sides (the IR's `In` operates on terms).
-    /// Distinct from the structural `in` in `forall x in source: body`.
+    /// Membership, `x in xs`. Both sides must be terms.
     In,
 }
 
-/// A contextual comparator: `word` reads as an ordered comparison in
-/// comparator position only, staying usable as an ordinary identifier
-/// everywhere else.
+/// A comparator word that is an ordinary identifier outside comparator position.
 fn contextual_cmp<'a, I>(
     word: &'static str,
     op: CompareOp,
@@ -1142,9 +966,7 @@ where
     select! { Token::Ident(s) if s == word => CmpOp::Compare(op, domain) }
 }
 
-/// Unwrap a term-shaped `ValueExpr::Term(_)`, or `None` for any compound
-/// value expression. Enforces the IR's term-only restriction on `In`
-/// operands.
+/// The term inside a `ValueExpr::Term`, or `None` for anything compound.
 fn value_as_term(e: &ValueExpr) -> Option<Term> {
     match e {
         ValueExpr::Term(t) => Some(t.clone()),

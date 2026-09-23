@@ -1,61 +1,23 @@
-//! Parser for the v0 surface.
+//! Parser for the `.morph` surface.
 //!
-//! The grammar is documented where each tier is implemented: the
-//! declaration grammar (programme header, predicates with discipline
-//! clauses, intents, definitions, invariants, transformations,
-//! derived claims) in [`program`]'s comments, the statement grammar
-//! in [`stmt`]'s module doc, and the expression productions beside
-//! their combinators in [`expr`]. The canonical surface-to-IR table
-//! (every operator, comparator, and quantifier form, with the
-//! reason it is spelled the way it is) lives in
-//! `docs/runtime-semantics.md`; this header does not duplicate it -
-//! an earlier copy here rotted as the grammar grew.
+//! Each tier documents its own grammar: declarations in [`program`], statements in [`stmt`],
+//! expressions beside their combinators in [`expr`]. The full surface-to-IR table lives in
+//! `docs/runtime-semantics.md` and is not repeated here.
 //!
-//! Newlines are insignificant. Trailing commas in argument lists
-//! are allowed. Comments are stripped at the lexer; the parser
-//! never sees them.
+//! Newlines carry no tokens (the layout pass handles indentation), trailing commas are allowed,
+//! and the lexer strips comments.
 //!
-//! Asymmetry to honour: `Prop::In(Term, Term)` operates on *terms*,
-//! not expressions, as do claim-call arguments. `Eq`, `Neq`, and the
-//! comparators relate two value expressions; the arithmetic
-//! operators compose value expressions. The
-//! parser must therefore reject `a + 1 in xs` (membership is
-//! term-only) and `Foo(x + 1, y)` (claim arguments are terms), while
-//! `Foo + 1 != Bar` is accepted - `!=` is symmetric with `=`. These
-//! constraints follow directly from the IR shape under the
-//! `docs/scope-and-ambition.md` surface doctrine.
+//! Claim-call arguments and both sides of `in` are terms, not expressions, because the IR says
+//! so. So `a + 1 in xs` and `Foo(x + 1, y)` are rejected, while `Foo + 1 != Bar` is fine: `=`,
+//! `!=` and the comparators relate value expressions.
 //!
-//! Disambiguation rules govern the bounded forms:
+//! `in` is part of the `forall x in source:` syntax and a membership test everywhere else; the
+//! position decides, not context. A `forall` source is a bare variable, a claim call, or a
+//! parenthesised expression; a bare variable is lifted to `Prop::In(Var(binding), source)`.
 //!
-//! - The `in` keyword is structural inside `forall <ident> in
-//!   <source>:` (consumed by the forall production before
-//!   reaching comparator-level grammar) and a membership
-//!   comparator everywhere else. Positional disambiguation; no
-//!   context-sensitive parsing.
-//! - `forall x in source: body` accepts the source in a restricted
-//!   grammar (bare variable, claim call, or parenthesised
-//!   expression) - per the doctrine, value-shaped primaries
-//!   (literals, wildcards, `sum`, `value`) cannot be `forall`
-//!   sources. When the source is a bare Term-wrapper, the parser
-//!   auto-lifts it to `Prop::In(Var(binding), source_term)`.
-//!
-//! Module layout: this parser file is split by concern. The
-//! programme-level parser (`parse_program`, `program_parser`,
-//! `RawProgram`, `TopLevelDecl`) lives in [`program`]; the
-//! expression-level parsers (`parse_expression`/`parse_value_expr`,
-//! `expression_parser`/`value_expr_parser`, `CmpOp`, `value_as_term`)
-//! live in [`expr`]. The programme
-//! parser uses the expression parser for invariant bodies via
-//! the `pub(super)` re-export from `expr`.
-//!
-//! Error recovery: humble. On a parse failure inside a top-level
-//! declaration, the parser skips forward to the next top-level
-//! declaration keyword (or EOF) and continues. The intent is
-//! "tell the author about every malformed declaration in one
-//! parse run", not a full-language error-recovery framework.
-//! Expression parsing does not yet add recovery shapes; a
-//! malformed expression surfaces as one diagnostic at the failure
-//! site.
+//! Error recovery is minimal: a malformed top-level declaration is skipped up to the next
+//! declaration keyword, so one run reports every broken declaration. A malformed expression
+//! gives one diagnostic at the failure site.
 
 mod consts;
 mod expr;
@@ -99,10 +61,8 @@ fn lex_error_diagnostics(errs: Vec<Rich<'_, char>>) -> Vec<Diagnostic> {
         .collect()
 }
 
-/// Map parser failures to diagnostics - the "parse error:" twin of
-/// [`lex_error_diagnostics`]. A stray `Indent` gets the layout rule
-/// spelled out: "found 'indent'" names the mechanism, not the fix, and
-/// the fix (same column, or parens) is not guessable from the message.
+/// Map parser failures to diagnostics, like [`lex_error_diagnostics`]. A stray `Indent` also
+/// gets the fix spelled out, since "found 'indent'" alone does not suggest it.
 fn parse_error_diagnostics(errs: Vec<Rich<'_, Token>>) -> Vec<Diagnostic> {
     errs.into_iter()
         .map(|e| {

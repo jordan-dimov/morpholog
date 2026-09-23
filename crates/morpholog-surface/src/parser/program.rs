@@ -1,9 +1,7 @@
-//! Programme-level parsing: the `program` header plus every top-level
-//! declaration - predicates (with their discipline clauses), intents,
-//! definitions, invariants, transformations, and derived claims, freely
-//! interleaved. After collection: duplicate-name diagnostics with spans
-//! for both sites, definition-call resolution, and discipline lowering,
-//! so the returned [`Program`] is the complete, enforceable IR.
+//! Programme-level parsing: the `program` header and every top-level declaration, in any order.
+//!
+//! After parsing it reports duplicate names, substitutes consts, resolves definition calls, and
+//! lowers disciplines, so the returned [`Program`] is complete and ready to enforce.
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
@@ -22,33 +20,22 @@ use super::stmt::statement_parser;
 
 /// Parse a Morpholog source string into a [`Program`].
 ///
-/// Returns `Ok(program)` when no diagnostics fire, even if the
-/// program is structurally minimal (e.g. just a `program` header
-/// with no predicates).
-///
-/// Returns `Err(diagnostics)` with one or more diagnostics on any
-/// lex or parse failure. Diagnostics carry byte-offset spans; the
-/// CLI renders them via `ariadne` against the original source.
+/// A bare `program` header is a valid programme. Returns `Err` with at least one diagnostic on
+/// any lex or parse failure.
 pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
     parse_program_with_sources(source).map(|(program, _)| program)
 }
 
-/// [`parse_program`], keeping the source locations the parser already
-/// knows. The returned [`SourceMap`] places every declaration (and
-/// every top-level transformation-body statement) in the source, so
-/// findings produced over the IR can be rendered with carets.
+/// [`parse_program`], also returning a [`SourceMap`] that places every declaration and top-level
+/// transformation statement in the source.
 pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), Vec<Diagnostic>> {
     let raw_tokens = lex(source).map_err(super::lex_error_diagnostics)?;
 
-    // The declared-field table named claim patterns resolve against,
-    // scanned from the raw tokens because declarations may follow their
-    // uses. Fail-closed and lexical; see `field_table`.
+    // Named claim patterns resolve against this. Scanned up front because a declaration may
+    // come after its uses.
     let field_table = super::field_table::scan(&raw_tokens);
 
     if raw_tokens.is_empty() {
-        // Span 0..1 (or 0..0 for a zero-length source) is the
-        // closest we can point at "the start"; the empty-file case
-        // doesn't have a more specific location.
         let end = source.len().min(1);
         return Err(vec![Diagnostic::error(
             "expected `program` header, found empty file",
@@ -56,11 +43,6 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
         )]);
     }
 
-    // Layout pass: enriches the token stream with virtual
-    // Indent/Dedent at block boundaries. Transformation
-    // bodies need this; predicate and invariant productions work
-    // either way (the layout pass only inserts tokens where
-    // indentation actually changes).
     let tokens = crate::layout::apply_layout(source, raw_tokens)?;
 
     let stream = token_stream(&tokens);
@@ -77,13 +59,8 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
         return Err(diagnostics);
     };
 
-    // Build the final Program and run the duplicate-name checks
-    // here on the parser side so the diagnostics carry source
-    // spans for BOTH declarations. `Program::validate` also
-    // detects duplicate predicate declarations but loses span
-    // context; invariant- and transformation-name duplication
-    // are not validated kernel-side at all, so the parser is the
-    // only place they get caught.
+    // Duplicate names are caught here, where both declarations' spans are known. The kernel
+    // does not check invariant or transformation names at all.
     report_duplicates(
         &mut diagnostics,
         "predicate",
@@ -138,10 +115,7 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
     );
 
     for (d, span) in &raw.derived_claims {
-        // Duplicate key names inside a single derived declaration.
-        // The IR's `keys` (a `Vec<Var>`) is positional; two same-named
-        // keys would shadow each other in the binding context and
-        // produce silently wrong enumeration.
+        // Two keys with one name would shadow each other and silently enumerate wrongly.
         let mut seen_keys: HashSet<&str> = HashSet::new();
         for k in &d.keys {
             if !seen_keys.insert(k.as_str()) {
@@ -152,12 +126,7 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
             }
         }
 
-        // Duplicate value names inside a single derived declaration.
-        // The IR's `values: Vec<DerivedValue>` is positional; two
-        // same-named values would emit two output fields with the
-        // same documentary name (the kernel doesn't enforce
-        // uniqueness internally, but a derived claim with two `v`
-        // outputs is a programmer error).
+        // Two outputs with one name are a mistake the kernel does not catch.
         let mut seen_values: HashSet<&str> = HashSet::new();
         for v in &d.values {
             if !seen_values.insert(v.name.as_str()) {
@@ -176,9 +145,7 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
         return Err(diagnostics);
     }
 
-    // Programme-level `const` substitution: rewrites every body in
-    // place before the IR-facing passes below, so definitions resolve
-    // and disciplines lower over const-free bodies.
+    // Substitute consts first, so the passes below see const-free bodies.
     let mut raw = raw;
     {
         let const_errors = super::consts::apply(
@@ -229,12 +196,9 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
         transformations: raw.transformations.into_iter().map(|(t, _, _)| t).collect(),
         derived_claims: raw.derived_claims.into_iter().map(|(d, _)| d).collect(),
     };
-    // The one place authored-ness is still known: `raw.definitions` are
-    // what the author wrote, and lowering is about to append to the same
-    // list. After that nothing can tell the two apart, so an authored
-    // definition colliding with a generated selector has to be caught
-    // here - otherwise the author's version silently wins and the
-    // discipline quietly generates nothing.
+    // Lowering is about to add generated definitions, after which authored and generated ones
+    // look the same. Catch a clash now, or the author's definition would silently replace the
+    // generated one.
     let mut collisions: Vec<Diagnostic> = Vec::new();
     for decl in &program.predicates {
         for discipline in &decl.disciplines {
@@ -263,36 +227,23 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
     if !collisions.is_empty() {
         return Err(collisions);
     }
-    // Discipline-generated DEFINITIONS first, because the next pass
-    // resolves calls by name: a selector `effective by` writes would
-    // otherwise not exist yet, and its call would resolve as a claim
-    // reference to an undeclared predicate - a baffling error for
-    // something the runtime was supposed to author.
+    // Generated definitions first, so calls to them resolve in the next pass instead of looking
+    // like undeclared predicates.
     morpholog_core::lower_discipline_definitions(&mut program);
-    // A call is spelled exactly like a claim reference; only the
-    // declaration table can tell them apart, and a reference may
-    // precede the definition it names, so resolution runs over the
-    // whole collected programme. Formatting a resolved call prints
-    // the same text back, so round-trip holds.
+    // A call looks exactly like a claim reference, and may come before its definition, so it is
+    // resolved only once the whole programme is in hand.
     morpholog_core::resolve_defined_calls(&mut program);
-    // Declared disciplines materialise as generated invariants here,
-    // for the same reason resolution runs here: the whole programme is
-    // in hand, and everything downstream (propose, scoped loading,
-    // audit, guarantees, explain) then sees them with no caller
-    // changes. The formatter omits them; reparsing regenerates them.
+    // Disciplines become generated invariants, so everything downstream sees them as ordinary
+    // rules. The formatter leaves them out; reparsing regenerates them.
     morpholog_core::lower_disciplines(&mut program);
-    // Each sum's empty-case seed resolves from the summed variable's
-    // declared kind, after call resolution so a variable bound inside a
-    // definition call is followed to its claim position. An empty cargo
-    // book is `0 t` with no seed claim needed to open it.
+    // An empty sum takes the zero of the summed variable's declared kind (`0 t`, not `0`). Runs
+    // after call resolution so variables bound through definition calls can be traced.
     morpholog_core::lower_sum_seeds(&mut program);
     Ok((program, map))
 }
 
-/// Report every name declared more than once in `items`: the
-/// diagnostic points at the repeat, the secondary at the first
-/// declaration. One shape serves every declaration kind; only the
-/// noun differs.
+/// Report every name declared more than once in `items`, pointing at the repeat and, as a
+/// secondary span, at the first declaration.
 fn report_duplicates<'a>(
     diagnostics: &mut Vec<Diagnostic>,
     what: &str,
@@ -314,11 +265,8 @@ fn report_duplicates<'a>(
     }
 }
 
-/// Report a declaration that repeats an argument name: a field names
-/// one position, so named patterns and every other field-name consumer
-/// (views, schemas, the named codec) would be ambiguous under a repeat.
-/// `Program::validate` refuses it too; this check carries the
-/// declaration's span.
+/// Report a declaration that repeats an argument name, which would make every lookup by field
+/// name ambiguous. `Program::validate` refuses it too, but without a span.
 fn report_duplicate_fields<'a>(
     diagnostics: &mut Vec<Diagnostic>,
     what: &str,
@@ -344,12 +292,8 @@ fn report_duplicate_fields<'a>(
     }
 }
 
-/// Intermediate parse result. Carries spans alongside the parsed
-/// values so the post-pass (duplicate detection) can produce
-/// span-rich diagnostics and the [`SourceMap`] can keep them. The
-/// final `Program` strips spans because the kernel IR is
-/// source-agnostic; transformations also carry one span per
-/// top-level body statement.
+/// Parsed declarations with their spans, for duplicate checks and the [`SourceMap`].
+/// Transformations also carry one span per top-level statement.
 #[derive(Debug)]
 struct RawProgram {
     name: String,
@@ -360,18 +304,13 @@ struct RawProgram {
     transformations: Vec<(Transformation, Span, Vec<Span>)>,
     derived_claims: Vec<(DerivedClaim, Span)>,
     consts: Vec<super::lets::LetBinding>,
-    /// Body-`let` names with their spans, carried forward from the
-    /// per-body pass (which substitutes the lets away) so the const
-    /// pass can refuse a programme-level name a body shadows.
+    /// Body `let` names, kept after the lets are substituted away so a const that a body shadows
+    /// can be refused.
     body_let_names: Vec<(String, Span)>,
 }
 
-/// One top-level declaration in a programme body. Predicates,
-/// invariants, and transformations can be freely interleaved; the
-/// parser partitions them into the `RawProgram` vectors after
-/// collection, preserving source order within each category. This
-/// shape avoids committing the language to an "all predicates
-/// first" file convention.
+/// One top-level declaration. Declarations may come in any order; they are sorted by kind
+/// afterwards, keeping source order within each kind.
 enum TopLevelDecl {
     Predicate(PredicateDecl, Span),
     Intent(IntentDecl, Span),
@@ -389,9 +328,7 @@ where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
     let ident = select! { Token::Ident(s) => s };
-    // A declared kind, or an identifier where one was expected - the
-    // latter names the whole vocabulary rather than leaving the author
-    // guessing what a kind even is (`String` is the classic reach).
+    // An unknown kind (`String`, say) gets a diagnostic listing the real ones.
     let kind = select! { Token::Kind(k) => k }.or(ident.validate(|word, e, emitter| {
         let span: SimpleSpan = e.span();
         emitter.emit(Rich::custom(
@@ -406,9 +343,7 @@ where
     }));
 
     // arg ::= Ident ":" Kind ("[" Ident "]")?
-    // The unit brackets attach only to `Decimal` - `Decimal[USD]` is a
-    // unit-tagged exact decimal. A unit on any other kind has no
-    // meaning the kernel could honour, so it is a parse-time error.
+    // Only `Decimal` takes a unit, as in `Decimal[USD]`.
     let unit = just(Token::LBracket)
         .ignore_then(ident)
         .then_ignore(just(Token::RBracket));
@@ -448,12 +383,8 @@ where
     //                      | "superseded" "via" Ident
     //                      | "effective" "by" "(" ident,+ ")" "on" "(" ident ")" "partial"?
     //
-    // Every clause word is a contextual identifier (the `before` /
-    // `duration` precedent), so none is reserved and all stay usable
-    // as variable names. Clauses follow the arg list inline or on
-    // indented continuation lines (one layout block; several clauses
-    // may share it). No ambiguity with the next declaration, which
-    // always opens with a reserved keyword.
+    // Clause words are not reserved, so they stay usable as variable names. Clauses follow the
+    // argument list inline or in one indented block.
     let kw_unique = select! { Token::Ident(s) if s == "unique" => () };
     let kw_by = select! { Token::Ident(s) if s == "by" => () };
     let kw_append = select! { Token::Ident(s) if s == "append" => () };
@@ -461,8 +392,6 @@ where
     let kw_current = select! { Token::Ident(s) if s == "current" => () };
     let kw_pointer = select! { Token::Ident(s) if s == "pointer" => () };
     let kw_effective = select! { Token::Ident(s) if s == "effective" => () };
-    // Contextual, like every other clause word: `partial` stays usable as a
-    // variable name, and only means this after an `effective by` clause.
     let kw_partial = select! { Token::Ident(s) if s == "partial" => () };
     let kw_on = select! { Token::Ident(s) if s == "on" => () };
     let kw_superseded = select! { Token::Ident(s) if s == "superseded" => () };
@@ -475,8 +404,6 @@ where
         .delimited_by(just(Token::LParen), just(Token::RParen));
     let single_field = ident.delimited_by(just(Token::LParen), just(Token::RParen));
     let discipline_clause = choice((
-        // Before `current pointer by`, because both can open a clause and
-        // this one is longer; the parenthesised date distinguishes it.
         kw_effective
             .ignore_then(kw_by)
             .ignore_then(field_list.clone())
@@ -535,10 +462,6 @@ where
         });
 
     // intent_decl ::= "intent" Ident "(" arg_list? ")"
-    // Mirrors predicate_decl exactly - same surface shape, different
-    // vocabulary. The parser distinguishes them; the check
-    // validates emits against intent decls just as it validates
-    // claims against predicate decls.
     let intent_decl = just(Token::KwIntent)
         .ignore_then(ident)
         .then(arg_list.delimited_by(just(Token::LParen), just(Token::RParen)))
@@ -553,28 +476,12 @@ where
             )
         });
 
-    // invariant_decl ::= "invariant" Ident ":" body
-    // body           ::= Indent let_line* expression Dedent | expression
-    // let_line       ::= "let" Ident "=" "(" value_expression ")"
+    // body     ::= Indent let_line* expression Dedent | expression
+    // let_line ::= "let" Ident "=" "(" value_expression ")"
     //
-    // The body alternative accepts both inline form
-    // (`invariant cap: Foo(x)`) and indented multi-line form
-    // (`invariant cap:\n    Foo(x)`). The layout pass produces
-    // `Indent`/`Dedent` around the indented form; the inline form
-    // has no layout tokens.
-    //
-    // A body `let` names a value expression and is substituted away
-    // before the IR exists (see [`super::lets`]). Lets live in the
-    // indented form only, and the value must be parenthesised:
-    // parens already mean "layout off", so the value can span lines
-    // freely, and a value ending in a bare decimal cannot absorb the
-    // next line's leading identifier as a quantity unit.
-    //
-    // No version syntax in v0: the version field defaults to 1.
-    // When versioning grows a second meaningful value, the surface
-    // adds a clause (e.g. `version <N>`) and the parser starts
-    // accepting it. Today, an attempted `invariant Name (v1):`
-    // surfaces as an unexpected-token diagnostic on the `(`.
+    // A body `let` is substituted away before the IR exists (see [`super::lets`]). Its value
+    // needs parentheses: it can then span lines, and a trailing number cannot swallow the next
+    // line's first word as a unit.
     let let_line = just(Token::KwLet)
         .ignore_then(ident)
         .then_ignore(just(Token::Eq))
@@ -597,10 +504,8 @@ where
     ));
     // invariant_decl ::= "invariant" Ident ("total" "over" Ident)? ":" body
     //
-    // `total` is contextual, like every discipline clause word, so it
-    // stays usable as a variable name. `over` is already reserved by
-    // `derived ... over ...`, so it arrives as a keyword token - which is
-    // why this clause reuses it rather than matching an identifier.
+    // `total` is not reserved; `over` is, because `derived` uses it. There is no version
+    // syntax: every parsed invariant is version 1.
     let kw_total = select! { Token::Ident(s) if s == "total" => () };
     let totality_clause = kw_total.ignore_then(just(Token::KwOver)).ignore_then(ident);
     let invariant_decl = just(Token::KwInvariant)
@@ -633,12 +538,8 @@ where
 
     // definition_decl ::= "define" Ident "(" param-list ")" ":" body
     //
-    // A named, parameterised proposition. Params are bare identifiers
-    // like a transformation's (their kinds are inferred from the body);
-    // the body is one proposition in the invariant's inline-or-indented
-    // shape, `let` prefix included. Calls are claim-shaped references
-    // resolved by name after the whole programme is collected (a
-    // reference may precede the definition it names).
+    // A named proposition with parameters, whose kinds are inferred from the body. The body is
+    // shaped like an invariant's.
     let definition_param_list = ident
         .separated_by(just(Token::Comma))
         .allow_trailing()
@@ -660,7 +561,6 @@ where
             let span: SimpleSpan = e.span();
             TopLevelDecl::Definition(
                 Definition {
-                    // Parsed from source, so authored by definition.
                     origin: morpholog_core::DefinitionOrigin::Authored,
                     name: name.into(),
                     parameters: parameters.into_iter().map(Var::from).collect(),
@@ -673,10 +573,8 @@ where
 
     // const_decl ::= "const" Ident "=" "(" value_expression ")"
     //
-    // A programme-level named value, substituted away at parse time
-    // (see [`super::consts`]). The required parens are the body-let
-    // rationale: layout off inside them, and a value ending in a bare
-    // decimal cannot absorb a following identifier as a quantity unit.
+    // Substituted away at parse time (see [`super::consts`]). Parenthesised for the same
+    // reasons as a body `let`.
     let const_decl = just(Token::KwConst)
         .ignore_then(ident)
         .then_ignore(just(Token::Eq))
@@ -693,18 +591,12 @@ where
 
     // transformation_decl ::= "transformation" Ident "(" param-list ")" ":" Indent stmt+ Dedent
     //
-    // Params are bare identifiers (no kinds); the IR stores them as
-    // `Var` because they initialise the transformation's binding context.
-    // The body uses indented-block layout: the layout pass emits
-    // Indent after the colon and Dedent at block end.
+    // Parameters are bare identifiers; their kinds are inferred.
     let param_list = ident
         .separated_by(just(Token::Comma))
         .allow_trailing()
         .collect::<Vec<String>>();
-    // Each top-level statement keeps its span so the SourceMap can
-    // place a check finding on the statement, not just the
-    // transformation header. Nested statements (inside a `for`) are
-    // covered by the enclosing statement's span.
+    // Keep each top-level statement's span, so a finding can point at the statement.
     let transformation_body = just(Token::Indent)
         .ignore_then(
             statement_parser(table)
@@ -741,10 +633,7 @@ where
     //   value_clause ::= "value" Ident "=" expression
     //   key_list     ::= Ident ("," Ident)* ","?
     //
-    // Each `value` clause becomes a `DerivedValue { name, expr }`.
-    // The IR evaluates each value expression against the per-key
-    // bindings only; values do not see one another. Surface
-    // mirrors that (no `let` for intermediates).
+    // Each value sees only the per-key bindings, never another value.
     let key_list = ident
         .separated_by(just(Token::Comma))
         .allow_trailing()
@@ -777,12 +666,7 @@ where
             )
         });
 
-    // top_level_decl ::= predicate_decl | invariant_decl | transformation_decl | derived_decl
-    //
-    // Free interleaving: a programme may mix any of the four in
-    // any order. The parser collects them into a single sequence
-    // and partitions on the post-pass (source order preserved
-    // within each category).
+    // Declarations may come in any order.
     let top_level_decl = choice((
         predicate_decl,
         intent_decl,
@@ -793,9 +677,7 @@ where
         const_decl,
     ));
 
-    // Sync at the next top-level keyword on failure; skip the rest
-    // of the malformed declaration but keep the declarations on
-    // either side of it.
+    // On failure, skip to the next top-level keyword, keeping the declarations around it.
     let top_level_recovering = top_level_decl.recover_with(skip_then_retry_until(
         any().ignored(),
         just(Token::KwPredicate)
