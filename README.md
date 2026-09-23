@@ -182,6 +182,8 @@ Each one runs end to end against PostgreSQL; nothing is mocked, and each has a R
 
 Active development, in Rust on PostgreSQL 18+, with no unsafe code. The kernel, database adapter, command-line tool, notification worker and every worked example work and are tested end to end.
 
+Capture Energy, a licensed electricity supplier in Great Britain, was a design partner and the first commercial application of Morpholog (2026).
+
 - **Speed.** A saved change takes about 9ms at worked-example scale. Where a programme's rules compile to SQL and their indexes are in place, a change checks only the records it touches and stays under 10ms from 1,000 to 100,000 records. Other rules are checked in memory and grow with the data (about 1.5s per change at 100,000). A frozen benchmark suite keeps these numbers honest.
 - **Integration.** The contract is pinned ([`docs/embedder-integration.md`](docs/embedder-integration.md)), and the binary generates a typed Python client from your rules. An open-source energy-trading system already runs a governed trade lifecycle through it.
 - **Not yet built:** a supervisor and HTTP delivery for the notification worker, authority rules that cover whole families of actions, and incremental refresh of derived views. Each arrives when a worked example needs it - the discipline that has kept the runtime small.
