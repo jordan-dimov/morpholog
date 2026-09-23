@@ -60,18 +60,24 @@ pub(crate) fn authorized_keys_as_of(rows: &[AuditRow], tree_size: i64) -> HashSe
     let mut keys = HashSet::new();
     let n = (tree_size.max(0) as usize).min(rows.len());
     for row in &rows[..n] {
-        for claim in &row.retracted_claims {
-            if let Some(triple) = key_triple(claim) {
-                keys.remove(&triple);
-            }
-        }
-        for claim in &row.asserted_claims {
-            if let Some(triple) = key_triple(claim) {
-                keys.insert(triple);
-            }
-        }
+        apply_key_claims(&mut keys, row);
     }
     keys
+}
+
+/// Advance the authorised set past one row: its retractions, then its
+/// assertions.
+pub(crate) fn apply_key_claims(keys: &mut HashSet<KeyTriple>, row: &AuditRow) {
+    for claim in &row.retracted_claims {
+        if let Some(triple) = key_triple(claim) {
+            keys.remove(&triple);
+        }
+    }
+    for claim in &row.asserted_claims {
+        if let Some(triple) = key_triple(claim) {
+            keys.insert(triple);
+        }
+    }
 }
 
 #[cfg(test)]

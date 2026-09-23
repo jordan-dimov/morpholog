@@ -21,13 +21,14 @@ use crate::audit::AuditRow;
 use crate::audit_pages::AuditPages;
 use crate::checkpoints::{
     Checkpoint, TreeVerification, checkpoint_hash, load_checkpoint_chain, same_tree_head,
-    signature_crypto_violation, verify_tree,
+    signature_crypto_violation,
 };
 use crate::error::{PgError, classify};
 use crate::merkle::{
     Digest, Hash, ProofError, audit_leaf_hash, consistency_proof, inclusion_proof,
     verify_consistency_proof, verify_inclusion_proof,
 };
+use crate::prefix_verify::PrefixVerifier;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 
 const PACK_FORMAT_V1: u32 = 1;
@@ -106,8 +107,8 @@ async fn load_prefix_rows(
 
 /// The rows in canonical order, the order leaves are computed in. Two
 /// rows at one coordinate are refused: a Merkle position holds one row.
-fn canonically_sorted(rows: &[AuditRow]) -> Result<Vec<AuditRow>, PackError> {
-    let mut rows = rows.to_vec();
+fn canonically_sorted(rows: &[AuditRow]) -> Result<Vec<&AuditRow>, PackError> {
+    let mut rows: Vec<&AuditRow> = rows.iter().collect();
     rows.sort_by_key(|a| (a.committed_at, a.transition_id));
     for pair in rows.windows(2) {
         if (pair[0].committed_at, pair[0].transition_id)
@@ -217,22 +218,11 @@ pub fn verify_pack(
 ) -> Result<TreeVerification, PackError> {
     validate_envelope(pack)?;
 
-    // The leaves and the authority check both use this order, as live.
-    let rows = canonically_sorted(&pack.rows)?;
-
-    let leaves: Vec<Hash> = rows.iter().map(audit_leaf_hash).collect::<Result<_, _>>()?;
-    let verdict = verify_tree(&leaves, &pack.checkpoints, anchor);
-    // An intact signed pack must still show, from its own rows, that each
-    // signing key (the anchor's included) was authorised as of its prefix.
-    let signed = |c: &Checkpoint| !c.signatures.is_empty();
-    if matches!(verdict, TreeVerification::Intact { .. })
-        && (pack.checkpoints.iter().any(signed) || anchor.is_some_and(signed))
-        && let Some(violation) =
-            crate::checkpoints::authority_violation(&pack.checkpoints, anchor, &rows)
-    {
-        return Ok(violation);
+    let mut verifier = PrefixVerifier::new(&pack.checkpoints, anchor);
+    for row in canonically_sorted(&pack.rows)? {
+        verifier.push(row)?;
     }
-    Ok(verdict)
+    Ok(verifier.finish().0)
 }
 
 /// The v1 envelope rules, checked before any cryptography. Stricter than
@@ -980,7 +970,10 @@ pub fn pack_role_rebindings(bytes: &[u8], verdict: &PackVerdict) -> RoleRebindin
             serde_json::from_slice::<SelectiveEvidencePack>(bytes).map(|p| p.rows),
         ),
     };
-    let Some(rows) = rows.ok().and_then(|rows| canonically_sorted(&rows).ok()) else {
+    let Ok(rows) = rows else {
+        return RoleRebindings::NotEvaluated;
+    };
+    let Ok(rows) = canonically_sorted(&rows) else {
         return RoleRebindings::NotEvaluated;
     };
     let mut fold = RebindingFold::default();

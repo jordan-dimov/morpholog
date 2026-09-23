@@ -35,6 +35,7 @@ mod merkle;
 mod migrations;
 mod outbox;
 mod pack;
+mod prefix_verify;
 mod program;
 mod propose;
 mod provision;

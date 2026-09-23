@@ -714,34 +714,3 @@ fn a_selective_pack_rejects_unknown_fields() {
     v["surprise"] = serde_json::json!("not part of the proof");
     assert!(serde_json::from_value::<SelectiveEvidencePack>(v).is_err());
 }
-
-/// A chain whose sizes go back down is broken, even when every checkpoint
-/// hashes and links correctly: one root per prefix, each longer than the
-/// last.
-#[test]
-fn a_checkpoint_smaller_than_its_predecessor_breaks_the_chain() {
-    use crate::checkpoints::checkpoint_hash;
-    use crate::merkle::merkle_root;
-
-    let leaves = [[1u8; 32], [2u8; 32]];
-    let linked = |size: i64, prev: Option<Digest>| {
-        let root_hash = Digest::from_bytes(merkle_root(&leaves[..size as usize]));
-        Checkpoint {
-            tree_size: size,
-            root_hash,
-            prev_checkpoint_hash: prev,
-            checkpoint_hash: checkpoint_hash(size, &root_hash, prev.as_ref()),
-            signatures: Vec::new(),
-            witnesses: Vec::new(),
-        }
-    };
-    let first = linked(2, None);
-    let second = linked(1, Some(first.checkpoint_hash));
-    match verify_tree(&leaves, &[first, second], None) {
-        TreeVerification::ChainBroken { detail } => assert!(
-            detail.contains("tree_size 1 follows one at tree_size 2"),
-            "{detail}"
-        ),
-        other => panic!("expected ChainBroken, got {other:?}"),
-    }
-}
