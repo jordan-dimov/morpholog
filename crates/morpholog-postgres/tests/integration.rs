@@ -26,30 +26,11 @@ use uuid::Uuid;
 
 mod common;
 use common::{claim_instance, dec, intent_instance, subj};
-use common::{reset_db, test_pool};
+use common::{reset_db, seed_claims, test_pool};
 
 // ============================================================
 // Test infrastructure
 // ============================================================
-
-async fn insert_pre_state(pool: &PgPool, claims: Vec<ClaimInstance>) {
-    // Pre-state claims need a non-null `asserted_in`; a fixed nil UUID
-    // makes fixture rows identifiable and carries no semantic meaning.
-    let fixture_transition = Uuid::nil();
-    for claim in claims {
-        let args_json = serde_json::to_value(&claim.args).unwrap();
-        sqlx::query(
-            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
-             VALUES ($1, $2, $3)",
-        )
-        .bind(claim.predicate.as_str())
-        .bind(&args_json)
-        .bind(fixture_transition)
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-}
 
 fn claim(predicate: &str, args: Vec<EvalValue>) -> ClaimInstance {
     claim_instance(predicate, &args)
@@ -88,7 +69,7 @@ fn netting_args() -> Vec<EvalValue> {
 async fn settlement_netting_happy_path_commits_claims_audit_and_outbox() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    insert_pre_state(&pool, netting_pre_state_claims()).await;
+    seed_claims(&pool, &netting_pre_state_claims()).await;
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
@@ -173,7 +154,7 @@ async fn propose_against_pg_does_not_load_unreferenced_predicates() {
             vec![subj(&format!("noise_{i}")), dec(i as i64)],
         ));
     }
-    insert_pre_state(&pool, claims).await;
+    seed_claims(&pool, &claims).await;
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
@@ -246,7 +227,7 @@ async fn require_failure_writes_nothing() {
     // Extra Netted(l1) makes the require check fail before any staging.
     let mut claims = netting_pre_state_claims();
     claims.push(claim("Netted", vec![subj("l1")]));
-    insert_pre_state(&pool, claims).await;
+    seed_claims(&pool, &claims).await;
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
@@ -290,7 +271,7 @@ async fn propose_against_pg_with_trace_returns_trace_on_committed() {
     use morpholog_core::TraceEntry;
     let pool = test_pool().await;
     reset_db(&pool).await;
-    insert_pre_state(&pool, netting_pre_state_claims()).await;
+    seed_claims(&pool, &netting_pre_state_claims()).await;
 
     let traced = common::propose_pg_with_trace_using_test_actor(
         &pool,
@@ -349,7 +330,7 @@ async fn propose_against_pg_with_trace_preserves_trace_on_kernel_error() {
     // `bind_one(LineAmount(line, amt))` multi-match and raise EvalError.
     let mut claims = netting_pre_state_claims();
     claims.push(claim("LineAmount", vec![subj("l1"), dec(99)]));
-    insert_pre_state(&pool, claims).await;
+    seed_claims(&pool, &claims).await;
 
     let traced = common::propose_pg_with_trace_using_test_actor(
         &pool,
@@ -420,7 +401,7 @@ async fn propose_against_pg_with_trace_returns_trace_on_rejected() {
     // Extra Netted(l1) makes the forall require's `not Netted` fail.
     let mut claims = netting_pre_state_claims();
     claims.push(claim("Netted", vec![subj("l1")]));
-    insert_pre_state(&pool, claims).await;
+    seed_claims(&pool, &claims).await;
 
     let traced = common::propose_pg_with_trace_using_test_actor(
         &pool,
@@ -465,7 +446,7 @@ async fn invariant_violation_on_candidate_state_writes_nothing() {
         "SettlementLine",
         vec![subj("l1"), subj("old_net"), dec(60)],
     ));
-    insert_pre_state(&pool, claims).await;
+    seed_claims(&pool, &claims).await;
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
@@ -545,9 +526,9 @@ fn marker_program() -> morpholog_core::Program {
 async fn retraction_deletes_targeted_row_and_preserves_others() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    insert_pre_state(
+    seed_claims(
         &pool,
-        vec![
+        &[
             claim("Marker", vec![subj("x")]),
             claim("Marker", vec![subj("y")]),
             claim("Marker", vec![subj("z")]),
@@ -608,7 +589,7 @@ async fn retraction_deletes_targeted_row_and_preserves_others() {
 async fn audit_jsonb_columns_round_trip_through_codec() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    insert_pre_state(&pool, netting_pre_state_claims()).await;
+    seed_claims(&pool, &netting_pre_state_claims()).await;
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
@@ -1209,7 +1190,7 @@ async fn ledger_closed_period_rejects_new_entry_and_writes_nothing() {
     reset_db(&pool).await;
 
     // Pre-state: period already closed.
-    insert_pre_state(&pool, vec![claim("PeriodClosed", vec![ledger_period()])]).await;
+    seed_claims(&pool, &vec![claim("PeriodClosed", vec![ledger_period()])]).await;
 
     // A normal posting must be rejected by `require not PeriodClosed`,
     // with no writes to claims, audit, or outbox.
@@ -1568,7 +1549,7 @@ async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
             )
         })
         .collect();
-    insert_pre_state(&pool, noise).await;
+    seed_claims(&pool, &noise).await;
 
     // Sanity: the noise is present and dominates the claims table.
     let total_claims = list_claims(&pool).await.unwrap();
@@ -1607,7 +1588,7 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
 
     // Period already closed: a normal posting is rejected by
     // `require not PeriodClosed`.
-    insert_pre_state(&pool, vec![claim("PeriodClosed", vec![ledger_period()])]).await;
+    seed_claims(&pool, &vec![claim("PeriodClosed", vec![ledger_period()])]).await;
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
@@ -2249,9 +2230,9 @@ async fn load_scoped_state_loads_only_in_scope_predicates() {
 
     // One claim the netting transformation actually reads, and one of a
     // predicate nothing in the programme references.
-    insert_pre_state(
+    seed_claims(
         &pool,
-        vec![
+        &[
             claim("ApprovedSettlementLine", vec![subj("l1")]),
             claim("UnrelatedNoise", vec![subj("x")]),
         ],

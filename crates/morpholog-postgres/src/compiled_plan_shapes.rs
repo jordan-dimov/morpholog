@@ -38,18 +38,9 @@ use sqlx::Row as _;
 
 use crate::PgPool;
 use crate::compiled::{CompiledInvariantSet, compile_invariants};
-use crate::compiled_differential::whole_in_fragment;
+use crate::compiled_differential::{test_pool, whole_in_fragment};
 use crate::indexes::provision_indexes;
 use crate::program::PgProgram;
-
-async fn test_pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for the plan-shape gate (e.g. postgres:///morpholog_dev)",
-    );
-    PgPool::connect(&crate::with_default_user(&url))
-        .await
-        .expect("failed to connect to PostgreSQL test database")
-}
 
 async fn reset(pool: &PgPool) {
     sqlx::raw_sql(crate::testing::RESET_SQL)

@@ -48,8 +48,8 @@ use std::fmt::Write as _;
 
 use morpholog_core::{
     ClaimInstance, EvalError, EvalValue, Impact, ImpactPlan, Invariant, InvariantName,
-    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Prop, RejectionReason, SumSeed, Term,
-    ValidatedProgram, Value, ValueExpr, Var, WitnessBinding,
+    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Prop, RejectionReason, SumSeed,
+    Term, ValidatedProgram, Value, ValueExpr, Var, WitnessBinding,
 };
 use sqlx::{Postgres, Row, Transaction};
 

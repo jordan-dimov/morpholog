@@ -10,12 +10,31 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{CompiledProgram, EvalValue, Program, Subject, Transformation, Transition};
+use morpholog_core::{
+    ClaimInstance, CompiledProgram, EvalValue, Program, Subject, Transformation, Transition,
+};
 use morpholog_postgres::{
     PgError, PgPool, PgProgram, PgProposalOutcome, PgTracedOutcome, Proposal, propose_against_pg,
     propose_against_pg_with_trace,
 };
 use uuid::Uuid;
+
+/// Insert claims straight into the table, as a pre-state for a test.
+/// They carry the nil transition id, which marks them as fixture rows.
+pub async fn seed_claims(pool: &PgPool, claims: &[ClaimInstance]) {
+    for claim in claims {
+        sqlx::query(
+            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+             VALUES ($1, $2, $3)",
+        )
+        .bind(claim.predicate.as_str())
+        .bind(serde_json::to_value(&claim.args).unwrap())
+        .bind(Uuid::nil())
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+}
 
 /// Connect to the integration-test database named by `DATABASE_URL`.
 /// These suites share one schema and TRUNCATE it on entry, so point

@@ -16,7 +16,7 @@
 
 mod common;
 
-use common::{attested, reset_db, test_pool};
+use common::{attested, reset_db, seed_claims, test_pool};
 use morpholog_core::{
     ClaimInstance, CompiledProgram, EvalError, EvalValue, Program, Subject, Transition,
 };
@@ -27,22 +27,6 @@ use morpholog_postgres::{
 };
 use morpholog_test_support::differential::{normalize_uuids, sample_args, sample_state};
 use morpholog_test_support::{dec, subj};
-
-async fn seed(pool: &PgPool, claims: &[ClaimInstance]) {
-    for claim in claims {
-        let args_json = serde_json::to_value(&claim.args).unwrap();
-        sqlx::query(
-            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
-             VALUES ($1, $2, $3)",
-        )
-        .bind(claim.predicate.as_str())
-        .bind(&args_json)
-        .bind(uuid::Uuid::nil())
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-}
 
 async fn count(pool: &PgPool, sql: &'static str) -> i64 {
     sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
@@ -111,7 +95,7 @@ async fn observe(
     transition: &Transition,
 ) -> RouteObservation {
     reset_db(pool).await;
-    seed(pool, seeded).await;
+    seed_claims(pool, seeded).await;
     let outcome = match propose_against_pg(pool, program, &attested(transition)).await {
         Ok(outcome) => outcome,
         Err(PgError::Kernel(e)) => return RouteObservation::Kernel(e),
@@ -349,8 +333,13 @@ async fn an_excess_that_cancels_is_representable_on_both_routes() {
     assert_eq!(real, spec);
 }
 
+/// The ledger on the compiled route. Checked here so no test that
+/// compares the two routes can silently compare the interpreter with
+/// itself.
 fn ledger() -> PgProgram {
-    PgProgram::new(CompiledProgram::new(double_entry_ledger::program()).unwrap())
+    let program = PgProgram::new(CompiledProgram::new(double_entry_ledger::program()).unwrap());
+    assert!(matches!(program.plan(), InvariantPlan::Compiled { .. }));
+    program
 }
 
 /// One balanced simple entry.
@@ -386,11 +375,6 @@ fn split_posting(entry: &str, debit: i64, credit_a: i64, credit_b: i64) -> Propo
         ],
         actor: Subject::from("route_test"),
     })
-}
-
-#[tokio::test]
-async fn the_ledger_takes_the_compiled_route() {
-    assert!(matches!(ledger().plan(), InvariantPlan::Compiled { .. }));
 }
 
 #[tokio::test]
@@ -520,13 +504,9 @@ async fn a_compiled_batch_checks_each_act_against_the_acts_before_it() {
     );
 }
 
-/// A retract followed by a re-admit of the same claim in one delta
-/// changes nothing, on both routes: the compiled route reads the
-/// delta back from the table as one deletion and one insertion and
-/// must net them, or it would revalidate a dirty case the kernel
-/// leaves untouched.
-#[tokio::test]
-async fn a_retract_and_readmit_touches_nothing_on_both_routes() {
+/// A ledger whose one act retracts a line and admits it again, on the
+/// compiled route and on the interpreter.
+fn churn_ledger() -> (PgProgram, PgProgram) {
     let source = "program churn_ledger
 predicate Entry(e: Subject)
 predicate Line(e: Subject, side: Subject, dr: Decimal, cr: Decimal)
@@ -540,8 +520,13 @@ transformation churn(e, side, dr, cr):
     let compiled = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
     assert!(matches!(compiled.plan(), InvariantPlan::Compiled { .. }));
     let interpreted = PgProgram::interpreted(CompiledProgram::new(program).unwrap());
-    // One dirty entry; churning its line repairs nothing and changes nothing.
-    let seeded = vec![
+    (compiled, interpreted)
+}
+
+/// One unbalanced entry; churning its line repairs nothing and changes
+/// nothing.
+fn dirty_entry() -> Vec<ClaimInstance> {
+    vec![
         ClaimInstance {
             predicate: "Entry".into(),
             args: vec![subj("legacy")],
@@ -550,12 +535,26 @@ transformation churn(e, side, dr, cr):
             predicate: "Line".into(),
             args: vec![subj("legacy"), subj("cash"), dec(100), dec(0)],
         },
-    ];
-    let transition = Transition {
+    ]
+}
+
+fn churn() -> Transition {
+    Transition {
         transformation_name: "churn".into(),
         args: vec![subj("legacy"), subj("cash"), dec(100), dec(0)],
         actor: Subject::from("route_test"),
-    };
+    }
+}
+
+/// A retract followed by a re-admit of the same claim in one delta
+/// changes nothing, on both routes: the compiled route reads the
+/// delta back from the table as one deletion and one insertion and
+/// must net them, or it would revalidate a dirty case the kernel
+/// leaves untouched.
+#[tokio::test]
+async fn a_retract_and_readmit_touches_nothing_on_both_routes() {
+    let (compiled, interpreted) = churn_ledger();
+    let (seeded, transition) = (dirty_entry(), churn());
     let pool = test_pool().await;
     let spec = observe(&pool, &interpreted, &seeded, &transition).await;
     assert!(
@@ -570,37 +569,12 @@ transformation churn(e, side, dr, cr):
 /// its row effects too.
 #[tokio::test]
 async fn a_retract_and_readmit_touches_nothing_in_a_batch_on_both_routes() {
-    let source = "program churn_ledger
-predicate Entry(e: Subject)
-predicate Line(e: Subject, side: Subject, dr: Decimal, cr: Decimal)
-invariant balanced:
-    Entry(e) implies sum(d | Line(e, _, d, _)) = sum(c | Line(e, _, _, c))
-transformation churn(e, side, dr, cr):
-    retract Line(e, side, dr, cr)
-    admit Line(e, side, dr, cr)
-";
-    let program = morpholog_surface::parse_program(source).expect("parses");
-    let compiled = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
-    let interpreted = PgProgram::interpreted(CompiledProgram::new(program).unwrap());
-    let seeded = vec![
-        ClaimInstance {
-            predicate: "Entry".into(),
-            args: vec![subj("legacy")],
-        },
-        ClaimInstance {
-            predicate: "Line".into(),
-            args: vec![subj("legacy"), subj("cash"), dec(100), dec(0)],
-        },
-    ];
-    let act = Proposal::gateway(&Transition {
-        transformation_name: "churn".into(),
-        args: vec![subj("legacy"), subj("cash"), dec(100), dec(0)],
-        actor: Subject::from("route_test"),
-    });
+    let (compiled, interpreted) = churn_ledger();
+    let (seeded, act) = (dirty_entry(), Proposal::gateway(&churn()));
     let pool = test_pool().await;
     for program in [&interpreted, &compiled] {
         reset_db(&pool).await;
-        seed(&pool, &seeded).await;
+        seed_claims(&pool, &seeded).await;
         let outcome = propose_all_against_pg(&pool, program, std::slice::from_ref(&act))
             .await
             .unwrap();

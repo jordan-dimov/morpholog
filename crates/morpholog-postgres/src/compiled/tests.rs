@@ -469,10 +469,7 @@ fn ledger_required_indexes_are_pinned() {
 /// coefficient of 1 at scale 29 refuses; trailing zeros never count.
 #[tokio::test]
 async fn the_range_test_matches_the_decimal_domain_at_its_edges() {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let pool = sqlx::PgPool::connect(&crate::with_default_user(&url))
-        .await
-        .expect("connect");
+    let pool = crate::compiled_differential::test_pool().await;
     let vectors: &[(&str, bool)] = &[
         ("0", false),
         ("79228162514264337593543950335", false),
