@@ -84,6 +84,43 @@ pub(crate) fn merkle_root(leaves: &[Hash]) -> Hash {
     }
 }
 
+/// The root of a growing prefix without keeping its leaves: the roots of
+/// its perfect subtrees, largest first, one per set bit of the size. An
+/// append and a root each cost O(log n), and history is never rehashed.
+#[derive(Debug, Default)]
+pub(crate) struct Frontier {
+    size: usize,
+    subtrees: Vec<Hash>,
+}
+
+impl Frontier {
+    pub(crate) fn push(&mut self, leaf: Hash) {
+        let mut node = leaf;
+        let mut size = self.size;
+        while size & 1 == 1
+            && let Some(left) = self.subtrees.pop()
+        {
+            node = node_hash(&left, &node);
+            size >>= 1;
+        }
+        self.subtrees.push(node);
+        self.size += 1;
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.size
+    }
+
+    /// The same root [`merkle_root`] gives over the leaves pushed so far.
+    pub(crate) fn root(&self) -> Hash {
+        let mut from_right = self.subtrees.iter().rev();
+        match from_right.next() {
+            None => merkle_root(&[]),
+            Some(last) => from_right.fold(*last, |right, left| node_hash(left, &right)),
+        }
+    }
+}
+
 /// A SHA-256 digest as the record carries it: `sha256:<64 hex>`, naming
 /// the algorithm in case it ever changes. Parsed where a hash enters
 /// (database, pack file, anchor), so a malformed hash is refused there and
