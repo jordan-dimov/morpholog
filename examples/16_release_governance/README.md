@@ -16,8 +16,12 @@ the later stage, taken only if living under the register for a real
 release cycle earns it.
 
 Each rule here has a near-miss in this repository's own history, and
-the register is kept by hand (one `morpholog propose` per step)
-during real releases of this project, starting with the next one.
+this project's own releases walk it: `scripts/release.sh vX.Y.Z` records
+each step only after checking it (CI green on the exact commit, the
+tag on that commit, every declared platform's asset present, the
+published notes matching the reviewed `release-notes/` file), and
+skips any step the register already holds, so a failed run resumes.
+The commands it runs are the ones below.
 
 ## The programme at a glance
 
@@ -70,7 +74,7 @@ morpholog propose $MORPH record_changelog --actor releaser \
     --args-named '{"version": "v0_0_8"}' --database-url $DB
 morpholog propose $MORPH announce --actor releaser \
     --args-named '{"version": "v0_0_8"}' --database-url $DB
-morpholog inspect claims $MORPH --database-url $DB
+morpholog inspect claims --named $MORPH --database-url $DB
 morpholog audit tail --database-url $DB
 morpholog inspect outbox --database-url $DB
 ```
