@@ -102,12 +102,7 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
         }),
         _ => PackVerdict::Prefix(verify_prefix_pack(&bytes, anchor.as_ref(), policy.as_ref())),
     };
-    let intact = matches!(
-        verdict,
-        PackVerdict::Prefix(TreeVerification::Intact { .. })
-            | PackVerdict::Window(WindowVerification::Intact { .. })
-            | PackVerdict::Selective(SelectiveVerification::Intact { .. })
-    );
+    let intact = verdict.is_intact();
 
     // Witnesses are judged apart from the verdict, and only when asked for.
     // Role rebindings are read from the rows only an intact verdict
@@ -121,10 +116,11 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     } else {
         None
     };
+    let role_rebindings = pack_role_rebindings(&bytes, &verdict);
     print_json(&PackVerificationReport {
         verdict,
         witnesses,
-        role_rebindings: pack_role_rebindings(&bytes, intact),
+        role_rebindings,
     })?;
 
     if !intact || witness_invalid {

@@ -184,6 +184,17 @@ pub enum PackVerdict {
     Selective(SelectiveVerification),
 }
 
+impl PackVerdict {
+    pub fn is_intact(&self) -> bool {
+        matches!(
+            self,
+            Self::Prefix(TreeVerification::Intact { .. })
+                | Self::Window(WindowVerification::Intact { .. })
+                | Self::Selective(SelectiveVerification::Intact { .. })
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

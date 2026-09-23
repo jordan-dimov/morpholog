@@ -15,9 +15,9 @@ use common::{
     session_is_superuser, test_pool,
 };
 use morpholog_postgres::{
-    AuditAttestation, PgPool, RebindingScope, RoleRebindings, TreeVerification, export_pack,
-    export_selective, list_audit_rows, pack_role_rebindings, verify_audit_tree_with_chain,
-    verify_pack,
+    AuditAttestation, PackVerdict, PgPool, RebindingScope, RoleRebindings, TreeVerification,
+    export_pack, export_selective, list_audit_rows, pack_role_rebindings,
+    verify_audit_tree_with_chain, verify_pack, verify_selective,
 };
 use sqlx::postgres::PgPoolOptions;
 
@@ -124,11 +124,9 @@ async fn a_recreated_role_is_reported_and_the_tree_stays_intact() {
     assert_eq!(change.first_observed_transition, second);
 
     let pack = export_pack(&pool, None).await.unwrap();
-    assert!(matches!(
-        verify_pack(&pack, None).unwrap(),
-        TreeVerification::Intact { .. }
-    ));
-    let from_pack = pack_role_rebindings(&serde_json::to_vec(&pack).unwrap(), true);
+    let verdict = PackVerdict::Prefix(verify_pack(&pack, None).unwrap());
+    assert!(verdict.is_intact(), "{verdict:?}");
+    let from_pack = pack_role_rebindings(&serde_json::to_vec(&pack).unwrap(), &verdict);
     assert!(
         matches!(&from_pack, RoleRebindings::Evaluated { changes, .. } if changes.len() == 1),
         "{from_pack:?}"
@@ -137,12 +135,10 @@ async fn a_recreated_role_is_reported_and_the_tree_stays_intact() {
     // them in log order too.
     let mut shuffled = pack.clone();
     shuffled.rows.reverse();
-    assert!(matches!(
-        verify_pack(&shuffled, None).unwrap(),
-        TreeVerification::Intact { .. }
-    ));
+    let verdict = PackVerdict::Prefix(verify_pack(&shuffled, None).unwrap());
+    assert!(verdict.is_intact(), "{verdict:?}");
     assert_eq!(
-        pack_role_rebindings(&serde_json::to_vec(&shuffled).unwrap(), true),
+        pack_role_rebindings(&serde_json::to_vec(&shuffled).unwrap(), &verdict),
         from_pack,
         "a shuffled pack reports the same change, in the same direction"
     );
@@ -150,7 +146,9 @@ async fn a_recreated_role_is_reported_and_the_tree_stays_intact() {
     let selective = export_selective(&pool, None, &[first, second])
         .await
         .unwrap();
-    let from_selective = pack_role_rebindings(&serde_json::to_vec(&selective).unwrap(), true);
+    let verdict = PackVerdict::Selective(verify_selective(&selective, None).unwrap());
+    assert!(verdict.is_intact(), "{verdict:?}");
+    let from_selective = pack_role_rebindings(&serde_json::to_vec(&selective).unwrap(), &verdict);
     assert!(
         matches!(&from_selective, RoleRebindings::Evaluated {
             scope: RebindingScope::Selective, changes, ..
@@ -185,6 +183,15 @@ async fn a_tampered_oid_breaks_the_tree_and_reports_nothing() {
         "{tree:?}"
     );
     assert_eq!(rebindings, RoleRebindings::NotEvaluated);
+
+    let pack = export_pack(&pool, None).await.unwrap();
+    let verdict = PackVerdict::Prefix(verify_pack(&pack, None).unwrap());
+    assert!(!verdict.is_intact(), "{verdict:?}");
+    assert_eq!(
+        pack_role_rebindings(&serde_json::to_vec(&pack).unwrap(), &verdict),
+        RoleRebindings::NotEvaluated,
+        "a pack that failed verification supports no finding"
+    );
 }
 
 /// A session whose role was dropped and created again under it cannot

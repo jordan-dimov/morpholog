@@ -332,6 +332,8 @@ pub enum morpholog_postgres::PackVerdict
 pub morpholog_postgres::PackVerdict::Prefix(morpholog_postgres::TreeVerification)
 pub morpholog_postgres::PackVerdict::Selective(morpholog_postgres::SelectiveVerification)
 pub morpholog_postgres::PackVerdict::Window(morpholog_postgres::WindowVerification)
+impl morpholog_postgres::PackVerdict
+pub fn morpholog_postgres::PackVerdict::is_intact(&self) -> bool
 impl core::clone::Clone for morpholog_postgres::PackVerdict
 pub fn morpholog_postgres::PackVerdict::clone(&self) -> morpholog_postgres::PackVerdict
 impl core::fmt::Debug for morpholog_postgres::PackVerdict
@@ -1838,7 +1840,7 @@ pub async fn morpholog_postgres::mark_outbox_delivered(&sqlx_postgres::PgPool, u
 pub async fn morpholog_postgres::mark_outbox_failed(&sqlx_postgres::PgPool, uuid::Uuid, &str, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::mark_outbox_transient_attempt(&sqlx_postgres::PgPool, uuid::Uuid, &str, jiff::timestamp::Timestamp) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::migration_status(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
-pub fn morpholog_postgres::pack_role_rebindings(&[u8], bool) -> morpholog_postgres::RoleRebindings
+pub fn morpholog_postgres::pack_role_rebindings(&[u8], &morpholog_postgres::PackVerdict) -> morpholog_postgres::RoleRebindings
 pub fn morpholog_postgres::parse_public_key(&str) -> core::result::Result<ed25519_dalek::verifying::VerifyingKey, morpholog_postgres::SigningError>
 pub fn morpholog_postgres::parse_signature(&str) -> core::result::Result<ed25519::Signature, morpholog_postgres::SigningError>
 pub async fn morpholog_postgres::plan_indexes(&sqlx_postgres::PgPool, &morpholog_postgres::PgProgram) -> core::result::Result<morpholog_postgres::ProvisionReport, morpholog_postgres::PgError>

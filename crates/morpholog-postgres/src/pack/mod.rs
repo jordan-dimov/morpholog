@@ -12,6 +12,7 @@
 //! history; that needs a subject-indexed commitment.
 
 use crate::role_rebindings::{RebindingFold, RebindingScope, RoleRebindings};
+use crate::witnesses::PackVerdict;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -958,27 +959,25 @@ fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackE
 #[cfg(test)]
 mod tests;
 
-/// The role rebindings among a pack's rows, in log order. `established`
-/// is whether the pack's verdict was intact: rows a failed verdict did not
-/// establish support no finding. Bytes that are not a pack this binary
-/// reads have no rows to compare.
-pub fn pack_role_rebindings(bytes: &[u8], established: bool) -> RoleRebindings {
-    let version = serde_json::from_slice::<serde_json::Value>(bytes)
-        .ok()
-        .and_then(|v| v.get("manifest")?.get("pack_format_version")?.as_u64());
-    let (scope, rows) = match version {
-        Some(2) => (
+/// The role rebindings among a pack's rows, in log order, given the
+/// verdict that pack received. Only an intact verdict establishes the
+/// rows; any other leaves them unevaluated.
+pub fn pack_role_rebindings(bytes: &[u8], verdict: &PackVerdict) -> RoleRebindings {
+    if !verdict.is_intact() {
+        return RoleRebindings::NotEvaluated;
+    }
+    let (scope, rows) = match verdict {
+        PackVerdict::Prefix(_) => (
+            RebindingScope::CompletePrefix,
+            serde_json::from_slice::<EvidencePack>(bytes).map(|p| p.rows),
+        ),
+        PackVerdict::Window(_) => (
             RebindingScope::Window,
             serde_json::from_slice::<WindowEvidencePack>(bytes).map(|p| p.rows),
         ),
-        Some(3) => (
+        PackVerdict::Selective(_) => (
             RebindingScope::Selective,
             serde_json::from_slice::<SelectiveEvidencePack>(bytes).map(|p| p.rows),
-        ),
-        Some(n) if n > 3 => return RoleRebindings::NotEvaluated,
-        _ => (
-            RebindingScope::CompletePrefix,
-            serde_json::from_slice::<EvidencePack>(bytes).map(|p| p.rows),
         ),
     };
     let Some(rows) = rows.ok().and_then(|rows| canonically_sorted(&rows).ok()) else {
@@ -988,5 +987,5 @@ pub fn pack_role_rebindings(bytes: &[u8], established: bool) -> RoleRebindings {
     for row in &rows {
         fold.observe(row);
     }
-    fold.finish(scope, established)
+    fold.finish(scope, true)
 }
