@@ -1,15 +1,8 @@
-//! Subcommand handlers.
+//! Subcommand handlers, one module per subcommand.
 //!
-//! Each module in this directory carries one subcommand's logic. `main.rs`
-//! holds the `clap`-derived `Cli`/`Command`/`Inspect` definitions and the
-//! `main()` dispatch loop; everything else lives here.
-//!
-//! The split keeps `main.rs` reviewable: clap structs plus dispatch, no
-//! handler bodies. Adding a new subcommand is "add a file here, add a
-//! variant to `Command`, add one dispatch arm in `main`."
-//!
-//! Shared helpers used across handlers (`connect`, `print_json`) live at
-//! the bottom of this file.
+//! `main.rs` holds only the clap definitions and the dispatch. Adding a
+//! subcommand means a file here, a variant on `Command`, and one dispatch
+//! arm in `main`. Helpers shared across handlers live in this file.
 
 use anyhow::{Context, anyhow};
 use morpholog_core::{
@@ -54,23 +47,17 @@ pub(crate) struct ParsedSource {
     pub(crate) source_name: String,
 }
 
-/// A failure the command has already reported in full - diagnostics
-/// rendered, remedy named - carried out to `main` only so it can set
-/// the exit code.
+/// A failure the command has already reported in full, carried out to
+/// `main` only to set the exit code. `main` prints nothing more for it.
 ///
-/// The alternative was calling `std::process::exit` from wherever the
-/// diagnostic was printed, which made those helpers unusable from
-/// anything that wanted to keep running: a caller could not compose
-/// them, and a test could not observe them without spawning a
-/// process. `main` prints nothing for this variant - the command
-/// already said everything.
+/// Returning it instead of calling `std::process::exit` keeps the helpers
+/// composable and testable in-process.
 #[derive(Debug)]
 pub(crate) struct AlreadyReported;
 
-/// The one-shot exit code for a proposal whose commit outcome could not
-/// be proven: distinct from every decided or known-non-commit failure
-/// (1) and from a usage error (2, clap's), so a caller can tell "read
-/// the record before re-submitting" apart without parsing prose.
+/// The exit code for a one-shot proposal whose commit outcome could not be
+/// proven. It differs from every other failure (1) and from a usage error
+/// (2), so a caller knows to read the record before re-submitting.
 pub(crate) const EXIT_COMMIT_OUTCOME_UNKNOWN: u8 = 3;
 
 /// A one-shot proposal's COMMIT failed without a PostgreSQL verdict.
@@ -91,19 +78,17 @@ impl std::error::Error for CommitOutcomeUnknown {}
 
 impl std::fmt::Display for AlreadyReported {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Reached only if something re-renders it; the diagnostics
-        // that matter were printed where they were found.
+        // Only seen if something re-renders it; the real diagnostics
+        // were already printed.
         f.write_str("the command reported its own diagnostics")
     }
 }
 
 impl std::error::Error for AlreadyReported {}
 
-/// Read a `.morph` source file and parse it. On parse failure,
-/// render diagnostics via ariadne to stderr and return
-/// [`AlreadyReported`] - the caller decides what to do next, and
-/// `main` prints nothing further. Shared by `parse` and `check` so
-/// the diagnostic rendering stays identical across both subcommands.
+/// Read a `.morph` source file and parse it. On parse failure, render the
+/// diagnostics to stderr and return [`AlreadyReported`]. Every command that
+/// reads a `.morph` file goes through here, so they all render alike.
 pub(crate) fn parse_or_report(file: &Path) -> anyhow::Result<ParsedSource> {
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("read source file {}", file.display()))?;
@@ -137,22 +122,15 @@ pub(crate) fn render_validation_error(err: &ValidationError, parsed: &ParsedSour
     }
 }
 
-/// Validate a parsed programme; on failure, print each diagnostic to
-/// stderr (caret-located where the source map can place it) and
-/// return [`AlreadyReported`]; on success, a [`ValidatedProgram`]
-/// handle the analysis
-/// surface ([`morpholog_core::transformation_param_kinds`],
-/// [`morpholog_core::transformation_arg_schema`]) consumes. Threading
-/// the handle through means the CLI pays the validation cost once,
-/// instead of once here and once again inside the analysis layer's
-/// previous defensive re-validation.
+/// Validate a parsed programme. On failure, print each diagnostic to stderr
+/// (with a caret where the source map can place it) and return
+/// [`AlreadyReported`]. On success, return the [`ValidatedProgram`] handle
+/// that analysis ([`morpholog_core::transformation_param_kinds`],
+/// [`morpholog_core::transformation_arg_schema`]) takes, so validation runs
+/// once.
 ///
-/// The gate every subcommand that acts on a `.morph` file's
-/// *semantics* applies after parsing - `propose` and `explain` before
-/// touching the database, `inspect derived`/`guarantees` before
-/// reading or rendering, `schema` before computing the JSON Schema -
-/// so an arbitrary file is held to the same vocabulary contract the
-/// kernel would otherwise enforce only at proposal time.
+/// Every subcommand that acts on a file's meaning runs this after parsing,
+/// so a bad file is refused up front rather than at proposal time.
 pub(crate) fn validate_or_report(parsed: &ParsedSource) -> anyhow::Result<ValidatedProgram<'_>> {
     match parsed.program.validated() {
         Ok(validated) => Ok(validated),
@@ -166,11 +144,9 @@ pub(crate) fn validate_or_report(parsed: &ParsedSource) -> anyhow::Result<Valida
 }
 
 /// Like [`validate_or_report`], but returns the owned, indexed
-/// [`CompiledProgram`] - one model object the command sources its
-/// transformation lookups, analysis handle ([`CompiledProgram::validated`]),
-/// and rule slices from. Clones the parsed programme once (negligible,
-/// one-time per invocation). Used by the by-name-lookup paths (`propose`,
-/// `explain`); the analysis-only commands keep `validate_or_report`.
+/// [`CompiledProgram`]: transformation lookup, the analysis handle
+/// ([`CompiledProgram::validated`]) and the rule slices in one object. For
+/// commands that look transformations up by name.
 pub(crate) fn compile_or_report(parsed: &ParsedSource) -> anyhow::Result<CompiledProgram> {
     match CompiledProgram::new(parsed.program.clone()) {
         Ok(compiled) => Ok(compiled),
@@ -183,10 +159,9 @@ pub(crate) fn compile_or_report(parsed: &ParsedSource) -> anyhow::Result<Compile
     }
 }
 
-/// Resolve a transformation by name against a compiled programme, the
-/// not-found error naming every transformation the file does declare.
-/// Shared by `propose` and `explain` so the lookup error (and any future
-/// "did you mean?" refinement) cannot drift between them.
+/// Resolve a transformation by name. The not-found error lists every
+/// transformation the file declares. Shared so the error reads the same
+/// from every command.
 pub(crate) fn lookup_transformation<'a>(
     compiled: &'a CompiledProgram,
     name: &str,
@@ -209,15 +184,10 @@ pub(crate) fn lookup_transformation<'a>(
         })
 }
 
-/// Open a PostgreSQL connection pool. Shared by every subcommand that
-/// touches the database.
+/// Open a PostgreSQL connection pool.
 ///
-/// The URL is deliberately NOT included in error context: a typical
-/// PostgreSQL connection string is `postgres://user:password@host/db`,
-/// and echoing it into stderr (where it may be captured by shells, CI
-/// logs, or terminal scrollback) would leak credentials. The underlying
-/// `sqlx` error already describes what went wrong (DNS failure, refused,
-/// authentication, etc.).
+/// The error never includes the URL: it may carry a password, and stderr
+/// ends up in logs. The `sqlx` error already says what went wrong.
 pub(crate) async fn connect(url: &str) -> anyhow::Result<PgPool> {
     // `postgres:///mydb` means "the OS user" to every other Postgres
     // tool; sqlx 0.9 alone reads it as `anonymous`.
@@ -227,9 +197,8 @@ pub(crate) async fn connect(url: &str) -> anyhow::Result<PgPool> {
         .context("failed to connect to PostgreSQL")
 }
 
-/// `connect`, capped at one connection: the session's shape. A
-/// lockstep protocol cannot use a second connection, and the cap
-/// bounds database connection load when many application workers each
+/// `connect`, capped at one connection, for sessions. A lockstep session
+/// never needs a second one, and the cap bounds load when many workers each
 /// hold a session open.
 pub(crate) async fn connect_single(url: &str) -> anyhow::Result<PgPool> {
     let url = morpholog_postgres::with_default_user(url);

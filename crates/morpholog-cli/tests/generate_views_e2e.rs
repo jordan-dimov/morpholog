@@ -1,8 +1,7 @@
-//! `morpholog generate views` end to end: the emitted SQL script, its
-//! determinism (the read-side drift discipline is regenerate-and-diff,
-//! exactly as for `python-client`), the committed golden, the model-hash
-//! catalogue, base/derived separation, and the whole-run refusal
-//! contract.
+//! `morpholog generate views` end to end: the emitted SQL, its determinism
+//! (drift is caught by regenerate-and-diff, as for `python-client`), the
+//! committed golden, the model-hash catalogue, base/derived separation, and
+//! whole-run refusal.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -56,10 +55,9 @@ fn generates_an_atomic_view_script_to_stdout() {
     assert!(sql.trim_end().ends_with("COMMIT;"));
 }
 
-// A derived-claim head gets a view over the `morpholog_read` cache (one
-// unified read surface), filtered by predicate and the generated model
-// hash, and the catalogue records its kind. Base predicates still read
-// `morpholog.claims`.
+// A derived predicate gets a view over the `morpholog_read` cache,
+// filtered by predicate and model hash, and the catalogue records its kind.
+// Base predicates read `morpholog.claims`.
 #[test]
 fn derived_heads_get_a_derived_view_over_the_cache() {
     let result = generate_stdout(&trade_lifecycle(), None);
@@ -90,8 +88,8 @@ fn derived_heads_get_a_derived_view_over_the_cache() {
     );
 }
 
-// Determinism IS the drift contract: same binary and programme produce a
-// byte-identical script, so an embedder's check is regenerate-and-diff.
+// The same binary and programme give a byte-identical script, so an
+// embedder can check for drift by regenerating and diffing.
 #[test]
 fn generation_is_byte_deterministic() {
     let a = generate_stdout(&trade_lifecycle(), None).stdout;
@@ -99,8 +97,7 @@ fn generation_is_byte_deterministic() {
     assert_eq!(a, b, "the script must be byte-identical across runs");
 }
 
-// The committed golden is the regenerate-and-diff anchor. If this fails,
-// regenerate it with the command in the message.
+// If this fails, regenerate the golden with the command in the message.
 #[test]
 fn committed_golden_matches_fresh_generation() {
     let fresh = generate_stdout(&trade_lifecycle(), None).stdout;
@@ -147,13 +144,9 @@ fn refusal_fixture(source: &str) -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 
-// Refusal is whole-run: a reserved-word field is named, and nothing is
-// written to stdout.
+// SQL reserved words are quoted, not refused.
 #[test]
 fn reserved_word_field_is_quoted_not_refused() {
-    // A reserved-word field (`select`) is allowed: the generator quotes
-    // every identifier, so the column is emitted as `AS "select"` rather
-    // than refused. Consumers quote it in turn.
     let (_dir, path) = refusal_fixture(
         "program kw\n\
          predicate P(id: Subject, select: Decimal)\n\
@@ -174,9 +167,7 @@ fn reserved_word_field_is_quoted_not_refused() {
 
 #[test]
 fn reserved_word_view_name_is_quoted_not_refused() {
-    // The same policy applies to a generated view NAME: a predicate named
-    // `Order` snakes to the reserved word `order`, and the view is quoted
-    // rather than refused.
+    // `Order` becomes the reserved word `order` as a view name.
     let (_dir, path) = refusal_fixture(
         "program kwview\n\
          predicate Order(id: Subject)\n\
@@ -195,8 +186,7 @@ fn reserved_word_view_name_is_quoted_not_refused() {
     );
 }
 
-// snake_case is many-to-one: `TradeID` and `Trade_id` are distinct lawful
-// Morpholog names that render the same view.
+// `TradeID` and `Trade_id` are distinct names that make the same view.
 #[test]
 fn colliding_view_names_refuse_naming_both() {
     let (_dir, path) = refusal_fixture(

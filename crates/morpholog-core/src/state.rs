@@ -1,11 +1,10 @@
 //! Runtime state types and the in-memory state store.
 //!
-//! `EvalValue` is the runtime form of `Value` (the IR literal type);
-//! `ClaimInstance` and `IntentInstance` are the grounded resolved forms
-//! of `Claim` and `Intent`. `State` holds the set of admitted claims
-//! plus the indexes that let the evaluator narrow lookups by predicate
-//! name and by argument position. `Bindings` is the per-statement
-//! variable-binding context threaded through evaluation.
+//! `EvalValue` is the runtime form of the IR's `Value`.
+//! `ClaimInstance` and `IntentInstance` are grounded claims and intents.
+//! `State` holds the admitted claims, indexed by predicate and by
+//! argument position. `Bindings` maps variables to values during
+//! evaluation.
 
 use jiff::civil::Date;
 use rust_decimal::Decimal;
@@ -43,10 +42,9 @@ pub enum EvalValue {
     /// JSON shape: `{ "type": "duration", "value": "PT6H" }` (jiff's
     /// default serde format for [`jiff::SignedDuration`]).
     Duration(jiff::SignedDuration),
-    /// A calendar span (whole months plus whole days) - an arithmetic
-    /// operand only, never admitted state: the proposal path refuses a
-    /// calendar span in any claim, intent, or transition argument, so
-    /// this variant lawfully never reaches storage or the wire.
+    /// A calendar span (whole months plus whole days). Only an
+    /// arithmetic operand: claims, intents, and transition arguments
+    /// refuse it, so it never reaches storage or the wire.
     CalendarSpan(crate::calendar::CalendarSpan),
     /// A unit-tagged exact decimal quantity. The amount serialises as a
     /// JSON **string** (exactness, like [`EvalValue::Decimal`]); the
@@ -61,10 +59,7 @@ pub enum EvalValue {
 
 impl EvalValue {
     /// Does this value carry a calendar span, directly or inside a
-    /// collection? The storage and wire boundaries (claim and intent
-    /// construction, transition arguments, derived rows) all refuse
-    /// on this - a span shifts a date inside an expression and is
-    /// never itself a governed value.
+    /// collection? Every storage and wire boundary refuses such a value.
     pub(crate) fn contains_calendar_span(&self) -> bool {
         match self {
             EvalValue::CalendarSpan(_) => true,
@@ -78,44 +73,35 @@ impl EvalValue {
 ///
 /// JSON encoding shape: `{ "predicate": "...", "args": [ ... ] }`.
 ///
-/// Used as-is for elements of `audit.asserted_claims` and
-/// `audit.retracted_claims` (each column is a JSONB array of these objects).
+/// Stored as-is in the JSONB arrays `audit.asserted_claims` and
+/// `audit.retracted_claims`.
 ///
-/// For row writes to the `claims` table itself, the PG adapter **splits**
-/// the claim across two columns: `predicate_name` (text, from `predicate`)
-/// and `arguments` (JSONB array, from `args`). The `arguments` column has
-/// a CHECK constraint that requires `jsonb_typeof(arguments) = 'array'`,
-/// so writing the full object there would fail. The `claim_args_serialise_as_a_json_array`
-/// test pins this contract.
+/// The `claims` table instead splits it into `predicate_name` (text) and
+/// `arguments` (a JSONB array, enforced by a CHECK constraint). The
+/// `claim_args_serialise_as_a_json_array` test pins this.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ClaimInstance {
     pub predicate: PredicateName,
     pub args: Vec<EvalValue>,
 }
 
-/// The admitted state of the runtime: a set of grounded [`ClaimInstance`]s
-/// against which invariants are evaluated and transformations are
-/// proposed. State is set-valued: identity is `(predicate, args)`. The
-/// PG adapter persists this set as rows in `morpholog.claims`; this
-/// in-memory representation is what the kernel evaluates against.
+/// The admitted state: a set of grounded [`ClaimInstance`]s that
+/// invariants are evaluated against. Identity is `(predicate, args)`.
+/// The PG adapter persists it as rows in `morpholog.claims`.
 ///
-/// Two layers: a base shared between a state and every state derived
-/// from it, and an overlay of what changed since. A candidate built by
-/// `with_delta` shares its pre-state's base and copies only the
-/// overlay, so building it costs the uncompacted overlay plus the act's
-/// own delta, never the base. When the overlay has grown past a
-/// fraction of the base it is folded into a fresh base, once.
+/// Two layers: a base shared with every state derived from it, and an
+/// overlay of what changed since. A candidate built by `with_delta`
+/// copies only the overlay, never the base. Once the overlay grows past
+/// a fraction of the base, it is folded into a fresh base.
 ///
-/// The logical claim sequence is the base in construction order minus
-/// retractions, then the additions in order. Retracting and later
-/// re-admitting a claim appends a new entry at the tail; it never
-/// revives the old position. Two states are equal when their logical
-/// sequences are equal, whatever their layering.
+/// Logical order is the base in construction order minus retractions,
+/// then additions in order. A claim retracted and re-admitted moves to
+/// the tail. Two states are equal when their logical sequences are
+/// equal, whatever their layering.
 ///
-/// Indexed by predicate name and by `(predicate, arg position, arg
-/// value)` so the evaluator can narrow a claim pattern to the smallest
-/// bucket a ground argument names. Construct via [`State::from_claims`]
-/// or [`State::default`]; derive a successor via `with_delta`.
+/// Indexed by predicate and by `(predicate, arg position, arg value)`,
+/// so a ground argument narrows a lookup to the smallest bucket.
+/// Construct via [`State::from_claims`] or [`State::default`].
 #[derive(Clone, Default)]
 pub struct State {
     base: Arc<Layer>,
@@ -137,14 +123,11 @@ struct Layer {
     by_predicate: HashMap<PredicateName, PredicateIndex>,
 }
 
-/// Per-predicate index entry stored on a [`Layer`]. Holds the
-/// construction-order positions of every claim with this predicate,
-/// plus a secondary index keyed on `(arg position, arg value)` for
-/// ground-argument lookup.
+/// One predicate's index on a [`Layer`]: the positions of its claims,
+/// plus a lookup by `(arg position, arg value)`.
 ///
-/// `by_arg` grows lazily as predicates of varying arity are observed:
-/// position `p` gets a map only when some claim of this predicate has
-/// at least `p + 1` args.
+/// `by_arg` grows lazily: position `p` gets a map only once some claim
+/// has at least `p + 1` args.
 #[derive(Clone, Default)]
 struct PredicateIndex {
     /// Indices into `Layer.claims` for every claim with this predicate.
@@ -214,9 +197,8 @@ impl Layer {
     }
 }
 
-/// The compaction floor: below this much churn the overlay is never
-/// folded, whatever the base's size. A performance policy, not a
-/// semantic constant; the logical state is the same either way.
+/// Below this much churn the overlay is never folded, whatever the
+/// base's size. A performance setting; the logical state is unaffected.
 const COMPACTION_FLOOR: usize = 512;
 
 impl std::fmt::Debug for State {
@@ -265,19 +247,17 @@ impl State {
     }
 
     /// Advance this state in place by one transition's delta:
-    /// retractions first, then admissions, with the same rules as
-    /// [`State::from_claims`] followed by the naive rebuild - what a
-    /// replay does once per audit row. Cheap snapshots along the way
-    /// are `clone()`, which copies only what changed since the base.
+    /// retractions first, then admissions not already present. A replay
+    /// calls this once per audit row. `clone()` is a cheap snapshot: it
+    /// copies only what changed since the base.
     pub fn apply(&mut self, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) {
         let threshold = (self.base.claims.len() / 8).max(COMPACTION_FLOOR);
         self.apply_under(asserted, retracted, threshold);
     }
 
-    /// [`State::apply`] folding into a fresh base once the churn
-    /// (retracted base positions plus every overlay slot, dead or
-    /// alive) exceeds `threshold`, so a test can drive every layering
-    /// of one logical history.
+    /// [`State::apply`] with an explicit compaction `threshold` (on
+    /// retracted base positions plus overlay slots), so a test can drive
+    /// every layering of one logical history.
     pub(crate) fn apply_under(
         &mut self,
         asserted: &[ClaimInstance],
@@ -380,12 +360,10 @@ impl State {
             )
     }
 
-    /// The claims a ground argument narrows a pattern to: every
-    /// admitted claim of `predicate` with `value` at `position`.
-    /// `None` when no claim of this predicate ever carried this value
-    /// at this position, which the caller uses to short-circuit an
-    /// empty intersection; a bucket whose every entry was retracted is
-    /// `Some` and yields nothing, which reads the same.
+    /// Every admitted claim of `predicate` with `value` at `position`.
+    /// `None` when no claim ever carried that value there. A bucket whose
+    /// entries were all retracted is `Some` and yields nothing, which
+    /// means the same.
     pub(crate) fn claim_candidates(
         &self,
         predicate: &PredicateName,
@@ -469,10 +447,8 @@ impl<'a> IntoIterator for Claims<'a> {
     }
 }
 
-/// The admitted claims of one predicate sharing one ground argument
-/// value: what the evaluator checks a pattern against once an argument
-/// has narrowed it. Layering is the state's business; the evaluator
-/// sees an estimated size and the claims.
+/// The admitted claims of one predicate sharing one argument value,
+/// hiding the state's layers from the evaluator.
 pub(crate) struct CandidateBucket<'a> {
     state: &'a State,
     base: &'a [usize],
@@ -509,15 +485,11 @@ pub type Bindings = HashMap<Var, EvalValue>;
 ///
 /// JSON encoding shape: `{ "name": "...", "args": [ ... ] }`.
 ///
-/// Used as-is for elements of `audit.emitted_intents` (a JSONB array of these
-/// objects).
+/// Stored as-is in the JSONB array `audit.emitted_intents`.
 ///
-/// For row writes to the `outbox` table, the PG adapter **splits** the intent
-/// across two columns: `intent_type` (text, from `name`) and `arguments`
-/// (JSONB array, from `args`). The `arguments` column has a CHECK constraint
-/// that requires `jsonb_typeof(arguments) = 'array'`, so writing the full
-/// object there would fail. The `intent_args_serialise_as_a_json_array`
-/// test pins this contract.
+/// The `outbox` table instead splits it into `intent_type` (text) and
+/// `arguments` (a JSONB array, enforced by a CHECK constraint). The
+/// `intent_args_serialise_as_a_json_array` test pins this.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntentInstance {
     pub name: IntentName,

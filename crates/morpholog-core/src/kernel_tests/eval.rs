@@ -41,12 +41,9 @@ fn subject_literal_unifies_with_matching_subject_arg() {
     assert!(unify_args(&pattern, &wrong_kind, &Bindings::new(), None).is_none());
 }
 
-/// Pins the contract of `State::claims_for`: it returns *only*
-/// claims whose predicate matches the requested name, it returns
-/// them with arg values intact, it returns an empty iterator for
-/// predicates that have no admitted claims, and it does not
-/// interfere with `State::claims` returning the construction-order
-/// list.
+/// `State::claims_for` returns only claims of the named predicate,
+/// args intact; nothing for a predicate with no claims; and leaves
+/// `State::claims` in construction order.
 #[test]
 fn claims_for_returns_only_matching_predicate() {
     let a1 = ClaimInstance {
@@ -85,14 +82,10 @@ fn claims_for_returns_only_matching_predicate() {
     );
 }
 
-/// Pins the contract of `State::claim_candidates`: it yields the
-/// claims with the requested predicate where the argument at the
-/// requested position equals the requested value, `None` (not an
-/// empty bucket) when no such bucket exists, and does not match
-/// claims of a different predicate that happen to share a value at
-/// the same position. The lookup is what `find_claim_matches` uses to
-/// make ground-argument matching O(bucket size) instead of
-/// O(predicate size).
+/// `State::claim_candidates` yields the named predicate's claims
+/// whose argument at the position equals the value; `None` (not an
+/// empty bucket) when there are none; and never claims of another
+/// predicate sharing that value.
 #[test]
 fn claim_candidates_narrow_by_predicate_position_and_value() {
     let line_for_entry_a = ClaimInstance {
@@ -152,11 +145,9 @@ fn claim_candidates_narrow_by_predicate_position_and_value() {
     );
 }
 
-/// Pins `predicates_referenced_by_prop`: a `Prop` touching every
-/// variant that carries a nested `Prop` or `Claim` node, each site
-/// using a unique predicate name, must extract every planted name.
-/// Comparator operands are value expressions, so the planted names
-/// at those positions arrive via `Sum`/`ValueOf` (the value walk).
+/// `predicates_referenced_by_prop` finds a uniquely named predicate
+/// planted in every variant that nests a `Prop` or `Claim`.
+/// Comparator operands reach theirs through `Sum`/`ValueOf`.
 #[test]
 fn predicates_referenced_by_prop_covers_every_variant() {
     let claim = |p: &str| Prop::Claim {
@@ -200,9 +191,7 @@ fn predicates_referenced_by_prop_covers_every_variant() {
         },
         Prop::Or(vec![claim("P_or_left"), claim("P_or_right")]),
         Prop::Pre(Box::new(claim("P_pre_inner"))),
-        // Variants carrying no predicate references: must contribute
-        // nothing. The exhaustive set comparison below would catch
-        // any spurious entry.
+        // Variants with no predicate references contribute nothing.
         Prop::Neq(
             Box::new(ValueExpr::Term(Term::Var("a".into()))),
             Box::new(ValueExpr::Term(Term::Var("b".into()))),
@@ -240,10 +229,9 @@ fn predicates_referenced_by_prop_covers_every_variant() {
     );
 }
 
-/// Pins `predicates_referenced_by_value`: a `ValueExpr` touching
-/// every variant that carries a nested predicate reference (a
-/// `ValueOf`, a `Sum` body, an arithmetic operand subtree) must
-/// extract every planted name. `Term` carries none.
+/// `predicates_referenced_by_value` finds a predicate planted in each
+/// `ValueExpr` variant that can nest one (`ValueOf`, a `Sum` body, an
+/// arithmetic operand). `Term` carries none.
 #[test]
 fn predicates_referenced_by_value_covers_every_variant() {
     let claim = |p: &str| Prop::Claim {
@@ -367,11 +355,9 @@ fn date_lit(s: &str) -> ValueExpr {
     ValueExpr::Term(Term::Literal(Value::Date(s.to_string())))
 }
 
-/// `DateLe(a, b)` admits `a <= b` and returns the unchanged
-/// binding set, mirroring decimal `Le`; `a > b` is the lawful
-/// no-match path, distinct from `TypeMismatch`. Equal dates
-/// admitting pins the **inclusive** validity-window semantics -
-/// `effective_to == action_date` is admissible, not rejected.
+/// `DateLe(a, b)` admits `a <= b` with bindings unchanged, like
+/// decimal `Le`; `a > b` is a plain no-match, not `TypeMismatch`.
+/// Equal dates admit: validity windows are inclusive.
 #[test]
 fn date_le_pins_direction_and_inclusivity() {
     let cases = [
@@ -387,12 +373,9 @@ fn date_le_pins_direction_and_inclusivity() {
     }
 }
 
-/// Mixed operand kinds raise `TypeMismatch`, not silent rejection,
-/// and the type guard covers both positions. A malformed
-/// `Value::Date` source string surfaces the same way at
-/// evaluation time, mirroring an invalid `Value::Decimal`: there
-/// is no separate IR validation pass; parsing is the evaluator's
-/// concern.
+/// Mixed operand kinds on either side raise `TypeMismatch`, not a
+/// silent no-match. A malformed `Value::Date` string fails the same
+/// way at evaluation time, like an invalid `Value::Decimal`.
 #[test]
 fn date_le_operand_type_guards_raise_type_mismatch() {
     let dec_lit = ValueExpr::Term(Term::Literal(Value::Decimal("1".to_string())));
@@ -471,8 +454,7 @@ fn date_strict_comparators_pin_direction() {
 }
 
 /// A `Value::Date` literal in a `claim` argument matches a claim
-/// admitted with the same date in that position. Pins the
-/// unify-against-literal-date path.
+/// admitted with the same date in that position.
 #[test]
 fn date_literal_unifies_with_matching_date_arg() {
     let claim = ClaimInstance {
@@ -500,10 +482,8 @@ fn date_literal_unifies_with_matching_date_arg() {
     );
 }
 
-/// The cumulative-cap shape: an `Arith` addition nested under a `<=`
-/// comparison (`running + proposed <= cap`), gating an authorisation
-/// under an aggregate limit. Pins the composition so the kernel cannot
-/// drift.
+/// The cumulative cap: an addition inside a `<=` comparison
+/// (`running + proposed <= cap`).
 #[test]
 fn add_nests_under_le_for_cumulative_cap() {
     let running = ValueExpr::Term(Term::Literal(Value::Decimal("60".to_string())));
@@ -545,12 +525,9 @@ fn add_nests_under_le_for_cumulative_cap() {
     assert!(matches.is_empty(), "60 + 50 <= 100 should reject");
 }
 
-/// `Prop::Or` returns the concatenation of each branch's binding
-/// sets, with no deduplication, mirroring `find_conjunction`'s
-/// multiplicity-preserving convention. Pins the four load-bearing
-/// cases: one branch matches, both branches match (multiplicity
-/// preserved), neither branch matches (empty), and a branch with a
-/// fresh binding contributes its extension.
+/// `Prop::Or` concatenates each branch's binding sets without
+/// deduplication, like `find_conjunction`. Covers one branch, both
+/// branches, neither, and a branch adding a fresh binding.
 #[test]
 fn or_returns_union_of_branch_binding_sets() {
     // State holds two A claims and one B claim. Different keys per
@@ -634,8 +611,7 @@ fn or_returns_union_of_branch_binding_sets() {
 }
 
 /// `Prop::Xor` holds exactly when one operand matches and the other
-/// does not - the truth table of the `(a or b) and not (a and b)` it
-/// lowers to. Pins all four cases with ground (binding-free) operands.
+/// does not. Covers all four cases with ground operands.
 #[test]
 fn xor_holds_for_exactly_one_operand() {
     let l = Prop::Claim {
@@ -676,9 +652,8 @@ fn xor_holds_for_exactly_one_operand() {
 // Prop::Pre - pre-state opt-in
 // ============================================================
 
-/// `pre(inner)` flips state lookup: the inner expression sees
-/// pre-state, the outer sees post (candidate). Pins the basic
-/// flip semantic with a single decimal-counter scenario.
+/// `pre(inner)` flips state lookup: the inner expression sees the
+/// pre-state, the outer sees the candidate.
 #[test]
 fn pre_flips_predicate_lookup_to_pre_state() {
     // pre_state has Counter(1); post (candidate) has Counter(2).
@@ -735,10 +710,9 @@ fn pre_flips_predicate_lookup_to_pre_state() {
     );
 }
 
-/// `Prop::Pre` in a context with no pre_state in scope errors
-/// `PreStateUnavailable`. This is what enforces the doctrine:
-/// derived-claim bodies, transformation `require` bodies, and
-/// standalone evaluator callers cannot reach for `pre()`.
+/// `Prop::Pre` with no pre-state in scope errors
+/// `PreStateUnavailable`, so derived claims, `require` bodies, and
+/// standalone evaluator callers cannot use `pre()`.
 #[test]
 fn pre_without_pre_state_errors_pre_state_unavailable() {
     let post = State::from_claims(vec![]);
@@ -766,12 +740,9 @@ fn nested_pre_errors_pre_state_unavailable() {
     assert!(matches!(err, EvalError::PreStateUnavailable), "got {err:?}");
 }
 
-/// `pre(forall x in S: body)` and `forall x in S: pre(body)`
-/// differ when the iteration domain itself shifts between pre
-/// and post. Pins that distinction: with `S` admitted only in
-/// post (say, an account that did not yet exist), the first
-/// form quantifies over nothing (vacuously true), the second
-/// quantifies over the post-state members.
+/// `pre(forall x in S: body)` and `forall x in S: pre(body)` differ
+/// when `S` changes. With `S` only in post, the first ranges over
+/// nothing (vacuously true), the second over the post-state members.
 #[test]
 fn pre_outside_forall_vs_inside_distinguish_iteration_domain() {
     let pre = State::from_claims(vec![]);

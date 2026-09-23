@@ -1,9 +1,8 @@
-//! `round(x, quantum)` semantics: the measured convention from the
-//! billing probe - nearest multiple of the quantum, exact halves away
-//! from zero - pinned as a table, negatives included (the naive
-//! shift-and-truncate formula the node replaces was WRONG on
-//! negatives, biasing them a penny upward). Plus the refusals: a
-//! non-positive quantum by name, non-decimal operands as a type error.
+//! `round(x, quantum)` semantics: nearest multiple of the quantum, exact
+//! halves away from zero, pinned as a table. Negatives are included
+//! because a naive shift-and-truncate formula biases them a penny upward.
+//! A non-positive quantum is refused by name; non-decimal operands are a
+//! type error.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -69,9 +68,8 @@ fn exact_halves_round_away_from_zero() {
 
 #[test]
 fn negatives_mirror_positives_exactly() {
-    // The probe's decisive cases: -1.234 must round to -1.23 (the
-    // broken formula produced -1.22) and the half -1.235 goes AWAY
-    // from zero to -1.24.
+    // -1.234 rounds to -1.23 (the naive formula gives -1.22), and the
+    // half -1.235 goes away from zero to -1.24.
     for (raw, expected) in [
         ("1.234", "1.23"),
         ("1.236", "1.24"),
@@ -119,9 +117,8 @@ fn negative_quantum_is_refused_by_name() {
 
 #[test]
 fn an_exact_multiple_beyond_the_count_range_still_rounds() {
-    // round(8, 1e-28) is exactly 8, but the COUNT of quanta (8e28)
-    // exceeds the decimal range - the quotient formulation panics on
-    // this input; the remainder formulation answers it.
+    // round(8, 1e-28) is exactly 8, but the count of quanta (8e28) is
+    // out of decimal range, so rounding must not go through that count.
     holds(eq(
         round(term(dec("8")), term(dec("0.0000000000000000000000000001"))),
         term(dec("8")),

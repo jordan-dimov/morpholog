@@ -1,10 +1,9 @@
-//! The lint tier's occupants. The gate-vs-invariant lint catches the
-//! revocation-rewrites-history shape (append-only antecedent, pointer
-//! consequent, forward direction only - the reverse is correct
-//! doctrine). The unsupplied-antecedent lint catches an antecedent
-//! referencing a predicate the programme declares no transformation to
-//! admit. Every worked example stays clean of both, pinned by the
-//! cross-example test.
+//! The hint-grade lints. Gate-vs-invariant: a permanent record's rule
+//! that requires a revocable pointer, so revoking it rewrites history.
+//! Unsupplied antecedent: a rule that depends on a predicate no
+//! transformation admits. Governing selection: picking "the version in
+//! force" with nothing guaranteeing one exists. Every worked example
+//! stays clean.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -67,8 +66,7 @@ invariant decisions_need_live_mandate:
     Decision(d, doc) implies CurrentMandate(doc, _)
 "#;
 
-/// Build a CompiledProgram for the analysis entry points, which now
-/// take `&CompiledProgram`.
+/// Build the `CompiledProgram` the analysis entry points take.
 fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
     morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
 }
@@ -90,9 +88,8 @@ fn an_append_only_antecedent_requiring_a_pointer_fires_with_both_names() {
     assert_eq!(pointer, "CurrentMandate");
 }
 
-// The reverse direction - "the pointer names a record that exists" -
-// is correct doctrine: retracting the pointer makes the rule vacuous,
-// never violated. It must stay silent.
+// The reverse, "the pointer names a record that exists", is correct:
+// retracting the pointer makes the rule vacuous, never violated.
 #[test]
 fn the_reverse_direction_is_correct_doctrine_and_stays_silent() {
     let found = lints_of(
@@ -163,11 +160,8 @@ invariant decisions_need_live_mandate:
     assert_eq!(found.len(), 1, "got {found:?}");
 }
 
-// Every worked example is lint-clean: the disciplines sweep declared
-// the doctrine without introducing the shape the lint names. (08's
-// onboarding rule has the pointer-consequent shape on purpose, and
-// stays clean precisely because OnboardedCustomer is deliberately not
-// append-only - continuous compliance is its intent.)
+// 08's onboarding rule has the pointer-consequent shape on purpose; it
+// stays clean because OnboardedCustomer is not append-only.
 #[test]
 fn every_worked_example_is_lint_clean() {
     for program in morpholog_examples::all_programs() {
@@ -180,10 +174,7 @@ fn every_worked_example_is_lint_clean() {
     }
 }
 
-// The implication itself can hide behind a named condition too: the
-// implication collector descends through `define` bodies (the same
-// red line the consequent walker already honoured), so the trip
-// shape is linted wherever it is spelled.
+// The implication itself may sit inside a `define`; it still fires.
 #[test]
 fn an_implication_inside_a_defined_call_still_fires() {
     let found = lints_of(
@@ -219,9 +210,7 @@ invariant registered_docs_decisions_mandated:
     assert_eq!(pointer, "CurrentMandate");
 }
 
-// A negated implication asserts no implication at all -
-// `not (A implies B)` is `A and not B` - so the lint must not read
-// one out of it.
+// `not (A implies B)` is `A and not B`: no implication to lint.
 #[test]
 fn a_negated_implication_is_not_linted() {
     let found = lints_of(
@@ -311,7 +300,7 @@ invariant either_way_captured:
 }
 
 // An `or` whose every branch is unsupplied is blocked, and the hint
-// names every branch (collectively the cause, not each on its own).
+// names every branch.
 #[test]
 fn an_or_of_only_unsupplied_branches_names_them_all() {
     let found = lints_of(
@@ -356,8 +345,7 @@ invariant captured_when_settled_and_maybe_approved:
     assert_eq!(unsupplied_missing(&found), ["Settled"]);
 }
 
-// The unsupplied requirement can hide behind a `define`; the detector
-// descends into the body, as the gate-vs-invariant walker does.
+// The unsupplied requirement can hide behind a `define`.
 #[test]
 fn an_unsupplied_antecedent_behind_a_define_fires() {
     let found = lints_of(
@@ -402,9 +390,8 @@ invariant settled_trades_are_captured:
     assert_eq!(unsupplied_missing(&found), ["Settled"]);
 }
 
-// One dead and one live implication in the same invariant: the dead one
-// is flagged, but the invariant is not declared to enforce nothing - the
-// live implication still does its work.
+// With one dead and one live implication in an invariant, the dead one
+// is flagged; the live one still enforces.
 #[test]
 fn a_dead_implication_beside_a_live_one_flags_only_the_dead() {
     let found = lints_of(
@@ -429,8 +416,8 @@ invariant captured_and_settled_are_traded:
     assert_eq!(unsupplied_missing(&found), ["Settled"]);
 }
 
-// A prohibition is not implication-shaped, so it has no antecedent to
-// block - the lint leaves it alone even with an unsupplied predicate.
+// A prohibition has no antecedent to block, so it is left alone even
+// with an unsupplied predicate.
 #[test]
 fn a_prohibition_invariant_is_not_flagged() {
     let found = lints_of(
@@ -506,11 +493,10 @@ invariant zzz_gate:
 }
 
 // ============================================================
-// The governing-selection-without-totality lint: the effective-time
-// vacuity smell. A dated claim bounded on-or-before a coordinate plus
-// a negated exists excluding a strictly later version selects "the
-// version in force" - and passes vacuously when no version exists,
-// unless another invariant carries the totality-backstop shape.
+// Governing selection without totality. "A dated claim on or before d,
+// with no strictly later one" picks the version in force at d. It passes
+// vacuously when no version exists, unless another invariant guarantees
+// one does.
 // ============================================================
 
 const TARIFF_SELECTION: &str = r#"
@@ -549,9 +535,7 @@ fn the_totality_companion_suppresses_the_finding() {
     assert_eq!(lints_of(&source), vec![], "the backstop closes the smell");
 }
 
-// The real-world spelling: the whole selection lives inside a `define`
-// (example 10's terms_in_force_on shape), so detection must expand
-// defined calls.
+// A selection spelled inside a `define` still fires.
 #[test]
 fn a_selection_spelled_inside_a_define_still_fires() {
     let found = lints_of(
@@ -886,10 +870,8 @@ invariant reading_priced_by_governing_tariff:
     assert_eq!(invariant, "reading_priced_by_governing_tariff");
 }
 
-// The mirrored spelling - excluding a strictly EARLIER version -
-// selects the earliest-in-force, which is vacuous over an empty set in
-// exactly the same way. The tiebreak is direction-insensitive on
-// purpose.
+// Excluding a strictly EARLIER version selects the earliest one, which
+// is just as vacuous over an empty set.
 #[test]
 fn an_earliest_version_selection_fires_too() {
     let found = lints_of(
@@ -914,9 +896,8 @@ invariant reading_priced_by_first_tariff:
     assert_eq!(predicates, ["Tariff"]);
 }
 
-// Direction is load-bearing in the window: a candidate bounded
-// on-or-AFTER the coordinate is a forward window, not "the version in
-// force at a coordinate".
+// A candidate bounded on-or-AFTER the coordinate is a forward window,
+// not "the version in force", so it stays clean.
 #[test]
 fn a_forward_window_does_not_fire() {
     assert_eq!(
@@ -941,9 +922,8 @@ invariant next_tariff_capped:
     );
 }
 
-// A future-only witness guarantees a version AFTER the coordinate and
-// closes no on-or-before hole - protection in appearance only, so it
-// must not suppress.
+// A witness only after the coordinate closes no on-or-before hole, so
+// it must not suppress.
 #[test]
 fn a_future_only_companion_does_not_suppress() {
     let source = format!(
@@ -959,11 +939,9 @@ invariant future_backstop:
     );
 }
 
-/// The conditional-selection hazard: a current-pointer read ONLY as
-/// an `if` condition still decides what a permanent record's rule
-/// expects, so retracting the pointer rewrites what history must
-/// satisfy - exactly the revocation shape GateVsInvariant surfaces.
-/// The condition contributes its whole reference set, polarity-blind.
+/// A current pointer read only as an `if` condition still decides what a
+/// permanent record's rule expects, so retracting it rewrites history.
+/// The condition counts whatever its polarity.
 const COND_POINTER: &str = r#"
 program cond_pointer
 
@@ -1024,11 +1002,9 @@ fn a_conditional_claim_is_not_a_governing_selection_false_positive() {
 
 #[test]
 fn a_conditional_under_an_outer_negation_still_triggers_it() {
-    // The whole equality is negated, flipping the polarity AROUND the
-    // conditional: the selection dependency must survive that too.
-    // Concretely: Charge(c, 100) is permanent, the pointer exists, and
-    // `not (100 = 90)` holds - retracting the pointer selects 100 and
-    // the historical charge starts violating the rule.
+    // Negating the whole equality flips polarity around the conditional,
+    // yet the hazard remains. Charge(c, 100) passes while the pointer
+    // selects 90; retracting it selects 100 and the charge breaks the rule.
     let source = COND_POINTER.replace(
         "implies amount = if(CurrentDiscount(c, _), 90, 100)",
         "implies not (amount = if(CurrentDiscount(c, _), 90, 100))",

@@ -1,17 +1,14 @@
 //! Several proposals as one decision: every act admitted or none.
 //!
-//! One `SERIALIZABLE` transaction, acts applied in order, each act's
-//! gates and invariants evaluated against the state the acts before it
-//! staged - including the actor policy, which is read through the same
-//! transaction. An accepted act writes its delta, audit row and outbox
-//! rows at once, so database-enforced uniqueness, later authorisation
-//! and the intents all see one staged reality; the intents reach the
-//! outbox only if the whole batch commits. A refused act rolls
-//! everything back and is recorded in the operational log alone.
+//! One `SERIALIZABLE` transaction. Acts apply in order, each judged
+//! (actor policy included) against the state the earlier acts staged. An
+//! accepted act writes its delta, audit and outbox rows at once, so later
+//! acts and database uniqueness see them; the intents are delivered only
+//! if the whole batch commits. A refused act rolls everything back and is
+//! only recorded in the rejection log.
 //!
-//! Deliberately not `propose --batch`: that is the import shape, one
-//! receipt per row and carry on. This is the other contract, chosen by
-//! name.
+//! Unlike `propose --batch`, which gives one receipt per row and carries
+//! on.
 
 use morpholog_core::{
     ClaimInstance, IntentInstance, Outcome, RejectionReason, StagedDelta, Subject, Transformation,
@@ -67,14 +64,13 @@ pub enum PgAtomicOutcome {
     },
 }
 
-/// Propose every act as one decision. An unknown transformation or a
-/// misshapen actor-policy declaration (the programme's, checked as the
-/// acts resolve) refuses the batch before a transaction opens; the
-/// first act's actor is authorised as the transaction opens, every
-/// later act's inside it; an empty batch is refused as invalid. On the
-/// proposal path's terms, every error but `CommitOutcomeUnknown` means
-/// nothing was committed, for the whole batch. A `40001` retries the
-/// whole batch; an unknown outcome is read back, never retried blind.
+/// Propose every act as one decision.
+///
+/// An empty batch, an unknown transformation, or a misshapen actor-policy
+/// declaration is refused before a transaction opens. Every actor is
+/// authorised inside the transaction. Every error but
+/// `CommitOutcomeUnknown` means nothing was committed. Retry the whole
+/// batch on `40001`; read back an unknown outcome, never retry it blind.
 pub async fn propose_all_against_pg(
     pool: &PgPool,
     program: &PgProgram,
@@ -184,9 +180,8 @@ pub async fn propose_all_against_pg(
                             &login_role,
                         )
                         .await?;
-                        // The next act's body reads the state these
-                        // acts left, in memory as the claims table now
-                        // holds it.
+                        // The next act reads the state these acts left,
+                        // matching the claims table.
                         state.apply(&asserted, &retracted);
                         (asserted, retracted, emitted)
                     }
@@ -206,10 +201,9 @@ pub async fn propose_all_against_pg(
     Ok(PgAtomicOutcome::Committed { acts: receipts })
 }
 
-/// Roll the whole batch back and record the refusing act, after the
-/// rollback like a single refusal. The witness may carry values the
-/// rolled-back prefix staged: it describes this act against that
-/// prefix, not history.
+/// Roll the whole batch back, then record the refusing act. Its witness
+/// may carry values the rolled-back acts staged: it describes this act
+/// against them, not against history.
 async fn refuse(
     pool: &PgPool,
     tx: Transaction<'_, Postgres>,

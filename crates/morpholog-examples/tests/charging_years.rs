@@ -1,10 +1,9 @@
 //! Charging years: a billing period may not straddle the 1 April
-//! anniversary, and a run must price from its own year's rate sheet.
-//! The gates refuse a straddling period and a wrong or unknown sheet
-//! at the act, the invariants refuse both against any other act, the
-//! recorded year is the record's own computation, and the sheet a run
-//! names must start on the day its recorded year begins - the wrong
-//! file choice is uncommittable.
+//! anniversary, and a run must price from its own year's rate sheet. The
+//! gates refuse a straddle or a wrong or unknown sheet at the act; the
+//! invariants refuse both from any other act. The recorded year is the
+//! record's own computation, and a run's sheet must start on the day its
+//! year begins.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -63,10 +62,9 @@ fn a_run_naming_its_years_sheet_commits_with_its_computed_year() {
 
 #[test]
 fn a_run_that_read_last_years_file_is_refused_at_the_gate() {
-    // The counterexample the example exists to kill: 2026's sheet IS
-    // published, the period is perfectly ordinary - but the engine
-    // loaded the 2025 file and says so. The wrong file choice is
-    // refused by name, not left in the loader's head.
+    // The case the example exists for: 2026's sheet IS published and the
+    // period is ordinary, but the engine loaded the 2025 file. The wrong
+    // file choice is refused by name.
     let reason = ex().must_reject(
         &charging_years::open_run(),
         vec![
@@ -218,9 +216,8 @@ fn a_run_recording_the_wrong_sheet_is_refused_by_the_invariant() {
         rejected_by(&reason, "runs_price_from_their_years_sheet"),
         "{reason:?}"
     );
-    // And the acceptance companion: the same bare admission naming
-    // its own year's sheet commits - the invariant asks for exactly
-    // the year-to-sheet join, nothing more.
+    // The same bare admission naming its own year's sheet commits: the
+    // invariant asks for the year-to-sheet join and nothing more.
     ex().must_accept(
         &bare_run(),
         vec![

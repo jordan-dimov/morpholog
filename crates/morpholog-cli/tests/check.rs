@@ -8,23 +8,18 @@ use common::{bin, repo_root};
 use std::process::Command;
 use tempfile::NamedTempFile;
 
-/// Write `source` to a uniquely-named temp file and return the
-/// handle. The file is auto-deleted when the handle drops; tests
-/// keep it alive for the duration of the `morpholog` subprocess.
-/// Tempfile-per-test avoids cross-test collisions under parallel
-/// or repeated local runs.
+/// Write `source` to a uniquely named temp file, deleted when the handle
+/// drops. Keep the handle alive while the subprocess runs.
 fn temp_morph(source: &str) -> NamedTempFile {
     let f = NamedTempFile::new().expect("create temp .morph file");
     std::fs::write(f.path(), source).expect("write temp .morph file");
     f
 }
 
-/// Drop ANSI CSI sequences (`ESC [` parameters, closed by a final
-/// byte in `@`..=`~`) so assertions can read the rendered diagnostic
-/// as plain text (ariadne colours the quoted source line per
-/// character). Restricted to CSI rather than skip-to-`m` so a
-/// non-SGR escape can never swallow unrelated output; a lone ESC is
-/// dropped.
+/// Drop ANSI CSI sequences (`ESC [`, ended by a byte in `@`..=`~`) so
+/// assertions read the diagnostic as plain text; ariadne colours each
+/// character. Only CSI, so another escape cannot swallow real output. A
+/// lone ESC is dropped.
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -57,9 +52,7 @@ fn check_clean_program_exits_zero_with_no_output() {
         "expected exit 0; stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // The contract for `check` on a clean programme is that it is
-    // silent on both streams. Asserting both keeps accidental
-    // warnings or stdout writes from sneaking in unnoticed.
+    // A clean programme is silent on both streams.
     assert!(
         out.stdout.is_empty(),
         "clean check should be silent on stdout; got:\n{}",
@@ -74,8 +67,7 @@ fn check_clean_program_exits_zero_with_no_output() {
 
 #[test]
 fn check_verbose_clean_program_prints_summary() {
-    // A self-contained fixture so the asserted counts are intrinsic
-    // to the test, not coupled to a worked example that may grow.
+    // Its own fixture, so the counts do not change when an example grows.
     let tmp = temp_morph(
         "program demo\n\
          predicate Foo(x: Subject)\n\
@@ -111,9 +103,8 @@ fn check_verbose_clean_program_prints_summary() {
     );
 }
 
-/// A programme with an invariant outside the compiled fragment runs
-/// on the interpreter as a whole, and the summary says which invariant
-/// kept it there and why.
+/// A programme with an invariant that cannot compile to SQL runs
+/// interpreted, and the summary names that invariant and why.
 #[test]
 fn check_verbose_names_the_invariant_that_keeps_a_programme_interpreted() {
     let tmp = temp_morph(
@@ -146,9 +137,8 @@ fn check_verbose_names_the_invariant_that_keeps_a_programme_interpreted() {
 
 #[test]
 fn check_verbose_on_invalid_program_prints_no_summary() {
-    // The summary is a success artifact: a failing check must keep
-    // stdout empty even under --verbose, so scripts piping stdout
-    // never see a half-summary for a programme that did not validate.
+    // The summary is for success only: a failing check keeps stdout empty
+    // even under --verbose.
     let tmp = temp_morph(
         "program demo\n\
          predicate Foo(x: Subject)\n\
@@ -226,9 +216,7 @@ fn check_parse_failure_renders_ariadne_diagnostic() {
         stderr.contains("program") || stderr.contains("Error"),
         "expected parse-error rendering; got:\n{stderr}"
     );
-    // Diagnostics go to stderr; stdout must stay empty so that
-    // scripts piping `check`'s stdout don't get diagnostic text
-    // mixed into their data stream.
+    // Diagnostics go to stderr; stdout stays empty for scripts.
     assert!(
         out.stdout.is_empty(),
         "parse failure should not write to stdout; got:\n{}",
@@ -238,9 +226,8 @@ fn check_parse_failure_renders_ariadne_diagnostic() {
 
 #[test]
 fn check_kind_mismatch_reports_predicate_arg_kind_diagnostic() {
-    // A decimal literal in a Subject slot is the canonical
-    // kind-checker catch. Surfaces an ArgKindMismatch
-    // diagnostic with the expected vs actual kinds named.
+    // A decimal literal in a Subject slot: the diagnostic names the
+    // expected and actual kinds.
     let tmp = temp_morph(
         "program demo\n\
          predicate Owner(id: Subject)\n\
@@ -262,9 +249,8 @@ fn check_kind_mismatch_reports_predicate_arg_kind_diagnostic() {
 
 #[test]
 fn check_date_le_with_decimal_literal_reports_operand_kind_diagnostic() {
-    // `on_or_before` is the date comparator; a decimal literal
-    // on either side is the wrong-kind mistake. Diagnostic
-    // should name the operator and the two kinds.
+    // A decimal on either side of the date comparator `on_or_before`: the
+    // diagnostic names the operator and both kinds.
     let tmp = temp_morph(
         "program demo\n\
          predicate Limit(amount: Decimal)\n\
@@ -286,9 +272,8 @@ fn check_date_le_with_decimal_literal_reports_operand_kind_diagnostic() {
 
 #[test]
 fn check_le_over_date_variables_refuses_and_names_the_date_comparator() {
-    // The #306 repro: `<=` over Date-bound operands used to pass check
-    // and refuse only at evaluation. It is refused at authoring now,
-    // and the diagnostic names the comparator that DOES order dates.
+    // `<=` does not order dates. Refuse it at check time, not at
+    // evaluation, and name the comparator that does.
     let tmp = temp_morph(
         "program demo\n\
          predicate Window(w: Subject, opens_on: Date)\n\
@@ -313,10 +298,9 @@ fn check_le_over_date_variables_refuses_and_names_the_date_comparator() {
 
 #[test]
 fn developer_intro_complete_program_checks() {
-    // The developer introduction embeds a complete `revenue.morph` and
-    // promises every shown artefact is real. Extract that block
-    // verbatim and check it, so a tutorial edit cannot silently break
-    // the programme readers are told to paste.
+    // The developer introduction embeds a complete `revenue.morph` for
+    // readers to paste. Check that block as-is, so a doc edit cannot
+    // break it silently.
     let doc = std::fs::read_to_string(repo_root().join("docs/developer-intro.md"))
         .expect("read developer intro");
     let section = doc
@@ -339,8 +323,7 @@ fn developer_intro_complete_program_checks() {
         "tutorial's complete revenue.morph failed check; stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // The doc tells the reader this summary reports one derived claim;
-    // pin the promise, not just well-formedness.
+    // The doc says the summary reports one derived claim; pin that too.
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("derived claims: 1"),
@@ -350,13 +333,9 @@ fn developer_intro_complete_program_checks() {
 
 #[test]
 fn check_all_worked_examples_are_well_formed() {
-    // Every worked example .morph must parse and validate cleanly. The
-    // list is the generated registry - the same one `all_programs()`
-    // derives from - so "all worked examples" means exactly one thing,
-    // and a new example is covered the moment build discovery sees it
-    // (a hardcoded list here once silently stopped at 12; a filesystem
-    // walk with a numbered-dir heuristic replaced it, and the registry
-    // replaces the heuristic).
+    // Every worked example must parse and validate. The list is the
+    // generated registry behind `all_programs()`, so a new example is
+    // covered as soon as the build finds it.
     let examples = morpholog_examples::all_examples();
     assert!(!examples.is_empty(), "the registry discovered no examples");
     for example in examples {
@@ -388,9 +367,8 @@ invariant decisions_need_live_mandate:
     Decision(d, doc) implies CurrentMandate(doc, _)
 "#;
 
-// A lint finding is advisory by default: hint on stderr, exit 0, and
-// stdout stays silent so the empty-stdout script contract holds. The
-// hint carets the invariant it concerns - LINT_TRIP's sits at 9:1.
+// A lint is advisory by default: a hint on stderr, exit 0, silent stdout.
+// The hint points at its invariant, here at 9:1.
 #[test]
 fn check_prints_a_located_hint_and_passes_without_strict() {
     let f = temp_morph(LINT_TRIP);
@@ -543,13 +521,9 @@ fn check_strict_on_a_clean_program_exits_zero() {
     assert!(out.stderr.is_empty());
 }
 
-/// A programme declaring a reserved actor-policy name in a shape the
-/// runtime cannot match is refused, not merely hinted.
-///
-/// The direction of failure is why this is an error. `AuditSigningKey`
-/// declared wrongly fails loudly the moment someone signs; this fails
-/// SILENTLY - the restriction simply never arms, and the programme
-/// looks protected while protecting nothing.
+/// A reserved actor-policy name declared in a shape the runtime cannot
+/// match is an error, not a hint: the restriction would silently never
+/// apply, and the programme would look protected while protecting nothing.
 const MISSHAPEN_POLICY: &str = "program p
 predicate ActorAssertionRestricted(actor: Subject, note: Decimal)
 predicate Thing(id: Subject)
@@ -574,8 +548,7 @@ fn a_misshapen_actor_policy_declaration_is_refused_by_check() {
 
 #[test]
 fn a_misshapen_actor_policy_declaration_is_refused_by_check_json() {
-    // `check --json` is a separate path; a gate wired into only the
-    // prose path would pass every machine-readable run.
+    // `check --json` is a separate path and must refuse too.
     let f = temp_morph(MISSHAPEN_POLICY);
     let out = Command::new(bin())
         .args(["check", "--json", f.path().to_str().unwrap()])
@@ -710,8 +683,8 @@ fn against_json_carries_the_finding_with_the_local_span_and_no_foreign_spans() {
         "{payload}"
     );
 
-    // A broken --against file is an unanchored error naming the path:
-    // the report has one `file`, and a span into another would lie.
+    // A broken --against file is an error naming the path, with no span:
+    // the report has one `file`, and a span into another would mislead.
     let broken = temp_morph("program broken\npredicate P(x: Subject)\ninvariant t: Nope(x)\n");
     let out = check_against(secure.path(), &[broken.path()], &["--json"]);
     assert!(!out.status.success());

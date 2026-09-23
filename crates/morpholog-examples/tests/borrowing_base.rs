@@ -1,7 +1,7 @@
 //! Integration tests for the borrowing-base example
 //! (`examples/11_borrowing_base/`).
 //!
-//! Exercises the new decimal arithmetic end to end: the advance-limit
+//! Decimal multiplication and division end to end: the advance-limit
 //! invariant multiplies (`drawn <= advance_rate * collateral`), and the
 //! `FacilityUtilisation` derived claim divides (`drawn / collateral`).
 
@@ -106,10 +106,9 @@ fn facility_utilisation_reports_drawn_over_collateral() {
 
 #[test]
 fn the_asset_register_is_keyed_by_the_asset_alone() {
-    // Two assets across two facilities. The register carries one row
-    // per asset - the facility each pledge names is projected away -
-    // and each row's figure is the pledge's own value, read by naming
-    // the `collateral_value` field with the facility left unstated.
+    // Two assets across two facilities. The register has one row per asset,
+    // with the facility projected away. Each row's figure is read by naming
+    // the `collateral_value` field, leaving the facility unstated.
     let pre = facility_with_collateral(100);
     let pre = ex().must_accept(
         &borrowing_base::open_facility(),
@@ -196,9 +195,8 @@ fn advance_rate_above_one_is_rejected() {
     );
 }
 
-/// The companion to metered billing's figures-only witness: this rule
-/// binds its subject, so the refusal can say WHICH facility breached the
-/// advance limit - the first question a credit officer asks.
+/// This rule binds its subject, so the refusal can say WHICH facility
+/// breached the advance limit, the first question a credit officer asks.
 #[test]
 fn a_refusal_names_the_facility_that_breached_the_limit() {
     let pre = facility_with_collateral(100);

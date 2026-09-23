@@ -1,11 +1,7 @@
 //! Integration tests for [`morpholog_outbox::OutboxWorker`].
 //!
-//! Timing assertions use [`MockClock`] and [`FixedJitter`] so the
-//! tests are deterministic: the clock never sleeps, and the
-//! jitter factor is a configured constant. The mock clock records
-//! every `sleep_for` call into an inspectable buffer; we assert
-//! the worker tried to sleep the expected jittered duration
-//! (`base_interval * factor`) without burning real time.
+//! [`MockClock`] records sleeps without sleeping and [`FixedJitter`] fixes the factor, so the
+//! tests check the requested sleep durations deterministically and in no real time.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -28,10 +24,7 @@ use tokio::sync::watch;
 
 const INTENT_TYPE: &str = "JournalEntryPosted";
 
-/// Deliverer that, after delivering its first row successfully,
-/// signals shutdown via the supplied watch sender. Tests use this
-/// to bound the worker's run after a single drain has done its
-/// work, without depending on real wall time.
+/// Delivers every row, and signals shutdown on the first, so the worker stops after one pass.
 struct ShutdownAfterFirstDelivery {
     shutdown: Arc<watch::Sender<bool>>,
     call_count: std::sync::atomic::AtomicU32,
@@ -43,19 +36,12 @@ impl Deliverer for ShutdownAfterFirstDelivery {
             .call_count
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if prior == 0 {
-            // Sent on the first call but the drain keeps going
-            // through any further claimable rows; shutdown is
-            // observed by the worker AFTER the current drain pass
-            // and AFTER the post-drain sleep race resolves.
+            // The worker only sees this after the current drain pass finishes.
             let _ = self.shutdown.send(true);
         }
         DeliveryOutcome::Delivered
     }
 }
-
-// AlwaysDelivers lives in `morpholog_postgres::testing` (imported
-// above). Test-file-local shapes that need worker-state access
-// (ShutdownAfterFirstDelivery) stay above.
 
 // ============================================================
 // Tests
@@ -78,8 +64,7 @@ async fn worker_returns_immediately_when_shutdown_is_set_at_start() {
         FixedJitter::new(1.0),
     );
     worker.run(shutdown_rx).await.unwrap();
-    // The test passes by virtue of run returning at all; an
-    // unfortunate bug would block here forever.
+    // Passing means `run` returned at all.
 }
 
 #[tokio::test]
@@ -121,10 +106,7 @@ async fn worker_drains_pending_rows_and_then_observes_shutdown() {
             .unwrap();
     assert_eq!(delivered.0, 2);
 
-    // The worker tried to sleep at least once (after the drain
-    // pass) before observing shutdown. The exact count depends on
-    // shutdown timing, but the recorded duration should match
-    // base_interval * jitter_factor.
+    // How many sleeps depends on shutdown timing; the first is base_interval * factor.
     let sleeps = clock.sleeps();
     assert!(
         !sleeps.is_empty(),
@@ -156,15 +138,9 @@ async fn worker_applies_jitter_factor_to_base_interval() {
     )
     .with_base_interval(Duration::from_millis(80));
 
-    // Spawn the worker; it will drain (no rows), then sleep, then
-    // attempt to read the (mock, instantly-resolving) sleep and
-    // loop. After a few iterations we trigger shutdown.
+    // Mock sleeps resolve at once, so yielding lets the worker loop several times.
     let handle = tokio::spawn(worker.run(shutdown_rx));
     tokio::task::yield_now().await;
-    // Let the worker run several iterations. Because MockClock's
-    // sleep_for resolves immediately, each iteration is just one
-    // drain + record-the-sleep. We yield several times to let the
-    // scheduler advance the worker.
     for _ in 0..10 {
         tokio::task::yield_now().await;
     }
@@ -173,7 +149,6 @@ async fn worker_applies_jitter_factor_to_base_interval() {
 
     let sleeps = clock.sleeps();
     assert!(!sleeps.is_empty(), "worker must have recorded sleeps");
-    // Every recorded sleep should be base_interval * jitter_factor.
     let expected = Duration::from_millis(80).mul_f64(1.25);
     for s in &sleeps {
         assert_eq!(*s, expected);
@@ -184,7 +159,6 @@ async fn worker_applies_jitter_factor_to_base_interval() {
 async fn two_workers_concurrent_do_not_double_claim_a_row() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    // Pre-load enough rows that both workers can make progress.
     for i in 0..6 {
         commit_simple_entry(&pool, &format!("entry_{i:03}"), "p_worker").await;
     }
@@ -214,8 +188,7 @@ async fn two_workers_concurrent_do_not_double_claim_a_row() {
 
     let handle_a = tokio::spawn(worker_a.run(shutdown_rx_a));
     let handle_b = tokio::spawn(worker_b.run(shutdown_rx_b));
-    // Yield enough times that both workers complete at least one
-    // drain pass against the pre-loaded rows.
+    // Let both workers complete at least one drain pass.
     for _ in 0..20 {
         tokio::task::yield_now().await;
     }
@@ -223,12 +196,6 @@ async fn two_workers_concurrent_do_not_double_claim_a_row() {
     handle_a.await.unwrap().unwrap();
     handle_b.await.unwrap().unwrap();
 
-    // All six rows are delivered exactly once. The total count of
-    // delivered rows equals the count of rows; no row was
-    // processed by both workers (which would have shown up as a
-    // double-update on `delivered_at` - but PG's row-level lock
-    // via SKIP LOCKED prevents the second worker from claiming
-    // the same row at all).
     let delivered: (i64,) =
         sqlx::query_as("SELECT count(*) FROM morpholog.outbox WHERE status='delivered'")
             .fetch_one(&pool)
@@ -247,14 +214,8 @@ async fn two_workers_concurrent_do_not_double_claim_a_row() {
 async fn worker_smart_sleeps_until_soonest_next_attempt_at_when_no_work_is_due() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    // Commit a row, then set its `next_attempt_at` 30 seconds in
-    // the future. The drain will return empty (the row is not due
-    // yet); smart sleep should clamp the post-drain sleep to ~30s
-    // rather than the 5-minute base interval.
-    //
-    // Generous offsets: 30s + 5min base + shutdown-after-first-
-    // sleep means the test cannot race past next_attempt_at even
-    // on a slow CI box.
+    // One row, retry due in 30s: the sleep should be ~30s, not the 5-minute base interval.
+    // The offsets are wide enough that a slow machine cannot race past the retry.
     commit_simple_entry(&pool, "entry_001", "p_worker").await;
     let future_retry = Timestamp::now() + SignedDuration::from_secs(30);
     sqlx::query("UPDATE morpholog.outbox SET next_attempt_at=$1 WHERE intent_type=$2")
@@ -278,11 +239,7 @@ async fn worker_smart_sleeps_until_soonest_next_attempt_at_when_no_work_is_due()
     .with_base_interval(Duration::from_secs(300));
 
     let handle = tokio::spawn(worker.run(shutdown_rx));
-    // Poll the mock clock until the worker records its first
-    // sleep, then shut it down. This avoids the race the earlier
-    // version had (waiting a fixed number of yields and hoping
-    // the worker got past drain + smart-sleep computation in
-    // time).
+    // Wait for the first recorded sleep rather than a fixed number of yields.
     loop {
         if !clock.sleeps().is_empty() {
             break;
@@ -294,11 +251,8 @@ async fn worker_smart_sleeps_until_soonest_next_attempt_at_when_no_work_is_due()
 
     let sleeps = clock.sleeps();
     assert!(!sleeps.is_empty(), "worker must have recorded sleeps");
-    // The first recorded sleep is the smart-sleep value: must be
-    // clamped well below the 5-minute base_interval. The clamp
-    // target is ~30s; we assert below 60s to absorb the small gap
-    // between MockClock construction and the next_attempt_at row
-    // update without making the assertion meaningless.
+    // Below 60s rather than exactly 30s, to absorb the gap between building the clock and
+    // setting the retry time.
     assert!(
         sleeps[0] < Duration::from_secs(60),
         "first smart sleep must clamp below base_interval (300s) to roughly \
@@ -311,10 +265,7 @@ async fn worker_smart_sleeps_until_soonest_next_attempt_at_when_no_work_is_due()
 async fn worker_uses_base_interval_when_no_pending_retries_exist() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    // Empty outbox: drain returns nothing; smart sleep finds no
-    // pending retry; worker falls back to base_interval *
-    // jitter_factor.
-
+    // Empty outbox, so no retry is pending and the sleep is base_interval * factor.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let clock = MockClock::new(Timestamp::now());
 
@@ -364,21 +315,14 @@ async fn worker_terminates_when_shutdown_channel_closes() {
     .with_base_interval(Duration::from_millis(20));
 
     let handle = tokio::spawn(worker.run(shutdown_rx));
-    // Yield once so the worker reaches the select! and is
-    // awaiting shutdown.changed().
+    // Let the worker reach the select! on shutdown.changed().
     for _ in 0..3 {
         tokio::task::yield_now().await;
     }
-    // Drop the only Sender. The worker's shutdown.changed() must
-    // now return Err, which the worker must treat as termination
-    // rather than ignoring (the bug Copilot flagged: ignoring Err
-    // would cause changed() to be immediately ready every loop and
-    // burn CPU forever with no way to stop the worker).
+    // With the only sender gone, changed() returns Err at once on every call. A worker that
+    // ignored it would spin forever, so it must stop.
     drop(shutdown_tx);
 
-    // The worker must exit within a generous bound. If it ignored
-    // the closed channel, this await would hang and the test
-    // harness would time out, not pass.
     tokio::time::timeout(Duration::from_secs(2), handle)
         .await
         .expect("worker did not terminate after shutdown channel closed")
@@ -389,10 +333,7 @@ async fn worker_terminates_when_shutdown_channel_closes() {
 #[tokio::test]
 #[should_panic(expected = "base_interval must be > 0")]
 async fn with_base_interval_panics_on_zero() {
-    // PgPool is not used by the builder; the panic fires
-    // before any DB activity. connect_lazy requires a tokio
-    // context but never actually opens a connection, so it works
-    // here.
+    // connect_lazy never opens a connection, and the panic comes before any database use.
     let _ = OutboxWorker::new(
         sqlx::PgPool::connect_lazy("postgres:///does_not_matter")
             .expect("lazy connect cannot fail"),

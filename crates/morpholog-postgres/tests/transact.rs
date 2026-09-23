@@ -168,8 +168,8 @@ async fn a_refusal_from_the_staged_prefix_names_the_act_and_carries_its_witness(
     reset_db(&pool).await;
     let compiled = common::compiled(fixture());
 
-    // Act 3 collides with a balance act 2 staged - a claim history
-    // never held. The witness describes that staged reality.
+    // Act 3 collides with a balance only act 2 staged, and the witness
+    // describes that staged state.
     let outcome = propose_all_against_pg(
         &pool,
         &compiled,

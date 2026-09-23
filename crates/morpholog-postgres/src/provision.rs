@@ -1,17 +1,13 @@
 //! Day-zero provisioning: the embedded schema, and the opt-in
-//! least-privilege floor that makes "the governed path is the only
-//! door" true on a fresh database by default rather than by operator
-//! convention.
+//! least-privilege floor that makes the governed path the only way in.
 
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::sql_quote::quote_ident;
 use sqlx::PgPool;
 use std::fmt::Write as _;
 
-/// The canonical Morpholog schema, compiled into this crate. The same
-/// file a repo checkout applies with `psql -f`; embedding it means a
-/// binary-only deployment provisions exactly the schema this build
-/// expects - nothing to vendor, nothing to drift.
+/// The canonical Morpholog schema, compiled in so a binary-only
+/// deployment provisions exactly the schema this build expects.
 pub const SCHEMA_SQL: &str = include_str!("../../morpholog-core/sql/schema.sql");
 
 /// Outcome of [`initialise_schema`]: provisioned now, or found already
@@ -22,18 +18,15 @@ pub enum InitOutcome {
     AlreadyInitialised,
 }
 
-/// Provision the `morpholog` schema in an existing database from the
-/// embedded `SCHEMA_SQL`. Day-zero only: if the schema already
-/// exists this returns [`InitOutcome::AlreadyInitialised`] without
-/// touching anything - it never drops and never migrates. Schema
-/// *evolution* is [`crate::apply_migrations`], which is a separate verb
-/// precisely so this one stays safe to run against a live database.
+/// Provision the `morpholog` schema from the embedded `SCHEMA_SQL`.
 ///
-/// Provisioning is atomic: the existence check and the whole schema
-/// script run in one transaction (the script is plain DDL, which
-/// PostgreSQL rolls back like any other statement), so a mid-script
-/// failure leaves nothing behind - in particular, no partial schema
-/// the existence guard would later misread as already-initialised.
+/// Day-zero only: if the schema exists, returns
+/// [`InitOutcome::AlreadyInitialised`] and touches nothing. It never drops
+/// or migrates (see [`crate::apply_migrations`]), so it is safe against a
+/// live database.
+///
+/// Atomic: the check and the whole script run in one transaction, so a
+/// failure leaves no partial schema to be mistaken for an initialised one.
 pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     let exists = sqlx::query!("SELECT 1 AS one FROM pg_namespace WHERE nspname = 'morpholog'")
@@ -47,36 +40,22 @@ pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
         .execute(&mut *tx)
         .await
         .map_err(classify)?;
-    // A database built from SCHEMA_SQL is at the head by construction, so
-    // every migration is recorded as applied without running one. Otherwise
-    // `migrate` would find a fresh database entirely "pending" and re-run
-    // the whole set as no-ops to reach where it already was.
+    // A fresh schema is at the head, so record every migration as applied.
     crate::migrations::record_all_applied(&mut tx).await?;
     tx.commit().await.map_err(classify)?;
     Ok(InitOutcome::Initialised)
 }
 
-/// A connection string with a username filled in when it specifies
-/// none, so `postgres:///mydb` keeps working. sqlx 0.9 stopped
-/// defaulting an unspecified user and connects as `anonymous` instead,
-/// which turns the short form every Postgres tool accepts - and that
-/// this project's install guide teaches - into a peer-authentication
-/// failure.
+/// A connection string with a username filled in when it names none, so
+/// `postgres:///mydb` keeps working. sqlx 0.9 connects an unnamed user as
+/// `anonymous`, which turns this standard short form into a
+/// peer-authentication failure.
 ///
-/// Applied at the connection door rather than pushed onto users as a
-/// documentation change, because the short form is not a Morpholog
-/// convention to revise - it is what Postgres tooling means.
-///
-/// **Not a claim of libpq parity.** libpq resolves the EFFECTIVE
-/// operating-system account (`getpwuid(geteuid())`); this reads
-/// `PGUSER`, then `USER`, then `LOGNAME`, which agree with it in an
-/// ordinary login session and can diverge under `sudo`, a service
-/// manager, or a container that does not set them. Chasing exact
-/// parity would mean `getpwuid` behind a new dependency (the workspace
-/// forbids `unsafe`) for a convenience that those contexts should
-/// answer by naming the user in the URL. When nothing is available the
-/// URL is returned untouched, so the driver reports rather than this
-/// inventing an identity.
+/// **Not libpq parity.** libpq uses the effective OS account; this reads
+/// `PGUSER`, then `USER`, then `LOGNAME`, which can differ under `sudo`, a
+/// service manager, or a container. Those contexts should name the user in
+/// the URL. With nothing available the URL is returned untouched, so the
+/// driver reports the problem rather than this inventing an identity.
 pub fn with_default_user(url: &str) -> String {
     // An EMPTY variable counts as unset and falls through - `PGUSER=` is
     // how a CI environment often clears it, and treating it as a value
@@ -89,11 +68,10 @@ pub fn with_default_user(url: &str) -> String {
     apply_default_user(url, user.as_deref())
 }
 
-/// A pool capped at one connection - the resident session's shape: a
-/// lockstep protocol cannot use a second connection, and the cap
-/// bounds database connection load when many application workers each
-/// hold a session open. The URL is taken as given; callers wanting
-/// the OS-user default apply [`with_default_user`] first.
+/// A pool capped at one connection, for a resident session: its lockstep
+/// protocol cannot use a second, and the cap bounds load when many workers
+/// each hold one. The URL is used as given; apply [`with_default_user`]
+/// first for the OS-user default.
 pub async fn single_connection_pool(url: &str) -> Result<PgPool, PgError> {
     sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
@@ -102,18 +80,15 @@ pub async fn single_connection_pool(url: &str) -> Result<PgPool, PgError> {
         .map_err(crate::error::classify)
 }
 
-/// [`with_default_user`] with the username supplied rather than read
-/// from the environment - the testable core, and the form a caller with
-/// its own identity source wants.
+/// [`with_default_user`] with the username supplied rather than read from
+/// the environment.
 pub fn with_user(url: &str, user: &str) -> String {
     apply_default_user(url, Some(user))
 }
 
-/// Percent-encode a username for a URL query value. Anything outside
-/// the unreserved set is escaped BY BYTE, so UTF-8 survives and a
-/// username carrying `&`, `#`, `%`, or a space cannot smuggle in
-/// connection options: `PGUSER='ops&sslmode=disable'` would otherwise
-/// append a real parameter and, in that example, disable TLS.
+/// Percent-encode a username for a URL query value, BY BYTE outside the
+/// unreserved set. UTF-8 survives, and a username cannot smuggle in
+/// options: `PGUSER='ops&sslmode=disable'` would otherwise disable TLS.
 fn percent_encode(value: &str) -> String {
     value
         .bytes()
@@ -126,9 +101,8 @@ fn percent_encode(value: &str) -> String {
         .collect()
 }
 
-/// The rule itself, with the environment lookup lifted out: the
-/// workspace forbids `unsafe`, so a test cannot mutate the environment -
-/// and the substitution is the part worth pinning regardless.
+/// The rule itself, without the environment lookup, so tests can pin it
+/// without mutating the environment (which needs `unsafe`).
 fn apply_default_user(url: &str, user: Option<&str>) -> String {
     let Some((_, rest)) = url.split_once("://") else {
         return url.to_string();
@@ -165,11 +139,9 @@ fn apply_default_user(url: &str, user: Option<&str>) -> String {
     format!("{url}{separator}user={}", percent_encode(user))
 }
 
-/// A connection string with any userinfo stripped, for a message an
-/// operator has to read. The host and database still identify the
-/// target - which is the whole point of echoing it before a
-/// destructive act - while a password copied into CI scrollback
-/// outlives the run that leaked it.
+/// A connection string with any userinfo stripped, for operator messages.
+/// Host and database still identify the target; a password must not land
+/// in CI logs.
 pub fn redact_database_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         return url.to_string();
@@ -186,16 +158,13 @@ pub fn redact_database_url(url: &str) -> String {
 /// Drop the `morpholog` schema and everything in it, for a
 /// development database that wants re-provisioning from scratch.
 ///
-/// Destructive by definition and deliberately dumb: the caller owns
-/// the acknowledgement (see the CLI's `init --reset`), because a
-/// library function cannot tell a scratch database from production.
-/// Returns whether a schema was there to drop, so a caller can report
-/// honestly rather than implying it removed something.
+/// Destructive and deliberately dumb: the caller owns the confirmation,
+/// because a library cannot tell a scratch database from production.
+/// Returns whether there was a schema to drop.
 ///
-/// One transaction with the re-provisioning it precedes is NOT
-/// possible here - the caller runs [`initialise_schema`] next, and a
-/// failure between the two leaves an un-provisioned database, which is
-/// the same state `init` starts from and recovers by re-running.
+/// Not atomic with the [`initialise_schema`] that follows; a failure in
+/// between leaves an unprovisioned database, which re-running `init`
+/// recovers.
 pub async fn drop_schema(pool: &PgPool) -> Result<bool, PgError> {
     let existed = sqlx::query!("SELECT 1 AS one FROM pg_namespace WHERE nspname = 'morpholog'")
         .fetch_optional(pool)
@@ -218,21 +187,6 @@ pub const WRITER_ROLE: &str = "morpholog_writer";
 /// the derived read cache, for dashboards, projections, and auditors.
 pub const READER_ROLE: &str = "morpholog_reader";
 
-/// Provision the least-privilege floor: mint the [`WRITER_ROLE`] and
-/// [`READER_ROLE`] group roles (kept if they already exist - roles are
-/// cluster-global), revoke PUBLIC from the governed schemas and tables,
-/// and grant each role exactly what it needs. Idempotent; one
-/// transaction, so a failure leaves nothing half-provisioned.
-///
-/// The writer's grants are the runtime's write set and nothing more.
-/// In particular `morpholog.audit` gets INSERT and SELECT only: the
-/// audit log is append-only at the database layer even for the
-/// runtime's own role.
-///
-/// Membership grants (and `pg_read_all_stats` for an audit-tailing
-/// reader) are deliberately left to the operator - printed by the CLI,
-/// never applied here - so no secret or cluster-wide policy decision
-/// hides inside provisioning.
 /// Whether this database has the least-privilege floor provisioned.
 ///
 /// Asked after migrating: the floor grants per table, so a migration that
@@ -248,6 +202,19 @@ pub(crate) async fn least_privilege_roles_exist(pool: &PgPool) -> Result<bool, P
     Ok(found.is_some())
 }
 
+/// Provision the least-privilege floor: create the [`WRITER_ROLE`] and
+/// [`READER_ROLE`] group roles (kept if they exist; roles are
+/// cluster-global), revoke PUBLIC from the governed schemas and tables,
+/// and grant each role exactly what it needs. Idempotent and in one
+/// transaction.
+///
+/// The writer gets the runtime's write set and nothing more. In
+/// particular `morpholog.audit` gets INSERT and SELECT only, so the log is
+/// append-only in the database even for the runtime's own role.
+///
+/// Membership grants (and `pg_read_all_stats` for an audit-tailing
+/// reader) are left to the operator, so no secret or cluster-wide policy
+/// hides inside provisioning.
 pub async fn provision_least_privilege(pool: &PgPool) -> Result<(), PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     for role in [WRITER_ROLE, READER_ROLE] {
@@ -279,11 +246,10 @@ pub async fn provision_least_privilege(pool: &PgPool) -> Result<(), PgError> {
     Ok(())
 }
 
-/// Name the remedy when the connection role cannot provision, because a
-/// bare permission error would leave the operator guessing. Two distinct
-/// privileges are in play: CREATE ROLE needs CREATEROLE, and the
-/// REVOKE/GRANT statements need ownership of the governed tables - in
-/// practice the role that ran `morpholog init`. A superuser has both.
+/// Name the remedy when the connection role cannot provision. CREATE ROLE
+/// needs CREATEROLE, and REVOKE/GRANT need ownership of the governed
+/// tables (normally the role that ran `morpholog init`). A superuser has
+/// both.
 fn provision_error(e: sqlx::Error) -> PgError {
     if let sqlx::Error::Database(db) = &e
         && db.code().as_deref() == Some("42501")
@@ -299,9 +265,8 @@ fn provision_error(e: sqlx::Error) -> PgError {
     classify(e)
 }
 
-/// The REVOKE/GRANT script, pure and deterministic so a test pins the
-/// exact privilege floor. The grants are the write-set census of the
-/// runtime's SQL, table by table.
+/// The REVOKE/GRANT script, pure so a test pins the exact privilege floor.
+/// The grants are the runtime SQL's write set, table by table.
 fn least_privilege_sql(writer: &str, reader: &str) -> String {
     let w = quote_ident(writer);
     let r = quote_ident(reader);
@@ -325,9 +290,8 @@ fn least_privilege_sql(writer: &str, reader: &str) -> String {
         out,
         "GRANT SELECT, INSERT, DELETE ON morpholog.claims TO {w};"
     );
-    // Readable by both, written by neither: `migrate --check` is a
-    // readiness question a deployment role should be able to ask without
-    // holding the privileges to answer it by migrating.
+    // Readable by both, written by neither: a deployment role can ask
+    // `migrate --check` without the power to migrate.
     let _ = writeln!(
         out,
         "GRANT SELECT ON morpholog.schema_migrations TO {w}, {r};"
@@ -440,18 +404,14 @@ mod redaction_tests {
 mod default_user_tests {
     use super::apply_default_user;
 
-    // sqlx 0.9 connects an unspecified user as `anonymous`, where libpq,
-    // psql, and sqlx 0.8 all use the OS user. These pin the compatibility
-    // shim: the short URL form is what every Postgres tool means by "this
-    // database, as me", and what this project's install guide,
-    // CONTRIBUTING, and whole test suite use.
+    // sqlx 0.9 connects an unnamed user as `anonymous`, where libpq and
+    // psql use the OS user. These pin the shim that restores the short URL
+    // form's meaning: "this database, as me".
 
     #[test]
     fn a_socket_url_gains_the_supplied_user_as_a_query_parameter() {
         // Not `postgres://alice@/morpholog_dev`: with no host, injected
         // userinfo reads as an empty host and the driver refuses it.
-        // Caught by an end-to-end connection, not by this test - which is
-        // why the shape is pinned here now.
         assert_eq!(
             apply_default_user("postgres:///morpholog_dev", Some("alice")),
             "postgres:///morpholog_dev?user=alice"
@@ -501,9 +461,8 @@ mod default_user_tests {
 
     #[test]
     fn a_parameter_merely_ending_in_user_does_not_suppress_the_fill_in() {
-        // Found by self-review, not by the first cut of these tests: a
-        // substring match on "user=" would skip the fill-in here and
-        // leave the caller connecting as `anonymous`.
+        // A substring match on "user=" would skip the fill-in here and
+        // connect as `anonymous`.
         assert_eq!(
             apply_default_user("postgres:///db?clusteruser=x", Some("alice")),
             "postgres:///db?clusteruser=x&user=alice"

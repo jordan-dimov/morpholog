@@ -173,12 +173,10 @@ fn intent_args_serialise_as_a_json_array() {
 // ============================================================
 // Transition actor codec (`actor_repr`)
 //
-// `Transition.actor` is a `Subject`, but it serialises through
-// `actor_repr` as a tagged `EvalValue::Subject`, so the audit `actor`
-// column and the CLI transition JSON keep their v0 shape. Deserialisation
-// validates the tag at the boundary - the one place a non-subject actor
-// can still enter, now that the kernel type makes it otherwise
-// unrepresentable. These pin both halves of that contract.
+// `Transition.actor` is a `Subject` that serialises as a tagged
+// `EvalValue::Subject`, the shape the audit `actor` column and the CLI
+// use. Deserialisation checks the tag, since the wire is the only place
+// a non-subject actor can come from.
 // ============================================================
 
 #[test]
@@ -211,17 +209,12 @@ fn transition_deserialize_rejects_non_subject_actor() {
 // ============================================================
 // Trace wire format
 //
-// The CLI's `morpholog propose --trace` flag emits a JSON object
-// whose `trace` field is a Vec<TraceEntry>. The tests below pin the
-// serde-derived wire shape so that an accidental serde-attribute
-// change (renaming a `kind` tag, switching from snake_case, etc.)
-// breaks the test rather than silently breaking downstream
-// consumers.
+// `morpholog propose --trace` emits a `trace` field that is a
+// Vec<TraceEntry>. These tests pin its serde shape so a renamed tag or
+// changed case breaks here, not downstream.
 //
-// `TracedProposal` is NOT covered here - it deliberately does not
-// derive serde at this stage (would transitively require Outcome /
-// EvalError / State to serialise). The CLI assembles its own
-// {result, trace} wrapper.
+// `TracedProposal` has no serde (it would drag in Outcome, EvalError and
+// State); the CLI builds its own {result, trace} wrapper.
 // ============================================================
 
 use morpholog_core::{

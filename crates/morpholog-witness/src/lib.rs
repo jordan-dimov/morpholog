@@ -1,14 +1,12 @@
-//! External witnesses to an audit tree head, rung one: RFC 3161 timestamp
-//! tokens. A witness proves that a commitment existed no later than a
-//! time, from a root the log operator does not control. This crate builds
-//! the request, self-checks the authority's response before it is stored,
-//! and verifies a stored proof offline against anchors the verifier chose.
+//! External witnesses to an audit tree head, as RFC 3161 timestamp tokens.
 //!
-//! The contract is narrow on purpose: tokens are recognised, the
-//! algorithm suite this implementation supports is verified, a proof it
-//! cannot judge is reported as `unsupported`, and inability is never
-//! misreported as cryptographic failure. Nothing here touches a network;
-//! the caller posts the request bytes and hands back the response bytes.
+//! A witness proves a commitment existed by some time, vouched for by an authority the log
+//! operator does not control. This crate builds the request, self-checks the response before
+//! it is stored, and verifies a stored proof offline against anchors the verifier chose.
+//!
+//! A proof signed with an algorithm this crate lacks is reported as `unsupported`, never as
+//! `invalid`. Nothing here touches the network: the caller posts the request bytes and hands
+//! back the response bytes.
 
 use std::ops::Deref as _;
 
@@ -64,17 +62,12 @@ pub enum WitnessError {
     Anchors(String),
 }
 
-/// The certificates a verifier deliberately trusts, every one an anchor:
-/// a signer is accepted when it is one of them, or when a certification
-/// path from it to one of them validates - issuer names chain, each
-/// signature verifies, every certificate on the path was valid at the
-/// attested time, and each issuing certificate is a certification
-/// authority whose constraints permit the path (RFC 5280 section 6.1).
-/// Revocation and certificate policies are not checked: a verifier that
-/// needs them holds them in the anchors it chooses. A pinned leaf is the
-/// narrowest choice and survives no rotation; a timestamping intermediate
-/// or root permits controlled rotation; a broad commercial root is broad
-/// trust.
+/// The certificates a verifier deliberately trusts.
+///
+/// A signer is accepted if it is an anchor, or if a certification path from it to an anchor
+/// validates at the attested time (RFC 5280 section 6.1). Revocation and certificate policies
+/// are not checked; a verifier that needs them picks its anchors accordingly. A pinned leaf is
+/// the narrowest trust and breaks on key rotation; an intermediate or root allows rotation.
 pub struct Anchors(Vec<CapturedX509Certificate>);
 
 impl Anchors {
@@ -535,17 +528,13 @@ fn valid_at(cert: &CapturedX509Certificate, at: DateTime<Utc>) -> bool {
     cert.validity_not_before() <= at && at <= cert.validity_not_after()
 }
 
-/// Certification path validation from the signer to one of the anchors,
-/// RFC 5280 section 6.1, evaluated at the attested time: a timestamp is
-/// judged by whether its signer was valid when it signed, not when a
-/// reader happens to check. An anchor is trusted as given, whether it is
-/// the signer itself (a pinned leaf) or the issuer at the top of the
-/// path; only its key and name are used. Every certificate below the
-/// anchor must have been valid at that time; each issuing certificate
-/// must be a certification authority (basicConstraints cA, a path length
-/// that admits what lies below it, keyCertSign if it declares key usage);
-/// and the signer, if it declares key usage, must be permitted to sign.
-/// Revocation and policies are not checked here.
+/// Certification path validation from the signer to an anchor (RFC 5280 section 6.1).
+///
+/// Validity is judged at the attested time: what matters is whether the signer was valid when
+/// it signed, not when someone checks. An anchor is trusted as given; only its key and name are
+/// used. Below it, every certificate must have been valid then, each issuer must be a
+/// certification authority whose path length and key usage allow the path, and the signer's key
+/// usage, if declared, must allow signing. Revocation and policies are not checked.
 fn validate_path(
     signer: &CapturedX509Certificate,
     carried: &[CapturedX509Certificate],
@@ -622,9 +611,8 @@ fn validate_path(
     Err("the certification path is longer than this verifier follows".to_string())
 }
 
-/// Helpers for tests in this and other crates: a `Request` rebuilt from a
-/// recorded request's DER, so a recorded response can be self-checked
-/// against the nonce it actually echoes.
+/// Test helpers: rebuild a `Request` from recorded DER, so a recorded response can be
+/// self-checked against the nonce it echoes.
 pub mod testing {
     use super::{Constructed, Mode, Request, TimeStampReq, WitnessError};
 

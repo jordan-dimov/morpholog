@@ -11,15 +11,11 @@
 //! async must not infect this crate. Worked-example IR lives in the
 //! `morpholog-examples` crate.
 //!
-//! The kernel is the trust boundary: its evaluation and proposal paths
-//! reject malformed input with a typed `EvalError`, never a `panic!`, and
-//! it never touches floating point (business values are decimal). The
-//! `warn`s below keep both mechanical - `panic!` stays out of non-test
-//! code and float arithmetic is a compile error. (Internal guards still
-//! `assert!` / `unreachable!` on structurally-impossible IR; those are
-//! programmer-error checks on already-validated data, not the input path,
-//! and `clippy::panic` covers neither.) Test code is exempt via
-//! `.clippy.toml` (`allow-panic-in-tests`).
+//! The kernel is the trust boundary. It rejects malformed input with a typed
+//! `EvalError`, never a `panic!`, and it never uses floating point. The lints
+//! below enforce both. Internal `assert!` / `unreachable!` guards on
+//! already-validated IR remain; they catch programmer error, not bad input.
+//! Tests are exempt via `.clippy.toml` (`allow-panic-in-tests`).
 #![warn(clippy::panic, clippy::float_arithmetic)]
 
 pub mod actor_repr;

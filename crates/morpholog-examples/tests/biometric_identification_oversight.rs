@@ -3,11 +3,9 @@
 //! EU AI Act Articles 12 and 14(5) demo script, each beat a refused
 //! or admitted proposal.
 //!
-//! The composition thesis under test: authority grant/revoke
-//! (example 04's shape), admission-time validity windows (example
-//! 06's), standing granted by verification (example 02's), and exact
-//! instants (example 12's) meet a statute - with no new kernel or
-//! surface needed.
+//! Authority grant/revoke, validity windows, standing granted by
+//! verification, and exact instants, all from earlier examples, combine to
+//! enforce a statute with nothing new in the language.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -161,14 +159,10 @@ fn decision_with_one_verification_is_refused() {
     );
 }
 
-// The PR's headline, pinned: a refused decision explains itself in
-// the statute's own terms. With no verification yet on record, asking
-// why the decision is refused names the verification condition by its
-// declared name AND - descending through that definition's body - the
-// directly-missing MatchVerified claim, with `verify_match` as the
-// transformation that supplies it. Both levels: the named business
-// condition, and the concrete missing evidence an auditor (or an
-// agent retrying) can act on.
+// A refused decision explains itself in the statute's terms. With no
+// verification on record, the explanation names the verification
+// condition and, inside it, the missing MatchVerified claim with
+// `verify_match` as the transformation that supplies it.
 #[test]
 fn the_refused_decision_explains_itself_in_the_statutes_terms() {
     let state = match_awaiting_verification();
@@ -203,13 +197,10 @@ fn the_refused_decision_explains_itself_in_the_statutes_terms() {
     );
 }
 
-// The one-hop explanation engine's honest boundary, pinned so it
-// cannot regress unnoticed: once ONE verification exists, the gate
-// still fails (a second distinct verifier is needed), but the gap is
-// the `v1 != v2` distinctness, not an absent claim - so the engine
-// names the failing gate without a directly-missing-claim checklist.
-// Distinctness-aware why-not is a deferred tier; this test documents
-// that the example sits right at its edge.
+// The limit of the explanation: with one verification, the gate still
+// fails for want of a second distinct verifier. The gap is `v1 != v2`,
+// not a missing claim, so the explanation names the failing gate but
+// lists no missing claim.
 #[test]
 fn one_verification_names_the_gate_but_distinctness_is_not_a_missing_claim() {
     let state = match_awaiting_verification();
@@ -356,9 +347,7 @@ fn revocation_stops_future_verifications_and_leaves_past_decisions_standing() {
         "anna",
         &state,
     );
-    // The decision admitted under her live authority is untouched:
-    // the revocation transformation committed against a state that
-    // still satisfies every invariant, decision included.
+    // The decision admitted under her live authority still stands.
     assert!(
         state
             .claims()
@@ -401,8 +390,8 @@ fn decision_dated_before_the_second_verification_is_refused() {
     );
 }
 
-// The machine actor is load-bearing: only the deployed system's own
-// identity may put its output on the record.
+// Only the deployed system's own identity may put its output on the
+// record.
 #[test]
 fn a_match_cannot_be_recorded_under_the_wrong_actor() {
     let state = match_awaiting_verification();
@@ -436,9 +425,8 @@ fn use_cannot_be_closed_before_a_match_it_already_produced() {
     );
 }
 
-// A kernel-error-free sanity sweep: the decision gate's witness
-// search is a lawful rejection path, not an evaluation error, even
-// with zero verifications on record.
+// With no verifications on record, the decision gate rejects rather than
+// raising an evaluation error.
 #[test]
 fn decision_with_no_verifications_is_a_lawful_rejection() {
     let state = match_awaiting_verification();

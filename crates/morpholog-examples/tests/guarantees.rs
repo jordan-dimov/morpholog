@@ -1,8 +1,7 @@
 //! Integration tests for `inspect guarantees` (`morpholog_core::guarantees`).
 //!
-//! Exercised across *every* worked example, not just carbon, so the
-//! derivation is demonstrably general - a mechanical reading of any
-//! programme's invariants, never handcrafted to flatter one example.
+//! Run over every worked example, to show the derivation is a mechanical
+//! reading of any programme's invariants, not tuned to one example.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -12,8 +11,7 @@ use common::all_programs;
 use morpholog_core::{Guarantee, guarantees, render_guarantees};
 use morpholog_examples::{approval_controls, carbon_credit_provenance as cc};
 
-/// Build a CompiledProgram for the analysis entry points, which now
-/// take `&CompiledProgram`.
+/// Build a CompiledProgram for the analysis entry points.
 fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
     morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
 }

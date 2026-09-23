@@ -1,11 +1,8 @@
-//! Checked arithmetic: an out-of-range result anywhere in the value
-//! grammar is the named `ArithOutOfRange` refusal, never a panic. The
-//! plain rust_decimal operators panic on overflow - including
-//! division, where a tiny divisor overflows the quotient - so every
-//! arithmetic site routes through checked variants. Each refusal case
-//! here is a well-typed input that panicked the kernel before this
-//! suite existed; the remainder case pins the one operator with no
-//! reachable overflow.
+//! An out-of-range arithmetic result anywhere in the value grammar is the
+//! named `ArithOutOfRange` refusal, never a panic. Plain rust_decimal
+//! operators panic on overflow, even division by a tiny divisor. Each
+//! refusal case is a well-typed input; the remainder case pins the one
+//! operator with no reachable overflow.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -89,11 +86,9 @@ fn sum_accumulation_overflow_is_refused_by_name() {
 
 #[test]
 fn sum_is_order_independent_over_cancelling_extremes() {
-    // State is a set of claims: [MAX, 1, -MAX] totals exactly 1 in
-    // EVERY insertion order. A checked fold in match order would
-    // refuse the ordering that meets MAX + 1 first - the accumulator
-    // is wider than the value type precisely so only the final total
-    // decides.
+    // [MAX, 1, -MAX] totals exactly 1 in every order. The accumulator is
+    // wider than the value type so only the final total can refuse, not
+    // an intermediate MAX + 1.
     const NEG_MAX: &str = "-79228162514264337593543950335";
     let values = [MAX, "1", NEG_MAX];
     let orders: &[[usize; 3]] = &[
@@ -205,10 +200,8 @@ fn in_range_extremes_still_evaluate_exactly() {
 
 #[test]
 fn remainder_has_no_reachable_overflow_and_stays_exact() {
-    // Probed directly: rust_decimal's rem rescales internally without
-    // overflow (MAX % 0.3 does not even panic unchecked), so no
-    // refusal witness exists - the checked call in the kernel is
-    // uniform defence, not a reachable arm. Pin the exactness instead.
+    // rust_decimal's remainder never overflows (MAX % 0.3 does not panic
+    // even unchecked), so there is no refusal to pin. Pin exactness instead.
     let t = transformation(
         "probe",
         params(&[]),

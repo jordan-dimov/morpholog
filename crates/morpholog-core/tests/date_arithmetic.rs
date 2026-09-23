@@ -1,12 +1,10 @@
-//! Civil-date arithmetic semantics: a calendar span shifts a date
-//! (months first, day clamped to the destination month, then days),
-//! and the difference of two dates is their signed count of actual
-//! days. Pinned as tables, the clamping traps included - the shift is
-//! neither reversible nor associative around clamped month ends, and
-//! the non-associativity case is pinned on purpose. Plus the refusals:
-//! every combination the matrix deliberately leaves out stays a type
-//! error, and a span is expression-only - the storage and wire
-//! boundaries each refuse it by name.
+//! Civil-date arithmetic. A calendar span shifts a date (months first,
+//! day clamped to the destination month, then days); the difference of
+//! two dates is their signed count of actual days. The clamping traps
+//! are pinned on purpose: the shift is neither reversible nor
+//! associative around month ends. Every combination left out stays a
+//! type error, and a span is expression-only: storage and wire refuse it
+//! by name.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -77,9 +75,8 @@ fn month_ends_clamp_to_the_destination_month() {
 #[test]
 fn clamped_shifts_are_not_associative_and_the_trap_is_pinned() {
     // Two quarterly rolls from Nov 30 drift to the 28th; one direct
-    // half-year shift keeps the 30th. A schedule defined hop-by-hop is
-    // therefore NOT the schedule defined from an anchor - the worked
-    // example teaches this; the kernel pins it.
+    // half-year shift keeps the 30th. A hop-by-hop schedule is not the
+    // schedule defined from an anchor.
     holds(eq(
         add(shifted("2026-11-30", "P3M"), term(span("P3M"))),
         term(date("2027-05-28")),

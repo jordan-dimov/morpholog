@@ -1,19 +1,16 @@
 //! Integration tests for the verified-revenue example
 //! (`examples/02_verified_revenue/`).
 //!
-//! Complementary patterns woven through one programme:
+//! Two patterns in one programme:
 //!
-//! - **Currentness with restatement.** Verifier admits a figure;
-//!   later corrects it. Singleton `CurrentVerification` pointer
-//!   moves; lineage recorded as `Supersedes`; standing on the prior
-//!   verification is retracted by pattern; historical decisions
-//!   survive in admitted state.
+//! - **Restatement.** A verifier corrects a figure: the
+//!   `CurrentVerification` pointer moves, `Supersedes` records the
+//!   lineage, standing on the old figure is withdrawn, and past
+//!   decisions survive.
 //!
-//! - **Admissibility-for-purpose.** Two authorities grant standing
-//!   for different decisions on the same underlying verification.
-//!   Standing can be revoked; the underlying verification is never
-//!   mutated; the historical record of each decision survives any
-//!   later revocation or correction.
+//! - **Admissibility for purpose.** Two authorities grant standing for
+//!   different decisions on the same figure. Standing can be revoked;
+//!   the figure never changes, and past decisions survive.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -59,10 +56,8 @@ fn grant(state: State, ver: &str, purpose: &str, authority: &str, grant_id: &str
 
 #[test]
 fn admit_then_correct_preserves_history_and_moves_pointer() {
-    // Verifier admits 91; then corrects to 88. The original
-    // IndependentlyVerifiedRevenue stays admitted; the singleton
-    // CurrentVerification pointer moves to the corrected figure;
-    // Supersedes records the lineage.
+    // Admit 91, then correct to 88. The original figure stays admitted;
+    // the pointer moves and Supersedes records the lineage.
     let pre = admit_iv(State::default(), 91, "ver_001");
     let post = ex().must_accept(
         &verified_revenue::correct_independent_verification(),
@@ -102,9 +97,8 @@ fn admit_then_correct_preserves_history_and_moves_pointer() {
 
 #[test]
 fn cannot_correct_already_superseded_verification() {
-    // The supersedes_unique_by_prior_verification_id invariant + the require in
-    // correct_independent_verification together prevent parallel
-    // restatement chains.
+    // The gate in correct_independent_verification and
+    // supersedes_unique_by_prior_verification_id prevent a forked chain.
     let pre = admit_iv(State::default(), 91, "ver_001");
     let pre = ex().must_accept(
         &verified_revenue::correct_independent_verification(),
@@ -120,9 +114,8 @@ fn cannot_correct_already_superseded_verification() {
 
 #[test]
 fn second_admission_against_existing_current_is_rejected() {
-    // The admit_independent_verification require enforces that an
-    // (asset, period) has at most one current verification at any
-    // moment. To replace it, use correct_independent_verification.
+    // An (asset, period) has at most one current verification; replacing
+    // it goes through correct_independent_verification.
     let pre = admit_iv(State::default(), 91, "ver_001");
     ex().must_reject(
         &verified_revenue::admit_independent_verification(),
@@ -131,12 +124,9 @@ fn second_admission_against_existing_current_is_rejected() {
     );
 }
 
-/// Correcting a correction is one more supersession step, at any
-/// depth, and staleness is a pointer read rather than a walk along the
-/// chain: no rule in this programme follows a `Supersedes` link, so no
-/// rule has a hop count to exceed. The one thing a chain forbids is a
-/// fork - a second correction of a version already superseded, at any
-/// depth - and the generated no-fork invariant refuses it by name.
+/// Corrections chain to any depth. Being current is a pointer read, not a
+/// walk along the chain, so depth never matters. The one thing refused is a
+/// fork: correcting a version already superseded, at any depth.
 #[test]
 fn correction_chains_run_to_any_depth_and_stale_versions_stay_stale() {
     let mut state = admit_iv(State::default(), 91, "ver_001");
@@ -175,8 +165,7 @@ fn correction_chains_run_to_any_depth_and_stale_versions_stay_stale() {
         assert!(has_claim(&state, "Supersedes", &[subj(next), subj(prior)]));
     }
 
-    // Standing attaches to the head only, whatever the depth of the
-    // version being asked about: the read is the pointer, not the chain.
+    // Standing attaches to the head only, whatever the chain's depth.
     for stale in &chain[..4] {
         ex().must_reject(
             &verified_revenue::grant_standing(),
@@ -211,9 +200,8 @@ fn correction_chains_run_to_any_depth_and_stale_versions_stay_stale() {
             &state,
         );
     }
-    // Correcting the head is not a fork: the chain simply grows, and the
-    // standing that attached to the old head goes with it - past
-    // decisions stand, new reliance moves to the new head.
+    // Correcting the head is not a fork: the chain grows, and standing on
+    // the old head is withdrawn while past decisions stand.
     let state = ex().must_accept(
         &verified_revenue::correct_independent_verification(),
         vec![asset(), period(), dec(70), subj("ver_006"), subj("ver_005")],
@@ -272,13 +260,9 @@ fn parallel_standings_coexist_on_same_verification() {
 fn decision_admits_only_with_matching_standing() {
     let pre = admit_iv(State::default(), 91, "ver_001");
 
-    // No standing for bank yet; admit_debt_service_revenue is
-    // rejected. Asserts via the trace that the first require
-    // (IndependentlyVerifiedRevenue exists) Held, while the second
-    // require (AdmissibleFor on bank_debt_service) Rejected. The
-    // standing-gate distinction is the load-bearing semantics of
-    // this example; trace lets us pin it precisely instead of
-    // settling for `matches!(outcome, Rejected { .. })`.
+    // With no bank standing, admit_debt_service_revenue is rejected. The
+    // trace shows why: the figure exists (first require held) but the
+    // standing does not (second require rejected).
     use morpholog_core::{
         RequireOutcome, Subject, TraceEntry, TracedProposal, Transition, propose_with_trace,
     };
@@ -389,8 +373,8 @@ fn investor_standing_does_not_admit_bank_decision() {
 
 #[test]
 fn revoking_standing_blocks_future_but_preserves_past() {
-    // The require-vs-invariant payoff. A decision admitted under
-    // valid standing survives a later revocation.
+    // A decision admitted under valid standing survives a later
+    // revocation, because standing is a gate, not an invariant.
     let pre = admit_iv(State::default(), 91, "ver_001");
     let pre = grant(
         pre,
@@ -497,11 +481,8 @@ fn cannot_regrant_after_revocation() {
 
 #[test]
 fn cannot_grant_standing_on_nonexistent_verification() {
-    // grant_standing's first require: the verification_id must
-    // reference a real IndependentlyVerifiedRevenue claim. Phantom
-    // ids are rejected at admission time. This is what attaches the
-    // word "standing" to a real admitted figure rather than just a
-    // shape in the database.
+    // Standing must attach to a real admitted figure: a phantom
+    // verification_id is refused.
     ex().must_reject(
         &verified_revenue::grant_standing(),
         vec![
@@ -516,9 +497,8 @@ fn cannot_grant_standing_on_nonexistent_verification() {
 
 #[test]
 fn cannot_grant_standing_on_superseded_verification() {
-    // After correction, ver_001 is admitted but no longer current.
-    // grant_standing requires CurrentVerification - new standing must
-    // attach to the live figure (ver_002), not the historical one.
+    // After correction ver_001 is no longer current, and new standing
+    // must attach to the live figure, ver_002.
     let pre = admit_iv(State::default(), 91, "ver_001");
     let pre = ex().must_accept(
         &verified_revenue::correct_independent_verification(),
@@ -562,12 +542,9 @@ fn cannot_grant_standing_on_superseded_verification() {
 
 #[test]
 fn correction_retracts_standing_on_prior_verification() {
-    // The load-bearing combined test. A verifier corrects a figure
-    // that already has multiple standings granted. Both standings on
-    // the prior verification are retracted by pattern-based retract;
-    // any historical decision admitted under those standings
-    // survives. The authorities must re-grant standing on the
-    // corrected figure if they accept it.
+    // Correcting a figure withdraws every standing on it, while decisions
+    // made under those standings survive. Authorities must re-grant on
+    // the corrected figure.
     let pre = admit_iv(State::default(), 91, "ver_001");
     let pre = grant(
         pre,
@@ -631,8 +608,7 @@ fn correction_retracts_standing_on_prior_verification() {
         "AdmissibleFor",
         &[subj("ver_001"), subj(verified_revenue::INVESTOR_REPORTING)],
     ));
-    // The StandingGrantedBy provenance survives - the historical
-    // record of who granted what is preserved.
+    // StandingGrantedBy survives: who granted what stays on the record.
     assert!(has_claim(
         &post,
         "StandingGrantedBy",

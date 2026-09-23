@@ -1,58 +1,26 @@
 //! Morpholog scale-pressure benchmark.
 //!
-//! Synthetic benchmark for understanding how the runtime behaves as
-//! state grows and as proposals contend. The scenarios:
+//! How the runtime behaves as state grows and as proposals contend. Each
+//! subcommand is one scenario:
 //!
-//! - `write` populates the claims table with N pre-existing journal
-//!   entries via direct SQL, then times one `propose_against_pg`
-//!   call. Measures load_state + invariant evaluation + commit as a
-//!   function of pre-state size.
-//! - `read` uses the same fixture and times the three phases of the
-//!   read path separately (`list_claims_for_predicates`,
-//!   `State::from_claims`, `enumerate_derived`). Measures where the
-//!   read time goes as N and the `--accounts K` axis grow.
-//! - `as-of` fabricates N audit transitions directly via SQL
-//!   (bypassing the kernel) and times one `reconstruct_state_at`
-//!   plus one `list_derived_at` against a target transition.
-//!   Measures audit-log replay cost as a function of N, the
-//!   `--at <fraction>` axis, and `--retract-fraction K` (what share
-//!   of the log retracts prior claims instead of asserting fresh
-//!   ones - the purely-additive default is best-case for replay).
-//! - `contend` runs W concurrent workers issuing `propose_against_pg`
-//!   into one shared period, each with the SERIALIZABLE 40001 retry
-//!   loop a real embedder owns. Measures throughput and the
-//!   serialization-conflict retry rate as `--workers` grows - the
-//!   axis the single-propose scenarios cannot see.
-//! - `import` commits N entries sequentially from an empty book - the
-//!   cumulative core-import curve `write` cannot see, and the
-//!   in-process core of the embedder import/replay workload.
-//! - `wide` proposes against, and reads back, a synthetic wide
-//!   predicate (default arity 13, the widest consumer-reported claim
-//!   shape) - the argument-count axis.
-//! - `suite` runs the frozen canonical case matrix across per-case
-//!   ladders and prints one table with provenance - the whole-suite
-//!   evidence a performance PR carries (docs/benchmarking.md owns the
-//!   discipline).
+//! - `write` times one proposal on top of N entries.
+//! - `read` times the three phases of the read path over the same fixture.
+//! - `as-of` times replaying a fabricated audit log up to a chosen point.
+//! - `contend` times concurrent proposers, each with its own retry loop.
+//! - `import` times N sequential commits from an empty book.
+//! - `wide` times a proposal and a read on a predicate with many arguments.
+//! - `suite` runs the fixed case matrix and prints one table
+//!   (docs/benchmarking.md explains how to use it).
 //!
-//! Every scenario takes `--repeat`: repeats start from the same
-//! logical pre-state (mutating scenarios rebuild their fixture), the
-//! first sample reports as `first`, the median over the rest as
-//! `steady median`.
+//! Every scenario takes `--repeat`. Each repeat starts from the same
+//! pre-state; the first sample is reported as `first`, the median of the
+//! rest as `steady median`.
 //!
-//! The `write` / `read` fixture distributes lines across `K`
-//! accounts via modular arithmetic; the `as-of` fixture is uniform
-//! (every fabricated transition uses the same two accounts) because
-//! grouping cost is not what the as-of scenario measures.
+//! The numbers are for finding bottlenecks, not regression gates. Don't
+//! check them in as expected values.
 //!
-//! Numbers printed here are NOT regression assertions. They are
-//! exploratory measurements meant to surface bottlenecks. Do not
-//! treat them as CI gates; do not check captured numbers into the
-//! repo as expected values.
-//!
-//! Truncates the entire morpholog schema before each run so prior
-//! state cannot contaminate measurement. This binary is destructive
-//! against whatever database it is pointed at; do not run it against
-//! a database with anything you want to keep.
+//! Every run truncates the whole morpholog schema. Never point this at a
+//! database you want to keep.
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
@@ -544,10 +512,6 @@ enum OutputFormat {
     Json,
 }
 
-/// Refuses to proceed unless `--reset` was explicitly passed. The
-/// target URL is echoed so the operator can see what is about to be
-/// truncated; this is the closest the binary gets to a "are you sure"
-/// dialog without making scripted use awkward.
 #[derive(clap::Args, Debug)]
 struct TransactArgs {
     /// Acts in the one decision. The embedder that forced the surface
@@ -591,6 +555,8 @@ struct TransactArgs {
     repeat: usize,
 }
 
+/// Refuses to run without `--reset`. The error echoes the target URL so
+/// the operator sees what would be truncated.
 fn check_reset_ack(reset: bool, database_url: &str) -> Result<()> {
     if !reset {
         return Err(anyhow!(
@@ -602,10 +568,8 @@ fn check_reset_ack(reset: bool, database_url: &str) -> Result<()> {
     Ok(())
 }
 
-/// `--accounts 0` would break the fixture's modulo-K distribution.
-/// PostgreSQL raises `SQLSTATE 22012 (division_by_zero)` on integer
-/// modulo by zero, and conceptually there must be at least one
-/// account for any journal line to land on.
+/// The fixture spreads lines over accounts by `i mod K`, so `K = 0`
+/// would divide by zero in PostgreSQL.
 fn require_positive_k(args: &ScenarioArgs) -> Result<()> {
     if args.accounts == 0 {
         return Err(anyhow!(
@@ -640,13 +604,8 @@ async fn main() -> Result<()> {
 // ============================================================
 
 /// The execution configuration a run measures, and the implementation
-/// column of every result row. Three configurations of one runtime:
-/// the kernel interpreter; the compiled invariant route with no
-/// compiler-required index present; the compiled route with every
-/// index it names provisioned. Selecting one is a change to the
-/// machine under measurement, never to the ruler, so the suite
-/// contract does not move with it. The default keeps an unflagged
-/// command's historical meaning.
+/// column of every result row. Choosing one changes what is measured,
+/// not how, so the suite contract does not depend on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum Implementation {
     Interpreted,
@@ -667,9 +626,9 @@ impl Implementation {
         matches!(self, Implementation::CompiledIndexed)
     }
 
-    /// The programme object a scenario proposes through. A compiled
-    /// configuration refuses a programme the production route would
-    /// interpret: a measurement labelled compiled must be one.
+    /// The programme a scenario proposes through. A compiled
+    /// configuration refuses a programme that would fall back to the
+    /// interpreter, so a row labelled compiled really is.
     fn program(self, core: Program) -> Result<PgProgram> {
         let compiled =
             CompiledProgram::new(core).map_err(|e| anyhow!("invalid programme: {e:?}"))?;
@@ -695,17 +654,12 @@ impl Implementation {
     }
 }
 
-/// The physical index condition is part of the configuration, and the
-/// bench establishes it itself after every logical reset and before
-/// the fixture, outside every timed sample. Every repeat starts from
-/// the same catalogue: Morpholog's own compiled indexes are dropped
-/// first (the `morpholog_ci_` namespace is Morpholog's, and `--reset`
-/// acknowledged a disposable database), so nothing left by an earlier
-/// case or programme rides along. An unindexed configuration then
-/// refuses an operator's equivalent index under another name, which
-/// would satisfy a requirement; the indexed configuration provisions
-/// every requirement fresh, accepts such an equivalent as satisfying
-/// it, and refuses a conflict.
+/// Sets up the indexes the configuration needs, after each reset and
+/// outside every timed sample. Morpholog's own `morpholog_ci_` indexes
+/// are dropped first so nothing from an earlier case carries over.
+/// Unindexed configurations refuse any other index that would satisfy a
+/// requirement; the indexed one provisions every requirement, accepts an
+/// equivalent, and refuses a conflict.
 async fn establish(pool: &PgPool, implementation: Implementation, cores: &[Program]) -> Result<()> {
     let owned: Vec<String> = sqlx::query_scalar(
         "SELECT indexname::text FROM pg_indexes
@@ -784,17 +738,15 @@ async fn require_migration_head(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-/// Bumped only when benchmark semantics change (cases, fixtures,
-/// ladders, aggregation) - never by an implementation being measured.
-/// The distinction between changing the machine and changing the
-/// ruler; see docs/benchmarking.md.
+/// Bumped only when what the benchmark measures changes (cases,
+/// fixtures, ladders, aggregation), never for a change in the code
+/// being measured. See docs/benchmarking.md.
 const SUITE_CONTRACT: u32 = 2;
 
-/// One measured metric of one case: named, unit-tagged samples in
-/// repeat order. `samples[0]` is the `first` reading - deliberately
-/// not called "cold": the fixture insert has just warmed the buffers,
-/// so all the instrument can defend is "first timed invocation after
-/// fixture construction". The steady median is over the rest.
+/// One metric of one case: named samples with a unit, in repeat order.
+/// `samples[0]` is the `first` reading, not a "cold" one: building the
+/// fixture has just warmed the buffers. The steady median is over the
+/// rest.
 #[derive(Debug, Clone, serde::Serialize)]
 struct Metric {
     name: &'static str,
@@ -879,9 +831,7 @@ fn print_case_human(result: &CaseResult) {
 }
 
 /// Refresh planner statistics after a fixture lands, so the first
-/// measured query is not also the query that pays for stale stats -
-/// the spike's lesson, carried over. A closed table set, so the SQL
-/// stays static.
+/// measured query is not planned against stale stats.
 async fn analyze_claims(pool: &PgPool) -> Result<()> {
     sqlx::query("ANALYZE morpholog.claims")
         .execute(pool)
@@ -1225,16 +1175,14 @@ fn read_report(path: &std::path::Path) -> Result<ReadReport> {
 
 type Key = (String, String, u64, String);
 
-/// Every metric of both sides, keyed by case, axis, point, metric, and
-/// unit: a key both sides have is a ratio row; a key only one side has
-/// is listed after the table, so a changed plan cannot pass as a changed
-/// number. Two rulers, two ladders, or one metric in two units are
-/// errors, not rows.
+/// Pairs every metric of both sides by case, axis, point, and metric. A
+/// pair becomes a ratio row; a metric only one side has is listed after
+/// the table, so a changed plan cannot pass as a changed number.
+/// Different contracts, ladders, or units are errors.
 ///
-/// Each side is one or more runs of the suite, and the run is the unit
-/// of evidence: repeats inside one run share a process, a fixture and a
-/// buffer cache, and agree with each other far more closely than two
-/// runs of the same binary do.
+/// Each side is one or more suite runs, and a run is the unit of
+/// evidence: repeats inside one run share a process and a cache, so
+/// they agree far more closely than two runs do.
 fn render_compare(before: &[ReadReport], after: &[ReadReport]) -> Result<String> {
     let (Some(first), Some(_)) = (before.first(), after.first()) else {
         return Err(anyhow!("each side needs at least one report"));
@@ -1399,14 +1347,13 @@ fn side_readings(
     Ok(out)
 }
 
-/// Whether one side's runs lie wholly beyond the other's. At least four
-/// runs a side are required: fewer says too little about how much runs
-/// vary, however many the other side has. With four or more a side,
-/// complete separation has a probability of at most `2 / C(8, 4)`, under
-/// 3%, if nothing changed and the runs were taken in interleaved order -
-/// the exact Mann-Whitney tail at its extreme. The rule is per row and
-/// not adjusted for how many rows a suite has. The words are
-/// direction-neutral because some metrics are throughputs.
+/// Whether one side's runs lie wholly beyond the other's. Each side
+/// needs at least four runs; fewer says too little about how much runs
+/// vary. With four a side, if nothing changed and runs were interleaved,
+/// complete separation happens by chance at most `2 / C(8, 4)` (under
+/// 3%, the exact Mann-Whitney tail). The rule is per row, with no
+/// correction for the number of rows. "lower"/"higher" rather than
+/// better/worse, because some metrics are throughputs.
 fn verdict(before: &[f64], after: &[f64]) -> &'static str {
     if before.len() < 4 || after.len() < 4 {
         return "too few runs";
@@ -1468,10 +1415,8 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
     Ok(())
 }
 
-/// The read case: one immutable fixture, reused across repeats (the
-/// pre-state never mutates, so re-reading it IS the same workload);
-/// the three phases of the read path timed separately, semantics
-/// identical to `list_derived` (the split is diagnostic).
+/// The read case: one fixture, reused across repeats because reading
+/// never changes it. Times the three phases of `list_derived` separately.
 async fn measure_read(
     implementation: Implementation,
     pool: &PgPool,
@@ -1522,9 +1467,7 @@ async fn measure_read(
         enumerate.push(t.elapsed());
         n_rows = rows.len();
 
-        // Bounds on the derived-row count given the fixture shape:
-        // 0 rows iff n=0, otherwise `0 < rows <= k` (the K-account
-        // modular cycle caps the distinct accounts touched).
+        // No rows iff n=0; otherwise between 1 and K, one per account.
         if n == 0 {
             if !rows.is_empty() {
                 return Err(anyhow!(
@@ -1768,12 +1711,10 @@ async fn contend_burst(
     Ok((total, t.elapsed()))
 }
 
-/// The contend case: every repeat rebuilds the prepopulated pre-state
-/// and races the same burst over it. `require_clean` is the canonical
-/// suite's validity rule: a row with failed (or rejected) operations
-/// is not a comparable measurement - an optimiser must not look
-/// faster because work stopped succeeding - so the case errors
-/// instead of reporting.
+/// The contend case: every repeat rebuilds the pre-state and races the
+/// same burst over it. With `require_clean`, any failed or rejected
+/// operation is an error: a change must not look faster because work
+/// stopped succeeding.
 #[allow(clippy::too_many_arguments)]
 async fn measure_contend(
     implementation: Implementation,
@@ -1903,10 +1844,8 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
         return Err(anyhow!("--periods must be at least 1"));
     }
 
-    // Pool sized to the worker count: each in-flight propose holds one
-    // connection for the life of its SERIALIZABLE transaction, so a
-    // smaller pool would serialise the workers at the connection layer
-    // and hide the very contention this scenario means to measure.
+    // One connection per worker: a smaller pool would queue workers on
+    // connections and hide the contention being measured.
     let pool = PgPoolOptions::new()
         .max_connections(args.workers as u32 + 2)
         .connect(&morpholog_postgres::with_default_user(&args.database_url))
@@ -1952,15 +1891,11 @@ struct Tally {
     failed: u64,
 }
 
-/// One worker's slice of the contended workload: `ops` sequential
-/// proposals against a uniquely-keyed item. In the default ledger
-/// workload each worker posts into period `worker_id mod periods` but
-/// shares the journal-line *predicate* footprint, so raising `--periods`
-/// partitions by value and does not relieve contention. With
-/// `--disjoint`, each worker's footprint is its own predicate
-/// (`Bench_{worker_id mod periods}`), so `--periods >= workers` makes the
-/// workers genuinely disjoint. Either workload carries the SERIALIZABLE
-/// retry loop a real embedder owns (see [`one_op`]).
+/// One worker: `ops` sequential proposals, each on a fresh item. In the
+/// ledger workload workers split by period but share predicates, so
+/// more periods do not relieve contention. With `--disjoint` each
+/// worker's footprint is its own predicate. Each proposal retries on
+/// serialization failure (see [`one_op`]).
 #[allow(clippy::too_many_arguments)]
 async fn contend_worker(
     implementation: Implementation,
@@ -1974,11 +1909,7 @@ async fn contend_worker(
 ) -> Result<Tally> {
     let mut tally = Tally::default();
     if disjoint {
-        // The whole footprint is one predicate, `Bench_{w mod periods}`:
-        // with `periods >= workers` every worker is on its own predicate
-        // (disjoint footprints); with `periods == 1` they all share
-        // `Bench_0`. The same `--periods` knob that partitions by *value*
-        // in the ledger workload here partitions by *predicate*.
+        // Here `--periods` splits workers by predicate, not by value.
         let predicate = format!("Bench_{}", worker_id % periods);
         let transformation = synthetic_bump(&predicate);
         let compiled = implementation.program(synthetic_program(&predicate))?;
@@ -2020,11 +1951,9 @@ async fn contend_worker(
     Ok(tally)
 }
 
-/// Propose one transition with the caller-owned SERIALIZABLE retry loop,
-/// folding the outcome into `tally`. A 40001 backs off and retries up to
-/// `max_retries` (then counts as `failed`); any other error is drift,
-/// not contention, and propagates as `Err` so a real run and the smoke
-/// test fail loudly instead of banking it as an expected outcome.
+/// Propose one transition, retrying on serialization failure, and count
+/// the outcome in `tally`. After `max_retries` it counts as `failed`.
+/// Any other error is a bug, not contention, so it propagates.
 async fn one_op(
     pool: &PgPool,
     compiled: &PgProgram,
@@ -2062,12 +1991,9 @@ async fn one_op(
     }
 }
 
-/// A minimal synthetic transformation whose entire read/write footprint
-/// is one predicate: `require not <predicate>(item)` then
-/// `admit <predicate>(item)`. Workers given distinct predicates have
-/// disjoint footprints and do not contend under SSI; workers sharing one
-/// predicate do. Built via `ir_builder` because the ledger example's
-/// predicates are fixed and cannot be made per-worker.
+/// A transformation that reads and writes only one predicate, so
+/// workers on distinct predicates do not contend and workers sharing one
+/// do. Hand-built because the ledger's predicates cannot vary per worker.
 fn synthetic_bump(predicate: &str) -> Transformation {
     use morpholog_core::ir_builder as b;
     b::transformation(
@@ -2080,9 +2006,7 @@ fn synthetic_bump(predicate: &str) -> Transformation {
     )
 }
 
-/// A minimal valid programme wrapping [`synthetic_bump`] so it can be
-/// proposed through the `CompiledProgram` facade: the bumped predicate
-/// declared, plus the bump transformation.
+/// The smallest valid programme around [`synthetic_bump`].
 fn synthetic_program(predicate: &str) -> morpholog_core::Program {
     use morpholog_core::ir_builder as b;
     b::program(&format!("synthetic_{predicate}"))
@@ -2095,19 +2019,11 @@ fn synthetic_program(predicate: &str) -> morpholog_core::Program {
 // import: the cumulative core-import curve
 // ============================================================
 
-/// The import case. Provenance: the external embedder's import path
-/// that forced `propose --batch` (design-history: "the first
-/// throughput lever the bench's contend axis names"), Redline's
-/// 130-act WAN seed, and grid-mysteries' CI replay. This is the
-/// in-process CORE of that workload - each commit here is what the
-/// real batch wraps in NDJSON parsing, argument decoding, and receipt
-/// serialisation.
-///
-/// From an empty book, N sequential kernel commits. Per-commit cost
-/// grows with the book on the interpreted runtime, so the journey is
-/// roughly quadratic in N - the decile split (mean of the first vs
-/// last tenth of per-commit latencies) is the growth signal. Every
-/// repeat re-truncates: the whole 0->N journey IS the sample.
+/// The import case: N sequential commits from an empty book, the
+/// in-process core of an embedder's bulk import (`propose --batch` adds
+/// parsing and receipts around each commit). Per-commit cost grows with
+/// the book, so the first and last tenth of commits show the growth.
+/// Each repeat re-truncates; the whole journey is one sample.
 async fn measure_import(
     implementation: Implementation,
     pool: &PgPool,
@@ -2128,9 +2044,8 @@ async fn measure_import(
     for r in 0..repeat {
         reset_db(pool).await?;
         establish(pool, implementation, &cores).await?;
-        // The empty book is this scenario's fixture; refresh stats so
-        // the first commits are not planned against the previous
-        // case's leftovers.
+        // Refresh stats so the first commits are not planned against
+        // the previous case's leftovers.
         analyze_claims(pool).await?;
         analyze_audit(pool).await?;
         let mut per_commit = Vec::with_capacity(n);
@@ -2189,14 +2104,10 @@ async fn run_import(args: ImportArgs) -> Result<()> {
 // wide: the argument-count axis
 // ============================================================
 
-/// The wide-predicate programme. Provenance: the billing embedder's
-/// 13-ary `InvoiceLine` (whose positional `rate_uni` typo was the
-/// live near-miss that forced named-field patterns) and
-/// grid-mysteries' `EvidenceMetric`; the gallery tops out at 7-ary,
-/// so this synthetic carrier owns the axis. Shape: a line key, a
-/// group, an amount, and subject padding to `arity`; a grouped-sum
-/// invariant so the write path pays realistic invariant work over
-/// the wide rows.
+/// The wide-predicate programme: a line key, a group, an amount, and
+/// subject padding up to `arity`. Real users have 13-argument claims;
+/// the worked examples stop at 7. A grouped-sum invariant gives the
+/// write path realistic work over the wide rows.
 fn wide_program(arity: usize) -> morpholog_core::Program {
     use morpholog_core::ir_builder as b;
     let mut decl = b::predicate("WideLine")
@@ -2206,12 +2117,8 @@ fn wide_program(arity: usize) -> morpholog_core::Program {
     for i in 3..arity {
         decl = decl.subject(&format!("pad_{i}"));
     }
-    // `unique by (line)`: the generated invariant must establish that
-    // two rows agreeing on the key agree on the WHOLE claim, so
-    // raising the arity widens the invariant being checked, not just
-    // the stored row - exactly the load the compiled-checking arc
-    // will optimise. The `require not` gate below is the write-path
-    // read; this is the invariant-machinery half.
+    // `unique by (line)` compares whole claims, so more arguments also
+    // widen the invariant being checked, not just the stored row.
     decl = decl.disciplines(vec![morpholog_core::Discipline::UniqueBy {
         fields: vec!["line".to_string()],
     }]);
@@ -2250,8 +2157,8 @@ fn wide_program(arity: usize) -> morpholog_core::Program {
             ],
         )])
         .build();
-    // Hand-built IR must lower its disciplines (the parser does this
-    // in parse_program); without it validation refuses the programme.
+    // The parser does this for `.morph` sources; hand-built IR must do
+    // it itself or validation refuses the programme.
     morpholog_core::lower_disciplines(&mut program);
     program
 }
@@ -2262,9 +2169,8 @@ fn wide_field_names(arity: usize) -> Vec<String> {
     names
 }
 
-/// Insert `n` wide rows directly. The SQL is assembled from the arity
-/// (a bench-internal integer, never external input), hence the
-/// explicit `AssertSqlSafe`.
+/// Insert `n` wide rows directly. The SQL is built from the arity, an
+/// internal integer, hence `AssertSqlSafe`.
 async fn insert_wide_rows(pool: &PgPool, n: usize, arity: usize) -> Result<()> {
     if n == 0 {
         return Ok(());
@@ -2295,10 +2201,8 @@ async fn insert_wide_rows(pool: &PgPool, n: usize, arity: usize) -> Result<()> {
     Ok(())
 }
 
-/// The wide case: every repeat rebuilds N wide rows, times the scoped
-/// read (list + build_state - no derived claim; the predicate itself
-/// is the payload), then one proposal through the grouped-sum
-/// invariant.
+/// The wide case: every repeat rebuilds N wide rows, times reading them
+/// back, then one proposal through the grouped-sum invariant.
 async fn measure_wide(
     implementation: Implementation,
     pool: &PgPool,
@@ -2410,39 +2314,18 @@ async fn run_wide(args: WideArgs) -> Result<()> {
     Ok(())
 }
 
-/// Fabricate `n` audit rows via direct SQL. Each row carries a
-/// 3-claim assertion payload (one JournalEntry + two JournalLines
-/// against the fixed `account_cash` / `account_revenue` pair),
-/// matching the shape `post_simple_entry` would produce.
+/// Fabricate `n` audit rows in one SQL statement, each shaped like a
+/// `post_simple_entry` commit (one JournalEntry, two JournalLines).
+/// Going through `propose_against_pg` would make building the fixture
+/// cost more than the replay being measured.
 ///
-/// All rows land in a single `INSERT ... SELECT ... FROM generate_series`
-/// so the fixture builds in `O(1)` round-trips regardless of `n`.
-/// The cost is in PG planning, JSONB construction, and the audit
-/// table's primary-key index maintenance.
+/// `transition_id` is a random UUIDv4: replay orders by
+/// `(committed_at, transition_id)`, and `committed_at` rises by one
+/// microsecond per row, so the order is deterministic.
 ///
-/// **Why direct SQL, not chained `propose_against_pg` calls.** The
-/// bench measures replay cost, not write cost. Going through
-/// `propose_against_pg` would pay the per-transition kernel evaluation
-/// and SERIALIZABLE-transaction overhead for every row, making fixture
-/// build the dominant cost at large N. Direct SQL bypasses that and
-/// produces audit rows whose shape (asserted_claims, retracted_claims,
-/// committed_at) is exactly what the replay reads.
-///
-/// **`transition_id` uses `gen_random_uuid()` (UUIDv4), not UUIDv7.**
-/// Replay correctness depends on the `(committed_at, transition_id)`
-/// row ordering, not on UUID byte order, so UUIDv4 is fine. The
-/// fabricated rows do use a strictly monotone `committed_at = now()
-/// + i microseconds` to keep replay order deterministic.
-///
-/// **Retracts.** With `retract_stride > 0`, every `stride`-th
-/// transition retracts the payload asserted by the immediately prior
-/// transition (`target = i - 1`) instead of asserting a fresh entry.
-/// Because the stride is at least 2, `i - 1` is always an assert and
-/// is still live when the retract replays, so the asserts-only
-/// invariant (every retracted claim was asserted earlier in causal
-/// order) holds. `stride = 0` reproduces the original asserts-only
-/// log. The payload is built once from `target` and routed to either
-/// `asserted_claims` or `retracted_claims` by `is_retract`.
+/// With `retract_stride > 0`, every `stride`-th row retracts the entry
+/// asserted by the row before it. The stride is at least 2, so that
+/// entry is always still live. A stride of 0 means no retracts.
 async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> Result<()> {
     let n_i: i64 = n
         .try_into()
@@ -2526,23 +2409,16 @@ async fn reset_db(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-/// Insert `n` synthetic journal entries (one JournalEntry plus two
-/// JournalLines per entry) into `morpholog.claims` via three SQL
-/// statements. Each statement uses `generate_series` so the entire
-/// fixture lands in `O(1)` round-trips regardless of `n`; the cost is
-/// in the planner and the JSONB construction, not in the wire.
+/// Insert `n` journal entries (one JournalEntry, two JournalLines each)
+/// in three SQL statements, whatever `n` is.
 ///
-/// Lines are distributed across `k` accounts via modular arithmetic:
-/// entry `i` debits `account_{i mod k}` and credits
-/// `account_{(i + 1) mod k}` for the same amount, so every entry is
-/// self-balancing (`balanced_posted_entry` invariant holds). Period
-/// is `p_bench`; no `PeriodClosed` claim is inserted, so the require
-/// in `post_simple_entry` passes for any follow-up `write` propose.
+/// Entry `i` debits `account_{i mod k}` and credits
+/// `account_{(i + 1) mod k}` by the same amount, so every entry
+/// balances. The period `p_bench` is never closed, so a later `write`
+/// proposal passes its gate.
 ///
-/// `asserted_in` uses `Uuid::nil()` as a synthetic fixture transition id
-/// (the same pattern the integration-test fixtures use). This row does
-/// not appear in the `audit` table; the schema does not enforce
-/// referential integrity from `claims.asserted_in` to `audit.transition_id`.
+/// `asserted_in` is `Uuid::nil()`, which has no audit row; the schema
+/// does not require one.
 async fn insert_n_entries(pool: &PgPool, n: usize, k: usize) -> Result<()> {
     let n_i: i64 = n
         .try_into()
@@ -2614,11 +2490,9 @@ async fn insert_n_entries(pool: &PgPool, n: usize, k: usize) -> Result<()> {
     Ok(())
 }
 
-/// Insert `count` rows of `UnrelatedNoise(noise_i, i)` directly into
-/// `morpholog.claims`. The predicate is never referenced by the
-/// double-entry-ledger programme; a correct scoped `load_state`
-/// skips these entirely. With the older unscoped loader, they show
-/// up as linear fetch + decode cost in `propose_one`.
+/// Insert `count` rows of `UnrelatedNoise(noise_i, i)`. The ledger
+/// programme never reads this predicate, so loading state for a
+/// proposal should skip these rows entirely.
 async fn insert_noise_claims(pool: &PgPool, count: usize) -> Result<()> {
     if count == 0 {
         return Ok(());
@@ -2899,19 +2773,14 @@ fn suite_plan(ladder: Ladder) -> Vec<CaseSpec> {
             },
         });
     }
-    // The same-workload A/B controls that established the concurrency
-    // law - at the maximum worker point only, so the law stays testable
-    // without doubling every curve. The two scaling curves above are
-    // NOT comparable to each other (different workloads); these are the
-    // rows each one compares against.
-    // The ladders above are static and non-empty; the fallback can
-    // never fire and exists only to keep the kernel-grade no-panic
-    // lint honest.
+    // Each curve above gets one control row on the same workload, at
+    // the top worker count only. The two curves use different
+    // workloads and are not comparable to each other. The ladder is
+    // never empty; the fallback only avoids a panic path.
     let max_workers = workers_ladder.last().copied().unwrap_or(1);
     plan.push(CaseSpec {
-        // Ledger, value-partitioned: same workload as /shared, one
-        // period per worker. The law's negative half: this row should
-        // NOT improve on /shared at the same worker count.
+        // Same workload as /shared, one period per worker. Expected
+        // NOT to improve on /shared.
         case: "contend/value-partitioned",
         kind: CaseKind::Contend {
             workers: max_workers,
@@ -2922,9 +2791,8 @@ fn suite_plan(ladder: Ladder) -> Vec<CaseSpec> {
         },
     });
     plan.push(CaseSpec {
-        // Synthetic, predicate-SHARED: same workload as /disjoint, all
-        // workers on one predicate. The law's positive half: /disjoint
-        // should improve on this row at the same worker count.
+        // Same workload as /disjoint, all workers on one predicate.
+        // /disjoint is expected to improve on this row.
         case: "contend/predicate-shared",
         kind: CaseKind::Contend {
             workers: max_workers,
@@ -3009,11 +2877,9 @@ async fn run_case(
             periods,
             disjoint,
         } => {
-            // 1000, not the standalone default of 100: the canonical
-            // rows must be CLEAN, and a real embedder's retry budget
-            // is not 100 - the retry RATE is the measurement, and an
-            // exhaustion at an arbitrary cap is a config artifact (the
-            // first full-ladder run lost 1 op in 200 to exactly that).
+            // A higher retry cap than the standalone default: these rows
+            // must be clean, and running out of retries at an arbitrary
+            // cap would be an artifact, not a measurement.
             measure_contend(
                 implementation,
                 pool,
@@ -3072,8 +2938,7 @@ async fn run_suite_specs(
     Ok(results)
 }
 
-/// One planned case with its full parameterisation - the flags travel
-/// with the number (the spike's rule), so a table is self-describing
+/// One planned case with all its parameters, so a table explains itself
 /// without reading `suite_plan`.
 #[derive(Debug, serde::Serialize)]
 struct PlanEntry {
@@ -3385,22 +3250,14 @@ async fn run_transact(args: TransactArgs) -> Result<()> {
 
 #[cfg(test)]
 mod smoke {
-    //! Minimal-size compatibility smoke test: runs every scenario once
-    //! against the configured database, asserting only that each
-    //! completes - never a timing. The persistence adapter's own
-    //! query/schema drift is now a compile error (its queries are
-    //! `sqlx::query!` macros checked against the committed `.sqlx/`
-    //! cache); this catches behavioural drift in the scenarios and drift
-    //! in the bench's *own* hand-written SQL (the kind that silently
-    //! broke the as-of fixture when `morpholog.audit` gained its NOT
-    //! NULL `actor` column) on the next PG-backed test run, rather than
-    //! the next time someone runs the scale bench by hand.
+    //! Runs every scenario once at minimal size and checks only that it
+    //! completes, never a timing. This catches schema drift in the
+    //! bench's own hand-written SQL on every database-backed test run,
+    //! not just when someone runs the bench by hand.
     //!
-    //! Gated on `DATABASE_URL`: skips (passes) when unset, so the pure
-    //! workspace stays green without a database. A single test runs
-    //! the scenarios sequentially because each truncates the schema -
-    //! it must not race other PG-backed tests, which is why the PG
-    //! suites run under `--test-threads=1`.
+    //! Skips when `DATABASE_URL` is unset. One test runs the scenarios in
+    //! sequence because each truncates the schema; the database suites
+    //! run with `--test-threads=1` for the same reason.
     use super::*;
 
     fn db_url() -> Option<String> {
@@ -3482,10 +3339,8 @@ mod smoke {
     }
 
     /// Two runs of one binary disagree far more than the repeats inside
-    /// either run do - an A/A pair called about one row in ten changed
-    /// when the repeats were the evidence. So the run is the unit: one run
-    /// a side proves nothing however cleanly its repeats separate, and
-    /// four runs a side that separate do.
+    /// a run do. So one run a side proves nothing however cleanly its
+    /// repeats separate, and four runs a side that separate do.
     #[test]
     fn compare_judges_runs_not_the_repeats_inside_them() {
         let run = |steady: f64| {
@@ -3556,10 +3411,8 @@ mod smoke {
             eprintln!("DATABASE_URL unset; skipping bench smoke test");
             return;
         };
-        // A database behind the migration head is refused by name, as an
-        // operator's would be: the head's record is removed, the refusal
-        // proven, and the database brought back to the head as an
-        // operator would with `migrate`.
+        // A database behind the migration head is refused with the
+        // remedy named; afterwards the test migrates it back.
         let pool = connect(&url).await.expect("connect");
         sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
             .bind(morpholog_postgres::head_version())
@@ -3601,9 +3454,8 @@ mod smoke {
         .await
         .expect("write scenario smoke");
 
-        // The compiled configurations, on every proposal-bearing
-        // scenario the ledger drives, so SQL drift on either route and
-        // the index-condition machinery are caught here too.
+        // Every scenario under both compiled configurations, so SQL
+        // drift on that route and in index setup is caught too.
         for implementation in [Implementation::Compiled, Implementation::CompiledIndexed] {
             run_write(ScenarioArgs {
                 n: 1,
@@ -3863,10 +3715,9 @@ mod smoke {
         .await
         .expect("wide scenario smoke");
 
-        // Suite plumbing over a PRIVATE tiny plan - never the public
-        // quick ladder, which is a real measurement run and does not
-        // belong in CI. One case per scenario family keeps the
-        // dispatch, the collection, and the renderer covered.
+        // The suite plumbing over a tiny private plan, one case per
+        // family. The quick ladder is a real measurement run, too slow
+        // for CI.
         let pool = PgPool::connect(&morpholog_postgres::with_default_user(&url))
             .await
             .expect("suite smoke pool");
@@ -3997,10 +3848,9 @@ mod smoke {
                 "| case | axis | point | metric | first | steady median | samples | unit |"
             )
         );
-        // first = samples[0]; the steady median over the even-count
-        // rest [2.0, 3.0] averages the two middles; the samples column
-        // is each row's own truth (per-family caps make the requested
-        // repeat a request, never a promise).
+        // first = samples[0]; the steady median of [2.0, 3.0] averages
+        // the two middles; the samples column is the row's own count,
+        // since some families cap their repeats.
         assert!(rendered.contains("| write/base | n | 100 | propose_one | 5.00 | 2.50 | 3 | ms |"));
         // A single-sample metric has no steady median.
         assert!(
@@ -4009,11 +3859,8 @@ mod smoke {
         assert!(!rendered.contains("benchmark-grade=false"));
     }
 
-    /// The frozen-matrix tripwire: `suite_contract=2` pins these
-    /// fingerprints of the canonical plans. Touching `suite_plan`
-    /// without bumping the contract (in its own reviewed commit) goes
-    /// red here - the ruler cannot change as one innocent parameter
-    /// buried in a diff.
+    /// Pins fingerprints of the canonical plans under the current suite
+    /// contract, so `suite_plan` cannot change without a contract bump.
     #[test]
     fn the_canonical_matrix_is_frozen_under_contract_2() {
         use sha2::{Digest, Sha256};

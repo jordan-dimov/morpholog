@@ -1,22 +1,11 @@
 //! No message may tell a reader to run a command that does not exist.
 //!
-//! The `audit` rename swept the CLI crate and missed a runtime error in
-//! another crate that told the reader to run checkpoint, unqualified. A
-//! user who followed it got clap's exit 2, and smoking the published
-//! release is what found it - the rename's own tests all passed.
+//! The valid commands are read from the binary's own `--help` tree rather
+//! than from a list of retired spellings. A list can never cover every way
+//! prose might name a dead command; the command tree is closed.
 //!
-//! The vocabulary here is DERIVED from the binary's own `--help` tree,
-//! not from a list of retired spellings. Two earlier cuts kept such a
-//! list, and widening it found real sites both times: first the
-//! morpholog-prefixed spelling, then a sentence-leading "Run" the
-//! case-sensitive match skipped. A list cannot be complete, because the
-//! thing it must know - every way prose might name a dead command - is
-//! open-ended. The valid command tree is closed, so the check reads that
-//! instead and asks whether each reference is in it.
-//!
-//! What stays heuristic is the DETECTOR: which backticked spans count as
-//! command references. That is bounded by the two shapes prose actually
-//! uses, and a shape nobody anticipated still escapes.
+//! Spotting references is still a heuristic: it knows the two shapes prose
+//! uses, and an unexpected shape can slip through.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -26,8 +15,8 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_morpholog");
 
-/// Command paths the `audit` rename retired. Distinct contract from the
-/// prose check: these must stay rejected, so a re-added alias fails here.
+/// Retired command paths. They must stay rejected, so a re-added alias
+/// fails here.
 const RETIRED_PATHS: &[&[&str]] = &[
     &["evidence"],
     &["evidence", "export"],
@@ -45,9 +34,8 @@ fn the_cli_rejects_every_retired_command_path() {
             .arg("--help")
             .output()
             .expect("the binary runs");
-        // Exit 2 is clap refusing the path. Not 127 (no such file) and
-        // not 0 - a smoke check of mine read 127 as a rejection once,
-        // which proved only that it had the wrong path to the binary.
+        // Exit 2 is clap refusing the path. 127 would only mean the binary
+        // was not found.
         assert_eq!(
             out.status.code(),
             Some(2),
@@ -61,9 +49,8 @@ fn the_cli_rejects_every_retired_command_path() {
 #[test]
 fn every_command_a_message_names_exists() {
     let valid = derive_command_tree();
-    // The tree is the source of truth, so a broken derivation must not
-    // read as "nothing to check": these are paths the binary certainly
-    // has, and the audit group is what the rename created.
+    // A broken derivation must not pass as "nothing to check": these paths
+    // certainly exist.
     for expected in [
         "check",
         "propose",
@@ -113,10 +100,8 @@ fn every_command_a_message_names_exists() {
 fn command_references(line: &str, known_words: &BTreeSet<String>) -> Vec<String> {
     let mut found = Vec::new();
     let lowered = line.to_lowercase();
-    // Carry the text that preceded the opening backtick. Searching for
-    // the span's position instead put the backtick itself at the end of
-    // the prefix, so the "run" shape never matched - the very shape the
-    // original defect took.
+    // Keep the text before the opening backtick, without the backtick,
+    // so the "run" shape can match.
     let mut preceding = "";
     for (index, span) in lowered.split('`').enumerate() {
         if index % 2 == 0 {
@@ -128,9 +113,8 @@ fn command_references(line: &str, known_words: &BTreeSet<String>) -> Vec<String>
                 found.push(path);
             }
         } else if preceding.trim_end().ends_with("run") {
-            // "run x" means "run morpholog x" only when x is a word the
-            // CLI actually uses. Without that, the shape also reads a
-            // doc comment about running a closure against a body.
+            // "run x" names a command only when x is a word the CLI uses;
+            // otherwise "run a closure" would count.
             if let Some(path) = command_path(span) {
                 let first = path.split(' ').next().unwrap_or_default();
                 if known_words.contains(first) {
@@ -169,8 +153,8 @@ fn derive_command_tree() -> BTreeSet<String> {
 }
 
 fn collect_subcommands(prefix: &[String], into: &mut BTreeSet<String>) {
-    // Three levels is the deepest the CLI goes; the bound also stops a
-    // parsing mistake from recursing forever.
+    // Three levels is the CLI's depth; the bound also stops runaway
+    // recursion on a parsing mistake.
     if prefix.len() >= 3 {
         return;
     }

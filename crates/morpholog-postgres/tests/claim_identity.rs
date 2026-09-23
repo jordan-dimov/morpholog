@@ -1,14 +1,11 @@
-//! A claim's identity is a digest of its arguments, so an argument's size is
-//! never a rule the database imposes behind the model's back.
+//! A claim's identity is a digest of its arguments, so argument size is
+//! never a limit the database imposes behind the model's back.
 //!
-//! The whole argument array used to be the primary key, and a btree index
-//! row may not exceed 2704 bytes: a long enough argument was refused by the
-//! index with a raw database error the proposal never got to decide. An
-//! embedder hit it with a free-text statement carried as a subject. The
-//! digest key has to hold for the hostile shape of that text - quotes,
-//! backslashes, non-ASCII, and enough entropy that compression cannot hide
-//! the size - through the whole set-semantics cycle: admit, admit again as a
-//! no-op, retract.
+//! A btree index row may not exceed 2704 bytes, so indexing the raw
+//! arguments would refuse a long free-text subject with a raw database
+//! error. The digest must hold for hostile text - quotes, backslashes,
+//! non-ASCII, and enough entropy that compression cannot hide the size -
+//! across admit, a repeat admit as a no-op, and retract.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -39,9 +36,9 @@ fn fixture() -> Program {
     p
 }
 
-/// Text the old key could not index: a deterministic pseudo-random stream
-/// (so it does not compress under the ceiling) salted with every character
-/// class the digest's text-to-bytes step must carry through intact.
+/// Text too long to index raw: a deterministic pseudo-random stream (so it
+/// does not compress under the limit) salted with every awkward character
+/// class the digest must carry intact.
 fn hostile_statement(bytes: usize) -> String {
     let alphabet: Vec<char> =
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 \"\\/'ü€日\n\t"
@@ -126,10 +123,10 @@ async fn a_long_hostile_argument_is_admitted_once_and_retracted_by_identity() {
     assert_eq!(remaining, serde_json::Value::String(sibling));
 }
 
-/// The verify replay pages the claims table by its key, so a table wider
-/// than one page is read whole, each row once. Rows go in beneath the audit
-/// log on purpose: the replay then reports every one of them as present
-/// only in the table, which is the count that proves the paging.
+/// The verify replay pages the claims table by its key, reading each row
+/// once. Rows are inserted without audit entries on purpose, so the replay
+/// reports each as present only in the table, and the count proves the
+/// paging.
 #[tokio::test]
 async fn verify_pages_the_claims_table_by_its_key() {
     let pool = test_pool().await;

@@ -1,10 +1,8 @@
-//! The canonical home for claim-discipline machinery: the lowering that
-//! turns declared disciplines into ordinary generated invariants, the
-//! deterministic names those invariants carry into rejection reasons
-//! and audit rows, and the effective append-only set the static retract
-//! ban consults. One place, so the enforcement a declaration implies
-//! cannot drift between the validator, the formatter, and the
-//! legibility surfaces.
+//! Claim disciplines: lowering declared disciplines into ordinary
+//! generated invariants and definitions, the names those carry into
+//! rejections and audit rows, and the append-only set the retract ban
+//! consults. Kept in one place so the validator, the formatter, and the
+//! inspect views agree on what a declaration enforces.
 
 use std::collections::BTreeSet;
 
@@ -13,49 +11,22 @@ use crate::ir::{
     PredicateDecl, PredicateName, Program, Prop, Term, ValueExpr, Var,
 };
 
-/// Lower every declared discipline that generates an invariant into
-/// [`Program::invariants`], with [`InvariantOrigin::Discipline`].
-/// `unique by` and `current pointer by` each lower to one uniqueness
-/// invariant on their own predicate; `superseded via L` lowers no-fork
-/// on `L` (uniqueness on the prior - the second field, per the
-/// `(successor, prior)` convention the worked examples established).
-/// `append only` lowers nothing - it is enforced statically.
+/// Add the definitions declared disciplines generate (the `effective
+/// by` selectors) to [`Program::definitions`].
 ///
-/// Materialising into `Program.invariants` is the point: proposal
-/// checking, predicate-scoped loading, the audit row's
-/// `invariants_checked`, `guarantees`, `controls`, and `explain` all
-/// see generated invariants with no caller changes - no hidden
-/// enforcement layer. The formatter omits Discipline-origin invariants
-/// (the declaration clauses imply them) and reparsing regenerates them,
-/// so round-trip holds.
+/// Must run before call resolution: a call is spelled like a claim, so a
+/// selector not yet generated would resolve as an undeclared predicate.
+/// [`lower_disciplines`] runs after resolution instead.
 ///
-/// Idempotent: a generated name already present with Discipline origin
-/// is skipped. The same name present with Authored origin is left to
-/// surface as the ordinary duplicate-declaration error. Clauses that
-/// cannot be lowered soundly (unknown field names, no value fields,
-/// a malformed lineage predicate) are skipped here; `Program::validate`
-/// reports each with its own error.
-/// Materialise the DEFINITIONS declared disciplines generate.
-///
-/// Separate from [`lower_disciplines`], and it must run **before** call
-/// resolution: a call is spelled exactly like a claim reference, so a
-/// selector that does not exist yet resolves as an undeclared predicate -
-/// a baffling error for something the runtime was supposed to write. The
-/// invariant half has no such constraint and stays after resolution,
-/// where a variable bound inside a call can still be followed.
-///
-/// Idempotent, like its sibling: a generated name already present is left
-/// alone, so parsing an already-lowered programme is a no-op.
+/// Idempotent: a generated definition already present is left alone.
 pub fn lower_discipline_definitions(program: &mut Program) {
     let mut generated: Vec<Definition> = Vec::new();
     for decl in &program.predicates {
         for discipline in &decl.disciplines {
             if let Discipline::EffectiveBy { keys, on, .. } = discipline
                 && let Some(def) = in_force_define(decl, keys, on)
-                // Idempotent on PROVENANCE, not on the name: an
-                // authored definition of that name is a collision the
-                // surface refuses, not evidence that lowering already
-                // ran.
+                // Match on origin, not just name: an authored definition
+                // of that name is a collision, not a sign lowering ran.
                 && !program
                     .definitions
                     .iter()
@@ -70,13 +41,11 @@ pub fn lower_discipline_definitions(program: &mut Program) {
 }
 
 /// One uniqueness commitment a discipline clause implies: the
-/// declaration it constrains (the lineage predicate for `superseded
-/// via`, the declaring one otherwise) and the key fields, with the
-/// clause and the declaration that carried it. A clause that cannot
-/// lower - an unknown or ill-shaped lineage - yields nothing; the
-/// validator owns that diagnostic. Declaration order, so every
-/// consumer sees the commitments in the order the generated invariant
-/// names appear in rejections and audit rows.
+/// predicate it constrains (the lineage for `superseded via`, else the
+/// declaring one), its key fields, and the clause that carried it. A
+/// clause with an unknown or ill-shaped lineage yields nothing; the
+/// validator reports it. Listed in declaration order, the order the
+/// generated names appear in rejections and audit rows.
 struct Uniqueness<'p> {
     target: &'p PredicateDecl,
     fields: Vec<String>,
@@ -92,12 +61,8 @@ fn uniqueness_clauses(program: &Program) -> Vec<Uniqueness<'_>> {
                 Discipline::UniqueBy { fields } | Discipline::CurrentPointerBy { fields } => {
                     (decl, fields.clone())
                 }
-                // The clause claims one version per key per date, so it
-                // owes the invariant that makes that true. Without it two
-                // rows tie for "latest" and the selector returns both -
-                // two contradictory prices each satisfying "priced at the
-                // rate in force", which is what the discipline exists to
-                // prevent.
+                // One version per key per date. Without it two rows tie
+                // for "latest" and the selector returns both.
                 Discipline::EffectiveBy { keys, on, .. } => {
                     let mut fields = keys.clone();
                     fields.push(on.clone());
@@ -126,19 +91,30 @@ fn uniqueness_clauses(program: &Program) -> Vec<Uniqueness<'_>> {
     out
 }
 
+/// Add the invariants declared disciplines generate to
+/// [`Program::invariants`], with [`InvariantOrigin::Discipline`].
+/// `unique by`, `current pointer by`, and `effective by` each lower to
+/// one uniqueness invariant on their own predicate. `superseded via L`
+/// lowers no-fork on `L`: uniqueness on the prior, its second field.
+/// `append only` lowers nothing; it is enforced statically.
+///
+/// Because they are ordinary invariants, proposal checking, scoped
+/// loading, audit, and the inspect views all see them. The formatter
+/// omits them and reparsing regenerates them, so round-trip holds.
+///
+/// Idempotent: a generated name already present with Discipline origin
+/// is skipped. The same name with Authored origin is left for the
+/// duplicate-declaration error. Clauses that cannot lower soundly are
+/// skipped; `Program::validate` reports each.
 pub fn lower_disciplines(program: &mut Program) {
     let generated: Vec<Invariant> = uniqueness_clauses(program)
         .iter()
         .filter_map(|u| unique_invariant(u.target, &u.fields))
         .collect();
-    // Generated invariants go FIRST: a discipline is a precondition of
-    // sense for the authored rules (uniqueness is what makes lookups
-    // and aggregates well-defined), so when a proposal violates both,
-    // the rejection names the root cause, not a knock-on. Dedupe both
-    // against the programme (idempotence across calls) and within this
-    // pass (a duplicate clause still gets its validation error, but
-    // the generated IR never carries the duplicate) - invalid input
-    // shapes must not leak into generated IR.
+    // Generated invariants go first: uniqueness is what makes lookups
+    // and sums well-defined, so a rejection names the root cause rather
+    // than a knock-on. Dedupe against the programme and within this
+    // pass, so a duplicate clause never reaches the generated IR.
     let mut fresh: Vec<Invariant> = Vec::new();
     for inv in generated {
         let already = program
@@ -156,10 +132,9 @@ pub fn lower_disciplines(program: &mut Program) {
     }
 }
 
-/// The deterministic name a uniqueness lowering carries:
-/// `{snake(Predicate)}_unique_by_{fields joined by _}`. Boring on
-/// purpose - it appears in rejection reasons and audit rows, so it must
-/// be stable, readable, and traceable back to the declaration.
+/// The name a uniqueness lowering carries:
+/// `{snake(Predicate)}_unique_by_{fields joined by _}`. It appears in
+/// rejections and audit rows, so it must stay stable and readable.
 pub(crate) fn unique_invariant_name(predicate: &PredicateName, fields: &[String]) -> String {
     format!(
         "{}_unique_by_{}",
@@ -174,22 +149,12 @@ pub fn in_force_define_name(predicate: &PredicateName) -> String {
 }
 
 /// The in-force-on-a-date selector for `decl`, keyed by `keys` and dated
-/// by `on`: the three lines every temporal programme was hand-rolling -
-/// the dated claim, an on-or-before bound, and a negated exists of a
-/// strictly later version.
-///
-/// A definition rather than an invariant, because the author calls it.
-/// That makes it the first thing the lowering generates which is not an
-/// invariant, and it is why the definition half of the lowering has to
-/// run before call resolution: a call is spelled exactly like a claim
-/// reference, so a selector that does not exist yet resolves as an
-/// undeclared predicate.
+/// by `on`: the dated claim, an on-or-before bound, and no strictly
+/// later version. A definition, because the author calls it.
 ///
 /// Parameters are the keys, an as-of date, then every payload field. The
-/// as-of is use-only - it appears in comparisons and binds nothing - so
-/// it must arrive bound at each call, which is what the runtime frame
-/// already requires. Callers wildcard the payload fields they do not
-/// want.
+/// as-of binds nothing, so it must arrive bound at each call. Callers
+/// wildcard the payload fields they do not want.
 ///
 /// `None` when the clause cannot be lowered soundly (an unknown field, or
 /// a key that is also the date); validation owns the diagnostic.
@@ -204,16 +169,13 @@ fn in_force_define(decl: &PredicateDecl, keys: &[String], on: &str) -> Option<De
     let domain = match decl.args.iter().find(|a| a.name == on)?.kind {
         PredicateArgKind::Date => OrderedDomain::Date,
         PredicateArgKind::Timestamp => OrderedDomain::Timestamp,
-        // A selector over anything else is refused at validation; the
-        // lowering declines rather than inventing an ordering.
+        // Validation refuses any other kind; don't invent an ordering.
         _ => return None,
     };
 
-    // Fresh against the declaration's own field names. A payload field
-    // called `as_of` would otherwise land in the parameter list twice,
-    // and the resulting DuplicateParameter names a definition the author
-    // never wrote - unactionable. Underscores are appended until the name
-    // is unique, so the escape works whatever the fields are called.
+    // Must not clash with a field name, or a field called `as_of` would
+    // yield a DuplicateParameter in a definition the author never wrote.
+    // Append underscores until unique.
     let taken: Vec<&str> = decl.args.iter().map(|a| a.name.as_str()).collect();
     let fresh = |base: &str, also: &[&Var]| {
         let mut name = base.to_string();
@@ -226,8 +188,7 @@ fn in_force_define(decl: &PredicateDecl, keys: &[String], on: &str) -> Option<De
     let effective = fresh("effective_from", &[&as_of]);
     let later = fresh("later_effective_from", &[&as_of, &effective]);
 
-    // Positional, because the date field can sit anywhere in the
-    // declaration - the keys are not necessarily first.
+    // Positional: the date field and keys can sit anywhere.
     let mut parameters: Vec<Var> = Vec::new();
     let mut outer: Vec<Term> = Vec::new();
     let mut inner: Vec<Term> = Vec::new();
@@ -245,8 +206,7 @@ fn in_force_define(decl: &PredicateDecl, keys: &[String], on: &str) -> Option<De
             let v = Var::from(arg.name.as_str());
             payload.push(v.clone());
             outer.push(Term::Var(v));
-            // The later version's payload is irrelevant - only its date
-            // decides whether it supersedes.
+            // Only the later version's date matters, not its payload.
             inner.push(Term::Wildcard);
         }
     }
@@ -297,10 +257,9 @@ fn in_force_define(decl: &PredicateDecl, keys: &[String], on: &str) -> Option<De
 }
 
 /// The uniqueness invariant for `decl` keyed by `fields`:
-/// `P(k.., a..) and P(k.., b..) implies (a1 = b1 and ...)` - full
-/// agreement, the keys determine the whole claim. `None` when the
-/// clause cannot be lowered soundly (an unknown field, or no value
-/// fields left); validation owns the diagnostic.
+/// `P(k.., a..) and P(k.., b..) implies (a1 = b1 and ...)`, so the keys
+/// determine the whole claim. `None` for an unknown field or no value
+/// fields left; validation reports it.
 fn unique_invariant(decl: &PredicateDecl, fields: &[String]) -> Option<Invariant> {
     let is_key: Vec<bool> = decl.args.iter().map(|a| fields.contains(&a.name)).collect();
     let all_known = fields
@@ -360,13 +319,10 @@ fn unique_invariant(decl: &PredicateDecl, fields: &[String]) -> Option<Invariant
     })
 }
 
-/// Every (predicate, generated-invariant-name) pair the programme's
-/// disciplines imply, for clauses that lower soundly. The validator
-/// checks each is present with Discipline origin, so hand-built IR
-/// that skipped `lower_disciplines` fails loudly instead of carrying
-/// silently unenforced commitments. Derived from the same clause walk
-/// as the lowering, so the expectation and the generation cannot
-/// drift.
+/// Every (predicate, generated-invariant-name) pair the disciplines
+/// imply. The validator checks each is present, so hand-built IR that
+/// skipped `lower_disciplines` fails instead of going unenforced. Uses
+/// the same clause walk as the lowering, so the two cannot drift.
 pub(crate) fn expected_generated_invariants(program: &Program) -> Vec<(PredicateName, String)> {
     uniqueness_clauses(program)
         .iter()
@@ -380,10 +336,9 @@ pub(crate) fn expected_generated_invariants(program: &Program) -> Vec<(Predicate
         .collect()
 }
 
-/// Generated-invariant-name -> the declaration clause that implied it,
-/// rendered for the legibility surfaces ("predicate CurrentFigure,
-/// current pointer by (owner)") - so a rejection naming a generated
-/// invariant traces back to its declaration in one hop.
+/// Generated invariant name -> the declaration clause that implied it,
+/// rendered as "predicate CurrentFigure, current pointer by (owner)",
+/// so a rejection traces back to its declaration.
 pub(crate) fn discipline_provenance(
     program: &Program,
 ) -> std::collections::HashMap<String, String> {
@@ -413,17 +368,15 @@ pub(crate) fn discipline_provenance(
 }
 
 /// The predicates no transformation may retract: those declared
-/// `append only`, plus every lineage predicate named by a
-/// `superseded via` (lineage is the doctrine's append-only third
-/// class). Consulted by the static retract ban in `Program::validate`.
+/// `append only`, plus every lineage named by a `superseded via`.
+/// Consulted by the static retract ban in `Program::validate`.
 pub(crate) fn append_only_predicates(program: &Program) -> BTreeSet<PredicateName> {
     let mut out = BTreeSet::new();
     for decl in &program.predicates {
         for discipline in &decl.disciplines {
             match discipline {
-                // Effective-dating says nothing about retraction: a new
-                // version supersedes by date, and whether the old one may
-                // be withdrawn is `append only`'s business.
+                // Effective-dating says nothing about retraction; that is
+                // `append only`'s business.
                 Discipline::EffectiveBy { .. } => {}
                 Discipline::AppendOnly => {
                     out.insert(decl.name.clone());
@@ -438,8 +391,7 @@ pub(crate) fn append_only_predicates(program: &Program) -> BTreeSet<PredicateNam
     out
 }
 
-/// `OfficialPrice` -> `official_price`. ASCII CamelCase only - the
-/// shape every predicate name in the surface convention takes.
+/// `OfficialPrice` -> `official_price`. ASCII CamelCase only.
 fn snake_case(name: &str) -> String {
     let mut out = String::with_capacity(name.len() + 4);
     for (i, c) in name.chars().enumerate() {

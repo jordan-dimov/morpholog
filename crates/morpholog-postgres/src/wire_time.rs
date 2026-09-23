@@ -1,26 +1,19 @@
-//! The one spelling of an operational instant on the wire - the
-//! adapter's timestamps: when a row committed, was rejected, enqueued,
-//! attested, or scored. RFC 3339, UTC, `Z`, seconds followed by the
-//! shortest of zero, three, six, or nine fractional digits that
-//! represents the instant exactly. Every adapter timestamp field and
-//! every adapter-rendered instant goes through here, so those bytes are
-//! specified in one place and the clock type behind them can change
-//! without moving them.
+//! The one wire spelling of the adapter's own instants (when a row
+//! committed, was rejected, enqueued, attested, or scored): RFC 3339, UTC,
+//! `Z`, seconds plus the shortest of zero, three, six, or nine fractional
+//! digits that is exact. Every adapter timestamp goes through here, so the
+//! bytes are defined in one place, independent of the clock type.
 //!
-//! Parsing accepts more than rendering emits, but only a fixed shape:
-//! `YYYY-MM-DD`, then `T`, `t` or a space, then `HH:MM:SS`, an optional
-//! one to nine fractional digits, and `Z`, `z` or a `+HH:MM` / `-HH:MM`
-//! offset, normalised to UTC. That is RFC 3339 without leap seconds or
-//! fractions finer than a nanosecond. The shape is checked here rather
-//! than left to the clock library, whose parser accepts more, because
-//! an evidence pack is read through this function and the instant it
-//! yields - not its spelling - is what the audit tree commits to.
+//! Parsing accepts more, but only a fixed shape: `YYYY-MM-DD`, then `T`,
+//! `t` or a space, `HH:MM:SS`, optionally one to nine fractional digits,
+//! and `Z`, `z` or a `+HH:MM` / `-HH:MM` offset, normalised to UTC. That
+//! is RFC 3339 without leap seconds or sub-nanosecond fractions. The shape
+//! is checked here, not left to the more lenient clock library, because
+//! evidence packs are read through this and the audit tree commits to the
+//! resulting instant.
 //!
-//! Domain timestamps - a `Timestamp` value inside a claim - belong to
-//! the kernel's own codec and are not this module's concern. The
-//! module is public on purpose: the CLI's envelopes carry adapter
-//! instants and must spell them the same way, so this is part of the
-//! adapter's surface, not incidental plumbing.
+//! Timestamps inside claims use the kernel's codec, not this. Public
+//! because the CLI's envelopes must spell adapter instants the same way.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serializer};

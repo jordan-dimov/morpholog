@@ -1,15 +1,12 @@
-//! `morpholog init` - provision the Morpholog schema in an existing
-//! PostgreSQL database, from the canonical schema embedded in the
-//! binary. Day-zero provisioning only: it refuses an
-//! already-initialised database (or reports and exits zero under
-//! `--skip-if-exists`, for deployment entrypoints that may re-run),
-//! and it never drops or migrates - schema evolution is the deferred
-//! migrations story, not this command's thin edge.
+//! `morpholog init` - provision the Morpholog schema, embedded in the
+//! binary, in an existing PostgreSQL database. Day-zero only: it refuses an
+//! initialised database (or exits zero under `--skip-if-exists`, for
+//! entrypoints that re-run). It never migrates; that is `morpholog
+//! migrate`. It drops the schema only under an acknowledged `--reset`.
 //!
-//! `--least-privilege` additionally provisions the writer/reader role
-//! floor, so "the governed path is the only way in" holds on a fresh
-//! database by default. Idempotent, so it composes with
-//! `--skip-if-exists` to retrofit an existing database.
+//! `--least-privilege` also provisions the writer and reader roles, so the
+//! governed path is the only way in from the start. It is idempotent, so
+//! with `--skip-if-exists` it can retrofit an existing database.
 
 use anyhow::{Context, anyhow};
 use morpholog_postgres::{
@@ -21,9 +18,8 @@ use crate::commands::{AlreadyReported, connect, print_json};
 use morpholog_cli::envelopes::{InitReport, LeastPrivilegeReport};
 
 pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
-    // The acknowledgement is checked before connecting: a mistyped
-    // production URL should be refused without the binary having
-    // touched that database at all.
+    // Check the acknowledgement before connecting, so a mistyped
+    // production URL is refused without touching that database.
     if args.i_know_this_deletes_data && !args.reset {
         return Err(anyhow!(
             "--i-know-this-deletes-data is only meaningful with --reset"
@@ -67,9 +63,7 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
     } else {
         None
     };
-    // `reset` distinguishes "there was a schema and it is gone" from
-    // "there was nothing to drop" - reporting the drop unconditionally
-    // would imply removing something that was never there.
+    // Say whether there was actually a schema to drop.
     if let Some(existed) = dropped {
         eprintln!(
             "{} the pre-existing `morpholog` schema before provisioning",

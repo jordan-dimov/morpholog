@@ -1,9 +1,8 @@
-//! An adapter instant crosses into PostgreSQL as microseconds counted
-//! from 2000-01-01, so finer digits are dropped toward that epoch: an
-//! instant just before it rounds up, one just after rounds down. The
-//! vectors straddle the epoch with sub-microsecond parts on both sides,
-//! and each is read back twice - as the database spells it, and decoded
-//! - so the encoding is pinned apart from the decoder.
+//! An instant reaches PostgreSQL as microseconds from 2000-01-01, so finer
+//! digits are dropped toward that epoch: just before it rounds up, just
+//! after rounds down. Each vector is read back both as the database
+//! spells it and decoded, so the encoding is checked apart from the
+//! decoder.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

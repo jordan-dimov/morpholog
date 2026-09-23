@@ -1,17 +1,12 @@
 //! `morpholog generate views` - emit a typed, read-only SQL view surface
 //! over `morpholog.claims` for a `.morph` programme's base predicates.
 //!
-//! Thin wrapper over [`morpholog_postgres::render_views`]: parse the
-//! `.morph`, validate it (the same vocabulary gate `schema` and `hash`
-//! apply), compute the canonical model hash, render, and either write the
-//! script to `--out` or print it raw to stdout so it can be piped to
-//! `psql`. The renderer is pure and DB-free; all the SQL knowledge lives
-//! beside the claims<->JSONB wire mapping in `morpholog-postgres`.
+//! A thin wrapper over [`morpholog_postgres::render_views`]: parse,
+//! validate, hash, render, then write to `--out` or print raw to stdout for
+//! piping to `psql`. The SQL knowledge lives in `morpholog-postgres`.
 //!
-//! Refusal is whole-run: the renderer returns every un-emittable
-//! identifier at once, and any finding fails the run with the full work
-//! list printed to stderr and nothing written - the same discipline as
-//! `generate python-client`.
+//! Refusal is whole-run, as in `generate python-client`: every identifier
+//! that cannot be emitted is printed to stderr, and nothing is written.
 
 use std::io::Write as _;
 
@@ -50,9 +45,8 @@ pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
             eprintln!("{summary} -> {}", path.display());
         }
         None => {
-            // Raw SQL to stdout, byte-identical to the rendered script, so
-            // the pipe-to-psql contract holds. Write the bytes directly;
-            // the script carries its own trailing newline.
+            // Exactly the rendered script, for piping to psql. It has its
+            // own trailing newline.
             let stdout = std::io::stdout();
             let mut handle = stdout.lock();
             handle.write_all(rendered.sql.as_bytes())?;

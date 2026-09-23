@@ -1,9 +1,6 @@
-//! A programme as the adapter runs it: the validated core programme
-//! beside the PostgreSQL execution plan built once from it. Whole-
-//! programme eligibility decides the plan: every invariant compiles to
-//! SQL or none does, and the interpreter runs the whole programme. The
-//! decision is made here, once, and reported; nothing on a commit path
-//! classifies again.
+//! A programme as the adapter runs it: the validated core programme plus
+//! how its invariants are checked. Either every invariant compiles to SQL,
+//! or the interpreter runs them all. That is decided once, here, at load.
 
 use morpholog_core::{CompiledProgram, PredicateName, Transformation};
 
@@ -22,19 +19,16 @@ pub(crate) enum InvariantBackend {
     Interpreted(Vec<CompileRefusal>),
 }
 
-/// The plan for checking a programme's invariants, as `check -v`
-/// reports it: what the programme is eligible for, decided once at
-/// load. Two outcomes by construction - the whole programme compiles
-/// or the whole programme is interpreted - so a caller matches both
-/// and nothing else.
+/// How a programme's invariants are checked, as `check -v` reports it.
+/// Decided once at load: the whole programme compiles or the whole
+/// programme is interpreted.
 #[derive(Debug, Clone, Copy)]
 pub enum InvariantPlan<'a> {
     /// Every invariant compiles; the count is the whole programme's.
     Compiled { invariants: usize },
     /// The interpreter runs every invariant; each refusal names its
     /// invariant and the construct that kept it out. Empty when the
-    /// interpreter was pinned by construction rather than forced by a
-    /// refusal.
+    /// interpreter was chosen directly rather than forced by a refusal.
     Interpreted { refusals: &'a [CompileRefusal] },
 }
 
@@ -46,10 +40,9 @@ pub(crate) enum Route<'a> {
 }
 
 impl Route<'_> {
-    /// What the loaded state must serve on this route: the compiled
-    /// checks read the candidate from the claims table, so only the
-    /// body's reads are loaded; the interpreter needs the invariants'
-    /// too.
+    /// What to load on this route. The compiled checks read the candidate
+    /// from the claims table, so they need only the body's reads; the
+    /// interpreter also needs what the invariants read.
     pub(crate) fn reads(self) -> Reads {
         match self {
             Route::Compiled(_) => Reads::Body,
@@ -68,9 +61,8 @@ impl PgProgram {
     }
 
     /// The interpreter for every invariant, whatever the programme is
-    /// eligible for. The benchmark's ruler: the same programme through
-    /// both evaluators. Not a knob for embedders; both evaluators reach
-    /// the same decisions.
+    /// eligible for. Lets the benchmark run one programme through both
+    /// evaluators; not a knob for embedders, since both decide the same.
     #[doc(hidden)]
     pub fn interpreted(core: CompiledProgram) -> Self {
         Self {
@@ -84,8 +76,7 @@ impl PgProgram {
     }
 
     /// The route a production proposal takes. Diagnostics (trace,
-    /// explain-on-reject) always take the interpreted route: they ask
-    /// the executable specification to run.
+    /// explain-on-reject) always take the interpreted route.
     pub(crate) fn route(&self) -> Route<'_> {
         match &self.backend {
             InvariantBackend::Compiled(set) => Route::Compiled(set),
@@ -94,7 +85,7 @@ impl PgProgram {
     }
 
     /// The predicates one execution of `transformation` must load on
-    /// `route`; the one authority for both evaluators.
+    /// `route`, for both evaluators.
     pub(crate) fn load_scope(
         &self,
         transformation: &Transformation,

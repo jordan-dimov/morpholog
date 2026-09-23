@@ -1,17 +1,10 @@
-//! The trace differential: `propose` and `propose_with_trace` claim
-//! one executor, differing only in the sink - but `Stmt::For`
-//! genuinely branches on `trace.is_on()` to keep per-iteration
-//! allocations off the untraced path, so the two paths carry real
-//! duplicated control flow. This test makes them answer every
-//! gallery case identically: same outcome, same rejection reason,
-//! same kernel error - traced or not.
+//! `propose` and `propose_with_trace` must answer every gallery case the same:
+//! same outcome, rejection reason, and kernel error. They share one executor,
+//! but `Stmt::For` branches on `trace.is_on()` to keep per-iteration
+//! allocations off the untraced path, so the paths really differ.
 //!
-//! Fresh subjects are the one lawful divergence: `let x = new
-//! Subject()` mints a UUIDv7 per execution, so two runs of the same
-//! proposal differ in exactly those identifiers. The observable
-//! alpha-normalises them, and the characterisation test at the
-//! bottom pins the reason - a traced dry run must never be read as
-//! predicting the fresh identifiers of another execution.
+//! Fresh subjects are the one lawful difference: `new Subject()` mints a new
+//! UUIDv7 per run. The comparison renames them away; the last test pins why.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -108,11 +101,9 @@ fn traced_and_untraced_execution_are_equivalent() {
         cases >= 100,
         "generator collapse: only {cases} cases ran ({skipped} skipped)"
     );
-    // The duplicated traced/untraced machinery this differential
-    // exists for is `Stmt::For`'s. A floor on total cases cannot see
-    // that seam disappear from coverage, so pin it directly: every
-    // loop-bearing transformation must produce at least one case, and
-    // at least one execution must actually enter a loop.
+    // The traced/untraced split lives in `Stmt::For`, and a total-case floor
+    // cannot see loops drop out of coverage. So every looping transformation
+    // must produce a case, and at least one run must enter a loop.
     assert!(
         for_transformations_skipped.is_empty(),
         "loop-bearing transformations produced no cases: \
@@ -125,11 +116,9 @@ fn traced_and_untraced_execution_are_equivalent() {
     );
 }
 
-/// Two executions of a `new Subject()` transformation lawfully mint
-/// DIFFERENT fresh identifiers - pinned so nobody reads a traced dry
-/// run as predicting the identifiers of the run that commits. The
-/// differential above only holds because its observable
-/// alpha-normalises these.
+/// Two runs of a `new Subject()` transformation mint DIFFERENT identifiers,
+/// so a traced dry run never predicts the identifiers of the run that
+/// commits. The differential above holds only because it renames them away.
 #[test]
 fn fresh_subjects_differ_between_executions_by_design() {
     use morpholog_core::Outcome;

@@ -1,13 +1,9 @@
-//! Behavioural tests for defined propositions (`define`): the
-//! relational-substitution semantics (generator projection, ground-arg
-//! filtering, hygiene-by-projection, multiplicity dedup), composition
-//! with `bind` / `pre(...)` / `sum`, the authoring-time checks the
-//! construct adds, and the legibility surfaces seeing through calls.
+//! Behavioural tests for `define`: how a call binds, filters and
+//! deduplicates, how it composes with `bind` / `pre(...)` / `sum`, the
+//! authoring-time checks, and the read-side reports seeing through calls.
 //!
-//! Scenario programmes are inline `.morph`, per the testing doctrine:
-//! the business story is the spec. The deliberately-adversarial shapes
-//! a parser can never produce (hygiene capture attempts, unresolved
-//! calls) live in `morpholog-core`'s own test layer instead.
+//! Scenarios are inline `.morph`. Shapes a parser can never produce
+//! (capture attempts, unresolved calls) are tested in `morpholog-core`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -91,13 +87,11 @@ fn club_with_sponsor() -> (Program, State) {
     (p, state)
 }
 
-// `bind` through a call: the body finds the sponsor, the projection
-// hands the binding out through the `sponsor` argument, and the
-// admitted claim carries it. The caller never sees the body's
-// internals - only the projected argument.
+// `bind` through a call: the body finds the sponsor and hands it out
+// through the `sponsor` argument. The caller sees only that argument,
+// never the body's internals.
 
-/// Build a CompiledProgram for the analysis entry points, which now
-/// take `&CompiledProgram`.
+/// Build a CompiledProgram for the analysis entry points.
 fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
     morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
 }
@@ -141,10 +135,9 @@ fn a_suspended_sponsor_fails_the_nested_condition() {
     );
 }
 
-// Two sponsors in good standing: the call yields two distinct
-// projections, and `bind` demands exactly one - the same multi-match
-// kernel error an ambiguous claim lookup raises, surfaced through the
-// call unchanged.
+// Two sponsors in good standing: the call yields two results and `bind`
+// demands exactly one, so it raises the same error as an ambiguous
+// claim lookup.
 #[test]
 fn two_distinct_projections_make_bind_a_multi_match_error() {
     let (p, state) = club_with_sponsor();
@@ -217,9 +210,8 @@ fn a_call_counts_distinct_projections_while_the_inline_body_counts_witnesses() {
         &p.invariants,
         &p.definitions,
     );
-    // Through the call: "is the deal vouched?" has one distinct answer
-    // for the projected arguments, however many internal witnesses
-    // exist - internal multiplicity is not observable.
+    // Through the call, "is the deal vouched?" has one answer, however
+    // many matches the body has inside.
     let state = must_accept(
         p.transformation("count_through_call").unwrap(),
         vec![subj("deal")],
@@ -228,8 +220,7 @@ fn a_call_counts_distinct_projections_while_the_inline_body_counts_witnesses() {
         &p.definitions,
     );
     assert!(has_claim(&state, "VouchedCount", &[subj("deal"), dec(1)]));
-    // Inlined, the same proposition counts its witnesses - two claims,
-    // two matches. The contrast is the dedup contract, pinned.
+    // Inlined, the same proposition counts both matching claims.
     let state = must_accept(
         p.transformation("count_inline").unwrap(),
         vec![subj("deal")],
@@ -461,10 +452,8 @@ define paired(x, x):
     );
 }
 
-// Definitions are proposition-valued only: `admit` (like `retract` and
-// `value`) needs a predicate, and naming a definition there is a
-// category error with its own guidance, not a misleading
-// undeclared-predicate report.
+// `admit` needs a predicate. Naming a definition there gets its own
+// guidance, not a misleading undeclared-predicate report.
 #[test]
 fn admitting_a_definition_is_a_category_error_with_guidance() {
     let errors = validation_errors(
@@ -523,9 +512,8 @@ invariant tagged_items_exist:
     );
 }
 
-// A use-only parameter (one the body consults but never binds) must
-// arrive bound: an invariant calling with a free variable in that
-// position is the same unbound-name error the runtime would raise.
+// A parameter the body reads but never binds must arrive bound. Passing
+// a free variable there is refused as an unbound name.
 #[test]
 fn an_unbound_argument_for_a_use_only_parameter_is_refused() {
     let errors = validation_errors(

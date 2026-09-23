@@ -1,7 +1,6 @@
-//! The binary's own tests: what the argument surface parses to, and
-//! that a refused command returns to `main` rather than ending the
-//! process. The command modules keep their own unit suites beside
-//! their code; the CLI's behaviour is tested end to end in `tests/`.
+//! The binary's own tests: what the arguments parse to, and that a refused
+//! command returns to `main` instead of ending the process. End-to-end
+//! behaviour is tested in `tests/`.
 
 use super::*;
 use clap::error::ErrorKind;
@@ -71,7 +70,6 @@ fn inspect_outbox_with_flag_url_parses() {
 }
 
 /// `inspect claims` without `--as-of` parses to `as_of = None`.
-/// Pins that the optional flag is genuinely optional.
 #[test]
 fn inspect_claims_without_as_of_parses_to_none() {
     let cli = Cli::parse_from([
@@ -166,8 +164,8 @@ fn inspect_claims_with_bare_date_as_of_errors_at_parse_time() {
     );
 }
 
-/// `--predicate` repeats into a Vec, in argv order; without it the
-/// filter defaults to empty (the unfiltered read stays the default).
+/// `--predicate` repeats into a Vec, in argv order; without it the filter
+/// is empty.
 #[test]
 fn inspect_claims_predicate_flag_repeats_into_vec() {
     let cli = Cli::parse_from([
@@ -222,8 +220,7 @@ fn inspect_claims_with_bad_as_of_errors_at_parse_time() {
         "not-a-uuid",
     ])
     .expect_err("bad UUID must surface a clap parse error");
-    // clap classifies FromStr failures as ValueValidation in recent
-    // versions, InvalidValue in older ones; accept either.
+    // clap versions differ between ValueValidation and InvalidValue.
     assert!(
         matches!(
             err.kind(),
@@ -261,11 +258,8 @@ fn inspect_derived_with_as_of_parses_uuid() {
     );
 }
 
-/// `inspect audit --as-of <uuid>` is rejected by clap because
-/// `InspectAuditArgs` does not declare the `--as-of` flag. Pins
-/// the design decision that as-of does not apply to the audit
-/// subcommand: the audit table IS the chronological record, and
-/// the tail's coordinate is `--after`.
+/// `inspect audit` has no `--as-of`: the audit log is itself the history,
+/// and the tail resumes with `--after`.
 #[test]
 fn inspect_audit_rejects_as_of_flag() {
     let err = Cli::try_parse_from([
@@ -326,7 +320,7 @@ fn propose_with_all_args_parses() {
 }
 
 /// `propose --args-named '{...}'` parses with `args_named: Some(...)`
-/// and `args: None`. Confirms the new flag plumbs through.
+/// and `args: None`.
 #[test]
 fn propose_with_args_named_parses_into_the_named_slot() {
     let cli = Cli::parse_from([
@@ -348,9 +342,7 @@ fn propose_with_args_named_parses_into_the_named_slot() {
     assert_eq!(args.args_named.as_deref(), Some(r#"{"trade":"a"}"#));
 }
 
-/// Passing BOTH `--args` and `--args-named` must be rejected at
-/// Clap-parse time so the run path never sees an ambiguous
-/// request shape.
+/// Passing both `--args` and `--args-named` is rejected at parse time.
 #[test]
 fn propose_with_both_args_codecs_errors() {
     let err = Cli::try_parse_from([
@@ -448,9 +440,8 @@ fn inspect_derived_with_all_args_parses() {
 
 #[test]
 fn inspect_derived_missing_derived_name_errors() {
-    // Two positionals are required (file + derived name). Omit the
-    // derived name; clap must surface MissingRequiredArgument rather
-    // than silently taking the flag as the missing arg.
+    // Without the derived name, clap must report it missing rather than
+    // take the flag as the missing argument.
     let err = Cli::try_parse_from([
         "morpholog",
         "inspect",
@@ -463,9 +454,8 @@ fn inspect_derived_missing_derived_name_errors() {
     assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
 }
 
-/// `inspect predicates <file.morph>` parses to `Inspect::Predicates`
-/// with the file path on the args struct. No `--database-url` flag:
-/// predicate declarations are programme metadata, not state.
+/// `inspect predicates <file.morph>` parses to `Inspect::Predicates`. No
+/// `--database-url`: declarations come from the file, not the database.
 #[test]
 fn inspect_predicates_parses_with_file_argument() {
     let cli = Cli::parse_from([
@@ -497,8 +487,7 @@ fn inspect_predicates_missing_file_errors() {
     assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
 }
 
-/// `propose --trace` parses to a `ProposeArgs` with `trace: true`. All other
-/// fields keep their existing behaviour.
+/// `propose --trace` parses to a `ProposeArgs` with `trace: true`.
 #[test]
 fn propose_with_trace_flag_parses() {
     let cli = Cli::parse_from([
@@ -525,8 +514,7 @@ fn propose_with_trace_flag_parses() {
     assert_eq!(args.actor.as_deref(), Some("jordan"));
 }
 
-/// Without `--trace`, `ProposeArgs.trace` defaults to false. The non-trace
-/// path must not be affected by the flag.
+/// Without `--trace`, `ProposeArgs.trace` defaults to false.
 #[test]
 fn propose_without_trace_flag_defaults_to_false() {
     let cli = Cli::parse_from([
@@ -549,10 +537,7 @@ fn propose_without_trace_flag_defaults_to_false() {
 
 #[test]
 fn propose_outcome_serialises_with_status_tag() {
-    // Pin the JSON wire shape that the CLI emits for outcomes.
-    // The codec uses a `status` discriminant via serde's tagged-enum
-    // representation; the CLI relies on this so that scripts can
-    // parse stdout and branch on `.status`.
+    // Scripts branch on `.status` in the outcome JSON.
     use morpholog_core::{ClaimInstance, Subject};
     use morpholog_postgres::PgProposalOutcome;
     use uuid::Uuid;
@@ -599,9 +584,7 @@ fn propose_outcome_serialises_with_status_tag() {
 #[test]
 fn missing_required_argument_surfaces_as_clap_error() {
     let err = Cli::try_parse_from(["morpholog"]).expect_err("no subcommand should error");
-    // clap 4 surfaces this as DisplayHelpOnMissingArgumentOrSubcommand;
-    // older versions used MissingSubcommand. Accept either so the
-    // test does not break under minor clap updates.
+    // clap versions differ on the error kind here; accept any of them.
     assert!(
         matches!(
             err.kind(),
@@ -614,8 +597,7 @@ fn missing_required_argument_surfaces_as_clap_error() {
     );
 }
 
-/// `check --ir` owns IR output; a bare `parse` subcommand must
-/// stay unknown. Pins both.
+/// `check --ir` prints the IR; there is no `parse` subcommand.
 #[test]
 fn parse_is_gone_and_check_ir_replaces_it() {
     let err = Cli::try_parse_from(["morpholog", "parse", "demo.morph"])
@@ -629,8 +611,7 @@ fn parse_is_gone_and_check_ir_replaces_it() {
     assert!(args.ir);
 }
 
-/// `check -v` parses to `CheckArgs { verbose: true }`. Pins the
-/// short form alongside the long one.
+/// `check -v` parses to `CheckArgs { verbose: true }`.
 #[test]
 fn check_with_verbose_flag_parses() {
     let cli = Cli::parse_from(["morpholog", "check", "demo.morph", "-v"]);
@@ -641,8 +622,8 @@ fn check_with_verbose_flag_parses() {
     assert_eq!(args.file.as_os_str(), "demo.morph");
 }
 
-/// Without `--verbose`, `CheckArgs.verbose` defaults to false -
-/// the silent-success contract scripts rely on stays the default.
+/// Without `--verbose`, `CheckArgs.verbose` defaults to false, so success
+/// stays silent for scripts.
 #[test]
 fn check_without_verbose_defaults_to_false() {
     let cli = Cli::parse_from(["morpholog", "check", "demo.morph"]);
@@ -689,8 +670,7 @@ fn explain_with_all_args_parses() {
 }
 
 /// `explain --args-named` parses with `args_named: Some(...)` and
-/// `args: None`. Mirrors `run_with_args_named_parses_into_the_named_slot`
-/// to confirm explain plumbs the new flag identically.
+/// `args: None`, as `propose` does.
 #[test]
 fn explain_with_args_named_parses_into_the_named_slot() {
     let cli = Cli::parse_from([
@@ -712,8 +692,7 @@ fn explain_with_args_named_parses_into_the_named_slot() {
     assert_eq!(args.args_named.as_deref(), Some(r#"{"x":"y"}"#));
 }
 
-/// Mutual exclusion at parse time for explain too: passing both
-/// `--args` and `--args-named` is a hard error.
+/// `explain` also refuses both `--args` and `--args-named` at parse time.
 #[test]
 fn explain_with_both_args_codecs_errors() {
     let err = Cli::try_parse_from([
@@ -771,10 +750,8 @@ fn explain_missing_actor_flag_errors() {
     assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
 }
 
-/// `morpholog schema <file> <transformation>` parses into the
-/// expected positional args. The schema subcommand takes no flags
-/// (no `--json`, no `--database-url`), so the test pins that the
-/// minimal positional surface is what the embedder will type.
+/// `morpholog schema <file> <transformation>` parses into the expected
+/// positional args, with no flags needed.
 #[test]
 fn schema_with_file_and_transformation_parses() {
     let cli = Cli::parse_from([
@@ -794,9 +771,8 @@ fn schema_with_file_and_transformation_parses() {
     );
 }
 
-/// `schema --result` needs no `.morph` file (the envelope contract
-/// is programme-independent) and conflicts with every per-programme
-/// mode.
+/// `schema --result` needs no `.morph` file, since the result contract is
+/// the same for every programme, and conflicts with every other mode.
 #[test]
 fn schema_result_parses_without_a_file() {
     let cli = Cli::parse_from(["morpholog", "schema", "--result"]);
@@ -822,9 +798,7 @@ fn schema_result_conflicts_with_per_programme_modes() {
     }
 }
 
-/// Without `--result`, schema still demands a file plus exactly one
-/// mode - the pre-existing contract survives the file becoming
-/// optional.
+/// Without `--result`, schema still needs a file and exactly one mode.
 #[test]
 fn schema_without_result_still_requires_a_file_and_mode() {
     let err = Cli::try_parse_from(["morpholog", "schema"])
@@ -858,8 +832,8 @@ fn schema_transformation_and_intent_conflict() {
     assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
 }
 
-/// Neither a transformation nor `--intent` should error at
-/// clap-parse time, before any file IO happens.
+/// Neither a transformation nor `--intent` is an error at parse time,
+/// before any file IO.
 #[test]
 fn schema_missing_transformation_errors() {
     let err = Cli::try_parse_from(["morpholog", "schema", "file.morph"])
@@ -932,15 +906,12 @@ fn refresh_derived_requires_a_file() {
 mod exit_path {
     use super::*;
 
-    /// The point of returning instead of exiting: a command that
-    /// refuses hands its caller an error and the caller is still
-    /// running to receive it. Written as a test because it could not
-    /// have been one before - `std::process::exit` inside the parse
-    /// gate would have taken the test runner down with it.
+    /// A refusing command hands its caller an error, and the caller is
+    /// still running to receive it. A `std::process::exit` would take the
+    /// test runner down with it.
     #[test]
     fn a_refused_command_returns_rather_than_ending_the_process() {
-        // A unique path per run, and no UTF-8 assumption about where
-        // the temp dir lives: this suite runs in parallel with itself.
+        // A unique path per run, since tests run in parallel.
         let file = tempfile::Builder::new()
             .suffix(".morph")
             .tempfile()
@@ -963,12 +934,11 @@ mod exit_path {
             err.is::<commands::AlreadyReported>(),
             "the diagnostics were printed, so main must add nothing: {err:?}"
         );
-        // Still here - which is the whole assertion.
+        // Still running: that is the assertion.
     }
 
-    /// The commit-unknown exit is its own number, and nothing else
-    /// borrows it: an ordinary failure, even one wrapping the marker
-    /// in context, exits 1 only when the marker is absent.
+    /// Exit 3 means an unknown commit outcome, even under added context;
+    /// any other failure exits 1.
     #[test]
     fn a_commit_outcome_unknown_exits_three_and_nothing_else_does() {
         let unknown: anyhow::Error = commands::CommitOutcomeUnknown("reset".into()).into();

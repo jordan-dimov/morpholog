@@ -1,20 +1,12 @@
-//! Spike for the outbox worker + compensation pattern.
+//! The outbox delivery and compensation flow, in hand-rolled code.
 //!
-//! Pairs with [`docs/outbox-sketch.md`]. Demonstrates the full
-//! delivery + compensation flow end-to-end in deliberately
-//! hand-rolled code - the seam-level characterisation of exactly
-//! what `morpholog-outbox`'s worker and `Deliverer` now automate,
-//! kept so the substrate's contract stays pinned independently of
-//! the worker that consumes it.
+//! Pairs with [`docs/outbox-sketch.md`]. `morpholog-outbox`'s worker
+//! automates this; the hand-rolled version keeps the database contract
+//! tested apart from that worker.
 //!
-//! The spike uses the existing `double_entry_ledger` transformations
-//! as both the compensable step (`post_simple_entry` against
-//! `account_cash` / `account_revenue`) and the compensation
-//! (`post_simple_entry` with debit and credit accounts swapped, so
-//! the reverse entry balances the original under
-//! `balanced_posted_entry`). No new transformations or claim
-//! predicates are introduced; the spike's job is to demonstrate the
-//! coordinator-shaped wiring, not to add domain content.
+//! The step is `post_simple_entry` from `double_entry_ledger`; the
+//! compensation is the same transformation with debit and credit
+//! swapped, so both entries balance.
 //!
 //! [`docs/outbox-sketch.md`]: ../../../docs/outbox-sketch.md
 
@@ -34,18 +26,14 @@ use common::{expect_committed, reset_db, test_pool};
 // ============================================================
 
 // ============================================================
-// Stand-ins for the production Deliverer trait + WorkerConfig.
-// Defined locally in the spike so the spike does not depend on any
-// crate that does not yet exist.
+// Local stand-ins for the worker's Deliverer and CompensationSpec.
 // ============================================================
 
-/// Three-way outcome borrowed from MassTransit / NServiceBus's
-/// vocabulary, named per the design doc's lean.
+/// Three-way outcome, in MassTransit / NServiceBus vocabulary.
 #[derive(Debug, PartialEq)]
 enum DeliveryOutcome {
     Delivered,
-    /// A future implementation will retry after `retry_after_ms`;
-    /// the spike does not exercise this branch.
+    /// Retry after `retry_after_ms`; not exercised here.
     #[allow(dead_code)]
     Transient {
         retry_after_ms: u64,
@@ -55,8 +43,7 @@ enum DeliveryOutcome {
     },
 }
 
-/// A stand-in for the production `Deliverer` trait. Function
-/// pointer in the spike; trait in the production crate.
+/// A stand-in for the `Deliverer` trait.
 type SpikeDeliverer = fn(&IntentInstance) -> DeliveryOutcome;
 
 fn mock_deliverer_always_succeeds(_intent: &IntentInstance) -> DeliveryOutcome {
@@ -69,14 +56,8 @@ fn mock_deliverer_always_fails_nonretryably(_intent: &IntentInstance) -> Deliver
     }
 }
 
-/// A stand-in for the production `CompensationSpec`. Holds the
-/// compensating transformation plus the args to invoke it with and
-/// the invariants to evaluate against.
-///
-/// In production this will be configured per intent type and the
-/// `args` will come from an `Fn(&IntentInstance, &str) -> Vec<EvalValue>`
-/// mapper; here in the spike, the caller of `process_one_pending`
-/// pre-resolves both.
+/// A stand-in for `CompensationSpec`: the compensating transformation
+/// and its args, already resolved.
 struct SpikeCompensation {
     transformation: Transformation,
     args: Vec<EvalValue>,
@@ -85,23 +66,9 @@ struct SpikeCompensation {
 // ============================================================
 // Hand-rolled consumer loop.
 //
-// This is the thing the production worker will eventually do, in
-// one procedural function for the spike. It takes one pending
-// outbox row, invokes the deliverer, and routes the outcome.
-//
-// The production version will:
-//   - run in a supervised tokio task per delivery target;
-//   - use SELECT ... FOR UPDATE SKIP LOCKED to coordinate with
-//     other workers safely;
-//   - wrap the deliverer call in a per-target circuit breaker;
-//   - implement backoff with jitter for Transient outcomes;
-//   - record `failed_at`, `failure_reason`, and
-//     `compensation_transition_id` in new columns the schema does
-//     not yet have.
-//
-// The spike does none of those; it just exercises the
-// commit -> deliver -> route -> (maybe compensate) sequence so the
-// audit-log shape can be asserted.
+// Takes one pending outbox row, calls the deliverer, and routes the
+// outcome: commit -> deliver -> route -> maybe compensate. No leases,
+// retries or circuit breaking; just enough to check the audit log.
 // ============================================================
 
 /// Returns the compensation's `transition_id` if compensation
@@ -117,8 +84,7 @@ async fn process_one_pending(
         return Ok(None);
     };
 
-    // Reconstruct an IntentInstance from the outbox row. In
-    // production this is the shape the Deliverer trait operates on.
+    // The shape a Deliverer works on.
     let intent = intent_instance(&row.intent_type, &row.arguments);
 
     match deliverer(&intent) {
@@ -145,11 +111,6 @@ async fn process_one_pending(
             Ok(None)
         }
         DeliveryOutcome::NonRetryable { reason: _reason } => {
-            // Mark the outbox row as failed. The production worker
-            // will additionally record `failed_at`, `failure_reason`,
-            // and (below) `compensation_transition_id` in new columns
-            // the schema does not yet have; for the spike, `status`
-            // alone is enough.
             sqlx::query(
                 "UPDATE morpholog.outbox
                  SET status='failed', attempt_count=attempt_count+1, last_attempt_at=now()
@@ -159,12 +120,8 @@ async fn process_one_pending(
             .execute(pool)
             .await?;
 
-            // If a compensation is wired, invoke it via
-            // propose_against_pg. The compensation goes through
-            // every invariant check just like any other
-            // transformation, and writes its own audit row. The
-            // ledger never lies: an auditor reading the audit log
-            // will see commit -> failure -> compensation.
+            // The compensation goes through propose_against_pg like any
+            // other transformation, so it is checked and audited.
             if let Some(comp) = compensation {
                 let outcome = common::propose_pg_with_test_actor(
                     pool,
@@ -195,10 +152,9 @@ async fn process_one_pending(
 // Tests
 // ============================================================
 
-/// Headline test: terminal delivery failure triggers a compensating
-/// transformation that goes through every invariant check and
-/// writes its own audit row. The audit log then preserves full
-/// lineage: original commit, then compensation.
+/// A terminal delivery failure triggers a compensating transformation,
+/// checked and audited like any other. The audit log holds the original
+/// commit, then the compensation.
 #[tokio::test]
 async fn outbox_spike_compensates_on_nonretryable_failure() {
     let pool = test_pool().await;
@@ -206,8 +162,7 @@ async fn outbox_spike_compensates_on_nonretryable_failure() {
 
     let period = subj("p_spike");
 
-    // 1. Commit the original transformation: post entry_001 with
-    //    cash debit 100, revenue credit 100. This commits and
+    // 1. Post entry_001: cash debit 100, revenue credit 100. This
     //    enqueues a JournalEntryPosted intent.
     let tid_commit = expect_committed(
         common::propose_pg_with_test_actor(
@@ -233,10 +188,8 @@ async fn outbox_spike_compensates_on_nonretryable_failure() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].intent_type, "JournalEntryPosted");
 
-    // 3. Define the compensation: post a reversing entry with
-    //    debit and credit accounts swapped, so the
-    //    `balanced_posted_entry` invariant holds for both the
-    //    original and the reversal.
+    // 3. The compensation: a reversing entry with debit and credit
+    //    swapped, so both entries balance.
     let compensation = SpikeCompensation {
         transformation: double_entry_ledger::post_simple_entry(),
         args: vec![
@@ -249,9 +202,8 @@ async fn outbox_spike_compensates_on_nonretryable_failure() {
         ],
     };
 
-    // 4. Process the pending row with a deliverer that always
-    //    returns NonRetryable. The consumer marks the row failed
-    //    and invokes the compensation.
+    // 4. A deliverer that always returns NonRetryable: the row is
+    //    marked failed and the compensation runs.
     let compensation_tid = process_one_pending(
         &pool,
         mock_deliverer_always_fails_nonretryably,
@@ -261,11 +213,8 @@ async fn outbox_spike_compensates_on_nonretryable_failure() {
     .unwrap()
     .expect("compensation should have fired on NonRetryable");
 
-    // 5. No rows remain pending. The original row is in status
-    //    'failed'. The reversal's notification is queued (the
-    //    compensation transformation itself emits its own intent),
-    //    which is fine - it would be delivered on the next
-    //    consumer pass.
+    // 5. The original row is 'failed'. Only the reversal's own intent
+    //    is pending, for the next pass.
     let pending_after = list_pending_outbox(&pool).await.unwrap();
     assert_eq!(
         pending_after.len(),
@@ -278,8 +227,7 @@ async fn outbox_spike_compensates_on_nonretryable_failure() {
         "the remaining pending row belongs to the compensation"
     );
 
-    // 6. The audit log preserves the full lineage. Two transitions:
-    //    the original commit and the compensation.
+    // 6. Two audit rows: the original commit and the compensation.
     let audit = list_audit_rows(&pool).await.unwrap();
     assert_eq!(
         audit.len(),
@@ -289,12 +237,9 @@ async fn outbox_spike_compensates_on_nonretryable_failure() {
     assert_eq!(audit[0].transition_id, tid_commit);
     assert_eq!(audit[1].transition_id, compensation_tid);
 
-    // 7. Current state contains both the original and the reversal.
-    //    The audit log is append-only; the reversal cancels the
-    //    original semantically (via balanced debits and credits)
-    //    but the original stays admitted - history is preserved.
-    //    A trial-balance read against current state would now show
-    //    zero balances on cash and revenue.
+    // 7. Both the original and the reversal stay admitted. The
+    //    reversal cancels the original in the balances, not by
+    //    removing it.
     let (je_count, jl_count): (i64, i64) = sqlx::query_as(
         "SELECT
             (SELECT count(*) FROM morpholog.claims WHERE predicate_name='JournalEntry'),
@@ -307,10 +252,7 @@ async fn outbox_spike_compensates_on_nonretryable_failure() {
     assert_eq!(jl_count, 4, "four JournalLines: 2 for each entry");
 }
 
-/// Happy path: successful delivery marks the outbox row delivered
-/// and invokes no compensation. Pinned alongside the failure path
-/// for symmetry - the worker's contract is "route based on
-/// outcome," not "always compensate."
+/// Successful delivery marks the row delivered and runs no compensation.
 #[tokio::test]
 async fn outbox_spike_marks_delivered_on_success() {
     let pool = test_pool().await;
@@ -336,9 +278,7 @@ async fn outbox_spike_marks_delivered_on_success() {
         .unwrap(),
     );
 
-    // 2. Process with a succeeding deliverer; no compensation is
-    //    wired (None) - compensation is irrelevant when delivery
-    //    succeeds.
+    // 2. A succeeding deliverer, with no compensation wired.
     let result = process_one_pending(&pool, mock_deliverer_always_succeeds, None)
         .await
         .unwrap();

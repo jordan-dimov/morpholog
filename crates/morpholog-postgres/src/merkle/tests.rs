@@ -43,12 +43,10 @@ fn fixed_row() -> AuditRow {
     }
 }
 
-/// The frozen leaf hash of [`fixed_row`] under the original leaf
-/// encoding. Computed once and pinned: any change to the canonical
-/// bytes - field order, length prefixes, codec, version byte -
-/// changes this hash, and such a change must arrive as a NEW leaf
-/// version, never as an edit to the encoding historical roots were
-/// computed under.
+/// The frozen leaf hash of [`fixed_row`] under the original encoding.
+/// Any change to the bytes (field order, length prefixes, codec, version
+/// byte) moves it; such a change must come as a NEW leaf version, never
+/// an edit to the encoding historical roots use.
 #[test]
 fn frozen_v1_leaf_hash_pins_the_canonical_encoding() {
     let hash = audit_leaf_hash(&fixed_row()).unwrap();
@@ -83,8 +81,8 @@ fn a_sub_microsecond_instant_hashes_as_its_floored_microsecond() {
     );
 }
 
-/// [`fixed_row`] with a gateway attestation - the attested twin,
-/// hashing under the attested leaf encoding.
+/// [`fixed_row`] with a gateway attestation, hashing under the attested
+/// encoding.
 fn attested_fixed_row() -> AuditRow {
     AuditRow {
         attestation: Some(crate::AuditAttestation::Gateway {
@@ -101,10 +99,9 @@ fn stamped_fixed_row() -> AuditRow {
     }
 }
 
-/// The frozen leaf hash of the self-describing twin, derived
-/// independently (Python, from the documented layout) before the
-/// encoder was written: version byte 3, the attested fields, then
-/// the names as one JSON array.
+/// The frozen leaf hash of the self-describing twin, computed separately
+/// in Python from the documented layout: version byte 3, the attested
+/// fields, then the names as one JSON array.
 #[test]
 fn frozen_v3_leaf_hash_pins_the_self_describing_encoding() {
     let hash = audit_leaf_hash(&stamped_fixed_row()).unwrap();
@@ -114,10 +111,9 @@ fn frozen_v3_leaf_hash_pins_the_self_describing_encoding() {
     );
 }
 
-/// Names on an unattested row, or names that do not match the
-/// arguments, describe no row the runtime wrote: no encoding, so
-/// nothing to hash - a pack carrying one is malformed, never
-/// intact under the nearest version.
+/// Names on an unattested row, or names that do not match the arguments,
+/// describe no row the runtime writes, so there is nothing to hash. A pack
+/// carrying one is malformed, never intact under the nearest version.
 #[test]
 fn an_impossible_row_shape_gets_no_leaf() {
     let unattested = AuditRow {
@@ -144,9 +140,8 @@ fn frozen_v2_leaf_hash_pins_the_attested_encoding() {
     );
 }
 
-/// Stripping or grafting an attestation flips the row to the other
-/// encoding, so either tamper direction breaks the leaf - the
-/// fails-closed property the content-derived version rests on.
+/// An attacker who can edit a stored row strips or grafts an attestation.
+/// Either way the row changes encoding, so the leaf breaks.
 #[test]
 fn attestation_presence_selects_the_encoding() {
     let bare = audit_leaf_hash(&fixed_row()).unwrap();
@@ -173,10 +168,8 @@ fn single_leaf_root_is_the_leaf() {
     assert_eq!(merkle_root(&[l]), l);
 }
 
-/// `merkle_root` matches the RFC 6962 recurrence for n = 1..=8: split
-/// at the largest power of two below n, hash the two subtrees. This
-/// independent reference pins that we speak the standard, not a
-/// dialect.
+/// `merkle_root` matches an independent RFC 6962 reference for n = 1..=8:
+/// split at the largest power of two below n, hash the two subtrees.
 #[test]
 fn matches_rfc6962_recurrence() {
     fn reference(leaves: &[Hash]) -> Hash {
@@ -210,10 +203,9 @@ fn two_leaf_root_is_one_node() {
     assert_eq!(merkle_root(&[a, b]), node_hash(&a, &b));
 }
 
-/// A frozen root over leaves `"a"` and `"b"`, computed independently
-/// with `sha256sum` (not these functions): a regression in the leaf
-/// or node hashing changes it. Pins byte-compatibility with the RFC
-/// 6962 construction, not just internal self-consistency.
+/// A frozen root over leaves `"a"` and `"b"`, computed with `sha256sum`
+/// rather than these functions, so it pins compatibility with RFC 6962,
+/// not just self-consistency.
 #[test]
 fn frozen_two_leaf_root_matches_an_independent_sha256() {
     let root = merkle_root(&[leaf_hash(b"a"), leaf_hash(b"b")]);
@@ -338,8 +330,8 @@ fn inclusion_round_trips_and_rejects_tampering() {
             verify_inclusion_proof(index, t.d.len(), &t.d[index], &t.root, &proof),
             Ok(())
         );
-        // A different leaf at this position must not verify - the
-        // guard against shipping fake rows under a genuine tree.
+        // A different leaf here must not verify, or fake rows could ship
+        // under a genuine tree.
         let wrong = leaf_hash(b"forged");
         assert_eq!(
             verify_inclusion_proof(index, t.d.len(), &wrong, &t.root, &proof),
@@ -349,7 +341,7 @@ fn inclusion_round_trips_and_rejects_tampering() {
 }
 
 /// Inclusion proofs round-trip for every (size, index) up to a small
-/// bound - the structural pin beyond the single RFC tree.
+/// bound, beyond the single RFC tree.
 #[test]
 fn inclusion_round_trips_for_all_small_trees() {
     let leaves: Vec<Hash> = (0u16..20).map(|n| leaf_hash(&n.to_le_bytes())).collect();
@@ -401,9 +393,8 @@ fn consistency_round_trips_and_rejects_wrong_roots() {
     }
 }
 
-/// An empty first tree is consistent with any later tree, the empty
-/// proof - prover and verifier agree on `first_size == 0` (the case the
-/// prover used to debug-assert away).
+/// An empty first tree is consistent with any later tree via the empty
+/// proof: prover and verifier agree on `first_size == 0`.
 #[test]
 fn consistency_with_an_empty_first_tree_is_the_empty_proof() {
     let leaves: Vec<Hash> = (0u16..5).map(|n| leaf_hash(&n.to_le_bytes())).collect();
@@ -416,11 +407,10 @@ fn consistency_with_an_empty_first_tree_is_the_empty_proof() {
     );
 }
 
-/// A genuine consistency proof does not authenticate which rows are the
-/// suffix - the overclaim the row-inclusion proofs exist to close. The
-/// proof verifies between the two roots regardless of any rows; only an
-/// inclusion proof binds a specific leaf to a position. This pins that
-/// the two checks are independent.
+/// An attacker presents forged suffix rows beside a genuine consistency
+/// proof. That proof relates two roots and says nothing about rows; only
+/// an inclusion proof binds a leaf to a position, so the forgery fails
+/// there.
 #[test]
 fn consistency_alone_says_nothing_about_specific_rows() {
     let leaves: Vec<Hash> = (0u16..7).map(|n| leaf_hash(&n.to_le_bytes())).collect();

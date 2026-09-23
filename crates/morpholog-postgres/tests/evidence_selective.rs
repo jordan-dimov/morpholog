@@ -1,7 +1,6 @@
 //! Selective evidence packs end to end: disclose a chosen subset of real
-//! committed transitions, verify OFFLINE (no pool), and pin the
-//! reveal-nothing property against genuine audit rows. Tampering is done
-//! by editing the pack's JSON, as an attacker holding the file would.
+//! transitions, verify offline, and check that nothing undisclosed leaks.
+//! The attacker holds the file and edits the pack's JSON.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -31,9 +30,8 @@ async fn a_disclosed_subset_verifies_intact_and_reveals_nothing_else() {
         }
     );
 
-    // The reveal-nothing property over real rows: neither the undisclosed
-    // transition's id nor any of its business payload appears anywhere in
-    // the pack bytes - not the entry subject, the accounts, or the claims.
+    // Neither the undisclosed transition's id nor any of its payload
+    // (entry subject, accounts, claims) appears in the pack bytes.
     let bytes = serde_json::to_string(&pack).unwrap();
     assert!(bytes.contains(&shown_a.to_string()));
     assert!(bytes.contains("cash_sel_b"));

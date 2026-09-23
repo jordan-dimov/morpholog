@@ -63,17 +63,15 @@ impl Proposal {
     }
 }
 
-/// The attestation lineage as the audit row stores it. Deliberately
-/// does not repeat the actor - the row's `actor` column is the single
-/// source, and this object is lineage about it. Decoding is strict:
-/// an unrecognised `mode` is an error at the boundary, never a value
-/// that flows on into hashing or display.
+/// The attestation lineage as the audit row stores it. It does not repeat
+/// the actor: the row's `actor` column is the single source. Decoding is
+/// strict: an unknown `mode` is an error, never a value that reaches
+/// hashing or display.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase", deny_unknown_fields)]
 pub enum AuditAttestation {
-    /// The PostgreSQL-authenticated login role of the proposing
-    /// connection asserted the actor. Resolved by the adapter from
-    /// `session_user` inside the committing transaction - never
-    /// supplied by the caller.
+    /// The login role of the proposing connection asserted the actor.
+    /// The adapter reads it from `session_user` inside the committing
+    /// transaction; the caller never supplies it.
     Gateway { authenticated_by: String },
 }

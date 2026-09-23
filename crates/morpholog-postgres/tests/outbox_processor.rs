@@ -1,9 +1,8 @@
 //! End-to-end integration tests for the single-row processor
 //! (`process_one_outbox_row`).
 //!
-//! These tests drive a real outbox row through every branch of the
-//! delivery-and-compensation state machine, against a real
-//! PostgreSQL database, asserting that:
+//! A real outbox row goes through each branch of the delivery and
+//! compensation state machine:
 //! - happy-path delivery marks the row `delivered`;
 //! - transient failures return the row to `pending` with a retry
 //!   instant;
@@ -12,14 +11,12 @@
 //! - non-retryable failures with a compensation spec drive the
 //!   row through the `failed` -> `compensation_in_progress` -> `failed`
 //!   sequence with `compensation_transition_id` set;
-//! - a compensating transformation that is rejected by an invariant
-//!   leaves the row in `compensation_failed` (the genuinely-broken
-//!   state).
+//! - a compensating transformation rejected by an invariant leaves the
+//!   row in `compensation_failed`.
 //!
-//! The processor is exercised against the `double_entry_ledger`
-//! example: the original commit posts a balanced entry; the
-//! compensation posts a reversal with debit and credit swapped, so
-//! `balanced_posted_entry` continues to hold across the audit log.
+//! The example is `double_entry_ledger`: the original posts a balanced
+//! entry, and the compensation posts the reversal with debit and credit
+//! swapped.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -71,17 +68,12 @@ const LEASE: Duration = Duration::from_secs(30);
 // Deliverer stubs
 // ============================================================
 //
-// AlwaysDelivers, AlwaysTransient, AlwaysNonRetryable live in
-// `morpholog_postgres::testing` so this crate's tests and
-// `morpholog-outbox`'s tests share the same stubs. Test-file-local
-// shapes that need processor-side state (e.g. forcing lease
-// expiry via direct SQL) stay here.
+// The shared stubs live in `morpholog_postgres::testing`; only ones
+// that reach into the database stay here.
 
-/// Deliverer that forces its own lease to expire (via direct SQL)
-/// before returning the configured outcome. Used to exercise the
-/// processor's LeaseLost branches deterministically: by the time
-/// the mark_* helper runs, the row's lock_expires_at is in the
-/// past, so the helper returns OutboxUpdate::LeaseLost.
+/// Deliverer that expires its own lease before returning the configured
+/// outcome, so the mark_* helper that follows returns
+/// OutboxUpdate::LeaseLost.
 struct ExpireLeaseThenReturn {
     pool: PgPool,
     outcome: DeliveryOutcome,
@@ -104,11 +96,9 @@ impl Deliverer for ExpireLeaseThenReturn {
 // Compensation specs
 // ============================================================
 
-/// A compensating transformation that genuinely balances: it posts
-/// a reversal with debit and credit accounts swapped. The args
-/// closure ignores the failed row's contents and hardcodes the
-/// reversal - the test setup is the only caller, and it knows the
-/// exact original posting it committed.
+/// A compensating transformation that balances: the reversal with debit
+/// and credit swapped. The args are hardcoded, since the test knows the
+/// original posting.
 fn balanced_reversal_spec(suffix: &str) -> CompensationSpec {
     let suffix = suffix.to_string();
     CompensationSpec {
@@ -120,9 +110,7 @@ fn balanced_reversal_spec(suffix: &str) -> CompensationSpec {
                 subj(&format!("reversal_{suffix}")),
                 subj("d_2026_05_17"),
                 subj("p_processor"),
-                // Original posted cash debit / revenue credit; the
-                // reversal swaps them so both entries balance under
-                // balanced_posted_entry.
+                // The original debited cash and credited revenue.
                 subj("account_revenue"),
                 subj("account_cash"),
                 dec(100),
@@ -131,10 +119,8 @@ fn balanced_reversal_spec(suffix: &str) -> CompensationSpec {
     }
 }
 
-/// A compensating transformation that is guaranteed to be rejected
-/// by `balanced_posted_entry`: it uses `post_split_entry` with
-/// mismatched debit and credit amounts. Demonstrates the
-/// `compensation_failed` branch.
+/// A compensating transformation `balanced_posted_entry` always rejects:
+/// `post_split_entry` with mismatched amounts.
 fn unbalanced_compensation_spec(suffix: &str) -> CompensationSpec {
     let suffix = suffix.to_string();
     CompensationSpec {
@@ -332,9 +318,8 @@ async fn process_one_outbox_row_compensates_on_nonretryable_with_spec() {
     assert_eq!(status, "failed");
     assert_eq!(compensation_transition_id, Some(compensation_tid));
 
-    // Audit log preserves the full lineage: original commit, then
-    // the compensating transformation. This is the load-bearing
-    // property of the compensation pattern.
+    // The audit log holds the original commit, then the compensating
+    // transformation.
     let audit = list_audit_rows(&pool).await.unwrap();
     let tids: Vec<Uuid> = audit.iter().map(|r| r.transition_id).collect();
     assert!(tids.contains(&original_tid), "original audit row preserved");
@@ -371,9 +356,8 @@ async fn process_one_outbox_row_marks_compensation_failed_when_compensation_reje
         "rejection reason should name the invariant that fired, got: {rejection_reason}"
     );
 
-    // The row is in compensation_failed; failure_reason now reflects
-    // the compensation rejection (overwriting the original
-    // delivery failure reason, per the helper's documented behavior).
+    // The row is compensation_failed, and failure_reason now holds the
+    // compensation's rejection instead of the delivery failure.
     let (status, failure_reason, compensation_transition_id): (
         String,
         Option<String>,
@@ -398,13 +382,10 @@ async fn process_one_outbox_row_marks_compensation_failed_when_compensation_reje
 // LeaseLost coverage
 // ============================================================
 //
-// Two tests force the lease to expire mid-deliver, exercising
-// the processor's LeaseLost return paths on different intended
-// outcomes. The third (LeaseLost during compensation completion)
-// would require a hook between begin_compensation and
-// complete_compensation that the current processor API does not
-// expose; the orphan-audit case is documented in
-// docs/outbox-sketch.md but not pinned by an automated test.
+// These force the lease to expire mid-delivery. A lease lost during
+// compensation would need a hook between begin_compensation and
+// complete_compensation that the processor does not expose, so that
+// case is documented in docs/outbox-sketch.md but not tested.
 
 #[tokio::test]
 async fn process_one_outbox_row_returns_lease_lost_when_delivery_lease_expires() {
@@ -431,10 +412,8 @@ async fn process_one_outbox_row_returns_lease_lost_when_delivery_lease_expires()
         "expected LeaseLost (delivery-mark branch), got {outcome:?}"
     );
 
-    // Row was NOT moved to `delivered`. It is still in_progress
-    // under the expired lease (an expired-lease reclaim by the
-    // next claim would set things right, but that has not yet
-    // happened in this test).
+    // Not `delivered`: still in_progress under the expired lease, until
+    // the next claim reclaims it.
     let (status, delivered_at): (String, Option<jiff_sqlx::Timestamp>) =
         sqlx::query_as("SELECT status, delivered_at FROM morpholog.outbox LIMIT 1")
             .fetch_one(&pool)
@@ -452,9 +431,8 @@ async fn process_one_outbox_row_returns_lease_lost_on_failed_branch_when_lease_e
     let pool = test_pool().await;
     reset_db(&pool).await;
     let _ = commit_post_simple_entry(&pool, "entry_001").await;
-    // A compensation spec is supplied here on purpose: the test
-    // pins that the early-return prevents the compensation arm
-    // from running when mark_outbox_failed itself was a no-op.
+    // A compensation spec is supplied on purpose: it must not run when
+    // mark_outbox_failed was a no-op.
     let spec = balanced_reversal_spec("entry_001");
 
     let outcome = process_one_outbox_row(
@@ -498,12 +476,10 @@ async fn process_one_outbox_row_returns_lease_lost_on_failed_branch_when_lease_e
     );
 }
 
-/// Compensation is the one durable path that never passes through
-/// `resolve()`: it carries a decomposed transformation and no
-/// programme, so the facades' declaration check cannot see it. The
-/// fail-closed guarantee therefore lives at the authorisation seam and
-/// keys off the CLAIMS, which every path shares - an admitted policy
-/// claim whose shape the runtime cannot read stops the commit here too.
+/// Compensation carries a bare transformation and no programme, so the
+/// declaration check the propose paths run cannot see it. The authorisation
+/// check reads the claims, which every path shares: a policy claim the
+/// runtime cannot read stops a compensation commit too.
 #[tokio::test]
 async fn compensation_refuses_to_commit_under_an_unreadable_policy_claim() {
     let pool = test_pool().await;
@@ -511,9 +487,8 @@ async fn compensation_refuses_to_commit_under_an_unreadable_policy_claim() {
     let original_tid = commit_post_simple_entry(&pool, "entry_pol").await;
     let spec = balanced_reversal_spec("entry_pol");
 
-    // A policy claim with the wrong arity - what a misshapen
-    // declaration admits. It looks like a restriction and protects
-    // nothing, so nothing durable may proceed while it stands.
+    // A policy claim with the wrong arity. It looks like a restriction
+    // but protects nothing, so nothing may commit while it stands.
     sqlx::query(
         "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
          VALUES ('ActorAssertionRestricted',

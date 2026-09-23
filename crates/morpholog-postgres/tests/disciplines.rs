@@ -1,7 +1,6 @@
-//! The durable half of the discipline contract: a generated invariant
-//! rejects atomically against real PostgreSQL, and a committed
-//! transition's audit row lists the generated invariant - under its
-//! traceable name - among the rules that governed admission.
+//! Disciplines against real PostgreSQL: a generated invariant rejects
+//! atomically, and a committed transition's audit row lists it by its
+//! generated name among the rules checked.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -37,9 +36,8 @@ async fn a_generated_invariant_rejects_durably_and_signs_the_audit_row() {
     let p = ledger();
     let post = p.transformation("post").unwrap();
 
-    // The first entry commits, and its audit row records that the
-    // generated invariant governed the admission - the declaration's
-    // commitment, named in the permanent record.
+    // The first entry commits, and its audit row names the generated
+    // invariant.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
         &common::compiled(p.clone()),

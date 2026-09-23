@@ -18,17 +18,13 @@ pub(crate) fn quote_literal(s: &str) -> String {
 mod tests {
     use super::{quote_ident, quote_literal};
 
-    // These two functions are the injection guard for every runtime-built
-    // SQL string in this crate - including reads over a schema name the
-    // caller supplies (`--views-schema`). sqlx 0.9 asks each such site to
-    // be audited by hand; an audit that rests on an untested helper is
-    // not worth much, so the escaping is pinned here.
+    // These two functions guard every runtime-built SQL string in this
+    // crate against injection, including a caller-supplied schema name
+    // (`--views-schema`), so the escaping is pinned here.
 
     #[test]
     fn ordinary_identifiers_are_quoted_not_folded() {
         assert_eq!(quote_ident("morpholog_views"), "\"morpholog_views\"");
-        // Quoted even when safe, so no caller depends on PostgreSQL's
-        // case-folding.
         assert_eq!(quote_ident("Order"), "\"Order\"");
     }
 

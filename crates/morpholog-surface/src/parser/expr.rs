@@ -535,21 +535,19 @@ where
                     )
                     .or_not(),
             )
-            .map(|(first, rest_opt)| {
-                match rest_opt {
-                    None => first,
-                    Some((second, more)) => {
-                        let mut chain = vec![first, second];
-                        chain.extend(more);
-                        let mut iter = chain.into_iter().rev();
-                        let Some(init) = iter.next() else {
-                            unreachable!("chain has at least two elements")
-                        };
-                        iter.fold(init, |acc, left| Prop::Implies {
-                            left: Box::new(left),
-                            right: Box::new(acc),
-                        })
-                    }
+            .map(|(first, rest_opt)| match rest_opt {
+                None => first,
+                Some((second, more)) => {
+                    let mut chain = vec![first, second];
+                    chain.extend(more);
+                    let mut iter = chain.into_iter().rev();
+                    let Some(init) = iter.next() else {
+                        unreachable!("chain has at least two elements")
+                    };
+                    iter.fold(init, |acc, left| Prop::Implies {
+                        left: Box::new(left),
+                        right: Box::new(acc),
+                    })
                 }
             });
 

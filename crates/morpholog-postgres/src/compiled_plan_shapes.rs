@@ -1,35 +1,28 @@
 //! The plan-shape gate on the compiled checks: the indexes the compiler
-//! says its SQL can seek on are the indexes PostgreSQL actually seeks
-//! on. Two properties, asserted structurally rather than by pinning a
-//! plan tree, because the planner is entitled to any reasonable plan:
+//! says its SQL can seek on are the ones PostgreSQL actually seeks on.
+//! Asserted structurally, not by pinning a plan tree, because the planner
+//! may choose any reasonable plan:
 //!
-//! - **Eligibility.** With the unordered scans disabled, a seek on each
-//!   required index's extractor uses that index, over every
-//!   whole-in-fragment gallery programme. One probe per index, because
-//!   a plan uses one index per scan and an occurrence filtered on two
-//!   positions lawfully uses one of its two. This is what catches an
-//!   extractor drifting away from its index expression: the two are
-//!   rendered by one object, and this proves the planner agrees.
-//! - **Planner regression.** On a populated and ANALYZEd ledger with the
-//!   planner left alone, every index the compiler required for an
-//!   invariant is chosen in that invariant's plan - the correlated
-//!   lookups the spike found were what paid. The JIT tax and the ORDER
-//!   BY flip the spike met are guarded where they bite (`jit = off` in
-//!   the check transaction, the ORDER BY over the extractor expressions)
-//!   and would show here as an index falling out of a plan.
+//! - **Eligibility.** With unordered scans disabled, a seek on each
+//!   required index's extractor uses that index, for every
+//!   whole-in-fragment gallery programme. One probe per index, because a
+//!   scan uses one index and a lookup filtered on two positions may use
+//!   either. This catches an extractor drifting from its index expression.
+//! - **Planner regression.** On a populated, ANALYZEd ledger with the
+//!   planner left alone, every index required for an invariant appears in
+//!   that invariant's plan. The JIT cost and the ORDER BY choice are
+//!   guarded where they bite (`jit = off` in the check transaction, ORDER
+//!   BY over the extractor expressions) and would show here as a missing
+//!   index.
 //!
-//! There is deliberately no third test asserting that every invariant's
-//! real violation SQL uses one of its own indexes across the gallery:
-//! it was written, and it found that a full stage-1 uniqueness check is
-//! a self-join over every row of the predicate, which the planner
-//! lawfully serves as a hash join of two whole-predicate scans without
-//! touching the expression index at any size. The seek pays in
-//! correlated lookups and in the case-bound stage, which is what the
-//! populated ledger's regression covers.
+//! There is deliberately no test that every full violation query uses its
+//! own indexes: a full uniqueness check is a self-join over the whole
+//! predicate, which the planner rightly serves as a hash join of two full
+//! scans. The indexes pay in correlated lookups and the case-bound check,
+//! which the ledger regression covers.
 //!
-//! Stage-1 SQL carries no bind parameters, so there is no generic plan
-//! to force; the day a parameter enters compiled SQL, a forced-generic
-//! case joins here. `DATABASE_URL`-gated like every PG suite.
+//! Compiled SQL has no bind parameters, so there is no generic plan to
+//! force. `DATABASE_URL`-gated.
 
 use std::collections::BTreeSet;
 
@@ -136,11 +129,9 @@ async fn every_required_index_is_eligible_for_every_whole_in_fragment_programme(
         populate_for_probes(&pool, &pg.required_indexes()).await;
         provision_indexes(&pool, &pg, false).await.unwrap();
         for spec in pg.required_indexes() {
-            // A seek spelled as the compiled SQL spells it - the query-side
-            // extractor, alias-qualified, from the same representation the
-            // index was derived from - with a literal of that type. The
-            // gate compares the two call sites: a specification derived
-            // one position off would build an index this seek cannot use.
+            // A seek spelled as the compiled SQL spells it, with a literal
+            // of the representation's type. A specification one position
+            // off would build an index this seek cannot use.
             let literal = match spec.representation {
                 crate::compiled::Representation::Text => "'probe'",
                 crate::compiled::Representation::Numeric => "0",
@@ -165,11 +156,9 @@ async fn every_required_index_is_eligible_for_every_whole_in_fragment_programme(
     }
 }
 
-/// Two hundred distinct rows per indexed predicate, each position
-/// carrying a value of the kind the representation at that position
-/// reads (a subject elsewhere), so a seek on one value is the cheaper
-/// plan for a reason rather than a tie with the key's prefix scan on
-/// an empty table.
+/// Two hundred distinct rows per indexed predicate, each position holding
+/// a value of the kind its representation reads (a subject elsewhere), so
+/// a seek is genuinely cheaper rather than a tie on an empty table.
 async fn populate_for_probes(pool: &PgPool, specs: &[crate::compiled::IndexSpec]) {
     use crate::compiled::Representation;
     let mut by_predicate: std::collections::BTreeMap<String, Vec<(usize, Representation)>> =

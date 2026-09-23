@@ -111,11 +111,9 @@ fn a_forked_schedule_is_refused() {
     );
 }
 
-/// A bare re-linking act that admits only the chain claim - the shape
-/// a future "rewire the schedule" transformation would take. Through
-/// `schedule_next_period` a merge or cross-facility link always trips
-/// the period-identity rules first; these tests pin that the chain
-/// disciplines are law on their own, not a side effect of that act.
+/// A bare act that admits only the chain link. Through `schedule_next_period`
+/// the period-identity rules would refuse first; this shows the chain rules
+/// hold on their own.
 fn link_only() -> morpholog_core::Transformation {
     use morpholog_core::ir_builder::{assert_, params, transformation, var};
     transformation(
@@ -317,10 +315,8 @@ fn a_notice_after_delivery_is_refused_whichever_order_is_proposed() {
 
 #[test]
 fn a_late_certificate_never_earns_timely_standing_even_by_hand() {
-    // Try to smuggle Timely standing past the gate by proposing the
-    // window invariant's own violation: certificate on day 46, then
-    // accept_timely. The gate refuses; nothing in the programme can
-    // admit Timely without it.
+    // Certificate on day 46, then accept_timely: the gate refuses, and
+    // nothing else in the programme can admit Timely.
     let state = opened();
     let state = ex().must_accept(
         &covenant_reporting::submit_certificate(),

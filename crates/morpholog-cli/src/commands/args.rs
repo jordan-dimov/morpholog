@@ -1,27 +1,16 @@
 //! Shared decoder for `propose` and `explain` transformation arguments.
+//! Both input forms decode into the positional `Vec<EvalValue>` the kernel
+//! takes; one decoder keeps the commands agreeing on what is valid.
 //!
-//! The CLI accepts two flag-distinguished input forms; both decode
-//! into the same positional `Vec<EvalValue>` the kernel expects.
-//! Centralising the decode here keeps the two commit / dry-run
-//! paths from drifting on what counts as a valid input.
+//! - `--args` (tagged): a JSON array of tagged `EvalValue`s, the kernel's
+//!   own wire shape. The type tags let it carry parameters whose kind the
+//!   schema cannot pin down.
 //!
-//! - `--args` (tagged) is the implementer-facing codec: a JSON
-//!   array of adjacently-tagged `EvalValue`s, exactly the wire
-//!   shape the kernel uses internally. Polymorphic / Ambiguous /
-//!   Collection parameters reach the kernel through this path
-//!   because the per-element type tags resolve any ambiguity.
-//!
-//! - `--args-named` (bare-by-name) is the embedder-facing codec:
-//!   a JSON object keyed by parameter name with bare values
-//!   matching the schema (`morpholog schema <file>
-//!   <transformation>`). Strict: missing required keys, unknown
-//!   keys, wrong types, and `null` are all rejected. Refuses
-//!   `Polymorphic`, `Unconstrained`, `Ambiguous`, and `Collection`
-//!   parameters because the schema cannot give an unambiguous
-//!   kind for them; each error points at the tagged codec as the
-//!   fallback. The schema is the contract; the codec converts
-//!   already-valid input - the embedder validates against the
-//!   schema before sending if they want pre-flight checking.
+//! - `--args-named`: a JSON object keyed by parameter name, with bare values
+//!   matching `morpholog schema <file> <transformation>`. Strict: missing,
+//!   unknown, mistyped and `null` keys are refused. Parameters with no single
+//!   known kind (polymorphic, unconstrained, ambiguous, or a collection of
+//!   unknown items) are refused too, and the error points to `--args`.
 
 use anyhow::{Context, anyhow, bail};
 use jiff::civil::Date;
@@ -34,22 +23,17 @@ use serde_json::Value;
 use std::path::Path;
 use std::str::FromStr;
 
-/// The two flag-distinguished inputs `propose` and `explain` accept.
-/// Constructed by the caller after Clap has enforced one-of-two;
-/// the decoder does not re-check exclusivity.
+/// The two inputs `propose` and `explain` accept. Clap has already
+/// enforced that exactly one was given.
 pub(crate) enum CliArgs<'a> {
     Tagged(&'a str),
     Named(&'a str),
 }
 
-/// Decode the CLI's `--args` or `--args-named` payload into the
-/// positional `Vec<EvalValue>` the kernel consumes. `program` and
-/// `transformation` are used by the named path to project parameter
-/// kinds via [`transformation_param_kinds`]; the tagged path
-/// ignores them. `file` is included so error messages can point at
-/// the right `morpholog schema` invocation. Takes a
-/// [`ValidatedProgram`] so the named path does not re-validate after
-/// the caller already has.
+/// Decode `--args` or `--args-named` into the positional `Vec<EvalValue>`
+/// the kernel takes. The named path reads parameter kinds from `program`
+/// and `transformation` via [`transformation_param_kinds`]; the tagged path
+/// ignores them. `file` lets errors name the right `morpholog schema` call.
 pub(crate) fn decode_args(
     program: &ValidatedProgram<'_>,
     transformation: &Transformation,
@@ -132,10 +116,8 @@ fn decode_value(
             decode_timestamp(param, raw, schema_hint)
         }
         ParamKind::Concrete(PredicateArgKind::Duration) => decode_duration(param, raw, schema_hint),
-        // The named codec's quantity rule: the wire value is the same
-        // bare decimal string as `Decimal` - the declaration already
-        // fixes the unit, so sending it again would create a second
-        // source of truth. The kernel attaches the declared unit here.
+        // A quantity travels as a bare decimal string. The declaration
+        // already fixes the unit, so it is attached here, not sent.
         ParamKind::Concrete(PredicateArgKind::Quantity(unit)) => {
             let EvalValue::Decimal(amount) =
                 decode_decimal(param, raw, schema_hint).map_err(|e| {
@@ -161,9 +143,8 @@ fn decode_value(
              span as a literal (e.g. span(P3M)) in the transformation body \
              instead. {schema_hint}"
         ),
-        // A collection with a known element kind: decode a JSON array,
-        // each item by the element kind. This is the named-codec path an
-        // external engine submits a whole batch through.
+        // A collection with a known element kind: a JSON array, each item
+        // decoded by that kind.
         ParamKind::Collection(element) => {
             let Value::Array(items) = raw else {
                 bail!("parameter `{param}` is a collection; expected a JSON array. {schema_hint}");
@@ -179,9 +160,8 @@ fn decode_value(
                 .collect::<anyhow::Result<Vec<EvalValue>>>()?;
             Ok(EvalValue::Collection(decoded))
         }
-        // An element kind the kernel never narrowed (e.g. a loop binding
-        // used at no kind-bearing position, or a nested collection). The
-        // named codec cannot type the items; the tagged `--args` codec can.
+        // The item kind was never narrowed (say, a nested collection). Only
+        // the tagged `--args` codec can type the items.
         ParamKind::Concrete(PredicateArgKind::Collection) => bail!(
             "parameter `{param}` is a collection whose item kind the model never observes; \
              --args-named cannot decode it. Use the parameter's items in the body so their \
@@ -200,8 +180,7 @@ fn decode_value(
              kind is observed. {schema_hint}"
         ),
         ParamKind::Ambiguous(observed) => {
-            // Kind names render via the shared `Display` impl, so the
-            // unit always appears (`Decimal[USD]`).
+            // `Display` keeps the unit (`Decimal[USD]`).
             let names: Vec<String> = observed.iter().map(ToString::to_string).collect();
             bail!(
                 "parameter `{param}` is Ambiguous ({}); --args-named cannot choose a branch \
@@ -213,12 +192,10 @@ fn decode_value(
     }
 }
 
-/// Render an [`EvalValue`] as the bare JSON the named codec accepts -
-/// the read-side mirror of `--args-named`. Exactness rules match the
-/// write side: decimals, dates, timestamps, durations, and quantity
-/// amounts are strings (a JSON number would round-trip through a
-/// double; a quantity's unit lives in the declaration, mirroring the
-/// write side), booleans are booleans, collections recurse.
+/// Render an [`EvalValue`] as the bare JSON `--args-named` accepts.
+/// Decimals, dates, timestamps, durations and quantity amounts are
+/// strings, since a JSON number could lose precision. A quantity drops its
+/// unit, which the declaration supplies. Collections recurse.
 pub(crate) fn eval_value_to_bare_json(v: &EvalValue) -> Value {
     match v {
         EvalValue::Subject(s) => Value::String(s.to_string()),
@@ -226,12 +203,11 @@ pub(crate) fn eval_value_to_bare_json(v: &EvalValue) -> Value {
         EvalValue::Date(d) => Value::String(d.to_string()),
         EvalValue::Timestamp(t) => Value::String(t.to_string()),
         EvalValue::Duration(d) => Value::String(d.to_string()),
-        // The bare amount only: the unit lives in the declaration on
-        // both sides of the codec.
+        // The bare amount only: the declaration carries the unit.
         EvalValue::Quantity { amount, .. } => Value::String(amount.to_string()),
         EvalValue::Bool(b) => Value::Bool(*b),
-        // Lawfully unreachable - a span never reaches storage or the
-        // wire - but rendered faithfully rather than panicking.
+        // A span never reaches storage or the wire, but render it
+        // rather than panic.
         EvalValue::CalendarSpan(s) => Value::String(s.to_string()),
         EvalValue::Collection(items) => {
             Value::Array(items.iter().map(eval_value_to_bare_json).collect())
@@ -239,9 +215,8 @@ pub(crate) fn eval_value_to_bare_json(v: &EvalValue) -> Value {
     }
 }
 
-/// The string prelude every scalar decoder shares: refuse a non-string
-/// with one parallel message shape - the kind, what arrived, what was
-/// expected, and the schema pointer.
+/// Every scalar decoder starts here: refuse a non-string with one message
+/// shape naming the kind, what arrived, what was expected, and the schema.
 fn require_str<'v>(
     param: &str,
     raw: &'v Value,
@@ -260,14 +235,9 @@ fn require_str<'v>(
 
 fn decode_subject(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
     let s = require_str(param, raw, "Subject", "a string", schema_hint)?;
-    // `Subject` is Morpholog's only primitive noun: it carries
-    // both minted entity identifiers and domain symbols (commodity
-    // codes, period names, direction enums, account codes). The IR
-    // does not pin a format; the codec mirrors that and accepts any
-    // string. Subjects minted by `Stmt::LetNewSubject` are UUIDv7
-    // by runtime convention; externally supplied Subjects are
-    // opaque. An embedder that wants stricter validation layers
-    // its own constraint on top in its pre-flight schema.
+    // Any string is a subject: minted ids and domain symbols (commodity
+    // codes, period names) alike. The IR pins no format, so neither does
+    // the codec. An embedder wanting stricter checks adds its own.
     Ok(EvalValue::Subject(Subject::from(s)))
 }
 
@@ -279,11 +249,9 @@ fn decode_decimal(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result
         "a decimal string (e.g. \"100.50\")",
         schema_hint,
     )?;
-    // The schema commits to `^-?(0|[1-9]\d*)(\.\d+)?$`; the codec
-    // must match or the embedder validates against a stricter
-    // contract than the CLI actually enforces. `Decimal::from_str`
-    // alone is too lenient (accepts leading `+`, leading zeros,
-    // trailing dot). Validate the shape first, then parse.
+    // Match the schema's `^-?(0|[1-9]\d*)(\.\d+)?$` exactly.
+    // `Decimal::from_str` alone also accepts a leading `+`, leading zeros
+    // and a trailing dot, so check the shape first.
     if !is_schema_decimal(s) {
         bail!(
             "parameter `{param}` is Decimal but `{s}` does not match the schema pattern \
@@ -300,12 +268,9 @@ fn decode_decimal(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result
     Ok(EvalValue::Decimal(d))
 }
 
-/// Decimal shape check matching the JSON Schema pattern emitted
-/// by `morpholog-core::schema`. Kept as a hand-rolled scan rather
-/// than pulling `regex` in just for this; the grammar is small,
-/// monomorphic, and unlikely to change (a worked example forcing
-/// scientific notation or different number conventions would be
-/// the natural moment to revisit).
+/// Decimal shape check matching the JSON Schema pattern from
+/// `morpholog-core::schema`. Hand-rolled: the grammar is too small to be
+/// worth a `regex` dependency.
 fn is_schema_decimal(s: &str) -> bool {
     let body = s.strip_prefix('-').unwrap_or(s);
     let (int_part, frac_part) = match body.split_once('.') {
@@ -424,10 +389,8 @@ pub(crate) fn decode_declared_value(
     kind: &PredicateArgKind,
     raw: &str,
 ) -> anyhow::Result<EvalValue> {
-    // A command line has only text, but the shared decoder is the named
-    // codec's, which takes booleans as JSON booleans. Without this,
-    // `--where settled=true` failed with "received string; expected
-    // `true` or `false`" - an error naming exactly what the caller wrote.
+    // A command line has only text, but the named codec wants JSON
+    // booleans, so `--where settled=true` needs converting.
     let json = match (kind, raw) {
         (PredicateArgKind::Bool, "true") => Value::Bool(true),
         (PredicateArgKind::Bool, "false") => Value::Bool(false),
@@ -499,8 +462,7 @@ mod tests {
 
     #[test]
     fn a_collection_param_rejects_an_ill_typed_item() {
-        // An item that is not a subject string fails at the element decode,
-        // not silently - the array is decoded item by item via the element kind.
+        // Each item is decoded by the element kind, so a bad one fails.
         let raw = json!(["acct_a", 42]);
         assert!(decode_value("accounts", &subject_collection(), &raw, "").is_err());
     }

@@ -1,23 +1,16 @@
 //! Generates the per-example accessor modules from the `.morph` source.
 //!
-//! Each worked example's `.morph` is the single source of truth. This
-//! script reads every `examples/<NN_dir>/<file>.morph` (exactly one `.morph`
-//! per directory - more is an error), extracts its top-level `transformation`
-//! / `invariant` / `derived` declaration names by a leading-token scan (the
-//! name follows the keyword at the start of a line, after any indentation;
-//! these forms are stable v0 syntax, and the scan is textual, not lexical),
-//! and emits an accessor module into `OUT_DIR`. `lib.rs` brings each in with
-//! one `example_module!(<name>)` line - that one line is the only manual step,
-//! and it cannot be silently forgotten: the generated `all_programs()`
-//! registry references the module, so a missing line is a compile error.
+//! Each `examples/<NN_dir>/` holds exactly one `.morph`, the single source of
+//! truth. This script scans it for top-level `transformation`, `invariant` and
+//! `derived` names (a textual scan of line-leading keywords) and writes an
+//! accessor module into `OUT_DIR`. `lib.rs` includes each with one
+//! `example_module!(<name>)` line; forgetting it is a compile error, because the
+//! generated `all_programs()` registry names the module.
 //!
-//! The scan reads only the SOURCE, so it sees authored declarations only
-//! (generated discipline invariants do not exist until parse-time lowering).
-//! Accessor names: transformations and invariants verbatim (snake-case in the
-//! surface), derived claims snake-cased from their PascalCase output
-//! predicate. Every emitted name is validated as a plain Rust identifier (and
-//! not a keyword), so a malformed declaration fails the build with a clear
-//! message rather than a cryptic error in generated code.
+//! The scan sees authored declarations only; generated discipline invariants
+//! appear later, at parse time. Transformations and invariants keep their names;
+//! derived claims are snake-cased from their PascalCase predicate. A name that
+//! is not a plain Rust identifier fails the build with a clear message.
 
 // A build script panics on error by design - a failure here is a build
 // failure, surfaced with the panic message.
@@ -63,10 +56,8 @@ fn main() {
         modules.push((module, rel));
     }
 
-    // The auto-discovered registry: one descriptor per example, and the
-    // programme list derived from it - one discovery, one meaning of
-    // "all worked examples". Generated, so a new `.morph` is covered
-    // the moment it is added - no manual list to forget.
+    // One generated registry, so a new `.morph` is covered the moment it is
+    // added, with no manual list to forget.
     modules.sort();
     let mut registry = String::from(
         "/// Every worked example, as build discovery found it: the single\n\
@@ -125,10 +116,8 @@ fn strip_numeric_prefix(dir: &str) -> &str {
     }
 }
 
-/// Leading-token names of each declaration kind, in source order: the name
-/// following `keyword ` at the start of a line (after any indentation), up to
-/// the terminator. Textual, not lexical - fine for the stable top-level
-/// declaration forms.
+/// Names of each `keyword` declaration, in source order: the first token after
+/// `keyword ` at the start of a line, before the terminator. Textual, not lexical.
 fn declarations<'a>(source: &'a str, keyword: &str, terminator: char) -> Vec<&'a str> {
     let prefix = format!("{keyword} ");
     source
@@ -136,9 +125,8 @@ fn declarations<'a>(source: &'a str, keyword: &str, terminator: char) -> Vec<&'a
         .filter_map(|line| line.trim().strip_prefix(&prefix))
         .filter_map(|rest| rest.split(terminator).next())
         .map(str::trim)
-        // The name is the first token: a declaration may carry clauses
-        // before its terminator (`invariant N total over P:`), and the
-        // accessor is named after N.
+        // A declaration may carry clauses before its terminator
+        // (`invariant N total over P:`); the name is the first token.
         .filter_map(|head| head.split_whitespace().next())
         .filter(|name| !name.is_empty())
         .collect()
@@ -161,10 +149,8 @@ fn render_module(name: &str, rel: &str, source: &str) -> String {
     }
     out.push_str("};\n\n");
 
-    // The path is resolved at the lib's compile time from CARGO_MANIFEST_DIR,
-    // not baked in as a build-machine absolute path. Embedded ONCE: the
-    // registry's descriptor references this same const, so the path
-    // expression exists in exactly one generated place.
+    // Resolved from CARGO_MANIFEST_DIR at compile time, not baked in as an
+    // absolute path. The registry reuses this const, so the path lives in one place.
     out.push_str(&format!(
         "/// The example's `.morph` source, embedded at compile time.\n\
          pub const SOURCE: &str =\n    \
@@ -218,11 +204,8 @@ fn snake_case(pascal: &str) -> String {
     out
 }
 
-/// A declaration name must become a plain Rust identifier (`a-z`, `0-9`, `_`,
-/// not starting with a digit) and not a keyword. A name that cannot fails the
-/// build here with a clear message, instead of a cryptic error in generated
-/// code. Raw-identifier handling for a keyword-named declaration is left until
-/// an example forces it.
+/// Fails the build with a clear message unless `name` is a plain Rust
+/// identifier and not a keyword, rather than a cryptic error in generated code.
 fn validated_ident(name: &str) -> &str {
     let mut chars = name.chars();
     let well_formed = chars

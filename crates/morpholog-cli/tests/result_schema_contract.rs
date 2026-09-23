@@ -1,23 +1,18 @@
 //! The outcome-envelope contract, pinned from both sides.
 //!
-//! `schema --result` embeds a hand-pinned JSON Schema document; this
-//! test is what keeps it honest, in two layers over one set of golden
-//! envelope files (`tests/golden/envelopes/*.json`):
+//! `schema --result` embeds a hand-written JSON Schema. This suite checks
+//! it in two layers over one set of goldens (`tests/golden/envelopes/*.json`):
 //!
-//! 1. **Reality**: each golden is byte-equal to a freshly serialized
-//!    real value (`PgProposalOutcome`, `explain()` output, an
-//!    `OutboxRow`) or to a composite built exactly the way the command
-//!    code builds it (`run.rs`'s traced/batch `json!` shapes,
-//!    `outbox.rs`'s wrappers). A serde change anywhere shows up here.
-//! 2. **Pin**: each golden validates against its `$defs` entry in the
-//!    embedded `result.json` - discriminants, required keys, key-set
-//!    strictness - via a small walker (no schema-validation
-//!    dependency; format/pattern are deliberately not checked here,
-//!    the reality layer pins exact bytes).
+//! 1. **Reality**: each golden is byte-equal to a freshly serialized real
+//!    value (`PgProposalOutcome`, `explain()` output, an `OutboxRow`), or to
+//!    a composite built the way the command builds it. Any serde change
+//!    shows up here.
+//! 2. **Pin**: each golden validates against its `$defs` entry in
+//!    `result.json` (discriminants, required keys, no extra keys) via a
+//!    small walker. Formats and patterns are left to the reality layer.
 //!
-//! The same goldens are loaded by the generated Python client's
-//! `test_envelopes.py`, so the binary, the schema document, and the
-//! emitted client all answer to one sample set.
+//! The generated Python client's `test_envelopes.py` loads the same
+//! goldens, so binary, schema and client answer to one sample set.
 //!
 //! To regenerate after a deliberate contract change:
 //! `UPDATE_GOLDENS=1 cargo test -p morpholog-cli --test result_schema_contract`
@@ -73,10 +68,9 @@ fn to_value<T: serde::Serialize>(v: &T) -> serde_json::Value {
     serde_json::to_value(v).unwrap()
 }
 
-/// Like [`assert_golden`], but pins the value's DIRECT serialization -
-/// the exact bytes `print_json` emits - instead of the
-/// `Value`-normalized form (whose object keys re-sort). For envelopes
-/// whose struct declaration order (or a `flatten`) is the wire order.
+/// Like [`assert_golden`], but pins the exact bytes `print_json` emits
+/// rather than the `Value` form, which re-sorts keys. For envelopes whose
+/// field order (or a `flatten`) is the wire order.
 fn assert_golden_bytes<T: serde::Serialize>(name: &str, value: &T) {
     let path = golden_dir().join(name);
     let rendered = format!("{}\n", serde_json::to_string_pretty(value).unwrap());
@@ -181,10 +175,9 @@ fn rejected_outcome() -> PgProposalOutcome {
     }
 }
 
-/// The same rejection, carrying the values the rule was reading. Pinned
-/// separately from the witness-less shape so both stay covered: a refusal
-/// the kernel cannot pin to one iteration still emits the original
-/// envelope, byte for byte.
+/// The same rejection, carrying the values the rule was reading. Both
+/// shapes are pinned, since a refusal with no single witness still emits
+/// the plain envelope.
 fn rejected_with_witness_outcome() -> PgProposalOutcome {
     PgProposalOutcome::Rejected {
         reason: "invariant `no_flagged_accounts` violated".to_string(),
@@ -285,9 +278,8 @@ fn named_gate_program() -> morpholog_core::Program {
     p
 }
 
-/// A programme whose statements reach every trace step kind, so the
-/// goldens below can cover each arm of the union rather than the arms one
-/// happy path happens to hit.
+/// A programme whose statements reach every trace step kind, so the goldens
+/// cover each arm of the union.
 fn traced_program() -> morpholog_core::Program {
     use morpholog_core::ir_builder::{
         bind_one_named, emit, for_, let_, let_new_subject, require_named, retract, term,
@@ -357,15 +349,8 @@ fn traced_program() -> morpholog_core::Program {
         .build()
 }
 
-/// One real `propose_with_trace` run: the outcome AND the trace from the
-/// same invocation.
-///
-/// Taking them from different runs is how the first cut of these goldens
-/// went wrong - a trace that stopped at a failed lookup was pinned beside
-/// an invariant-violation reason, a pairing the runtime cannot produce. The
-/// point of a cross-layer golden is that it holds the runtime, the schema
-/// and the client to one sample; a self-contradicting sample holds them to
-/// nothing.
+/// One real `propose_with_trace` run: the outcome and the trace from the
+/// same call. Mixing runs could pin a pairing the runtime never produces.
 fn traced_run(
     name: &str,
     args: Vec<EvalValue>,
@@ -451,12 +436,9 @@ fn errored_run() -> (String, Vec<morpholog_core::TraceEntry>) {
     }
 }
 
-/// A `let x = new Subject()` step mints a fresh UUIDv7 on every run, so its
-/// entry is the one thing a byte-equal golden cannot take verbatim. That
-/// subject - and only that subject - is replaced with a fixed one; every
-/// other byte in these goldens is what the runtime produced. Without this
-/// the step could not be pinned at all, and the schema would go on
-/// describing an arm no cross-layer sample covers.
+/// A `let x = new Subject()` step mints a fresh UUIDv7 each run. Replace
+/// that subject, and only it, with a fixed one; every other byte is what
+/// the runtime produced.
 fn pin_fresh_subjects(trace: &mut [morpholog_core::TraceEntry]) {
     use morpholog_core::TraceEntry;
     for entry in trace.iter_mut() {
@@ -511,10 +493,8 @@ fn explanations_serialize_as_pinned() {
     let error = explain(&p, &transition("no_such_transformation"), &flagged_state());
     assert_golden("explanation_admissible.json", &to_value(&admissible));
     assert_golden("explanation_gate.json", &to_value(&gate));
-    // Two goldens, so both shapes stay covered: an unnamed gate omits
-    // `rule` entirely (above, byte-identical to before names existed) and
-    // a named one carries it. `explain` is a command in its own right, so
-    // this is the only place a dry run can report which rule would refuse.
+    // Both shapes: an unnamed gate omits `rule` (above), a named one
+    // carries it.
     let named = explain(
         &named_gate_program(),
         &transition("open_account"),
@@ -525,12 +505,8 @@ fn explanations_serialize_as_pinned() {
     assert_golden("explanation_error.json", &to_value(&error));
 }
 
-/// The rejection log's row shape, both with and without a witness.
-///
-/// Pinned now because it carries structured evidence: an embedder reading
-/// `inspect rejections` programmatically was reaching an ad-hoc surface, and
-/// the moment a surface is consumed it has to be an envelope with a floor
-/// under it rather than a shape that can drift silently.
+/// The rejection log's row shape, with and without a witness. Embedders
+/// read `inspect rejections`, so its shape must not drift.
 #[test]
 fn rejection_rows_serialize_as_pinned() {
     let base = morpholog_postgres::RejectionRow {
@@ -546,9 +522,8 @@ fn rejection_rows_serialize_as_pinned() {
         rejected_at: "2026-06-01T12:00:00Z".parse::<jiff::Timestamp>().unwrap(),
     };
     assert_golden("rejection_row.json", &to_value(&base));
-    // A gate refusal, which has no witness and no version: the key is
-    // absent rather than null, so a row from before the column existed
-    // reads identically to one the kernel could not pin.
+    // A gate refusal has no witness and no version: the keys are absent,
+    // not null.
     let gate = morpholog_postgres::RejectionRow {
         kind: "require".to_string(),
         rule: "actor_has_authority_for_amount".to_string(),
@@ -560,12 +535,8 @@ fn rejection_rows_serialize_as_pinned() {
     assert_golden("rejection_row_gate.json", &to_value(&gate));
 }
 
-/// The `migrate` report, in both shapes an operator meets: a database that
-/// is behind, and one that has just been brought current.
-///
-/// Pinned because a deploy step reads it - `--check` exits non-zero and the
-/// report says what is outstanding, which is a contract the moment anyone
-/// gates on it.
+/// The `migrate` report for a database that is behind and one just brought
+/// current. Deploy steps gate on `--check` and read what is outstanding.
 #[test]
 fn migration_reports_serialize_as_pinned() {
     let behind = morpholog_postgres::MigrationReport {
@@ -609,8 +580,8 @@ fn migration_reports_serialize_as_pinned() {
     };
     assert_golden("migration_report_applied.json", &to_value(&applied));
 
-    // A database migrated by a NEWER binary. The dangerous shape: nothing
-    // is pending, and it is emphatically not current.
+    // A database migrated by a newer binary: nothing pending, yet not
+    // current.
     let ahead = morpholog_postgres::MigrationReport {
         recorded_version_before: Some(15),
         recorded_version_after: Some(15),
@@ -647,8 +618,7 @@ fn outbox_row_serializes_as_pinned() {
         lock_expires_at: Some("2026-06-01T12:00:30Z".parse::<jiff::Timestamp>().unwrap()),
     };
     assert_golden("outbox_row.json", &to_value(&row));
-    // The claim/update wrappers, built exactly as commands/outbox.rs
-    // builds them.
+    // The claim and update wrappers, built as commands/outbox.rs does.
     assert_golden("outbox_claim.json", &serde_json::json!({ "row": row }));
     assert_golden(
         "outbox_claim_null.json",
@@ -690,8 +660,8 @@ fn audit_rows_serialize_as_pinned() {
     };
     assert_golden("audit_row.json", &to_value(&row));
 
-    // The attested variant: same row, plus the gateway attestation
-    // lineage the adapter records on every commit it writes today.
+    // The attested variant: the same row plus the gateway attestation the
+    // adapter records on every commit.
     let attested = AuditRow {
         attestation: Some(morpholog_postgres::AuditAttestation::Gateway {
             authenticated_by: "morpholog_writer".to_string(),
@@ -700,9 +670,8 @@ fn audit_rows_serialize_as_pinned() {
     };
     assert_golden("audit_row_attested.json", &to_value(&attested));
 
-    // The self-describing variant: the attested row plus the parameter
-    // names the writer stamped, one per argument - the row's own
-    // signature, outliving the programme that wrote it.
+    // The attested row plus the parameter names the writer stamped, one
+    // per argument, so the row outlives the programme that wrote it.
     let self_describing = AuditRow {
         parameters: Some(vec!["account_id".to_string()]),
         ..attested.clone()
@@ -712,10 +681,8 @@ fn audit_rows_serialize_as_pinned() {
         &to_value(&self_describing),
     );
 
-    // The --named form replaces the two claim arrays with
-    // field-keyed bare objects (the named_claim shape) and leaves
-    // everything else byte-identical - through the same projection
-    // the binary runs.
+    // The --named form replaces the claim arrays with named claims and
+    // leaves the rest unchanged, via the binary's own projection.
     let named = morpholog_cli::envelopes::audit_row_named(
         &row,
         vec![morpholog_cli::envelopes::NamedClaim {
@@ -733,9 +700,9 @@ fn audit_rows_serialize_as_pinned() {
     assert_golden("audit_row_named.json", &named);
 }
 
-// Composite envelopes, built exactly the way commands/run.rs builds
-// them (the cli_integration suite pins the live binary's output; this
-// pins the bytes the Python tests consume).
+// Composite envelopes, built the way the propose command builds them.
+// cli_integration pins the live output; this pins what the Python tests
+// read.
 #[test]
 fn composite_envelopes_serialize_as_pinned() {
     let p = explanation_program();
@@ -749,9 +716,7 @@ fn composite_envelopes_serialize_as_pinned() {
             explanation,
         )),
     );
-    // The combination the schema always permitted and the runtime could
-    // not produce: the diagnosis path dropped the witness, so the one
-    // command built for diagnosis answered least.
+    // A rejection with both an explanation and a witness.
     let explanation = explain(&p, &transition("open_account"), &flagged_state());
     assert_golden(
         "rejected_with_explanation_and_witness.json",
@@ -762,9 +727,8 @@ fn composite_envelopes_serialize_as_pinned() {
             explanation,
         )),
     );
-    // Every traced golden below is one real run: outcome and trace from the
-    // same `propose_with_trace` call, so the pair is one the runtime can
-    // actually produce. Between them they reach each arm of the trace union.
+    // Each traced golden below is one real run, and together they reach
+    // every arm of the trace union.
     let (committed, trace) = traced_run("walk", walk_args(), &account_state(&[]));
     assert_golden(
         "traced_committed.json",
@@ -834,8 +798,8 @@ fn composite_envelopes_serialize_as_pinned() {
             3,
         )),
     );
-    // A row the database refused before anything was recorded: a
-    // receipt, the rows after it still run.
+    // The database refused the row before recording anything: a receipt,
+    // and later rows still run.
     assert_golden(
         "batch_error_receipt_not_committed.json",
         &to_value(&morpholog_cli::envelopes::ErrorReceipt::new(
@@ -848,15 +812,11 @@ fn composite_envelopes_serialize_as_pinned() {
     );
 }
 
-// A real coverage report over a programme with a DECLARED discipline,
-// so the golden carries the generated invariant's `from` provenance -
-// the one optional field with a special Python mapping (`from` is a
-// Python keyword; the client maps it to `from_clause`). The authored
-// invariant is refused once (constrained, with first/last refusal
-// ids), flag_account is used, open_account is declared-but-unused
-// with a gate refusal, and historical-only names are flagged on both
-// the transformation and invariant sides: every optional field of
-// the shape appears in the golden.
+// A real coverage report that uses every optional field. A declared
+// discipline gives the generated invariant's `from` provenance, which the
+// Python client maps to `from_clause` since `from` is a keyword. The
+// authored invariant is refused once; `open_account` is unused but has a
+// gate refusal; names only in history are flagged on both sides.
 #[test]
 fn coverage_report_serializes_as_pinned() {
     let source = "program envelopes_coverage\n\
@@ -929,9 +889,7 @@ fn report_envelopes_serialize_as_pinned() {
     );
     {
         use morpholog_cli::envelopes::{ErrorCode, ErrorReceipt, SessionReady};
-        // The version is stamped from the crate at serialization time,
-        // which would rot the golden on every release; pin the value
-        // shape with the field overridden to a fixed string.
+        // The crate version changes every release, so fix it here.
         let mut ready = to_value(&SessionReady::new(
             format!("sha256:{}", "0".repeat(64)),
             "envelopes".to_string(),
@@ -946,8 +904,8 @@ fn report_envelopes_serialize_as_pinned() {
                 17,
             )),
         );
-        // COMMIT failed without a server verdict: the one receipt that
-        // means "read the record before re-submitting".
+        // COMMIT failed without a verdict: read the record before
+        // re-submitting.
         assert_golden(
             "session_error_receipt_commit_outcome_unknown.json",
             &to_value(&ErrorReceipt::new(
@@ -994,9 +952,8 @@ fn report_envelopes_serialize_as_pinned() {
 fn claim_arrays_serialize_as_pinned() {
     use morpholog_cli::envelopes::NamedClaim;
 
-    // Direct serialization, not Value-normalized: the commands print
-    // these Vecs straight through print_json, so the golden must carry
-    // the structs' true wire order (`predicate` before `args`).
+    // Direct serialization, as print_json prints it, so the golden keeps
+    // the wire order (`predicate` before `args`).
     assert_golden_bytes("claim_instances.json", &vec![kitchen_sink_claim()]);
     assert_golden_bytes(
         "named_claims.json",
@@ -1012,9 +969,8 @@ fn claim_arrays_serialize_as_pinned() {
     );
 }
 
-// `refresh derived`: the snapshot pair is present or absent together
-// (it comes from one audit row), and the schema + validator hold the
-// pair constraint, not just this serialization.
+// `refresh derived`: the snapshot pair is present or absent together, and
+// the schema enforces that too.
 #[test]
 fn refresh_derived_reports_serialize_as_pinned() {
     use morpholog_cli::envelopes::RefreshDerivedReport;
@@ -1046,9 +1002,8 @@ fn refresh_derived_reports_serialize_as_pinned() {
     );
 }
 
-// A one-sided snapshot pair is unrepresentable on the wire, and the
-// schema layer agrees: dependentRequired refuses it, and the validator
-// actually enforces dependentRequired.
+// The schema refuses a one-sided snapshot pair via dependentRequired, and
+// the validator enforces it.
 #[test]
 fn refresh_derived_report_rejects_one_sided_snapshot() {
     let schema = result_schema();
@@ -1066,10 +1021,8 @@ fn refresh_derived_report_rejects_one_sided_snapshot() {
     assert!(err.contains("dependentRequired"), "unexpected error: {err}");
 }
 
-// The evaluate score reports, byte-pinned as the CLI prints them
-// (direct struct serialization, no Value normalization): the discovery
-// harness consumes this stdout by subprocess, so the pin covers the
-// true wire order - including `CaseResult`'s flatten.
+// The evaluate reports, pinned byte for byte as printed, including
+// `CaseResult`'s flatten: a discovery harness reads this stdout.
 #[test]
 fn score_reports_serialize_as_pinned() {
     let candidate = program("candidate")
@@ -1097,9 +1050,7 @@ fn score_reports_serialize_as_pinned() {
 
     let mut scorer = CandidateScorer::new(&candidate).unwrap();
     scorer.observe_transition(&flagged, &admitted, t1).unwrap();
-    // The boundary strings are rendered by the adapter's wire-time
-    // authority, as the scorer renders them, so the golden pins the
-    // real spelling and not one typed here.
+    // Render the boundaries as the scorer does, not typed by hand.
     let split_at = morpholog_postgres::wire_time::parse("2026-06-01T12:00:00Z").unwrap();
     scorer.mark_split(SplitBoundaryReport {
         requested: morpholog_postgres::wire_time::render(&split_at),
@@ -1135,9 +1086,8 @@ fn score_reports_serialize_as_pinned() {
     assert_golden_bytes("batch_score.json", &batch);
 }
 
-// The tamper-evidence family: the envelopes of `verify`, `checkpoint`,
-// and `audit export`/`verify-pack`. One golden per serialized variant so
-// the reality layer pins every shape an embedder decodes.
+// The envelopes of `audit verify`, `checkpoint`, `export` and
+// `verify-pack`: one golden per variant an embedder decodes.
 
 fn sample_checkpoint() -> Checkpoint {
     Checkpoint {
@@ -1294,8 +1244,8 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
     // `audit witness` prints the checkpoint as now stored, bare.
     assert_golden("checkpoint_witnessed.json", &to_value(&witnessed));
 
-    // The witness axis: what each stored witness proves, on the live
-    // report and on the pack report that carries it beside the verdict.
+    // What each stored witness proves, on the live report and on the pack
+    // report.
     let attested = "2026-09-16T10:20:05Z".parse::<jiff::Timestamp>().unwrap();
     let witnesses_report = WitnessesReport {
         checkpoints: vec![CheckpointWitnesses {
@@ -1449,7 +1399,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         }),
     );
 
-    // `evidence export --from-*`: the windowed pack (v2).
+    // `audit export --from-*`: the windowed pack (v2).
     assert_golden(
         "window_evidence_pack.json",
         &to_value(&WindowEvidencePack {
@@ -1606,10 +1556,8 @@ fn result_schema() -> serde_json::Value {
 }
 
 /// Shallow structural validation: discriminants (const/enum), required
-/// keys, key-set strictness, recursion through properties / items /
-/// $ref / oneOf. Deliberately ignores format/pattern/minimum - the
-/// reality layer pins exact bytes; this layer pins that result.json
-/// AGREES with those bytes structurally.
+/// keys, no extra keys, recursing through properties, items, $ref and
+/// oneOf. Format, pattern and minimum are left to the byte-exact layer.
 fn validate(
     value: &serde_json::Value,
     schema: &serde_json::Value,
@@ -1720,12 +1668,8 @@ fn validate(
     Ok(())
 }
 
-/// Every arm of the trace union appears in some traced golden.
-///
-/// The arms are read out of the schema rather than listed here, so adding
-/// one without a sample reddens this test instead of quietly shipping a
-/// branch no golden exercises - which is how four arms came to be described
-/// by the schema and produced by nothing.
+/// Every arm of the trace union appears in some traced golden. The arms
+/// come from the schema, so a new arm without a sample fails here.
 #[test]
 fn every_trace_arm_appears_in_a_golden() {
     let schema = result_schema();
@@ -1819,21 +1763,8 @@ fn every_trace_arm_appears_in_a_golden() {
     }
 }
 
-/// No golden carries an empty `witness`, because absence and emptiness must
-/// not both be sayable.
-///
-/// The prose promises "absent, never `[]`" - absence means nothing was
-/// captured, while `[]` would claim the rule was reading nothing, which is
-/// never true of a refusal. `skip_serializing_if` is what delivers that and
-/// the schema's `minItems` states it, but the walker here ignores `minItems`
-/// deliberately, so without this check the promise would rest on a keyword
-/// nothing in the repo enforces.
-/// A gate refusal carrying an invariant version, or a witness, is not a row
-/// the writer can produce - and the pin must say so.
-///
-/// A flat object with both fields independently optional validated those
-/// combinations happily, which left the pinned client unable to notice a
-/// serializer regression that attached invariant-only evidence to a gate.
+/// A gate refusal carrying an invariant version or a witness is not a row
+/// the writer can produce, so the schema must refuse it.
 #[test]
 fn a_gate_row_cannot_carry_invariant_only_fields() {
     let schema = result_schema();
@@ -1843,8 +1774,7 @@ fn a_gate_row_cannot_carry_invariant_only_fields() {
         &std::fs::read_to_string(golden_dir().join("rejection_row_gate.json")).unwrap(),
     )
     .unwrap();
-    // Sanity: the untampered gate row validates, or the refusals below prove
-    // nothing about the fields and everything about a broken fixture.
+    // The untouched row must validate, or the refusals below prove nothing.
     validate(&gate, def, defs, "rejection_row").expect("the gate golden validates as it stands");
 
     gate["invariant_version"] = serde_json::json!(4);
@@ -1865,6 +1795,9 @@ fn a_gate_row_cannot_carry_invariant_only_fields() {
     );
 }
 
+/// No golden carries an empty `witness`. Absent means nothing was
+/// captured; `[]` would claim the rule read nothing, never true of a
+/// refusal. The walker ignores the schema's `minItems`, so this checks it.
 #[test]
 fn no_golden_carries_an_empty_witness() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/envelopes");
@@ -2069,8 +2002,7 @@ fn every_golden_validates_against_its_defs_entry() {
     }
 }
 
-// The schema document itself stays structurally sane: every $ref in it
-// resolves to a $defs entry, so a rename cannot silently orphan one.
+// Every $ref in the schema resolves to a $defs entry.
 #[test]
 fn every_internal_ref_resolves() {
     let schema = result_schema();
@@ -2093,18 +2025,14 @@ fn every_internal_ref_resolves() {
     }
 }
 
-/// Every session error code the binary can emit must be in the pinned
-/// enum. The goldens pin one code each; nothing else would notice a
-/// new variant reaching an embedder that had matched exhaustively on
-/// the published set.
+/// Every error code the binary can emit is in the published enum, so an
+/// embedder matching on the set never meets an unknown code.
 #[test]
 fn every_session_error_code_is_in_the_pinned_enum() {
     use morpholog_cli::envelopes::{ErrorCode, ProposeCode};
     let schema = result_schema();
-    // Each receipt references a named set rather than carrying a copy:
-    // the session the whole vocabulary, the batch exactly what a
-    // proposal row can earn - a schema must admit nothing the command
-    // cannot produce.
+    // The session receipt uses the whole set, the batch only what a
+    // proposal row can produce. The schema admits nothing more.
     assert_eq!(
         schema["$defs"]["session_error_receipt"]["properties"]["code"]["$ref"],
         "#/$defs/error_code"
@@ -2133,8 +2061,7 @@ fn every_session_error_code_is_in_the_pinned_enum() {
         propose_published, propose_emitted,
         "propose_error_code must be exactly the codes a batch row can carry"
     );
-    // The vocabulary partitions into the proposal codes and the codes
-    // only a session can answer with; a new code has to land on one side.
+    // Every code is either a proposal code or session-only.
     let session_only = [ErrorCode::UnknownOperation];
     for code in ErrorCode::ALL {
         let is_propose = ProposeCode::ALL
@@ -2170,12 +2097,10 @@ fn every_session_error_code_is_in_the_pinned_enum() {
 // ============================================================
 // The manual-schema intent ledger.
 //
-// result.json is written by hand. Each entry below is one reason it
-// cannot be replaced by a schema generated from the Rust types: a rule
-// the schema states that the types do not, a name an embedder
-// references, a closed shape, or a format. Each is asserted on the
-// document itself, so dropping one from the schema fails here by name
-// and the reason is read before the entry is removed.
+// result.json is written by hand. Each entry below is a reason it cannot
+// be generated from the Rust types: a rule the types do not state, a name
+// an embedder uses, a closed shape, or a format. Each is checked against
+// the document, so removing one fails here by name.
 // ============================================================
 
 #[derive(Debug, Clone, Copy)]

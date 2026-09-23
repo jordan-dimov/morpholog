@@ -1,19 +1,13 @@
 //! Schema evolution: the numbered migrations, compiled into the binary.
 //!
-//! `init` provisions a database and never migrates it, which left upgrading
-//! as an instruction rather than a capability - "apply every numbered file
-//! that postdates your database", from a directory the release artifact does
-//! not contain. An embedder consuming releases had to fetch the SQL out of a
-//! git tag. Embedding them here is the same move `SCHEMA_SQL` already makes:
-//! a binary-only deployment carries exactly the migrations this build
-//! expects, with nothing to vendor and nothing to drift.
+//! Embedded like `SCHEMA_SQL`, so a binary-only deployment carries exactly
+//! the migrations it expects, with nothing to vendor or drift.
 //!
 //! **What "pending" means.** `morpholog.schema_migrations` records applied
-//! versions. A database provisioned from `schema.sql` is at the head by
-//! construction, so [`crate::initialise_schema`] records every migration
-//! without running any. A database predating that table has no record, so
-//! everything is pending - which is sound because the migrations are
-//! idempotent, and migration 011 backfills the record once it lands.
+//! versions. A database provisioned from `schema.sql` is at the head, so
+//! [`crate::initialise_schema`] records every migration without running
+//! any. A database predating that table has no record, so everything is
+//! pending. That is sound because the migrations are idempotent.
 
 use crate::error::{PgError, classify, classify_checked_query};
 use serde::{Deserialize, Serialize};
@@ -81,12 +75,10 @@ pub struct MigrationRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MigrationReport {
     /// The newest version the database recorded before this run, or `None`
-    /// when it recorded nothing - a database predating the record.
+    /// when it predates the record.
     ///
-    /// `None` rather than `0`, because "no record exists" and "recorded
-    /// version zero" are different claims and only one of them is true. A
-    /// database with no record may well have migrations 1..10 applied; what
-    /// is absent is the knowledge, not the schema.
+    /// `None`, not `0`: such a database may well have migrations applied;
+    /// only the record is missing.
     pub recorded_version_before: Option<i32>,
     /// The newest version recorded after this run. Unchanged by `--check`.
     pub recorded_version_after: Option<i32>,
@@ -98,13 +90,11 @@ pub struct MigrationReport {
     /// Still outstanding. Empty after a successful run; populated when
     /// checking a database that is behind.
     pub pending: Vec<MigrationRef>,
-    /// Recorded by the database and unknown to this binary - the database
-    /// is AHEAD, which is what a rollback to an older binary looks like.
+    /// Recorded by the database and unknown to this binary: the database
+    /// is AHEAD, as after a rollback to an older binary.
     ///
-    /// Reported and refused rather than ignored. A binary cannot know
-    /// whether a migration it has never seen removed or reinterpreted
-    /// something it depends on, and that is exactly the moment a green
-    /// readiness check is most dangerous.
+    /// Refused, not ignored: the binary cannot know whether an unseen
+    /// migration changed something it depends on.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown: Vec<MigrationRef>,
 }
@@ -118,9 +108,8 @@ impl MigrationReport {
 
 /// Which versions the database records as applied.
 ///
-/// `None` when the record itself does not exist - a database older than the
-/// migration that introduces it. That is different from "recorded nothing",
-/// and the caller treats it as "everything is pending".
+/// `None` when the record table itself does not exist, which the caller
+/// treats as "everything is pending".
 async fn recorded_versions(pool: &PgPool) -> Result<Option<Vec<MigrationRef>>, PgError> {
     let present = sqlx::query!(
         "SELECT 1 AS one FROM pg_tables
@@ -219,17 +208,15 @@ pub async fn migration_status(pool: &PgPool) -> Result<MigrationReport, PgError>
 
 /// Apply every migration the database has not recorded, in order.
 ///
-/// Each runs in its own transaction with its record written alongside, so a
-/// failure part-way leaves the versions before it applied and recorded
-/// rather than a half-migrated database claiming to be current.
+/// Each runs in its own transaction with its record, so a failure part-way
+/// leaves the earlier versions applied and recorded, never a half-migrated
+/// database claiming to be current.
 pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError> {
     ensure_schema_present(pool).await?;
     let before = migration_status(pool).await?;
     if !before.unknown.is_empty() {
         // Migrating a database that is ahead would apply nothing and report
-        // success, which is the worst answer available: the binary cannot
-        // know whether a migration it has never seen changed something it
-        // depends on.
+        // success, although an unseen migration may have broken this binary.
         let names: Vec<String> = before
             .unknown
             .iter()
@@ -243,11 +230,9 @@ pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError>
             names.join(", ")
         )));
     }
-    // The record has to exist before the first migration can record itself:
-    // the migration that introduces it is number 11, and 001 would otherwise
-    // insert into a table ten steps in its future. Idempotent, and it
-    // matches what 011 creates - which stays, for anyone applying the files
-    // by hand with psql.
+    // The record table must exist before the first migration records
+    // itself, though a later migration introduces it. This matches what that
+    // migration creates, which stays for anyone applying files by hand.
     sqlx::raw_sql(
         "CREATE TABLE IF NOT EXISTS morpholog.schema_migrations (
              version     integer      PRIMARY KEY,
@@ -283,11 +268,8 @@ pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError>
             name: m.name.to_string(),
         });
     }
-    // A migration that creates a table leaves the least-privilege roles
-    // without access to it: the floor grants per table, and GRANT does not
-    // reach forward in time. Re-applying it is idempotent and is the only
-    // way an existing locked-down installation gets privileges on anything
-    // a migration added.
+    // Grants are per table and do not cover tables created later, so
+    // re-apply the least-privilege floor (idempotent) after migrating.
     if !applied.is_empty() && crate::least_privilege_roles_exist(pool).await? {
         crate::provision_least_privilege(pool).await?;
     }

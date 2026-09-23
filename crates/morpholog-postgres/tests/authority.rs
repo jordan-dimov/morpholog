@@ -1,10 +1,8 @@
-//! The keys-as-claims authority layer: a signed checkpoint verifies as
-//! intact only when its signing key was admitted as an `AuditSigningKey`
-//! claim as of the checkpoint's prefix. A genuine signature by a key the
-//! ledger never authorised is `UnauthorizedKey`, not intact - the
-//! signature is real, the signer was not permitted. Signing itself refuses
-//! an unauthorised key, so an unauthorised signature only arises from
-//! tampering with the signatures column or an externally-supplied anchor.
+//! Signing-key authority: a signed checkpoint is intact only if its key
+//! was admitted as an `AuditSigningKey` claim as of the checkpoint's
+//! prefix. A genuine signature by a key the ledger never authorised is
+//! `UnauthorizedKey`. Signing refuses such a key, so the attacker here
+//! is one who edits the signatures column or supplies a forged anchor.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -24,7 +22,7 @@ use common::{
 const PURPOSE: &str = "audit_checkpoint_v1";
 
 /// Authorise a fresh key under `key_id` and create a checkpoint signed by
-/// it - the legitimate starting point most of these tests then attack.
+/// it: the legitimate starting point most tests then attack.
 async fn signed_checkpoint(pool: &PgPool, key_id: &str) -> Checkpoint {
     let key = generate_signing_key();
     authorize_signing_key(
@@ -46,9 +44,8 @@ async fn signed_checkpoint(pool: &PgPool, key_id: &str) -> Checkpoint {
     }
 }
 
-/// A genuine signature over a checkpoint's tree head by an arbitrary key -
-/// what an attacker who edits the (out-of-tree) signatures column, or a
-/// forged anchor, would carry.
+/// A genuine signature over a checkpoint's tree head by any key, as an
+/// edited signatures column or a forged anchor would carry.
 fn signature_over(key: &SigningKey, key_id: &str, cp: &Checkpoint) -> TreeHeadSignature {
     let head = TreeHead {
         tree_size: cp.tree_size,
@@ -99,8 +96,7 @@ async fn signing_with_an_unauthorized_key_is_refused() {
     let err = create_checkpoint(&pool, Some(&interloper), None)
         .await
         .expect_err("signing with an unauthorised key must be refused, not produced");
-    // Quiet horizon, nothing withheld: the plain refusal, about the key -
-    // never the truncated-prefix diagnosis.
+    // Nothing withheld, so the refusal is about the key, not the horizon.
     assert!(
         matches!(err, PgError::SigningKeyUnauthorised { tree_size: 1, .. }),
         "expected the plain authority refusal as of this prefix, got: {err}"
@@ -113,8 +109,7 @@ async fn an_unauthorised_key_with_a_withheld_authorisation_names_the_horizon() {
     reset_db(&pool).await;
 
     // An older transaction is still open when the key is authorised, so
-    // the authorisation commits at or above the resume horizon - withheld
-    // from the checkpoint's stable prefix, not missing.
+    // the authorisation is withheld from the checkpoint, not missing.
     let mut interferer = pool.begin().await.unwrap();
     sqlx::query("SELECT transaction_timestamp()")
         .execute(&mut *interferer)
@@ -156,8 +151,8 @@ async fn an_unauthorised_key_with_a_withheld_authorisation_names_the_horizon() {
         "the message must point at the workload, not the key: {err}"
     );
 
-    // The remedy the message names is true: once the older transaction
-    // ends the horizon advances and the same signer succeeds.
+    // The remedy the message names works: once the older transaction
+    // ends, the same signer succeeds.
     interferer.rollback().await.unwrap();
     match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
         CheckpointOutcome::Created(c) => {
@@ -170,18 +165,17 @@ async fn an_unauthorised_key_with_a_withheld_authorisation_names_the_horizon() {
     }
 }
 
-// The race this pins: a signing run resolves authority over its own
-// (possibly horizon-truncated) prefix, but its signature attaches to the
-// chain head, which may sit past a revocation. The signature must be
-// judged against the head it attests, or signing produces a checkpoint
-// `verify` itself rejects as UnauthorizedKey.
+// A signing run sees a prefix the horizon may cut short, but its
+// signature attaches to the chain head, which may be past a revocation.
+// Authority must be judged at the head, or signing makes a checkpoint
+// `verify` rejects as UnauthorizedKey.
 #[tokio::test]
 async fn attaching_a_signature_resolves_authority_as_of_the_head_actually_signed() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     if !session_is_superuser(&pool).await {
-        // The head-advancing checkpoint below rides the asserted horizon
-        // ignoring our (superuser, census-exempt) interferer session.
+        // The checkpoint below relies on the asserted horizon ignoring
+        // our superuser interferer session.
         eprintln!("skipping: needs a superuser test role");
         return;
     }
@@ -218,10 +212,9 @@ async fn attaching_a_signature_resolves_authority_as_of_the_head_actually_signed
         "the head covers authorisation and revocation"
     );
 
-    // Sign without the assertion: this run's horizon trails the
-    // interferer, so its own prefix (tree_size 1) still shows k1
-    // authorised - but the signature would attach to the head at 2,
-    // where k1 is revoked. Authority must be judged as of 2.
+    // Without the assertion the horizon trails the interferer, so the
+    // prefix (tree_size 1) shows k1 authorised. But the signature would
+    // attach to the head at 2, where k1 is revoked.
     let signer = CheckpointSigner {
         key_id: "k1".into(),
         key,
@@ -243,11 +236,9 @@ async fn attaching_a_signature_resolves_authority_as_of_the_head_actually_signed
     drop_roles_if_present(&pool, &roles).await;
 }
 
-// The mirror image of the race above: the key IS authorised, but in a
-// committed row beyond the existing head that the dragged-back horizon
-// keeps uncheckpointable. Refusing with the plain "fix the key" message
-// here is the #303 misdiagnosis reappearing on the head-ahead path -
-// the honest answer is the withheld-horizon diagnosis.
+// The mirror image: the key IS authorised, in a committed row past the
+// head that the held-back horizon keeps out of any checkpoint. The
+// refusal must blame the horizon, not tell the caller to fix the key.
 #[tokio::test]
 async fn an_authorisation_beyond_the_head_is_diagnosed_as_withheld_not_missing() {
     let pool = test_pool().await;
@@ -259,9 +250,9 @@ async fn an_authorisation_beyond_the_head_is_diagnosed_as_withheld_not_missing()
     let roles = ["mtest305_idle"];
     recreate_roles(&pool, &roles, &["CREATE ROLE mtest305_idle LOGIN"]).await;
 
-    // An older transaction opens; an unrelated row commits above its
-    // start; a checkpoint under the asserted horizon (ignoring the
-    // interferer) makes that row the head; THEN the key is authorised.
+    // An older transaction opens; an unrelated row commits; a checkpoint
+    // under the asserted horizon makes that row the head; then the key
+    // is authorised.
     let mut interferer = pool.begin().await.unwrap();
     sqlx::query("SELECT transaction_timestamp()")
         .execute(&mut *interferer)
@@ -288,10 +279,9 @@ async fn an_authorisation_beyond_the_head_is_diagnosed_as_withheld_not_missing()
     )
     .await;
 
-    // Sign without the assertion: the horizon trails the interferer, the
-    // candidate prefix is empty, and the head (tree_size 1) predates the
-    // authorisation - but the authorisation exists, committed, one row
-    // beyond the head. The refusal must say so, not impugn the key.
+    // Without the assertion the prefix is empty and the head (tree_size
+    // 1) predates the authorisation, which is committed one row beyond.
+    // The refusal must say so, not blame the key.
     let signer = CheckpointSigner {
         key_id: "k1".into(),
         key,
@@ -314,8 +304,8 @@ async fn an_authorisation_beyond_the_head_is_diagnosed_as_withheld_not_missing()
         other => panic!("expected the truncated-prefix diagnosis, got: {other}"),
     }
 
-    // The remedy is true: the interferer ends, the horizon advances, and
-    // the same signer checkpoints the suffix that authorises it.
+    // Once the interferer ends, the same signer checkpoints the suffix
+    // that authorises it.
     interferer.rollback().await.unwrap();
     match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
         CheckpointOutcome::Created(c) => {
@@ -334,9 +324,9 @@ async fn a_genuine_signature_by_an_unauthorized_key_is_unauthorized_key() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    // Sign legitimately, then tamper the signatures column with a genuine
-    // signature by an unauthorised key (the merkle root is blind to it -
-    // signatures are not in the tree head, so only authority catches it).
+    // Sign legitimately, then put a genuine signature by an unauthorised
+    // key in the signatures column. Signatures are not in the tree head,
+    // so only the authority check catches it.
     let cp = signed_checkpoint(&pool, "k1").await;
     let forged = signature_over(&generate_signing_key(), "k2", &cp);
     sqlx::query("UPDATE morpholog.audit_checkpoints SET signatures = $1::jsonb")

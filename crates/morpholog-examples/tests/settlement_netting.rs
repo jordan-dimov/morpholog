@@ -1,13 +1,9 @@
 //! Integration tests for the bilateral settlement netting example
 //! (`examples/01_settlement_netting/`).
 //!
-//! Covers IR-shape tests (the example's invariants and
-//! transformation look like what we expect), evaluator tests (the
-//! `net_amount_equals_lines` invariant holds when arithmetic checks
-//! out and fails when it doesn't), and full-chain `propose()` tests
-//! (well-formed netting commits; pre-state `Netted` violation is
-//! rejected at admission time; candidate-state double-netting is
-//! caught by the invariant on the post-state).
+//! Covers the IR shape, the `net_amount_equals_lines` invariant on its own,
+//! and full `propose()` runs: good netting commits, an already-`Netted` line
+//! is refused at the gate, and double-netting is caught on the candidate state.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -26,8 +22,7 @@ fn ex() -> &'static Example {
 }
 
 // ============================================================
-// IR shape - the example's invariants and transformation look
-// like what we expect at the IR level.
+// IR shape.
 // ============================================================
 
 #[test]
@@ -220,13 +215,9 @@ fn propose_accepts_well_formed_netting() {
 
 #[test]
 fn propose_rejects_when_line_already_netted() {
-    // PR-G migration: the create_net_settlement transformation's
-    // single require is `forall(line in lines): and(approved, between,
-    // not(Netted(line)))`. With Netted(l1) admitted, the forall fails
-    // at the l1 iteration, and the failure-walk drills past forall and
-    // through the inner And to the failing `not(Netted(line))`
-    // conjunct. The old test could only prove "some require failed";
-    // this version pins which sub-expression rejected.
+    // The single require is `forall(line in lines): and(approved, between,
+    // not(Netted(line)))`. With Netted(l1) admitted, the failure report should
+    // drill through the forall and the And to the failing `not(Netted(line))`.
     use morpholog_core::{
         RequireOutcome, TraceEntry, TracedProposal, Transition, propose_with_trace,
     };
@@ -263,10 +254,7 @@ fn propose_rejects_when_line_already_netted() {
         _ => None,
     });
     let failing = failing.expect("expected failing_sub_expression on the require");
-    // The failure-walk should drill past forall + the inner And to
-    // the negated Netted clause. Pinning "Netted" alone is enough -
-    // the broader And contains other conjuncts (ApprovedSettlementLine,
-    // Between) and asserting on Netted specifically rules out them.
+    // Naming "Netted" is enough to rule out the other conjuncts.
     assert!(
         failing.contains("Netted"),
         "expected drill-down to the negated Netted clause; got: {failing}"
@@ -279,10 +267,9 @@ fn propose_rejects_when_line_already_netted() {
 
 #[test]
 fn propose_rejects_when_candidate_state_violates_no_double_netting() {
-    // l1 already participates in an older settlement, but Netted(l1)
-    // is missing from pre-state (inconsistent legacy data). The require
-    // check passes, the transformation stages a second SettlementLine
-    // for l1, and the invariant catches it on the candidate state.
+    // l1 is in an older settlement, but Netted(l1) is missing (bad legacy
+    // data). The gate passes, a second SettlementLine for l1 is staged, and
+    // the invariant catches it on the candidate state.
     let extra = vec![claim_instance(
         "SettlementLine",
         &[subj("l1"), subj("old_net"), dec(60)],
@@ -296,12 +283,9 @@ fn propose_rejects_when_candidate_state_violates_no_double_netting() {
     );
 }
 
-// Pins the propose() guard that a Transition's transformation_name must
-// match the Transformation it is being evaluated against. Without this,
-// a misuse where the caller passes a transformation whose `name`
-// disagrees with the audit-recorded `transformation_name` could commit
-// with a misleading audit row. The guard surfaces as EvalError so the
-// adapter rolls back rather than committing inconsistent state.
+// A Transition's transformation_name must match the Transformation it is
+// evaluated against; otherwise the audit row would name the wrong one. The
+// mismatch is an EvalError, so the adapter rolls back.
 #[test]
 fn propose_rejects_transition_name_mismatch() {
     use morpholog_core::{EvalError, Transition, propose};

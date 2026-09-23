@@ -2,9 +2,8 @@ use crate::error::{PgError, classify, classify_checked_query};
 use morpholog_core::Subject;
 use sqlx::{PgPool, Postgres, Transaction};
 
-/// The transaction isolation levels the adapter opens. A closed enum,
-/// not a `&str`, so the concurrency contract cannot be set to an
-/// arbitrary level - every isolation the adapter uses is named here.
+/// The transaction isolation levels the adapter opens. A closed enum, so
+/// no caller can pick an arbitrary level.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum TxIsolation {
     Serializable,
@@ -14,9 +13,8 @@ pub(crate) enum TxIsolation {
 }
 
 impl TxIsolation {
-    /// The full `SET TRANSACTION` statement as a `'static` literal, so
-    /// the per-transaction setup allocates nothing (the level is part of
-    /// the constant, not interpolated at runtime).
+    /// The full `SET TRANSACTION` statement, as a `'static` literal so
+    /// per-transaction setup allocates nothing.
     fn set_statement(self) -> &'static str {
         match self {
             TxIsolation::Serializable => "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
@@ -31,11 +29,8 @@ impl TxIsolation {
     }
 }
 
-/// Begin a transaction and set its isolation level - the ritual every
-/// adapter entry point opens with, in one auditable place. The `SET`
-/// stays raw control SQL (not a `query!` macro); the statement is a
-/// `'static` literal because [`TxIsolation`] is closed, so this hot path
-/// allocates nothing.
+/// Begin a transaction and set its isolation level. Every adapter entry
+/// point opens this way.
 pub(crate) async fn begin_isolated_tx(
     pool: &PgPool,
     isolation: TxIsolation,
@@ -52,21 +47,16 @@ pub(crate) async fn begin_isolated_tx(
 /// authenticated identity, and settle whether that identity may
 /// propose as this actor - before anything is loaded or evaluated.
 ///
-/// One seam for every durable proposal path. The traced and untraced
-/// paths each open their own transaction, and a policy check wired
-/// into only one of them would be a gate you could walk around by
-/// asking for a trace.
+/// Every durable proposal path goes through here, traced or not, so the
+/// policy check cannot be skipped by asking for a trace.
 ///
-/// `session_user` is the role PostgreSQL authenticated at login: it
-/// is immune to `SET ROLE`, so a caller cannot shed or borrow an
-/// identity through this adapter. A superuser can still change it
-/// with `SET SESSION AUTHORIZATION` - the same accepted residue as a
-/// superuser writing audit rows directly.
+/// `session_user` is the role PostgreSQL authenticated at login. `SET ROLE`
+/// cannot change it, so a caller cannot shed or borrow an identity. A
+/// superuser still can, via `SET SESSION AUTHORIZATION`; that is accepted,
+/// like a superuser writing audit rows directly.
 ///
-/// The role travels back with the transaction because the audit row
-/// records it too, and reading it twice would leave room for the
-/// identity that was CHECKED and the identity that is RECORDED to
-/// differ.
+/// The role is returned with the transaction for the audit row, so the
+/// identity checked and the identity recorded are the same read.
 pub(crate) async fn begin_authorised_proposal_tx<'a>(
     pool: &'a PgPool,
     actor: &Subject,

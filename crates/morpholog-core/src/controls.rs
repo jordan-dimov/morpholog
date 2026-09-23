@@ -1,54 +1,32 @@
 //! `inspect controls`: the control matrix an auditor reads.
 //!
-//! The two questions a controller or regulator asks of a rule set are
-//! "what can never be true?" and "what must already be true before
-//! each action?". [`crate::guarantees`] answers the first from the
-//! declared invariants; this module answers the second from each
-//! transformation's gates - its `require` conditions and its
-//! `bind`-exactly-one lookups - and packages both as one
-//! [`ControlMatrix`], the artefact a compliance mapping cites rule by
-//! rule.
+//! An auditor asks two things of a rule set: "what can never be true?"
+//! and "what must be true before each action?". [`crate::guarantees`]
+//! answers the first from the invariants. This module answers the second
+//! from each transformation's `require` and `bind` gates, and packages
+//! both as one [`ControlMatrix`].
 //!
-//! It also draws the cross-link the two questions share: which gate
-//! **front-loads** which invariant. A gate front-loads an invariant when
-//! this transformation can trigger that invariant (it admits a predicate
-//! the invariant's antecedent rests on) and the gate positively
-//! references a predicate the invariant's consequent also references - so
-//! the gate pre-checks, at action time, a condition the invariant
-//! enforces over committed state. This is a syntactic *correspondence*,
-//! not a proof of entailment: a gate checks bound arguments in the
-//! pre-state, the invariant is the standing guarantee over the candidate
-//! state and is checked at commit regardless, other transformations
-//! exist, and a shared predicate name need not mean the same business
-//! condition (`positive_claims` collects polarity-positive references,
-//! including across an `or`, which is weaker than "requires"). The map
-//! says "this `require` is the front line for that rule", never "this
-//! gate makes that rule unbreakable" - the same honesty boundary as the
-//! unsupplied-antecedent lint. Each link names both sides: the predicate
-//! this transformation admits that triggers the invariant, and the shared
-//! consequent predicate (surfaced so the reader sees the nuance - a gate
-//! may be stronger or weaker than the invariant; a consequent with no
-//! positive predicate - a `sum(..) <= ..` cap - is correctly left
-//! unlinked). The failure mode each link front-loads against is rendered
-//! mechanically as `<antecedent> and not (<consequent>)`.
+//! It also links the two: a gate **front-loads** an invariant when the
+//! transformation admits a predicate the invariant's antecedent rests on,
+//! and the gate positively references a predicate the consequent also
+//! references. The gate then checks early what the invariant enforces at
+//! commit. This is a name match, not a proof: the invariant is still
+//! checked at commit, other transformations exist, and a shared
+//! predicate may not mean the same business condition. Each link names
+//! both predicates so the reader can judge. A consequent with no
+//! positive predicate (a `sum(..) <= ..` cap) is left unlinked. The
+//! failure each link guards against renders as
+//! `<antecedent> and not (<consequent>)`.
 //!
-//! The same links read from the invariant's side are the **front-line
-//! coverage** ([`ControlMatrix::front_line_coverage`]), at implication-shape
-//! granularity so partial coverage of a multi-implication invariant stays
-//! visible. Each implication is one of three: front-loaded (a gate exists),
-//! a **backstop** (a transformation can trigger it but no gate front-loads
-//! it - caught only at commit), or **dormant** (no declared transformation
-//! triggers it at all). That three-way reading is the honest answer to
-//! "where is the front line for this standing rule, and where is there none?"
+//! Read from the invariant's side ([`ControlMatrix::front_line_coverage`]),
+//! each implication is front-loaded (a gate exists), a **backstop** (some
+//! transformation can trigger it but no gate front-loads it, so only the
+//! commit catches it), or **dormant** (no transformation triggers it).
 //!
-//! Deterministic and mechanical, like every legibility surface here:
-//! the words come only from declared names and the formatter, never
-//! generated prose. Deliberately shallow (v0): top-level gates in
-//! body order, no reachability analysis, no cross-transformation
-//! flow, predicate-overlap as the "syntactic subsumption" (no Prop-level
-//! entailment proving). Gates inside `for` bodies are iteration
-//! conditions, not admission preconditions, and are deliberately not
-//! lifted out.
+//! The output is mechanical: words come only from declared names and the
+//! formatter. It is deliberately shallow: top-level gates in body order,
+//! no reachability or cross-transformation analysis. Gates inside `for`
+//! bodies are per-item conditions, so they are not listed.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -62,31 +40,23 @@ use crate::guarantees::{Guarantee, guarantees};
 use crate::ir::{InvariantOrigin, PredicateName, Program, Prop, Stmt};
 use crate::lint::{implications_of, positive_claims_of};
 
-/// One invariant a gate **front-loads**: the gate pre-checks, at action
-/// time, a condition the invariant enforces over committed state. This
-/// is a syntactic *correspondence* through shared positive predicate
-/// references, not a proof of entailment - the invariant is the standing
-/// guarantee and is checked at commit regardless; the gate is the
-/// front-line filter. See the module doc.
+/// One invariant a gate **front-loads**: the gate checks early what the
+/// invariant enforces at commit. A match on shared predicates, not a
+/// proof; see the module doc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct GateFrontLoad {
     /// The invariant this gate front-loads.
     pub invariant: String,
     /// The predicates this transformation admits that the invariant's
-    /// antecedent rests on - why the invariant is in play here at all,
-    /// sorted. The antecedent side of the correspondence.
+    /// antecedent rests on, sorted.
     pub triggered_by: Vec<String>,
     /// The predicates referenced positively by both the gate and the
-    /// invariant's consequent - the overlap that makes the correspondence,
-    /// sorted. The reader checks the nuance (a gate may be stronger or
-    /// weaker than its invariant; sharing a predicate name is not proof
-    /// the same business condition is meant).
+    /// invariant's consequent, sorted. A gate may still be stronger or
+    /// weaker than its invariant.
     pub shared: Vec<String>,
-    /// The forbidden state the invariant rules out, rendered mechanically
-    /// from its implication as `<antecedent> and not (<consequent>)` - the
-    /// failure mode this gate front-loads against. Always present (unlike
-    /// [`Guarantee::forbids`], which only the `not(..)` shape populates).
+    /// The forbidden state, rendered as `<antecedent> and not
+    /// (<consequent>)`. Always present, unlike [`Guarantee::forbids`].
     pub failure_shape: String,
 }
 
@@ -95,24 +65,19 @@ pub struct GateFrontLoad {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct GateControl {
-    /// The author's stable identifier for this gate, absent when it has
-    /// none. The name a refusal reports, and what reads best here: a
-    /// reviewer scanning the control matrix wants the rule's name, not its
-    /// expression.
+    /// The gate's author-given name, if any: the name a refusal reports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// `"require"` or `"bind"` - the statement form the precondition
-    /// takes. A `require` is a yes/no condition; a `bind` demands
-    /// exactly one matching claim and refuses on zero (or several).
+    /// `"require"` (a yes/no condition) or `"bind"` (exactly one
+    /// matching claim, refused on zero or several).
     pub form: String,
     /// The condition, rendered in surface syntax.
     pub condition: String,
-    /// The claim predicates this precondition consults, sorted - the
-    /// evidence an auditor checks the condition against.
+    /// The claim predicates this precondition consults, sorted.
     pub consults: Vec<String>,
     /// The invariants this gate front-loads (see [`GateFrontLoad`]).
-    /// Empty for a gate with no standing-rule counterpart - e.g. an
-    /// authority gate, where the doctrine is action-time-only.
+    /// Empty for a gate with no matching invariant, such as an authority
+    /// check.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub front_loads: Vec<GateFrontLoad>,
 }
@@ -126,17 +91,15 @@ pub struct TransformationControls {
     pub gates: Vec<GateControl>,
 }
 
-/// One gate that front-loads an implication shape, named from the
-/// invariant's side: the same honesty/debug fields as the gate-side
-/// [`GateFrontLoad`], plus which transformation and gate they belong to.
+/// One gate that front-loads an implication, seen from the invariant's
+/// side: the fields of [`GateFrontLoad`] plus the transformation and gate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct GateRef {
     pub transformation: String,
     /// `"require"` or `"bind"`.
     pub form: String,
-    /// The gate's stable identifier, when it has one - so this view and
-    /// the transformation-side view name the same rule the same way.
+    /// The gate's author-given name, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// The gate condition, rendered in surface syntax.
@@ -148,23 +111,20 @@ pub struct GateRef {
     pub shared: Vec<String>,
 }
 
-/// The invariant side of the front-loads relation, at **implication-shape
-/// granularity** (an authored invariant with several implications yields
-/// several rows - partial coverage stays visible). Three readings:
-/// `front_loaded_by` non-empty = a front line exists; empty with
-/// `triggered_by_transformations` non-empty = a **backstop** (a
-/// transformation can trigger it, but no gate front-loads it - checked
-/// only at commit); both empty = **dormant** (no declared transformation
-/// currently triggers this implication shape at all).
+/// The invariant side of the front-loads relation, one row per
+/// implication, so partial coverage stays visible. Three readings:
+/// - `front_loaded_by` non-empty: a gate checks it early;
+/// - only `triggered_by_transformations` non-empty: a **backstop**,
+///   checked only at commit;
+/// - both empty: **dormant**, no transformation triggers it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct InvariantFrontLoad {
     pub invariant: String,
-    /// `<antecedent> and not (<consequent>)` - the forbidden state this
-    /// implication shape rules out (matches the gate-side `failure_shape`).
+    /// `<antecedent> and not (<consequent>)`: the forbidden state,
+    /// matching the gate side's `failure_shape`.
     pub failure_shape: String,
-    /// Transformations that admit a predicate the antecedent rests on -
-    /// the ones that can make this implication relevant.
+    /// Transformations that admit a predicate the antecedent rests on.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggered_by_transformations: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -180,15 +140,15 @@ pub struct ControlMatrix {
     pub program: String,
     pub transformations: Vec<TransformationControls>,
     pub guarantees: Vec<Guarantee>,
-    /// One entry per authored implication-shaped invariant's implication
-    /// (the front-loads relation's domain). See [`InvariantFrontLoad`].
+    /// One entry per implication of each authored invariant. See
+    /// [`InvariantFrontLoad`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub front_line_coverage: Vec<InvariantFrontLoad>,
 }
 
-/// Derive the control matrix from a parsed programme. Pure and
-/// mechanical: one entry per transformation in declaration order,
-/// gates in body order, plus the invariant guarantees.
+/// Derive the control matrix from a parsed programme: one entry per
+/// transformation in declaration order, gates in body order, plus the
+/// invariant guarantees.
 pub fn controls(compiled: &CompiledProgram) -> ControlMatrix {
     let program = compiled.program();
     let defs = compiled.definition_table();
@@ -223,11 +183,9 @@ pub fn controls(compiled: &CompiledProgram) -> ControlMatrix {
         })
         .collect();
 
-    // Invert the gate front-loads links into the invariant-side view, at
-    // implication-shape granularity. Keyed by (invariant, failure shape) -
-    // not the shape alone, so two invariants that happen to render the same
-    // implication shape keep separate front-loaders. Partial coverage of a
-    // multi-implication invariant stays visible: one row per implication.
+    // Invert the gate links into the invariant-side view. Keyed by
+    // (invariant, failure shape) so two invariants rendering the same
+    // shape keep separate rows.
     let mut by_shape: BTreeMap<(&str, &str), Vec<GateRef>> = BTreeMap::new();
     for t in &transformations {
         for g in &t.gates {
@@ -246,8 +204,8 @@ pub fn controls(compiled: &CompiledProgram) -> ControlMatrix {
             }
         }
     }
-    // Which transformations admit a predicate each implication's
-    // antecedent rests on - the backstop-vs-dormant distinction.
+    // Which transformations can trigger each implication: backstop or
+    // dormant.
     let asserted_by: Vec<(String, BTreeSet<PredicateName>)> = program
         .transformations
         .iter()
@@ -282,12 +240,10 @@ pub fn controls(compiled: &CompiledProgram) -> ControlMatrix {
     }
 }
 
-/// One authored, implication-shaped invariant reduced to the predicate
-/// footprints the protection match needs: what its antecedent positively
-/// requires (so we know which transformations can trigger it) and what
-/// its consequent positively requires (what a gate must overlap to be
-/// front-loading it). Generated discipline invariants are excluded - a
-/// gate does not front-load auto-generated uniqueness.
+/// One implication of an authored invariant, reduced to the positive
+/// predicates of its antecedent (who can trigger it) and consequent
+/// (what a gate must overlap). Generated discipline invariants are left
+/// out.
 struct InvImplication {
     invariant: String,
     antecedent: BTreeSet<PredicateName>,
@@ -321,11 +277,9 @@ fn authored_implications(program: &Program, defs: DefinitionTable<'_>) -> Vec<In
     out
 }
 
-/// The transformation's admission preconditions: top-level `require` and
-/// `bind` statements, in body order. A gate inside a `for` is deliberately
-/// NOT lifted here - it is an iteration condition, and rendering it flat
-/// would show a per-item condition as though it gated the whole
-/// transformation. `controls.rs`'s doctrine pin holds that line.
+/// The transformation's top-level `require` and `bind` statements, in
+/// body order. A gate inside a `for` is a per-item condition; listing it
+/// here would show it as gating the whole transformation.
 fn collect_gates<'s>(body: &'s [Stmt], out: &mut Vec<(&'static str, &'s Prop, Option<String>)>) {
     for stmt in body {
         match stmt {
@@ -357,15 +311,11 @@ fn gate(
     let mut consults = BTreeSet::new();
     predicates_referenced_by_prop(prop, definitions, &mut consults);
 
-    // The predicates the gate references positively - the signature we
-    // match against each triggerable invariant's consequent.
+    // Matched against each triggerable invariant's consequent.
     let gate_sig = positive_claims_of(prop, defs);
 
-    // A gate front-loads an invariant when this transformation can trigger
-    // it (admits a predicate the antecedent rests on) AND the gate
-    // references a predicate the invariant's consequent also references.
-    // One link per matched implication, naming both sides, in
-    // invariant-declaration then discovery order.
+    // One link per matched implication, in invariant-declaration then
+    // discovery order.
     let front_loads = implications
         .iter()
         .filter_map(|imp| {
@@ -402,11 +352,9 @@ fn gate(
     }
 }
 
-/// Render the control matrix as deterministic prose - the view an
-/// auditor or a compliance mapping reads. Transformations first
-/// (what must be true before each action), guarantees second
-/// (what can never be true), mirroring how a control walkthrough
-/// runs: actions, then standing rules.
+/// Render the control matrix as deterministic text: transformations
+/// first (what must be true before each action), then guarantees (what
+/// can never be true).
 pub fn render_controls(matrix: &ControlMatrix) -> String {
     let mut out = String::new();
     out.push_str(&format!("Controls for `{}`\n", matrix.program));

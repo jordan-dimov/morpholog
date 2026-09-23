@@ -1,22 +1,7 @@
-//! Lint-grade hints: findings that deserve an author's attention but
-//! are not errors, because the flagged shape has a deliberate reading.
-//! Surfaced by `morpholog check` as hints; `--strict` promotes them to
-//! errors. Distinct from [`crate::ValidationError`] on purpose - an
-//! error means the programme cannot mean what it says, a lint means it
-//! says something that is usually, but not always, a mistake.
-//!
-//! The first lint is the gate-vs-invariant doctrine made mechanical:
-//! with append-only and current-pointer classes declared as
-//! disciplines, the revocation-rewrites-history shape - an invariant
-//! conditioning permanent records on a retractable pointer's presence
-//! - is detectable at check time.
-//!
-//! The third occupant is the effective-time vacuity smell: an
-//! antecedent selecting "the governing version in force at a
-//! coordinate" passes vacuously when no version exists there, unless
-//! another invariant backstops totality. A shape smell, never a
-//! vacuity proof - that is the verification arc's static-vacuity
-//! tier.
+//! Lint hints: shapes that are usually, but not always, a mistake.
+//! `morpholog check` prints them as hints; `--strict` makes them errors.
+//! A [`crate::ValidationError`] is different: it means the programme
+//! cannot mean what it says.
 
 use std::collections::BTreeSet;
 
@@ -33,79 +18,61 @@ use crate::ir::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lint {
     /// An invariant whose antecedent positively references an
-    /// append-only predicate and whose consequent positively requires
-    /// a current-pointer predicate. Retracting that pointer would make
-    /// already-admitted records violate the rule - blocking the
-    /// retraction or forcing history to be rewritten. The deliberate
-    /// reading exists (continuous-compliance models re-check standing
-    /// over admitted records on purpose), which is why this is a hint:
-    /// keep it knowingly, or move the check into the admitting
-    /// transformation's gate.
+    /// append-only predicate and whose consequent positively requires a
+    /// current-pointer predicate. Retracting the pointer would make
+    /// admitted records violate the rule, so the retraction is blocked
+    /// or history must be rewritten. A hint, because re-checking standing
+    /// over old records can be deliberate; otherwise move the check into
+    /// the admitting transformation's gate.
     ///
-    /// Forward direction only. The reverse - a pointer's antecedent
-    /// requiring an append-only consequent ("the pointer names a
-    /// figure that exists") - is correct doctrine: retracting the
-    /// pointer makes it vacuous, never violated.
+    /// Forward direction only. The reverse ("the pointer names a figure
+    /// that exists") is fine: retracting the pointer makes it vacuous.
     GateVsInvariant {
         invariant: String,
         append_only: String,
         pointer: String,
     },
 
-    /// An authored invariant whose antecedent the current programme
-    /// cannot satisfy on a fresh ledger, because it depends on
-    /// predicates no transformation admits. `missing` lists those
-    /// predicates (collectively the cause - for an `or`, every branch is
-    /// unsupplied; for an `and`, each is a mandatory conjunct). A hint,
-    /// not a proof of a dead rule: persisted or historically admitted
+    /// An authored invariant whose antecedent depends on predicates no
+    /// transformation admits, so it cannot fire on a fresh ledger.
+    /// `missing` lists them together: every branch of an `or`, each
+    /// required conjunct of an `and`. Not proof of a dead rule: stored
     /// claims may still match.
     UnsuppliedAntecedent {
         invariant: String,
         missing: Vec<String>,
     },
 
-    /// An authored invariant whose antecedent appears to select "the
-    /// governing version of `P` in force at a coordinate" - a dated
-    /// `P` claim bounded on-or-before a coordinate, with a negated
-    /// `exists` excluding a strictly later `P` - while no OTHER
-    /// authored invariant carries the recognised totality-backstop
-    /// shape for `P` (an implication guaranteeing an `exists` witness
-    /// of `P` with a temporal bound). When no version is in force at
-    /// a coordinate, such a selection passes vacuously - the rule
-    /// silently does not apply at the edges. `predicates` names the
-    /// UNBACKED selected predicates only. A shape smell, not a
-    /// vacuity proof: coordinate agreement between selection and
-    /// backstop is not verified.
+    /// An authored invariant whose antecedent selects "the version of `P`
+    /// in force at a date" (a dated `P` on or before it, with no strictly
+    /// later `P`), while no other invariant backs `P`'s totality, either
+    /// by declaring `total over` or by guaranteeing a dated `P` exists.
+    /// Where no version is in force, the rule silently does not apply.
+    /// `predicates` names only the unbacked predicates. Whether the
+    /// backstop covers the same dates is not checked.
     GoverningSelectionWithoutTotality {
         invariant: String,
         predicates: Vec<String>,
     },
 
-    /// A predicate declared `effective by` with no invariant declaring
-    /// `total over` it. The generated selector returns nothing where no
-    /// version is in force, so every rule reading it goes quietly vacuous
-    /// at the edges - and nothing in the source says whether that was
-    /// intended.
+    /// A predicate declared `effective by` (not `partial`) with no
+    /// invariant declaring `total over` it. Where no version is in force
+    /// the selector returns nothing, so every rule reading it quietly
+    /// does not apply, and the source does not say if that is intended.
     ///
-    /// A rule that reads `P`'s in-force selector cannot declare `P`'s
-    /// totality: it only applies where a version is already in force, so
-    /// it cannot be the reason one exists. Such a declaration is ignored
-    /// and the finding stands.
+    /// A rule that reads `P`'s own selector cannot declare `P`'s
+    /// totality: it only applies where a version already exists. Such a
+    /// declaration is ignored.
     ///
-    /// A hint, not an error: a partial effective-dated predicate can be a
-    /// correct model, where a rule genuinely should not apply before the
-    /// first version exists. `--strict` promotes it for authors who want
-    /// the pairing guaranteed rather than remembered.
+    /// A hint, because a rule that should not apply before the first
+    /// version is a valid model.
     EffectiveWithoutDeclaredTotality { predicate: String },
 
     /// A transformation of this programme writes a predicate another
-    /// programme also writes. Two programmes proposing into one
-    /// database share rows for a same-named predicate, each ungoverned
-    /// by the other's gates, so both hold write authority over the same
-    /// persisted state. Reads are not findings. A hint, because two
-    /// programmes may share a claim on purpose; `guarded` says only
-    /// whether a transformation carries a top-level admission gate,
-    /// never how strong it is.
+    /// programme also writes. In one database they share those rows, and
+    /// neither is bound by the other's gates. Reads are not findings. A
+    /// hint, because sharing may be deliberate. `guarded` says only
+    /// whether a transformation has a top-level gate, not how strong.
     SharedWriter {
         transformation: String,
         predicate: String,
@@ -122,10 +89,9 @@ pub struct SharedWriterPeer {
     pub guarded: bool,
 }
 
-/// The cross-programme findings for `this`, judged against `other`:
-/// one per transformation of `this` and predicate it writes that some
-/// transformation of `other` also writes, in declaration order. Pure;
-/// naming which file `other` came from is the caller's.
+/// The cross-programme findings for `this` against `other`: one per
+/// (transformation, predicate) of `this` that `other` also writes, in
+/// declaration order. The caller names which file `other` came from.
 pub fn shared_writer_lints(this: &Program, other: &Program) -> Vec<Lint> {
     let writers: Vec<(&crate::ir::Transformation, BTreeSet<PredicateName>)> = other
         .transformations
@@ -264,11 +230,10 @@ impl std::fmt::Display for Lint {
     }
 }
 
-/// Collect every lint finding for a programme. Pure and deterministic:
-/// one pass over invariants in declaration order, each invariant's
-/// findings emitted before the next invariant's. Within one invariant,
-/// gate findings precede the unsupplied-antecedent finding; ordering by
-/// sub-expression position awaits the node-identified IR.
+/// Collect every lint finding for a programme, deterministically:
+/// `effective by` findings first, then each invariant's findings in
+/// declaration order (gate-vs-invariant, unsupplied antecedent, then
+/// governing selection).
 pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
     let program = compiled.program();
     let definitions = compiled.definition_table();
@@ -286,13 +251,10 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
     let declared = crate::analysis::declared_supplier_predicates(program);
     let do_gate = !append_only.is_empty() && !pointers.is_empty();
 
-    // What an author has DECLARED they backstop, whatever shape the rule
-    // takes. Positional for the same reason `witnesses` is - so a consumer
-    // can skip the invariant under test. A declaration is also dropped
-    // outright when the declaring rule consults the in-force selector for
-    // the predicate it vouches for: a rule that only applies where a
-    // version is in force cannot be the reason one exists, so it is no
-    // one's companion, not merely not its own.
+    // The totality each invariant declares, by position so a consumer can
+    // skip the invariant under test. Dropped when the rule reads the
+    // selector for the predicate it vouches for: it only applies where a
+    // version exists, so it cannot be why one exists.
     let declared_totality: Vec<Option<PredicateName>> = program
         .invariants
         .iter()
@@ -306,9 +268,8 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
         })
         .collect();
 
-    // The shape-recognised side, for programmes that declare nothing.
-    // Positional, so the consumer can skip the invariant under test: a
-    // companion is by definition a DIFFERENT rule.
+    // The totality recognised by shape, for programmes that declare
+    // nothing. By position, since a backstop must be a different rule.
     let witnesses: Vec<BTreeSet<PredicateName>> = program
         .invariants
         .iter()
@@ -322,18 +283,9 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
         .collect();
 
     let mut out = Vec::new();
-    // An `effective by` predicate with nothing declaring its totality: the
-    // selector goes quiet where no version is in force, and the omission
-    // is invisible. A hint rather than an error because a partial
-    // effective-dated predicate can be correct - a rule that should not
-    // apply before the first version exists is a legitimate model - but
-    // `--strict` turns it into the refusal an author who wants the pairing
-    // guaranteed is asking for.
     for decl in &program.predicates {
-        // `partial` is the author saying the gaps are intended. A
-        // declaration, not a suppression: it is checkable, and contradicting
-        // it with a `total over` is a validation error rather than a silent
-        // preference.
+        // `partial` declares the gaps intended. Contradicting it with a
+        // `total over` is a validation error.
         let effective = decl
             .disciplines
             .iter()
@@ -358,9 +310,8 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
                 &mut out,
             );
         }
-        // A generated discipline invariant is machinery the author cannot
-        // see in source, so it gets no unsupplied-antecedent hint - and no
-        // governing-selection hint either.
+        // Generated discipline invariants are not in the source, so they
+        // get no hints of these kinds.
         if inv.origin == InvariantOrigin::Authored {
             unsupplied_antecedent_findings(inv, &implications, &declared, definitions, &mut out);
             governing_selection_findings(
@@ -377,10 +328,6 @@ pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
     out
 }
 
-/// The effective-time vacuity smell: an antecedent that selects the
-/// governing version of a predicate at a coordinate, in a programme
-/// where no OTHER invariant carries the recognised totality-backstop
-/// shape for it. Names only the unbacked predicates.
 /// Whether `body` reaches `target`, following definition calls through the
 /// definitions they in turn call.
 fn calls_definition(
@@ -408,6 +355,9 @@ fn calls_definition(
     false
 }
 
+/// An antecedent that selects the version of a predicate in force at a
+/// date, where no other invariant declares or guarantees that
+/// predicate's totality. Names only the unbacked predicates.
 fn governing_selection_findings(
     inv: &Invariant,
     index: usize,
@@ -427,11 +377,8 @@ fn governing_selection_findings(
     if selected.is_empty() {
         return;
     }
-    // A DECLARED backstop settles it. Shape-matching stays as the
-    // fallback for programmes that never declare one, but where the
-    // author has said which rule backstops the predicate, the pairing is
-    // checked rather than guessed - an unusual-but-intended backstop
-    // counts, and a shape that matched by accident does not.
+    // A declared backstop or a recognised backstop shape in another
+    // invariant both count.
     let unbacked: Vec<String> = selected
         .iter()
         .filter(|p| {
@@ -510,18 +457,15 @@ fn unsupplied_antecedent_findings(
     });
 }
 
-/// One `Defined` call traversed on the way to a collected
-/// implication: the definition's name plus the argument terms at the
-/// call site. Coverage replays the chain through the canonical call
-/// frames so a call-site-constrained antecedent (a literal argument,
-/// a pre-bound variable) is evaluated under that constraint instead
-/// of with the definition's parameters free; the lint ignores it
-/// (substitution never changes predicate names).
+/// One `Defined` call on the way to a collected implication: the
+/// definition's name and the call-site arguments. Coverage replays the
+/// chain so literal or pre-bound arguments constrain the antecedent. The
+/// lint ignores it, since substitution never changes predicate names.
 pub(crate) type DefinedCall<'a> = (&'a crate::ir::DefinitionName, &'a [Term]);
 
-/// One collected implication: antecedent, consequent, and the stack
-/// of `Defined` calls (outermost first) it was found under - empty
-/// for an implication spelled directly in the invariant body.
+/// One collected implication: antecedent, consequent, and the
+/// `Defined` calls (outermost first) it was found under, empty when
+/// written directly in the invariant body.
 pub(crate) struct CollectedImplication<'a> {
     pub(crate) antecedent: &'a Prop,
     pub(crate) consequent: &'a Prop,
@@ -556,18 +500,12 @@ pub(crate) fn positive_claims_of(
     out
 }
 
-/// Every `Implies` node the invariant actually ASSERTS - collected
-/// only at positive polarity, because a negated implication
-/// (`not (A implies B)` is `A and not B`) and an implication sitting
-/// in another implication's antecedent enforce nothing of the shape
-/// the lint reads. Enclosing `And`/`Or`/quantifiers preserve polarity;
-/// `Not` flips it; an `Implies` flips its own left side. `Defined`
-/// calls descend into their bodies (recursion-stack guard against
-/// cycles, the walker red line): an implication hidden behind a named
-/// condition is still an implication the invariant asserts. The
-/// collected antecedent/consequent references may therefore point
-/// into a definition's body; each implication carries the call chain
-/// it was found under so coverage can evaluate it in call context.
+/// Every `Implies` the invariant asserts, so only at positive polarity:
+/// `not (A implies B)` means `A and not B`, and an implication inside
+/// another's antecedent enforces nothing. `Not` flips polarity, as does
+/// an `Implies` on its left side; everything else keeps it. `Defined`
+/// calls are followed (cycles guarded), and each implication carries its
+/// call chain so coverage can evaluate it in context.
 fn collect_implications<'a>(
     prop: &'a Prop,
     positive: bool,
@@ -588,10 +526,8 @@ fn collect_implications<'a>(
             collect_implications(left, !positive, definitions, seen, calls, out);
             collect_implications(right, positive, definitions, seen, calls, out);
         }
-        // Polarity is part of the meaning here, so the same definition
-        // called again at a different polarity must be expanded again -
-        // exactly the stack-guard semantics `DefinitionTable::enter`
-        // provides.
+        // The same definition at another polarity must be expanded again,
+        // which `DefinitionTable::enter`'s stack guard allows.
         Prop::Defined { name, args } => definitions.enter(name, seen, |def_, seen| {
             calls.push((name, args));
             collect_implications(&def_.body, positive, definitions, seen, calls, out);
@@ -619,14 +555,11 @@ fn collect_implications<'a>(
     }
 }
 
-/// Predicates referenced at POSITIVE polarity: required to hold, not
-/// required absent. `Not` flips polarity; a nested `Implies` flips its
-/// left side (an implication is satisfied by its antecedent failing);
-/// everything else preserves it. Negative-polarity references are
-/// dropped - `implies not Pointer(...)` gets STRONGER when the pointer
-/// is retracted, which is the opposite of the bug. `Defined` calls
-/// descend into their bodies (with a seen-set, mirroring the analysis
-/// walkers), since a named condition hides its claims behind the call.
+/// Predicates referenced at positive polarity: required to hold, not
+/// required absent. `Not` flips polarity, as does a nested `Implies` on
+/// its left side. Negative references are dropped: `implies not
+/// Pointer(...)` only gets stronger when the pointer is retracted.
+/// `Defined` calls are followed.
 fn positive_claims(
     prop: &Prop,
     positive: bool,
@@ -654,9 +587,8 @@ fn positive_claims(
             }
         }
         Prop::Xor(left, right) => {
-            // Exactly-one holds each side in both polarities; treat
-            // both as referenced at the current polarity (the
-            // conservative reading for a hint).
+            // Xor uses each side in both polarities; count both at the
+            // current one.
             positive_claims(left, positive, definitions, seen, out);
             positive_claims(right, positive, definitions, seen, out);
         }
@@ -679,10 +611,9 @@ fn positive_claims(
     }
 }
 
-/// Value-sort companion. A defaultless `value Pred(...)` lookup
-/// *requires* a claim to be readable, so it counts at the enclosing
-/// polarity; one with a `default` tolerates absence and contributes
-/// only what its default expression carries. `sum` bodies tolerate
+/// Value-sort companion. A `value Pred(...)` lookup without a default
+/// requires the claim, so it counts at the enclosing polarity; with a
+/// default only the default expression counts. `sum` bodies tolerate
 /// zero matches, so they contribute nothing.
 fn positive_value_claims(
     expr: &ValueExpr,
@@ -707,39 +638,21 @@ fn positive_value_claims(
             positive_value_claims(left, positive, definitions, seen, out);
             positive_value_claims(right, positive, definitions, seen, out);
         }
-        // The operator itself adds no dependencies - unlike a
-        // conditional there is no selection semantics - but its
-        // children are ordinary value expressions (a lookup or a
-        // conditional can sit in any slot), so the ordinary walk
-        // recurses into each.
+        // A builtin adds nothing itself, but its arguments may.
         ValueExpr::Call { args, .. } => {
             for a in args {
                 positive_value_claims(a, positive, definitions, seen, out);
             }
         }
-        // A sum tolerates zero matches; neither its body nor its target
-        // (evaluated only when the body matches) REQUIRES the claims,
-        // so it contributes nothing.
+        // A sum tolerates zero matches, so it requires nothing.
         ValueExpr::Sum { .. } => {}
-        // An extremum is the opposite, which is why it cannot share the
-        // arm above: zero matches is an error, so its body IS required.
-        // Grouping the two would hide a rule over a permanent record that
-        // reads a retractable pointer - exactly the shape this lint
-        // exists to surface.
+        // An extremum is the opposite: zero matches is an error, so its
+        // body is required.
         ValueExpr::Extremum { body, .. } => positive_claims(body, positive, definitions, seen, out),
-        // A conditional's condition SELECTS the expected value, so
-        // every predicate that can flip it - present, absent, under
-        // `not` inside the condition, or with the whole conditional
-        // sitting under an outer negation - is a dependency of the
-        // rule's meaning: retracting a pointer read only here
-        // rewrites what the rule expects of permanent history. The
-        // condition therefore contributes its whole reference set
-        // UNCONDITIONALLY, ignoring the surrounding polarity too
-        // (unlike a sum body, whose zero-match case changes a total,
-        // not a selection). The branches contribute normally; only
-        // one is taken, but which one is not knowable here, so the
-        // union is the conservative reading - the same posture as
-        // `or`.
+        // The condition picks the expected value, so every predicate in
+        // it counts, whatever the polarity: retracting a pointer read only
+        // here still changes what the rule expects of old records. Either
+        // branch may be taken, so both count, as with `or`.
         ValueExpr::Cond {
             when,
             then,

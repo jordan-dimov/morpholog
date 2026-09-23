@@ -17,32 +17,20 @@ use morpholog_test_support::{claim_instance, intent_instance};
 use proptest::prelude::*;
 use rust_decimal::Decimal;
 
-/// Generate `rust_decimal::Decimal` values from the `i64` mantissa
-/// subset of the representable space, paired with scales 0..=28 (the
-/// `rust_decimal` maximum). The full `rust_decimal` mantissa is 96-bit;
-/// we deliberately stay inside `i64` here because the codec contract
-/// being exercised (decimal → JSON string → decimal, exactness
-/// preserved) does not depend on mantissa width, and `i64` keeps
-/// shrinking reports small and the strategy cheap.
+/// Decimals with an `i64` mantissa and scale 0..=28. The round trip does
+/// not depend on mantissa width, and `i64` keeps shrinking small.
 fn arb_decimal() -> impl Strategy<Value = Decimal> {
     (any::<i64>(), 0u32..=28u32).prop_map(|(mantissa, scale)| Decimal::new(mantissa, scale))
 }
 
-/// Generate subject identifiers from a conservative character set
-/// (letters, digits, underscore). Wider character sets are unlikely
-/// to surface JSON round-trip bugs the codec doesn't already handle
-/// via serde's string escaping, and bounded length keeps shrinking
-/// reports small.
+/// Subject identifiers from letters, digits and underscore. serde's
+/// string escaping already covers wider character sets.
 fn arb_subject() -> impl Strategy<Value = String> {
     "[a-zA-Z][a-zA-Z0-9_]{0,16}".prop_map(|s| s)
 }
 
-/// Generate civil dates from a bounded calendar range. The codec
-/// contract being exercised (date → JSON string → date, exactness
-/// preserved) does not depend on extreme years; constraining to a
-/// realistic window keeps shrinking reports small. February overflow
-/// (day 30/31 in a 28/29-day month) is handled by `Date::new`
-/// returning an error, which the strategy filters out.
+/// Civil dates from a realistic window; the round trip does not depend on
+/// extreme years. Impossible days (30 February) are filtered out.
 fn arb_civil_date() -> impl Strategy<Value = Date> {
     (1970i16..=2100i16, 1i8..=12i8, 1i8..=31i8)
         .prop_filter_map("invalid civil date", |(y, m, d)| Date::new(y, m, d).ok())

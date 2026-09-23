@@ -1,9 +1,7 @@
-//! Shared test helpers for the morpholog-outbox integration tests.
+//! Shared helpers for the morpholog-outbox integration tests.
 //!
-//! The outbox tests cannot reuse `morpholog-postgres`'s integration-test
-//! `common` module (it belongs to a different crate's test binaries), so
-//! this is the outbox crate's own copy of the same small infrastructure,
-//! plus a `commit_simple_entry` setup the worker tests share.
+//! A small copy of `morpholog-postgres`'s test `common` module, which another crate's tests
+//! cannot import.
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
@@ -43,10 +41,8 @@ pub fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
     }
 }
 
-/// Commit one balanced double-entry ledger entry so its `emit` lands an
-/// outbox row - the setup every worker test opens with. `period` keeps
-/// each test's rows distinct; the accounts derive from `entry_id` so the
-/// entry balances. Returns the committed transition id.
+/// Commit one balanced ledger entry, whose `emit` puts one row in the outbox.
+/// Returns the committed transition id.
 pub async fn commit_simple_entry(pool: &PgPool, entry_id: &str, period: &str) -> Uuid {
     let transformation = double_entry_ledger::post_simple_entry();
     let transition = Transition {

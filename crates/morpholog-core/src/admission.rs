@@ -1,19 +1,16 @@
 //! Admission: the rule under which a staged transition is accepted.
 //!
-//! An invariant describes what lawful state means and stays a
-//! whole-state predicate everywhere else. Admission is case-local
-//! revalidation: every case the transition's effective delta could
-//! affect must satisfy each invariant afterwards; a case the delta
-//! cannot reach may remain as history left it; and where the impact
-//! cannot be bounded safely the whole invariant is checked. Inherited
-//! dirt therefore blocks only the transitions that touch it, which is
-//! what rule versioning and exception claims need, and a transition
-//! that changes nothing is admitted whatever the history holds.
+//! An invariant is still a whole-state predicate. Admission only
+//! rechecks the cases a transition could affect: those must satisfy
+//! every invariant afterwards, while cases it cannot reach stay as
+//! history left them. If the impact cannot be bounded safely, the whole
+//! invariant is checked. So old bad data blocks only the transitions
+//! that touch it, and a transition that changes nothing is always
+//! admitted.
 //!
-//! The effective delta is the admitted-set change between the
-//! pre-state and the candidate, never the staged vectors: a duplicate
-//! admit, a retract of what is absent, and a retract followed by a
-//! re-admit change nothing and affect nothing.
+//! The effective delta is the change in the admitted set, not the
+//! staged lists: a duplicate admit, a retract of something absent, and
+//! a retract then re-admit change nothing.
 
 use std::borrow::Cow;
 
@@ -76,12 +73,10 @@ impl EffectiveDelta {
         self.asserted.is_empty() && self.retracted.is_empty()
     }
 
-    /// The one rule, over whatever knows the pre-state's membership:
-    /// retractions apply first, then admissions, so an admission is
-    /// effective only when the claim was absent, and a retraction only
-    /// when the claim was present and is not re-admitted in the same
-    /// delta. A claim retracted and re-admitted is present on both
-    /// sides and counts on neither.
+    /// Computes the delta, with `present` answering pre-state membership.
+    /// An admission counts only if the claim was absent. A retraction
+    /// counts only if the claim was present and is not re-admitted in
+    /// the same delta, so a retract-then-re-admit counts on neither side.
     pub fn of(
         asserted: &[ClaimInstance],
         retracted: &[ClaimInstance],

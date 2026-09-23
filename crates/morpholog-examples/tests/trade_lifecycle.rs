@@ -1,16 +1,10 @@
 //! Integration tests for the trade-lifecycle example
 //! (`examples/10_trade_lifecycle/`).
 //!
-//! Outcome-level tests over the parsed example: capture, commodity-scoped
-//! confirmation authority, effective-dated terms and amendment,
-//! official-price correction as restatement, settlement gated on the
-//! in-force official price, and the effective-quantity cap (cumulative
-//! settled, by effective date, against the terms in force on that date).
-//! The headline tests carry the weight: a backdated amendment lifts
-//! the cap so a previously-rejected slice becomes admissible, and a
-//! settlement made under the prior terms stays standing after a later
-//! amendment - the trade-lifecycle form of the `02_verified_revenue`
-//! lesson, now on the effective-time axis.
+//! Covers capture, commodity-scoped confirmation, amendment, price
+//! correction, settlement, and the cap on quantity settled by each date.
+//! The key tests: a backdated amendment can lift the cap so a refused
+//! slice now fits, and a later amendment never unsettles an earlier slice.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -561,13 +555,9 @@ fn slices_summing_over_the_effective_quantity_are_rejected() {
 
 #[test]
 fn backdated_amendment_lifts_the_effective_cap() {
-    // The headline of the effective-time story. Confirm at qty 100; a slice
-    // of 110 effective 2026-02-20 is rejected (over the 100 in force then).
-    // The desk then backdates an amendment to qty 120 effective 2026-02-01
-    // - before the settlement date, after the original 2026-01-15. Now the
-    // terms in force on 2026-02-20 allow 120, and the very same slice
-    // admits. The rejected attempt never happened; the amendment changed
-    // what is admissible.
+    // A slice of 110 effective 2026-02-20 is refused against qty 100. A
+    // backdated amendment to 120 effective 2026-02-01 then lets the very
+    // same slice in. The refused attempt left no trace.
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
 
     let before = ex()
@@ -618,13 +608,9 @@ fn backdated_amendment_lifts_the_effective_cap() {
 
 #[test]
 fn settlement_under_prior_terms_remains_standing_after_amendment() {
-    // The effective-time form of the verified-revenue lesson. A slice of 80
-    // is settled effective 2026-01-20, well within the 100 in force then.
-    // The desk later backdates an amendment *down* to qty 50, effective
-    // 2026-02-01. Because the cap is judged per effective date against the
-    // terms in force on that date, the Jan 20 slice - governed by the 100
-    // still in force on Jan 20 - stays admitted. A backdated re-cut does not
-    // retroactively invalidate a settlement that was legitimate when made.
+    // A slice of 80 settles on 2026-01-20 under qty 100. An amendment
+    // *down* to 50 effective 2026-02-01 leaves it standing: the cap is
+    // judged against the terms in force on each slice's own date.
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
     let settled = settle(confirmed, 80, "s1", "op1", "2026-01-20");
     let post = ex().must_accept_as(
@@ -667,11 +653,9 @@ fn settlement_under_prior_terms_remains_standing_after_amendment() {
 
 #[test]
 fn replaying_a_settlement_id_is_rejected_before_a_second_request() {
-    // The settlement id is an idempotency key. Settling s1, then replaying
-    // the exact same settle_trade, is refused by the freshness gate - so a
-    // duplicate TradeSettlementRequested never reaches the outbox. (An
-    // exact-duplicate claim would dedup in state and pass the invariant; it
-    // is the re-emit the gate exists to stop.)
+    // Replaying the same settle_trade is refused by the freshness gate, so
+    // a duplicate TradeSettlementRequested never reaches the outbox. The
+    // duplicate claim alone would dedup in state; the gate stops the re-emit.
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
     let first = settle(confirmed, 40, "s1", "op1", "2026-01-20");
     let outcome = ex()
@@ -695,10 +679,9 @@ fn replaying_a_settlement_id_is_rejected_before_a_second_request() {
 
 #[test]
 fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
-    // The path the settle gate cannot see: a single transformation
-    // admitting two TradeSettled with the same id but different quantities.
-    // trade_settled_unique_by_settlement_id is the backstop that refuses
-    // it, keeping the cumulative sum honest against hand-constructed state.
+    // One transformation admitting two TradeSettled with the same id but
+    // different quantities slips past the settle gate.
+    // trade_settled_unique_by_settlement_id refuses it.
     use morpholog_core::ir_builder;
 
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
@@ -743,11 +726,8 @@ fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
 
 #[test]
 fn correction_after_settlement_leaves_the_settlement_standing() {
-    // Settle under official price op1, then correct the official price to
-    // op2. The settlement made under op1 remains a true record of what was
-    // settled that day; only future settlements would see op2. (The price
-    // axis; its terms-axis counterpart is
-    // settlement_under_prior_terms_remains_standing_after_amendment.)
+    // Correcting the official price from op1 to op2 leaves the settlement
+    // made under op1 standing; only future settlements see op2.
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
     let settled = settle(confirmed, 100, "s1", "op1", "2026-01-20");
     let post = ex().must_accept_as(
@@ -793,9 +773,8 @@ fn correction_after_settlement_leaves_the_settlement_standing() {
 
 #[test]
 fn settlement_before_any_effective_terms_is_rejected() {
-    // Terms are effective from 2026-01-15. A slice effective 2026-01-01 -
-    // before the trade had any terms - has no quantity to be capped
-    // against. The settle gate refuses it on the ordinary path.
+    // A slice effective 2026-01-01, before any terms (from 2026-01-15), has
+    // no quantity to be capped against. The settle gate refuses it.
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
     ex().must_reject(
         &trade_lifecycle::settle_trade(),
@@ -812,10 +791,8 @@ fn settlement_before_any_effective_terms_is_rejected() {
 
 #[test]
 fn settlement_before_effective_terms_is_rejected_by_the_invariant() {
-    // The path the settle gate cannot see: a transformation admitting a
-    // TradeSettled effective before any terms version exists. Without the
-    // backstop the effective cap would pass vacuously (no terms to compare
-    // against); settled_date_has_effective_terms refuses it instead.
+    // A TradeSettled dated before any terms would pass the cap vacuously.
+    // settled_date_has_effective_terms refuses it where the gate cannot see.
     use morpholog_core::ir_builder;
 
     let confirmed = confirm_as(grant(captured(100), "mo", "power"), "mo", "op1", 52);
@@ -1005,9 +982,8 @@ fn a_short_position_over_the_limit_is_refused() {
 
 #[test]
 fn buys_and_sells_net_against_each_other() {
-    // It is the net magnitude that is bounded, not the gross: a buy of 40
-    // and a sell of 35 leave a net of +5, comfortably within a limit of 50
-    // even though the two legs gross 75. The sell reduces the position.
+    // The net is bounded, not the gross: a buy of 40 and a sell of 35 net
+    // to +5, within a limit of 50, though the legs gross 75.
     let state = set_limit(grant(State::default(), "mo", "power"), "mo", "power", 50);
     let state = capture_into(state, "t1", "power", "buy", "tv1", 40);
     capture_into(state, "t2", "power", "sell", "tv2", 35);
@@ -1015,11 +991,8 @@ fn buys_and_sells_net_against_each_other() {
 
 #[test]
 fn an_amendment_that_grows_a_position_past_the_limit_is_refused() {
-    // The invariant judges the resulting admitted state, not the action
-    // named: growing a position by amendment is refused exactly as an
-    // over-large new capture is. `current_quantity` follows the
-    // latest-effective version, so amending t1 up to 150 (net 150 > 100)
-    // breaches the limit.
+    // The invariant judges the resulting state, not the action: amending t1
+    // up to 150 breaches the limit just as a new capture of 150 would.
     let state = set_limit(grant(State::default(), "mo", "power"), "mo", "power", 100);
     let state = capture_into(state, "t1", "power", "buy", "tv1", 80);
     let outcome = ex()
@@ -1040,17 +1013,9 @@ fn an_amendment_that_grows_a_position_past_the_limit_is_refused() {
     assert_rejected(outcome, "within_position_limit");
 }
 
-/// A settlement records the terms version that governed it, chosen at
-/// commit time from the effective dates.
-///
-/// `terms_in_force_on` asks the same question for the cap invariant, but
-/// it can only answer yes or no - an invariant needs a truth, and this
-/// needs a value to look the version up by. The aggregate form yields the
-/// governing date itself, which then keys the claim carrying the version.
-///
-/// The trade is amended to a later version effective 2026-02-01, and a
-/// slice settled on 2026-01-20 must still name the ORIGINAL version:
-/// a later amendment does not retroactively govern an earlier settlement.
+/// A settlement records the terms version that governed it on its own date.
+/// After an amendment effective 2026-02-01, a slice settled on 2026-01-20
+/// still names the original version.
 #[test]
 fn a_settlement_names_the_version_that_governed_it() {
     let captured = grant(captured(100), "mo", "power");

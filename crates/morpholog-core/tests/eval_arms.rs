@@ -1,10 +1,9 @@
-//! Evaluation arms the mutation audit found unwitnessed: exact results
-//! of the unit and time arithmetic, literal argument matching for the
-//! time kinds, the multiple-match refusal on both candidate paths,
-//! definition-projection dedup, and the missing-claim diagnosis
-//! through a defined call. Each test is the minimal business behaviour
-//! that makes the arm observable - a mutant flipping the arm now has a
-//! named witness.
+//! Evaluation arms that need their own witness: exact unit and time
+//! arithmetic, literal matching for the time kinds, the multiple-match
+//! refusal on both candidate paths, definition-projection dedup, and the
+//! missing-claim diagnosis through a defined call. Each test is the
+//! smallest behaviour that makes its arm observable, so a mutant that
+//! flips the arm fails a named test.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

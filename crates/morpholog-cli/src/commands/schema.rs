@@ -2,25 +2,15 @@
 //! transformation's argument object, or (with `--intent <Type>`) an
 //! emitted intent's payload object.
 //!
-//! Thin wrapper over [`morpholog_core::transformation_arg_schema`] and
-//! [`morpholog_core::intent_arg_schema`]. Reads the `.morph`, validates,
-//! calls the function, prints the resulting JSON Schema. The library
-//! surface made the kernel self-describing; this subcommand carries the
-//! same contract through the CLI so a non-Rust embedder can fetch a
-//! typed contract via `subprocess.run` - the transformation schema to
-//! build a request, the intent schema to decode an outbox payload by
-//! name instead of by hand-coded position.
+//! A thin wrapper over [`morpholog_core::transformation_arg_schema`] and
+//! [`morpholog_core::intent_arg_schema`], so a non-Rust embedder can fetch
+//! the typed contract: the transformation schema to build a request, the
+//! intent schema to decode an outbox payload by name.
 //!
-//! No `--json` flag: a JSON Schema is JSON by definition. Errors
-//! follow the existing diagnostic style - parse and validation
-//! failures via ariadne caret blocks (handled by [`parse_or_report`]
-//! and [`validate_or_report`]), unknown transformation / intent as a
-//! single `error:` line.
-//!
-//! Exits zero on success; non-zero on any error path. The schema
-//! itself never carries an error field - operational failures are
-//! distinct from a valid schema and should not require the embedder
-//! to discriminate at parse time.
+//! Parse and validation failures render as caret blocks (via
+//! [`parse_or_report`] and [`validate_or_report`]); an unknown
+//! transformation or intent is one `error:` line. Any error exits non-zero,
+//! and the schema itself never carries an error field.
 
 use crate::SchemaArgs;
 use crate::commands::{AlreadyReported, parse_or_report, print_json, validate_or_report};
@@ -31,10 +21,9 @@ use morpholog_core::{
 
 pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
     if args.result {
-        // The outcome-envelope contract is programme-independent and
-        // pinned in the binary. Parse-then-print rather than printing
-        // the raw bytes: the binary cannot ship a syntactically broken
-        // document, and the output stays print_json-canonical.
+        // The result contract is the same for every programme and built
+        // into the binary. Parsing it first means a broken document cannot
+        // ship, and the output is formatted like all the rest.
         let document: serde_json::Value =
             serde_json::from_str(include_str!("../schemas/result.json")).context(
                 "the embedded result schema failed to parse; the contract test pins its validity",
@@ -43,9 +32,7 @@ pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
     }
 
     let Some(file) = &args.file else {
-        // Clap's required_unless_present("result") makes this
-        // unreachable; the bail keeps the invariant honest without a
-        // panic path in the binary.
+        // Clap makes this unreachable; bail rather than panic.
         anyhow::bail!("a .morph file is required for every mode except --result");
     };
     let parsed = parse_or_report(file)?;
@@ -55,14 +42,10 @@ pub(crate) fn run(args: SchemaArgs) -> anyhow::Result<()> {
     // Clap enforces exactly-one-of `transformation` / `--intent` /
     // `--all`.
     if args.all {
-        // The manifest: every contract in one artefact, stamped with
-        // the canonical model hash so generated code can record
-        // exactly which rules it was built against. Keyed objects give
-        // codegen lookup by name; the *_order arrays carry declaration
-        // order explicitly, because JSON object key order is not a
-        // contract (serde_json's map is sorted, and embedders should
-        // not rely on object ordering anyway) - the manifest-level
-        // analogue of x-morpholog-arg-order.
+        // Every contract in one document, stamped with the model hash so
+        // generated code records which rules it was built against. The
+        // `*_order` arrays carry declaration order, since JSON key order
+        // is not a contract.
         let transformation_order: Vec<String> = program
             .transformations
             .iter()

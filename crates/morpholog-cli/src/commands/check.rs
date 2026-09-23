@@ -17,15 +17,12 @@ use std::path::Path;
 ///   places it (its declaration, or the exact statement), a plain
 ///   `error: <message>` line when it has no source anchor. Exit 1.
 /// - Both clean: declaration policy, then lints, then `--against`
-///   collisions. A lint renders at hint severity and the check still
-///   passes - lints flag shapes with a deliberate reading. Under
-///   `--strict` the same finding is an error and the check fails.
-/// - Fully clean: print nothing and exit 0, or a one-screen summary
-///   under `--verbose`. Scripts rely on the silent stdout default;
-///   findings go to stderr, so that contract holds either way.
-///   `--json` is the opt-in machine-readable stdout shape: one object
-///   carrying every finding with byte offsets and line/column, same
-///   exit semantics.
+///   collisions. A lint is a hint and the check still passes; under
+///   `--strict` it is an error and the check fails.
+/// - Fully clean: print nothing and exit 0, or a short summary under
+///   `--verbose`. Findings always go to stderr, so stdout stays silent
+///   for scripts. `--json` prints every finding to stdout as one object,
+///   with byte offsets and line/column; exit codes are the same.
 pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     let collected = collect(&args)?;
     if args.json {
@@ -76,11 +73,10 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// One finding, with the caret-located diagnostic when a source map
-/// places it. A finding about another file (an `--against` programme
-/// that does not validate) carries that file's own source so the plain
-/// renderer can still show its carets; the JSON report has one `file`,
-/// so there it is reported without a location rather than a lying one.
+/// One finding, with its caret-located diagnostic when a source map places
+/// it. A finding about another file (a broken `--against` programme)
+/// carries that file's source for its carets. The JSON report has one
+/// `file`, so there such a finding has no location rather than a wrong one.
 struct Finding {
     severity: &'static str,
     message: String,
@@ -164,9 +160,8 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
             return Ok(out);
         }
     };
-    // Constructing the `CompiledProgram` is the validation gate: `Err`
-    // carries the same errors `program.validate()` would, and `Ok` is
-    // the compiled programme the lints run against - validated once.
+    // Building the `CompiledProgram` validates: `Err` holds the same
+    // errors `program.validate()` would.
     let compiled = match CompiledProgram::new(program) {
         Ok(compiled) => compiled,
         Err(errors) => {
@@ -218,8 +213,8 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
     Ok(out)
 }
 
-/// `--against` the file being checked would report every write as a
-/// collision with itself: nonsensical input, refused.
+/// Refuse `--against` the file being checked: every write would collide
+/// with itself.
 fn refuse_self_comparison(file: &Path, against: &Path) -> anyhow::Result<()> {
     let same = match (file.canonicalize(), against.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
@@ -234,11 +229,9 @@ fn refuse_self_comparison(file: &Path, against: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The programme behind an `--against` path, cleared to the floor
-/// `check` holds the primary file to - parse, validation, declaration
-/// policy; its own lints are its own `check`'s business - or every
-/// reason it is not, as findings naming the path and carrying the
-/// other file's source for their carets.
+/// The programme behind an `--against` path, held to the same parse,
+/// validation and declaration-policy floor as the checked file (not its
+/// lints). On failure, the findings name the path and carry its source.
 fn load_against(path: &Path) -> Result<Program, Vec<Finding>> {
     let against = path.display();
     let source = std::fs::read_to_string(path).map_err(|e| {
@@ -282,15 +275,12 @@ fn load_against(path: &Path) -> Result<Program, Vec<Finding>> {
     Ok(compiled.program().clone())
 }
 
-/// Print the validated programme's internal representation as pretty
-/// JSON - `check --ir`, the debugging view. Behind validation, so only a
-/// sound programme renders.
+/// `check --ir`: print the validated programme's internal representation
+/// as pretty JSON, for debugging.
 ///
-/// `Program` does not derive `Serialize` directly today, so the CLI
-/// emits a projection: declarations roundtrip structurally, while
-/// invariant, definition, transformation, and derived-claim bodies
-/// render through the canonical formatter. When the IR types pick up
-/// `Serialize`, this can collapse to a direct `print_json(&program)`.
+/// `Program` does not derive `Serialize`, so this is a projection:
+/// declarations are structural, and rule bodies render through the
+/// canonical formatter.
 fn print_ir(program: &Program) -> anyhow::Result<()> {
     let invariants_payload: Vec<serde_json::Value> = program
         .invariants
@@ -367,10 +357,9 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
     print_json(&payload)
 }
 
-/// The `--verbose` success summary: programme name, a count per
-/// declaration kind, and how the invariants are checked - compiled to SQL when
-/// every invariant is inside the fragment, interpreted otherwise with
-/// each refusal named - echoing the file path the caller passed.
+/// The `--verbose` success summary: the file path, programme name, a count
+/// per declaration kind, and how invariants are checked (compiled to SQL,
+/// or interpreted with each reason named).
 fn summary(program: &PgProgram, file: &Path) -> String {
     let p = program.core().program();
     let mut out = format!(

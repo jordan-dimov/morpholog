@@ -39,13 +39,10 @@ pub(crate) async fn resolve_as_of(
     })
 }
 
-/// The claims read, shared by `inspect claims` and the session. Four
-/// paths, one rule: `as_of` picks current-vs-replay, `predicates`
-/// picks full-vs-scoped. The scoped replay filters during
-/// reconstruction; the current filtered read compares in the database
-/// (transfer and decoding saved, not scanning); the replayed paths
-/// filter after reconstruction, because there is no table to push the
-/// comparison into.
+/// The claims read, shared by `inspect claims` and the session. `as_of`
+/// picks current state or a replay; `predicates` picks all or some. A
+/// filtered current read compares in the database. Replayed reads filter
+/// afterwards, since there is no table to push the comparison into.
 pub(crate) async fn claims_rows(
     pool: &PgPool,
     as_of: Option<Uuid>,
@@ -62,10 +59,9 @@ pub(crate) async fn claims_rows(
             .context("list_claims_at_for_predicates failed")?,
         (None, []) => list_claims(pool).await.context("list_claims failed")?,
         (None, [predicate]) if !filters.is_empty() => {
-            // Arity comes from the declaration `--where` already
-            // required, so a row that disagrees with it comes back and
-            // the decoder refuses it - the filter must not hide skew
-            // the unfiltered read would catch.
+            // The arity comes from the declaration, so a row that
+            // disagrees still comes back and the decoder refuses it. The
+            // filter must not hide a mismatch the plain read would catch.
             list_claims_where(pool, predicate, &pg_filters(filters)?, declared_arity)
                 .await
                 .context("list_claims_where failed")?
@@ -84,10 +80,9 @@ pub(crate) async fn claims_rows(
     })
 }
 
-/// The derived read, shared by `inspect derived` and the session:
-/// enumerate the view against current or replayed state, then filter
-/// here rather than in SQL, because the rows were computed from
-/// claims, not stored.
+/// The derived read, shared by `inspect derived` and the session. It
+/// filters here rather than in SQL, because derived rows are computed,
+/// not stored.
 pub(crate) async fn derived_rows(
     pool: &PgPool,
     definitions: &[morpholog_core::Definition],
@@ -112,18 +107,14 @@ pub(crate) async fn derived_rows(
     })
 }
 
-/// Dispatch every `inspect` variant. Each variant either runs inline
-/// (the simple list-claims/audit/outbox ones) or delegates to a
-/// focused helper (derived, predicates) that needs more setup.
+/// Dispatch every `inspect` variant.
 pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
     match what {
         Inspect::Claims(args) => {
-            // With `--named`, the programme is the authority - so it is
-            // parsed and validated before any database work, and a
-            // requested `--predicate` the file does not declare is a
-            // hard error: the typo this mode exists to catch. (The bare
-            // read keeps the opposite contract: claims table as
-            // authority, an unknown predicate matches nothing.)
+            // With `--named`, the programme is the authority: it is
+            // validated before any database work, and a `--predicate` it
+            // does not declare is an error. Without it, the claims table is
+            // the authority and an unknown predicate just matches nothing.
             let named_program = match &args.named {
                 Some(file) => {
                     let parsed = parse_or_report(file)?;
@@ -192,19 +183,15 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
     }
 }
 
-/// Run `inspect audit`: stream committed transitions as NDJSON, one
-/// per line, in `(committed_at, transition_id)` order - the blessed
-/// tail for downstream projectors.
+/// Run `inspect audit`: stream committed transitions as NDJSON, one per
+/// line, in `(committed_at, transition_id)` order, for downstream
+/// projectors.
 ///
-/// The lossless-resume recipe (cursor, then horizon, then snapshot)
-/// lives in the adapter's `begin_audit_tail`, with its load-bearing
-/// order baked in; this command is the recipe's stdout. Rows whose
-/// writers were in flight when the horizon was computed are withheld
-/// for the next invocation, never skipped. Constant memory: one page
-/// in flight at a time, one line out per transition.
+/// The adapter's `begin_audit_tail` does the lossless-resume work. Rows
+/// whose writers were still in flight are held for the next run, never
+/// skipped. Memory stays constant: one page at a time.
 async fn inspect_audit(args: crate::InspectAuditArgs) -> anyhow::Result<()> {
-    // With `--named`, the programme is the authority - parsed and
-    // validated before any database work (the claims-arm contract).
+    // With `--named`, validate the programme before any database work.
     let named_program = match &args.named {
         Some(file) => {
             let parsed = parse_or_report(file)?;
@@ -233,13 +220,10 @@ async fn inspect_audit(args: crate::InspectAuditArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Serialize one audit row with its asserted/retracted claim arrays
-/// decoded by declared field name. Everything else - `arguments`,
-/// `emitted_intents`, the scalar fields - serialises exactly as the
-/// tagged row does: transformation arguments and intent payloads
-/// belong to different vocabularies (parameter kinds, not predicate
-/// declarations), and the contract states the asymmetry rather than
-/// half-inventing a second decoder.
+/// Serialize one audit row with its asserted and retracted claims decoded
+/// by field name. Everything else, including `arguments` and
+/// `emitted_intents`, stays tagged: those follow parameter kinds, not
+/// predicate declarations.
 fn audit_row_named_json(
     program: &morpholog_core::Program,
     file: &std::path::Path,
@@ -252,10 +236,9 @@ fn audit_row_named_json(
     )?)
 }
 
-/// Run `inspect coverage <file.morph>`: replay the audit log through
-/// the coverage tracker and report which rules ever fired. Read-only;
-/// always exits zero on a parsed-and-validated programme - coverage
-/// answers a question, it does not enforce (the `explain` stance).
+/// Run `inspect coverage <file.morph>`: replay the audit log and report
+/// which rules ever fired. Read-only; exits zero for any valid programme,
+/// since it answers a question rather than enforcing.
 async fn inspect_coverage(args: crate::InspectCoverageArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
     validate_or_report(&parsed)?;
@@ -279,20 +262,15 @@ fn declared_predicates(program: &morpholog_core::Program) -> String {
         .join(", ")
 }
 
-/// Decode positional, tagged claims into bare named objects using the
-/// declared vocabulary of the already-parsed programme - the
-/// read-side mirror of `--args-named`. With `--named`, the programme
-/// is the authority: an undeclared predicate or an arity mismatch is
-/// programme/database skew and a hard error naming both sides, never
-/// a silent skip. (The bare read keeps the opposite contract - claims
-/// table as authority - which is why decoding requires the file.)
+/// Decode tagged claims into bare named objects using the programme's
+/// declarations, mirroring `--args-named`. An undeclared predicate or an
+/// arity mismatch means the programme and database disagree: an error
+/// naming both sides, never a silent skip.
 pub(crate) fn decode_claims_named(
     program: &morpholog_core::Program,
     file: &Path,
     claims: &[ClaimInstance],
 ) -> anyhow::Result<Vec<morpholog_cli::envelopes::NamedClaim>> {
-    // The vocabulary is static for the whole invocation; index it once
-    // rather than scanning the declarations per returned claim.
     let decls: std::collections::HashMap<&str, &morpholog_core::PredicateDecl> = program
         .predicates
         .iter()
@@ -333,16 +311,14 @@ pub(crate) fn decode_claims_named(
     Ok(rows)
 }
 
-/// Run the `inspect derived` subcommand end-to-end: look up the named
-/// program and derived claim, connect, and enumerate the derived
-/// extension against the current durable state (or against a past
-/// state via `--as-of`).
+/// Run `inspect derived`: find the derived claim in the programme and
+/// enumerate it against current state, or a past state with `--as-of`.
 ///
 /// Errors:
-/// - Parse failure: rendered diagnostics, exits non-zero (the `check`/`propose` path).
-/// - Unknown derived claim: surfaces the list of derived predicates
-///   declared on the parsed programme.
-/// - Connection failure or kernel error: propagated via anyhow context.
+/// - Parse failure: rendered diagnostics, exits non-zero.
+/// - Unknown derived claim: lists the derived predicates the programme
+///   declares.
+/// - Connection failure or kernel error: propagated with context.
 async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
     validate_or_report(&parsed)?;
@@ -367,9 +343,8 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
         }
     })?;
 
-    // A derived view's own output predicate is declared like any other,
-    // so `--where` resolves field names the same way `inspect claims`
-    // does - no second vocabulary.
+    // A derived predicate is declared like any other, so `--where`
+    // resolves fields as `inspect claims` does.
     let (filters, _) = crate::commands::filter::resolve_where(
         Some(program),
         std::slice::from_ref(&args.derived),
@@ -385,17 +360,15 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
     }
 }
 
-/// Run `inspect predicates <file.morph>`. Parses the source file, then
-/// prints its declared predicates as JSON. Read-only and synchronous; no
-/// database connection.
+/// Run `inspect predicates <file.morph>`: print the declared predicates as
+/// JSON. No database.
 fn inspect_predicates(args: crate::InspectPredicatesArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
     print_json(&parsed.program.predicates)
 }
 
-/// Show a parsed programme's control matrix: per-transformation
-/// preconditions plus the invariant guarantees. Static and read-only -
-/// no database. Prose by default; `--json` emits the structured form.
+/// Show the control matrix: each transformation's preconditions plus the
+/// invariant guarantees. No database. Prose, or JSON with `--json`.
 fn inspect_controls(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
     let compiled = compile_or_report(&parsed)?;
@@ -405,9 +378,8 @@ fn inspect_controls(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
     })
 }
 
-/// Show what a parsed programme makes impossible: its guarantees, one per
-/// invariant. Static and read-only - no database. Prose by default;
-/// `--json` emits the structured form.
+/// Show what a programme makes impossible: one guarantee per invariant.
+/// No database. Prose, or JSON with `--json`.
 fn inspect_guarantees(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
     let compiled = compile_or_report(&parsed)?;
@@ -423,9 +395,8 @@ fn pg_filters(filters: &[FieldFilter]) -> anyhow::Result<Vec<ClaimFilter>> {
         .iter()
         .map(|f| {
             Ok(ClaimFilter {
-                // A position that does not fit is a declaration this
-                // programme could not have parsed - an invariant, not a
-                // filter that matches nothing.
+                // A position that does not fit cannot come from a parsed
+                // declaration: a bug, not a filter that matches nothing.
                 position: i32::try_from(f.position)
                     .with_context(|| format!("argument position {} does not fit", f.position))?,
                 value: serde_json::to_value(&f.value).context("encoding a --where value")?,

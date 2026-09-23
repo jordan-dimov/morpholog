@@ -1,10 +1,8 @@
-//! The rejection log's recording contract: a lawful rejection writes
-//! exactly one row to `morpholog.rejections` with the kind, rule, and
-//! version taken from the structured reason - while every other
-//! outcome (commit, kernel error, PG-layer error) writes nothing.
-//! The record lands AFTER the refusing transaction rolled back, so
-//! these tests are also the proof that the post-rollback insert
-//! actually runs on every public propose path.
+//! The rejection log: a lawful rejection writes exactly one row to
+//! `morpholog.rejections`, with kind, rule and version taken from the
+//! structured reason. Every other outcome (commit, kernel error, database
+//! error) writes nothing. The row is written after rollback, so these
+//! tests also show that insert runs on every public propose path.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -45,8 +43,8 @@ fn fixture() -> Program {
 }
 
 /// (transformation_name, kind, rule, invariant_version, reason,
-/// arguments, actor) in `(rejected_at, rejection_id)` order - the
-/// raw table contents, read without going through any adapter API.
+/// arguments, actor) in `(rejected_at, rejection_id)` order, read from
+/// the table directly.
 type RejectionTuple = (
     String,
     String,
@@ -197,18 +195,16 @@ async fn commits_and_kernel_errors_write_no_rejection_row() {
     .await
     .expect("commits");
 
-    // A kernel error is not a rejection: a `bind` that leaves both
-    // columns free now sees two candidate entries - the multi-match
-    // EvalError path, which must never reach the rejection insert.
+    // A kernel error is not a rejection: a `bind` with both columns free
+    // matches two entries, which is an EvalError.
     use morpholog_core::ir_builder::{bind_one, claim, transformation, var};
     let sweep = transformation(
         "sweep",
         vec![],
         vec![bind_one(claim("Entry", vec![var("eid"), var("amt")]))],
     );
-    // `sweep` must live in the proposed programme for the facade to reach
-    // the kernel (an unknown name would error before evaluation), so add
-    // it to the fixture programme.
+    // `sweep` must be in the programme, or the unknown name would error
+    // before evaluation.
     let mut with_sweep = fixture();
     with_sweep.transformations.push(sweep.clone());
     common::propose_pg_with_test_actor(&pool, &common::compiled(with_sweep), &sweep, vec![])
@@ -228,10 +224,9 @@ async fn a_pg_layer_error_writes_no_rejection_row() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    // Two identical intents collide on the deterministic idempotency
-    // key inside write_accepted - a PG-layer error on the ACCEPTED
-    // path, the proxy proof that Err(PgError) paths never reach the
-    // rejection insert.
+    // Two identical intents collide on the idempotency key: a database
+    // error on the accepted path, which must not reach the rejection
+    // insert.
     let double_emit = transformation(
         "double_emit",
         vec![],
@@ -285,8 +280,7 @@ async fn the_trace_and_rejection_state_paths_each_record_exactly_once() {
     ));
     assert_eq!(rejection_rows(&pool).await.len(), 1);
 
-    // The explain-on-reject path goes through with_rejection_state -
-    // one call, one row, no double recording.
+    // The explain-on-reject path records one row, not two.
     let transition = test_transition(post_approved, vec![subj("t2"), dec(2)]);
     let result = propose_against_pg_with_rejection_state(
         &pool,
@@ -332,10 +326,8 @@ async fn sequential_rejections_each_record_in_replay_order() {
     );
 }
 
-// The kind/version agreement is enforced by the table itself, not
-// only by the writer: a versioned gate or an unversioned invariant
-// cannot be inserted even by hand - the operational evidence is hard
-// to corrupt manually.
+// The table itself enforces the kind/version agreement: a versioned
+// gate or an unversioned invariant cannot be inserted even by hand.
 #[tokio::test]
 async fn the_table_refuses_kind_version_disagreement() {
     let pool = test_pool().await;
@@ -363,12 +355,9 @@ async fn the_table_refuses_kind_version_disagreement() {
     }
 }
 
-/// The witness survives the process that saw it.
-///
-/// This is the whole point of persisting it: before, an operator could
-/// diagnose a refusal live and had nothing to review afterwards, because the
-/// row carried only the reason string. The values come back through
-/// `list_rejection_rows`, decoded, not as raw JSON an embedder has to parse.
+/// The witness survives the process that saw it, so an operator can
+/// review a refusal afterwards. The values come back through
+/// `list_rejection_rows` decoded, not as raw JSON.
 #[tokio::test]
 async fn an_invariant_rejection_persists_the_values_the_rule_was_reading() {
     let pool = test_pool().await;
@@ -415,9 +404,8 @@ async fn an_invariant_rejection_persists_the_values_the_rule_was_reading() {
     );
 }
 
-/// A gate refusal has no witness, and the column stays NULL rather than
-/// holding an empty array - so absence reads as "nothing was captured"
-/// rather than "the rule was reading nothing".
+/// A gate refusal has no witness. The column stays NULL, not an empty
+/// array, so it reads as "nothing captured", not "the rule read nothing".
 #[tokio::test]
 async fn a_gate_rejection_persists_no_witness() {
     let pool = test_pool().await;

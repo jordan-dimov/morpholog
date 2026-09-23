@@ -1,9 +1,8 @@
 //! Tamper-evidence over the audit log: checkpoints commit to an RFC 6962
 //! Merkle root of the committed prefix, and `verify_audit_tree` catches
-//! edits. The load-bearing test is the last one - it forces the trust
-//! model honest: a coordinated rewrite of the audit log AND the
-//! checkpoint table is internally self-consistent and passes a bare
-//! verify, and is caught ONLY by an externally-held anchor.
+//! edits. Attacker: direct write access to the audit and checkpoint
+//! tables. A coordinated rewrite of both is self-consistent and passes a
+//! bare verify; only an anchor held outside the database catches it.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -45,9 +44,8 @@ async fn checkpoint_verifies_then_catches_an_audit_edit() {
         TreeVerification::Intact { .. }
     ));
 
-    // Edit an audit row's content directly - the coordinated-edit an
-    // honest replay alone cannot see, since claims could be edited to
-    // match. The recomputed root no longer matches the checkpoint.
+    // Edit an audit row directly. Replay alone would miss it if claims
+    // were edited to match, but the root no longer matches the checkpoint.
     sqlx::query("UPDATE morpholog.audit SET transformation_name = 'tampered' WHERE transition_id = (SELECT transition_id FROM morpholog.audit ORDER BY committed_at, transition_id LIMIT 1)")
         .execute(&pool)
         .await
@@ -116,9 +114,9 @@ async fn editing_a_checkpoint_row_breaks_the_chain() {
     ));
 }
 
-/// The honest trust model: a coordinated rewrite of the audit log AND a
-/// fresh, self-consistent checkpoint over the false history passes a bare
-/// verify - and is caught ONLY by the checkpoint that left the database.
+/// A rewrite of the audit log plus a fresh, self-consistent checkpoint
+/// over it passes a bare verify. Only a checkpoint kept outside the
+/// database catches it.
 #[tokio::test]
 async fn coordinated_rewrite_passes_bare_verify_but_fails_against_an_anchor() {
     let pool = test_pool().await;
@@ -146,8 +144,8 @@ async fn coordinated_rewrite_passes_bare_verify_but_fails_against_an_anchor() {
         "the false history has a different root"
     );
 
-    // A bare verify cannot tell - the forged checkpoint matches the
-    // forged log. This is the honest limit of internal checks.
+    // A bare verify cannot tell: the forged checkpoint matches the forged
+    // log.
     assert!(
         matches!(
             verify_audit_tree(&pool, None).await.unwrap(),
@@ -241,7 +239,7 @@ async fn signing_an_existing_unsigned_head_attaches_the_signature_idempotently()
     .await;
 
     // An unsigned head, then a sign run with no new rows: the signature is
-    // attached to the existing head, not dropped (the operational trap).
+    // attached to the existing head, not dropped.
     let unsigned = common::make_checkpoint(&pool).await;
     assert!(unsigned.signatures.is_empty());
 

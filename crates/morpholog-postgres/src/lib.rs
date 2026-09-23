@@ -50,7 +50,7 @@ mod verify;
 pub mod wire_time;
 mod witnesses;
 
-// Re-export the full public surface so `morpholog_postgres::X` paths are unchanged.
+// The whole public surface, flat at the crate root.
 pub use actor_policy::{
     AUTHORITY_PREDICATE, PolicyDeclarationError, RESTRICTED_PREDICATE, validate_declarations,
 };

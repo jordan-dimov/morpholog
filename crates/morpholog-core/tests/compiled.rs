@@ -32,10 +32,8 @@ fn fixture() -> Program {
             params(&["t"]),
             claim("Trade", vec![var("t")]),
         )])
-        // Over ordinary claims, not the derived: an invariant naming
-        // `TradeTotal` is refused, because a derived is computed and
-        // never admitted. This fixture carried exactly that dead rule
-        // until the check that refuses it existed.
+        // Over ordinary claims: an invariant naming the derived
+        // `TradeTotal` is refused, because a derived is never admitted.
         .invariants(vec![invariant(
             "total_needs_trade",
             implies(

@@ -1,23 +1,18 @@
 //! RFC 6962 (Certificate Transparency) Merkle history tree over the
 //! audit log.
 //!
-//! The audit log is an append-only ordered sequence of transitions; each
-//! row is a leaf. The Merkle Tree Hash (MTH) of the first `n` leaves is a
-//! single root commitment to that prefix - a later edit to any covered
-//! row changes its leaf and therefore the root, which a stored checkpoint
-//! catches (see `checkpoints`). We use the RFC 6962 construction (not a
-//! naive hash chain) so the same leaves later yield logarithmic inclusion
-//! and consistency proofs without recomputation.
+//! Each audit row is a leaf. The root over the first `n` leaves commits to
+//! that prefix: editing any covered row changes the root, which a stored
+//! checkpoint catches (see `checkpoints`). A Merkle tree rather than a hash
+//! chain, so the same leaves give logarithmic inclusion and consistency
+//! proofs.
 //!
-//! Proof *generation* follows RFC 6962 (sections 2.1.1 and 2.1.2); proof
-//! *verification* follows the explicit step-by-step algorithms in RFC 9162
-//! (Certificate Transparency 2.0, sections 2.1.3.2 and 2.1.4.2) - its
-//! successor over the same tree, because RFC 6962 specifies the construction
-//! but not a verifier procedure. The two are interoperable; the per-function
-//! doc comments cite whichever the code there implements.
+//! Proof generation follows RFC 6962 (sections 2.1.1 and 2.1.2). Proof
+//! verification follows RFC 9162 (sections 2.1.3.2 and 2.1.4.2), its
+//! successor over the same tree, since RFC 6962 gives no verifier
+//! procedure.
 //!
-//! This module is pure and synchronous: leaf encoding + tree hashing,
-//! no I/O.
+//! Pure: no I/O.
 
 use jiff::Timestamp;
 use sha2::{Digest as _, Sha256};
@@ -33,14 +28,11 @@ use morpholog_core::EvalValue;
 const LEAF_PREFIX: u8 = 0x00;
 const NODE_PREFIX: u8 = 0x01;
 
-/// Version bytes for the canonical leaf encoding. A codec change
-/// becomes a new leaf version rather than a silent change to historical
-/// roots. The version a row hashes under is derived from the row's own
-/// content - nothing selects the original encoding, an attestation the
-/// attested one, an attestation with parameter names the
-/// self-describing one - so a verifier needs no side channel, and
-/// moving a field across a boundary in either direction changes the
-/// leaf and breaks the root.
+/// Version bytes for the leaf encoding. A codec change becomes a new
+/// version, never a silent change to historical roots. The row's own
+/// content picks the version: no attestation is V1, an attestation is V2,
+/// an attestation plus parameter names is V3. A verifier needs no side
+/// channel, and moving a field across that line changes the leaf.
 const LEAF_FORMAT_V1: u8 = 1;
 const LEAF_FORMAT_V2: u8 = 2;
 const LEAF_FORMAT_V3: u8 = 3;
@@ -79,8 +71,8 @@ fn split_point(n: usize) -> usize {
 /// The RFC 6962 Merkle Tree Hash over an ordered sequence of already
 /// computed leaf hashes. Empty -> `SHA-256("")`; one leaf -> that leaf;
 /// otherwise split at the largest power of two below the length and hash
-/// the two subtrees. Left-full, so appending leaves only ever rebuilds
-/// the right spine - the property the proofs later rely on.
+/// the two subtrees. Left-full, so appending only rebuilds the right
+/// spine, which the proofs rely on.
 pub(crate) fn merkle_root(leaves: &[Hash]) -> Hash {
     match leaves.len() {
         0 => Sha256::new().finalize().into(),
@@ -92,16 +84,11 @@ pub(crate) fn merkle_root(leaves: &[Hash]) -> Hash {
     }
 }
 
-/// A SHA-256 digest as the record carries it: `sha256:<64 hex>`, the
-/// project's self-describing hash convention, so the algorithm is
-/// legible if it ever has to change. Parsed once, at every boundary a
-/// hash crosses - a checkpoint read from the database, a pack read
-/// from a file, an anchor handed to a verifier - so a value of this
-/// type is well-formed by construction and no verifier re-parses a
-/// hash at the point of use. A malformed hash is refused where it
-/// arrives, as the malformed input it is. The hex is lowercase only,
-/// so parsing a rendering and rendering a parse are both the identity
-/// and one digest has one spelling everywhere it is compared.
+/// A SHA-256 digest as the record carries it: `sha256:<64 hex>`, naming
+/// the algorithm in case it ever changes. Parsed where a hash enters
+/// (database, pack file, anchor), so a malformed hash is refused there and
+/// a `Digest` is always well-formed. Lowercase hex only, so one digest has
+/// one spelling.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Digest(Hash);
 
@@ -160,50 +147,42 @@ impl<'de> serde::Deserialize<'de> for Digest {
     }
 }
 
-/// Append `bytes` length-prefixed (u32 little-endian length, then the
-/// bytes) so the field concatenation is injective: no two distinct field
-/// sequences can produce the same buffer.
+/// Append `bytes` with a u32 little-endian length prefix, so no two
+/// different field sequences produce the same buffer.
 fn push_field(buf: &mut Vec<u8>, bytes: &[u8]) {
     buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
     buf.extend_from_slice(bytes);
 }
 
-/// The canonical, version-tagged byte encoding of one audit row - the
-/// leaf payload. Every column that carries legitimacy is covered, in a
-/// fixed order, each field length-prefixed. `committed_at` is encoded as
-/// integer microseconds (PostgreSQL `timestamptz` precision), so an
-/// order-preserving timestamp shift still changes the leaf. The JSONB
-/// columns reuse the existing deterministic tagged codec (the same
-/// determinism `compute_idempotency_key` relies on).
+/// The version-tagged byte encoding of one audit row: the leaf payload.
+/// Every column that carries legitimacy is covered, in a fixed order, each
+/// length-prefixed. `committed_at` is integer microseconds (`timestamptz`
+/// precision), so even an order-preserving timestamp shift changes the
+/// leaf. JSONB columns use the deterministic tagged codec.
 fn canonical_leaf_bytes(row: &AuditRow) -> Result<Vec<u8>, serde_json::Error> {
-    // A row no writer could have produced gets no encoding at all,
-    // rather than the nearest one: hostile input must not hash.
+    // A row no writer could have produced gets no encoding: hostile input
+    // must not hash.
     row.validate_shape().map_err(serde::ser::Error::custom)?;
     let mut buf = Vec::new();
     match (&row.attestation, &row.parameters) {
-        // The original encoding, frozen forever: rows written before
-        // attestation existed hash exactly as they always did, so every
-        // historical root still verifies. Its one quirk stays with it -
-        // the actor serialises as the transparent bare string here,
-        // although the column and the envelope carry the tagged form.
+        // Frozen forever, so every historical root still verifies. Its
+        // quirk stays: the actor is a bare string here, although the column
+        // and the envelope carry the tagged form.
         (None, _) => {
             buf.push(LEAF_FORMAT_V1);
             push_transition_fields(&mut buf, row, &serde_json::to_vec(&row.actor)?)?;
         }
-        // The attested encoding: same field order, the actor in the
-        // same tagged form the column and the envelope use, and the
-        // attestation object covered whole - its internal shape can
-        // grow (new modes, new fields) without another leaf version,
-        // because the leaf commits to its exact bytes either way.
+        // The actor in its tagged form, plus the whole attestation object.
+        // The attestation can grow new modes or fields without a new leaf
+        // version, since the leaf commits to its exact bytes.
         (Some(attestation), None) => {
             buf.push(LEAF_FORMAT_V2);
             let actor = EvalValue::Subject(row.actor.clone());
             push_transition_fields(&mut buf, row, &serde_json::to_vec(&actor)?)?;
             push_field(&mut buf, &serde_json::to_vec(attestation)?);
         }
-        // The self-describing encoding: the attested fields, then the
-        // parameter names as one JSON array - the signature a reader's
-        // absence claims rest on, covered by the same leaf.
+        // V2's fields plus the parameter names as one JSON array, so a
+        // reader's claims about absent arguments rest on hashed content.
         (Some(attestation), Some(parameters)) => {
             buf.push(LEAF_FORMAT_V3);
             let actor = EvalValue::Subject(row.actor.clone());
@@ -215,9 +194,8 @@ fn canonical_leaf_bytes(row: &AuditRow) -> Result<Vec<u8>, serde_json::Error> {
     Ok(buf)
 }
 
-/// The fields both leaf versions share, in their fixed order; the actor
-/// bytes are supplied by the caller because the two versions encode the
-/// actor differently.
+/// The fields every leaf version shares, in fixed order. The caller
+/// supplies the actor bytes because V1 encodes the actor differently.
 fn push_transition_fields(
     buf: &mut Vec<u8>,
     row: &AuditRow,
@@ -236,10 +214,9 @@ fn push_transition_fields(
     Ok(())
 }
 
-/// Floors to the microsecond, as the leaf always has. A row read from
-/// the database is whole microseconds already, but a pack is hashed as
-/// written, and truncating toward zero would move the leaf of an
-/// instant just before 1970.
+/// Floors to the microsecond. Database rows are whole microseconds
+/// already, but a pack is hashed as written, and truncating toward zero
+/// would move the leaf of an instant just before 1970.
 fn committed_at_micros(ts: Timestamp) -> i64 {
     ts.as_second() * 1_000_000 + i64::from(ts.subsec_nanosecond()).div_euclid(1_000)
 }
@@ -249,18 +226,14 @@ pub(crate) fn audit_leaf_hash(row: &AuditRow) -> Result<Hash, serde_json::Error>
     Ok(leaf_hash(&canonical_leaf_bytes(row)?))
 }
 
-/// Why a Merkle proof failed to verify. One enum serves both proof kinds:
-/// the failure modes are identical, and two near-identical types would be
-/// surface for no distinction (the pack layer maps `RootMismatch` to the
-/// kind-specific verdict from its own context).
+/// Why a Merkle proof failed to verify, for both proof kinds. The pack
+/// layer maps `RootMismatch` to the kind-specific verdict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProofError {
     /// The size/index arguments are out of range (e.g. `first > second`,
     /// or a leaf index past the tree size).
     BadParameters,
-    /// The proof has the wrong length for the given tree sizes - too few
-    /// or too many hashes. A structurally malformed proof, not a data
-    /// disagreement.
+    /// The proof has too few or too many hashes for the tree sizes.
     Malformed,
     /// The proof is well-formed but did not reconstruct the expected root.
     /// For inclusion: the leaf is not at that position. For consistency:
@@ -377,10 +350,9 @@ fn subproof(m: usize, leaves: &[Hash], b: bool) -> Vec<Hash> {
 }
 
 /// Verify a consistency proof by the RFC 9162 section 2.1.4.2 algorithm:
-/// reconstruct both the earlier root (`first_root`) and the later root
-/// (`second_root`) from the proof and check both. `RootMismatch` means the
-/// later tree is not an append-only extension of the earlier one (the
-/// inconsistent-extension case the window verdict names).
+/// rebuild both `first_root` and `second_root` from the proof and check
+/// both. `RootMismatch` means the later tree is not an append-only
+/// extension of the earlier one.
 pub(crate) fn verify_consistency_proof(
     first_size: usize,
     first_root: &Hash,

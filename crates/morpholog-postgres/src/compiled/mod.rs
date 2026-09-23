@@ -1,20 +1,18 @@
 //! Compile fragment invariants into SQL violation queries.
 //!
-//! Denial orientation: each invariant compiles to one query that returns a
-//! witnessing row when the invariant FAILS over the claims table and no rows
-//! when it holds. The kernel semantics being reproduced: an invariant holds
-//! iff its body yields at least one binding witness; `Implies`/`Forall`/
-//! `Exists`/`Not` export no bindings; `And` threads bindings left to right;
-//! decimal comparison is scale-insensitive (`::numeric`, never JSON text).
+//! Each invariant compiles to one query that returns a witnessing row when
+//! the invariant FAILS and no rows when it holds. It reproduces the kernel:
+//! an invariant holds iff its body yields at least one binding;
+//! `Implies`/`Forall`/`Exists`/`Not` export no bindings; `And` threads
+//! bindings left to right; decimals compare scale-insensitively
+//! (`::numeric`, never JSON text).
 //!
-//! The compiler is also the fragment classifier: an invariant outside the
-//! fragment is a [`CompileRefusal`], collected whole-run like
-//! `sql_views::ViewRefusal`. Input is a [`ValidatedProgram`], so a refusal
-//! means exactly "a valid Morpholog invariant the fragment cannot express" -
-//! undeclared names and arity mismatches stay validation errors.
+//! An invariant the compiler cannot express is a [`CompileRefusal`], and
+//! all of them are collected. Input is a [`ValidatedProgram`], so a refusal
+//! always means a valid invariant outside the fragment, never a validation
+//! error.
 //!
-//! Equality representations are exhaustive per declared kind, each with its
-//! proof, never a convenience fallback:
+//! Each declared kind has one equality representation, with its reason:
 //!
 //! - `Decimal`: `(arguments -> N ->> 'value')::numeric`. The kernel compares
 //!   decimals scale-insensitively while the stored string preserves scale
@@ -31,17 +29,12 @@
 //!   `Any` (may hold anything): no equality representation is proved, so a
 //!   variable join or filter on such a position refuses by kind.
 //!
-//! The kernel stays the executable spec: the compiled path's correctness
-//! claim is held by the same-candidate differential in
-//! `compiled_differential`, which stages each probe's delta once and
-//! requires the kernel and both compiled stages to agree over it.
+//! The kernel stays the executable spec; `compiled_differential` proves
+//! the compiled checks agree with it.
 //!
-//! The adopted witness contract (spike verdict): rule name, version, and
-//! the witness VARIABLE SET are strict across evaluators; witness values
-//! are observational - a symmetric self-join lawfully names the violating
-//! pair in a different order. (The spike had a second cause, bodies
-//! minting `new Subject()` twice; the same-candidate differential stages
-//! the body once, so that source of divergence no longer exists.)
+//! Witness contract: rule name, version and the witness VARIABLE SET must
+//! match the kernel. Witness values may differ: a symmetric self-join can
+//! name the violating pair in either order.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -116,9 +109,8 @@ pub struct CompileRefusal {
     pub reason: CompileReason,
 }
 
-/// Every invariant of a programme, compiled. Programme order is preserved:
-/// the runner evaluates in this order and refuses on the first violation,
-/// matching the kernel's first-failure contract.
+/// Every invariant of a programme, compiled, in programme order: the
+/// runner refuses on the first violation, as the kernel does.
 #[derive(Debug)]
 pub(crate) struct CompiledInvariantSet {
     pub(crate) invariants: Vec<CompiledInvariant>,
@@ -139,14 +131,13 @@ impl CompiledInvariantSet {
     }
 }
 
-/// Which check runs: the whole stage-1 query, the invariant's
-/// whole-state meaning, or stage 2 bounded to the cases the effective
-/// delta could have changed, the admission obligation production runs.
+/// Which check runs: the whole-state check, or the check bounded to the
+/// cases the effective delta could have changed, which production runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Stage {
-    /// Kept for the differential: on governed history it must agree
-    /// with the admission obligation, and on dirty history it is the
-    /// whole-state check `evaluate` asks.
+    /// Used by the differential: on governed history it must agree with
+    /// `CaseBound`; on dirty history it is the whole-state question
+    /// `evaluate` asks.
     #[cfg_attr(not(test), allow(dead_code))]
     Full,
     CaseBound,
@@ -170,10 +161,9 @@ impl From<SqlViolation> for RejectionReason {
     }
 }
 
-/// Correlated-subquery estimates inflate planned cost past the JIT
-/// threshold (~118ms of compilation for a sub-ms plan, measured at
-/// 100k claims in the spike). Off for the rest of this transaction;
-/// JIT is for analytics.
+/// Turn off JIT for the rest of this transaction. Correlated-subquery
+/// estimates push planned cost past the JIT threshold, costing ~118ms of
+/// compilation for a sub-millisecond plan (measured at 100k claims).
 pub(crate) async fn disable_jit(tx: &mut Transaction<'_, Postgres>) -> Result<(), PgError> {
     sqlx::raw_sql("SET LOCAL jit = off")
         .execute(&mut **tx)
@@ -183,21 +173,18 @@ pub(crate) async fn disable_jit(tx: &mut Transaction<'_, Postgres>) -> Result<()
 }
 
 impl CompiledInvariantSet {
-    /// The first violating invariant in programme order with its decoded
-    /// witness, or `None` when every check holds: the compiled analogue
-    /// of the kernel's first-failure loop. Runs inside the caller's
-    /// transaction, over the claims table as the written delta left it.
-    /// The commit path and the differential both run checks through
-    /// here, so the differential proves the runner that admits
-    /// transitions.
+    /// The first violating invariant in programme order with its witness,
+    /// or `None` when every check holds. Runs inside the caller's
+    /// transaction, over the claims table after the delta was written. The
+    /// commit path and the differential both use it, so the differential
+    /// tests the code that admits transitions.
     ///
-    /// Two range mechanisms, neither redundant. The `range_error` column
-    /// keeps the accept path correct: an oversized total that compares as
-    /// holding produces no violation row, so only the flag can turn that
-    /// row into an error without a second query on every acceptance. The
-    /// whole-scope range query keeps the refusal path correct: the
-    /// violation query stops at its first row in witness order, and the
-    /// error must dominate a violation that merely sorts earlier.
+    /// Two range checks, both needed. The `range_error` column covers
+    /// acceptance: an oversized total that compares as holding yields no
+    /// violation row, so only the flag can report it without a second
+    /// query on every acceptance. The separate range query covers refusal:
+    /// the violation query stops at its first row, and a range error must
+    /// win over a violation that merely sorts earlier.
     pub(crate) async fn first_violation(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -215,9 +202,8 @@ impl CompiledInvariantSet {
                 },
             };
             let sql = inv.violation_sql(case_filter.as_deref());
-            // Audited for AssertSqlSafe: the SQL is rendered entirely by
-            // this module from a validated programme - identifiers are
-            // quoted, literals escaped, and the provenance comment
+            // Safe: this module renders the SQL from a validated programme,
+            // with identifiers quoted, literals escaped and the name comment
             // neutralised.
             let row = sqlx::query(sqlx::AssertSqlSafe(sql))
                 .fetch_optional(&mut **tx)
@@ -250,9 +236,9 @@ impl CompiledInvariantSet {
     }
 }
 
-/// Decode a violation row's witness columns: each is the `::text` of
-/// the full tagged value, so `EvalValue`'s own serde is the decoder -
-/// the one wire contract, no per-kind column logic.
+/// Decode a violation row's witness columns. Each is the `::text` of the
+/// full tagged value, so `EvalValue`'s serde decodes it with no per-kind
+/// logic.
 fn decode_witness(
     inv: &CompiledInvariant,
     row: &sqlx::postgres::PgRow,
@@ -273,12 +259,10 @@ fn decode_witness(
     Ok(witness)
 }
 
-/// One index the compiled SQL can seek on: a partial expression index
-/// over one argument position of one predicate, in the representation
-/// the SQL reads that position with. Emitted by the compiler beside the
-/// query, from the same [`Representation`], so the index necessarily
-/// matches the extractor. Provisioning reconciles these against the
-/// database; correctness never depends on them.
+/// One index the compiled SQL can seek on: a partial expression index over
+/// one argument position of one predicate. Built from the same
+/// [`Representation`] as the query's extractor, so the two always match.
+/// Correctness never depends on it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct IndexSpec {
     pub(crate) predicate: PredicateName,
@@ -320,9 +304,8 @@ impl IndexSpec {
         hex::encode(Sha256::digest(canonical.as_bytes()))
     }
 
-    /// The deterministic name in Morpholog's reserved namespace: a
-    /// readable prefix and the digest that makes it unique, well under
-    /// the identifier limit.
+    /// The deterministic name: a readable reserved prefix plus the digest,
+    /// well under the identifier limit.
     pub(crate) fn index_name(&self) -> String {
         let readable: String = self
             .predicate
@@ -363,9 +346,9 @@ pub(crate) enum CaseFilter {
     /// Delta disjoint from the invariant's occurrences: skip it entirely.
     Untouched,
     /// The touched cases, as a SQL disjunction over the antecedent's
-    /// columns - spliced into the stage-1 query.
+    /// columns, spliced into the full query.
     Bounded(String),
-    /// Touched, but not boundable to antecedent columns: run full stage 1.
+    /// Touched, but not boundable to antecedent columns: run the full check.
     Unbounded,
 }
 
@@ -382,23 +365,20 @@ pub(crate) struct CompiledInvariant {
     pub(crate) name: InvariantName,
     pub(crate) version: u32,
     /// Witness variables, sorted by name. Each violation row carries the
-    /// full tagged value as `w_<var>`, decoded through `EvalValue`'s own
-    /// serde - the one wire contract, no second kind decoder.
+    /// full tagged value as `w_<var>`.
     pub(crate) witness_vars: Vec<Var>,
-    /// Which cases a delta touches, from core's one impact authority;
-    /// `case_cols` renders its bindings onto the antecedent's columns.
+    /// Which cases a delta touches, decided by core; `case_cols` renders
+    /// its bindings onto the antecedent's columns.
     plan: ImpactPlan,
     case_cols: BTreeMap<Var, ColRef>,
     sql_select_from_where: String,
     sql_order_limit: String,
-    /// Whether any row in the invariant's scope has an unrepresentable
-    /// sum, asked only after the violation query returned a violation:
-    /// that query stops at its first row in witness order, and the
-    /// range error must dominate a violation that merely sorts earlier.
-    /// Without its `LIMIT`, so a case filter can bound it to the same
-    /// obligation as the violation query. `None` when the invariant has
-    /// no sum, or its violation query already answers over the whole
-    /// scope.
+    /// Whether any row in scope has an unrepresentable sum. Asked only
+    /// after a violation was found, since the violation query stops at its
+    /// first row and a range error must win over a violation that sorts
+    /// earlier. Has no `LIMIT`, so a case filter can bound it like the
+    /// violation query. `None` when there is no sum, or the violation query
+    /// already covers the whole scope.
     sql_range: Option<String>,
     /// The indexes this invariant's SQL can seek on, in specification
     /// order.
@@ -406,8 +386,8 @@ pub(crate) struct CompiledInvariant {
 }
 
 impl CompiledInvariant {
-    /// The violation query. `case_filter` is a stage-2 bound produced by
-    /// [`Self::case_filter`]; `None` is the full stage-1 check.
+    /// The violation query. `case_filter` is a bound from
+    /// [`Self::case_filter`]; `None` is the full check.
     pub(crate) fn violation_sql(&self, case_filter: Option<&str>) -> String {
         let stage = if case_filter.is_some() { 2 } else { 1 };
         let mut sql = format!(
@@ -437,8 +417,8 @@ impl CompiledInvariant {
     }
 
     /// Bound the check to the cases a delta could have changed: core
-    /// decides the cases, this renders them. A bound value the SQL
-    /// cannot compare widens to the whole invariant, never narrows.
+    /// decides the cases, this renders them. A value the SQL cannot
+    /// compare widens to the whole invariant, never narrows.
     pub(crate) fn case_filter(
         &self,
         asserted: &[ClaimInstance],
@@ -471,11 +451,10 @@ impl CompiledInvariant {
     }
 }
 
-/// An invariant name is an opaque string in hand-built IR; neutralise
-/// every sequence that could break the block comment it travels in.
-/// PostgreSQL block comments NEST, so an embedded `/*` is as hostile
-/// as `*/`: it opens a level our single closer would then close,
-/// leaving the real comment open over the rest of the statement.
+/// An invariant name can be any string in hand-built IR, so neutralise
+/// anything that could break the block comment it sits in. PostgreSQL
+/// block comments NEST, so `/*` is as dangerous as `*/`: it would leave
+/// the comment open over the rest of the statement.
 fn comment_safe(name: &str) -> String {
     name.replace(['\r', '\n'], " ")
         .replace("*/", "* /")
@@ -483,7 +462,7 @@ fn comment_safe(name: &str) -> String {
 }
 
 /// Compile every invariant of a validated programme, or report every
-/// refusal (whole-run: nothing compiles unless everything does).
+/// refusal: nothing compiles unless everything does.
 pub(crate) fn compile_invariants(
     program: ValidatedProgram<'_>,
 ) -> Result<CompiledInvariantSet, Vec<CompileRefusal>> {
@@ -518,9 +497,9 @@ type Env = BTreeMap<Var, ColRef>;
 struct Ctx<'a> {
     decls: &'a BTreeMap<&'a str, &'a PredicateDecl>,
     counter: usize,
-    /// Every (predicate, position, representation) the rendered SQL
-    /// filters or joins on - the index specification, collected where
-    /// the extractor is emitted so both come from the same object.
+    /// Every (predicate, position, representation) the SQL filters or
+    /// joins on, collected where the extractor is emitted: the index
+    /// specification.
     required: BTreeSet<(PredicateName, usize, Representation)>,
     /// Sums rendered while a comparison's operands were being rendered:
     /// the comparison collects them into its own rendering.
@@ -535,12 +514,10 @@ struct RenderedSum {
 }
 
 /// A scope's rendering. `where_` holds the conjuncts before any sum
-/// comparison; `tail` is that comparison, the last conjunct of its
-/// scope, with the sums it reads in `laterals` and each total's
-/// representability in `range_errors`. Keeping the tail apart is what
-/// lets a violation query put the range error where the kernel
-/// evaluates the sum: reached only past the prefix, dominating the
-/// comparison once reached.
+/// comparison; `tail` is that comparison (the scope's last conjunct), with
+/// its sums in `laterals` and their range tests in `range_errors`. The tail
+/// is kept apart so a range error counts only where the kernel would
+/// evaluate the sum: past the prefix, and then ahead of the comparison.
 #[derive(Default)]
 struct Rendered {
     from: Vec<(String, String)>, // (alias, from item)
@@ -584,8 +561,7 @@ impl Rendered {
     }
 
     /// `EXISTS`-shaped rendering of this match, usable inside a WHERE.
-    /// Never reached with a sum in scope: those shapes are refused
-    /// before rendering nests them.
+    /// Never reached with a sum in scope: those shapes are refused first.
     fn exists_sql(&self) -> String {
         if self.from.is_empty() && self.laterals.is_empty() {
             format!("({})", self.conjunction())
@@ -599,10 +575,6 @@ impl Rendered {
     }
 }
 
-/// The total is a representable decimal iff, normalised, its scale is
-/// at most 28 and its coefficient fits 96 bits - the kernel's own
-/// test on its wide accumulator. Data, never a thrown error, so the
-/// planner's evaluation order cannot change what the query reports.
 /// Conjunction without the `true` an absent part contributes; `false`
 /// outright when any part is.
 fn and_all(parts: &[String]) -> String {
@@ -639,6 +611,10 @@ fn or_all(parts: &[String]) -> String {
     }
 }
 
+/// True when the total is NOT a representable decimal. It is representable
+/// iff, normalised, its scale is at most 28 and its coefficient fits 96
+/// bits, the kernel's own test. Data, never a thrown error, so the
+/// planner's evaluation order cannot change what the query reports.
 fn range_error_sql(total: &str) -> String {
     format!(
         "NOT (min_scale({total}) <= 28 AND abs({total}) * power(10::numeric, min_scale({total})) < 79228162514264337593543950336::numeric)"
@@ -664,9 +640,8 @@ fn compile_invariant(
             body,
         } => compile_denial(source, body, &mut ctx)?,
         // Top-level Not: violated iff the inner matches. The inner's
-        // bindings bound the case for stage 2, but the kernel reports
-        // no witness for a failure with nothing bound above it, so
-        // neither does the check.
+        // bindings bound the cases, but the kernel reports no witness here,
+        // so neither does the check.
         Prop::Not(inner) => {
             let r = render_prop(inner, Env::new(), &mut ctx)?;
             if r.from.is_empty() {
@@ -728,8 +703,8 @@ type Denial = (String, String, Option<String>, Env);
 fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReason> {
     let ant = render_prop(left, Env::new(), ctx)?;
     if ant.from.is_empty() {
-        // Filter-only antecedent: no generators to witness; use the
-        // generic whole-body denial.
+        // Filter-only antecedent: nothing to witness, so use the generic
+        // denial.
         return generic_denial_implies(left, right, ctx);
     }
     let cons = render_prop(right, ant.env.clone(), ctx)?;
@@ -738,11 +713,10 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
             detail: "sum beside claim patterns in a consequent",
         });
     }
-    // Reached past the antecedent's prefix: the antecedent's own range
-    // error, or its tail holding and the consequent failing. A
-    // consequent's range error counts only once its prefix holds; a
-    // failing prefix is an ordinary violation that never reaches the
-    // sum.
+    // Past the antecedent's prefix, a violation is the antecedent's range
+    // error, or its tail holding and the consequent failing. A consequent's
+    // range error counts only once its prefix holds; a failing prefix is an
+    // ordinary violation that never reaches the sum.
     let ant_tail = ant.tail.clone().unwrap_or_else(|| "true".to_string());
     let cons_range = if cons.has_sum() {
         and_all(&[cons.prefix(), cons.range_error()])
@@ -902,11 +876,10 @@ fn witness_select_order(r: &Rendered) -> (String, String) {
             .collect::<Vec<_>>()
             .join(",\n       ")
     };
-    // Order by the extractor expressions, not the generators' raw
-    // `arguments`: raw-argument order matches the PK, which baits the
-    // planner into an early-stop scan of the whole predicate (measured
-    // plan flip at N=100k in the spike); the extractor expressions match
-    // the partial expression indexes rung 2 derives. Deterministic in
+    // Order by the extractor expressions, not raw `arguments`. Raw order
+    // matches the primary key, which tempts the planner into an early-stop
+    // scan of the whole predicate (seen at 100k rows); the extractors match
+    // the partial expression indexes the compiler emits. Deterministic in
     // everything the row reports.
     let order = if r.env.is_empty() {
         r.from
@@ -925,9 +898,8 @@ fn witness_select_order(r: &Rendered) -> (String, String) {
 }
 
 /// How a claim-argument position is read in SQL so that SQL equality is
-/// kernel equality - and, from the same object, how an index over that
-/// position is expressed, so the index necessarily matches the
-/// extractor. See the module doc for the per-kind proofs.
+/// kernel equality, and how an index over it is expressed, so the two
+/// always match. The module doc gives the reason per kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Representation {
     Text,
@@ -1003,11 +975,10 @@ fn literal_sql(value: &Value) -> Result<(String, Representation), CompileReason>
     }
 }
 
-/// Stage-2 constant equality on an antecedent column, or None when the
-/// value kind cannot be rendered (widens to Unbounded). The tagged
-/// tier compares the whole value as jsonb against the delta value's
-/// own serialisation - the same serde every stored claim passed
-/// through, so the constant and the column speak one canonical form.
+/// Case-bound constant equality on an antecedent column, or None when the
+/// value kind cannot be rendered (widens to Unbounded). Tagged kinds
+/// compare as jsonb against the value's own serialisation, the same serde
+/// every stored claim passed through.
 fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
     match ev {
         EvalValue::Subject(s) => Some(format!(
@@ -1195,10 +1166,9 @@ fn render_claim(
                         .insert((bound.predicate.clone(), bound.position, repr));
                     ctx.required.insert((predicate.clone(), i, repr));
                 } else {
-                    // Binding a variable requires the position to carry a
-                    // proved equality representation NOW, not lazily: a
-                    // later join or witness read must never fall back to
-                    // an unsound comparison.
+                    // Binding requires a proved equality representation
+                    // now, so a later join or witness read can never fall
+                    // back to an unsound comparison.
                     repr_for(&col.kind)?;
                     env.insert(v.clone(), col);
                 }
@@ -1213,10 +1183,9 @@ fn render_claim(
     })
 }
 
-/// A scope the query evaluates by existence (a nested negation,
-/// exists or implication) may stop at its first match, where the
-/// kernel evaluates every binding of a sum's scope; no sum compiles
-/// under one.
+/// A scope checked by existence (nested negation, exists, implication)
+/// may stop at its first match, while the kernel evaluates every binding
+/// of a sum's scope, so no sum compiles under one.
 fn nested_scope(r: Rendered) -> Result<Rendered, CompileReason> {
     if r.has_sum() {
         return Err(CompileReason::SumShape {
@@ -1286,9 +1255,8 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<String, C
                     detail: "sum within a sum body",
                 });
             }
-            // The compiled sum target is a bound decimal variable or a
-            // decimal literal - the pre-expression-target shape. A
-            // computed target refuses.
+            // The sum target must be a bound decimal variable or a decimal
+            // literal; a computed target refuses.
             let val = match value.as_ref() {
                 ValueExpr::Term(Term::Var(v)) => {
                     let col = r

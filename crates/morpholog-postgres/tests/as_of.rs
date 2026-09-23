@@ -1,14 +1,10 @@
 //! Integration tests for as-of evaluation.
 //!
-//! These tests cover the production helpers `reconstruct_state_at`,
-//! `list_claims_at`, `list_derived_at`, and (indirectly via the
-//! last) the internal `reconstruct_state_at_for_predicates`. The
-//! scenario most tests share is the double-entry-ledger restatement
-//! chain: post entry_001 at 100, post entry_002 at 200, restate
-//! entry_001 to 150. Three distinct trial balances exist in the
-//! same database; only the last is reachable through the
-//! current-state `list_derived`. The as-of helpers must recover
-//! the other two.
+//! Covers `reconstruct_state_at`, `list_claims_at` and `list_derived_at`.
+//! Most tests share a ledger restatement chain: post entry_001 at 100,
+//! post entry_002 at 200, restate entry_001 to 150. That leaves three
+//! trial balances in one database. `list_derived` sees only the last;
+//! the as-of helpers must recover the other two.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -29,13 +25,8 @@ use common::{expect_committed, reset_db, test_pool};
 // Test infrastructure
 // ============================================================
 
-/// Unwrap a `Committed` outcome and return its `transition_id`,
-/// panicking if the transformation rejected. Each step of the chain
-/// is required to commit; a rejection is a fixture or kernel bug,
-/// not a business outcome.
-/// Three-step ledger fixture: post entry_001 at 100, post entry_002
-/// at 200, restate entry_001 to 150. Returns the three captured
-/// `transition_id`s in order. Used by most of the tests below.
+/// Post entry_001 at 100, post entry_002 at 200, restate entry_001 to
+/// 150. Returns the three transition ids in order.
 async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     let period = subj("p_as_of");
 
@@ -117,17 +108,15 @@ fn assert_balance(rows: &[ClaimInstance], account_name: &str, amount: i64) {
 // Tests
 // ============================================================
 
-/// Test #1: reconstruct_state_at recovers the pre-restatement state.
-/// Inherits the spike's headline scenario.
+/// reconstruct_state_at recovers the pre-restatement state.
 #[tokio::test]
 async fn reconstruct_state_at_recovers_pre_restatement_state() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     let (tid1, tid2, _tid3) = three_step_ledger(&pool).await;
 
-    // As-of tid2: entry_001 (100) and entry_002 (200), no
-    // restatement yet. That's 2 JournalEntry + 4 JournalLine = 6
-    // claims total.
+    // As of tid2: two entries, no restatement yet. 2 JournalEntry + 4
+    // JournalLine = 6 claims.
     let state_at_tid2 = reconstruct_state_at(&pool, tid2).await.unwrap();
     assert_eq!(
         state_at_tid2.len(),
@@ -144,8 +133,8 @@ async fn reconstruct_state_at_recovers_pre_restatement_state() {
     );
 }
 
-/// Test #2: reconstruct_state_at at the latest transition matches
-/// current `list_claims` as a set.
+/// reconstruct_state_at at the latest transition matches current
+/// `list_claims` as a set.
 #[tokio::test]
 async fn reconstruct_state_at_at_latest_equals_current_claims() {
     let pool = test_pool().await;
@@ -155,11 +144,8 @@ async fn reconstruct_state_at_at_latest_equals_current_claims() {
     let state_at_tid3 = reconstruct_state_at(&pool, tid3).await.unwrap();
     let current = list_claims(&pool).await.unwrap();
 
-    // Compare as sets, not as ordered lists: list_claims orders by
-    // (asserted_at, predicate, args::text); reconstruct_state_at
-    // returns construction (replay) order. ClaimInstance does not
-    // derive Hash, so check set equality by length plus mutual
-    // containment - O(N^2) but the sets are tiny here.
+    // Compare as sets: the two functions order claims differently.
+    // ClaimInstance is not Hash, so use length plus mutual containment.
     assert_eq!(
         state_at_tid3.len(),
         current.len(),
@@ -173,9 +159,8 @@ async fn reconstruct_state_at_at_latest_equals_current_claims() {
     }
 }
 
-/// Test #3: reconstruct_state_at errors with TransitionNotFound for
-/// an unknown UUID. Crisp contract: every unknown id is an error,
-/// including ids ordered between/before/after known ids.
+/// reconstruct_state_at errors with TransitionNotFound for any unknown
+/// id, wherever it sorts relative to known ids.
 #[tokio::test]
 async fn reconstruct_state_at_returns_transition_not_found_for_unknown_id() {
     let pool = test_pool().await;
@@ -193,9 +178,7 @@ async fn reconstruct_state_at_returns_transition_not_found_for_unknown_id() {
         other => panic!("expected TransitionNotFound, got {other:?}"),
     }
 
-    // A fresh random v7 UUID that does not exist in audit must also
-    // be an error - not silently treated as current state. This is
-    // the load-bearing test for the "no magical edge cases" contract.
+    // A fresh v7 UUID must be an error too, not treated as current state.
     let bogus = Uuid::now_v7();
     let err = reconstruct_state_at(&pool, bogus)
         .await
@@ -203,9 +186,7 @@ async fn reconstruct_state_at_returns_transition_not_found_for_unknown_id() {
     assert!(matches!(err, PgError::TransitionNotFound(_)));
 }
 
-/// Test #4: list_claims_at returns the claim set as it was at the
-/// supplied moment, differing from current when state has changed
-/// since.
+/// list_claims_at returns the claims as they were at that transition.
 #[tokio::test]
 async fn list_claims_at_differs_from_current_after_state_change() {
     let pool = test_pool().await;
@@ -226,8 +207,7 @@ async fn list_claims_at_differs_from_current_after_state_change() {
     assert_eq!(current.len(), 10);
 }
 
-/// Test #5: list_derived_at recovers the historical trial balance.
-/// The headline as-of property.
+/// list_derived_at recovers the historical trial balance.
 #[tokio::test]
 async fn list_derived_at_recovers_historical_trial_balance() {
     let pool = test_pool().await;
@@ -261,9 +241,7 @@ async fn list_derived_at_recovers_historical_trial_balance() {
     assert_balance(&at_tid2, "account_revenue", -300);
 }
 
-/// Test #6: list_derived_at at the latest transition equals
-/// list_derived against the current state. Behavioural equivalence
-/// guarantee.
+/// list_derived_at at the latest transition equals list_derived.
 #[tokio::test]
 async fn list_derived_at_at_latest_equals_list_derived() {
     let pool = test_pool().await;
@@ -289,11 +267,8 @@ async fn list_derived_at_at_latest_equals_list_derived() {
     );
 }
 
-/// Test #7: list_derived_at ignores unrelated predicates during
-/// replay (proves scoped reconstruction is correct under noise).
-/// Commit an unrelated transformation via `propose_against_pg`
-/// (which adds its own audit row), then confirm the trial balance
-/// at that new transition is unchanged.
+/// list_derived_at ignores unrelated predicates during replay: after an
+/// unrelated commit, the trial balance as of that commit is unchanged.
 #[tokio::test]
 async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
     let pool = test_pool().await;
@@ -310,11 +285,8 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
     .await
     .unwrap();
 
-    // Commit an unrelated transformation (verified_revenue's
-    // admit_independent_verification). This adds an
-    // IndependentlyVerifiedRevenue claim and a new audit row, none of
-    // which the trial-balance derived references. Capture the new
-    // tid; ask for the trial balance as of THIS tid.
+    // An IndependentlyVerifiedRevenue claim, which the trial balance
+    // does not read.
     let new_tid = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
@@ -346,23 +318,11 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
     );
 }
 
-/// Test #8: confirms the trial balance derived enumeration is
-/// correct against historical state that ALSO contains predicates
-/// the derived does not touch (JournalEntry, Supersedes). This is
-/// the output-level check: `list_derived_at` produces the right
-/// answer even when the audit log contains noise predicates.
+/// The trial balance is correct over history that also holds
+/// predicates it does not read (JournalEntry, Supersedes).
 ///
-/// Note: this test does NOT directly inspect what
-/// `reconstruct_state_at_for_predicates` returns - that function is
-/// `pub(crate)` and not reachable from integration tests. The
-/// partial-state contract (only requested predicates in the
-/// reconstructed state) is enforced internally by the scope check
-/// in the replay loop and validated
-/// here only indirectly via correct output. A regression that
-/// accidentally loaded everything would still produce correct
-/// output for the trial balance (the JournalLines would still be
-/// there); the test that catches such a regression is the bench's
-/// list_scoped phase timing.
+/// This checks output only. A scoped replay that loaded everything
+/// would still pass; the bench's list_scoped timing catches that.
 #[tokio::test]
 async fn list_derived_at_returns_correct_output_under_mixed_predicate_history() {
     let pool = test_pool().await;
@@ -370,22 +330,15 @@ async fn list_derived_at_returns_correct_output_under_mixed_predicate_history() 
     let (_tid1, _tid2, tid3) = three_step_ledger(&pool).await;
 
     let full = reconstruct_state_at(&pool, tid3).await.unwrap();
-    // Full state at tid3: JournalEntry, JournalLine, and Supersedes
-    // (the restatement adds a Supersedes claim). All three predicates
-    // should be present.
+    // Full state at tid3 holds JournalEntry, JournalLine and Supersedes.
     let predicates: std::collections::HashSet<&str> =
         full.claims().iter().map(|c| c.predicate.as_str()).collect();
     assert!(predicates.contains("JournalEntry"));
     assert!(predicates.contains("JournalLine"));
     assert!(predicates.contains("Supersedes"));
 
-    // Now ask for the trial balance at tid3 via list_derived_at,
-    // which internally calls reconstruct_state_at_for_predicates
-    // with footprint = {"JournalLine"}. The output is the trial
-    // balance rows, which require only JournalLine to compute
-    // correctly. If the scoped reconstruction were broken (e.g.,
-    // accidentally loaded everything, or accidentally skipped
-    // JournalLines), the trial balance would be wrong.
+    // The trial balance replays only JournalLine. Skipping it would
+    // make the balance wrong.
     let trial_balance = double_entry_ledger::trial_balance_row();
     let rows = list_derived_at(
         &pool,
@@ -400,31 +353,13 @@ async fn list_derived_at_returns_correct_output_under_mixed_predicate_history() 
     assert_balance(&rows, "account_revenue", -450);
 }
 
-/// Test #9: cross-transition retraction.
+/// Replay applies a retraction made in a later transition.
 ///
-/// The previous eight tests exercise additive workflows only
-/// (`post_simple_entry`, `restate_entry`) - neither retracts
-/// anything, so the replay loop's `claims.retain(|c| c != r)`
-/// branch is never tickled by realistic data. This test uses
-/// `verified_revenue::correct_independent_verification`, which
-/// **retracts** the `CurrentVerification` pointer as part of its
-/// body. The scenario:
-///
-/// 1. `admit_independent_verification` (IV1, asserts also
-///    `CurrentVerification(asset, period, ver_001)`)   -> tid1
-/// 2. `correct_independent_verification`               -> tid2 (asserts
-///    new IV2 + `Supersedes`; **retracts** the `CurrentVerification`
-///    that step 1 created and asserts a new one for ver_002)
-///
-/// As-of tid1: `CurrentVerification(_, _, ver_001)` IS present.
-/// As-of tid2: `CurrentVerification(_, _, ver_001)` is GONE;
-///             `CurrentVerification(_, _, ver_002)` is present.
-///
-/// A regression that broke the retraction branch of the replay loop
-/// (e.g. ignored retractions, or applied them after assertions
-/// rather than before, or scoped them out under
-/// `reconstruct_state_at_for_predicates`) would make this test
-/// fail.
+/// The ledger tests never retract. Here
+/// `correct_independent_verification` retracts the
+/// `CurrentVerification` pointer for ver_001 and admits one for
+/// ver_002. As of tid1 the ver_001 pointer is present; as of tid2 it
+/// is gone and ver_002's is present.
 #[tokio::test]
 async fn reconstruct_state_at_applies_cross_transition_retractions() {
     let pool = test_pool().await;
@@ -445,9 +380,7 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
         .unwrap(),
     );
 
-    // Step 2: correct the verification to 91 (ver_002). This
-    // transformation retracts CurrentVerification(ver_001) and
-    // asserts CurrentVerification(ver_002) plus Supersedes.
+    // Step 2: correct the verification to 91 (ver_002).
     let tid2 = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
@@ -490,9 +423,8 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
         "CurrentVerification(ver_002) should be present as of tid2"
     );
 
-    // The historical IV1 must survive the correction (history is
-    // append-only); both verifications should be in admitted state
-    // at tid2.
+    // The correction leaves IV1 standing: both verifications are
+    // admitted at tid2.
     let iv_at_tid2 = claims_at_tid2
         .iter()
         .filter(|c| c.predicate.as_str() == "IndependentlyVerifiedRevenue")
@@ -503,16 +435,8 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
     );
 }
 
-/// Test #10: empty audit log.
-///
-/// `reconstruct_state_at(pool, any_uuid)` against a database whose
-/// audit table is empty must return `TransitionNotFound`, not
-/// `Ok(empty State)`. Pins the "as of *this actual committed
-/// transition*" contract at its edge: even when there are no
-/// committed transitions at all, an unknown id is still an error.
-/// A regression that returned an empty state for "the audit table
-/// has nothing matching" would silently succeed with the wrong
-/// semantics.
+/// With an empty audit log, any id is `TransitionNotFound`, not an
+/// empty state.
 #[tokio::test]
 async fn reconstruct_state_at_on_empty_audit_log_is_transition_not_found() {
     let pool = test_pool().await;
@@ -528,10 +452,9 @@ async fn reconstruct_state_at_on_empty_audit_log_is_transition_not_found() {
     );
 }
 
-/// The order contract of a historical read: live claims keep the order
-/// the replay first admitted them, and a claim retracted and re-admitted
-/// moves to the tail - the same rule the kernel's own state applies, so
-/// there is one replay rule and not a second resurrecting one.
+/// A historical read keeps claims in the order replay admitted them,
+/// and a claim retracted and re-admitted moves to the end - the same
+/// rule the kernel's own state follows.
 #[tokio::test]
 async fn list_claims_at_moves_a_readmitted_claim_to_the_tail() {
     let pool = test_pool().await;

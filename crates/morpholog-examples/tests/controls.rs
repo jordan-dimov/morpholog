@@ -1,8 +1,6 @@
-//! Worked-example coverage of the gate-protection map - the `front_loads`
-//! cross-link `inspect controls` draws between each gate and the standing
-//! invariant it pre-checks. Exercised over the real examples so the
-//! correspondence is demonstrably mechanical, including the honest
-//! non-pairing a `sum(..) <= ..` cap produces.
+//! The gate-protection map: the `front_loads` link `inspect controls` draws
+//! from each gate to the invariant it pre-checks. Run over the real examples,
+//! including a `sum(..) <= ..` cap that correctly gets no link.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -16,8 +14,7 @@ use morpholog_examples::{
     approval_controls, biometric_identification_oversight as bio, trade_lifecycle,
 };
 
-/// Build a CompiledProgram for the analysis entry points, which now
-/// take `&CompiledProgram`.
+/// Build a CompiledProgram for the analysis entry points.
 fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
     morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
 }
@@ -106,9 +103,8 @@ fn trade_terms_gate_front_loads_the_backstop_not_the_quantity_cap() {
 
 #[test]
 fn approval_authority_gates_front_load_nothing() {
-    // Authority is an action-time gate with no standing-invariant
-    // counterpart (revoking it does not invalidate past approvals), so the
-    // map draws no front-loads link - the correct doctrine, not a gap.
+    // Authority is checked only at action time (revoking it does not undo
+    // past approvals), so there is no invariant to link to. By design, not a gap.
     let matrix = controls(&compiled(&approval_controls::program()));
     let links = matrix
         .transformations
@@ -121,10 +117,8 @@ fn approval_authority_gates_front_load_nothing() {
 
 #[test]
 fn trade_front_line_coverage_separates_front_loaded_from_backstop() {
-    // The invariant-side view: the terms backstop is front-loaded by the
-    // settle gate, while the quantity cap (a sum(..) <= qty consequent) is
-    // a true backstop - triggered by transformations, but no gate
-    // front-loads it.
+    // From the invariant side: the settle gate front-loads the terms check,
+    // while the quantity cap is a true backstop that no gate pre-checks.
     let cov = controls(&compiled(&trade_lifecycle::program())).front_line_coverage;
     let backstop = cov
         .iter()

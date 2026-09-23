@@ -1,13 +1,10 @@
 //! Integration tests for the metered billing example
 //! (`examples/15_metered_billing/`).
 //!
-//! The `round(x, quantum)` forcing example: the payable figure on
-//! every charge line IS the recomputed rate-times-volume rounded to
-//! the nearest penny, exact halves away from zero. These tests pin
-//! the teaching points - the 1p tamper refusal, the away-from-zero
-//! half boundary, the VAT totality companion closing the vacuity
-//! hole, and the per-line-then-sum convention refusing the rival
-//! round-the-aggregate figure.
+//! Each charge line's payable figure IS rate times volume, rounded to the
+//! penny with exact halves away from zero. Covered: a 1p tamper is refused,
+//! halves round away from zero, an undeclared VAT rate is refused rather
+//! than passing emptily, and the invoice total rounds per line, then sums.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -140,9 +137,8 @@ fn an_exact_half_rounds_away_from_zero() {
 
 #[test]
 fn a_line_naming_an_undeclared_rate_is_refused_by_the_companion() {
-    // Arithmetic all correct - but the named rate was never declared,
-    // so the VAT recompute rule would pass EMPTILY. The totality
-    // companion is what actually refuses it.
+    // The arithmetic is right, but the named rate was never declared, so the
+    // VAT recompute rule would pass EMPTILY. The totality rule refuses it.
     let outcome = add_line(
         "line_a",
         "13.5",
@@ -222,10 +218,9 @@ fn the_aggregate_convention_total_is_refused() {
 
 #[test]
 fn a_negative_tariff_or_volume_is_refused_not_an_accidental_credit() {
-    // -13.5 p/kWh * 431.7 kWh recomputes and rounds consistently to
-    // -58.28, so the recompute rule alone would admit it - a credit
-    // note by accident. The range invariant is what closes the
-    // boundary the prose declares out of scope.
+    // -13.5 p/kWh * 431.7 kWh rounds consistently to -58.28, so the recompute
+    // rule alone would admit an accidental credit note. The range invariant
+    // refuses it.
     let outcome = add_line(
         "line_neg",
         "-13.5",
@@ -280,17 +275,13 @@ fn a_sealed_invoice_takes_no_further_lines() {
 
 /// A refusal names which line, and by how much.
 ///
-/// The biller's question after "line_net_is_the_rounded_recompute
-/// violated" is which row and what was wrong with it, so the witness
-/// answers both: the line and invoice it was reading, and the tampered
-/// net beside the tariff and volume it should have been computed from.
-/// Enough to see 13.5 * 431.7 / 100 rounds to 58.28, not the submitted
-/// 58.29, without opening the database.
+/// The witness carries the line and invoice, and the tampered net beside the
+/// tariff and volume it should come from: enough to see 13.5 * 431.7 / 100
+/// rounds to 58.28, not the submitted 58.29, without opening the database.
 ///
-/// `line` and `invoice` reach the witness only because the rule names
-/// them - the arithmetic never uses either. Two lines can share a tariff,
-/// a volume and a net, so the figures alone are not a row identifier;
-/// what a rule binds decides how good its refusals are.
+/// `line` and `invoice` appear only because the rule names them; the
+/// arithmetic uses neither. Figures alone cannot identify a row, since two
+/// lines can share them.
 #[test]
 fn a_refusal_names_which_line_and_by_how_much() {
     let outcome = add_line(

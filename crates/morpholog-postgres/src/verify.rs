@@ -18,14 +18,11 @@ use std::collections::HashMap;
 use uuid::Uuid;
 /// The outcome of replaying the audit log against the claims table.
 ///
-/// The two tables are independent records of the same history: the
-/// claims table is current state maintained write-by-write, the audit
-/// log is the journal those writes came from. Replaying the journal
-/// must land on the same claim set; a difference is evidence that one
-/// of them was modified outside the runtime.
+/// The claims table and the audit log are independent records of one
+/// history. Replaying the log must land on the same claim set; a
+/// difference means one was modified outside the runtime.
 ///
-/// `Serialize` uses the same `status`-tagged representation as the
-/// other CLI envelopes.
+/// Serialises with a `status` tag.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum VerifyOutcome {
@@ -46,13 +43,10 @@ pub enum VerifyOutcome {
         only_in_replay: Vec<ClaimInstance>,
     },
 }
-/// The `morpholog audit verify` envelope: the replay verdict (claims table vs
-/// audit log) beside the tamper-evidence verdict (the audit Merkle tree
-/// against its checkpoints), so one read carries both, plus - when the
-/// verifier asked for it - the generated-view-surface verdict, and -
-/// when any checkpoint carries one - what its external witnesses prove.
-/// Field order is the wire contract; `replay` then `tree`, `views` only
-/// when requested, `witnesses` only when there are some.
+/// The `morpholog audit verify` envelope: the replay verdict (claims vs
+/// audit log) and the tree verdict (Merkle tree vs checkpoints), plus the
+/// view-surface verdict when requested and the witness report when any
+/// checkpoint has witnesses. Field order is the wire contract.
 #[derive(Debug, Clone, Serialize)]
 pub struct VerifyReport {
     pub replay: VerifyOutcome,
@@ -63,11 +57,10 @@ pub struct VerifyReport {
     pub witnesses: Option<WitnessesReport>,
 }
 
-/// The verdict over a generated SQL view surface: the seal the apply
-/// script recorded (each view's `pg_get_viewdef` hashed in the same
-/// transaction that created it) compared against a live re-read. The
-/// read-side analogue of the model hash: a view redefined in place
-/// under the same name passes the catalogue inventory but not this.
+/// The verdict over a generated SQL view surface: the seal recorded at
+/// apply time (each view's `pg_get_viewdef` hashed as it was created)
+/// against a live re-read. A view redefined in place under the same name
+/// passes the inventory but not this.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ViewsVerification {
@@ -109,17 +102,15 @@ pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerificati
         return Ok(ViewsVerification::NotSealed);
     }
 
-    // The schema is a runtime input, so these two reads cannot be
-    // compile-checked macros; the identifier is quoted with the same
-    // rule the generator quotes it.
+    // The schema is a runtime input, so these reads cannot be
+    // compile-checked; it is quoted by the generator's own rule.
     let sealed_sql = format!(
         "SELECT view_name, definition_sha256 FROM {}.{}",
         crate::sql_quote::quote_ident(schema),
         crate::sql_quote::quote_ident(crate::sql_views::VIEW_DEFS_TABLE),
     );
-    // Audited for AssertSqlSafe: the only interpolated values are a
-    // caller-supplied schema name and a crate constant, both through
-    // `quote_ident`, whose escaping is pinned by its own tests.
+    // Audited for AssertSqlSafe: only a caller's schema name and a crate
+    // constant are interpolated, both through `quote_ident`.
     let sealed: HashMap<String, String> =
         sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sealed_sql))
             .fetch_all(pool)
@@ -143,11 +134,10 @@ pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerificati
             .await
         {
             Ok(names) => names,
-            // A catalogue redefined without a readable `view_name`
-            // column (dropped, renamed, or retyped) is tampering, not
-            // an operational failure: fall back to the seal's own
-            // inventory and let the hash comparison below name the
-            // catalogue mismatched. Anything else stays an error.
+            // A catalogue without a readable `view_name` column is
+            // tampering, not an operational failure: fall back to the
+            // seal's inventory and let the hash check name it. Anything
+            // else stays an error.
             Err(sqlx::Error::Database(db)) if db.code().as_deref() == Some("42703") => {
                 sealed.keys().cloned().collect()
             }
@@ -190,10 +180,9 @@ pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerificati
     }
 }
 
-/// The live definition hash of one view, exactly as the seal records
-/// it: `sha256(pg_get_viewdef(oid, true))` over PostgreSQL's own
-/// stored text. `None` when no view of that name exists in the schema
-/// (dropped, or replaced by a non-view relation).
+/// The live definition hash of one view, as the seal records it:
+/// `sha256(pg_get_viewdef(oid, true))`. `None` when no view of that name
+/// exists in the schema.
 async fn live_view_hash(
     pool: &PgPool,
     schema: &str,
@@ -211,36 +200,28 @@ async fn live_view_hash(
     .await
     .map_err(classify_checked_query)
 }
-/// Replay the audit log through a [`CoverageTracker`], then count
-/// the rejection log into it, and report, per invariant of
-/// `program`, whether its antecedent ever bound and whether it ever
-/// refused a real proposal - the auditor questions "which of these
-/// rules has ever actually done work?" and "which has demonstrably
-/// said no?". See `morpholog_core::coverage` for the verdict
-/// semantics and the bounds that shape them.
+/// Report, per invariant of `program`, whether its antecedent ever bound
+/// and whether it ever refused a real proposal: "which rules have done
+/// work?" and "which have said no?". Replays the audit log through a
+/// [`CoverageTracker`], then counts the rejection log into it. See
+/// `morpholog_core::coverage` for the verdicts.
 ///
-/// One `SERIALIZABLE READ ONLY DEFERRABLE` transaction reads the
-/// whole log: the deferrable mode waits for a safe snapshot and then
-/// runs with a guaranteed-serializable view and zero SSI footprint -
-/// the right isolation for a long analytical read over a live system.
+/// One `SERIALIZABLE READ ONLY DEFERRABLE` transaction reads everything:
+/// it waits for a safe snapshot, then reads with no SSI footprint.
 ///
-/// Cost: one pass over the audit log, plus a state snapshot and an
-/// antecedent evaluation for each transition whose delta predicates
-/// touch a tracked antecedent (the tracker's pruning). The same
-/// scaling family as `verify` and as-of replay - an offline auditor
-/// command, not a hot path.
+/// Cost: one pass over the log, plus a state snapshot and antecedent
+/// evaluation for each transition whose delta touches a tracked
+/// antecedent. An offline auditor command, not a hot path.
 pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<CoverageReport, PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
     let mut tracker = CoverageTracker::new(program);
     let needs_pre = tracker.needs_pre_state();
     let mut replay = State::default();
-    // The previous transition's state, carried only when some tracked
-    // antecedent contains pre(...); the empty state otherwise (and for
-    // the first transition - never absent, so pre(...) evaluates
-    // instead of erroring).
+    // The previous transition's state, kept only when some antecedent uses
+    // pre(...). Otherwise, and before the first transition, it is empty,
+    // never absent, so pre(...) evaluates rather than errors.
     let mut pre_state = State::from_claims(Vec::new());
-    // Paged inside the one deferrable snapshot: the replay is linear and
-    // streamable, so only one chunk of rows is ever in memory.
+    // Paged inside the snapshot: one chunk in memory at a time.
     let mut pages = ReplayPages::new(None);
     loop {
         let rows = pages.next(&mut tx).await?;
@@ -279,10 +260,8 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
             }
         }
     }
-    // Second pass: the rejection log, inside the same deferrable
-    // snapshot so refusal counts and committed history describe one
-    // consistent moment. Pure counting - no state folding - but the
-    // same keyset shape, over the index made for it.
+    // Second pass: the rejection log, in the same snapshot so refusals
+    // and committed history describe one moment. Counting only.
     struct RejRow {
         rejection_id: Uuid,
         transformation_name: String,
@@ -345,19 +324,13 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
 /// Replay the audit log to its latest transition and compare the
 /// reconstructed state against the claims table.
 ///
-/// All reads happen inside one `REPEATABLE READ READ ONLY`
-/// transaction, so the comparison is over a single database snapshot:
-/// a commit landing while `verify` runs can never manufacture a false
-/// divergence by appearing in one record but not the other. This is
-/// the contract that makes the command safe to run against a live
-/// system, not only during quiescence.
+/// All reads share one `REPEATABLE READ READ ONLY` snapshot, so a
+/// concurrent commit cannot fake a divergence by appearing in one record
+/// but not the other. Safe against a live system.
 ///
-/// An empty database (no transitions, no claims) is trivially
-/// consistent. The comparison is a multiset diff, order-insensitive:
-/// replay order is causal while the claims table orders by
-/// `(asserted_at, ...)`, and neither order is part of the contract.
-/// The divergence buckets are sorted by `(predicate, args)` so the
-/// operator-facing report is deterministic across runs.
+/// An empty database is consistent. The comparison is an
+/// order-insensitive multiset diff; divergences are sorted by
+/// `(predicate, args)` so the report is deterministic.
 pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
     let latest = sqlx::query!(
@@ -381,11 +354,8 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
             .to_vec(),
         None => Vec::new(),
     };
-    // Keyset over the primary key: the multiset diff below is
-    // order-insensitive, so the PK order serves where the listing
-    // helpers' (asserted_at, ...) contract is not needed - and the
-    // claims table never has to fit in memory beyond the diff's own
-    // accumulation.
+    // Keyset over the primary key: the diff ignores order, and the claims
+    // table is paged rather than held whole.
     struct ClaimRow {
         predicate_name: String,
         arguments: serde_json::Value,

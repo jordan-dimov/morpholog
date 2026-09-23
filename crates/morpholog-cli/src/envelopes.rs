@@ -1,10 +1,8 @@
-//! The CLI-local envelope shapes: report surfaces the binary owns
-//! (rather than re-serializing a kernel or adapter struct).
+//! The report shapes the binary owns, as opposed to kernel or adapter
+//! structs it serializes as-is.
 //!
-//! Field order is wire order. The golden pins normalize through
-//! `serde_json::Value`, whose object keys sort alphabetically, while
-//! the binary serializes these structs directly - so fields are
-//! declared in alphabetical order to keep the two byte-identical.
+//! Fields are declared in alphabetical order. Field order is wire order,
+//! and the goldens go through `serde_json::Value`, which sorts keys.
 
 use morpholog_core::WitnessBinding;
 use serde::Serialize;
@@ -66,11 +64,9 @@ pub struct HashReport {
     pub program: String,
 }
 
-/// `session`: the ready line - the first and only unprompted line a
-/// session emits. Carries the staleness token (`model_hash` is the
-/// canonical rules-identity hash the programme was pinned at) and the
-/// protocol number, which is the wire's version, distinct from the
-/// binary's.
+/// `session`: the ready line, the only line a session emits unprompted.
+/// `model_hash` is the rules hash the session pinned, for staleness checks.
+/// `protocol` versions the wire, separately from the binary.
 #[derive(Serialize)]
 pub struct SessionReady {
     pub model_hash: String,
@@ -92,12 +88,10 @@ impl SessionReady {
     }
 }
 
-/// The per-row error receipt of `propose --batch` and `session`, one
-/// shape for both: a caller deciding whether a retry is safe, or
-/// matching a refusal in a control test, must never parse English
-/// prose, so the receipt carries a stable `code`. `row` is the 1-based
-/// input line or request number, the same counter the propose receipts
-/// carry.
+/// The per-row error receipt of `propose --batch` and `session`. The
+/// stable `code` lets a caller decide on a retry without parsing prose.
+/// `row` is the 1-based input line or request number, as on propose
+/// receipts.
 #[derive(Serialize)]
 pub struct ErrorReceipt {
     pub code: ErrorCode,
@@ -117,10 +111,8 @@ impl ErrorReceipt {
     }
 }
 
-/// `transact`'s error object: a known error of the whole batch, with
-/// the same stable code a receipt carries and no `row` - the batch is
-/// one request. Printed so a caller never parses prose to learn
-/// whether re-submitting is safe.
+/// `transact`'s error object: an error for the whole batch. Same stable
+/// `code` as a receipt, but no `row`, since the batch is one request.
 #[derive(Serialize)]
 pub struct AtomicError {
     pub code: ErrorCode,
@@ -138,14 +130,12 @@ impl AtomicError {
     }
 }
 
-/// The closed set of per-row failure codes a batch or a session can
-/// answer with. `serialization_failure` is the one a caller may
-/// re-submit on (retries stay the caller's); the rest describe the row
-/// itself. Operational failures never become receipts - the run aborts.
-/// One list, two products: the enum and the slice a contract test
-/// walks. Declaring a variant anywhere else is impossible, so a code
-/// the binary can emit cannot go missing from the published set - a
-/// hand-kept array would compile happily while the enum grew past it.
+/// The closed set of per-row failure codes a batch or session can return.
+/// Only `serialization_failure` is safe to re-submit; the rest describe the
+/// row itself. Operational failures abort the run instead.
+///
+/// One list builds both the enum and the `ALL` slice a contract test
+/// walks, so the published set cannot miss a code.
 macro_rules! error_codes {
     ($($variant:ident),+ $(,)?) => {
         #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -163,12 +153,10 @@ macro_rules! error_codes {
     };
 }
 
-/// The codes a proposal row can fail with, on the batch and the session
-/// alike: the whole vocabulary minus the session's own
-/// `unknown_operation`, which a batch row has no way to earn. A type
-/// rather than a list so a proposal-row failure cannot be given a code
-/// the published `propose_error_code` set says is impossible; the
-/// schema is held to `ALL` by test.
+/// The codes a proposal row can fail with, in a batch or a session: every
+/// code except the session-only `unknown_operation`. A type, so a proposal
+/// row cannot get a code outside the published `propose_error_code` set; a
+/// test holds the schema to `ALL`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ProposeCode {
     ActorAssertionUnauthorised,
@@ -267,13 +255,12 @@ impl LeastPrivilegeReport {
     }
 }
 
-/// `refresh derived`: the published read-model generation, typed. The
-/// snapshot pair is the latest audit transition visible in the
-/// refresh's read snapshot - a coarse freshness marker, never a
-/// lossless audit-resume cursor (a writer in flight at snapshot time
-/// is excluded and folded in by the next refresh; lossless resume is
-/// `inspect audit`). Absent together on an empty ledger. Timings stay
-/// on stderr: operational colour, not contract.
+/// `refresh derived`: the published read-model generation.
+///
+/// The snapshot pair is the latest audit transition the refresh saw. It is
+/// a rough freshness marker, not a resume cursor: a writer still in flight
+/// is missed until the next refresh (`inspect audit` resumes losslessly).
+/// Both are absent on an empty ledger. Timings go to stderr, not here.
 #[derive(Serialize)]
 pub struct RefreshDerivedReport {
     pub derived_claim_count: usize,
@@ -290,9 +277,8 @@ pub struct RefreshDerivedReport {
 
 impl From<&morpholog_postgres::RefreshSummary> for RefreshDerivedReport {
     fn from(s: &morpholog_postgres::RefreshSummary) -> Self {
-        // The snapshot coordinates come from one audit row; a one-sided
-        // pair is a bug upstream, and refusing beats reporting it as a
-        // lawful empty ledger.
+        // Both come from one audit row. A one-sided pair is an upstream
+        // bug, not an empty ledger.
         let snapshot = match (
             s.source_snapshot_transition_id,
             s.source_snapshot_committed_at,
@@ -313,18 +299,16 @@ impl From<&morpholog_postgres::RefreshSummary> for RefreshDerivedReport {
     }
 }
 
-/// The `propose --trace` envelope: `{result, trace}`, exactly as the
-/// contract pins it. Generic so the CLI serialises the adapter's
-/// outcome and trace by reference without re-stating their types.
+/// The `propose --trace` envelope: `{result, trace}`. Generic so the
+/// adapter's outcome and trace serialize by reference.
 #[derive(Serialize)]
 pub struct Traced<R, T> {
     pub result: R,
     pub trace: T,
 }
 
-/// The errored `result` inside a traced envelope: a transformation
-/// that raised a kernel error mid-execution. The constructor owns the
-/// `status` discriminator - a caller cannot misspell the tag.
+/// The errored `result` inside a traced envelope: the transformation raised
+/// a kernel error. The constructor sets `status`, so it cannot be misspelled.
 #[derive(Serialize)]
 pub struct TracedError {
     error: String,
@@ -347,17 +331,13 @@ impl TracedError {
 pub struct RejectedWithExplanation<'a, E> {
     explanation: E,
     reason: &'a str,
-    /// The refused rule's stable identifier. Absent when a gate has no
-    /// name - never the rendered expression, so a caller reading this
-    /// never gets a value a rewording can change.
+    /// The refused rule's stable name. Absent when a gate has no name;
+    /// never the rendered expression, which a rewording would change.
     #[serde(skip_serializing_if = "Option::is_none")]
     rule: Option<&'a str>,
     status: &'static str,
-    /// The refused rule's offending values. Carried here too because this
-    /// is the path an operator diagnosing a refusal actually uses - the
-    /// first cut destructured the outcome as `{ reason, .. }` and dropped
-    /// them, so the one command built for diagnosis was the one that
-    /// answered least.
+    /// The refused rule's offending values. An operator diagnosing a
+    /// refusal needs them most on this path.
     #[serde(skip_serializing_if = "<[WitnessBinding]>::is_empty")]
     witness: &'a [WitnessBinding],
 }
@@ -388,10 +368,9 @@ pub struct NamedClaim {
     pub predicate: morpholog_core::PredicateName,
 }
 
-/// The `--named` audit row: the tagged row's own serialization with
-/// the two claim arrays replaced by named claims, everything else
-/// byte-identical by construction. Shared by the binary and the
-/// contract test so the projection has one definition.
+/// The `--named` audit row: the tagged row with its two claim arrays
+/// replaced by named claims; everything else is unchanged. Shared with the
+/// contract test so there is one definition.
 pub fn audit_row_named(
     row: &morpholog_postgres::AuditRow,
     asserted: Vec<NamedClaim>,

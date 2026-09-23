@@ -1,9 +1,8 @@
 //! The calendar-span grammar and value: `P[nY][nM][nD]`, or `PnW` alone.
 //!
-//! Owned here rather than delegated to jiff's span parser, which accepts
-//! a wider language (lowercase, signed, fractional, time units). The
-//! surface diagnostic path and the evaluator both route through
-//! [`parse_calendar_span`], so the two cannot drift.
+//! Owned here because jiff's span parser accepts more (lowercase, signed,
+//! fractional, time units). The parser's diagnostics and the evaluator both
+//! use [`parse_calendar_span`], so the two cannot drift.
 
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +18,7 @@ pub struct CalendarSpan {
 
 /// Renders the normalised form (`P3M`, `P45D`, `P3M15D`; `P0D` when
 /// empty) for error messages and traces. The IR literal keeps the
-/// author's source spelling; this is the runtime value's own face.
+/// author's own spelling.
 impl std::fmt::Display for CalendarSpan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.months == 0 && self.days == 0 {
@@ -36,11 +35,9 @@ impl std::fmt::Display for CalendarSpan {
     }
 }
 
-/// The only parse-time bound is the representation's own: each
-/// normalised component must fit an `i32`. A span is not intrinsically
-/// out of range - whether a shift leaves the calendar depends on the
-/// date it is applied to, and that is the evaluator's
-/// `ArithOutOfRange`, not the grammar's business.
+/// Each normalised component must fit an `i32`; that is the only parse-time
+/// bound. Whether a shift leaves the calendar depends on the date it is
+/// applied to, so the evaluator reports that (`ArithOutOfRange`).
 const MAX_COMPONENT: i64 = i32::MAX as i64;
 
 /// Parse the calendar-span grammar. Uppercase only, unsigned whole

@@ -69,11 +69,11 @@ async fn audit_rows(pool: &PgPool) -> i64 {
         .unwrap()
 }
 
-/// One test, three phases, because each phase alters the shared schema
-/// and the phases must not overlap: a failure writing the delta, a
-/// server error answered at COMMIT, and a rejection the log cannot
-/// record. Each is an ordinary error with a definite meaning - never
-/// the commit-unknown variant, which only a lost server verdict earns.
+/// One test with three phases, because each alters the shared schema and
+/// they must not overlap: a failure writing the delta, a server error at
+/// COMMIT, and a rejection the log cannot record. Each is an ordinary
+/// error with a definite meaning, never commit-unknown, which only a lost
+/// server answer earns.
 #[tokio::test]
 async fn proposal_path_errors_say_what_they_know() {
     let pool = test_pool().await;
@@ -95,11 +95,10 @@ async fn proposal_path_errors_say_what_they_know() {
     )
     .await;
 
-    // Phase 1: the delta write itself is refused by the server (a CHECK
-    // on the audit table). Nothing was committed, and the caller is
-    // told so by an ordinary database error. Each phase restores the
-    // schema before it asserts: a failed assertion must not leave the
-    // shared database poisoned for the suite.
+    // Phase 1: a CHECK on the audit table refuses the delta write.
+    // Nothing committed; the caller gets an ordinary database error.
+    // Each phase restores the schema before asserting, so a failure
+    // cannot leave the shared database broken.
     ddl(
         &pool,
         "ALTER TABLE morpholog.audit ADD CONSTRAINT probe CHECK (false)",
@@ -156,10 +155,8 @@ async fn proposal_path_errors_say_what_they_know() {
         PgProposalOutcome::Committed { .. }
     ));
 
-    // Phase 3: a lawful rejection whose operational record cannot be
-    // written. The verdict was decided and rolled back; the failure
-    // carries its own provenance so no surface can call it a
-    // pre-decision failure.
+    // Phase 3: a lawful rejection whose log row cannot be written. The
+    // rejection was decided and rolled back, and the error says so.
     assert!(matches!(
         try_gated(&pool, "g1", 1).await.unwrap(),
         PgProposalOutcome::Committed { .. }

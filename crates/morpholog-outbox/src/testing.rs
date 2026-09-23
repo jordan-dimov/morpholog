@@ -1,9 +1,7 @@
-//! Test-support implementations of the [`crate::clock::Clock`] and
-//! [`crate::jitter::JitterRng`] traits.
+//! Test implementations of [`crate::clock::Clock`] and [`crate::jitter::JitterRng`].
 //!
-//! These types are always compiled (no feature flag) so integration
-//! tests in `tests/*.rs` can use them without configuring a feature.
-//! Production code should not import them.
+//! Always compiled, so integration tests can use them without a feature flag. Production code
+//! should not import them.
 
 #![allow(clippy::expect_used)]
 
@@ -16,13 +14,9 @@ use crate::clock::Clock;
 use crate::jitter::JitterRng;
 
 /// [`Clock`] that never sleeps and records every `sleep_for` call.
-/// `now()` returns the supplied fixed instant unless explicitly
-/// advanced.
+/// `now()` stays at the starting instant until [`MockClock::advance`] moves it.
 ///
-/// Internally Arc-shared so a test can clone the handle, pass one
-/// copy to the worker (which takes the clock by value), and keep
-/// another copy for inspection. All clones observe the same
-/// recorded sleeps and the same `now`.
+/// Clones share state, so a test can hand one to the worker and inspect another.
 #[derive(Clone)]
 pub struct MockClock {
     state: Arc<MockClockState>,
@@ -43,8 +37,7 @@ impl MockClock {
         }
     }
 
-    /// Snapshot of every `sleep_for` call observed so far, in
-    /// order. Cloned out so callers do not hold the lock.
+    /// Every `sleep_for` duration so far, in order.
     pub fn sleeps(&self) -> Vec<Duration> {
         self.state
             .sleeps
@@ -53,11 +46,8 @@ impl MockClock {
             .clone()
     }
 
-    /// Move the mock's `now` forward by `delta`. Sleep futures
-    /// produced by `sleep_for` are independent of `now` (they
-    /// always resolve immediately); this method exists for tests
-    /// that want to assert the worker's smart-sleep decisions
-    /// against a moving clock.
+    /// Move `now` forward by `delta`. Sleeps still resolve immediately; this only changes what
+    /// `now()` reports.
     pub fn advance(&self, delta: Duration) {
         let mut now = self.state.fixed_now.lock().expect("MockClock now poisoned");
         *now = now.checked_add(delta).expect("delta overflow");
@@ -78,9 +68,7 @@ impl Clock for MockClock {
     }
 }
 
-/// [`JitterRng`] that always returns the same configured factor,
-/// regardless of the requested range. Tests use this so sleep
-/// durations are deterministic.
+/// [`JitterRng`] that always returns `factor`, ignoring the requested range.
 #[derive(Debug, Clone, Copy)]
 pub struct FixedJitter {
     pub factor: f64,

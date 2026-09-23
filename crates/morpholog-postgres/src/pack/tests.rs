@@ -1,15 +1,13 @@
 use super::*;
 
-/// A digest from its rendering; the tests forge DIFFERENT valid
-/// digests, never prose, because a checkpoint cannot hold prose.
+/// A digest from its rendering. Forgeries use different valid digests,
+/// never prose, because a checkpoint cannot hold prose.
 fn digest(text: &str) -> Digest {
     text.parse().unwrap()
 }
 
-/// A dummy audit row built through the same `Deserialize` the pack
-/// uses. The content is irrelevant to envelope validation (which runs
-/// before any hashing); only the `(committed_at, transition_id)`
-/// coordinates matter here.
+/// A dummy audit row, built through the pack's own `Deserialize`. Only
+/// its coordinates matter: envelope validation runs before any hashing.
 fn row(committed_at: &str, id: &str) -> AuditRow {
     serde_json::from_value(serde_json::json!({
         "transition_id": id,
@@ -26,9 +24,8 @@ fn row(committed_at: &str, id: &str) -> AuditRow {
     .unwrap()
 }
 
-/// A dummy checkpoint. Its hashes are placeholders - envelope checks
-/// compare strings, they do not recompute the Merkle root (that is
-/// `verify_tree`, reached only after a well-formed envelope).
+/// A dummy checkpoint with placeholder hashes: envelope checks never
+/// recompute the Merkle root.
 fn checkpoint(tree_size: i64) -> Checkpoint {
     Checkpoint {
         tree_size,
@@ -95,8 +92,7 @@ fn too_few_rows_is_malformed() {
 
 #[test]
 fn extra_rows_beyond_the_checkpoint_are_malformed() {
-    // The load-bearing case from review: rows past the covering
-    // checkpoint must NOT ride along unproven.
+    // Rows past the covering checkpoint must NOT ride along unproven.
     let cp = checkpoint(1);
     let pack = EvidencePack {
         manifest: manifest_for(&cp),
@@ -117,8 +113,7 @@ fn extra_rows_beyond_the_checkpoint_are_malformed() {
 
 #[test]
 fn a_negative_checkpoint_size_is_malformed() {
-    // Hostile JSON the runtime could never produce: rejected
-    // before anything indexes with it.
+    // Hostile JSON the runtime never produces, rejected before indexing.
     let cp = checkpoint(-1);
     let pack = EvidencePack {
         manifest: manifest_for(&cp),
@@ -130,8 +125,7 @@ fn a_negative_checkpoint_size_is_malformed() {
 
 #[test]
 fn each_manifest_field_alone_is_enough_to_disagree() {
-    // The disagreement check is a disjunction: any ONE lying field
-    // must fail the pack, not only all of them together.
+    // Any ONE lying field must fail the pack.
     for field in ["tree_size", "root_hash", "checkpoint_hash"] {
         let cp = checkpoint(1);
         let mut manifest = manifest_for(&cp);
@@ -154,10 +148,8 @@ fn each_manifest_field_alone_is_enough_to_disagree() {
 
 #[test]
 fn an_unauthorized_signed_anchor_is_judged_even_on_an_unsigned_chain() {
-    // The authority question is asked when the chain OR the anchor
-    // carries signatures: an unsigned pack presented against a
-    // signed anchor must still have that anchor's key judged - and
-    // with no key claims in the rows, judged unauthorized.
+    // Authority is judged when the chain OR the anchor is signed. With no
+    // key claims in the rows, the anchor's key is unauthorized.
     let rows = rows_tagged(2, 'a');
     let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
     let cp = real_checkpoint(&leaves, 2, None);
@@ -237,8 +229,7 @@ fn each_window_manifest_field_alone_is_enough_to_disagree() {
 
 #[test]
 fn an_unauthorized_signature_on_the_chain_itself_is_judged() {
-    // No anchor at all: signatures stored on the pack's own
-    // checkpoints must trigger the authority question too.
+    // With no anchor, signatures on the pack's own checkpoints are judged.
     let rows = rows_tagged(2, 'a');
     let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
     let mut cp = real_checkpoint(&leaves, 2, None);
@@ -275,10 +266,8 @@ fn an_unauthorized_signature_on_the_chain_itself_is_judged() {
 
 #[test]
 fn zero_is_the_genesis_boundary_not_a_negative_size() {
-    // The negative-size rejections must not creep up to zero: a v1
-    // chain starting at genesis verifies outright, and a zero
-    // endpoint on the window and selective kinds is never refused
-    // AS negative (whatever else their envelopes demand of it).
+    // Zero is not negative: a v1 chain from genesis verifies, and a zero
+    // endpoint on the other kinds is never refused AS negative.
     let rows = rows_tagged(2, 'a');
     let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
     let genesis = real_checkpoint(&[], 0, None);
@@ -468,10 +457,9 @@ fn a_wrong_anchor_is_caught_even_when_the_proof_verifies() {
 
 #[test]
 fn a_tampered_window_row_is_not_included() {
-    // The overclaim-1 guard at the pack level: a genuine consistency
-    // proof does not protect the rows; only inclusion does. Mutating a
-    // row's body (coordinates unchanged, so the envelope passes) is
-    // caught by its inclusion proof, not the consistency proof.
+    // A consistency proof does not protect the rows; only inclusion does.
+    // A changed row body (same coordinates, so the envelope passes) is
+    // caught by its inclusion proof.
     let (mut pack, _) = valid_window(3, 7);
     pack.rows[0].invariant_epoch = 999;
     assert_eq!(
@@ -482,10 +470,8 @@ fn a_tampered_window_row_is_not_included() {
 
 #[test]
 fn a_rewritten_prior_prefix_is_an_inconsistent_extension() {
-    // The to-checkpoint is over the real history; the from-checkpoint
-    // claims a different prefix root (the prior period was rewritten).
-    // Consistency must reject - and this is a genuine fork, not a
-    // corrupted proof.
+    // The from-checkpoint claims a rewritten prior period. Consistency must
+    // reject it as a genuine fork, not a corrupted proof.
     let rows = rows_tagged(7, 'a');
     let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
     let to_cp = real_checkpoint(&leaves, 7, None);
@@ -597,9 +583,8 @@ fn a_tampered_disclosed_row_is_not_included() {
 
 #[test]
 fn swapped_inclusion_proofs_are_row_not_included() {
-    // Only the declared leaf index binds a row to its position; array
-    // order carries no proof weight. Swapping two proofs must therefore
-    // fail inclusion, not pass by coincidence of ordering.
+    // Only the declared leaf index binds a row to its position, so swapping
+    // two proofs must fail inclusion.
     let (mut pack, _) = valid_selective(7, &[2, 5]);
     let a = pack.inclusion_proofs[0].proof.clone();
     let b = pack.inclusion_proofs[1].proof.clone();

@@ -207,9 +207,8 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
             CompileReason::Construct { construct: "xor" },
         ),
         (
-            // Membership needs a bound collection, and binding a
-            // Collection-kinded position refuses first - the kind
-            // tier owns this family; the `Prop::In` arm is defence.
+            // Binding a Collection-kinded position refuses first; the
+            // `Prop::In` arm is only a backstop.
             "in",
             "invariant r:\n    Cx(x, c) implies x in c\n",
             CompileReason::ArgumentKind {
@@ -358,11 +357,9 @@ fn the_provenance_comment_neutralises_a_hostile_invariant_name() {
     let set = compile_invariants(program.validated().expect("validates"))
         .expect("in-fragment body compiles");
     let sql = set.invariants[0].violation_sql(None);
-    // The whole comment head: exactly one opener, exactly one
-    // closer, nothing nested. PostgreSQL block comments NEST, so
-    // an embedded `/*` left alone would swallow the statement -
-    // the first version of this test only inspected the text
-    // before the first closer and missed exactly that.
+    // The whole comment head: exactly one opener, exactly one closer.
+    // PostgreSQL block comments NEST, so an embedded `/*` would swallow
+    // the statement.
     let head = sql.lines().next().expect("the comment head line");
     assert_eq!(head.matches("/*").count(), 1, "one opener, got:\n{sql}");
     assert_eq!(head.matches("*/").count(), 1, "one closer, got:\n{sql}");
@@ -414,11 +411,10 @@ fn comment_safe_leaves_no_delimiter_standing() {
     assert!(!safe.contains('\n') && !safe.contains('\r'));
 }
 
-/// The indexes the ledger's SQL can seek on are emitted by the compiler
-/// beside the SQL, one per (predicate, position) it filters or joins
-/// on, in the representation the SQL reads that position with. A
-/// witness-only position (the fork invariant's successor ids) is not a
-/// seek and is not indexed; the spike indexed every variable position.
+/// The compiler emits one index per (predicate, position) the ledger's
+/// SQL filters or joins on, in the representation the SQL reads it with.
+/// A witness-only position (the fork invariant's successor ids) is not a
+/// seek and is not indexed.
 #[test]
 fn ledger_required_indexes_are_pinned() {
     let specs = compiled(&ledger_program()).required_indexes();

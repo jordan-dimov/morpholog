@@ -1,18 +1,8 @@
 //! Tests for the [`morpholog_core::Program`] packaging abstraction.
 //!
-//! `Program` is the smallest public container for a governed domain
-//! model: a name, a set of invariants, a set of transformations. Each
-//! worked example exposes a `program()` constructor; the tests below
-//! verify that:
-//!
-//! - the constructed `Program`s have the expected stable names,
-//! - their invariant and transformation counts match what each example
-//!   actually contains,
-//! - `transformation(name)` and `invariant(name)` lookups find the
-//!   expected items and return `None` for unknown names,
-//! - the returned references point at the same data as the direct
-//!   per-example constructor functions (i.e. `Program` is a
-//!   composition of existing pieces, not a parallel definition).
+//! Each worked example's `program()` has its expected name and contents,
+//! `transformation(name)` and `invariant(name)` find items or return `None`,
+//! and the results equal the per-example accessors.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -61,7 +51,7 @@ fn verified_revenue_program_has_expected_shape() {
             .is_some()
     );
 
-    // All four invariants present.
+    // Every invariant present.
     assert!(p.invariant("admissibility_has_provenance").is_some());
     assert!(p.invariant("admissibility_excludes_revocation").is_some());
     assert!(
@@ -164,10 +154,7 @@ fn clinical_trial_enrolment_program_has_expected_shape() {
 
 #[test]
 fn program_is_composition_not_a_parallel_definition() {
-    // Pin the contract that program() composes the existing constructor
-    // functions rather than redefining the IR. If a future refactor
-    // drifts the two apart (e.g. program() forgets to include a newly
-    // added transformation), this assertion catches it.
+    // program() and the per-example accessors must agree.
     let p = settlement_netting::program();
     let direct = settlement_netting::create_net_settlement();
     assert_eq!(
@@ -182,9 +169,7 @@ fn program_is_composition_not_a_parallel_definition() {
 
 #[test]
 fn unknown_lookups_return_none() {
-    // Lookup is the v0 way for the CLI / external callers to find a
-    // transformation by name. Make sure missing entries don't panic
-    // or wrap-around silently.
+    // Callers find items by name; a missing name must return None, not panic.
     let p = double_entry_ledger::program();
     assert!(p.transformation("not_a_real_transformation").is_none());
     assert!(p.transformation("").is_none());
@@ -193,15 +178,8 @@ fn unknown_lookups_return_none() {
 
 #[test]
 fn example_enumeration_contains_every_per_example_program() {
-    // `common::all_programs()` is the cross-example test enumeration the
-    // property tests (round-trip, format-smoke, validation, guarantees)
-    // iterate. If a new worked example lands but the contributor forgets
-    // to add its `program()` to the enumeration, those tests would
-    // silently skip it.
-    //
-    // Pin the contract by checking that every per-example `program()` is
-    // present by name. The list below is load-bearing: update it in the
-    // same commit that adds a new example to the enumeration.
+    // The cross-example tests iterate `common::all_programs()`. Spot-check
+    // that it holds these examples, so none is silently skipped.
     let enumeration = common::all_programs();
     let names: Vec<&str> = enumeration.iter().map(|p| p.name.as_str()).collect();
 
@@ -223,9 +201,7 @@ fn example_enumeration_contains_every_per_example_program() {
 
 #[test]
 fn example_enumeration_has_unique_names() {
-    // A program is found by name via linear search; duplicate names
-    // would make one of the duplicates unreachable, silently. Pin
-    // uniqueness so the failure surfaces immediately.
+    // Programs are found by name, so a duplicate would hide the other.
     let enumeration = common::all_programs();
     let mut names: Vec<&str> = enumeration.iter().map(|p| p.name.as_str()).collect();
     let total = names.len();
@@ -236,16 +212,9 @@ fn example_enumeration_has_unique_names() {
 
 #[test]
 fn every_example_program_passes_strict_arity_validation() {
-    // Every worked programme must declare every
-    // predicate it uses, with matching arity at every call site
-    // (transformation bodies, invariant bodies, derived-claim
-    // domains/shapes). The validator runs in strict mode - undeclared
-    // predicates are errors, not passthrough.
-    //
-    // If this test fails for a new example, the validator's error
-    // list names every missing or mismatched call site; fix them
-    // by extending the example's `all_predicates()` rather than by
-    // weakening this assertion.
+    // Every programme must declare each predicate it uses, with matching
+    // arity at every use. If a new example fails, the error list names each
+    // site; fix the example's `.morph` declarations, not this assertion.
     for p in common::all_programs() {
         match p.validate() {
             Ok(()) => {}

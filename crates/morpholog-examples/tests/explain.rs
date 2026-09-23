@@ -1,22 +1,13 @@
 //! Integration tests for the explanation engine (`morpholog_core::explain`).
 //!
-//! The flagship cases run against the real `approval_controls` example -
-//! a rejected `approve_document` is the canonical "Morpholog explains
-//! legitimacy" artifact: it names the directly-missing authority claim
-//! and the transformation that could supply it. The remaining cases pin
-//! the v0 boundary: comparator failures and present blockers carry an
-//! empty missing-claims list, invariant violations and kernel errors use
-//! their own rejection shapes, and the JSON and prose surfaces are
-//! deterministic.
+//! The main case: a rejected `approve_document` in `approval_controls` names
+//! the missing authority claim and the transformation that could supply it.
+//! The rest pin the limits: comparator failures and present blockers list no
+//! missing claims, invariant violations and kernel errors have their own
+//! shapes, and the JSON and prose output are deterministic.
 //!
-//! Test layers: the flagship and boundary cases run against the real
-//! `approval_controls` example; small bespoke scenarios (a sanctions
-//! blocker, a missing supplier, an invariant violation) are authored as
-//! inline `.morph` and parsed, so they read as models rather than IR
-//! struct-construction. The "transformation minus one statement"
-//! invariant-teeth tests (chess, insurance) are a different layer -
-//! deliberately adversarial, constructing shapes a correct programme
-//! never would, where the Rust IR builders are the right tool.
+//! Small bespoke scenarios are inline `.morph`, so they read as models
+//! rather than IR construction.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -120,8 +111,8 @@ fn admissible_transition_explains_as_admissible() {
 }
 
 // ============================================================
-// The v0 boundary: comparator failures and present blockers are
-// faithful rejections with NO directly-missing claim.
+// Comparator failures and present blockers are rejections with NO
+// directly-missing claim.
 // ============================================================
 
 #[test]
@@ -154,8 +145,8 @@ fn comparator_failure_carries_no_directly_missing_claim() {
 #[test]
 fn present_blocker_carries_no_directly_missing_claim() {
     // require not Sanctioned(customer); Sanctioned(alice) holds, so the
-    // gate fails on a present blocker - which v0 reports as a faithful
-    // rejection, not a missing claim.
+    // gate fails on a present blocker, reported as a rejection with no
+    // missing claim.
     let program = parse_program(
         "program blocker_demo
 
@@ -296,7 +287,7 @@ fn unknown_transformation_is_an_error_rejection() {
 }
 
 // ============================================================
-// JSON: the explanation is now an external surface; pin its shape.
+// JSON: the explanation is an external surface; pin its shape.
 // ============================================================
 
 #[test]

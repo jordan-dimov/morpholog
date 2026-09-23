@@ -3,9 +3,7 @@ use std::io::BufReader;
 
 #[test]
 fn a_multibyte_character_split_across_buffer_fills_decodes_whole() {
-    // A two-byte reader capacity forces the fill boundary through
-    // the middle of the two-byte `é`; per-chunk decoding refused
-    // this as invalid UTF-8.
+    // A two-byte buffer splits the two-byte `é` across two fills.
     let mut input = BufReader::with_capacity(2, "h\u{e9}llo\n{\"op\":\"x\"}\n".as_bytes());
     let mut line = String::new();
     let n = read_line_capped(&mut input, &mut line).expect("valid line");

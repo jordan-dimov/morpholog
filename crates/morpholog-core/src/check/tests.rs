@@ -212,11 +212,9 @@ fn any_slot_observes_variable_without_constraining_it() {
 
 #[test]
 fn actor_term_carries_subject_kind() {
-    // `actor` flowing into a Decimal slot is a kind mismatch.
-    // Tested in a transformation body, where `actor` is
-    // legitimately available - so the only error is the kind
-    // mismatch, not the actor-not-available error an invariant
-    // body would add.
+    // `actor` in a Decimal slot is a kind mismatch. In a
+    // transformation body `actor` is available, so that is the only
+    // error.
     let mut p = empty_program();
     p.predicates = vec![pdecl("Limit", &[("amount", PredicateArgKind::Decimal)])];
     p.transformations = vec![transformation(
@@ -248,10 +246,9 @@ fn actor_term_carries_subject_kind() {
 
 #[test]
 fn actor_in_invariant_body_flags_actor_not_available() {
-    // `actor` in an invariant body has no proposing transition
-    // in scope; the kernel raises UnboundActor at runtime, the
-    // check flags it statically. The predicate slot is Subject
-    // so no kind error muddies the result.
+    // An invariant has no proposing actor: the kernel raises
+    // UnboundActor at runtime, the check flags it statically. The
+    // slot is Subject so no kind error interferes.
     let mut p = empty_program();
     p.predicates = vec![pdecl("Approver", &[("who", PredicateArgKind::Subject)])];
     p.invariants = vec![invariant(
@@ -272,9 +269,8 @@ fn actor_in_invariant_body_flags_actor_not_available() {
 
 #[test]
 fn two_derived_declarations_of_one_head_are_refused() {
-    // The parser refuses this before validation sees it; a hand-built
-    // programme reaches validation directly, and the read cache that
-    // materialises derived output takes it as a set.
+    // The parser refuses this, but hand-built IR reaches validation
+    // directly.
     let mut p = empty_program();
     p.predicates = vec![pdecl("Src", &[("k", PredicateArgKind::Subject)])];
     let row = crate::ir::DerivedClaim {
@@ -335,14 +331,9 @@ fn actor_in_derived_claim_value_flags_actor_not_available() {
     );
 }
 
-/// A derived claim is a read model. Every rule that names one is
-/// refused at authoring time, because the alternative is a design
-/// that type-checks and then fails against a live database - which is
-/// how a trial lost an hour to `bind` over a derived.
-///
-/// Table-driven over every position a rule can name a predicate,
-/// because the first report was only about `bind` and the same
-/// deadness applies to all of them.
+/// A derived claim is a read model, so any rule that names one is
+/// refused at authoring time rather than failing against a live
+/// database. Covers every position a rule can name a predicate.
 #[test]
 fn no_rule_may_name_a_derived_claim() {
     let derived = |p: &mut crate::ir::Program| {
@@ -388,9 +379,8 @@ fn no_rule_may_name_a_derived_claim() {
         vec![assert_("Row", vec![var("k")])],
     )];
 
-    // Deriveds do not compose: a derived's domain is evaluated
-    // against admitted claims too, so naming another derived there
-    // is as dead as naming one from a transformation.
+    // Deriveds do not compose: a derived's domain also reads only
+    // admitted claims.
     let mut derived_case = empty_program();
     derived(&mut derived_case);
     derived_case.derived_claims.push(crate::ir::DerivedClaim {
@@ -419,11 +409,9 @@ fn no_rule_may_name_a_derived_claim() {
 /// A discipline is a promise about governed state, and a derived
 /// output is not governed state.
 ///
-/// Both clause shapes matter and they fail differently: `unique by`
-/// lowers to a generated invariant, so without this the author saw an
-/// error naming a rule they never wrote, while `append only` lowers
-/// to nothing at all and passed silently - publishing an
-/// append-only promise for a view whose generations refresh replaces
+/// Both clause shapes are covered: `unique by` would otherwise surface
+/// as an error in a generated rule the author never wrote, and
+/// `append only` would pass silently on a view that refresh replaces
 /// wholesale.
 #[test]
 fn a_derived_output_cannot_carry_a_discipline() {
@@ -452,9 +440,8 @@ fn a_derived_output_cannot_carry_a_discipline() {
     }
 }
 
-/// The acceptance side of the same rule: a derived claim reading
-/// ordinary admitted claims is exactly what a derived is for, and
-/// tightening the check must not refuse it.
+/// The acceptance side: a derived claim reading ordinary admitted
+/// claims is fine.
 #[test]
 fn a_derived_may_read_the_claims_it_is_computed_from() {
     let mut p = empty_program();
@@ -553,12 +540,9 @@ fn bind_one_then_conflicting_assert_flags_variable_conflict() {
 
 #[test]
 fn require_does_not_export_bindings_to_subsequent_statements() {
-    // The load-bearing unbound-variable case: `require A(x)`
-    // matches and binds x WITHIN the require, but does not export
-    // it. The
-    // later `assert B(x)` therefore uses an unbound x and must
-    // flag UnboundVariable - exactly the runtime UnboundVariable
-    // the gate's non-export rule would produce.
+    // `require A(x)` binds x only within the require, so the later
+    // `assert B(x)` uses an unbound x and must flag UnboundVariable,
+    // as the runtime would.
     let mut p = empty_program();
     p.predicates = vec![
         pdecl("A", &[("v", PredicateArgKind::Decimal)]),
@@ -584,9 +568,8 @@ fn require_does_not_export_bindings_to_subsequent_statements() {
 
 #[test]
 fn params_flow_to_admit_without_a_binding_statement() {
-    // The positive complement to require-non-export: parameters
-    // are bound at transformation entry, so an `admit` using them
-    // directly - no intervening `bind`/`let` - is clean.
+    // Parameters are bound at transformation entry, so an `admit`
+    // using them directly is clean.
     let mut p = empty_program();
     p.predicates = vec![pdecl(
         "Payment",
@@ -607,12 +590,11 @@ fn params_flow_to_admit_without_a_binding_statement() {
     );
 }
 
-// The branch-binding-export family: an invariant
-// `A(x, n) implies (B(x, m) <op> C(...)) and n <= m`. The
-// intersection rule exports `m` to the comparator only when EVERY
-// branch binds it; if one branch leaves it unbound the runtime may
-// carry that witness forward, so `m` must stay unbound. Checked
-// across both short-circuiting connectives and both binding shapes.
+// Branch binding export, for an invariant
+// `A(x, n) implies (B(x, m) <op> C(...)) and n <= m`: `m` reaches the
+// comparator only if every branch binds it, since the runtime may
+// carry forward a witness from a branch that did not. Checked for `or`
+// and `xor` and both binding shapes.
 #[derive(Clone, Copy)]
 enum BranchOp {
     Or,
@@ -800,11 +782,8 @@ fn retract_args_are_kind_checked() {
 // Value-expression inference + comparators / arithmetic
 // ============================================================
 
-/// One mixed operand pair (a date and a decimal), each comparator:
-/// `<=` is the decimal comparator and flags the date; `on_or_before`
-/// is the date comparator and flags the decimal. The canonical
-/// "wrong comparator" mistake the kernel surfaces as TypeMismatch
-/// at runtime.
+/// A date and a decimal under each comparator: `<=` flags the date,
+/// `on_or_before` flags the decimal. At runtime this is a TypeMismatch.
 #[test]
 fn comparator_operand_mismatches_flag_operator_and_kinds() {
     type Comparator = fn(ValueExpr, ValueExpr) -> Prop;
@@ -882,11 +861,8 @@ fn abs_of_a_decimal_is_accepted() {
 
 #[test]
 fn abs_refines_the_variable_it_wraps() {
-    // `x` is used in a Subject slot and inside `abs(x) <= 10`. The
-    // refinement reaches the variable through abs and pins it to
-    // Decimal, conflicting with the Subject use - the conflict only
-    // arises if abs's operand is refined (without it, x stays the
-    // Subject the claim made it, and nothing pins it to Decimal).
+    // `x` is used in a Subject slot and inside `abs(x) <= 10`.
+    // Refinement through abs pins x to Decimal, which conflicts.
     let mut p = empty_program();
     p.predicates = vec![pdecl("S", &[("v", PredicateArgKind::Subject)])];
     p.invariants = vec![invariant(
@@ -908,8 +884,7 @@ fn abs_refines_the_variable_it_wraps() {
 
 #[test]
 fn add_with_subject_literal_operand_flags_no_arith_rule() {
-    // Arithmetic on a subject literal is the unambiguous bug. With
-    // the time kinds in the matrix, the report names both operand
+    // Arithmetic on a subject literal. The report names both operand
     // kinds rather than assuming Decimal was intended.
     let mut p = empty_program();
     p.invariants = vec![invariant(
@@ -1165,10 +1140,8 @@ fn sum_with_date_literal_value_term_flags_operand_mismatch() {
 
 #[test]
 fn sum_body_bindings_do_not_leak_to_surrounding_env() {
-    // `bind_one Q(x); require x <= sum(amount | P(_, amount))`
-    // - the outer x is Decimal (Q's slot). The Sum's body
-    // binds an inner `amount` at Decimal; after the Sum, the
-    // outer env should still see `amount` as unconstrained.
+    // `bind_one Q(x); require x <= sum(amount | P(_, amount))`.
+    // The sum binds `amount` only inside its body.
     let mut p = empty_program();
     p.predicates = vec![
         pdecl("Q", &[("v", PredicateArgKind::Decimal)]),
@@ -1190,10 +1163,8 @@ fn sum_body_bindings_do_not_leak_to_surrounding_env() {
                 term(var("x")),
                 sum(var("amount"), claim("P", vec![wildcard(), var("amount")])),
             )),
-            // The Sum bound `amount` only inside its body. At
-            // this assert `amount` is unbound again, so it must
-            // flag UnboundVariable - which is precisely the
-            // non-leak property: the sum binding did not escape.
+            // Here `amount` is unbound again: the sum binding did
+            // not escape.
             assert_("S", vec![var("amount")]),
         ],
     )];
@@ -1209,10 +1180,8 @@ fn sum_body_bindings_do_not_leak_to_surrounding_env() {
 
 #[test]
 fn value_of_resolves_to_wildcard_slot_kind() {
-    // `value Policy(p, _)` resolves to Policy's second slot
-    // (Decimal); against `<= 100` (Decimal) there is no kind
-    // error. `p` is a transformation parameter so it is bound
-    // for the lookup key (an invariant would leave it unbound).
+    // `value Policy(p, _)` reads Policy's Decimal slot, so `<= 100`
+    // is fine. `p` is a transformation parameter, so it is bound.
     let mut p = empty_program();
     p.predicates = vec![pdecl(
         "Policy",
@@ -1595,11 +1564,9 @@ fn emit_with_arg_kinds_matching_declared_intent_is_clean() {
 // Or branch independence
 // ============================================================
 //
-// `Or` evaluates each branch against the same base context
-// and concatenates the results. The check mirrors this:
-// each branch sees the env at the call site; refinements
-// inside one branch are not visible to other branches and do
-// not leak out of the `Or`.
+// `Or` evaluates each branch against the same context. The check
+// mirrors this: a refinement in one branch is invisible to the others
+// and does not leak out.
 
 #[test]
 fn or_branches_with_disjoint_kind_constraints_do_not_conflict() {
@@ -1624,11 +1591,9 @@ fn or_branches_with_disjoint_kind_constraints_do_not_conflict() {
 
 #[test]
 fn or_branch_refinements_do_not_leak_after_or() {
-    // `(A(x) or B(x)) and C(x)` - A refines x to Decimal in
-    // one branch, B to Subject in the other; the trailing
-    // `C(x)` (Subject) must NOT conflict because Or did not
-    // export either branch's refinement. (Conservative v0:
-    // no per-variable intersection across branches.)
+    // `(A(x) or B(x)) and C(x)`: A refines x to Decimal, B to
+    // Subject. `C(x)` (Subject) must not conflict, because `or`
+    // exports neither branch's refinement.
     let mut p = empty_program();
     p.predicates = vec![
         pdecl("A", &[("v", PredicateArgKind::Decimal)]),
@@ -1651,10 +1616,8 @@ fn or_branch_refinements_do_not_leak_after_or() {
 
 #[test]
 fn or_still_walks_branches_for_in_branch_kind_errors() {
-    // A literal-vs-slot mismatch inside a branch must still
-    // surface even though branches are independent of each
-    // other. Pin the regression: independence is per-variable,
-    // not per-error-emission.
+    // A literal-vs-slot mismatch inside a branch still surfaces:
+    // branches are independent for variables, not for errors.
     let mut p = empty_program();
     p.predicates = vec![pdecl("A", &[("v", PredicateArgKind::Subject)])];
     p.invariants = vec![invariant(
@@ -1680,13 +1643,9 @@ fn or_still_walks_branches_for_in_branch_kind_errors() {
 // Quantifier bindings unify with outer (no shadowing)
 // ============================================================
 //
-// The runtime evaluator (`find_matches`) does not shadow
-// quantifier bindings - `unify_args` treats existing bindings
-// as constraints. An outer `x` reused as a forall / exists /
-// sum binding constrains the source/body rather than being
-// shadowed; a kind mismatch between the outer and inner uses
-// is what the runtime would surface as a unification failure,
-// so the check flags it as `VariableKindConflict`.
+// The evaluator does not shadow quantifier bindings: an outer `x`
+// reused as a forall / exists / sum binding constrains it. A kind
+// mismatch between the two uses is flagged as `VariableKindConflict`.
 
 #[test]
 fn forall_with_kind_conflicting_outer_variable_flags_conflict() {
@@ -1749,10 +1708,8 @@ fn exists_with_kind_conflicting_outer_variable_flags_conflict() {
 
 #[test]
 fn value_of_default_kind_mismatch_flags_operand_mismatch() {
-    // ValueOf's default must match the wildcard slot's kind.
-    // Here the slot is Decimal but the default is a Subject -
-    // the runtime would return either, so the caller cannot
-    // safely consume the result.
+    // ValueOf's default must match the slot's kind. Here the slot is
+    // Decimal but the default is a Subject.
     let mut p = empty_program();
     p.predicates = vec![pdecl(
         "Policy",

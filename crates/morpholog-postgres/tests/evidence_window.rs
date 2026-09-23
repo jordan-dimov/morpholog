@@ -1,9 +1,7 @@
 //! Windowed evidence packs end to end: export the interval between two real
-//! checkpoints and verify it OFFLINE (no pool), the way a regulator holding
-//! the prior period's anchor would. The realistic complement to the pure
-//! tests in `pack.rs`: real rows and checkpoints, so the consistency and
-//! inclusion proofs are exercised against genuine Merkle data. Tampering is
-//! done by editing the pack's JSON, as an attacker holding the file would.
+//! checkpoints and verify it offline, as a regulator holding the prior
+//! period's anchor would. The attacker holds the file and edits the pack's
+//! JSON.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -64,9 +62,8 @@ async fn a_window_extends_its_anchor_and_includes_its_rows() {
 
 #[tokio::test]
 async fn a_tampered_window_row_is_caught_by_inclusion_not_consistency() {
-    // The headline overclaim guard, end to end: the consistency proof is
-    // untouched and genuine, yet editing a window row's body fails its
-    // inclusion proof - consistency alone would never catch it.
+    // The consistency proof stays genuine, yet editing a window row's body
+    // fails its inclusion proof. Consistency alone would never catch it.
     let pool = test_pool().await;
     reset_db(&pool).await;
     let (pack, _q1, _q2) = window_q1_q2(&pool, "tamper").await;
@@ -152,9 +149,8 @@ async fn export_refuses_a_window_with_an_unknown_endpoint() {
 
 #[tokio::test]
 async fn export_from_a_diverged_anchor_refuses() {
-    // `--from-anchor` is the trust object: if the stored start checkpoint no
-    // longer matches the anchor the operator holds, export must refuse rather
-    // than silently export from the diverged stored checkpoint.
+    // If the stored start checkpoint no longer matches the anchor the
+    // operator holds (`--from-anchor`), export must refuse.
     let pool = test_pool().await;
     reset_db(&pool).await;
     let (_pack, q1, q2) = window_q1_q2(&pool, "div").await;

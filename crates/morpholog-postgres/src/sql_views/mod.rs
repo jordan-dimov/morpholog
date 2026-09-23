@@ -3,44 +3,31 @@
 //! `morpholog.claims`, DERIVED predicates over the `morpholog_read` cache
 //! that `morpholog refresh derived` populates.
 //!
-//! This is the read-side complement of `morpholog schema`: where `schema`
-//! describes the write contract, this projects the admitted state into
-//! plain relational SQL any BI or analytics tool can read. The renderer
-//! is **pure** (no sqlx, no async, no DB): same inputs produce
-//! byte-identical bytes, so the embedder's drift discipline is
-//! regenerate-and-diff, exactly as for the generated Python client.
+//! Plain relational SQL that any BI tool can read: the read-side
+//! counterpart of `morpholog schema`. The renderer is **pure** (no
+//! database): the same inputs give byte-identical output, so drift is
+//! caught by regenerating and diffing.
 //!
-//! It lives in `morpholog-postgres`, not the kernel, because SQL over
-//! `morpholog.claims` - the JSONB shape, the PG types, the extractor
-//! operators - is PostgreSQL-substrate knowledge. The crate already owns
-//! the claims<->JSONB wire mapping (`decode_claim_rows`), so the
-//! kind->PG-type match co-locates with the shape it mirrors. The single
-//! source of truth for the JSONB shape is `EvalValue` in
-//! `morpholog-core/src/state.rs` (`#[serde(tag="type", content="value")]`);
-//! the extractors here mirror it position-for-position.
+//! The JSONB shape comes from `EvalValue` in `morpholog-core/src/state.rs`
+//! (`#[serde(tag="type", content="value")]`); the extractors here mirror it
+//! position for position.
 //!
-//! Four properties make the output a credible read *contract* rather than
-//! a convenience dump:
-//!   1. **Non-updatable by construction** - each view wraps its source in
-//!      a top-level `WITH`, which disqualifies it from PostgreSQL's
-//!      automatic updatability, so `INSERT`/`UPDATE`/`DELETE` through it
-//!      fail rather than reaching `morpholog.claims`.
-//!   2. **Atomic** - the whole script is wrapped `BEGIN; ... COMMIT;`, so
-//!      a database-time failure leaves no half-updated read surface.
-//!   3. **Metadata-first columns** plus the raw `_morpholog_arguments`
-//!      column, so appending a declared field stays a compatible
-//!      `CREATE OR REPLACE VIEW`, and the exact governed value is always
-//!      available behind the typed projection.
-//!   4. **Hash-pinned** - a `_morpholog_catalog` view carries the model
-//!      hash and the intended view inventory, the same pin the generated
-//!      Python client records.
+//! What makes the output a read *contract*:
+//!   1. **Read-only** - each view wraps its source in a top-level `WITH`,
+//!      so PostgreSQL refuses `INSERT`/`UPDATE`/`DELETE` through it.
+//!   2. **Atomic** - the script is one `BEGIN; ... COMMIT;`, so a failure
+//!      leaves no half-updated surface.
+//!   3. **Metadata columns first**, plus the raw `_morpholog_arguments`, so
+//!      appending a field stays a compatible `CREATE OR REPLACE VIEW` and
+//!      the exact value is always behind the typed columns.
+//!   4. **Hash-pinned** - a `_morpholog_catalog` view carries the model hash
+//!      and the view inventory.
 //!
-//! Refusal is whole-run (mirrors `generate.rs::sweep`): every
-//! un-emittable identifier across the base and derived vocabulary is
-//! collected before anything is rendered, and any finding fails the run
-//! with the full work list and nothing written. A derived view reads only
-//! the active generation whose model hash matches this surface, so it is
-//! empty until `morpholog refresh derived` runs for the same programme.
+//! Refusal is whole-run: every bad identifier across base and derived
+//! predicates is collected first, and any finding fails the run with
+//! nothing written. A derived view shows only the active generation built
+//! from the same model hash, so it is empty until `morpholog refresh
+//! derived` runs for this programme.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
@@ -49,9 +36,8 @@ use morpholog_core::{PredicateArgKind, PredicateDecl, ValidatedProgram};
 
 use crate::sql_quote::{quote_ident, quote_literal};
 
-/// The rendered script plus how many views of each kind it emits
-/// (excluding the catalogue), so the CLI can report the split without
-/// re-deriving it.
+/// The rendered script plus how many views of each kind it emits,
+/// excluding the catalogue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedViews {
     pub sql: String,
@@ -61,26 +47,23 @@ pub struct RenderedViews {
     pub derived_view_count: usize,
 }
 
-/// One reason a programme cannot be rendered as a view surface. Collected
-/// across the whole base vocabulary so the author sees one complete work
-/// list. The CLI maps each variant to a single `error:` line via
-/// [`std::fmt::Display`].
+/// One reason a programme cannot be rendered as views. All are collected,
+/// so the author sees the complete list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewRefusal {
-    /// A preserved field name is not a safe unquoted SQL identifier
+    /// A field name is not a safe unquoted SQL identifier
     /// (`[a-z_][a-z0-9_]*`). PostgreSQL folds unquoted identifiers to
     /// lowercase, so an uppercase name would silently diverge from the
-    /// declaration; refusing beats mangling.
+    /// declaration.
     InvalidIdentifier { owner: String, name: String },
-    /// An identifier exceeds PostgreSQL's 63-byte limit, beyond which it
-    /// is silently truncated - which can collide invisibly.
+    /// An identifier exceeds PostgreSQL's 63-byte limit and would be
+    /// silently truncated, possibly colliding.
     IdentifierTooLong { owner: String, name: String },
     /// A business field name starts with the generator-owned
     /// `_morpholog_` prefix, which would shadow a metadata column.
     ReservedPrefix { owner: String, name: String },
-    /// Two predicates (base or derived head, in either combination) whose
-    /// names render to the same snake_case view in the shared schema. Both
-    /// sources are named so the author knows which to rename.
+    /// Two predicates (base or derived) whose names render to the same
+    /// snake_case view. Both are named.
     ViewNameCollision {
         generated: String,
         sources: Vec<String>,
@@ -124,9 +107,8 @@ impl std::fmt::Display for ViewRefusal {
     }
 }
 
-/// The generator-owned column prefix. Reserved as a whole namespace
-/// (rather than the individual provenance names) so a legitimate business
-/// field called `predicate_name` or `asserted_at` is lawful.
+/// The generator-owned column prefix. The whole prefix is reserved, so a
+/// business field may still be called `predicate_name` or `asserted_at`.
 const MORPHOLOG_PREFIX: &str = "_morpholog_";
 
 /// PostgreSQL's identifier length limit (`NAMEDATALEN - 1`). Names beyond
@@ -137,9 +119,9 @@ const MAX_IDENT_BYTES: usize = 63;
 /// view inventory for drift-checking.
 pub(crate) const CATALOG_VIEW: &str = "_morpholog_catalog";
 
-/// The seal table's name: each generated view's definition as
-/// PostgreSQL stores it, hashed at apply time. A table, not a view -
-/// it is the recorded observation, not part of the generated surface.
+/// The seal table: each generated view's stored definition, hashed at
+/// apply time. A table, not a view: it records an observation and is not
+/// part of the surface.
 pub const VIEW_DEFS_TABLE: &str = "_morpholog_view_defs";
 
 /// The SQL `SELECT` expression and the kind note for one declared
@@ -152,13 +134,10 @@ struct ColumnSql {
 
 /// The PG type + extractor for one argument kind at positional index `i`.
 ///
-/// Exhaustive over [`PredicateArgKind`] with **no `_` arm**: a new kind
-/// must fail compilation here, forcing a deliberate decision rather than
-/// a silently-wrong projection. The shapes mirror `EvalValue` in
-/// `morpholog-core/src/state.rs` position-for-position. Every kind is
-/// representable - `Collection` and `Any` fall back to faithful `jsonb`
-/// rather than being refused (they diverge from the python-client floor,
-/// which refuses them, because a read projection can carry them).
+/// **No `_` arm**: a new [`PredicateArgKind`] must fail to compile here
+/// rather than project silently wrong. Every kind is representable:
+/// `Collection` and `Any` fall back to plain `jsonb` (the Python client
+/// refuses them, but a read projection can carry them).
 fn column_sql(kind: &PredicateArgKind, i: usize) -> ColumnSql {
     let col = |expr: String, kind_comment: String| ColumnSql { expr, kind_comment };
     match kind {
@@ -181,12 +160,10 @@ fn column_sql(kind: &PredicateArgKind, i: usize) -> ColumnSql {
                 .to_string(),
         ),
         PredicateArgKind::Duration => col(
-            // jiff serialises a negative span with a LEADING sign
-            // (`-PT6H`), which PostgreSQL's interval parser rejects (it
-            // wants the sign inside, `PT-6H`). Strip the leading `-` and
-            // negate, so one negative-duration claim does not break the
-            // whole view at read time. Sub-microsecond components still
-            // truncate (the documented precision boundary).
+            // jiff writes a negative span with a LEADING sign (`-PT6H`),
+            // which PostgreSQL rejects. Strip it and negate, so one negative
+            // duration does not break the whole view. Sub-microsecond parts
+            // still truncate.
             format!(
                 "CASE WHEN (arguments -> {i} ->> 'value') LIKE '-%' \
                  THEN -((substring(arguments -> {i} ->> 'value' FROM 2))::interval) \
@@ -208,10 +185,8 @@ fn column_sql(kind: &PredicateArgKind, i: usize) -> ColumnSql {
             format!("arguments -> {i} -> 'value'"),
             "Morpholog kind Collection (jsonb array of tagged values)".to_string(),
         ),
-        // Expression-only: validation refuses any declaration carrying
-        // this kind, so no view column can ever be asked for one. The
-        // faithful-jsonb fallback keeps the arm honest if that ever
-        // changes.
+        // Validation refuses this kind in declarations, so no column asks
+        // for it; plain jsonb is the safe fallback.
         PredicateArgKind::CalendarSpan => col(
             format!("arguments -> {i}"),
             "Morpholog kind CalendarSpan (expression-only; never admitted)".to_string(),
@@ -225,10 +200,7 @@ fn column_sql(kind: &PredicateArgKind, i: usize) -> ColumnSql {
 
 /// `TradeSettled` -> `trade_settled`, acronym-aware: `PPAContract` ->
 /// `ppa_contract`, `TradeID` -> `trade_id`, `HTTP2Request` ->
-/// `http2_request`. Inserts `_` before an uppercase letter that follows a
-/// lowercase or digit, and before an uppercase letter that begins a word
-/// after an acronym (uppercase preceded by uppercase, followed by
-/// lowercase); lowercases everything.
+/// `http2_request`.
 fn snake_case(name: &str) -> String {
     let chars: Vec<char> = name.chars().collect();
     let mut out = String::new();
@@ -266,12 +238,9 @@ fn is_safe_lower_ident(s: &str) -> bool {
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-/// Push every identifier refusal for `name` under `owner`. Applied
-/// identically to a preserved field name and to a generated view name.
-/// SQL reserved words are not refused (they are quoted on both sides);
-/// the refusals here are for names quoting cannot rescue - non-lowercase
-/// or otherwise unsafe identifiers, over-long ones, and the reserved
-/// `_morpholog_` metadata prefix.
+/// Push every identifier refusal for `name` under `owner`, for field and
+/// view names alike. Only what quoting cannot rescue is refused: unsafe or
+/// non-lowercase names, over-long ones, and the `_morpholog_` prefix.
 fn check_identifier(owner: String, name: &str, refusals: &mut Vec<ViewRefusal>) {
     if name.starts_with(MORPHOLOG_PREFIX) {
         refusals.push(ViewRefusal::ReservedPrefix {
@@ -293,29 +262,23 @@ fn check_identifier(owner: String, name: &str, refusals: &mut Vec<ViewRefusal>) 
             name: name.to_string(),
         });
     }
-    // A SQL reserved word (`limit`, `order`, `user`, ...) is not refused:
-    // every generated identifier is double-quoted, so a reserved-word
-    // column or view is valid DDL. Consumers quote it in turn (`SELECT
-    // "limit" FROM ...`) - the one place the unquoted-read convenience
-    // does not reach, in exchange for not banning common field names.
+    // Reserved words (`limit`, `order`, `user`) are allowed: every
+    // generated identifier is quoted. Readers must quote them too
+    // (`SELECT "limit" ...`), a fair price for not banning common names.
 }
 
-/// Make a value safe to interpolate into a `--` line comment. A `--`
-/// comment runs to end of line, so a newline in the value would break
-/// out of it - and since `render_views` is public and takes an arbitrary
-/// `model_hash` (and a `Program.name` the kernel does not SQL-validate),
-/// a newline could inject text after the comment. Escape CR and LF.
+/// Make a value safe inside a `--` line comment by escaping CR and LF. A
+/// newline would end the comment and inject SQL; `render_views` takes an
+/// arbitrary `model_hash` and a programme name nothing SQL-validates.
 fn comment_text(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('\r', "\\r")
         .replace('\n', "\\n")
 }
 
-/// Which state a view projects: base predicates read `morpholog.claims`
-/// directly; derived predicates read the `morpholog_read` cache that
-/// `morpholog refresh derived` populates. The column projection is
-/// identical (the cache stores arguments in the same tagged-JSONB shape);
-/// only the source CTE and the provenance metadata columns differ.
+/// Which state a view projects: base predicates read `morpholog.claims`;
+/// derived predicates read the `morpholog_read` cache. The columns are the
+/// same; only the source and the metadata columns differ.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ViewKind {
     Base,
@@ -332,12 +295,11 @@ impl ViewKind {
     }
 }
 
-/// Render the atomic `CREATE VIEW` script for `program`, into `schema`:
-/// one typed view per BASE predicate over `morpholog.claims`, one per
-/// DERIVED predicate over the `morpholog_read` cache (empty until
-/// `morpholog refresh derived` runs), and the `_morpholog_catalog`
-/// inventory. Pure: identical inputs produce byte-identical output. On
-/// any refusal returns every finding and renders nothing.
+/// Render the atomic `CREATE VIEW` script for `program` into `schema`: one
+/// typed view per base predicate, one per derived predicate, and the
+/// `_morpholog_catalog` inventory. Pure: identical inputs give
+/// byte-identical output. On any refusal, returns every finding and
+/// renders nothing.
 pub fn render_views(
     program: ValidatedProgram<'_>,
     schema: &str,
@@ -345,10 +307,8 @@ pub fn render_views(
 ) -> Result<RenderedViews, Vec<ViewRefusal>> {
     let program = program.as_program();
 
-    // A derived claim's head is itself a declared predicate (validation
-    // requires it and checks its kinds against the derived output), so its
-    // `ArgDecl` kinds drive the view columns exactly as a base predicate's
-    // do - it just projects the read cache rather than `morpholog.claims`.
+    // A derived head is a declared predicate, so its declared kinds drive
+    // the columns exactly as a base predicate's do.
     let derived_heads: HashSet<&str> = program
         .derived_claims
         .iter()
@@ -378,11 +338,9 @@ pub fn render_views(
     })
 }
 
-/// Collect every reason this programme's vocabulary cannot be rendered,
-/// across base and derived predicates together, so the author sees one
-/// complete work list (the same whole-run discipline as
-/// `generate.rs::sweep`). Base and derived views share the one schema, so
-/// the view-name collision check spans both.
+/// Collect every reason the programme cannot be rendered, across base and
+/// derived predicates. They share one schema, so the view-name collision
+/// check spans both.
 fn sweep(schema: &str, base: &[&PredicateDecl], derived: &[&PredicateDecl]) -> Vec<ViewRefusal> {
     let mut refusals = Vec::new();
 
@@ -401,12 +359,8 @@ fn sweep(schema: &str, base: &[&PredicateDecl], derived: &[&PredicateDecl]) -> V
                 &mut refusals,
             );
         }
-        // The generated view name gets the SAME rules as a field: a
-        // reserved word (a predicate named `Order`, `User`, `Select`) is
-        // quoted, not refused, just like a reserved-word column; the helper
-        // refuses only what quoting cannot rescue - non-lowercase or
-        // over-long names, and the reserved `_morpholog_` namespace (which
-        // protects `_morpholog_catalog`).
+        // View names follow the same rules as fields. The `_morpholog_`
+        // prefix rule also protects `_morpholog_catalog`.
         let view = snake_case(predicate.name.as_str());
         check_identifier(
             format!("predicate `{}` (view name `{view}`)", predicate.name),
@@ -415,10 +369,8 @@ fn sweep(schema: &str, base: &[&PredicateDecl], derived: &[&PredicateDecl]) -> V
         );
     }
 
-    // snake_case is many-to-one, and Morpholog's duplicate check is on
-    // exact names - so two lawful predicate names (a base and a derived
-    // head included) can collide at the generated view. Refuse, naming
-    // both sources.
+    // snake_case is many-to-one, so two distinct predicate names can render
+    // to the same view.
     let mut by_view: BTreeMap<String, Vec<&str>> = BTreeMap::new();
     for predicate in &all {
         by_view
@@ -438,8 +390,7 @@ fn sweep(schema: &str, base: &[&PredicateDecl], derived: &[&PredicateDecl]) -> V
     refusals
 }
 
-/// Render the complete atomic script. Pure string-building; assumes the
-/// sweep has already passed (so every identifier is safe to quote).
+/// Render the complete atomic script. Assumes the sweep has passed.
 fn render(
     program: &str,
     schema: &str,
@@ -475,14 +426,11 @@ fn render(
     out
 }
 
-/// Render the seal: after the views exist (same transaction), read each
-/// one's definition back from PostgreSQL and store its hash. Reading
-/// `pg_get_viewdef` - not hashing the DDL emitted above - is the
-/// load-bearing detail: an in-place `CREATE OR REPLACE VIEW` under the
-/// same name changes PostgreSQL's stored definition even when the
-/// catalogue and the model hash do not, so `verify --views-schema` can
-/// prove the surface intact. The catalogue view is sealed too - it is
-/// part of the surface being trusted.
+/// Render the seal: in the same transaction, read each view's definition
+/// back with `pg_get_viewdef` and store its hash. Hashing what PostgreSQL
+/// stores, not the DDL above, catches a later `CREATE OR REPLACE VIEW`
+/// under the same name, so `verify --views-schema` can prove the surface
+/// intact. The catalogue view is sealed too.
 fn render_seal(
     out: &mut String,
     schema: &str,
@@ -521,11 +469,8 @@ fn render_seal(
     out.push_str(") AS v(name);\n");
 }
 
-/// Render one predicate's view block: the non-updatable CTE view, then
-/// the persistent `COMMENT ON VIEW` / `COMMENT ON COLUMN` metadata. The
-/// CTE source and the provenance metadata columns differ by `kind`; the
-/// typed business-column projection (`column_sql` over `arguments`) is
-/// the same for both.
+/// Render one predicate's view block: the read-only view, then its
+/// `COMMENT ON VIEW` / `COMMENT ON COLUMN` metadata.
 fn render_view(
     out: &mut String,
     schema: &str,
@@ -540,10 +485,8 @@ fn render_view(
     let _ = writeln!(out, "\n-- View for {} predicate `{name}`.", kind.label());
     let _ = writeln!(out, "CREATE OR REPLACE VIEW {qualified} AS");
 
-    // The CTE binds `arguments` (the tagged-JSONB row) plus the
-    // source-specific provenance columns. Both shapes are non-updatable
-    // by construction: a top-level `WITH` disqualifies the view from
-    // PostgreSQL's auto-updatability, so writes through it fail.
+    // The CTE binds `arguments` plus the source's metadata columns. The
+    // top-level `WITH` makes the view read-only.
     let (cte_name, mut selects): (&str, Vec<(String, String)>) = match kind {
         ViewKind::Base => {
             out.push_str("WITH governed_claims AS (\n");
@@ -561,12 +504,9 @@ fn render_view(
             )
         }
         ViewKind::Derived => {
-            // Filter on the generated model hash too, not just the active
-            // generation: a cache refreshed for a DIFFERENT model would
-            // carry rows whose shape may not match this view's columns.
-            // So the view shows rows only when the active generation was
-            // produced by the same model - otherwise empty, until
-            // `refresh derived` runs for this `.morph`.
+            // Filter on the model hash too: a cache refreshed for a
+            // DIFFERENT model may not match these columns. The view stays
+            // empty until `refresh derived` runs for this model.
             out.push_str("WITH governed_derived AS (\n");
             out.push_str("    SELECT c.arguments, r.refreshed_at, r.model_hash,\n");
             out.push_str(
@@ -606,10 +546,9 @@ fn render_view(
     };
     out.push_str("SELECT\n");
 
-    // Metadata-first, then business fields in declaration order, so
-    // appending a declared field stays a compatible CREATE OR REPLACE and
-    // the raw `_morpholog_arguments` preserves the exact value behind the
-    // typed projection (and the precision floor for temporal kinds).
+    // Metadata first, then fields in declaration order, so appending a
+    // field stays a compatible CREATE OR REPLACE. `_morpholog_arguments`
+    // keeps the exact value, including temporal precision.
     let mut column_comments: Vec<(String, String)> = Vec::new();
     for (i, arg) in predicate.args.iter().enumerate() {
         let col = column_sql(&arg.kind, i);
@@ -656,10 +595,9 @@ fn render_view(
     }
 }
 
-/// Render the model catalogue: programme, hash, and the predicate->view
-/// inventory with each view's `kind` (`base` | `derived`). `VALUES`-backed
-/// so it is inherently non-updatable. A programme with no predicates gets
-/// a typed-empty catalogue.
+/// Render the model catalogue: programme, hash, and each predicate's view
+/// with its `kind` (`base` | `derived`). `VALUES`-backed, so read-only. A
+/// programme with no predicates gets a typed empty catalogue.
 fn render_catalog(
     out: &mut String,
     program: &str,
@@ -672,8 +610,7 @@ fn render_catalog(
     out.push_str("\n-- Model catalogue: the programme, its model hash, and the views generated.\n");
     let _ = writeln!(out, "CREATE OR REPLACE VIEW {qualified} AS");
 
-    // (predicate name, view kind) in render order: base first, then
-    // derived - matching the view blocks above.
+    // Base first, then derived, matching the view blocks above.
     let rows: Vec<(&str, ViewKind)> = base
         .iter()
         .map(|p| (p.name.as_str(), ViewKind::Base))

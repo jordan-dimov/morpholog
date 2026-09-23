@@ -1,15 +1,10 @@
-//! A Rust construction kit for the kernel IR - **not** the Morpholog
-//! language. The product surface is `.morph`; the worked examples are
-//! authored there and parsed, and the parser is the only thing in the
-//! product that builds IR. These builders exist for tests: assembling
-//! precise edge cases and adversarial or malformed shapes (the kind a
-//! parser would never emit) directly, where authoring a `.morph` file
-//! would be the wrong tool.
+//! Rust helpers for building kernel IR by hand - **not** the Morpholog
+//! language, which is `.morph`. In the product only the parser builds IR.
+//! These exist for tests that need precise edge cases or malformed shapes
+//! a parser would never emit.
 //!
-//! The kernel IR is deliberately low-level - every variant is one thing,
-//! no syntactic sugar - so hand-constructing a transformation body reads
-//! like raw struct construction. These thin wrappers give it a readable
-//! shape:
+//! The IR has no sugar, so raw construction is verbose. These thin
+//! wrappers make it readable:
 //!
 //! ```ignore
 //! use morpholog_core::ir_builder::*;
@@ -63,16 +58,14 @@ pub fn wildcard() -> Term {
 }
 
 /// The actor proposing the current transition. Only valid inside a
-/// transformation body (`require`, `let`, `assert`, `retract`, `emit`,
-/// `for`); referencing it from an invariant or derived-claim body
-/// raises `EvalError::UnboundActor`.
+/// transformation body; in an invariant or derived-claim body it raises
+/// `EvalError::UnboundActor`.
 pub fn actor() -> Term {
     Term::Actor
 }
 
-/// Subject literal. Used for named constants (purposes, roles,
-/// statuses, fixed authorities) and for embedding specific subject
-/// identifiers in IR bodies.
+/// Subject literal: a named constant (a purpose, role or status) or a
+/// specific subject identifier.
 pub fn subj(s: &str) -> Term {
     Term::Literal(Value::Subject(Subject::from(s)))
 }
@@ -102,9 +95,9 @@ pub fn duration(s: &str) -> Term {
     Term::Literal(Value::Duration(s.to_string()))
 }
 
-/// Calendar-span literal in date units (e.g. `P3M`, `P45D`) - the IR
-/// for the surface's `span(P3M)`. Stored as the exact source string;
-/// the evaluator parses it through the kernel's own grammar on use.
+/// Calendar-span literal in date units (e.g. `P3M`, `P45D`), the
+/// surface's `span(P3M)`. Stored as the exact source string; parsed with
+/// [`crate::calendar::parse_calendar_span`] on use.
 pub fn span(s: &str) -> Term {
     Term::Literal(Value::CalendarSpan(s.to_string()))
 }
@@ -119,11 +112,8 @@ pub fn qty(amount: &str, unit: &str) -> Term {
     })
 }
 
-/// Semantic alias for [`subj`]. Identical runtime representation;
-/// documents reader intent at the call site when the subject names a
-/// delegated role. Resist adding more aliases until an example forces
-/// one - the subject-as-string model is intentional, and pseudo-types
-/// over it would not help.
+/// Same as [`subj`]; the name tells the reader the subject is a role.
+/// Subjects are deliberately untyped, so avoid adding more aliases.
 pub fn role(s: &str) -> Term {
     subj(s)
 }
@@ -132,9 +122,8 @@ pub fn role(s: &str) -> Term {
 // Prop constructors (the predicate-shaped sort)
 // ============================================================
 
-/// Claim pattern. Each `args` term is either a variable to bind, a
-/// wildcard, a literal to match, or `actor()`. Match semantics:
-/// every position must unify against the candidate claim.
+/// Claim pattern. Each `args` term is a variable to bind, a wildcard, a
+/// literal to match, or `actor()`. Every position must match.
 pub fn claim(predicate: &str, args: Vec<Term>) -> Prop {
     Prop::Claim {
         predicate: predicate.into(),
@@ -142,9 +131,9 @@ pub fn claim(predicate: &str, args: Vec<Term>) -> Prop {
     }
 }
 
-/// Call to a named [`Definition`]. The call-shaped sibling of [`claim`]:
-/// args pair positionally with the definition's parameters, ground args
-/// filter, unbound variable args receive the body's projected bindings.
+/// Call to a named [`Definition`]. Args pair with its parameters by
+/// position: bound args filter, unbound variables receive the body's
+/// bindings.
 pub fn defined(name: &str, args: Vec<Term>) -> Prop {
     Prop::Defined {
         name: name.into(),
@@ -168,9 +157,9 @@ pub fn xor(left: Prop, right: Prop) -> Prop {
     Prop::Xor(Box::new(left), Box::new(right))
 }
 
-/// Opt the wrapped subtree into pre-transition state lookup.
-/// Legal only inside invariant bodies during a proposal; surfaces
-/// [`crate::EvalError::PreStateUnavailable`] anywhere else.
+/// Evaluate the wrapped subtree against the state before the transition.
+/// Works only in an invariant during a proposal; elsewhere it raises
+/// [`crate::EvalError::PreStateUnavailable`].
 pub fn pre(inner: Prop) -> Prop {
     Prop::Pre(Box::new(inner))
 }
@@ -201,10 +190,8 @@ pub fn eq(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     Prop::Eq(Box::new(lhs), Box::new(rhs))
 }
 
-/// `Prop::Neq` over two terms - the common authoring case (comparing two
-/// variables or literals). The IR's `Neq` is symmetric with `Eq` and
-/// accepts full value expressions; build `Prop::Neq` directly for the
-/// rarer expression-on-either-side case.
+/// `Prop::Neq` over two terms, the common case. Build `Prop::Neq`
+/// directly to compare full value expressions.
 pub fn neq(t1: Term, t2: Term) -> Prop {
     Prop::Neq(Box::new(ValueExpr::Term(t1)), Box::new(ValueExpr::Term(t2)))
 }
@@ -233,9 +220,8 @@ pub fn in_(elem: Term, coll: Term) -> Prop {
 // ValueExpr constructors (the value-producing sort)
 // ============================================================
 
-/// Lift a [`Term`] into value position. Used wherever a sub-expression
-/// must evaluate to a value (e.g. inside `le`, `date_le`, `add`, `sub`,
-/// `sum`'s value).
+/// Lift a [`Term`] into value position (inside `le`, `add`, `sum`'s
+/// value, and so on).
 pub fn term(t: Term) -> ValueExpr {
     ValueExpr::Term(t)
 }
@@ -283,16 +269,15 @@ pub fn period_index(anchor: ValueExpr, span: ValueExpr, at: ValueExpr) -> ValueE
     call(Builtin::PeriodIndex, vec![anchor, span, at])
 }
 
-/// `period_start_of(anchor, span, index)` - period `index`'s first
-/// day, the boundary date back from the coordinate; refuses an index
-/// whose boundary leaves the calendar.
+/// `period_start_of(anchor, span, index)` - the first day of period
+/// `index`. Refuses an index whose start falls outside the calendar.
 pub fn period_start_of(anchor: ValueExpr, span: ValueExpr, index: ValueExpr) -> ValueExpr {
     call(Builtin::PeriodStartOf, vec![anchor, span, index])
 }
 
-/// `if(when, then, otherwise)` - the value selected by whether the
-/// proposition holds; witnesses discarded, only the selected branch
-/// evaluates.
+/// `if(when, then, otherwise)` - `then` if the proposition holds, else
+/// `otherwise`. Only the chosen branch is evaluated; the condition binds
+/// nothing.
 pub fn cond(when: Prop, then: ValueExpr, otherwise: ValueExpr) -> ValueExpr {
     ValueExpr::Cond {
         when: Box::new(when),
@@ -328,17 +313,14 @@ pub fn sum(value: impl Into<ValueExpr>, body: Prop) -> ValueExpr {
     }
 }
 
-/// Functional lookup: match exactly one claim and yield its
-/// wildcard-position value. Zero matches errors unless `default` is
-/// supplied; multiple matches always errors. Use
-/// [`value_of_with_default`] for the fallback form.
+/// Match exactly one claim and yield the value at its first wildcard.
+/// Zero matches is an error (see [`value_of_with_default`] for a
+/// fallback); more than one always is.
 ///
-/// **Prefer [`bind_one`] in transformation bodies.** To extract a
-/// uniquely-matching claim's values into the statement-level binding
-/// context, `bind_one` reads more directly and rejects lawfully on
-/// zero matches. Reach for `value_of` only in value-producing
-/// positions (arithmetic, comparisons, `Sum`, `Let`, or a
-/// `DerivedClaim` value expression) where a statement form does not fit.
+/// **Prefer [`bind_one`] in transformation bodies**: it reads more
+/// directly and rejects cleanly on zero matches. Use `value_of` only in
+/// value positions (arithmetic, comparisons, `Sum`, `Let`, a derived-claim
+/// value).
 pub fn value_of(predicate: &str, args: Vec<Term>) -> ValueExpr {
     let extract = first_wildcard(&args);
     ValueExpr::ValueOf {
@@ -361,18 +343,16 @@ pub fn value_of_with_default(predicate: &str, args: Vec<Term>, default: ValueExp
     }
 }
 
-/// The positional extraction rule: the first wildcard is the hole. An
-/// argument list with no wildcard yields an out-of-range index, which
-/// validation refuses - the builder stays infallible.
+/// The first wildcard is the value to extract. With none, the index is
+/// out of range and validation refuses it, so the builder never fails.
 fn first_wildcard(args: &[Term]) -> usize {
     args.iter()
         .position(|t| matches!(t, Term::Wildcard))
         .unwrap_or(args.len())
 }
 
-/// `value_of` with an explicit extraction hole - the named surface
-/// form's shape, where the hole need not be the first wildcard.
-/// `args[extract]` must be a wildcard or validation refuses.
+/// `value_of` extracting position `extract`, which need not be the first
+/// wildcard. `args[extract]` must be a wildcard or validation refuses.
 pub fn value_of_extracting(predicate: &str, args: Vec<Term>, extract: usize) -> ValueExpr {
     ValueExpr::ValueOf {
         predicate: predicate.into(),
@@ -399,13 +379,10 @@ pub fn require_named(name: &str, prop: Prop) -> Stmt {
     }
 }
 
-/// Deterministic unique-lookup binding statement. The companion to
-/// [`require`]: where `require` is a yes/no gate that does not export
-/// bindings, `bind_one` evaluates a predicate-shaped expression,
-/// *replaces* the current binding context with the single matching
-/// binding set, and short-circuits with a kernel error if more than
-/// one claim matches (programme bug) or a lawful rejection if none
-/// matches (business outcome).
+/// Unique lookup. Unlike [`require`], which is a yes/no gate, `bind_one`
+/// *replaces* the binding context with the single match. No match is a
+/// rejection (a business outcome); more than one is a kernel error (a
+/// programme bug).
 ///
 /// ```ignore
 /// bind_one(claim("Policy", vec![var("policy_id"), var("aggregate_limit")]))
@@ -469,9 +446,8 @@ pub fn for_(binding: &str, collection: ValueExpr, body: Vec<Stmt>) -> Stmt {
 // Parameter-list sugar
 // ============================================================
 
-/// Convenience for the parameter list of a [`crate::Transformation`].
-/// Equivalent to `names.iter().map(|s| Var::from(*s)).collect()` but
-/// reads as `params(&["claim_id", "amount"])` at the call site.
+/// Parameter list for a [`crate::Transformation`]:
+/// `params(&["claim_id", "amount"])`.
 pub fn params(names: &[&str]) -> Vec<Var> {
     names.iter().map(|s| Var::from(*s)).collect()
 }
@@ -480,12 +456,9 @@ pub fn params(names: &[&str]) -> Vec<Var> {
 // PredicateDecl builder
 // ============================================================
 
-/// Builder for a [`PredicateDecl`]. Construct with [`predicate`],
-/// chain one kind method per argument position
-/// (`subject`/`decimal`/`date`/`boolean`/`collection`/`any`), and
-/// terminate with [`PredicateDeclBuilder::build`]. Call order is the
-/// predicate's positional argument order. Names surface in
-/// `morpholog inspect predicates`; kinds drive kind-checking.
+/// Builder for a [`PredicateDecl`]. Start with [`predicate`], call one kind
+/// method per argument in positional order, and finish with
+/// [`PredicateDeclBuilder::build`].
 #[must_use]
 pub struct PredicateDeclBuilder {
     name: String,
@@ -530,9 +503,7 @@ impl PredicateDeclBuilder {
         )
     }
 
-    /// Boolean-kinded argument. Named `boolean` rather than `bool`
-    /// because `bool` is the Rust type and `.bool(name)` reads as a
-    /// cast at the call site.
+    /// Boolean argument. Not `bool`, which would read as a cast.
     pub fn boolean(self, name: &str) -> Self {
         self.arg(name, PredicateArgKind::Bool)
     }
@@ -575,8 +546,7 @@ pub fn predicate(name: &str) -> PredicateDeclBuilder {
 // Top-level declaration builders
 // ============================================================
 
-/// Build an [`Invariant`]. `version` defaults to 1, the v0 value the
-/// surface always emits.
+/// Build an [`Invariant`] with `version` 1, as the surface emits.
 pub fn invariant(name: &str, body: Prop) -> Invariant {
     Invariant {
         totality_for: None,

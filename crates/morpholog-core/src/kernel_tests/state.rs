@@ -26,7 +26,7 @@ fn delta_strategy() -> impl Strategy<Value = (Vec<ClaimInstance>, Vec<ClaimInsta
     )
 }
 
-/// Today's algorithm, kept as the oracle: copy, drop every retracted
+/// The plain algorithm, as the oracle: copy, drop every retracted
 /// claim, append each admitted claim not already present.
 fn naive(
     pre: &[ClaimInstance],

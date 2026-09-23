@@ -1,66 +1,41 @@
 //! Rule coverage over replayed history: which of these rules has
 //! ever actually done work?
 //!
-//! Two histories feed the verdicts. The audit log records committed
-//! transitions; replaying it answers whether a rule's condition ever
-//! matched anything real. The rejection log records refused
-//! proposals - operational evidence written after each rollback,
-//! at-most-once, outside the legitimacy-grade audit record - and
-//! counting it answers the sharper question: did this rule ever
-//! actually REFUSE something? The verdicts, strongest first:
+//! Two logs feed the verdicts. Replaying the audit log shows whether a
+//! rule's condition ever matched a committed state. The rejection log
+//! shows whether the rule ever refused a proposal. The verdicts, strongest
+//! first:
 //!
-//! - **constrained** - the rule refused at least one real proposal,
-//!   per the rejection log. The strongest evidence a rule can have,
-//!   and the only verdict that can reach an always-on prohibition:
-//!   refusals are exactly the work that committed history cannot
-//!   show.
-//! - **fired** - the invariant has implication shape and at least one
-//!   antecedent bound at least one witness in the post-state of at
-//!   least one replayed transition. The rule has evaluated something
-//!   real (but never refused).
-//! - **never fired** - implication shape, antecedent never bound
-//!   across the whole history, no recorded refusals: dynamically
-//!   vacuous. The rule has never evaluated anything beyond
-//!   trivially-true, whatever its text promises. The headline
-//!   verdict.
-//! - **always on** - no positive-polarity implication (a prohibition
-//!   like `not (Retired(c, _) and HeldBy(c, _))`, a bare comparison):
-//!   the rule holds over every committed state by construction. Its
-//!   own verdict, never conflated with fired - and superseded by
-//!   `constrained` the moment the rejection log shows it refusing.
+//! - **constrained** - the rule refused at least one proposal. This is the
+//!   only verdict an always-on prohibition can earn, since refusals never
+//!   reach committed history.
+//! - **fired** - the rule is an implication and its condition matched in
+//!   at least one committed state, but it never refused anything.
+//! - **never fired** - an implication whose condition never matched and
+//!   that never refused anything. The rule has never been more than
+//!   trivially true.
+//! - **always on** - no implication to fire (a prohibition like
+//!   `not (Retired(c, _) and HeldBy(c, _))`, a bare comparison). It holds
+//!   in every committed state by construction.
 //!
-//! One verdict remains deliberately absent, named in the report
-//! legend: *dead antecedent* (an antecedent that CANNOT bind -
-//! static satisfiability, the offline-oracle tier). And the
-//! rejection log's at-most-once bound keeps `constrained` honest as
-//! a floor, not a census: a crash between rollback and insert loses
-//! that record.
+//! `constrained` is a floor, not a census: the rejection log records at
+//! most once, and a crash after rollback loses that row. There is no "dead
+//! antecedent" verdict; proving a condition can never match is a static
+//! question this module does not ask.
 //!
-//! Coverage measures the CURRENT programme's rules over history: "has
-//! this rule ever done work" is a question about today's rules. The
-//! audit rows' `invariants_checked` column is the substrate for a
-//! later "when did this rule enter service" tier, not consulted here.
+//! Coverage measures today's rules over the whole history.
 //!
-//! Shape classification descends through definition calls (the
-//! every-walker-transitive red line): an implication hidden behind a
-//! named condition is still an implication, and only a body with no
-//! positive-polarity implication anywhere - including through its
-//! definitions - classifies always-on. An antecedent extracted from a
-//! definition body is evaluated UNDER its call chain's frames, so a
-//! call-site-constrained argument (a literal, a pre-bound variable)
-//! constrains the firing question too. One recorded residual: a call
-//! repeating an UNBOUND variable (`f(x, x)` at invariant scope)
-//! carries an equality constraint frames cannot express, so such an
-//! antecedent can still overcount `fired`.
+//! Classification looks through definition calls, so an implication behind
+//! a named condition still counts. An antecedent inside a definition is
+//! evaluated with its call's arguments, so a literal or already-bound
+//! argument narrows it. Known gap: a call repeating an unbound variable
+//! (`f(x, x)`) loses that equality and can overcount `fired`.
 //!
-//! The driver (the PG adapter's `coverage_replay`) folds the audit
-//! log transition by transition and calls [`CoverageTracker::observe`]
-//! with each post-state and the transition's delta predicates; the
-//! tracker evaluates only the invariants whose antecedent footprint
-//! intersects the delta, which is what keeps a long replay tractable.
-//! It then walks the rejection log and calls
-//! [`CoverageTracker::observe_rejection`] per row - pure counting,
-//! no state evaluation.
+//! The PostgreSQL driver replays the audit log, calling
+//! [`CoverageTracker::observe`] per transition. Only invariants whose
+//! antecedent predicates the transition touched are evaluated, which keeps
+//! a long replay fast. It then calls [`CoverageTracker::observe_rejection`]
+//! per rejection-log row, which only counts.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -74,9 +49,8 @@ use crate::lint::implications_of;
 use crate::predicates_referenced_by_prop;
 use crate::state::{Bindings, State};
 
-/// Coverage verdict for one invariant, strongest first. See the
-/// module doc for the precise meaning of each - and for the verdict
-/// deliberately absent.
+/// Coverage verdict for one invariant, strongest first. The module doc
+/// defines each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoverageVerdict {
@@ -111,8 +85,7 @@ pub struct InvariantCoverage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_refused: Option<String>,
     /// True when the rejection log names an invariant the current
-    /// programme no longer declares - vocabulary drift the auditor
-    /// should see, mirroring the transformation flag.
+    /// programme no longer declares.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub not_in_programme: bool,
 }
@@ -123,9 +96,8 @@ fn is_zero(n: &u64) -> bool {
 }
 
 /// Usage of one transformation over the replayed history. Declared
-/// transformations appear even at zero - a never-used transformation
-/// is the same auditor question one level up. A name seen in history
-/// but absent from the current programme appears too, flagged.
+/// transformations appear even when never used. A name seen in history but
+/// no longer declared appears too, flagged.
 #[derive(Debug, Clone, Serialize)]
 pub struct TransformationUsage {
     pub transformation: String,
@@ -134,13 +106,12 @@ pub struct TransformationUsage {
     pub first: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last: Option<String>,
-    /// Proposals of this transformation that were refused - by a
-    /// gate of its own or by any invariant. A refusal is still a
-    /// refused proposal OF the transformation, whichever rule said no.
+    /// Proposals of this transformation that were refused, by one of its
+    /// gates or by any invariant.
     #[serde(skip_serializing_if = "is_zero")]
     pub proposals_refused: u64,
     /// True when history names a transformation the current programme
-    /// no longer declares - vocabulary drift the auditor should see.
+    /// no longer declares.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub not_in_programme: bool,
 }
@@ -157,16 +128,9 @@ pub struct CoverageReport {
     pub transformations: Vec<TransformationUsage>,
 }
 
-/// One antecedent to test for firing: the proposition plus the
-/// `Defined` call chain (outermost first) it was extracted from. An
-/// antecedent found inside a definition body is evaluated UNDER the
-/// chain's call frames, so a call-site-constrained argument (a
-/// literal, a pre-bound variable) constrains the firing question the
-/// way it constrains enforcement. The residual imprecision is the
-/// repeated-UNBOUND-variable call (`f(x, x)` at invariant scope):
-/// frames cannot carry an equality between two free positions, so
-/// such an antecedent is still evaluated without that constraint and
-/// can overcount - the bound is recorded in the module doc.
+/// One antecedent to test for firing, with the chain of definition calls
+/// (outermost first) it was found inside. It is evaluated with those
+/// calls' arguments bound.
 struct Antecedent<'p> {
     prop: &'p Prop,
     calls: Vec<crate::lint::DefinedCall<'p>>,
@@ -174,25 +138,19 @@ struct Antecedent<'p> {
 
 /// How one invariant participates in coverage.
 enum Shape<'p> {
-    /// One or more positive-polarity implications (the collector
-    /// descends through definition calls, so an implication hidden
-    /// behind a named condition still counts); coverage asks whether
-    /// any antecedent ever binds. `footprint` is the union of the
-    /// antecedents' referenced predicates (transitive through
-    /// definitions), the delta-pruning key. `uses_pre` disables the
-    /// prune: a `pre(...)` antecedent's firing opportunity lags the
-    /// delta by one transition (the claim asserted at T sits in the
-    /// PRE-state only from T+1), so pruning by the current delta
-    /// would skip exactly the transition where it first binds.
+    /// One or more positive implications; coverage asks whether any
+    /// antecedent ever binds. `footprint` is the predicates the
+    /// antecedents read, used to skip transitions that cannot matter.
+    /// `uses_pre` turns that skipping off: a claim admitted at step T is
+    /// in the pre-state only from T+1, so a `pre(...)` antecedent can
+    /// first bind on a transition that did not touch it.
     Implication {
         antecedents: Vec<Antecedent<'p>>,
         footprint: BTreeSet<PredicateName>,
         uses_pre: bool,
     },
-    /// No positive-polarity implication, even through definitions:
-    /// holds over every committed state by construction. "Always on"
-    /// means *not measurable by antecedent firing* - its enforcement
-    /// work is invisible in committed history.
+    /// No positive implication, even through definitions. It holds in
+    /// every committed state, so only refusals can show it working.
     AlwaysOn,
 }
 
@@ -206,8 +164,8 @@ struct Entry<'p> {
     refusals: Refusals,
 }
 
-/// Refusal stats accumulated from the rejection log - shared by
-/// declared invariants and rejection-log-only names.
+/// Refusal counts from the rejection log, for declared and undeclared
+/// invariant names alike.
 #[derive(Default)]
 struct Refusals {
     count: u64,
@@ -236,14 +194,13 @@ pub struct CoverageTracker<'p> {
     program_name: String,
     definitions: &'p [Definition],
     entries: Vec<Entry<'p>>,
-    /// Invariant name -> position in `entries`, so the rejection
-    /// pass attributes each row in O(log invariants) instead of a
-    /// linear scan per row - the rejection log can be long.
+    /// Invariant name -> position in `entries`; the rejection log can be
+    /// long.
     entry_index: BTreeMap<String, usize>,
     declared_transformations: Vec<String>,
     usage: BTreeMap<String, Usage>,
-    /// Refusals attributed to invariant names the current programme
-    /// does not declare - drift, surfaced rather than dropped.
+    /// Refusals by invariant names the current programme does not
+    /// declare, reported rather than dropped.
     unmatched_refusals: BTreeMap<String, Refusals>,
     transitions: u64,
     rejections: u64,
@@ -322,15 +279,12 @@ impl<'p> CoverageTracker<'p> {
         }
     }
 
-    /// Record one rejection-log row: pure counting, no state
-    /// evaluation. `invariant` is the refusing invariant's name when
-    /// the rejection's kind is `invariant`, `None` for the gate kinds
-    /// (`require`/`bind`) - gates belong to their transformation, so
-    /// a gate refusal counts only there. An invariant refusal counts
-    /// for the invariant AND the transformation: it is still a
-    /// refused proposal of that transformation, whichever rule said
-    /// no. Invariant names the current programme does not declare
-    /// accumulate separately and surface flagged.
+    /// Record one rejection-log row. Counts only; evaluates nothing.
+    ///
+    /// `invariant` names the refusing invariant, or is `None` for a gate
+    /// (`require` / `bind`) refusal. A gate refusal counts for the
+    /// transformation only; an invariant refusal counts for both. Unknown
+    /// invariant names are kept separately and reported flagged.
     pub fn observe_rejection(
         &mut self,
         invariant: Option<&str>,
@@ -354,12 +308,10 @@ impl<'p> CoverageTracker<'p> {
         }
     }
 
-    /// True when this transition needs a state snapshot at all:
-    /// `delta` touches a tracked antecedent's footprint, or some
-    /// antecedent reads pre-state (those are never pruned). A
-    /// transition that is not relevant still counts (transitions,
-    /// usage) but evaluates nothing, so the driver may pass any
-    /// state.
+    /// True when this transition needs a state snapshot: `delta` touches
+    /// a tracked antecedent's predicates, or some antecedent reads the
+    /// pre-state. An irrelevant transition is still counted but evaluates
+    /// nothing, so the driver may pass any state.
     pub fn delta_is_relevant(&self, delta: &BTreeSet<PredicateName>) -> bool {
         self.entries.iter().any(|entry| match &entry.shape {
             Shape::Implication {
@@ -371,10 +323,9 @@ impl<'p> CoverageTracker<'p> {
         })
     }
 
-    /// True when any tracked antecedent contains `pre(...)` - the
-    /// driver's cue that it must carry the previous state forward on
-    /// every step. When false, the pre-state argument is never read
-    /// and the driver can skip the bookkeeping entirely.
+    /// True when any tracked antecedent contains `pre(...)`, so the driver
+    /// must keep the previous state at every step. When false, the
+    /// pre-state argument is never read.
     pub fn needs_pre_state(&self) -> bool {
         self.entries.iter().any(|entry| match &entry.shape {
             Shape::Implication { uses_pre, .. } => *uses_pre,
@@ -382,18 +333,14 @@ impl<'p> CoverageTracker<'p> {
         })
     }
 
-    /// Record one replayed transition: `post_state` is the state after
-    /// it committed, `pre_state` the state before (the empty state for
-    /// the first transition - never `None`, so `pre(...)` antecedents
-    /// evaluate instead of erroring), `delta` the predicates its
-    /// asserted and retracted claims touch.
+    /// Record one replayed transition. `post_state` is the state after it
+    /// committed; `pre_state` the state before (the empty state for the
+    /// first transition, so `pre(...)` antecedents still evaluate);
+    /// `delta` the predicates it admitted or retracted.
     ///
-    /// Only invariants whose antecedent footprint intersects `delta`
-    /// are evaluated - an antecedent that gained no new claims cannot
-    /// have started binding, and one that lost claims either still
-    /// binds (counted earlier) or stopped (nothing new to count).
-    /// Antecedents that read pre-state are exempt from the prune:
-    /// their firing opportunity lags the delta by one transition.
+    /// Only invariants whose antecedent reads a predicate in `delta` are
+    /// evaluated: an antecedent that gained no claims cannot have started
+    /// binding. Antecedents that read the pre-state are always evaluated.
     pub fn observe(
         &mut self,
         post_state: &State,
@@ -424,12 +371,9 @@ impl<'p> CoverageTracker<'p> {
             let index = DefinitionTable::new(self.definitions);
             let mut fired = false;
             for antecedent in antecedents {
-                // Replay the antecedent's call chain through the
-                // canonical call frames: each step resolves the call's
-                // arguments in the enclosing scope, so a literal or
-                // pre-bound argument pins the matching parameter and
-                // the antecedent is asked the question the call site
-                // asked - not "does this bind for ANY arguments".
+                // Bind each call's arguments in turn, so the antecedent
+                // answers for the arguments the call site passed, not for
+                // any arguments at all.
                 let mut scope = bindings.clone();
                 for (name, args) in &antecedent.calls {
                     let def = index
@@ -455,11 +399,9 @@ impl<'p> CoverageTracker<'p> {
         Ok(())
     }
 
-    /// Finish: verdicts from the accumulated stats (a refusal beats
-    /// everything - `constrained` is the strongest verdict for any
-    /// shape, including always-on), invariants in declaration order
-    /// with rejection-log-only names after, transformations in
-    /// declaration order first, historical-only names after.
+    /// Build the report. Any refusal makes an invariant `constrained`,
+    /// whatever its shape. Declared names come first, in declaration
+    /// order; names seen only in history follow.
     pub fn into_report(mut self) -> CoverageReport {
         let mut invariants: Vec<InvariantCoverage> = self
             .entries
@@ -490,8 +432,7 @@ impl<'p> CoverageTracker<'p> {
                 }
             })
             .collect();
-        // Refusals attributed to invariant names the programme no
-        // longer declares - drift, surfaced rather than dropped.
+        // Invariant names the programme no longer declares.
         for (name, refusals) in self.unmatched_refusals {
             invariants.push(InvariantCoverage {
                 invariant: name,
@@ -519,8 +460,7 @@ impl<'p> CoverageTracker<'p> {
                 not_in_programme: false,
             });
         }
-        // Whatever remains was seen in history but is not declared
-        // today - vocabulary drift, surfaced rather than dropped.
+        // Whatever remains was seen in history but is not declared today.
         for (name, usage) in self.usage {
             transformations.push(TransformationUsage {
                 transformation: name,
@@ -612,8 +552,8 @@ pub fn render_coverage(report: &CoverageReport) -> String {
         if t.transitions == 0 && t.proposals_refused == 0 {
             out.push_str(&format!("\n  {} - never used\n", t.transformation));
         } else if t.transitions == 0 {
-            // Proposed but only ever refused - "0 transition(s)" would
-            // read as never-proposed, which is the opposite of true.
+            // Only ever refused: "0 transition(s)" would read as never
+            // proposed.
             out.push_str(&format!(
                 "\n  {} - never committed a transition\n",
                 t.transformation

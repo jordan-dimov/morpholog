@@ -1,10 +1,8 @@
 //! Argument-level selection, evaluated in the database.
 //!
-//! The point of `list_claims_where` is that the comparison happens in
-//! PostgreSQL, so a single-subject question stops paying for the whole
-//! predicate. These tests exercise the SQL directly: a CLI-level test
-//! would pass just as well if the filter ran after the rows crossed the
-//! wire, which is the one thing worth proving here.
+//! `list_claims_where` compares in PostgreSQL, so a single-subject
+//! question does not load the whole predicate. These tests call it
+//! directly: a CLI test would also pass if the filter ran client-side.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -19,9 +17,8 @@ use serde_json::json;
 /// Lines spread across more than one invoice, with an amount stored at a
 /// scale the caller is unlikely to type back exactly.
 ///
-/// Seeded through `propose` rather than by inserting rows: a claim
-/// carries the transition that admitted it, so a hand-inserted row is
-/// not a claim the runtime would ever have made.
+/// Seeded through `propose`, so every claim carries the transition that
+/// admitted it, as a real one would.
 async fn seed(pool: &PgPool) {
     use morpholog_core::ir_builder::{assert_, params, predicate, program, transformation, var};
     reset_db(pool).await;
@@ -82,10 +79,9 @@ async fn a_filter_returns_only_the_matching_rows() {
 
 #[tokio::test]
 async fn a_decimal_matches_the_same_number_at_a_different_scale() {
-    // The trap this closes: decimals are stored as strings to stay
-    // exact, so 13.5 and 13.50 are equal numbers and different text.
-    // Comparing the JSON would report no such row for a row that
-    // exists - a filter answering "nothing here" about data that is.
+    // Decimals are stored as strings to stay exact, so 13.5 and 13.50
+    // are equal numbers but different text. Comparing the JSON would
+    // miss a row that exists.
     let pool = test_pool().await;
     seed(&pool).await;
     for typed in ["13.5", "13.50", "13.500"] {
@@ -156,9 +152,8 @@ async fn filters_are_conjunctive_and_a_miss_returns_nothing() {
 
 #[tokio::test]
 async fn no_filters_means_every_row_not_none() {
-    // An empty conjunction is true. `bool_and` over zero rows is NULL,
-    // though, and `AND NULL` would hand a caller who asked for
-    // everything an empty set - the wrong answer, silently.
+    // An empty conjunction is true. But `bool_and` over zero rows is
+    // NULL, and `AND NULL` would silently return nothing.
     let pool = test_pool().await;
     seed(&pool).await;
     let rows = list_claims_where(&pool, "InvoiceLine", &[], 3)
@@ -176,12 +171,10 @@ async fn no_filters_means_every_row_not_none() {
 
 #[tokio::test]
 async fn a_row_of_the_wrong_arity_survives_the_filter() {
-    // The named read promises programme/database skew is a hard error,
-    // and the decoder raises it - but only for rows it is given. A
-    // filter on a position a short row does not have yields NULL, so
-    // without this the row is dropped in SQL and the filtered call
-    // succeeds where the unfiltered one refuses. Returning it keeps one
-    // answer to "does this database match this programme".
+    // A row that does not match the programme's shape is a hard error,
+    // but the decoder only sees rows it is given. Filtering on a position
+    // a short row lacks yields NULL and would drop the row in SQL, so the
+    // filtered call would succeed where the unfiltered one refuses.
     let pool = test_pool().await;
     seed(&pool).await;
     sqlx::query(

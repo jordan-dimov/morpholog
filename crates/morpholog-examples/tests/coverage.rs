@@ -153,8 +153,8 @@ fn firing_counts_first_and_last_accumulate_per_transition() {
     assert_eq!(usage("never_called"), 0);
 }
 
-// The delta prune is load-bearing: a state that WOULD bind is not
-// evaluated when the transition's delta does not touch the antecedent.
+// A state that would bind is not evaluated when the transition's delta
+// does not touch the antecedent.
 #[test]
 fn delta_pruning_skips_untouched_invariants() {
     let program = parsed();
@@ -206,9 +206,9 @@ fn historical_only_transformations_are_flagged() {
     assert_eq!(drifted.transitions, 1);
 }
 
-// A pre(...) antecedent evaluates against the previous state the
-// replay supplies - the first transition gets the empty state, so a
-// transition invariant never errors with PreStateUnavailable.
+// A pre(...) antecedent evaluates against the previous state. The first
+// transition gets the empty state, so it never errors with
+// PreStateUnavailable.
 #[test]
 fn pre_state_antecedents_fire_against_the_previous_state() {
     let source = r#"
@@ -259,13 +259,10 @@ transformation tick(slot, n):
     assert_eq!(inv.first_fired.as_deref(), Some("t2"));
 }
 
-// A pre-read nested inside a comparison operand is still a pre-read:
-// the tracker must carry pre-state and exempt the antecedent from
-// delta pruning, exactly as it does for a prop-level pre(...). The
-// comparison direction makes the fire depend on the real previous
-// state (an empty pre-state sums to 0 and fails it), and the firing
-// transition's delta misses the footprint (only the prune exemption
-// reaches it).
+// A pre(...) inside a comparison operand is still a pre-read: the tracker
+// must carry pre-state and never prune the antecedent. Here an empty
+// pre-state fails the comparison, and the firing transition's delta misses
+// the footprint, so only both behaviours together make it fire.
 #[test]
 fn pre_nested_in_a_comparison_operand_still_cues_pre_state() {
     let source = r#"
@@ -304,9 +301,9 @@ transformation audit(slot):
     tracker
         .observe(&s1, &empty, &delta(&["Count"]), "t1", "tick")
         .unwrap();
-    // The audit step touches nothing in the antecedent's footprint;
-    // only the never-pruned exemption evaluates it, and it fires only
-    // because the carried pre-state holds the Count.
+    // The audit step misses the antecedent's footprint. It is evaluated
+    // only because pre-reads are never pruned, and fires because the
+    // pre-state holds the Count.
     tracker
         .observe(&s2, &s1, &delta(&["Audit"]), "t2", "audit")
         .unwrap();
@@ -323,8 +320,8 @@ transformation audit(slot):
 }
 
 // Generated discipline invariants are implication-shaped, carry their
-// provenance, and participate in coverage like authored rules; the
-// carbon example's prohibitions classify always-on.
+// provenance, and count like authored rules; carbon's prohibitions are
+// always-on.
 #[test]
 fn worked_example_shapes_classify_as_documented() {
     let carbon = parse_program(include_str!(
@@ -368,9 +365,8 @@ fn worked_example_shapes_classify_as_documented() {
 fn the_prose_render_carries_verdicts_and_the_legend() {
     let program = parsed();
     let mut tracker = CoverageTracker::new(&program);
-    // The refusal goes to an implication-shaped rule so every verdict
-    // stays represented: ghosts_never_fire stays NEVER FIRED and the
-    // prohibition stays always on.
+    // Refuse under an implication-shaped rule so every verdict appears:
+    // ghosts_never_fire stays never-fired and the prohibition always-on.
     tracker.observe_rejection(Some("flagged_accounts_exist"), "flag_account", "r1");
     let report = tracker.into_report();
     let prose = morpholog_core::render_coverage(&report);
@@ -419,9 +415,8 @@ fn a_refusal_beats_fired_and_records_first_and_last_ids() {
     assert_eq!(inv.last_refused.as_deref(), Some("r2"));
 }
 
-// THE headline payoff: an always-on prohibition's enforcement work is
-// invisible in committed history, but the rejection log shows it
-// refusing - the first time such a rule becomes measurable at all.
+// An always-on prohibition leaves no trace in committed history; only
+// the rejection log shows it refusing.
 #[test]
 fn an_always_on_prohibition_with_a_refusal_is_constrained() {
     let program = parsed();
@@ -486,11 +481,9 @@ fn refusals_naming_undeclared_rules_and_transformations_surface_flagged() {
     assert_eq!(usage.proposals_refused, 1);
 }
 
-// REGRESSION (review catch): a pre(...) antecedent's firing
-// opportunity lags the delta by one transition - the claim asserted
-// at T sits in the PRE-state only from T+1. The prune must therefore
-// never skip a pre-reading invariant, even when the current delta
-// misses its footprint entirely.
+// A pre(...) antecedent fires one transition after the delta: a claim
+// asserted at T is in the pre-state only from T+1. So a pre-reading
+// invariant is never pruned, even when the delta misses its footprint.
 #[test]
 fn pre_antecedent_fires_on_a_transition_whose_delta_misses_its_footprint() {
     let source = r#"
@@ -523,9 +516,8 @@ transformation mark(slot):
     tracker
         .observe(&s1, &empty, &delta(&["Count"]), "t1", "start")
         .unwrap();
-    // t2's delta is ONLY Marker - outside the antecedent's {Count}
-    // footprint - yet the previous state now holds Count, so this is
-    // exactly the transition where the antecedent first binds.
+    // t2's delta is only Marker, outside the {Count} footprint, yet the
+    // previous state now holds Count: the antecedent first binds here.
     tracker
         .observe(&s2, &s1, &delta(&["Marker"]), "t2", "mark")
         .unwrap();
@@ -545,10 +537,8 @@ transformation mark(slot):
     );
 }
 
-// REGRESSION (review catch): an implication hidden behind a `define`
-// call is still an implication - the every-walker-transitive red
-// line. It must classify (and fire) as implication-shaped, never
-// always-on.
+// An implication hidden behind a `define` call is still an implication.
+// It must classify and fire as one, never as always-on.
 #[test]
 fn an_implication_inside_a_define_is_implication_shaped_and_fires() {
     let source = r#"
@@ -592,12 +582,10 @@ invariant accounts_audited_when_flagged:
     assert_eq!(report.invariants[0].transitions_fired, 1);
 }
 
-// REGRESSION (review catch): the definition-descent guard is a
-// recursion STACK, not a visited set - polarity is part of the
-// meaning. The same define called at negative polarity FIRST and
-// positive polarity second must still surface its implication on the
-// positive call; a visited-set would mark it seen on the negative
-// pass and silently skip the positive one.
+// The guard against recursive definitions tracks the call stack, not a
+// visited set, because polarity matters. A define called first negatively
+// and then positively must still surface its implication on the positive
+// call; a visited set would skip it.
 #[test]
 fn a_define_seen_at_negative_polarity_first_still_classifies_on_the_positive_call() {
     let source = r#"
@@ -624,10 +612,9 @@ invariant tautological_guard:
     );
 }
 
-// REGRESSION (review catch): an antecedent extracted from a
-// definition body must be evaluated under the CALL's constraints. A
-// literal argument pins the matching parameter; a claim that matches
-// the raw body but not the call must not count as firing.
+// An antecedent taken from a definition body is evaluated under the
+// call's arguments. A claim that matches the body but not the call's
+// literal argument does not count as firing.
 #[test]
 fn a_literal_constrained_define_call_does_not_fire_on_unrelated_claims() {
     let source = r#"
@@ -693,10 +680,8 @@ transformation rate(case_id, level):
     assert_eq!(inv.transitions_fired, 1);
 }
 
-// The call chain composes: an outer define forwards its (literal)
-// argument to an inner define whose body carries the implication.
-// The frames replay outermost-first, so the constraint survives the
-// hop.
+// Nested calls: an outer define forwards its literal argument to an inner
+// define that holds the implication. The constraint survives the hop.
 #[test]
 fn a_nested_define_chain_carries_the_call_constraint_through() {
     let source = r#"

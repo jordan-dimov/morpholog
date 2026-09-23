@@ -18,8 +18,7 @@
 //! - **Protocol amendment.** Admitting `proto_v2` later does not
 //!   invalidate an earlier randomisation under `proto_v1`; a new
 //!   participant after `proto_v1`'s window closes must enrol
-//!   under `proto_v2`. This is the standing-after-amendment
-//!   doctrine made enforceable.
+//!   under `proto_v2`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -35,12 +34,9 @@ fn ex() -> &'static Example {
     EX.get_or_init(|| Example::new(&cte::program()))
 }
 
-/// Build a state with the full happy-path setup for randomising
-/// `participant_id` on `randomised_on` under `proto_v1`, with windows
-/// designed to admit by default. Each per-gate test then **overrides**
-/// one specific claim to exercise that gate's rejection path; the
-/// other gates stay valid so the rejection is unambiguously
-/// attributable.
+/// Happy-path setup for randomising `participant_id` on `randomised_on`
+/// under `proto_v1`. Each per-gate test overrides one claim, so the other
+/// gates stay valid and the rejection has one clear cause.
 struct Setup {
     trial: &'static str,
     investigator: &'static str,
@@ -89,10 +85,8 @@ fn default_setup() -> Setup {
     }
 }
 
-/// Run the full happy-path setup chain against `State::default()`.
-/// Each step calls a setup transformation; the returned state has
-/// every preceding admission applied. Returning the post-state lets
-/// per-test overrides re-build state with one specific claim swapped.
+/// Run the happy-path setup transformations from `State::default()` and
+/// return the resulting state.
 fn happy_path_state(s: &Setup) -> State {
     let mut state = State::default();
     state = ex().must_accept(&cte::open_trial(), vec![subj(s.trial)], state);
@@ -287,10 +281,9 @@ fn expired_consent_form_rejects() {
 
 #[test]
 fn consent_after_randomisation_violates_the_invariant() {
-    // `randomise_participant`'s gate already refuses consent-after-
-    // randomisation for the normal path; the invariant makes it a standing
-    // guarantee over *all* admitted state, however it is reached. Here we
-    // check the invariant directly against a candidate state.
+    // The gate refuses consent-after-randomisation on the normal path; the
+    // invariant guards all admitted state, however it is reached. Check the
+    // invariant directly.
     let inv = cte::consent_obtained_before_randomisation();
 
     // Randomised on the 12th, but consent only obtained on the 15th.
@@ -416,9 +409,8 @@ fn open_important_protocol_deviation_rejects() {
 #[test]
 fn failed_eligibility_assessment_rejects() {
     // The criterion requires `PASS`; the assessment recorded `FAIL`.
-    // Inside the load-bearing `require And(...)`, the assessment
-    // claim's `result` position is unified against the criterion's
-    // `required_result` binding - non-matching values fail the And.
+    // The assessment's `result` must match the criterion's
+    // `required_result`, so the gate fails.
     let mut s = default_setup();
     s.assessment_actual_result = "FAIL";
     let pre = happy_path_state(&s);
@@ -431,16 +423,14 @@ fn failed_eligibility_assessment_rejects() {
 }
 
 // ============================================================
-// Protocol amendment - the load-bearing doctrine
+// Protocol amendment
 // ============================================================
 
 #[test]
 fn protocol_amendment_preserves_earlier_randomisation_under_proto_v1() {
-    // Randomise p_001 on 2026-03-12 under proto_v1. Then admit a
-    // later proto_v2 effective from 2026-04-01. The earlier
-    // ParticipantRandomised(... proto_v1 ...) claim must remain
-    // admitted: validity is checked at admission, not as an eternal
-    // invariant.
+    // Randomise p_001 under proto_v1, then admit proto_v2 from 2026-04-01.
+    // The earlier randomisation stays admitted: validity is checked at
+    // admission, not forever.
     let s = default_setup();
     let pre = happy_path_state(&s);
     let post_randomise = ex().must_accept_as(
@@ -488,13 +478,9 @@ fn protocol_amendment_preserves_earlier_randomisation_under_proto_v1() {
 
 #[test]
 fn later_randomisation_must_use_active_protocol_version() {
-    // proto_v1 ends 2026-03-31; proto_v2 starts 2026-04-01. A new
-    // participant randomised on 2026-04-15 must enrol under
-    // proto_v2 - attempting to enrol them under proto_v1 must
-    // reject (proto_v1 window has closed), and enrolling them under
-    // proto_v2 with criterion + assessment under proto_v2 must
-    // admit. The consent form window is widened so the consent
-    // gate is satisfied for the later participant.
+    // proto_v1 ends 2026-03-31; proto_v2 starts 2026-04-01. A participant
+    // randomised on 2026-04-15 is refused under proto_v1 and admitted under
+    // proto_v2. The consent window is widened so that gate passes.
     let mut s = default_setup();
     s.consent_to = "2026-12-31";
     let mut state = happy_path_state(&s);

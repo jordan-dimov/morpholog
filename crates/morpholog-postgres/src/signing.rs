@@ -1,20 +1,15 @@
 //! Ed25519 signatures over audit tree heads.
 //!
 //! A checkpoint commits to a prefix of the audit log (see [`crate::merkle`],
-//! [`crate::checkpoints`]). Signing the tree head makes an externally-held
-//! anchor *attributable*: tampering then needs the private key, not just
-//! write access, and a third party can verify the anchor against a known
-//! public key.
+//! [`crate::checkpoints`]). Signing its tree head makes an anchor held
+//! outside *attributable*: tampering then needs the private key, not just
+//! write access, and anyone can verify it against a known public key.
 //!
-//! The signature is over a typed, length-delimited, versioned payload -
-//! the DSSE pre-authentication-encoding idea: bind both the bytes *and* an
-//! unambiguous payload type, never a bare concatenation - so a signature
-//! can never be reinterpreted across formats or artefact kinds. A future
-//! signed artefact (a schema manifest, an evidence pack) gets its own
-//! payload type and cannot be confused with a tree-head signature.
+//! The signature covers a typed, length-delimited, versioned payload (the
+//! DSSE pre-authentication encoding idea), so it cannot be reinterpreted as
+//! a signature over another format or kind of artefact.
 //!
-//! Pure and synchronous: no I/O, no database. Key file reading lives in
-//! the CLI; this module turns bytes into keys and keys into signatures.
+//! Pure: no I/O. The CLI reads key files.
 
 use crate::merkle::Digest;
 use ed25519_dalek::pkcs8::{DecodePrivateKey, EncodePrivateKey};
@@ -24,27 +19,24 @@ use pkcs8::LineEnding;
 /// The payload type bound into every audit-tree-head signature.
 const TREE_HEAD_PAYLOAD_TYPE: &str = "application/vnd.morpholog.tree-head.v1";
 /// The payload type an external witness (a timestamp authority) binds:
-/// the head alone, without a purpose or key id, since a witness speaks
-/// for no key - and without the signature set, which may lawfully grow
-/// after the fact. Its own type string keeps a witness digest from ever
-/// colliding with a signing payload over the same head.
+/// the head alone. No purpose or key id, since a witness speaks for no key,
+/// and no signatures, which may lawfully be added later. Its own type
+/// string keeps a witness digest apart from a signing payload.
 const TREE_HEAD_WITNESS_PAYLOAD_TYPE: &str = "application/vnd.morpholog.tree-head-witness.v1";
 /// Rendering prefixes, mirroring the `sha256:` convention on hashes.
 const PUBLIC_KEY_PREFIX: &str = "ed25519-pub:";
 const SIGNATURE_PREFIX: &str = "ed25519-sig:";
 
-/// A malformed key or signature - a parse-time failure, distinct from a
-/// signature that parses but does not verify (which is a verdict, not an
-/// error).
+/// A malformed key or signature. A signature that parses but does not
+/// verify is a verdict, not this error.
 #[derive(Debug, thiserror::Error)]
 pub enum SigningError {
     #[error("malformed {what}: {detail}")]
     Malformed { what: &'static str, detail: String },
 }
 
-/// The tree-head fields a signature commits to. Borrowed from a
-/// [`crate::Checkpoint`] at the call site so this module stays decoupled
-/// from the storage type.
+/// The tree-head fields a signature commits to, borrowed from a
+/// [`crate::Checkpoint`].
 pub struct TreeHead<'a> {
     pub tree_size: i64,
     pub root_hash: &'a Digest,
@@ -57,10 +49,9 @@ fn push_field(buf: &mut Vec<u8>, field: &[u8]) {
     buf.extend_from_slice(field);
 }
 
-/// The exact bytes a tree-head signature commits to: a length-delimited,
-/// typed, versioned encoding. Length prefixes make every field boundary
-/// unambiguous; the leading payload type stops a signature for one
-/// artefact kind being replayed as another.
+/// The exact bytes a tree-head signature commits to. Length prefixes make
+/// every field boundary unambiguous; the leading payload type stops a
+/// signature for one kind of artefact being replayed as another.
 pub fn tree_head_signing_bytes(purpose: &str, key_id: &str, head: &TreeHead<'_>) -> Vec<u8> {
     let mut b = Vec::new();
     push_field(&mut b, TREE_HEAD_PAYLOAD_TYPE.as_bytes());
@@ -79,12 +70,10 @@ pub fn tree_head_signing_bytes(purpose: &str, key_id: &str, head: &TreeHead<'_>)
     b
 }
 
-/// The bytes an external witness commits to: the typed, length-delimited
-/// head, encoded exactly as [`tree_head_signing_bytes`] encodes it, minus
-/// the signing-only fields. A timestamp authority receives the SHA-256 of
-/// these bytes as its message imprint. Frozen by test in both branches
-/// (genesis and chained), since a stored proof stops verifying the moment
-/// this encoding moves.
+/// The bytes an external witness commits to: the head encoded as
+/// [`tree_head_signing_bytes`] does, minus the signing-only fields. A
+/// timestamp authority receives their SHA-256 as its message imprint.
+/// Frozen by test: if this encoding changes, stored proofs stop verifying.
 pub fn tree_head_witness_bytes(head: &TreeHead<'_>) -> Vec<u8> {
     let mut b = Vec::new();
     push_field(&mut b, TREE_HEAD_WITNESS_PAYLOAD_TYPE.as_bytes());
@@ -127,12 +116,10 @@ pub fn verify_tree_head(
 
 /// Generate a fresh Ed25519 signing key from OS entropy.
 pub fn generate_signing_key() -> SigningKey {
-    // `fill_bytes` alone would accept any generator, so the bound
-    // rejects one not designated cryptographically secure - a real
-    // guard, since nothing downstream could detect a predictable
-    // signing key. It is not a proof of unpredictable seeding: a
-    // ChaCha built from a fixed seed satisfies `CryptoRng` too, so the
-    // entropy guarantee stays with the call site below.
+    // The `CryptoRng` bound refuses a generator not marked as secure,
+    // since nothing downstream could detect a predictable key. It does not
+    // prove good seeding (a fixed-seed ChaCha is `CryptoRng` too); the call
+    // site below supplies the entropy.
     fn fill_from_csprng(rng: &mut impl rand::CryptoRng, seed: &mut [u8; 32]) {
         rng.fill_bytes(seed);
     }
@@ -141,8 +128,8 @@ pub fn generate_signing_key() -> SigningKey {
     SigningKey::from_bytes(&seed)
 }
 
-/// Render a private key as a PKCS#8 PEM document - the production key
-/// file format (`openssl` reads it; less foot-shooting than raw hex).
+/// Render a private key as a PKCS#8 PEM document, the key file format
+/// (`openssl` reads it).
 pub fn signing_key_to_pem(key: &SigningKey) -> Result<String, SigningError> {
     key.to_pkcs8_pem(LineEnding::LF)
         .map(|pem| pem.to_string())
@@ -243,10 +230,8 @@ mod tests {
 
     /// The exact bytes a tree-head signature commits to, frozen.
     ///
-    /// Every other test here round-trips - sign then verify, with both sides
-    /// moving together - so a change to this encoding would leave all of them
-    /// green while every signature already stored stopped verifying. This is
-    /// the test that would notice.
+    /// The round-trip tests move both sides together, so they would stay
+    /// green if this encoding changed and every stored signature broke.
     #[test]
     fn frozen_signing_input_pins_the_payload_encoding() {
         let bytes = tree_head_signing_bytes("audit_checkpoint_v1", "k1", &sample_head());
@@ -259,10 +244,9 @@ mod tests {
 
     /// The signature itself, frozen against a fixed key and head.
     ///
-    /// Ed25519 is deterministic (RFC 8032), so this value is stable across
-    /// any correct implementation - which is what makes it the right pin for
-    /// a dependency bump. If it moves, signatures in existing databases have
-    /// stopped verifying.
+    /// Ed25519 is deterministic (RFC 8032), so any correct implementation
+    /// gives this value. If it moves, stored signatures have stopped
+    /// verifying.
     #[test]
     fn frozen_signature_pins_ed25519_over_the_payload() {
         let sig = sign_tree_head(&fixed_key(), "audit_checkpoint_v1", "k1", &sample_head());
@@ -273,8 +257,7 @@ mod tests {
     }
 
     /// The public key that seed yields, so a change in key derivation is
-    /// caught as well - the signature pin alone would move for either reason
-    /// and could not tell them apart.
+    /// told apart from a change in signing.
     #[test]
     fn frozen_public_key_pins_the_seed_derivation() {
         assert_eq!(
@@ -283,11 +266,9 @@ mod tests {
         );
     }
 
-    // Artefacts produced by the PREVIOUS release - ed25519-dalek 2, pkcs8
-    // 0.10 - captured by running the emitter against that code, not by
-    // rendering them here. A same-version round trip cannot tell you that a
-    // parser still accepts what an older writer left on disk, which is the
-    // only question an upgrade actually asks.
+    // Artefacts written by ed25519-dalek 2 and pkcs8 0.10, captured from
+    // that code rather than rendered here. A same-version round trip cannot
+    // show that files an older writer left on disk still load.
     const PRE_UPGRADE_PRIVATE_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\n\
         MFECAQEwBQYDK2VwBCIEIAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcH\n\
         gSEA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=\n\
@@ -301,8 +282,7 @@ mod tests {
     const PRE_UPGRADE_INPUT_CHAINED: &str = "26000000000000006170706c69636174696f6e2f766e642e6d6f7270686f6c6f672e747265652d686561642e7631130000000000000061756469745f636865636b706f696e745f763102000000000000006b3108000000000000002a0000000000000047000000000000007368613235363a313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310147000000000000007368613235363a3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333347000000000000007368613235363a32323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232";
 
     /// The head every checkpoint after the first signs: the previous
-    /// checkpoint's hash is present, which is the other branch of the
-    /// payload encoding and the one an enduring chain actually uses.
+    /// checkpoint's hash is present, the other branch of the encoding.
     fn chained_head() -> TreeHead<'static> {
         TreeHead {
             prev_checkpoint_hash: Some(&THREES),
@@ -310,13 +290,9 @@ mod tests {
         }
     }
 
-    /// A signing key written by the previous release still loads, and is the
-    /// same key.
-    ///
-    /// PKCS#8 is a third of this upgrade and had nothing pinned: every key
-    /// test wrote and read with the same version, so a parser regression
-    /// would have rejected an operator's existing key file while every test
-    /// stayed green.
+    /// A key file written by the older libraries still loads, as the same
+    /// key. Same-version tests would miss a parser that rejects an
+    /// operator's existing key file.
     #[test]
     fn a_pre_upgrade_pem_still_loads_as_the_same_key() {
         let key = signing_key_from_pem(PRE_UPGRADE_PRIVATE_KEY_PEM)
@@ -325,8 +301,7 @@ mod tests {
             render_public_key(&key.verifying_key()),
             PRE_UPGRADE_PUBLIC_KEY
         );
-        // And writing it back out yields what the old release wrote, so a
-        // key round-tripped through this version stays readable by both.
+        // Writing it back yields the same file, readable by both versions.
         assert_eq!(
             signing_key_to_pem(&key).unwrap(),
             PRE_UPGRADE_PRIVATE_KEY_PEM
@@ -350,9 +325,8 @@ mod tests {
         }
     }
 
-    /// And this version reproduces them byte for byte, so a checkpoint
-    /// re-signed after the upgrade is indistinguishable from one signed
-    /// before it.
+    /// This version reproduces them byte for byte, so a re-signed checkpoint
+    /// matches one signed with the older libraries.
     #[test]
     fn this_version_reproduces_the_pre_upgrade_signatures() {
         let key = signing_key_from_pem(PRE_UPGRADE_PRIVATE_KEY_PEM).unwrap();
@@ -376,20 +350,16 @@ mod tests {
         );
     }
 
-    /// The chained payload encoding, frozen. `sample_head` leaves the
-    /// previous hash absent, so the frozen vector above covers only the
-    /// `None` marker - this one covers the `Some` branch: its presence byte,
-    /// length prefix and position.
+    /// The chained payload encoding, frozen: the `Some` branch's presence
+    /// byte, length prefix and position, which `sample_head` does not reach.
     #[test]
     fn frozen_chained_signing_input_pins_the_other_branch() {
         let bytes = tree_head_signing_bytes("audit_checkpoint_v1", "k1", &chained_head());
         assert_eq!(hex::encode(bytes), PRE_UPGRADE_INPUT_CHAINED);
     }
 
-    /// The witness payload, frozen in both branches. The expected bytes
-    /// were derived independently of this implementation (field by field
-    /// from the encoding's definition), so the pin is not the code
-    /// checking itself.
+    /// The witness payload, frozen in both branches. The expected bytes were
+    /// built by hand from the encoding's definition, not by this code.
     #[test]
     fn frozen_witness_payload_pins_both_branches() {
         assert_eq!(

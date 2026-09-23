@@ -1,18 +1,14 @@
 //! `morpholog explain` - a deterministic, structured account of why a
 //! proposed transition would be admitted or rejected against live state.
 //!
-//! The read-only counterpart of `propose`: the same `.morph` parse/validate
-//! path and the same `Transition` codec, but instead of proposing it
-//! loads the scoped pre-state, runs the kernel in-memory via
-//! `morpholog_core::explain`, and renders the resulting `Explanation` as
-//! claim-shaped prose (default) or as the structured JSON object.
+//! The read-only counterpart of `propose`: same parsing and argument
+//! codec, but it loads the relevant state, runs `morpholog_core::explain`
+//! in memory, and prints the `Explanation` as prose or JSON.
 //!
-//! It never writes, and the verdict never changes the exit code: explain
-//! exits zero on both admissible and rejected verdicts, because explaining
-//! a transition is answering a question, not taking an action. Only
-//! operational failures - a parse or validation error, malformed `--args`,
-//! an unknown transformation, a database failure - exit non-zero. A script
-//! that wants the gate uses `propose`.
+//! It never writes, and it exits 0 whether the verdict is admit or reject:
+//! it answers a question rather than acting. Only operational failures
+//! (bad programme or `--args`, unknown transformation, database error) exit
+//! non-zero. Scripts that want the gate use `propose`.
 
 use anyhow::Context;
 use morpholog_core::{Subject, Transition, explain};
@@ -25,16 +21,13 @@ use crate::commands::{
 };
 
 pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
-    // Same parse + validate front-end as `propose`: a malformed programme
-    // never reaches the explanation path. The compiled programme is the
-    // one model object the lookup, codec, and rule slices source from.
+    // Same front-end as `propose`: a malformed programme stops here.
     let parsed = parse_or_report(&args.file)?;
     let compiled = compile_or_report(&parsed)?;
 
     let transformation = lookup_transformation(&compiled, &args.transformation, &args.file)?;
 
-    // Decode --args or --args-named via the same shared codec `propose`
-    // uses, so the two paths cannot drift on what is a valid input.
+    // The same codec as `propose`, so both accept the same input.
     let codec_input = match (&args.args, &args.args_named) {
         (Some(tagged), None) => CliArgs::Tagged(tagged.as_str()),
         (None, Some(named)) => CliArgs::Named(named.as_str()),

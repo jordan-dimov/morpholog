@@ -1,11 +1,10 @@
-//! Static analyses over the IR. Used by the PostgreSQL adapter's read
-//! path to load only the claims a derived-claim enumeration or
-//! transformation body needs, and by callers that want to inspect a
-//! programme's predicate vocabulary without running it.
+//! Static analyses over the IR. The PostgreSQL read path uses them to load
+//! only the claims a derived claim or transformation needs; other callers use
+//! them to inspect a programme's predicates without running it.
 //!
-//! Every walker uses an **exhaustive** match (no `_` arm) so that a
-//! future `Prop`, `ValueExpr`, or `Stmt` variant cannot silently fall
-//! through and cause the read path to load an incomplete claim set.
+//! Every walker matches exhaustively (no `_` arm), so a new `Prop`,
+//! `ValueExpr`, or `Stmt` variant cannot slip through and leave the read path
+//! loading too few claims.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -16,24 +15,14 @@ use crate::ir::{
 };
 use crate::validate::ValidatedProgram;
 
-/// Return the set of predicate names a proposition references anywhere
-/// in its tree. Used by the PostgreSQL adapter's read path to load only
-/// the claims a derived-claim enumeration needs, instead of fetching the
-/// whole `morpholog.claims` table.
+/// Return the set of predicate names a proposition references anywhere in
+/// its tree, including through defined calls. The PostgreSQL read path uses
+/// it to load only the claims it needs instead of the whole
+/// `morpholog.claims` table.
 ///
-/// The match below is **exhaustive over `Prop` variants on purpose**
-/// (no `_` arm). If a new `Prop` variant is added, the
-/// compiler will refuse this function until the new variant is
-/// handled. That compile-time check is what keeps the analysis
-/// honest: a missed variant here would silently produce
-/// wrong-answer bugs at runtime - the read path would skip claims
-/// the kernel actually needs, and `enumerate_derived` would return
-/// an answer computed against an incomplete state.
-///
-/// `In` takes only `Term`s (variables, wildcards, or literals), none of
-/// which can reference a predicate; it contributes nothing. Comparator
-/// operands are value expressions, walked by
-/// `predicates_referenced_by_value`.
+/// A missed variant would load too few claims and give wrong answers, so the
+/// match is exhaustive: a new `Prop` variant does not compile until handled.
+/// `In` reads only terms and contributes nothing.
 pub fn predicates_referenced_by_prop(
     prop: &Prop,
     definitions: &[Definition],
@@ -47,10 +36,9 @@ pub fn predicates_referenced_by_prop(
     );
 }
 
-/// Recursive worker for [`predicates_referenced_by_prop`]. `seen`
-/// guards definition recursion: each definition body is walked once
-/// per top-level call, which both avoids rework and keeps the walk
-/// terminating on (invalid, cyclic) unvalidated IR.
+/// Recursive worker for [`predicates_referenced_by_prop`]. `seen` walks each
+/// definition body once, so the walk also terminates on cyclic,
+/// unvalidated IR.
 pub(crate) fn prop_refs(
     prop: &Prop,
     definitions: DefinitionTable<'_>,
@@ -58,11 +46,8 @@ pub(crate) fn prop_refs(
     out: &mut BTreeSet<PredicateName>,
 ) {
     match prop {
-        // A call reads whatever its definition's body reads -
-        // transitively, so the PG read path loads every predicate a
-        // gate consults through any chain of named conditions. Missing
-        // this recursion would be a silent wrong-answer bug: the kernel
-        // would evaluate the body against claims that were never loaded.
+        // A call reads whatever its definition's body reads, transitively.
+        // Otherwise the body would be evaluated against claims never loaded.
         Prop::Defined { name, .. } => {
             if seen.insert(name.clone())
                 && let Some(def) = definitions.get(name)
@@ -103,14 +88,10 @@ pub(crate) fn prop_refs(
     }
 }
 
-/// Return the set of predicate names a value expression references
-/// anywhere in its tree. The value-sort companion to
-/// [`predicates_referenced_by_prop`]; the two recurse into each other
-/// because the sorts are mutually recursive (`Sum`'s body is a `Prop`).
-///
-/// Exhaustive over `ValueExpr` for the same honesty reason as the
-/// proposition walker. `Term` takes only a `Term` and contributes
-/// nothing.
+/// Return the set of predicate names a value expression references anywhere
+/// in its tree. The value companion to [`predicates_referenced_by_prop`];
+/// the two recurse into each other (`Sum`'s body is a `Prop`). Exhaustive
+/// for the same reason.
 pub(crate) fn predicates_referenced_by_value(
     expr: &ValueExpr,
     definitions: &[Definition],
@@ -151,10 +132,8 @@ fn value_refs(
         ValueExpr::Extremum { body, .. } => {
             prop_refs(body, definitions, seen, out);
         }
-        // The footprint is the conservative union of the condition
-        // and BOTH branches: branch evaluation is lazy, but which
-        // branch will be taken is unknowable statically, so the
-        // durable adapter must load everything either could read.
+        // Only one branch runs, but we cannot know which statically, so
+        // load what the condition and both branches read.
         ValueExpr::Cond {
             when,
             then,
@@ -164,10 +143,7 @@ fn value_refs(
             value_refs(then, definitions, seen, out);
             value_refs(otherwise, definitions, seen, out);
         }
-        // A builtin has no predicate of its own - its footprint IS
-        // the union of its arguments', which is part of what makes it
-        // a builtin rather than a construct. A lookup nested in a
-        // child still counts.
+        // A builtin reads nothing itself; its footprint is its arguments'.
         ValueExpr::Call { args, .. } => {
             for a in args {
                 value_refs(a, definitions, seen, out);
@@ -179,15 +155,11 @@ fn value_refs(
     }
 }
 
-/// Return the set of predicate names that `enumerate_derived(derived,
-/// state)` will need to read out of `state`. Computed as the union of
-/// the `domain` expression's referenced predicates and every
-/// `DerivedValue.expr`'s referenced predicates.
+/// Return the predicate names `enumerate_derived(derived, state)` reads from
+/// `state`: those referenced by the `domain` and by every value expression.
 ///
-/// The `predicate` field on the derived claim itself is **not**
-/// included: that names the OUTPUT predicate of the enumeration,
-/// which the kernel never reads from state. Including it would tell
-/// callers to load claims they have no use for.
+/// The derived claim's own `predicate` is excluded. It is the output, never
+/// read from state.
 pub fn predicates_referenced_by_derived(
     derived: &DerivedClaim,
     definitions: &[Definition],
@@ -200,30 +172,17 @@ pub fn predicates_referenced_by_derived(
     out
 }
 
-/// Return every predicate name a statement **reads from pre-state**.
-/// `Stmt::Assert`'s output predicate is excluded: it is *written* to
-/// the staged outcome and never read from pre-state.
+/// Return every predicate name a statement **reads from pre-state**. The PG
+/// adapter uses it to load only the predicates a transformation consults.
 ///
-/// This is the analysis the PG adapter's `propose_against_pg` and
-/// `propose_against_pg_with_trace` use to scope `load_state`: only
-/// the predicates this transformation will actually consult need to
-/// be fetched from `morpholog.claims`, instead of the full table.
+/// - `Require` / `BindOne` / `Let` value / `For` collection: read.
+/// - `Retract`: read. Its pattern is matched against pre-state to find
+///   the claims to retract.
+/// - `Assert`: not read. The claim is only written.
+/// - `Emit` / `LetNewSubject`: nothing.
+/// - `For` body: recurses.
 ///
-/// Variant treatment:
-/// - `Require` / `BindOne` / `Let.value` / `For.collection` - read
-///   (their expressions evaluate against pre-state).
-/// - `Retract { predicate, args }` - **read**, despite being a
-///   mutation. The retract pattern is matched against pre-state to
-///   find which claims to retract; without loading the target
-///   predicate, the pattern match has nothing to find.
-/// - `Assert(claim)` - **not read**. The claim is staged as an
-///   output; the predicate's existing pre-state has no bearing on
-///   the assert.
-/// - `Emit` / `LetNewSubject` - contribute nothing.
-/// - `For` body - recurses (the body's own reads count).
-///
-/// Exhaustive match: a future `Stmt` variant must declare its read
-/// behaviour explicitly.
+/// Exhaustive, so a new `Stmt` variant must declare its reads.
 pub fn predicates_read_by_stmt(
     stmt: &Stmt,
     definitions: &[Definition],
@@ -236,13 +195,10 @@ pub fn predicates_read_by_stmt(
         Stmt::Let { value, .. } => predicates_referenced_by_value(value, definitions, out),
         Stmt::LetNewSubject { .. } => {}
         Stmt::Assert(_) => {
-            // Write-only: the asserted claim is staged as output, not
-            // looked up against pre-state. Excluded from the read set.
+            // Written, not read.
         }
         Stmt::Retract { predicate, .. } => {
-            // Retract is a mutation, but its pattern is matched
-            // against pre-state to find candidates - so the target
-            // predicate must be loaded.
+            // The pattern is matched against pre-state, so load it.
             out.insert(predicate.clone());
         }
         Stmt::For {
@@ -257,10 +213,9 @@ pub fn predicates_read_by_stmt(
     }
 }
 
-/// The predicates a statement admits: the assert targets, through
-/// `For` bodies. What a loaded pre-state must hold for the effective
-/// delta to be exact - an admit of a claim already present changes
-/// nothing, and only the loaded state can say so.
+/// The predicates a statement admits, through `For` bodies. The loaded
+/// pre-state must include them for the effective delta to be exact: admitting
+/// a claim already present changes nothing, and only loaded state can tell.
 pub fn predicates_asserted_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
     match stmt {
         Stmt::Assert(claim) => {
@@ -280,20 +235,12 @@ pub fn predicates_asserted_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateName
     }
 }
 
-/// Return the names of every transformation in `program` whose body
-/// asserts `predicate`, in declaration order. This is the one-hop
-/// "what could supply this claim?" lookup the explanation engine uses
-/// to name candidate suppliers for a directly-missing claim.
+/// Return the names of every transformation in `program` whose body asserts
+/// `predicate` (including inside `For` bodies), in declaration order. The
+/// explanation engine uses it to name who could supply a missing claim.
 ///
-/// Deliberately predicate-level and structural: a transformation that
-/// asserts `predicate` is a *candidate* supplier, not a guarantee it
-/// can supply a specific claim instance under given bindings - it may
-/// carry its own `require` gates, authority, or date windows. Honest
-/// candidate-supplier lookup; not instance matching, not multi-hop
-/// reachability (that is bounded model checking, deferred).
-///
-/// Recurses into `For` bodies: an assert nested in a loop still makes
-/// the transformation a supplier of that predicate.
+/// A match is only a *candidate* supplier: its own gates may still stop it
+/// from supplying a given claim. This is one hop, with no instance matching.
 pub fn transformations_asserting(program: &Program, predicate: &str) -> Vec<String> {
     program
         .transformations
@@ -304,11 +251,7 @@ pub fn transformations_asserting(program: &Program, predicate: &str) -> Vec<Stri
 }
 
 /// Whether a statement (or, for `For`, its body) asserts `predicate`.
-///
-/// Exhaustive over `Stmt` for the same reason as the predicate walkers:
-/// a future variant that can assert a claim must declare itself here
-/// rather than fall silently through a `_` arm and make a supplier
-/// invisible to `explain`.
+/// Exhaustive, so a new variant cannot hide a supplier from `explain`.
 fn stmt_asserts(stmt: &Stmt, predicate: &str) -> bool {
     match stmt {
         Stmt::Assert(claim) => claim.predicate.as_str() == predicate,
@@ -322,16 +265,11 @@ fn stmt_asserts(stmt: &Stmt, predicate: &str) -> bool {
     }
 }
 
-/// The predicates the current programme can admit into state: those
-/// some transformation asserts. The scope is what the *source file* can
-/// put into the candidate state an invariant checks against, not what
-/// state may already hold - persisted, imported, or historically
-/// admitted claims can populate a predicate outside this set, so its
-/// absence here is an authoring signal, not a proof of emptiness.
+/// The predicates some transformation in this programme asserts. Stored
+/// state can still hold claims of other predicates, so absence here is an
+/// authoring signal, not proof a predicate is empty.
 ///
-/// Derived claims are excluded on purpose: they are read-side
-/// projections, never enumerated into candidate state, so a predicate
-/// produced only as a derived claim has no admitted supplier.
+/// Derived claims do not count: they are read-side only, never admitted.
 pub(crate) fn declared_supplier_predicates(program: &Program) -> BTreeSet<PredicateName> {
     let mut out = BTreeSet::new();
     for t in &program.transformations {
@@ -342,10 +280,9 @@ pub(crate) fn declared_supplier_predicates(program: &Program) -> BTreeSet<Predic
     out
 }
 
-/// Every predicate a transformation's body writes - admits or retracts -
-/// descending into `for` bodies. A retraction is as much an authority
-/// over shared state as an admission, which is what sets this apart from
-/// the assert-only walker the control matrix uses.
+/// Every predicate a transformation's body admits or retracts, including
+/// inside `for` bodies. Unlike the assert-only walkers, retractions count:
+/// they change shared state too.
 pub fn predicates_written_by(
     transformation: &crate::ir::Transformation,
 ) -> BTreeSet<PredicateName> {
@@ -377,11 +314,9 @@ fn collect_written(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
     }
 }
 
-/// Whether the transformation carries an admission gate: a top-level
-/// `require` or `bind`. A gate inside a `for` is an iteration condition
-/// on one item, not protection of the whole transformation - the line
-/// the controls surface draws, kept here so a cross-programme finding
-/// claims no more than the control matrix would.
+/// Whether the transformation has a top-level `require` or `bind`. A gate
+/// inside a `for` guards one item, not the whole transformation; this
+/// matches what the control matrix counts.
 pub fn has_admission_gate(transformation: &crate::ir::Transformation) -> bool {
     transformation
         .body
@@ -421,19 +356,15 @@ fn collect_asserted(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
     }
 }
 
-/// The predicates with no declared supplier that prevent `prop` from
-/// binding on a fresh ledger, or `None` if it could bind there. A
-/// blocker is a predicate the antecedent genuinely requires - a
-/// mandatory conjunct, or every branch of a disjunction - that the
-/// current programme never admits. The result names only predicates
-/// that actually force the answer, so a diagnostic built from it points
-/// at a true cause, not every undeclared predicate in the tree.
+/// The unsupplied predicates that stop `prop` from binding on a fresh
+/// ledger, or `None` if it could bind there. A blocker is a predicate the
+/// programme never admits that `prop` truly requires: a required conjunct,
+/// or every branch of an `or`. Only those are named, so a diagnostic points
+/// at a real cause.
 ///
-/// "On a fresh ledger" is the honest scope: a predicate with no supplier
-/// is empty against an empty state the programme alone fills, but says
-/// nothing about state already persisted. Negation, implication,
-/// `forall`, and value comparisons stay satisfiable here, so this looks
-/// at predicate positions only.
+/// This says nothing about state already stored. Negation, implication,
+/// `forall`, and value comparisons can still hold on a fresh ledger, so only
+/// claim positions are examined.
 pub(crate) fn undeclared_blockers(
     prop: &Prop,
     declared: &BTreeSet<PredicateName>,
@@ -500,14 +431,12 @@ fn undeclared_blockers_inner(
 }
 
 // ============================================================
-// Governing-version selection and its totality backstop: the two
-// halves of the effective-time vacuity lint.
+// The effective-time vacuity lint: selecting the version in force at
+// a date, and the invariant that guarantees one exists.
 // ============================================================
 
-/// Is this a temporal comparison between two plain variables? The
-/// building block of the not-a-later-one pattern; value arithmetic in
-/// a comparison operand disqualifies it here on purpose (the pattern
-/// compares dates, not computed values).
+/// Is this a date or timestamp comparison between two plain variables?
+/// Computed operands do not count: the pattern compares dates as stored.
 fn temporal_var_pair(prop: &Prop) -> Option<(CompareOp, &Var, &Var)> {
     let Prop::Compare {
         op,
@@ -524,25 +453,21 @@ fn temporal_var_pair(prop: &Prop) -> Option<(CompareOp, &Var, &Var)> {
     }
 }
 
-/// Evidence gathered over one conjunctive scope: positive claims with
-/// their variable arguments, temporal variable-pair comparisons split
-/// strict/non-strict, and the negated-exists excluders (the claimed
-/// predicate, the variables its inner claim and binder carry, and the
-/// strict temporal comparisons inside it).
-/// One negated-exists excluder: the claimed predicate, the variables
-/// its inner claim and binder carry, and the strict temporal
-/// comparisons inside it.
+/// One `not exists` excluder: the claimed predicate, the variables its
+/// inner claim and binder carry, and the strict temporal comparisons inside.
 type Excluder<'a> = (
     &'a PredicateName,
     BTreeSet<&'a Var>,
     Vec<(&'a Var, &'a Var)>,
 );
 
+/// Evidence gathered over one `and` scope: positive claims with their
+/// variables, temporal variable comparisons, and `not exists` excluders.
 #[derive(Default)]
 struct SelectionEvidence<'a> {
     claims: Vec<(&'a PredicateName, BTreeSet<&'a Var>)>,
-    /// Temporal variable pairs normalised to (earlier, later),
-    /// whichever way they were spelled.
+    /// Temporal variable pairs as (earlier, later), however they were
+    /// spelled.
     nonstrict: Vec<(&'a Var, &'a Var)>,
     strict: Vec<(&'a Var, &'a Var)>,
     excluders: Vec<Excluder<'a>>,
@@ -557,30 +482,21 @@ fn claim_vars(args: &[Term]) -> BTreeSet<&Var> {
         .collect()
 }
 
-/// The bounded governing-version selections completed inside `prop`
-/// (an implication antecedent): predicates `P` where one conjunctive
-/// alternative holds a positive `P` claim carrying a date variable
-/// that is (a) bounded by a non-strict temporal comparison (the
-/// "on-or-before the coordinate" half) and (b) strictly ordered
-/// against a `P` claim inside a negated `exists` (the "no later
-/// version" half). Evidence never crosses `or` branches - each branch
-/// is its own scope - and `Defined` bodies are expanded with the
-/// recursion-stack guard (matching inside the body's own variable
-/// namespace; call-site substitution is not performed, so a name
-/// collision between call-site and body variables could in principle
-/// forge a cross-namespace link - accepted for a hint).
+/// The predicates `P` that `prop` (an implication antecedent) selects "the
+/// version in force at a date" for. That needs, in one `and` scope, a `P`
+/// claim whose date variable is:
+/// - on or before some bound (`<=`), and
+/// - strictly compared with a `P` claim inside a `not exists` (no later one).
 ///
-/// Deliberately incomplete: `implies`, `xor`, and `forall` inside the
-/// antecedent are opaque, and the unbounded ("current version")
-/// selection does not fire - this lint is about a governing version at
-/// a coordinate. Missing an exotic spelling is preferred over accusing
-/// ordinary temporal logic. Direction is load-bearing in the WINDOW
-/// (the bound must establish candidate <= coordinate; a forward
-/// window is not a governing selection) but deliberately NOT in the
-/// strict tiebreak: within a retrospective window, excluding a
-/// strictly LATER version selects the latest-in-force and excluding a
-/// strictly EARLIER one selects the earliest - and either selection
-/// over an empty window is vacuous in exactly the same way.
+/// Each `or` branch is its own scope. Definition bodies are expanded without
+/// renaming variables, so a name clash between caller and body could forge a
+/// link; acceptable for a hint.
+///
+/// Deliberately incomplete: `implies`, `xor`, and `forall` are opaque, and a
+/// selection with no date bound does not fire. Missing an odd spelling beats
+/// flagging ordinary logic. The bound's direction matters; the strict
+/// comparison's does not, since picking the latest or the earliest is
+/// equally vacuous over an empty window.
 pub(crate) fn governing_selections(
     prop: &Prop,
     definitions: DefinitionTable<'_>,
@@ -612,9 +528,8 @@ fn selections_in_scope(
                 }
             });
             let Some(v) = candidate_var else { continue };
-            // The bound must establish candidate <= coordinate: a
-            // forward window (candidate on-or-AFTER a date) is not
-            // "the version in force at a coordinate" and stays clean.
+            // Only candidate <= bound counts. Candidate on or after a date
+            // is not "the version in force".
             if ev.nonstrict.iter().any(|(earlier, _)| *earlier == v) {
                 out.insert((*predicate).clone());
             }
@@ -632,10 +547,8 @@ fn gather_selection_evidence<'a>(
     match prop {
         Prop::Claim { predicate, args } => ev.claims.push((predicate, claim_vars(args))),
         Prop::Compare { .. } => {
-            // Normalised to (earlier_or_equal, later_or_equal): the
-            // direction is load-bearing - the candidate bound must
-            // establish candidate <= coordinate, whichever way it was
-            // spelled.
+            // Stored as (earlier, later) whichever way it was spelled; the
+            // direction matters later.
             if let Some((op, l, r)) = temporal_var_pair(prop) {
                 match op {
                     CompareOp::Le => ev.nonstrict.push((l, r)),
@@ -684,19 +597,16 @@ fn gather_selection_evidence<'a>(
     }
 }
 
-/// The predicates an invariant body GUARANTEES a dated witness for -
-/// the recognised totality-backstop shape. Top level: implication
-/// consequents (descending `and`, `forall` bodies, and `Defined`);
-/// within a consequent, a must-guarantee algebra: `and` unions,
-/// `or` intersects (only one branch need hold), and everything
-/// conditional or negative (`implies`, `not`, `pre`, `xor`,
-/// `forall`) contributes nothing. The witness itself is an `exists`
-/// whose body carries a positive claim of `P` and a temporal
-/// comparison involving one of that claim's variables (or the
-/// binder) - "some `P` effective by a coordinate", not merely "some
-/// `P` somewhere". Coordinate agreement with any particular
-/// selection is deliberately NOT verified - that is the verification
-/// arc's static-vacuity tier, not a lint.
+/// The predicates an invariant body guarantees a dated witness for: "some
+/// `P` in effect by a date", not just "some `P`". The witness is an `exists`
+/// holding a `P` claim whose variable is on the earlier side of a temporal
+/// comparison.
+///
+/// Only implication consequents count, found through `and`, `forall`, and
+/// definitions. Inside a consequent, `and` unions and `or` intersects (only
+/// one branch need hold); `implies`, `not`, `pre`, `xor`, and `forall` add
+/// nothing. Whether the witness date matches a given selection's is not
+/// checked.
 pub(crate) fn guaranteed_dated_witnesses(
     invariant_body: &Prop,
     definitions: DefinitionTable<'_>,
@@ -755,11 +665,8 @@ pub(crate) fn guaranteed_dated_witnesses(
                     .chain(ev.strict.iter())
                     .map(|(earlier, _)| *earlier)
                     .collect();
-                // A claim is a dated witness only when one of ITS OWN
-                // variables sits on the EARLIER side of a temporal
-                // relation - "some P effective by a coordinate". A
-                // future-only witness (P dated after the coordinate)
-                // closes no on-or-before hole and must not suppress.
+                // One of the claim's own variables must be on the earlier
+                // side. A `P` dated after the bound fills no gap before it.
                 ev.claims
                     .iter()
                     .filter(|(_, vars)| vars.iter().any(|v| earlier_side.contains(v)))
@@ -785,74 +692,43 @@ pub(crate) fn guaranteed_dated_witnesses(
 }
 
 // ============================================================
-// Per-transformation argument-kind analysis: the embedder-facing
-// input contract.
+// Argument kinds per transformation: the embedder's input contract.
 // ============================================================
 
-/// The resolved kind for one transformation parameter, projected from
-/// the union of every position the parameter is observed in across
-/// the transformation body. The variants each map to genuinely
-/// different embedder behaviour:
+/// The resolved kind of one transformation parameter, from every position
+/// it is used in across the body. Each variant asks the embedder for
+/// different handling, so they are kept apart.
 ///
-/// - `Concrete(Decimal)` is a single decimal input field.
-/// - `Polymorphic` is "the embedder must accept input but cannot
-///   narrow the kind" (the parameter flowed only through `Any` slots,
-///   the declaration-time escape hatch).
-/// - `Unconstrained` is "the parameter is never used" - likely dead
-///   or a modelling smell.
-/// - `Ambiguous` is "the parameter is observed at different concrete
-///   kinds across separately-satisfiable code paths" - the static
-///   checker walks `Or` branches (and `Require` / `Sum` / `For`
-///   bodies) in cloned scopes whose refinements do not export, so a
-///   programme can validate even when the same parameter has
-///   different concrete kinds in different branches. The Or-of-
-///   different-kinds shape is legitimate (the runtime picks the
-///   branch that matches the actual input), so refusing to emit a
-///   schema would be too strict; reporting one concrete kind would
-///   be a lie. The vec lists the distinct kinds observed in
-///   deterministic order (the `PredicateArgKind` declaration order).
-///
-/// Collapsing `Polymorphic` / `Unconstrained` to one state loses a
-/// useful distinction (the embedder presents them differently);
-/// collapsing `Ambiguous` to `Polymorphic` or to a silent
-/// first-observation-wins reports a contract that does not hold.
+/// `Ambiguous` exists because a programme can validate with a parameter
+/// used at different kinds in different `or` branches, and the runtime
+/// then takes whichever branch fits the input. Refusing a schema would be
+/// too strict; naming one kind would be false.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParamKind {
-    /// A specific declared kind (Subject, Decimal, Date, Bool, Collection).
-    /// The embedder can derive a typed input field directly.
+    /// A specific kind. The embedder can derive a typed input field directly.
     Concrete(PredicateArgKind),
-    /// The parameter flows only through positions declared as
-    /// `PredicateArgKind::Any` - the declaration-time kind escape
-    /// hatch. The kernel cannot narrow the kind; the embedder
-    /// should accept input but flag the lack of constraint.
+    /// The parameter is used only at positions declared
+    /// `PredicateArgKind::Any`. The kind cannot be narrowed; the embedder
+    /// should accept input but flag the missing constraint.
     Polymorphic,
-    /// The parameter is never observed at any kind-bearing
-    /// position in the transformation body. Either dead code or a
-    /// modelling smell; the embedder should surface it.
+    /// The parameter is never used where a kind is known: likely dead or a
+    /// modelling mistake. The embedder should surface it.
     Unconstrained,
-    /// The parameter is observed at two or more distinct concrete
-    /// kinds across cloned scopes the checker does not refine across
-    /// (typically `Or` branches). The vec carries every observed
-    /// kind, in declaration order, deduplicated. The embedder can
-    /// render this as a disjunctive contract (JSON Schema `anyOf`,
-    /// for instance) or surface it as a modelling diagnostic.
+    /// The parameter is used at two or more concrete kinds in separate
+    /// scopes (typically `or` branches). Lists each kind once, in
+    /// `PredicateArgKind` declaration order. The embedder can render it as
+    /// JSON Schema `anyOf` or report it as a modelling issue.
     Ambiguous(Vec<PredicateArgKind>),
-    /// The parameter is a collection iterated by `for` / `forall` whose
-    /// element kind WAS observed: the projection of how the loop binding
-    /// is used in the body - `Collection(Concrete(Subject))` for a list
-    /// of subjects. The element is itself a [`ParamKind`], so nesting is
-    /// expressible. This variant appears only once an element kind is
-    /// actually observed: a collection whose binding is never used at a
-    /// kind-bearing position carries no element evidence and stays the
-    /// opaque `Concrete(Collection)` instead. This is the shape an
-    /// external engine submits a whole batch through.
+    /// A collection iterated by `for` / `forall` whose element kind is
+    /// known from how the loop variable is used, e.g.
+    /// `Collection(Concrete(Subject))` for a list of subjects. Elements may
+    /// nest. If the loop variable's kind is never known, the parameter
+    /// stays `Concrete(Collection)` instead.
     Collection(Box<ParamKind>),
 }
 
-/// Errors that prevent per-transformation argument-kind analysis.
-/// Programme-level validation errors do not appear here: the API
-/// takes a [`ValidatedProgram`], so the type system rules out the
-/// invalid-programme case before this function runs.
+/// Errors from per-transformation argument-kind analysis. Validation errors
+/// cannot occur: the API takes a [`ValidatedProgram`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AnalysisError {
     /// No transformation declared with that name.
@@ -860,44 +736,21 @@ pub enum AnalysisError {
     UnknownTransformation { name: TransformationName },
 }
 
-/// Compute the embedder-facing input contract for one transformation:
-/// the resolved [`ParamKind`] for every parameter, in declaration
-/// order.
+/// Compute the embedder's input contract for one transformation: the
+/// resolved [`ParamKind`] of every parameter, in declaration order (never
+/// hash order; generated forms and clients depend on it).
 ///
-/// The walker is a *sibling* of the static checker's
-/// `check_program`, not the same walker. The checker walks
-/// `Require` (and `Or` branches, `Sum` / `For` bodies) in a cloned
-/// scope, which is the correct semantics for the runtime
-/// binding-flow doctrine - match bindings inside a gate do not
-/// export to later statements. But that semantics is wrong for an
-/// **external input contract**: a parameter used only inside
-/// `require` is still externally supplied, and its slot still
-/// observes a concrete kind. So this walker accumulates kind
-/// observations across the union of every visited position
-/// (`Require` included), in a flat environment that is never cloned
-/// at scope boundaries.
+/// This is not the static checker's walk. The checker keeps bindings made
+/// inside `require`, `or`, `sum`, and `for` local, which is right at
+/// runtime. For an input contract it is wrong: a parameter used only
+/// inside `require` is still supplied from outside and still has a kind.
+/// So this walk collects kinds from every position into one flat scope.
 ///
-/// All variable observations are tracked, not only parameter
-/// observations - this lets a parameter pick up its kind from
-/// intermediate variables that are themselves observed in
-/// kind-bearing positions later in the body. (`Eq` / `Neq`
-/// cross-refinement, where a literal on one side would pin a bare
-/// variable on the other, is deliberately omitted - the simpler
-/// walker is honest about what it does; a worked example that
-/// genuinely needs the inference becomes the witness for adding
-/// it.)
+/// Kinds are tracked for all variables, so a parameter can pick one up
+/// through a `let` alias. `x = literal` does not give `x` a kind.
 ///
-/// Returns observations in `transformation.parameters` declaration
-/// order, never in hash-iteration order: form generation, request
-/// models, and CLI payload examples downstream depend on stable
-/// human-facing order.
-///
-/// Takes a [`ValidatedProgram`] rather than a `&Program` so the
-/// precondition (programme is validated) is enforced at the type
-/// level. The accessor no longer needs to defensively re-validate
-/// internally - callers that have already validated (every CLI
-/// path, every worked-example test) only pay the validation cost
-/// once.
+/// Takes a [`ValidatedProgram`], so the programme is known valid and is
+/// not re-validated here.
 pub fn transformation_param_kinds(
     program: &ValidatedProgram<'_>,
     name: &TransformationName,
@@ -912,10 +765,8 @@ pub fn transformation_param_kinds(
         collector.walk_stmt(stmt);
     }
 
-    // Observations were already propagated eagerly through the
-    // current equivalence class at each observation site, so each
-    // parameter's accumulated set is a direct lookup. No post-hoc
-    // class-building needed.
+    // Observations already reached every alias when made, so this is a
+    // direct lookup.
     Ok(transformation
         .parameters
         .iter()
@@ -925,15 +776,9 @@ pub fn transformation_param_kinds(
                 .get(param)
                 .cloned()
                 .unwrap_or_default();
-            // A parameter ITERATED as a collection with an observed element
-            // (a `collection_elements` entry, always non-empty) carries that
-            // element kind: the projection of how its loop binding was used.
-            // A parameter observed as a collection only through a
-            // Collection-declared predicate arg, or iterated with a binding
-            // never used at a kind-bearing position, has no element evidence
-            // and stays the opaque `Concrete(Collection)`. A parameter used
-            // both as a collection and a scalar stays a genuine conflict (the
-            // ordinary `Ambiguous` projection).
+            // A collection iterated with a known element kind reports that
+            // element kind. Without one it stays `Concrete(Collection)`. Used
+            // as both a collection and a scalar, it is `Ambiguous`.
             let kind = if observed.len() == 1
                 && observed.contains(&PredicateArgKind::Collection)
                 && let Some(element) = collector.collection_elements.get(param)
@@ -947,13 +792,9 @@ pub fn transformation_param_kinds(
         .collect())
 }
 
-/// Project a parameter's accumulated observation set into the public
-/// [`ParamKind`]. `Any` is the declaration-time escape hatch; a
-/// parameter observed only through `Any` slots is `Polymorphic`, not
-/// `Concrete(Any)`. Conflicting concrete observations become
-/// `Ambiguous` rather than silently collapsing to either side.
-/// `BTreeSet` iteration yields the deterministic `PredicateArgKind`
-/// declaration order, which the public `Ambiguous` payload guarantees.
+/// Turn a parameter's observed kinds into a [`ParamKind`]. Seen only in `Any`
+/// slots means `Polymorphic`; conflicting concrete kinds mean `Ambiguous`, in the
+/// `BTreeSet`'s `PredicateArgKind` declaration order.
 fn project(observations: BTreeSet<PredicateArgKind>) -> ParamKind {
     let has_any = observations.contains(&PredicateArgKind::Any);
     let concrete: Vec<PredicateArgKind> = observations
@@ -968,63 +809,34 @@ fn project(observations: BTreeSet<PredicateArgKind>) -> ParamKind {
     }
 }
 
-/// Walker state for [`transformation_param_kinds`]. Tracks observations
-/// for every variable encountered, not only parameters - the projection
-/// to parameters happens at the end. Observations are accumulated in a
-/// single flat environment; no scope cloning at `Require` / `Or` / `Sum`
-/// / `For` boundaries, which is the entire point of running this
-/// alongside the checker rather than reusing it.
+/// Walker state for [`transformation_param_kinds`]. Collects kinds for every
+/// variable in one flat scope; parameters are picked out at the end.
 ///
-/// Each variable carries a *set* of observed kinds, not a single
-/// refined kind. A conflict between two concrete observations across
-/// different cloned scopes the checker hides (an `Or` branch picking
-/// Decimal vs another picking Subject, say) is preserved as a
-/// set with both kinds, then projected to [`ParamKind::Ambiguous`].
-/// Silently dropping the second observation would produce a JSON
-/// Schema that rejects valid inputs of the other branch's kind.
+/// Each variable keeps a *set* of kinds. Keeping only one would yield a
+/// schema that rejects valid inputs for another `or` branch.
 ///
-/// The walker is deliberately minimal: it visits every position where
-/// a variable can appear in a kind-bearing slot, observes it there,
-/// and recurses. It does NOT cross-refine `Eq` / `Neq` operands
-/// (pinning a bare variable to a literal's kind on the other side) -
-/// real models flow parameters through claim / intent arg positions;
-/// cross-refinement is reserved for the first example that genuinely
-/// needs it. `Eq(param, literal)` as a parameter's *sole* kind
-/// observation surfaces as `Unconstrained`, which is the right
-/// signal: the embedder either receives a clean rewrite via a claim
-/// arg, or learns the model is leaning on a hidden assumption.
+/// `Eq` / `Neq` do not pass a literal's kind to a variable. A parameter
+/// used only as `param = literal` comes out `Unconstrained`, which tells
+/// the embedder the model leans on an unstated assumption.
 struct ParamCollector<'a> {
     predicates: HashMap<&'a str, &'a [ArgDecl]>,
     intents: HashMap<&'a str, &'a [ArgDecl]>,
-    /// Inferred kind-observation sets per definition parameter,
-    /// computed callees-first at construction (a definition's params
-    /// have no declared kinds; the body is the only kind source). A
-    /// call argument observes every kind in its parameter's set, so a
-    /// disjunctive body surfaces as `Ambiguous` rather than silently
-    /// committing to one kind.
+    /// Kinds inferred per definition parameter from its body, computed
+    /// callees first. A call argument observes every kind in its
+    /// parameter's set.
     definition_params: HashMap<String, Vec<BTreeSet<PredicateArgKind>>>,
     observations: HashMap<Var, BTreeSet<PredicateArgKind>>,
-    /// Element-kind observations per collection variable: when `for x in
-    /// coll` (or `forall`) iterates a variable `coll`, the loop binding's
-    /// observed kinds ARE `coll`'s element kinds, captured at the `For`
-    /// node before the binding's loop-local observations are discarded.
-    /// Projected into [`ParamKind::Collection`] for collection parameters.
+    /// Element kinds per collection variable: in `for x in coll` (or
+    /// `forall`), the kinds seen for `x` are `coll`'s element kinds.
+    /// Feeds [`ParamKind::Collection`].
     collection_elements: HashMap<Var, BTreeSet<PredicateArgKind>>,
-    /// Flow-sensitive equivalence-class membership per currently-live
-    /// variable. Maintained as the walker advances: a `Let` or
-    /// `LetNewSubject` rebinding `name` removes `name` from its
-    /// existing class first (the old logical variable is gone), then
-    /// optionally adds the new alias. Observations propagate eagerly
-    /// through the current class at the moment of observation; an
-    /// observation made *after* a rebind never reaches names the
-    /// rebound variable used to alias. Deliberately narrow: only
-    /// `Let { value: Term(Var(alias)) }` registers an alias - we do
-    /// NOT try to infer aliases through `Eq` / `Neq` (that is a
-    /// different semantic commitment, deferred).
+    /// Current alias class per variable. Only `let x = y` creates an alias.
+    /// Rebinding a name drops it from its class first, so later
+    /// observations do not reach its old aliases. An observation reaches
+    /// every member of the class at the time it is made.
     ///
-    /// A variable absent from this map has the implicit singleton
-    /// class `{var}`; storing all singletons would just waste
-    /// memory. Stored classes always have at least two members.
+    /// A variable absent here is its own singleton class. Stored classes
+    /// have at least two members.
     current_class: HashMap<Var, BTreeSet<Var>>,
 }
 
@@ -1048,10 +860,9 @@ impl<'a> ParamCollector<'a> {
             collection_elements: HashMap::new(),
             current_class: HashMap::new(),
         };
-        // Pre-walk each definition body, callees before callers, and
-        // project its parameters' observation sets. On a cyclic graph
-        // (unvalidated IR; `validate` rejects it) the map stays empty
-        // and calls simply contribute no observations.
+        // Walk each definition body, callees first, to learn its
+        // parameters' kinds. On a cycle (invalid IR) the map stays empty
+        // and calls contribute nothing.
         if let Ok(order) = crate::definitions::definition_topo_order(&program.definitions) {
             for i in order {
                 let def = &program.definitions[i];
@@ -1077,19 +888,9 @@ impl<'a> ParamCollector<'a> {
         collector
     }
 
-    /// Observe `name` at `kind`. Inserts the kind into the
-    /// observation set of every currently-aliased member of `name`'s
-    /// equivalence class - so a parameter's observation reaches its
-    /// aliased local binding (and vice versa) at the moment of
-    /// observation, not via a post-hoc projection. Multi-kind sets
-    /// accumulate per variable and project to [`ParamKind::Ambiguous`]
-    /// at the end rather than silently committing to one kind.
-    /// The kind of a value expression when it is determinable without
-    /// assumption: a literal's inherent kind, or a variable that every
-    /// position so far has pinned to exactly one concrete kind. `None`
-    /// for anything deeper - this probe is deliberately shallow, a
-    /// sibling of the checker's full inference, used only to decide
-    /// whether the arithmetic matrix forces the *other* operand.
+    /// The kind of a value expression when it is plain: a literal's kind, or
+    /// a variable seen at exactly one kind so far. `None` otherwise. Used
+    /// only to decide whether arithmetic forces the other operand's kind.
     fn shallow_value_kind(&self, v: &ValueExpr) -> Option<PredicateArgKind> {
         match v {
             ValueExpr::Term(Term::Literal(lit)) => Some(match lit {
@@ -1113,11 +914,8 @@ impl<'a> ParamCollector<'a> {
         }
     }
 
+    /// Observe `name` at `kind`, and every variable currently aliased to it.
     fn observe(&mut self, name: &Var, kind: PredicateArgKind) {
-        // Collect the class members up front so we don't hold a borrow
-        // of `current_class` across the mutable borrows of
-        // `observations`. The implicit singleton case avoids storing
-        // a class for every variable.
         let members: Vec<Var> = match self.current_class.get(name) {
             Some(class) => class.iter().cloned().collect(),
             None => vec![name.clone()],
@@ -1130,12 +928,8 @@ impl<'a> ParamCollector<'a> {
         }
     }
 
-    /// Remove `name` from any current equivalence class it
-    /// participates in. The other members stay aliased to each
-    /// other; `name` becomes a fresh singleton. Called when a
-    /// `Let` or `LetNewSubject` rebinds `name` - the old logical
-    /// variable's aliases must not silently capture observations
-    /// of the new binding.
+    /// Remove `name` from its alias class; the rest stay aliased. Called on
+    /// rebinding, so the old aliases do not see the new binding's kinds.
     fn invalidate(&mut self, name: &Var) {
         let Some(mut class) = self.current_class.remove(name) else {
             return;
@@ -1143,8 +937,7 @@ impl<'a> ParamCollector<'a> {
         class.remove(name);
         match class.len() {
             0 | 1 => {
-                // Singleton class is the implicit default - drop the
-                // entry for any remaining lone member.
+                // A lone member needs no stored class.
                 if let Some(only) = class.into_iter().next() {
                     self.current_class.remove(&only);
                 }
@@ -1157,10 +950,8 @@ impl<'a> ParamCollector<'a> {
         }
     }
 
-    /// Merge `name` and `alias` (and their current classes) into a
-    /// single equivalence class. Called when `Let { name, value:
-    /// Term(Var(alias)) }` is encountered, *after* `invalidate(name)`
-    /// has cleared any prior alias relations for `name`.
+    /// Merge `name` and `alias`, with their classes, into one class. Called
+    /// for `let name = alias`, after `invalidate(name)`.
     fn add_alias(&mut self, name: &Var, alias: &Var) {
         let mut merged: BTreeSet<Var> = BTreeSet::new();
         merged.insert(name.clone());
@@ -1176,17 +967,13 @@ impl<'a> ParamCollector<'a> {
         }
     }
 
-    /// Walk a statement. Exhaustive over `Stmt` for the same honesty
-    /// reason as the predicate-set walkers: a future variant that
-    /// can carry a variable observation must declare itself here.
+    /// Walk a statement. Exhaustive, so a new `Stmt` variant must declare
+    /// what it observes.
     fn walk_stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Require { prop, .. } | Stmt::BindOne { prop, .. } => self.walk_prop(prop),
             Stmt::Let { name, value } => {
-                // Flow-sensitive: clear any prior alias relations
-                // for `name` first, since the rebinding creates a
-                // fresh logical variable. Then optionally register
-                // the new alias.
+                // Rebinding makes a new variable: drop old aliases first.
                 self.invalidate(name);
                 if let ValueExpr::Term(Term::Var(alias)) = value {
                     self.add_alias(name, alias);
@@ -1194,10 +981,7 @@ impl<'a> ParamCollector<'a> {
                 self.walk_value(value, None);
             }
             Stmt::LetNewSubject { name } => {
-                // A fresh subject identifier. Same flow-sensitive
-                // rebinding rule as `Let`: drop any prior alias for
-                // `name`, then observe at Subject (the checker pins
-                // `name`'s kind here too).
+                // Rebinding, as for `Let`; a new subject is a Subject.
                 self.invalidate(name);
                 self.observe(name, PredicateArgKind::Subject);
             }
@@ -1211,22 +995,10 @@ impl<'a> ParamCollector<'a> {
                 body,
             } => {
                 self.walk_value(collection, Some(PredicateArgKind::Collection));
-                // `For` is the one Stmt the static checker walks
-                // under a *cloned* scope (`check.rs` notes "the
-                // loop binding and any body-introduced names do
-                // not leak across iterations or beyond the loop").
-                // Mirror that: the loop binding shadows any outer
-                // name of the same name for the body's duration,
-                // so observations inside the body attributed to
-                // the binding name must NOT propagate to outer
-                // aliases of that name (a parameter with the same
-                // name being the live failure mode). Save the
-                // binding's outer observations and class,
-                // invalidate, walk the body, then restore - so
-                // observations of OTHER outer variables made
-                // inside the body still survive (they are
-                // legitimately about the outer scope), but the
-                // binding's body-time state is discarded.
+                // The loop binding shadows any outer variable of the same
+                // name, such as a parameter. Save its outer state, walk the
+                // body, then restore, so its loop kinds do not leak out.
+                // Kinds seen for other outer variables inside the body stay.
                 let saved_obs = self.observations.get(binding).cloned();
                 let saved_class = self.current_class.get(binding).cloned();
                 self.invalidate(binding);
@@ -1236,11 +1008,8 @@ impl<'a> ParamCollector<'a> {
                     self.walk_stmt(inner);
                 }
 
-                // The loop binding's body-time observations ARE the
-                // collection's element kinds. Capture them against the
-                // collection variable (when it is a plain variable - a
-                // parameter or a let-bound list) before the binding's
-                // loop-local state is discarded below.
+                // The binding's kinds are the collection's element kinds.
+                // Record them if the collection is a plain variable.
                 if let ValueExpr::Term(Term::Var(coll_var)) = collection
                     && let Some(elem_obs) = self.observations.get(binding)
                 {
@@ -1303,15 +1072,12 @@ impl<'a> ParamCollector<'a> {
                 source,
                 body,
             } => {
-                // The source observes the collection (a `forall x in xs`
-                // lowers to a source `In(x, xs)`, whose `In` arm observes
-                // `xs` as a collection).
+                // `forall x in xs` has source `In(x, xs)`, which observes
+                // `xs` as a collection.
                 self.walk_prop(source);
 
-                // Same shadowing discipline as `Stmt::For`: the quantifier
-                // binding is loop-local, so its body-time observations must
-                // not leak to an outer name of the same name. Save, clear,
-                // walk, capture the element kind, then restore.
+                // Same shadowing as `Stmt::For`: save, clear, walk, record
+                // the element kind, restore.
                 let saved_obs = self.observations.get(binding).cloned();
                 let saved_class = self.current_class.get(binding).cloned();
                 self.invalidate(binding);
@@ -1319,10 +1085,8 @@ impl<'a> ParamCollector<'a> {
 
                 self.walk_prop(body);
 
-                // The binding's body-time observations ARE the source
-                // collection's element kinds. Capture them against the
-                // collection variable from the `In` source before the
-                // binding's loop-local state is discarded.
+                // The binding's kinds are the source collection's element
+                // kinds.
                 if let Prop::In(_, Term::Var(coll)) = source.as_ref()
                     && let Some(elem_obs) = self.observations.get(binding)
                 {
@@ -1351,13 +1115,9 @@ impl<'a> ParamCollector<'a> {
                 ..
             } => {
                 let kind = match domain {
-                    // The decimal domain has two flavours (bare decimal,
-                    // unit-tagged quantity). If either side's shallow
-                    // kind already names a unit, both sides observe at
-                    // that quantity kind - so `settled <= due` pins the
-                    // settlement parameter to the due figure's unit.
-                    // Otherwise the domain's neutral bare-decimal
-                    // reading stands, as before quantities existed.
+                    // If either side is known to carry a unit, both sides
+                    // take that quantity kind: `settled <= due` gives
+                    // `settled` the unit of `due`. Otherwise bare decimal.
                     OrderedDomain::Decimal => {
                         match (
                             self.shallow_value_kind(left),
@@ -1376,17 +1136,13 @@ impl<'a> ParamCollector<'a> {
                 self.walk_value(right, Some(kind));
             }
             Prop::Eq(left, right) | Prop::Neq(left, right) => {
-                // No cross-refinement (see the struct-level comment):
-                // observe only the kinds that sub-positions force, not
-                // the kind one operand would push onto the other.
+                // One operand does not pass its kind to the other.
                 self.walk_value(left, None);
                 self.walk_value(right, None);
             }
             Prop::In(_element, collection) => {
-                // The element is introduced as a binder (the
-                // checker binds it without pinning a kind, since v0
-                // does not track collection item kinds); only the
-                // collection contributes a kind observation.
+                // The element is a binder whose kind comes from its uses
+                // in the body; here only the collection is observed.
                 if let Term::Var(name) = collection {
                     self.observe(name, PredicateArgKind::Collection);
                 }
@@ -1394,12 +1150,9 @@ impl<'a> ParamCollector<'a> {
         }
     }
 
-    /// Walk a value expression. `expected` carries the kind the
-    /// surrounding position requires the expression to be (Decimal
-    /// from `Arith`, Collection from `For`, the domain kind from
-    /// `Compare`, etc.). A bare-variable operand pins to `expected`;
-    /// anything else recurses, and the sub-positions force kinds
-    /// from their own walkers.
+    /// Walk a value expression. `expected` is the kind the surrounding
+    /// position requires, if any. A bare variable is observed at it;
+    /// anything else recurses.
     fn walk_value(&mut self, expr: &ValueExpr, expected: Option<PredicateArgKind>) {
         match expr {
             ValueExpr::Term(Term::Var(name)) => {
@@ -1409,22 +1162,12 @@ impl<'a> ParamCollector<'a> {
             }
             ValueExpr::Term(_) => {}
             ValueExpr::Arith { op, left, right } => {
-                // Every operator runs the matrix's one-side-known
-                // refinement: if one side's kind is already
-                // determinable (a literal, or a variable every prior
-                // position pinned to one kind) and exactly one rule
-                // fits, the other side observes the forced
-                // counterpart - the externally supplied turn time in
-                // `tendered_at + turn_time` resolves to Duration this
-                // way, and the scaling factor in `daily_amount * x`
-                // resolves to Decimal. When several rules fit
-                // (`Timestamp - x`, `usd_amount / x`), nothing is
-                // assumed and the checker's matrix remains the only
-                // judge. With NEITHER side determinable, Mul / Div /
-                // Mod keep their historical bare-decimal default
-                // (mirroring the checker; a unit cannot be inferred
-                // from nothing); the additive operators stay
-                // unrefined, as the time kinds left them.
+                // If one side's kind is known and only one arithmetic rule
+                // fits, the other side takes the matching kind: `turn_time`
+                // in `tendered_at + turn_time` becomes a Duration. If several
+                // rules fit (`Timestamp - x`), nothing is assumed. With
+                // neither side known, `*`, `/`, `%` default to bare decimal,
+                // as the checker does; `+` and `-` stay open.
                 let l_known = self.shallow_value_kind(left);
                 let r_known = self.shallow_value_kind(right);
                 let (l_exp, r_exp) = match (l_known, r_known) {
@@ -1453,15 +1196,11 @@ impl<'a> ParamCollector<'a> {
                 seed: _,
             } => {
                 self.walk_prop(body);
-                // No expectation on the target: its kind is decided by
-                // the body's bindings, not the sum's position. Walked
-                // for what sits inside it (a lookup's claim reference,
-                // an operand a literal pins).
+                // The target's kind comes from the body, not from where
+                // the sum sits; walk it only for what it contains.
                 self.walk_value(value, None);
             }
-            // An extremum yields one of the members it ranged over, so
-            // like a sum its kind is observed inside the body and the
-            // aggregate itself pins nothing.
+            // Like a sum, the kind is observed inside the body.
             ValueExpr::Extremum { value, body, .. } => {
                 let _ = value;
                 self.walk_prop(body);
@@ -1477,14 +1216,10 @@ impl<'a> ParamCollector<'a> {
                     self.walk_value(d, expected);
                 }
             }
-            // Which builtin decides what each argument slot expects,
-            // so this is exhaustive too rather than a shared recursion.
+            // Each builtin decides what its argument slots expect.
             ValueExpr::Call { builtin, args } => self.walk_builtin(*builtin, args, expected),
-            // The condition pins nothing on the conditional's own
-            // kind; both branches carry the expected kind. The flat
-            // env unions their observations, so a parameter seen at
-            // two kinds across branches lands on Ambiguous exactly as
-            // it would across `or` branches.
+            // Both branches carry the expected kind. A parameter seen at
+            // two kinds across them is `Ambiguous`, as with `or`.
             ValueExpr::Cond {
                 when,
                 then,
@@ -1497,10 +1232,8 @@ impl<'a> ParamCollector<'a> {
         }
     }
 
-    /// What each builtin expects of its arguments, for kind
-    /// observation. Exhaustive over [`Builtin`]: `abs` and the
-    /// extrema pass the surrounding expectation down (they preserve
-    /// kind), while the rest pin their slots.
+    /// What each builtin expects of its arguments. `abs`, `min`, and `max`
+    /// pass the surrounding expectation down; the rest fix their slots.
     fn walk_builtin(
         &mut self,
         builtin: Builtin,
@@ -1508,17 +1241,14 @@ impl<'a> ParamCollector<'a> {
         expected: Option<PredicateArgKind>,
     ) {
         match builtin {
-            // Kind-preserving, so the operand carries the same
-            // expectation as the call itself.
+            // Kind-preserving.
             Builtin::Abs => {
                 for a in args {
                     self.walk_value(a, expected.clone());
                 }
             }
-            // Both operands share one kind, so a determinable side
-            // forces its counterpart - the same one-side-known
-            // refinement the arithmetic matrix runs, and the reason
-            // `min(x, 100)` still tells the schema `x` is a decimal.
+            // Both operands share one kind, so a known side fixes the
+            // other: `min(x, 100)` makes `x` a decimal.
             Builtin::Min | Builtin::Max => {
                 let left_known = self.shallow_value_kind(&args[0]);
                 let right_known = self.shallow_value_kind(&args[1]);
@@ -1561,9 +1291,9 @@ impl<'a> ParamCollector<'a> {
         }
     }
 
-    /// Observe variable arguments in a claim reference against the
-    /// declared predicate arg kinds. An undeclared predicate
-    /// contributes nothing (the checker already flagged it).
+    /// Observe a claim's variable arguments at the predicate's declared
+    /// kinds. An undeclared predicate contributes nothing (the checker
+    /// flags it).
     fn observe_claim_args(&mut self, predicate: &str, args: &[Term]) {
         let Some(decl_args) = self.predicates.get(predicate) else {
             return;
@@ -1595,11 +1325,8 @@ mod supplier_tests {
     use crate::ir::DerivedClaim;
     use crate::ir_builder::{assert_, claim, program, transformation};
 
-    // A predicate produced only as a derived claim is read-side, never
-    // admitted into the candidate state invariants check, so it is not
-    // an admitted supplier. (An invariant referencing it is rejected as
-    // undeclared before lints run, so the lint never observes this - but
-    // the supplier set must still not pretend it can be admitted.)
+    // A derived claim is read-side only, never admitted, so it is not a
+    // supplier.
     #[test]
     fn a_derived_only_predicate_is_not_an_admitted_supplier() {
         let prog = program("p")

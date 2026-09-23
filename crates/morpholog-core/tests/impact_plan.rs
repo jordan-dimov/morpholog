@@ -1,15 +1,14 @@
 //! The impact plan: which cases of an invariant a delta can affect,
-//! decided once in core for both evaluators. Pinned here because the
-//! PostgreSQL compiler renders these answers and the kernel will apply
-//! them; the shapes are those the compiled differential proves.
+//! decided once in core. Pinned here because both the kernel and the
+//! PostgreSQL compiler act on these answers.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::BTreeMap;
 
 use morpholog_core::ir_builder::{
-    add, and, claim, dec as dec_term, defined, eq, implies, invariant, not,
-    subj as lit_subject, sum, term, value_of, var, wildcard,
+    add, and, claim, dec as dec_term, defined, eq, implies, invariant, not, subj as lit_subject,
+    sum, term, value_of, var, wildcard,
 };
 use morpholog_core::{EvalValue, Impact, ImpactPlan, Invariant};
 use morpholog_test_support::{claim_instance, dec, subj};

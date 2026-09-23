@@ -1,15 +1,13 @@
 //! `provision indexes`: reconcile the indexes a programme's compiled SQL
 //! can seek on against the database.
 //!
-//! The compiler emits the canonical index specifications its own SQL
-//! representations require; this module merely reconciles them. The
-//! catalogue says what physically exists, the registry says what
-//! Morpholog manages and which programmes require it, and neither
-//! participates in correctness - the compiled checks are right with no
-//! index at all, only slower.
+//! The compiler emits the index specifications its SQL needs; this module
+//! reconciles them. The catalogue says what exists; the registry says what
+//! Morpholog manages and which programmes require it. Neither affects
+//! correctness: the compiled checks are right with no index, only slower.
 //!
-//! Each specification lands in one state, and the same enum a dry run
-//! prints is what the executor consumes:
+//! Each specification lands in one state; a dry run prints the same plan
+//! the executor applies:
 //!
 //! - absent -> `CREATE`;
 //! - present under Morpholog's name, exact, valid -> `KEEP` (and adopted
@@ -23,12 +21,12 @@
 //! - managed but required by no programme -> `STALE`, dropped only under
 //!   `prune`.
 //!
-//! Indexes are built and dropped `CONCURRENTLY`, each its own statement
-//! outside any transaction, so the table stays writable; one session
-//! advisory lock serialises two provisioners. Equivalence is decided
-//! structurally: the expression and the partial predicate as PostgreSQL
-//! itself renders them, the access method, and the key count - never by
-//! comparing `CREATE` strings, and never through `IF NOT EXISTS`.
+//! Indexes are built and dropped `CONCURRENTLY`, each as its own statement
+//! outside any transaction, so the table stays writable. A session advisory
+//! lock lets only one provisioner run at a time. Equivalence is structural:
+//! the expression and partial predicate as PostgreSQL renders them, the
+//! access method and the key count. Never `CREATE` strings or
+//! `IF NOT EXISTS`.
 
 use std::fmt;
 
@@ -161,9 +159,9 @@ async fn catalogue(conn: &mut sqlx::PgConnection) -> Result<Vec<CatalogueIndex>,
 }
 
 /// A specification's expression and partial predicate as PostgreSQL
-/// renders them: built on a temporary twin of the claims table inside
-/// a transaction that is rolled back, so the real table is untouched
-/// and both sides of the comparison come from the same renderer.
+/// renders them. Built on a temporary copy of the claims table in a
+/// rolled-back transaction, so the real table is untouched and both sides
+/// of the comparison come from the same renderer.
 async fn normalise(
     conn: &mut sqlx::PgConnection,
     spec: &IndexSpec,
@@ -256,15 +254,12 @@ async fn reconcile(
     let program_hash = canonical_hash(program.core().program());
     let specs = program.required_indexes();
 
-    // The lock holder is also the DDL connection: concurrent builds
-    // cannot run inside a transaction, and one provisioner at a time is
-    // what makes the state machine single-writer.
+    // The lock holder also runs the DDL: concurrent builds cannot run
+    // inside a transaction, and the lock keeps provisioning single-writer.
     let mut conn = pool.acquire().await.map_err(classify)?;
-    // Polled, never awaited inside one statement: a session blocked in
-    // `pg_advisory_lock` holds a snapshot, and a concurrent index build
-    // on the other side waits for every snapshot to end - a deadlock
-    // PostgreSQL detects and reports. Each try is its own short
-    // statement, so the build it waits for can finish.
+    // Polled, not a blocking `pg_advisory_lock`: a blocked session holds a
+    // snapshot, and a concurrent index build waits for every snapshot to
+    // end, which deadlocks. Short separate tries let that build finish.
     let started = std::time::Instant::now();
     loop {
         let got: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
@@ -292,8 +287,8 @@ async fn reconcile(
         prune,
     )
     .await;
-    // Released on connection close too; explicit so a pooled connection
-    // never carries the lock into another caller's hands.
+    // Released explicitly so a pooled connection never hands the lock to
+    // another caller.
     let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
         .bind(RECONCILE_LOCK_KEY)
         .execute(&mut *conn)
@@ -326,11 +321,10 @@ async fn reconcile_locked(
         });
     }
 
-    // Fail closed: a conflict means the catalogue and the specification
-    // disagree under Morpholog's own name, and a partial reconciliation
-    // around it would drop this programme's requirement for the index
-    // and let a later prune, by any programme, take the operator's index
-    // for stale. Nothing is applied; the report says why.
+    // Fail closed. A conflict means an index under Morpholog's name differs
+    // from the specification. Reconciling around it would drop this
+    // programme's requirement, and a later prune could then drop the
+    // operator's index as stale. Nothing is applied; the report says why.
     let applied = apply && !entries.iter().any(|e| e.action == IndexAction::Conflict);
     if applied {
         for (spec, entry) in specs.iter().zip(&entries) {
@@ -354,12 +348,11 @@ async fn reconcile_locked(
                 | IndexAction::Stale => {}
             }
         }
-        // The registry: every managed specification once, then this
-        // programme's requirement set replaced whole - every specification
-        // it desires, including one an operator's index satisfies, so a
-        // requirement outlives the index that happens to serve it. On the
-        // held connection, since a one-connection pool has no other, and
-        // the session lock outlives the transaction.
+        // Record every managed specification, then replace this programme's
+        // requirement set whole. It includes specifications an operator's
+        // index satisfies, so a requirement outlives the index serving it.
+        // Runs on the held connection; the session lock outlives the
+        // transaction.
         let mut tx = sqlx::Connection::begin(&mut *conn)
             .await
             .map_err(classify)?;
@@ -475,8 +468,7 @@ async fn reconcile_locked(
 }
 
 async fn drop_concurrently(conn: &mut sqlx::PgConnection, name: &str) -> Result<(), PgError> {
-    // DDL over a quoted identifier: the only dynamic part is the name,
-    // and the quoting is the same authority every generated view uses.
+    // The only dynamic part is the name, quoted like every generated view.
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "DROP INDEX CONCURRENTLY IF EXISTS morpholog.{}",
         quote_ident(name)

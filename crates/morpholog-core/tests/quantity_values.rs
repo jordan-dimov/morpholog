@@ -1,11 +1,9 @@
-//! Functional tests for unit-tagged quantities (`Decimal[U]`): the
-//! same-unit algebra, scaling, the duration ratio, quantity
-//! aggregation with its seed pattern, and the authoring-time rule
-//! checks. Expressed as a miniature of the demurrage-settlement model
-//! that forced the kind - cargo parcels in tonnes against a vessel's
-//! capacity, a daily demurrage amount in USD settled against the time
-//! the voyage ran over - so every assertion is a business behaviour,
-//! not an operator probe.
+//! Functional tests for unit-tagged quantities (`Decimal[U]`): same-unit
+//! algebra, scaling, the duration ratio, aggregation with its seed, and
+//! the authoring-time checks. The fixture is a small demurrage model -
+//! cargo in tonnes against a vessel's capacity, a daily USD amount
+//! settled against the time the voyage ran over - so every assertion is
+//! a business behaviour.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -55,13 +53,11 @@ fn must_error_naming(
     }
 }
 
-/// The miniature: a vessel's capacity caps the summed cargo parcels
-/// (tonnes); a daily demurrage amount (USD) scaled by the days of
-/// excess caps the summed settlements. Setting the rate seeds a
-/// zero-amount settlement, the pre-`lower_sum_seeds` ritual - kept
-/// deliberately UN-lowered here, so the evaluation-tier landmine that
-/// pass exists for stays reachable (see
-/// `unseeded_quantity_aggregate_errors_at_evaluation`).
+/// A vessel's capacity caps the summed cargo (tonnes); a daily USD amount
+/// times the days of excess caps the summed settlements. Setting the rate
+/// admits a zero-amount settlement as a hand-made seed. The programme is
+/// left un-lowered on purpose so the empty-sum error stays reachable
+/// (see `unseeded_quantity_aggregate_errors_at_evaluation`).
 fn mini_demurrage() -> Program {
     program("mini_demurrage")
         .predicates(vec![
@@ -181,10 +177,9 @@ fn mini_demurrage() -> Program {
 
 #[test]
 fn unlowered_quantity_sums_are_refused_and_lowering_restores_validity() {
-    // Un-lowered, each quantity aggregate carries the decimal default
-    // seed while the checker reads a quantity - the empty book would
-    // be a kernel type error, so validation refuses the disagreement
-    // by name instead of letting it wait for runtime.
+    // Un-lowered, each quantity sum keeps a decimal zero seed while the
+    // checker expects a quantity. An empty book would be a runtime type
+    // error, so validation refuses it by name.
     let p = mini_demurrage();
     let errors = p.validate().expect_err("un-lowered quantity sums refuse");
     assert!(
@@ -292,11 +287,9 @@ fn mixed_unit_comparison_names_both_units() {
 
 #[test]
 fn unseeded_quantity_aggregate_errors_at_evaluation() {
-    // The landmine the seed pattern exists for: with no settlement
-    // rows at all, the sum is the (decimal) empty sum, and comparing
-    // it against a USD figure is a kernel type error - not a lawful
-    // rejection, and not a silent pass. Admitting the rate without
-    // its seed steps on it immediately.
+    // With no settlement rows, the sum is a decimal zero, and comparing
+    // it with a USD figure is a kernel type error - neither a rejection
+    // nor a silent pass. Admitting the rate without its seed hits it.
     let p = mini_demurrage();
     must_error_naming(
         p.transformation("set_rate_unseeded").unwrap(),

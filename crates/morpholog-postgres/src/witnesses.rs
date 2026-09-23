@@ -1,9 +1,8 @@
 //! The witness axis of a verification: what each stored external witness
-//! proves about its checkpoint, judged offline against the anchors the
-//! verifier chose. Independent of the tree verdict - a witness says "this
-//! head existed no later than T" whether or not the log still recomputes
-//! to that head - and never part of it: only an `invalid` witness is a
-//! judgement, and only that fails the command.
+//! proves about its checkpoint, judged offline against the verifier's
+//! chosen anchors. Separate from the tree verdict: a witness says "this
+//! head existed no later than T" whether or not the log still matches it.
+//! Only an `invalid` witness fails the command.
 
 use jiff::Timestamp;
 use morpholog_witness::{Anchors, WitnessStatus, verify_rfc3161};
@@ -48,8 +47,8 @@ pub struct CheckpointWitnesses {
 }
 
 /// The whole axis: every witnessed checkpoint in the order given, and the
-/// earliest time any VERIFIED witness attests - the one figure a reader
-/// can rest a "no later than" claim on.
+/// earliest time any VERIFIED witness attests, the figure a "no later
+/// than" claim can rest on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WitnessesReport {
     pub checkpoints: Vec<CheckpointWitnesses>,
@@ -69,8 +68,7 @@ impl WitnessesReport {
 }
 
 /// Judge every witness on the given checkpoints. `None` when no checkpoint
-/// carries one, so a report without witnesses stays byte-identical to
-/// before the axis existed.
+/// has one, so the report omits the axis.
 pub fn witnesses_report(
     checkpoints: &[Checkpoint],
     anchors: Option<&Anchors>,
@@ -164,9 +162,8 @@ fn judge(
 }
 
 /// `audit verify-pack` with the witness axis requested: the pack's own
-/// verdict, whatever its kind, beside what its checkpoints' witnesses
-/// prove. Emitted only on request, so a verifier that never asked keeps
-/// the bare verdict it always had.
+/// verdict beside what its checkpoints' witnesses prove. Only on request;
+/// otherwise the bare verdict is emitted.
 #[derive(Debug, Clone, Serialize)]
 pub struct PackVerificationReport {
     pub verdict: PackVerdict,

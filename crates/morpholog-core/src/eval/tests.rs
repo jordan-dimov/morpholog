@@ -7,9 +7,8 @@ use crate::state::{ClaimInstance, State};
 /// The extremum picks from a set, so match order must not decide it,
 /// and the answer must be the member itself rather than a position.
 ///
-/// Table-driven over both ends and both orderings of the same claims:
-/// a max that depended on iteration would pass one row and fail its
-/// mirror.
+/// Runs both ends over both orderings of the same claims, so a max
+/// that depended on iteration order fails one of them.
 #[test]
 fn an_extremum_picks_the_same_member_whatever_the_match_order() {
     use crate::ir::ExtremumOp;
@@ -62,10 +61,9 @@ fn an_extremum_picks_the_same_member_whatever_the_match_order() {
 /// Validity is a question of kind, never of how many claims happen
 /// to match.
 ///
-/// The first cut checked only comparisons, so one unordered match
-/// succeeded and two raised a type error - the same programme going
-/// from working to broken because a second claim was admitted. Every
-/// candidate is checked now, singletons included.
+/// Every candidate is checked, singletons included. Otherwise one
+/// unordered match would succeed and two would fail, and admitting a
+/// second claim would break a working programme.
 #[test]
 fn an_unordered_candidate_is_refused_however_many_there_are() {
     use crate::ir::ExtremumOp;
@@ -237,10 +235,8 @@ fn an_extremum_over_nothing_refuses_by_name() {
     assert!(text.contains("require"), "must name the remedy: {text}");
 }
 
-/// `claim_matches` and `unify_args` share `match_args`, so they must
-/// agree on every verdict; `unify_args` must additionally extend the
-/// base with exactly the new bindings. Pins that the boolean path
-/// cannot drift from the binding-producing one.
+/// `claim_matches` and `unify_args` must agree on every verdict, and
+/// `unify_args` must extend the base with exactly the new bindings.
 #[test]
 fn claim_matches_agrees_with_unify_args_and_extends_base() {
     let s = |x: &str| EvalValue::Subject(Subject::from(x));
@@ -371,10 +367,7 @@ fn min_rejects_non_decimal_operands() {
     ));
 }
 
-// ValueOf: pins the single-indexed-pass behaviour that the
-// `select_candidates` extraction shares with `find_claim_matches`.
-// The double-entry example the bench uses has no ValueOf, so these
-// are where the changed path's semantics are nailed down.
+// ValueOf: the candidate selection it shares with `find_claim_matches`.
 
 /// `Price(trade, amount)` claims for the given (trade, amount) rows.
 fn price_state(rows: &[(&str, i64)]) -> State {
@@ -476,10 +469,8 @@ fn value_of_multiple_matches_errors() {
 
 #[test]
 fn value_of_unbound_actor_errors_position_independently() {
-    // A selective ground arg before `actor` would short-circuit to
-    // "no matches" first; the up-front actor check in
-    // `select_candidates` must still surface `UnboundActor` when no
-    // actor is in scope.
+    // A ground arg before `actor` could short-circuit to "no matches";
+    // an unbound actor must still surface as `UnboundActor`.
     let state = price_state(&[("t1", 100)]);
     let e = value_of("Triple", vec![subj("absent"), Term::Actor, wildcard()]);
     assert_eq!(eval_in(&e, &state, None), Err(EvalError::UnboundActor));
@@ -530,9 +521,8 @@ fn matching_claims_no_match_is_empty() {
 
 #[test]
 fn matching_claims_unbound_actor_errors() {
-    // `select_candidates`' up-front actor check applies on the
-    // retract path too: a `Term::Actor` arg with no actor in scope
-    // is an error, not a silent no-match.
+    // On the retract path too, an unbound `Term::Actor` arg is an
+    // error, not a silent no-match.
     let state = price_state(&[("t1", 100)]);
     let bindings = Bindings::new();
     let ctx = EvalContext::new(

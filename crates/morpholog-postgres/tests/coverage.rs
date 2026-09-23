@@ -54,9 +54,8 @@ async fn coverage_reports_fired_never_fired_and_usage_over_real_history() {
     );
     assert!(report.transformations.iter().all(|t| t.transitions == 0));
 
-    // Now a real history: two posted entries through the normal commit
-    // path - each carrying JournalEntry + JournalLine claims, so the
-    // balance and lines invariants both fire.
+    // Two posted entries, each with JournalEntry and JournalLine claims,
+    // so the balance and lines invariants both fire.
     let tid1 = post_entry(&pool, "entry_001", 100).await;
     let tid2 = post_entry(&pool, "entry_002", 200).await;
 
@@ -82,10 +81,8 @@ async fn coverage_reports_fired_never_fired_and_usage_over_real_history() {
         Some(tid2.to_string().as_str())
     );
 
-    // The period was never closed, so any invariant whose antecedent
-    // needs a PeriodClosed claim stayed silent - and is reported so,
-    // not hidden. (Identify them structurally rather than by pinned
-    // name: every implication invariant that did not fire.)
+    // The period was never closed, so invariants whose antecedent needs
+    // PeriodClosed never fired, and are reported as such.
     let never_fired: Vec<&str> = report
         .invariants
         .iter()
@@ -115,9 +112,9 @@ async fn coverage_reports_fired_never_fired_and_usage_over_real_history() {
     assert!(!usage("close_period").not_in_programme);
 }
 
-// Closing the period makes the close-gate invariants fire too, and the
-// counts stay per-transition (the balance rule does not re-count on a
-// transition whose delta does not touch its antecedent).
+// Closing the period makes the close-gate invariants fire too. Counts
+// are per transition: the balance rule does not count a transition that
+// does not touch its antecedent.
 #[tokio::test]
 async fn firing_is_counted_per_relevant_transition() {
     let pool = test_pool().await;
@@ -143,8 +140,8 @@ async fn firing_is_counted_per_relevant_transition() {
         .iter()
         .find(|i| i.invariant == "balanced_posted_entry")
         .unwrap();
-    // The close transition asserts only PeriodClosed - outside the
-    // balance rule's antecedent footprint - so the count stays 1.
+    // The close asserts only PeriodClosed, which the balance rule's
+    // antecedent does not read, so the count stays 1.
     assert_eq!(balanced.transitions_fired, 1);
     assert_ne!(
         balanced.last_fired.as_deref(),
@@ -153,9 +150,8 @@ async fn firing_is_counted_per_relevant_transition() {
     );
 }
 
-// The headline payoff of the rejection log: an always-on prohibition
-// whose enforcement work was structurally invisible in committed
-// history becomes measurable the moment it refuses a real proposal.
+// An always-on prohibition leaves no trace in committed history, but
+// once it refuses a real proposal the rejection log shows it at work.
 #[tokio::test]
 async fn an_always_on_prohibition_that_refuses_shows_constrained() {
     use morpholog_surface::parse_program;

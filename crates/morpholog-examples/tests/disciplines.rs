@@ -1,9 +1,7 @@
-//! Behavioural tests for claim disciplines: declared properties of
-//! claim shapes, enforced by lowering to generated invariants
-//! (`unique by`, `current pointer by`, `superseded via`) or statically
-//! (`append only`). Scenario programmes are inline `.morph`; the
-//! strengthening pins run against the real worked examples whose
-//! models the disciplines deliberately tightened.
+//! Behavioural tests for claim disciplines. `unique by`, `current pointer by`
+//! and `superseded via` are enforced by generated invariants; `append only`
+//! is checked statically. Most scenarios are inline `.morph`; a few run
+//! against the worked examples the disciplines tightened.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -78,8 +76,7 @@ fn registry_with_figure() -> (Program, State) {
 // content, is refused - and the refusal names the generated invariant,
 // the name an audit row would carry.
 
-/// Build a CompiledProgram for the analysis entry points, which now
-/// take `&CompiledProgram`.
+/// The analysis entry points take a `&CompiledProgram`.
 fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
     morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
 }
@@ -131,7 +128,7 @@ fn the_pointer_moves_atomically_and_its_singleton_holds() {
 }
 
 // `superseded via`: the lineage can never fork - one prior, at most
-// one direct successor - under the boring generated name.
+// one direct successor - under the generated name.
 #[test]
 fn the_lineage_cannot_fork() {
     let (p, state) = registry_with_figure();
@@ -213,8 +210,7 @@ transformation undo_batch(batch_id):
     );
 }
 
-// The lineage named by `superseded via` is append only without saying
-// so: history is the doctrine's third class.
+// The lineage named by `superseded via` is append only without saying so.
 #[test]
 fn retracting_a_lineage_predicate_is_refused_too() {
     let errors = validation_errors(
@@ -409,16 +405,14 @@ fn generated_invariants_appear_in_guarantees() {
 }
 
 // ============================================================
-// The strengthening pins, against the real examples: states the old
-// hand-written rules tolerated and the declared disciplines refuse.
+// Against the real examples: states a looser hand-written rule would
+// tolerate and the declared disciplines refuse.
 // ============================================================
 
-// 12: one voyage, one tender event - the voyage now determines the
-// WHOLE tender record. The tender gate already refuses a second NOR
-// on the ordinary path, so the discipline's extra teeth only show
-// against state no gate would admit: the same NOR id recorded at two
-// instants. The old hand-written rule (ids agree, timestamp
-// wildcarded) PASSED that state; the declared discipline refuses it.
+// 12: the voyage determines the WHOLE tender record. The tender gate
+// already refuses a second NOR, so the difference shows only against state
+// no gate would admit: the same NOR id at two instants. A rule that matched
+// ids and ignored the timestamp would pass it; the discipline refuses it.
 #[test]
 fn the_same_nor_at_two_instants_now_violates_the_declared_uniqueness() {
     let p = lay::program();
@@ -451,8 +445,7 @@ fn the_same_nor_at_two_instants_now_violates_the_declared_uniqueness() {
 #[test]
 fn a_decision_id_with_a_second_outcome_is_refused() {
     let p = bio::program();
-    // Build the admitted path to one decision via the example's own
-    // fixtures: deploy, oversee, start, match, verify twice, decide.
+    // Deploy, oversee, start, match, verify twice, decide.
     let state = bio_state_with_decision();
     let outcome = morpholog_core::propose(
         p.transformation("decide_on_identification").unwrap(),
@@ -550,11 +543,8 @@ fn bio_state_with_decision() -> State {
 
 #[test]
 fn the_generated_unique_invariant_is_pinned_exactly() {
-    // The lowered invariant's whole IR, against an independently
-    // hand-built expectation - the one check the generator cannot
-    // satisfy by being self-consistently wrong (shape drift like an
-    // And-wrapped single agreement, or a silently missing invariant,
-    // reddens here and nowhere else).
+    // The whole lowered IR against a hand-built expectation: the one check
+    // the generator cannot pass by being consistently wrong with itself.
     use morpholog_core::{InvariantOrigin, Prop, Term, ValueExpr, Var};
     let program = parsed(
         r#"
@@ -596,9 +586,8 @@ transformation open(account_id, balance):
 
 #[test]
 fn a_vacuous_clause_lowers_no_invariant_at_all() {
-    // Validation refuses the all-keys clause separately; this pins the
-    // LOWERING side - the vacuous clause must not quietly manufacture
-    // an invariant the refusal then hides.
+    // Validation refuses the all-keys clause separately; this checks that
+    // lowering does not quietly generate an invariant for it.
     let program = parse_program(
         r#"
 program vacuous_lowering
@@ -621,9 +610,8 @@ predicate Item(id: Subject, label: Subject)
 
 #[test]
 fn lineage_provenance_travels_to_the_coverage_report() {
-    // The no-fork invariant generated from `superseded via` carries
-    // its `from:` provenance into every legibility surface; coverage's
-    // report is the pinnable one.
+    // The generated no-fork invariant carries its `from:` provenance;
+    // coverage's report is the easiest place to check it.
     let program = parsed(
         r#"
 program lineage_provenance
@@ -658,10 +646,9 @@ transformation restate(owner, successor, prior):
 
 #[test]
 fn an_unlowered_lineage_is_caught_and_an_unfit_one_is_not_expected() {
-    // Hand-built IR that skips lowering must fail validation for the
-    // superseded-via clause's missing no-fork invariant - and only
-    // when the lineage predicate actually has the two-argument shape
-    // the convention requires.
+    // Hand-built IR that skips lowering fails validation for the missing
+    // no-fork invariant, but only when the lineage predicate has the
+    // required two-argument shape.
     use morpholog_core::ir_builder::{predicate, program};
     use morpholog_core::{Discipline, ValidationError};
     let two_arg = {
@@ -732,11 +719,9 @@ transformation price(charge, amount):
 /// so a superseded rate and a future rate are both refused, and only the
 /// one in force is admitted.
 ///
-/// Three rates and three verdicts, because the two wrong answers fail
-/// differently: the 2025 rate is real but superseded, and the 2026-09
-/// rate is real but not yet in force. A selector that got only the
-/// `on_or_before` half right would admit the first; one that got only
-/// the `no later version` half right would admit the second.
+/// Three rates, because the two wrong ones fail differently: the 2025 rate
+/// is superseded, the 2026-09 rate is not yet in force. A selector missing
+/// either half of its test would admit one of them.
 #[test]
 fn the_generated_selector_admits_only_the_rate_in_force() {
     let p = parsed(EFFECTIVE_DATED);
@@ -799,9 +784,8 @@ fn generating_the_selector_is_idempotent() {
 }
 
 /// An authored definition of the generated name is refused rather than
-/// silently winning. Caught in the surface, the only place that still
-/// knows which definitions the author wrote - after lowering appends to
-/// the same list, nothing can tell them apart.
+/// silently winning. Only the surface can catch it: after lowering, authored
+/// and generated definitions share one list.
 #[test]
 fn an_authored_definition_may_not_shadow_the_generated_selector() {
     let source = r#"program clash
@@ -840,9 +824,7 @@ predicate R(charge: Subject, effective_from: Date, amount: Decimal)
 transformation t(charge, effective_from, amount):
     admit R(charge, effective_from, amount)
 "#;
-    // Matched on the VARIANT, not the rendered message: the text is for a
-    // human and may be reworded, which is exactly the instability that
-    // makes an unnamed `require` hard to test (#261).
+    // Matched on the variant, not the message, which may be reworded.
     let program = parse_program(not_a_time).expect("parses; validation refuses the clause");
     let errs = program
         .validate()
@@ -867,9 +849,8 @@ transformation t(charge, effective_from, amount):
 /// The generated selector's own variable names must not collide with the
 /// predicate's fields.
 ///
-/// A payload field called `as_of` put that name in the parameter list
-/// twice, and the resulting error named `definition r_in_force_on` - a
-/// definition the author never wrote, so unactionable. Every field name
+/// Otherwise a field called `as_of` would be a duplicate parameter, and the
+/// error would name a definition the author never wrote. Every field name
 /// here is one the generator wants for itself.
 #[test]
 fn the_generated_selector_avoids_the_predicates_own_field_names() {
@@ -889,9 +870,7 @@ transformation add(charge, effective_from, as_of, later_effective_from):
 transformation see(charge):
     admit Seen(charge)
 "#;
-    // Validation is the assertion: a collision surfaced as
-    // DuplicateParameter plus a kind conflict, both naming the generated
-    // definition rather than anything the author could edit.
+    // Validation is the assertion: a collision would fail it.
     let p = parsed(source);
     let add = p.transformation("add").expect("add").clone();
     let see = p.transformation("see").expect("see").clone();
@@ -915,11 +894,9 @@ transformation see(charge):
 /// The clause claims one version per key per date, so it owes the
 /// invariant that makes that true.
 ///
-/// Without it two rows tie for "latest" and the selector returns BOTH -
-/// so two contradictory prices each satisfied "priced at the rate in
-/// force", which is precisely what the discipline exists to prevent. The
-/// adversarial shape is two different payloads at the same effective
-/// date; the second must be refused.
+/// Otherwise two rows tie for "latest", the selector returns both, and two
+/// contradictory prices each count as "the rate in force". Two payloads at
+/// the same effective date: the second must be refused.
 #[test]
 fn two_versions_at_one_effective_date_cannot_both_stand() {
     let p = parsed(EFFECTIVE_DATED);
@@ -950,10 +927,8 @@ fn two_versions_at_one_effective_date_cannot_both_stand() {
 
 /// One selector per predicate, so one clause.
 ///
-/// Both clauses generate the same name, so the second was silently
-/// skipped by the lowering and the governing doctrine ended up decided by
-/// declaration order - a programme that validates and means something
-/// other than it says.
+/// Both clauses would generate the same name, so one would be silently
+/// dropped and declaration order would decide which rule governs.
 #[test]
 fn a_predicate_may_carry_only_one_effective_clause() {
     let source = r#"program two
@@ -1001,11 +976,8 @@ transformation price(charge, priced_on, amount):
 /// An effective-dated predicate with nothing declaring its totality earns
 /// a hint - and `--strict` turns that into a refusal.
 ///
-/// The tier matters: a partial effective-dated predicate can be a correct
-/// model (a rule that genuinely should not apply before the first version
-/// exists), so this cannot be a hard error. An author who wants the
-/// pairing guaranteed rather than remembered runs `--strict`, and then the
-/// omission is unwritable.
+/// Only a hint, because a partial effective-dated predicate can be correct
+/// (a rule that should not apply before the first version exists).
 #[test]
 fn an_effective_predicate_without_a_declared_companion_is_flagged() {
     let undeclared = TOTALITY.replace(" total over ChargeRate", "");
@@ -1033,12 +1005,10 @@ fn an_effective_predicate_without_a_declared_companion_is_flagged() {
     );
 }
 
-/// A declared companion settles the governing-selection lint too, which
-/// previously had to recognise the backstop by shape.
+/// A declared companion also settles the governing-selection lint.
 ///
-/// This is the "smell to checked pairing" half: the author says which rule
-/// backstops the predicate, so an unusual-but-intended backstop counts and
-/// a shape matching by accident does not.
+/// The author names the backing rule, so an unusual but intended backstop
+/// counts and an accidental shape match does not.
 #[test]
 fn a_declared_companion_settles_the_governing_selection_lint() {
     let declared = parse_program(TOTALITY).expect("parses");
@@ -1068,13 +1038,9 @@ fn the_totality_clause_survives_a_format_and_reparse() {
     assert_eq!(declared, vec!["ChargeRate".to_string()]);
 }
 
-/// A rule cannot be its own backstop, and saying `total over P` does not
-/// make it one if it only applies where a version of `P` is already in
-/// force. Such a claim is circular - the rule is guarded by the very
-/// selector it promises will always match - so the demand stands.
-///
-/// The shape-recognised path has always excluded the invariant under test;
-/// the declared path is global, which is exactly how it could be fooled.
+/// A rule cannot be its own backstop. `total over P` on a rule that applies
+/// only where a version of `P` is already in force is circular, so the
+/// demand stands.
 #[test]
 fn a_rule_that_reads_the_selector_cannot_declare_its_own_totality() {
     // The only invariant is guarded by the in-force selector for the very
@@ -1144,13 +1110,10 @@ transformation price(charge, priced_on, amount):
 }
 
 /// A hand-rolled governing selection that declares its own totality is
-/// still flagged. The declaration path is positional for the same reason
-/// the shape-recognised path is: a companion is by definition a DIFFERENT
-/// rule.
+/// still flagged: a companion must be a different rule.
 ///
-/// Distinct from the selector-reading case: this programme has no
-/// `effective by` clause and no generated selector, so only the positional
-/// exclusion can catch it.
+/// There is no `effective by` clause here, so no generated selector to spot;
+/// only excluding the rule itself catches it.
 #[test]
 fn a_hand_rolled_selection_cannot_declare_its_own_totality() {
     let source = r#"program cg
@@ -1183,10 +1146,9 @@ transformation settle(trade, settled_on, settled):
     );
 }
 
-/// `total over` a predicate the programme never declares is a hard error,
-/// not inert metadata. The declaration is load-bearing - it is what tells
-/// the vacuity lints which rule is the backstop - so a typo silently
-/// withdraws the guarantee it looks like it makes.
+/// `total over` a predicate the programme never declares is a hard error.
+/// The lints trust the declaration, so a typo would silently withdraw the
+/// guarantee it seems to make.
 #[test]
 fn a_totality_declaration_must_name_a_declared_predicate() {
     let typo = TOTALITY.replace("total over ChargeRate", "total over Typo");
@@ -1201,10 +1163,8 @@ fn a_totality_declaration_must_name_a_declared_predicate() {
     );
 }
 
-/// The acceptance side: the target need NOT carry `effective by`. The
-/// governing-selection lint fires on hand-rolled dated selections too, so
-/// declaring the backstop for a predicate that has no generated selector
-/// is a legitimate way to settle it.
+/// The target need not carry `effective by`: the governing-selection lint
+/// also fires on hand-rolled dated selections, and this is how to settle it.
 #[test]
 fn a_totality_target_need_not_be_effective_dated() {
     let source = r#"program plain
@@ -1231,11 +1191,9 @@ transformation settle(trade, settled_on, settled):
 /// `partial` declares that coverage gaps are intended, and `--strict` stops
 /// refusing.
 ///
-/// The hole it closes: the totality hint is right for the usual case and
-/// wrong for a model where a rule genuinely should not apply before the
-/// first version exists. Under `--strict` - which the consumer who hit this
-/// runs - there was no way to say so, leaving a choice between declaring a
-/// companion that is not true and abandoning strict checking entirely.
+/// For a rule that should not apply before the first version exists.
+/// Without it, a `--strict` user would have to declare an untrue companion
+/// or give up strict checking.
 #[test]
 fn partial_declares_an_intended_totality_gap() {
     let source = TOTALITY.replace(" total over ChargeRate", "").replace(
@@ -1277,9 +1235,7 @@ fn partial_and_total_over_cannot_both_be_declared() {
 
 /// `partial` survives format-and-reparse.
 ///
-/// A formatter that dropped it would turn a checked declaration back into a
-/// programme the hint fires on - the same class of silent downgrade that
-/// makes the `total over` round-trip worth pinning.
+/// A formatter that dropped it would silently bring the hint back.
 #[test]
 fn partial_survives_format_and_reparse() {
     let source = TOTALITY.replace(" total over ChargeRate", "").replace(

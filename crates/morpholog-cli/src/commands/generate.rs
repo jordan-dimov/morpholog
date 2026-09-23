@@ -1,27 +1,20 @@
 //! `morpholog generate python-client` - emit a typed, stdlib-only
 //! Python client for a `.morph` programme.
 //!
-//! The package's static modules are programme-independent and
-//! emitted VERBATIM from the templates
-//! beside this crate (`templates/python_client/`), so the files the
-//! template test suite runs are byte-identical to the files embedders
-//! receive. Two are generated per programme: `models.py` (a frozen
-//! request dataclass per transformation, a read model per predicate,
-//! a payload per intent) and `__init__.py` (the version-floor check
-//! and the stamps - model hash, binary version - that let an
-//! embedder's CI assert the generated code, the manifest, and the
-//! live binary all name the same rules).
+//! The static modules are copied verbatim from `templates/python_client/`,
+//! so the files the template tests run are the files embedders get. Two
+//! are generated per programme: `models.py` (a request dataclass per
+//! transformation, a read model per predicate, a payload per intent) and
+//! `__init__.py` (the version check, plus the model hash and binary
+//! version stamps an embedder's CI can compare).
 //!
-//! Models read `ParamKind` and the declarations directly, never the
-//! JSON schema fragments: the exhaustive matches below are forced
-//! open by the compiler when a kind is added, where re-parsing JSON
-//! would silently misclassify it.
+//! Models read `ParamKind` and the declarations directly, not the JSON
+//! schema, so a new kind breaks the exhaustive matches below at compile
+//! time instead of being misread.
 //!
-//! Refusal is whole-run: every transformation parameter, predicate
-//! field, and intent field is swept BEFORE anything is written, and
-//! any unsupported kind or un-emittable name fails the run with every
-//! finding listed and the out directory untouched. No partial
-//! packages, no silent mangling.
+//! Refusal is whole-run: every parameter and field is checked before
+//! anything is written, and any unsupported kind or name fails the run
+//! with every finding listed and the output directory untouched.
 
 use std::fmt::Write as _;
 
@@ -39,9 +32,8 @@ const ENVELOPES_PY: &str = include_str!("../../templates/python_client/envelopes
 const ADAPTER_PY: &str = include_str!("../../templates/python_client/adapter.py");
 const SESSION_PY: &str = include_str!("../../templates/python_client/session.py");
 
-/// The interpreter floor the emitted package declares and enforces at
-/// import. A conservative-subset floor, moved only deliberately - the
-/// PG 17+ idiom applied to Python.
+/// The oldest Python the emitted package supports, checked at import.
+/// Raise it only deliberately.
 const PYTHON_FLOOR: (u32, u32) = (3, 10);
 
 pub(crate) fn run(args: &GeneratePythonClientArgs) -> anyhow::Result<()> {
@@ -61,10 +53,8 @@ pub(crate) fn run(args: &GeneratePythonClientArgs) -> anyhow::Result<()> {
         return Err(AlreadyReported.into());
     }
 
-    // Render everything in memory before touching the filesystem, so
-    // no SEMANTIC failure can leave a partial package behind (an IO
-    // failure mid-write can, like any file copy; regenerating is the
-    // recovery either way).
+    // Render everything in memory first, so a refusal never leaves a
+    // partial package. (An IO failure mid-write still can; regenerate.)
     let models = render_models(program, &validated)?;
     let init = render_init(program);
     let files = [
@@ -98,14 +88,9 @@ pub(crate) fn run(args: &GeneratePythonClientArgs) -> anyhow::Result<()> {
 /// `--check`: compare the rendered package against what is on disk and
 /// write nothing.
 ///
-/// The contract is the EXIT CODE - zero when every file agrees,
-/// non-zero on any difference, missing file, or unreadable directory.
-/// The prose on stderr names what drifted for a human reading a failed
-/// CI log; it is deliberately not a machine surface, so there is
-/// nothing here for an embedder to parse and nothing to drift silently
-/// (see "A consumed surface is a pinned envelope" in
-/// `docs/embedder-integration.md` - this command answers with its
-/// status, not with data).
+/// The exit code is the contract: zero when every file agrees, non-zero on
+/// any difference, missing file or unreadable directory. The stderr prose
+/// is for a human reading a CI log, not for parsing.
 fn report_drift(package_dir: &std::path::Path, files: &[(&str, &str)]) -> anyhow::Result<()> {
     let mut drifted: Vec<String> = Vec::new();
     for (name, expected) in files {
@@ -143,9 +128,9 @@ fn report_drift(package_dir: &std::path::Path, files: &[(&str, &str)]) -> anyhow
 // The refusal sweep.
 // ============================================================
 
-/// Python's hard keywords (3.10 floor). A field with one of these
-/// names cannot be a dataclass field; refusing beats mangling, which
-/// would silently divorce the field name from the wire name.
+/// Python's hard keywords (3.10 floor). Such a name cannot be a dataclass
+/// field, and renaming it would break the link to the wire name, so it is
+/// refused.
 const PYTHON_KEYWORDS: &[&str] = &[
     "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
     "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import",
@@ -153,11 +138,9 @@ const PYTHON_KEYWORDS: &[&str] = &[
     "with", "yield",
 ];
 
-/// Member names the generated classes define; a field sharing one
-/// would shadow it. The uppercase entries are the ClassVar metadata
-/// slots - `TRANSFORMATION` is an unlikely field name but a lawful
-/// `.morph` identifier, and a collision there corrupts the very
-/// metadata `submit()` dispatches on.
+/// Member names the generated classes define; a field sharing one would
+/// shadow it. The uppercase entries are class metadata, such as the
+/// `TRANSFORMATION` that `submit()` dispatches on.
 const RESERVED_MEMBERS: &[&str] = &[
     "to_args_named",
     "from_named",
@@ -205,9 +188,8 @@ fn name_refusal(owner: &str, name: &str) -> Option<String> {
     None
 }
 
-/// Param kinds for a transformation the programme itself declares -
-/// the lookup cannot miss, but the error path stays a clean failure
-/// rather than a panic in the binary.
+/// Param kinds for a transformation the programme declares. The lookup
+/// cannot miss, but fails cleanly rather than panic.
 fn param_kinds(
     validated: &ValidatedProgram<'_>,
     name: &morpholog_core::TransformationName,
@@ -240,9 +222,8 @@ fn sweep(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow::Result<
                          --args-named)"
                     ));
                 }
-                // A collection with a supported scalar element is carried as
-                // a typed list; an element kind the client cannot type (or a
-                // nested collection) is refused, the same floor as a scalar.
+                // A collection of a supported scalar becomes a typed list;
+                // any other element kind is refused.
                 ParamKind::Collection(element) => match element.as_ref() {
                     ParamKind::Concrete(c) if kind_supported(c) => {}
                     _ => refusals.push(format!(
@@ -268,11 +249,9 @@ fn sweep(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow::Result<
         );
     }
 
-    // camel() is many-to-one (`capture_trade` and `CaptureTrade` both
-    // render `CaptureTradeRequest`), and Morpholog's duplicate check
-    // is on exact names - so two lawful declarations can collide at
-    // the generated class. Refuse with both sources named; the suffix
-    // keeps the three categories disjoint from one another.
+    // `capture_trade` and `CaptureTrade` both become `CaptureTradeRequest`,
+    // so two valid declarations can collide. Refuse, naming both. The
+    // suffixes keep transformations, predicates and intents apart.
     sweep_class_collisions(
         "transformation",
         "Request",
@@ -355,10 +334,9 @@ fn camel(name: &str) -> String {
         .collect()
 }
 
-/// The Python annotation, the named-read parse expression, and the
-/// docstring qualifier for one supported kind. The exhaustive match is
-/// the point: a new kind fails compilation here instead of emitting a
-/// wrong model.
+/// The Python annotation, the parse expression for a named read, and the
+/// docstring qualifier for one supported kind. The match is exhaustive so
+/// a new kind fails to compile here rather than emit a wrong model.
 fn kind_map(kind: &PredicateArgKind) -> (&'static str, String, Option<String>) {
     match kind {
         PredicateArgKind::Subject => ("str", "raw".to_string(), None),
@@ -404,9 +382,8 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
          from . import values\n",
     );
 
-    // Request models: one frozen dataclass per transformation, fields
-    // in declaration order (the same order x-morpholog-arg-order
-    // carries), each knowing its transformation name and how to encode
+    // Request models: one frozen dataclass per transformation, fields in
+    // declaration order (as in x-morpholog-arg-order), each able to encode
     // itself for --args-named.
     for transformation in &program.transformations {
         let kinds = param_kinds(validated, &transformation.name)?;
@@ -418,9 +395,8 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
         );
         let mut encodes = Vec::new();
         for (param, kind) in &kinds {
-            // The sweep already refused everything but a concrete scalar
-            // or a collection of a concrete scalar; a collection becomes a
-            // typed `list[...]` field encoded item by item.
+            // Only scalars and collections of scalars get this far; a
+            // collection becomes a typed `list[...]` field.
             let (annotation, qualifier, encode) = match kind {
                 ParamKind::Concrete(concrete) => {
                     let (annotation, _, qualifier) = kind_map(concrete);
@@ -458,8 +434,7 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
         );
     }
 
-    // Read models: one per predicate, parsing the named read's
-    // wire-true values by declared kind.
+    // Read models: one per predicate, parsing values by declared kind.
     for predicate in &program.predicates {
         let class = format!("{}Claim", camel(predicate.name.as_str()));
         let _ = write!(
@@ -496,12 +471,9 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
         );
     }
 
-    // Intent payloads: positional args become named typed fields, the
-    // contract baked at generation time under the hash stamp - no
-    // runtime `schema --intent` call, no hand-coded order. `from_args`
-    // takes the DECODED positional values the adapter's OutboxRow
-    // already carries (decode_tagged is the adapter's job, arity and
-    // naming are the contract's).
+    // Intent payloads: positional args become named typed fields, fixed at
+    // generation time, so no runtime `schema --intent` call is needed.
+    // `from_args` takes the already-decoded values an OutboxRow carries.
     for intent in &program.intents {
         let class = format!("{}Payload", camel(intent.name.as_str()));
         let order = intent
@@ -532,10 +504,8 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
         );
     }
 
-    // One dispatch table: the deliverer looks payloads up by the
-    // intent name the outbox row carries. Requests and reads are
-    // reached by class name (the caller knows which model it wants);
-    // tables for them arrive when a consumer does.
+    // The deliverer looks payloads up by the intent name on the outbox
+    // row. Requests and reads are used by class name, so need no table.
     let payload_entries = program
         .intents
         .iter()

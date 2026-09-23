@@ -1,8 +1,6 @@
-//! Integration tests for the release-governance example
-//! (`examples/16_release_governance/`) - each checklist rule proven
-//! uncommittable when broken, through the full `propose()` path, with
-//! refusals matched structurally on the rule's name (never parsed out
-//! of display prose).
+//! The release-governance example (`examples/16_release_governance/`): each
+//! broken checklist rule is refused through `propose()`, matched on the rule's
+//! name, never on display text.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -79,9 +77,8 @@ fn a_complete_release_announces_and_emits_exactly_one_intent() {
     else {
         panic!("a complete release must announce");
     };
-    // The intent is the eventual integration point (the later stage
-    // drives the real publish from it), so its exact payload is
-    // load-bearing: one intent, this name, this version.
+    // The real publish will be driven from this intent, so its exact payload
+    // matters: one intent, this name, this version.
     assert_eq!(emitted_intents.len(), 1);
     assert_eq!(emitted_intents[0].name, "ReleaseAnnounced");
     assert_eq!(emitted_intents[0].args, vec![subj("v0_0_8")]);
@@ -238,9 +235,9 @@ fn a_platform_declared_later_does_not_invalidate_a_past_announcement() {
         vec![subj("v0_0_8")],
         ready_to_announce(),
     );
-    // The gate-not-invariant doctrine, proven: growing the matrix
-    // AFTER announcing commits cleanly - the past announcement stays
-    // lawful, exactly as a closed period keeps its entries.
+    // A gate, not an invariant: growing the matrix AFTER announcing commits
+    // cleanly, and the past announcement stays lawful, as a closed period
+    // keeps its entries.
     e.must_accept(
         &release_governance::declare_platform(),
         vec![subj("macos_arm64")],

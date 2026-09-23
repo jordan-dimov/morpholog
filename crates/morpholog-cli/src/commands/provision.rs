@@ -1,8 +1,7 @@
 //! `morpholog provision indexes` - reconcile the indexes a programme's
-//! compiled invariants can seek on. Thin over the adapter: the compiler
-//! says what is required, the adapter reconciles, this prints the plan
-//! in the same words the executor acted on and exits non-zero when a
-//! conflict needs an operator.
+//! compiled invariants can use. The compiler says what is needed and the
+//! adapter reconciles; this prints the plan it acted on and exits non-zero
+//! when a conflict needs an operator.
 
 use anyhow::bail;
 use morpholog_postgres::{IndexAction, PgProgram, plan_indexes, provision_indexes};

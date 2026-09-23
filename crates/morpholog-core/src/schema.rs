@@ -1,43 +1,20 @@
-//! JSON Schema emission for a transformation's argument contract.
+//! JSON Schema (Draft 2020-12) for a transformation's arguments or an
+//! intent's payload: which named fields it takes and the kind of each.
 //!
-//! Renders the analysis-layer truth ([`ParamKind`] from
-//! [`crate::analysis`]) into a form an external embedder can lean on:
-//! a JSON Schema (Draft 2020-12) describing exactly which named
-//! arguments a transformation expects and what kind each one must
-//! carry.
+//! This renders the kernel's inferred [`ParamKind`]s; it is not a second
+//! source of truth. Other renderings (OpenAPI, a Python class) would be
+//! built from the same analysis.
 //!
-//! Module boundary: this is **adapter**, not kernel. The kernel
-//! exports the inferred input contract (the [`ParamKind`] result);
-//! this module renders one encoding of it. A future embedder may
-//! want a different rendering (OpenAPI components, a Python
-//! dataclass, a TypeScript interface, an HTML form) - each would be
-//! a separate adapter built from the same analysis result, never a
-//! second source of truth. JSON Schema sits in `morpholog-core`
-//! because it is small and self-contained.
-//!
-//! The mapping leans toward stable, embedder-friendly encodings over
-//! exhaustively re-stating the kernel's contract:
-//! - Subjects render as `{"type": "string"}` with NO `format`.
-//!   Morpholog's `Subject` is the only primitive noun and carries
-//!   both minted entity identifiers and domain symbols (commodity
-//!   codes, period names, direction enums, account codes); the IR
-//!   treats `Subject` as an opaque string newtype and the schema
-//!   mirrors that. Subjects minted by `Stmt::LetNewSubject` are
-//!   UUIDv7 by runtime convention, but externally supplied Subjects
-//!   need not be; the description names the convention without
-//!   pinning it as a JSON-Schema constraint.
-//! - Decimals carry as strings (not JSON numbers) because the kernel
-//!   stores them as exact source strings; the pattern is strict
-//!   enough to reject `00.12`, leading-`+`, and other ambiguous
-//!   forms that the parser normalises.
-//! - Dates carry as ISO-8601 civil dates (no time of day, no zone);
-//!   timestamps as RFC 3339 instants; durations as ISO-8601
-//!   exact-time spans; quantity amounts as the same bare decimal
-//!   string as `Decimal`, with the unit in `x-morpholog-unit`.
-//! - `Polymorphic` and `Unconstrained` parameters become properties
-//!   with no `type` constraint and a description carrying their
-//!   state - the embedder can render them but should flag that the
-//!   kernel cannot help narrow them.
+//! Encoding choices:
+//! - Subjects are plain strings with no `format`. A subject may be a minted
+//!   UUIDv7 or a domain symbol such as a commodity code.
+//! - Decimals are strings, not JSON numbers, to stay exact. The pattern
+//!   rejects ambiguous forms such as `00.12` or a leading `+`.
+//! - Dates are ISO-8601 civil dates, timestamps RFC 3339 instants,
+//!   durations ISO-8601 exact-time spans. A quantity is a decimal string
+//!   with its unit in `x-morpholog-unit`.
+//! - `Polymorphic` and `Unconstrained` parameters have no `type`, and a
+//!   description saying the kernel cannot narrow them.
 
 use serde_json::{Value, json};
 
@@ -48,13 +25,11 @@ use crate::validate::ValidatedProgram;
 /// Emit a JSON Schema (Draft 2020-12) for the named transformation's
 /// argument object. Parameters appear in declaration order under
 /// `properties`, all are `required`, and `additionalProperties` is
-/// `false` so the embedder's caller cannot smuggle in extra fields.
+/// `false` so no extra fields get through.
 ///
-/// Pure adapter over [`transformation_param_kinds`]: every error
-/// from the analysis layer bubbles through unchanged. Takes a
-/// [`ValidatedProgram`] so the validation precondition is enforced
-/// at the type level (and so the schema layer does not re-validate
-/// after the caller already has).
+/// # Errors
+///
+/// Whatever [`transformation_param_kinds`] returns, unchanged.
 pub fn transformation_arg_schema(
     program: &ValidatedProgram<'_>,
     name: &TransformationName,
@@ -75,25 +50,18 @@ pub fn transformation_arg_schema(
         "type": "object",
         "additionalProperties": false,
         "required": required,
-        // The positional contract. `required` is a JSON Schema validation
-        // keyword (semantically a set); a consumer that needs the order -
-        // to build the tagged-array `--args` codec - must read this
-        // extension, not the incidental array order of `required`.
+        // The argument order, for the positional `--args` codec.
+        // `required` is a set in JSON Schema, so its order means nothing.
         "x-morpholog-arg-order": arg_order,
         "properties": properties,
     }))
 }
 
 /// Emit a JSON Schema (Draft 2020-12) for the named intent's payload
-/// object. The embedder-facing dual of [`transformation_arg_schema`]:
-/// where that describes what a transformation *accepts*, this describes
-/// what an emitted intent *carries*, so a deliverer reading an outbox
-/// payload can decode it by name instead of by hand-coded position.
+/// object, so an outbox deliverer can decode a payload by name.
 ///
-/// Intent arguments are *declared* with explicit kinds (unlike
-/// transformation parameters, whose kinds are inferred), so this is a
-/// direct render with no analysis - hence a plain `Option` (the intent
-/// is declared or it is not) rather than the analysis-layer `Result`.
+/// Intent arguments declare their kinds, so nothing is inferred. `None`
+/// when no intent has that name.
 pub fn intent_arg_schema(program: &ValidatedProgram<'_>, name: &IntentName) -> Option<Value> {
     let decl = program
         .as_program()
@@ -118,28 +86,20 @@ pub fn intent_arg_schema(program: &ValidatedProgram<'_>, name: &IntentName) -> O
         "type": "object",
         "additionalProperties": false,
         "required": required,
-        // The load-bearing contract for decoding a tagged payload array:
-        // the positional order of the emitted intent's args. `required`
-        // mirrors the names but is a set keyword, not ordering metadata.
+        // The argument order, for decoding a positional payload array.
+        // `required` is a set in JSON Schema, so its order means nothing.
         "x-morpholog-arg-order": arg_order,
         "properties": properties,
     }))
 }
 
-/// Map one parameter's [`ParamKind`] to its JSON Schema property
-/// fragment. Centralised so the per-kind encoding is one switch the
-/// reader can audit at a glance. `Ambiguous` renders as `anyOf` over
-/// each observed kind's bare type/format/pattern fragment - the
-/// per-kind description is dropped from the alternatives so the
-/// embedder does not see a misleading "opaque Morpholog subject
-/// identifier" as one of N options. The contract-level description
-/// belongs at the property level, naming the ambiguity.
+/// Map one parameter's [`ParamKind`] to its JSON Schema property.
+/// `Ambiguous` becomes an `anyOf` of bare shapes, with one description at
+/// the property level naming the ambiguity rather than one per option.
 fn property_schema(kind: &ParamKind) -> Value {
     match kind {
         ParamKind::Concrete(k) => concrete_property(k, SchemaContext::TransformationArg),
-        // `Polymorphic` is the projection of "observed only at `Any`
-        // slots"; the analysis layer never emits `Concrete(Any)`, but
-        // the type permits it, so render it the same way.
+        // Seen only at `Any` positions.
         ParamKind::Polymorphic => json!({
             "description": "polymorphic; the model does not narrow this parameter's kind"
         }),
@@ -153,12 +113,9 @@ fn property_schema(kind: &ParamKind) -> Value {
                 "anyOf": alternatives,
             })
         }
-        // A collection: a JSON array whose items take the element kind
-        // inferred from the loop binding, decodable through the named codec
-        // like any scalar. This arm is reached only when an element kind was
-        // observed; a collection with no element evidence stays the opaque
-        // `Concrete(Collection)` and renders an untyped array elsewhere.
-        // `items` recurses on the element kind.
+        // A collection whose element kind was inferred from its loop. With
+        // no element evidence it stays `Concrete(Collection)`, an untyped
+        // array.
         ParamKind::Collection(element) => json!({
             "type": "array",
             "description": "collection; send as a JSON array, one entry per item",
@@ -167,21 +124,16 @@ fn property_schema(kind: &ParamKind) -> Value {
     }
 }
 
-/// Whether a property is rendered for a transformation's *input*
-/// arguments or an emitted intent's *payload*. Only the `Collection`
-/// description differs: the input rendering points the caller at the
-/// `--args` codec for *sending* a collection, which is meaningless for a
-/// read-only payload field the embedder only ever decodes.
+/// Whether a property describes a transformation's input or an intent's
+/// payload. Only the `Collection` description differs: advice on sending
+/// one makes no sense for a payload the embedder only reads.
 #[derive(Clone, Copy)]
 enum SchemaContext {
     TransformationArg,
     IntentPayload,
 }
 
-/// The `Concrete`-kind property: the bare type/format/pattern shape
-/// plus the per-kind, context-aware description. Shared by
-/// [`property_schema`]'s `Concrete` arm and by [`intent_arg_schema`],
-/// whose declared arguments are always concrete kinds.
+/// A concrete kind's property: its bare shape plus its description.
 fn concrete_property(kind: &PredicateArgKind, ctx: SchemaContext) -> Value {
     let mut value = bare_kind_shape(kind);
     if let Some(obj) = value.as_object_mut()
@@ -192,21 +144,12 @@ fn concrete_property(kind: &PredicateArgKind, ctx: SchemaContext) -> Value {
     value
 }
 
-/// The bare JSON-Schema type/format/pattern shape for a concrete
-/// kind, without any descriptive text. Reused by [`property_schema`]
-/// for both the `Concrete` rendering (which adds the per-kind
-/// description on top) and the `Ambiguous` `anyOf` alternatives
-/// (which deliberately omit per-alternative descriptions).
+/// The JSON Schema type/format/pattern for a concrete kind, with no
+/// description.
 fn bare_kind_shape(kind: &PredicateArgKind) -> Value {
     match kind {
-        // `Subject` deliberately carries NO `format: "uuid"`.
-        // Morpholog's `Subject` is the only primitive noun and
-        // represents both minted entity identifiers (UUIDv7 by
-        // runtime convention) and domain symbols (commodity codes,
-        // direction enums, period names, etc.). The IR does not
-        // pin a format; the schema mirrors that. An embedder that
-        // wants UUID validation for a specific parameter layers
-        // its own constraint on top in its pre-flight schema.
+        // No `format: "uuid"`: a subject can also be a domain symbol such
+        // as a commodity code.
         PredicateArgKind::Subject => json!({"type": "string"}),
         PredicateArgKind::Decimal => {
             json!({"type": "string", "pattern": r"^-?(0|[1-9]\d*)(\.\d+)?$"})
@@ -216,34 +159,24 @@ fn bare_kind_shape(kind: &PredicateArgKind) -> Value {
         PredicateArgKind::Duration => json!({"type": "string", "format": "duration"}),
         PredicateArgKind::Bool => json!({"type": "boolean"}),
         PredicateArgKind::Collection => json!({"type": "array"}),
-        // A quantity travels as the SAME bare decimal string as
-        // `Decimal` - the declaration supplies the unit, so the wire
-        // shape does not change. The unit rides as an
-        // `x-morpholog-unit` extension (the machine-readable
-        // contract); the human-readable unit lands in the
-        // description, because many form generators ignore custom
-        // extensions.
+        // Same wire shape as `Decimal`; the declaration fixes the unit.
+        // The unit is also in the description, because many form
+        // generators ignore custom extensions.
         PredicateArgKind::Quantity(u) => json!({
             "type": "string",
             "pattern": r"^-?(0|[1-9]\d*)(\.\d+)?$",
             "x-morpholog-unit": u.as_str(),
         }),
-        // Expression-only: no declaration can carry this kind (the
-        // validator refuses it), so no schema is ever generated for
-        // it. The arm exists for exhaustiveness only.
+        // Unreachable: the validator refuses this kind in any declaration.
         PredicateArgKind::CalendarSpan => json!(false),
-        // `Any` carries no constraint at the JSON-Schema level; the
-        // contract-level "this is polymorphic" lives in the
-        // property's description, not on the bare shape.
+        // No constraint; the property's description says it is
+        // polymorphic.
         PredicateArgKind::Any => json!({}),
     }
 }
 
-/// The per-kind description used by the `Concrete` rendering. `None`
-/// for kinds where the JSON-Schema type alone is descriptive enough
-/// (booleans). Only `Collection` reads `ctx`: a transformation argument
-/// points at the `--args` codec for *sending* a collection; an intent
-/// payload field is read-only output, so that guidance would mislead.
+/// The description for a concrete kind, or `None` where the type says
+/// enough. Only `Collection` depends on `ctx`.
 fn concrete_kind_description(kind: &PredicateArgKind, ctx: SchemaContext) -> Option<String> {
     let owned = match kind {
         PredicateArgKind::Quantity(u) => {
@@ -299,10 +232,8 @@ fn concrete_kind_description(kind: &PredicateArgKind, ctx: SchemaContext) -> Opt
 mod tests {
     use super::*;
 
-    /// The `Collection` description is input-specific: a transformation
-    /// argument is pointed at the `--args` codec for sending a
-    /// collection, but an intent payload is read-only output, so that
-    /// guidance must not leak into the `schema --intent` contract.
+    /// Advice on sending a collection via `--args` appears for a
+    /// transformation argument, never for a read-only intent payload.
     #[test]
     fn collection_description_splits_by_context() {
         let input = concrete_property(
@@ -328,10 +259,8 @@ mod tests {
         assert_eq!(payload["type"], "array");
     }
 
-    /// An inferred collection (the loop binding observed at a Subject
-    /// slot) emits a TYPED array: `items` carries the element kind, not
-    /// the opaque untyped array of `Concrete(Collection)`. This is the
-    /// embedder-facing contract behind a generated `list[str]` field.
+    /// A collection with an inferred element kind emits typed `items`;
+    /// the generated client's `list[str]` field relies on it.
     #[test]
     fn an_inferred_collection_emits_typed_items() {
         let kind = ParamKind::Collection(Box::new(ParamKind::Concrete(PredicateArgKind::Subject)));

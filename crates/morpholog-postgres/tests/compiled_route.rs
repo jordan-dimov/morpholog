@@ -1,16 +1,12 @@
 //! The compiled route beside the interpreter, on the production path.
-//! Every whole-in-fragment gallery programme is proposed twice from the
-//! same seeded state, once through each route, and the two must reach
-//! the same decision: the same outcome and reason, the same refusing
-//! rule and version, the same witness variables, the same semantic
-//! rejection-log fields, and the same persisted audit, claim and outbox
-//! rows up to generated identities and times. Witness values are
-//! observational (a symmetric plan may name the violating pair in
-//! another order).
+//! Each fully compilable programme is proposed through both routes from
+//! the same state. They must agree on outcome, reason, refusing rule and
+//! version, witness variables, rejection-log fields, and persisted rows
+//! (ignoring generated ids and times). Witness values may differ in
+//! order, so they are not compared.
 //!
-//! The other half is what a compiled check may never do: decide by
-//! falling back. A SQL error inside a check is an operational error,
-//! with the transaction rolled back and nothing recorded.
+//! A compiled check never falls back: a SQL error inside one is an
+//! operational error, rolled back with nothing recorded.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -32,11 +28,10 @@ async fn count(pool: &PgPool, sql: &'static str) -> i64 {
     sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
 }
 
-/// Rows as text with generated identities normalised, sorted, so two
-/// runs that minted different subjects still compare equal when they
-/// persisted the same thing. Audit rows keep every field but their
-/// transition id and time; claims drop the transition that asserted
-/// them; outbox rows drop their ids and the key derived from one.
+/// Rows as sorted text with generated identities normalised, so two runs
+/// that minted different subjects compare equal. Audit rows drop their
+/// transition id and time, claims the transition that asserted them,
+/// outbox rows their ids and the key derived from one.
 async fn persisted(pool: &PgPool, sql: &'static str) -> Vec<String> {
     let rows: Vec<String> = sqlx::query_scalar(sql).fetch_all(pool).await.unwrap();
     let mut rows: Vec<String> = rows.iter().map(|r| normalize_uuids(r)).collect();
@@ -249,12 +244,10 @@ async fn both_routes(
     (spec, real)
 }
 
-/// One entry breaks the balance, another's total is more than any
-/// decimal holds. Admission is case-local on both routes: a posting
-/// elsewhere is admitted despite both; a posting onto the overflowing
-/// entry is the range error, with nothing recorded anywhere; a posting
-/// onto the unbalanced entry is that entry's refusal, never the other
-/// entry's error.
+/// One entry is unbalanced; another's total overflows a decimal. On both
+/// routes a posting elsewhere is admitted, a posting onto the overflowing
+/// entry is a range error with nothing recorded, and a posting onto the
+/// unbalanced entry is refused for that entry, not the other's error.
 #[tokio::test]
 async fn admission_is_case_local_on_both_routes() {
     let pool = test_pool().await;
@@ -308,9 +301,9 @@ async fn admission_is_case_local_on_both_routes() {
     assert_eq!(real, spec);
 }
 
-/// The kernel accumulates wider than a decimal and tests only the
-/// final total, so an excess that cancels is no error: the compiled
-/// check must agree, and admit.
+/// The kernel sums wider than a decimal and checks only the final
+/// total, so an overflow that cancels is no error. The compiled check
+/// must agree and admit.
 #[tokio::test]
 async fn an_excess_that_cancels_is_representable_on_both_routes() {
     let pool = test_pool().await;
@@ -323,8 +316,8 @@ async fn an_excess_that_cancels_is_representable_on_both_routes() {
         line("e1", "account_revenue", dec(0), dec(1)),
         line("e1", "account_revenue", dec(0), dec(-1)),
     ];
-    // A posting of nothing onto the entry raises its obligation: the
-    // totals stay at the maximum, and both routes admit.
+    // A zero posting onto the entry forces its check: the totals stay
+    // at the maximum, and both routes admit.
     let (spec, real) = both_routes(&pool, &seeded, "e1", 0).await;
     assert!(
         matches!(&spec, RouteObservation::Decided(o) if o.outcome.starts_with("committed")),
@@ -387,9 +380,8 @@ async fn a_failing_compiled_check_is_an_operational_error_never_a_decision() {
         .unwrap();
     assert!(matches!(first, PgProposalOutcome::Committed { .. }));
 
-    // A line whose amount is not a number. Nothing the codec would
-    // write; a corrupt row is the one way to make a correct query fail.
-    // Admission being case-local, only a posting onto that entry reads
+    // A line whose amount is not a number: a corrupt row is the only way
+    // to make a correct query fail. Only a posting onto that entry reads
     // it.
     let corrupted = sqlx::query(
         "UPDATE morpholog.claims
@@ -459,10 +451,10 @@ async fn a_compiled_batch_checks_each_act_against_the_acts_before_it() {
         3
     );
 
-    // The same split after a simple posting of the same entry in the
-    // same batch: its debit line is the earlier act's line (claims are
-    // a set), so the entry's credits outrun its debits. Only a check
-    // that sees the first act's delta can refuse the second.
+    // The same split after a simple posting of the same entry in one
+    // batch: its debit line is the earlier act's line (claims are a
+    // set), so credits exceed debits. Only a check that sees the first
+    // act's delta can refuse the second.
     let outcome = propose_all_against_pg(
         &pool,
         &program,
@@ -546,11 +538,10 @@ fn churn() -> Transition {
     }
 }
 
-/// A retract followed by a re-admit of the same claim in one delta
-/// changes nothing, on both routes: the compiled route reads the
-/// delta back from the table as one deletion and one insertion and
-/// must net them, or it would revalidate a dirty case the kernel
-/// leaves untouched.
+/// Retracting and re-admitting a claim in one delta changes nothing, on
+/// both routes. The compiled route sees a deletion and an insertion and
+/// must net them, or it would recheck a dirty case the kernel leaves
+/// alone.
 #[tokio::test]
 async fn a_retract_and_readmit_touches_nothing_on_both_routes() {
     let (compiled, interpreted) = churn_ledger();

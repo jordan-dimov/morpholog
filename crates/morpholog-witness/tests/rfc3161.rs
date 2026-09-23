@@ -1,9 +1,9 @@
-//! The verifier over real tokens, recorded from public authorities over the
-//! frozen witness payloads (genesis and chained heads) with OpenSSL as the
-//! ground truth at recording time. Attacker capability modelled: whoever
-//! can write the checkpoints table can plant, edit, or re-home a proof;
-//! whoever can propose can bring their own authority. The verifier's job is
-//! to judge what it can and to say plainly what it cannot.
+//! The verifier over real tokens recorded from public authorities, with OpenSSL as the ground
+//! truth at recording time.
+//!
+//! Attacker capability modelled: whoever can write the checkpoints table can plant, edit, or
+//! re-home a proof; whoever can propose can bring their own authority. The verifier must judge
+//! what it can and say plainly what it cannot.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -105,10 +105,8 @@ fn a_tampered_token_is_invalid_not_unsupported() {
     ));
 }
 
-/// The negative control that guards the verifier's honesty: a genuine
-/// FreeTSA token, granted, over this head, nonce echoed, signed with ECDSA
-/// P-384 and SHA-512 - a primitive this implementation lacks. It is
-/// `unsupported`, never `invalid`, with or without trust material.
+/// A genuine FreeTSA token over this head, signed with ECDSA P-384 and SHA-512, which this
+/// crate lacks. It must be `unsupported`, never `invalid`, with or without trust material.
 #[test]
 fn a_genuine_token_this_implementation_cannot_judge_is_unsupported_never_invalid() {
     let proof = fixture("genesis_freetsa.tsr");
@@ -130,13 +128,10 @@ fn a_request_carries_a_sha256_imprint_and_a_fresh_nonce() {
     assert!(a.der.len() > 40);
 }
 
-/// The self-check that decides storage runs every verifier check plus the
-/// nonce; the recorded request and response prove the happy path, and a
-/// response to a different request is refused on its nonce.
+/// The pre-storage self-check also checks the nonce: a response to a different request is
+/// refused.
 #[test]
 fn check_response_accepts_the_recorded_pair_and_refuses_a_foreign_nonce() {
-    // The recorded request's DER, wrapped as the Request the builder would
-    // have produced: its nonce is the INTEGER the file carries.
     let recorded =
         morpholog_witness::testing::request_from_der(&fixture("genesis_digicert.tsq")).unwrap();
     let checked = check_response(
