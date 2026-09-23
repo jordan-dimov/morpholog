@@ -357,7 +357,7 @@ jobs:
       # Coverage runs the full workspace test suite under llvm-cov.
       # PG-backed tests share one schema and must run serially.
       # No threshold gating - the summary is a visibility tool, not
-      # a merge gate, so a coverage dip is a review prompt rather
+      # a required merge check, so a coverage dip is a review prompt rather
       # than a hard fail.
       #
       # `--threads=1` on the linker caps rust-lld's internal parallel
