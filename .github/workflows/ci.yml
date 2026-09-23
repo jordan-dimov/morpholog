@@ -302,7 +302,9 @@ jobs:
   coverage:
     name: coverage (llvm-cov)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A normal run takes about five minutes. The disk clean-up below
+    # has taken eleven on a slow runner, so the limit leaves room for it.
+    timeout-minutes: 25
 
     services:
       postgres:
@@ -328,6 +330,7 @@ jobs:
       # touches; the test-binary count tipped it into "No space left
       # on device". Clearing the unused toolchains buys ~25 GB.
       - name: Free runner disk
+        timeout-minutes: 15
         run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
 
       - name: Install stable toolchain with llvm-tools

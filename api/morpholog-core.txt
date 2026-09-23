@@ -9,6 +9,7 @@ pub morpholog_core::analysis::AnalysisError::UnknownTransformation::name: morpho
 impl core::clone::Clone for morpholog_core::analysis::AnalysisError
 pub fn morpholog_core::analysis::AnalysisError::clone(&self) -> morpholog_core::analysis::AnalysisError
 impl core::cmp::Eq for morpholog_core::analysis::AnalysisError
+pub fn morpholog_core::analysis::AnalysisError::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::analysis::AnalysisError
 pub fn morpholog_core::analysis::AnalysisError::eq(&self, &morpholog_core::analysis::AnalysisError) -> bool
 impl core::error::Error for morpholog_core::analysis::AnalysisError
@@ -33,6 +34,7 @@ pub morpholog_core::analysis::ParamKind::Unconstrained
 impl core::clone::Clone for morpholog_core::analysis::ParamKind
 pub fn morpholog_core::analysis::ParamKind::clone(&self) -> morpholog_core::analysis::ParamKind
 impl core::cmp::Eq for morpholog_core::analysis::ParamKind
+pub fn morpholog_core::analysis::ParamKind::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::analysis::ParamKind
 pub fn morpholog_core::analysis::ParamKind::eq(&self, &morpholog_core::analysis::ParamKind) -> bool
 impl core::fmt::Debug for morpholog_core::analysis::ParamKind
@@ -59,7 +61,9 @@ pub morpholog_core::calendar::CalendarSpan::days: i32
 pub morpholog_core::calendar::CalendarSpan::months: i32
 impl core::clone::Clone for morpholog_core::calendar::CalendarSpan
 pub fn morpholog_core::calendar::CalendarSpan::clone(&self) -> morpholog_core::calendar::CalendarSpan
+impl core::clone::TrivialClone for morpholog_core::calendar::CalendarSpan
 impl core::cmp::Eq for morpholog_core::calendar::CalendarSpan
+pub fn morpholog_core::calendar::CalendarSpan::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::calendar::CalendarSpan
 pub fn morpholog_core::calendar::CalendarSpan::eq(&self, &morpholog_core::calendar::CalendarSpan) -> bool
 impl core::fmt::Debug for morpholog_core::calendar::CalendarSpan
@@ -197,6 +201,7 @@ pub morpholog_core::AnalysisError::UnknownTransformation::name: morpholog_core::
 impl core::clone::Clone for morpholog_core::analysis::AnalysisError
 pub fn morpholog_core::analysis::AnalysisError::clone(&self) -> morpholog_core::analysis::AnalysisError
 impl core::cmp::Eq for morpholog_core::analysis::AnalysisError
+pub fn morpholog_core::analysis::AnalysisError::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::analysis::AnalysisError
 pub fn morpholog_core::analysis::AnalysisError::eq(&self, &morpholog_core::analysis::AnalysisError) -> bool
 impl core::error::Error for morpholog_core::analysis::AnalysisError
@@ -220,6 +225,7 @@ pub morpholog_core::ArithOp::Mul
 pub morpholog_core::ArithOp::Sub
 impl core::clone::Clone for morpholog_core::ArithOp
 pub fn morpholog_core::ArithOp::clone(&self) -> morpholog_core::ArithOp
+impl core::clone::TrivialClone for morpholog_core::ArithOp
 impl core::cmp::Eq for morpholog_core::ArithOp
 impl core::cmp::PartialEq for morpholog_core::ArithOp
 pub fn morpholog_core::ArithOp::eq(&self, &morpholog_core::ArithOp) -> bool
@@ -245,6 +251,7 @@ pub morpholog_core::BindOneOutcome::NoMatch::failing_sub_expression: core::optio
 impl core::clone::Clone for morpholog_core::BindOneOutcome
 pub fn morpholog_core::BindOneOutcome::clone(&self) -> morpholog_core::BindOneOutcome
 impl core::cmp::Eq for morpholog_core::BindOneOutcome
+pub fn morpholog_core::BindOneOutcome::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::BindOneOutcome
 pub fn morpholog_core::BindOneOutcome::eq(&self, &morpholog_core::BindOneOutcome) -> bool
 impl core::fmt::Debug for morpholog_core::BindOneOutcome
@@ -273,6 +280,7 @@ pub fn morpholog_core::Builtin::arity(self) -> usize
 pub fn morpholog_core::Builtin::name(self) -> &'static str
 impl core::clone::Clone for morpholog_core::Builtin
 pub fn morpholog_core::Builtin::clone(&self) -> morpholog_core::Builtin
+impl core::clone::TrivialClone for morpholog_core::Builtin
 impl core::cmp::Eq for morpholog_core::Builtin
 impl core::cmp::PartialEq for morpholog_core::Builtin
 pub fn morpholog_core::Builtin::eq(&self, &morpholog_core::Builtin) -> bool
@@ -315,6 +323,7 @@ pub morpholog_core::CompareOp::Le
 pub morpholog_core::CompareOp::Lt
 impl core::clone::Clone for morpholog_core::CompareOp
 pub fn morpholog_core::CompareOp::clone(&self) -> morpholog_core::CompareOp
+impl core::clone::TrivialClone for morpholog_core::CompareOp
 impl core::cmp::Eq for morpholog_core::CompareOp
 impl core::cmp::PartialEq for morpholog_core::CompareOp
 pub fn morpholog_core::CompareOp::eq(&self, &morpholog_core::CompareOp) -> bool
@@ -336,6 +345,7 @@ pub morpholog_core::CoverageVerdict::Fired
 pub morpholog_core::CoverageVerdict::NeverFired
 impl core::clone::Clone for morpholog_core::CoverageVerdict
 pub fn morpholog_core::CoverageVerdict::clone(&self) -> morpholog_core::CoverageVerdict
+impl core::clone::TrivialClone for morpholog_core::CoverageVerdict
 impl core::cmp::Eq for morpholog_core::CoverageVerdict
 impl core::cmp::PartialEq for morpholog_core::CoverageVerdict
 pub fn morpholog_core::CoverageVerdict::eq(&self, &morpholog_core::CoverageVerdict) -> bool
@@ -357,6 +367,7 @@ pub morpholog_core::DefinitionOrigin::Authored
 pub morpholog_core::DefinitionOrigin::Discipline
 impl core::clone::Clone for morpholog_core::DefinitionOrigin
 pub fn morpholog_core::DefinitionOrigin::clone(&self) -> morpholog_core::DefinitionOrigin
+impl core::clone::TrivialClone for morpholog_core::DefinitionOrigin
 impl core::cmp::Eq for morpholog_core::DefinitionOrigin
 impl core::cmp::PartialEq for morpholog_core::DefinitionOrigin
 pub fn morpholog_core::DefinitionOrigin::eq(&self, &morpholog_core::DefinitionOrigin) -> bool
@@ -388,6 +399,7 @@ pub morpholog_core::Discipline::UniqueBy::fields: alloc::vec::Vec<alloc::string:
 impl core::clone::Clone for morpholog_core::Discipline
 pub fn morpholog_core::Discipline::clone(&self) -> morpholog_core::Discipline
 impl core::cmp::Eq for morpholog_core::Discipline
+pub fn morpholog_core::Discipline::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Discipline
 pub fn morpholog_core::Discipline::eq(&self, &morpholog_core::Discipline) -> bool
 impl core::fmt::Debug for morpholog_core::Discipline
@@ -430,6 +442,7 @@ pub fn morpholog_core::EvalError::sum_out_of_decimal_range() -> Self
 impl core::clone::Clone for morpholog_core::EvalError
 pub fn morpholog_core::EvalError::clone(&self) -> morpholog_core::EvalError
 impl core::cmp::Eq for morpholog_core::EvalError
+pub fn morpholog_core::EvalError::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::EvalError
 pub fn morpholog_core::EvalError::eq(&self, &morpholog_core::EvalError) -> bool
 impl core::convert::From<morpholog_core::EvalError> for morpholog_core::ScoreError
@@ -462,6 +475,7 @@ pub morpholog_core::EvalValue::Timestamp(jiff::timestamp::Timestamp)
 impl core::clone::Clone for morpholog_core::EvalValue
 pub fn morpholog_core::EvalValue::clone(&self) -> morpholog_core::EvalValue
 impl core::cmp::Eq for morpholog_core::EvalValue
+pub fn morpholog_core::EvalValue::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::EvalValue
 pub fn morpholog_core::EvalValue::eq(&self, &morpholog_core::EvalValue) -> bool
 impl core::fmt::Debug for morpholog_core::EvalValue
@@ -487,6 +501,7 @@ impl morpholog_core::ExtremumOp
 pub fn morpholog_core::ExtremumOp::as_str(self) -> &'static str
 impl core::clone::Clone for morpholog_core::ExtremumOp
 pub fn morpholog_core::ExtremumOp::clone(&self) -> morpholog_core::ExtremumOp
+impl core::clone::TrivialClone for morpholog_core::ExtremumOp
 impl core::cmp::Eq for morpholog_core::ExtremumOp
 impl core::cmp::PartialEq for morpholog_core::ExtremumOp
 pub fn morpholog_core::ExtremumOp::eq(&self, &morpholog_core::ExtremumOp) -> bool
@@ -506,6 +521,7 @@ pub morpholog_core::GateKind::BindOne
 pub morpholog_core::GateKind::Require
 impl core::clone::Clone for morpholog_core::GateKind
 pub fn morpholog_core::GateKind::clone(&self) -> morpholog_core::GateKind
+impl core::clone::TrivialClone for morpholog_core::GateKind
 impl core::cmp::Eq for morpholog_core::GateKind
 impl core::cmp::PartialEq for morpholog_core::GateKind
 pub fn morpholog_core::GateKind::eq(&self, &morpholog_core::GateKind) -> bool
@@ -531,6 +547,7 @@ pub morpholog_core::Impact::Untouched
 impl core::clone::Clone for morpholog_core::Impact
 pub fn morpholog_core::Impact::clone(&self) -> morpholog_core::Impact
 impl core::cmp::Eq for morpholog_core::Impact
+pub fn morpholog_core::Impact::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Impact
 pub fn morpholog_core::Impact::eq(&self, &morpholog_core::Impact) -> bool
 impl core::fmt::Debug for morpholog_core::Impact
@@ -548,6 +565,7 @@ pub morpholog_core::InvariantOrigin::Authored
 pub morpholog_core::InvariantOrigin::Discipline
 impl core::clone::Clone for morpholog_core::InvariantOrigin
 pub fn morpholog_core::InvariantOrigin::clone(&self) -> morpholog_core::InvariantOrigin
+impl core::clone::TrivialClone for morpholog_core::InvariantOrigin
 impl core::cmp::Eq for morpholog_core::InvariantOrigin
 impl core::cmp::PartialEq for morpholog_core::InvariantOrigin
 pub fn morpholog_core::InvariantOrigin::eq(&self, &morpholog_core::InvariantOrigin) -> bool
@@ -584,6 +602,7 @@ pub morpholog_core::Lint::UnsuppliedAntecedent::missing: alloc::vec::Vec<alloc::
 impl core::clone::Clone for morpholog_core::Lint
 pub fn morpholog_core::Lint::clone(&self) -> morpholog_core::Lint
 impl core::cmp::Eq for morpholog_core::Lint
+pub fn morpholog_core::Lint::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Lint
 pub fn morpholog_core::Lint::eq(&self, &morpholog_core::Lint) -> bool
 impl core::fmt::Debug for morpholog_core::Lint
@@ -608,6 +627,7 @@ pub fn morpholog_core::OrderedDomain::admits(self, &morpholog_core::PredicateArg
 pub fn morpholog_core::OrderedDomain::for_concrete_kind(&morpholog_core::PredicateArgKind) -> core::option::Option<morpholog_core::OrderedDomain>
 impl core::clone::Clone for morpholog_core::OrderedDomain
 pub fn morpholog_core::OrderedDomain::clone(&self) -> morpholog_core::OrderedDomain
+impl core::clone::TrivialClone for morpholog_core::OrderedDomain
 impl core::cmp::Eq for morpholog_core::OrderedDomain
 impl core::cmp::PartialEq for morpholog_core::OrderedDomain
 pub fn morpholog_core::OrderedDomain::eq(&self, &morpholog_core::OrderedDomain) -> bool
@@ -633,6 +653,7 @@ pub morpholog_core::Outcome::Rejected::reason: morpholog_core::RejectionReason
 impl core::clone::Clone for morpholog_core::Outcome
 pub fn morpholog_core::Outcome::clone(&self) -> morpholog_core::Outcome
 impl core::cmp::Eq for morpholog_core::Outcome
+pub fn morpholog_core::Outcome::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Outcome
 pub fn morpholog_core::Outcome::eq(&self, &morpholog_core::Outcome) -> bool
 impl core::fmt::Debug for morpholog_core::Outcome
@@ -654,6 +675,7 @@ pub morpholog_core::ParamKind::Unconstrained
 impl core::clone::Clone for morpholog_core::analysis::ParamKind
 pub fn morpholog_core::analysis::ParamKind::clone(&self) -> morpholog_core::analysis::ParamKind
 impl core::cmp::Eq for morpholog_core::analysis::ParamKind
+pub fn morpholog_core::analysis::ParamKind::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::analysis::ParamKind
 pub fn morpholog_core::analysis::ParamKind::eq(&self, &morpholog_core::analysis::ParamKind) -> bool
 impl core::fmt::Debug for morpholog_core::analysis::ParamKind
@@ -680,6 +702,7 @@ pub morpholog_core::PredicateArgKind::Timestamp
 impl core::clone::Clone for morpholog_core::PredicateArgKind
 pub fn morpholog_core::PredicateArgKind::clone(&self) -> morpholog_core::PredicateArgKind
 impl core::cmp::Eq for morpholog_core::PredicateArgKind
+pub fn morpholog_core::PredicateArgKind::assert_fields_are_eq(&self)
 impl core::cmp::Ord for morpholog_core::PredicateArgKind
 pub fn morpholog_core::PredicateArgKind::cmp(&self, &morpholog_core::PredicateArgKind) -> core::cmp::Ordering
 impl core::cmp::PartialEq for morpholog_core::PredicateArgKind
@@ -737,6 +760,7 @@ pub morpholog_core::Prop::Xor(alloc::boxed::Box<morpholog_core::Prop>, alloc::bo
 impl core::clone::Clone for morpholog_core::Prop
 pub fn morpholog_core::Prop::clone(&self) -> morpholog_core::Prop
 impl core::cmp::Eq for morpholog_core::Prop
+pub fn morpholog_core::Prop::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Prop
 pub fn morpholog_core::Prop::eq(&self, &morpholog_core::Prop) -> bool
 impl core::fmt::Debug for morpholog_core::Prop
@@ -756,6 +780,7 @@ pub morpholog_core::Rejection::Invariant(morpholog_core::InvariantRejection)
 impl core::clone::Clone for morpholog_core::Rejection
 pub fn morpholog_core::Rejection::clone(&self) -> morpholog_core::Rejection
 impl core::cmp::Eq for morpholog_core::Rejection
+pub fn morpholog_core::Rejection::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Rejection
 pub fn morpholog_core::Rejection::eq(&self, &morpholog_core::Rejection) -> bool
 impl core::fmt::Debug for morpholog_core::Rejection
@@ -786,6 +811,7 @@ pub morpholog_core::RejectionReason::Require::rendered: alloc::string::String
 impl core::clone::Clone for morpholog_core::RejectionReason
 pub fn morpholog_core::RejectionReason::clone(&self) -> morpholog_core::RejectionReason
 impl core::cmp::Eq for morpholog_core::RejectionReason
+pub fn morpholog_core::RejectionReason::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::RejectionReason
 pub fn morpholog_core::RejectionReason::eq(&self, &morpholog_core::RejectionReason) -> bool
 impl core::fmt::Debug for morpholog_core::RejectionReason
@@ -810,6 +836,7 @@ pub morpholog_core::RequireOutcome::Rejected::reason: alloc::string::String
 impl core::clone::Clone for morpholog_core::RequireOutcome
 pub fn morpholog_core::RequireOutcome::clone(&self) -> morpholog_core::RequireOutcome
 impl core::cmp::Eq for morpholog_core::RequireOutcome
+pub fn morpholog_core::RequireOutcome::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::RequireOutcome
 pub fn morpholog_core::RequireOutcome::eq(&self, &morpholog_core::RequireOutcome) -> bool
 impl core::fmt::Debug for morpholog_core::RequireOutcome
@@ -854,6 +881,7 @@ pub morpholog_core::StagedDelta::Staged::retracted: alloc::vec::Vec<morpholog_co
 impl core::clone::Clone for morpholog_core::StagedDelta
 pub fn morpholog_core::StagedDelta::clone(&self) -> morpholog_core::StagedDelta
 impl core::cmp::Eq for morpholog_core::StagedDelta
+pub fn morpholog_core::StagedDelta::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::StagedDelta
 pub fn morpholog_core::StagedDelta::eq(&self, &morpholog_core::StagedDelta) -> bool
 impl core::fmt::Debug for morpholog_core::StagedDelta
@@ -890,6 +918,7 @@ pub morpholog_core::Stmt::Retract::predicate: morpholog_core::PredicateName
 impl core::clone::Clone for morpholog_core::Stmt
 pub fn morpholog_core::Stmt::clone(&self) -> morpholog_core::Stmt
 impl core::cmp::Eq for morpholog_core::Stmt
+pub fn morpholog_core::Stmt::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Stmt
 pub fn morpholog_core::Stmt::eq(&self, &morpholog_core::Stmt) -> bool
 impl core::fmt::Debug for morpholog_core::Stmt
@@ -909,6 +938,7 @@ pub morpholog_core::SumSeed::Quantity(morpholog_core::Unit)
 impl core::clone::Clone for morpholog_core::SumSeed
 pub fn morpholog_core::SumSeed::clone(&self) -> morpholog_core::SumSeed
 impl core::cmp::Eq for morpholog_core::SumSeed
+pub fn morpholog_core::SumSeed::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::SumSeed
 pub fn morpholog_core::SumSeed::eq(&self, &morpholog_core::SumSeed) -> bool
 impl core::default::Default for morpholog_core::SumSeed
@@ -931,6 +961,7 @@ pub morpholog_core::Term::Wildcard
 impl core::clone::Clone for morpholog_core::Term
 pub fn morpholog_core::Term::clone(&self) -> morpholog_core::Term
 impl core::cmp::Eq for morpholog_core::Term
+pub fn morpholog_core::Term::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Term
 pub fn morpholog_core::Term::eq(&self, &morpholog_core::Term) -> bool
 impl core::convert::From<morpholog_core::Term> for morpholog_core::ValueExpr
@@ -977,6 +1008,7 @@ pub morpholog_core::TraceEntry::Retract::retracted: alloc::vec::Vec<morpholog_co
 impl core::clone::Clone for morpholog_core::TraceEntry
 pub fn morpholog_core::TraceEntry::clone(&self) -> morpholog_core::TraceEntry
 impl core::cmp::Eq for morpholog_core::TraceEntry
+pub fn morpholog_core::TraceEntry::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::TraceEntry
 pub fn morpholog_core::TraceEntry::eq(&self, &morpholog_core::TraceEntry) -> bool
 impl core::fmt::Debug for morpholog_core::TraceEntry
@@ -1003,6 +1035,7 @@ pub morpholog_core::TracedProposal::Errored::trace: alloc::vec::Vec<morpholog_co
 impl core::clone::Clone for morpholog_core::TracedProposal
 pub fn morpholog_core::TracedProposal::clone(&self) -> morpholog_core::TracedProposal
 impl core::cmp::Eq for morpholog_core::TracedProposal
+pub fn morpholog_core::TracedProposal::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::TracedProposal
 pub fn morpholog_core::TracedProposal::eq(&self, &morpholog_core::TracedProposal) -> bool
 impl core::fmt::Debug for morpholog_core::TracedProposal
@@ -1028,6 +1061,7 @@ pub morpholog_core::ValidationContext::Transformation::statement: core::option::
 impl core::clone::Clone for morpholog_core::ValidationContext
 pub fn morpholog_core::ValidationContext::clone(&self) -> morpholog_core::ValidationContext
 impl core::cmp::Eq for morpholog_core::ValidationContext
+pub fn morpholog_core::ValidationContext::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::ValidationContext
 pub fn morpholog_core::ValidationContext::eq(&self, &morpholog_core::ValidationContext) -> bool
 impl core::fmt::Debug for morpholog_core::ValidationContext
@@ -1206,6 +1240,7 @@ pub morpholog_core::ValidationError::WildcardAsValue::context: morpholog_core::V
 impl core::clone::Clone for morpholog_core::ValidationError
 pub fn morpholog_core::ValidationError::clone(&self) -> morpholog_core::ValidationError
 impl core::cmp::Eq for morpholog_core::ValidationError
+pub fn morpholog_core::ValidationError::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::ValidationError
 pub fn morpholog_core::ValidationError::eq(&self, &morpholog_core::ValidationError) -> bool
 impl core::error::Error for morpholog_core::ValidationError
@@ -1234,6 +1269,7 @@ pub morpholog_core::Value::Timestamp(alloc::string::String)
 impl core::clone::Clone for morpholog_core::Value
 pub fn morpholog_core::Value::clone(&self) -> morpholog_core::Value
 impl core::cmp::Eq for morpholog_core::Value
+pub fn morpholog_core::Value::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Value
 pub fn morpholog_core::Value::eq(&self, &morpholog_core::Value) -> bool
 impl core::fmt::Debug for morpholog_core::Value
@@ -1275,6 +1311,7 @@ pub morpholog_core::ValueExpr::ValueOf::predicate: morpholog_core::PredicateName
 impl core::clone::Clone for morpholog_core::ValueExpr
 pub fn morpholog_core::ValueExpr::clone(&self) -> morpholog_core::ValueExpr
 impl core::cmp::Eq for morpholog_core::ValueExpr
+pub fn morpholog_core::ValueExpr::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::ValueExpr
 pub fn morpholog_core::ValueExpr::eq(&self, &morpholog_core::ValueExpr) -> bool
 impl core::convert::From<morpholog_core::Term> for morpholog_core::ValueExpr
@@ -1295,6 +1332,7 @@ pub morpholog_core::Verdict::Rejected(morpholog_core::Rejection)
 impl core::clone::Clone for morpholog_core::Verdict
 pub fn morpholog_core::Verdict::clone(&self) -> morpholog_core::Verdict
 impl core::cmp::Eq for morpholog_core::Verdict
+pub fn morpholog_core::Verdict::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Verdict
 pub fn morpholog_core::Verdict::eq(&self, &morpholog_core::Verdict) -> bool
 impl core::fmt::Debug for morpholog_core::Verdict
@@ -1318,6 +1356,7 @@ pub morpholog_core::VocabularyKind::Intent
 pub morpholog_core::VocabularyKind::Predicate
 impl core::clone::Clone for morpholog_core::VocabularyKind
 pub fn morpholog_core::VocabularyKind::clone(&self) -> morpholog_core::VocabularyKind
+impl core::clone::TrivialClone for morpholog_core::VocabularyKind
 impl core::cmp::Eq for morpholog_core::VocabularyKind
 impl core::cmp::PartialEq for morpholog_core::VocabularyKind
 pub fn morpholog_core::VocabularyKind::eq(&self, &morpholog_core::VocabularyKind) -> bool
@@ -1339,8 +1378,6 @@ pub morpholog_core::Admission::definitions: &'a [morpholog_core::Definition]
 pub morpholog_core::Admission::invariants: &'a [morpholog_core::Invariant]
 impl<'a> morpholog_core::Admission<'a>
 pub fn morpholog_core::Admission<'a>::of(&'a [morpholog_core::Invariant], &'a [morpholog_core::Definition]) -> Self
-pub fn morpholog_core::Admission<'a>::plans(&self) -> &[morpholog_core::ImpactPlan]
-pub fn morpholog_core::Admission<'a>::with_plans(&'a [morpholog_core::Invariant], &'a [morpholog_core::Definition], &'a [morpholog_core::ImpactPlan]) -> Self
 impl<'a> core::marker::Freeze for morpholog_core::Admission<'a>
 impl<'a> core::marker::Send for morpholog_core::Admission<'a>
 impl<'a> core::marker::Sync for morpholog_core::Admission<'a>
@@ -1354,6 +1391,7 @@ pub morpholog_core::ArgDecl::name: alloc::string::String
 impl core::clone::Clone for morpholog_core::ArgDecl
 pub fn morpholog_core::ArgDecl::clone(&self) -> morpholog_core::ArgDecl
 impl core::cmp::Eq for morpholog_core::ArgDecl
+pub fn morpholog_core::ArgDecl::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::ArgDecl
 pub fn morpholog_core::ArgDecl::eq(&self, &morpholog_core::ArgDecl) -> bool
 impl core::fmt::Debug for morpholog_core::ArgDecl
@@ -1415,8 +1453,6 @@ impl<'p> morpholog_core::CandidateScorer<'p>
 pub fn morpholog_core::CandidateScorer<'p>::into_report(self) -> morpholog_core::CandidateScore
 pub fn morpholog_core::CandidateScorer<'p>::mark_split(&mut self, morpholog_core::SplitBoundaryReport)
 pub fn morpholog_core::CandidateScorer<'p>::new(&'p morpholog_core::Program) -> core::result::Result<Self, morpholog_core::ScoreError>
-pub fn morpholog_core::CandidateScorer<'p>::observe(&mut self, &morpholog_core::State, &morpholog_core::State, &str) -> core::result::Result<(), morpholog_core::EvalError>
-pub fn morpholog_core::CandidateScorer<'p>::observe_post(&mut self, &morpholog_core::State, &str) -> core::result::Result<(), morpholog_core::EvalError>
 pub fn morpholog_core::CandidateScorer<'p>::observe_transition(&mut self, &morpholog_core::State, &morpholog_core::EffectiveDelta, &str) -> core::result::Result<(), morpholog_core::EvalError>
 impl<'p> core::marker::Freeze for morpholog_core::CandidateScorer<'p>
 impl<'p> core::marker::Send for morpholog_core::CandidateScorer<'p>
@@ -1447,6 +1483,7 @@ pub morpholog_core::Claim::predicate: morpholog_core::PredicateName
 impl core::clone::Clone for morpholog_core::Claim
 pub fn morpholog_core::Claim::clone(&self) -> morpholog_core::Claim
 impl core::cmp::Eq for morpholog_core::Claim
+pub fn morpholog_core::Claim::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Claim
 pub fn morpholog_core::Claim::eq(&self, &morpholog_core::Claim) -> bool
 impl core::fmt::Debug for morpholog_core::Claim
@@ -1465,6 +1502,7 @@ pub morpholog_core::ClaimInstance::predicate: morpholog_core::PredicateName
 impl core::clone::Clone for morpholog_core::ClaimInstance
 pub fn morpholog_core::ClaimInstance::clone(&self) -> morpholog_core::ClaimInstance
 impl core::cmp::Eq for morpholog_core::ClaimInstance
+pub fn morpholog_core::ClaimInstance::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::ClaimInstance
 pub fn morpholog_core::ClaimInstance::eq(&self, &morpholog_core::ClaimInstance) -> bool
 impl core::fmt::Debug for morpholog_core::ClaimInstance
@@ -1493,6 +1531,7 @@ impl core::fmt::Debug for morpholog_core::Claims<'_>
 pub fn morpholog_core::Claims<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::clone::Clone for morpholog_core::Claims<'a>
 pub fn morpholog_core::Claims<'a>::clone(&self) -> morpholog_core::Claims<'a>
+impl<'a> core::clone::TrivialClone for morpholog_core::Claims<'a>
 impl<'a> core::iter::traits::collect::IntoIterator for morpholog_core::Claims<'a>
 pub type morpholog_core::Claims<'a>::IntoIter = alloc::boxed::Box<(dyn core::iter::traits::iterator::Iterator<Item = &'a morpholog_core::ClaimInstance> + 'a)>
 pub type morpholog_core::Claims<'a>::Item = &'a morpholog_core::ClaimInstance
@@ -1536,6 +1575,7 @@ pub morpholog_core::ControlMatrix::transformations: alloc::vec::Vec<morpholog_co
 impl core::clone::Clone for morpholog_core::ControlMatrix
 pub fn morpholog_core::ControlMatrix::clone(&self) -> morpholog_core::ControlMatrix
 impl core::cmp::Eq for morpholog_core::ControlMatrix
+pub fn morpholog_core::ControlMatrix::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::ControlMatrix
 pub fn morpholog_core::ControlMatrix::eq(&self, &morpholog_core::ControlMatrix) -> bool
 impl core::fmt::Debug for morpholog_core::ControlMatrix
@@ -1573,7 +1613,6 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::CoverageReport
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::CoverageReport
 pub struct morpholog_core::CoverageTracker<'p>
 impl<'p> morpholog_core::CoverageTracker<'p>
-pub fn morpholog_core::CoverageTracker<'p>::delta_is_relevant(&self, &alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>) -> bool
 pub fn morpholog_core::CoverageTracker<'p>::into_report(self) -> morpholog_core::CoverageReport
 pub fn morpholog_core::CoverageTracker<'p>::needs_pre_state(&self) -> bool
 pub fn morpholog_core::CoverageTracker<'p>::new(&'p morpholog_core::Program) -> Self
@@ -1594,6 +1633,7 @@ pub morpholog_core::Definition::parameters: alloc::vec::Vec<morpholog_core::Var>
 impl core::clone::Clone for morpholog_core::Definition
 pub fn morpholog_core::Definition::clone(&self) -> morpholog_core::Definition
 impl core::cmp::Eq for morpholog_core::Definition
+pub fn morpholog_core::Definition::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Definition
 pub fn morpholog_core::Definition::eq(&self, &morpholog_core::Definition) -> bool
 impl core::fmt::Debug for morpholog_core::Definition
@@ -1612,6 +1652,7 @@ pub fn morpholog_core::DefinitionName::as_str(&self) -> &str
 impl core::clone::Clone for morpholog_core::DefinitionName
 pub fn morpholog_core::DefinitionName::clone(&self) -> morpholog_core::DefinitionName
 impl core::cmp::Eq for morpholog_core::DefinitionName
+pub fn morpholog_core::DefinitionName::assert_fields_are_eq(&self)
 impl core::cmp::Ord for morpholog_core::DefinitionName
 pub fn morpholog_core::DefinitionName::cmp(&self, &morpholog_core::DefinitionName) -> core::cmp::Ordering
 impl core::cmp::PartialEq for morpholog_core::DefinitionName
@@ -1656,6 +1697,7 @@ pub morpholog_core::DerivedClaim::values: alloc::vec::Vec<morpholog_core::Derive
 impl core::clone::Clone for morpholog_core::DerivedClaim
 pub fn morpholog_core::DerivedClaim::clone(&self) -> morpholog_core::DerivedClaim
 impl core::cmp::Eq for morpholog_core::DerivedClaim
+pub fn morpholog_core::DerivedClaim::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::DerivedClaim
 pub fn morpholog_core::DerivedClaim::eq(&self, &morpholog_core::DerivedClaim) -> bool
 impl core::fmt::Debug for morpholog_core::DerivedClaim
@@ -1674,6 +1716,7 @@ pub morpholog_core::DerivedValue::name: alloc::string::String
 impl core::clone::Clone for morpholog_core::DerivedValue
 pub fn morpholog_core::DerivedValue::clone(&self) -> morpholog_core::DerivedValue
 impl core::cmp::Eq for morpholog_core::DerivedValue
+pub fn morpholog_core::DerivedValue::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::DerivedValue
 pub fn morpholog_core::DerivedValue::eq(&self, &morpholog_core::DerivedValue) -> bool
 impl core::fmt::Debug for morpholog_core::DerivedValue
@@ -1690,11 +1733,11 @@ pub struct morpholog_core::EffectiveDelta
 pub morpholog_core::EffectiveDelta::asserted: alloc::vec::Vec<morpholog_core::ClaimInstance>
 pub morpholog_core::EffectiveDelta::retracted: alloc::vec::Vec<morpholog_core::ClaimInstance>
 impl morpholog_core::EffectiveDelta
-pub fn morpholog_core::EffectiveDelta::is_empty(&self) -> bool
 pub fn morpholog_core::EffectiveDelta::of(&[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance], impl core::ops::function::Fn(&morpholog_core::ClaimInstance) -> bool) -> Self
 impl core::clone::Clone for morpholog_core::EffectiveDelta
 pub fn morpholog_core::EffectiveDelta::clone(&self) -> morpholog_core::EffectiveDelta
 impl core::cmp::Eq for morpholog_core::EffectiveDelta
+pub fn morpholog_core::EffectiveDelta::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::EffectiveDelta
 pub fn morpholog_core::EffectiveDelta::eq(&self, &morpholog_core::EffectiveDelta) -> bool
 impl core::default::Default for morpholog_core::EffectiveDelta
@@ -1714,6 +1757,7 @@ pub morpholog_core::ErrorRejection::message: alloc::string::String
 impl core::clone::Clone for morpholog_core::ErrorRejection
 pub fn morpholog_core::ErrorRejection::clone(&self) -> morpholog_core::ErrorRejection
 impl core::cmp::Eq for morpholog_core::ErrorRejection
+pub fn morpholog_core::ErrorRejection::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::ErrorRejection
 pub fn morpholog_core::ErrorRejection::eq(&self, &morpholog_core::ErrorRejection) -> bool
 impl core::fmt::Debug for morpholog_core::ErrorRejection
@@ -1738,6 +1782,7 @@ pub fn morpholog_core::Explanation::render(&self) -> alloc::string::String
 impl core::clone::Clone for morpholog_core::Explanation
 pub fn morpholog_core::Explanation::clone(&self) -> morpholog_core::Explanation
 impl core::cmp::Eq for morpholog_core::Explanation
+pub fn morpholog_core::Explanation::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Explanation
 pub fn morpholog_core::Explanation::eq(&self, &morpholog_core::Explanation) -> bool
 impl core::fmt::Debug for morpholog_core::Explanation
@@ -1760,6 +1805,7 @@ pub morpholog_core::ForIterationTrace::trace: alloc::vec::Vec<morpholog_core::Tr
 impl core::clone::Clone for morpholog_core::ForIterationTrace
 pub fn morpholog_core::ForIterationTrace::clone(&self) -> morpholog_core::ForIterationTrace
 impl core::cmp::Eq for morpholog_core::ForIterationTrace
+pub fn morpholog_core::ForIterationTrace::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::ForIterationTrace
 pub fn morpholog_core::ForIterationTrace::eq(&self, &morpholog_core::ForIterationTrace) -> bool
 impl core::fmt::Debug for morpholog_core::ForIterationTrace
@@ -1785,6 +1831,7 @@ pub morpholog_core::GateControl::name: core::option::Option<alloc::string::Strin
 impl core::clone::Clone for morpholog_core::GateControl
 pub fn morpholog_core::GateControl::clone(&self) -> morpholog_core::GateControl
 impl core::cmp::Eq for morpholog_core::GateControl
+pub fn morpholog_core::GateControl::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::GateControl
 pub fn morpholog_core::GateControl::eq(&self, &morpholog_core::GateControl) -> bool
 impl core::fmt::Debug for morpholog_core::GateControl
@@ -1809,6 +1856,7 @@ pub morpholog_core::GateFrontLoad::triggered_by: alloc::vec::Vec<alloc::string::
 impl core::clone::Clone for morpholog_core::GateFrontLoad
 pub fn morpholog_core::GateFrontLoad::clone(&self) -> morpholog_core::GateFrontLoad
 impl core::cmp::Eq for morpholog_core::GateFrontLoad
+pub fn morpholog_core::GateFrontLoad::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::GateFrontLoad
 pub fn morpholog_core::GateFrontLoad::eq(&self, &morpholog_core::GateFrontLoad) -> bool
 impl core::fmt::Debug for morpholog_core::GateFrontLoad
@@ -1835,6 +1883,7 @@ pub morpholog_core::GateRef::triggered_by: alloc::vec::Vec<alloc::string::String
 impl core::clone::Clone for morpholog_core::GateRef
 pub fn morpholog_core::GateRef::clone(&self) -> morpholog_core::GateRef
 impl core::cmp::Eq for morpholog_core::GateRef
+pub fn morpholog_core::GateRef::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::GateRef
 pub fn morpholog_core::GateRef::eq(&self, &morpholog_core::GateRef) -> bool
 impl core::fmt::Debug for morpholog_core::GateRef
@@ -1859,6 +1908,7 @@ pub morpholog_core::GateRejection::statement_kind: morpholog_core::GateKind
 impl core::clone::Clone for morpholog_core::GateRejection
 pub fn morpholog_core::GateRejection::clone(&self) -> morpholog_core::GateRejection
 impl core::cmp::Eq for morpholog_core::GateRejection
+pub fn morpholog_core::GateRejection::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::GateRejection
 pub fn morpholog_core::GateRejection::eq(&self, &morpholog_core::GateRejection) -> bool
 impl core::fmt::Debug for morpholog_core::GateRejection
@@ -1883,6 +1933,7 @@ pub morpholog_core::Guarantee::rule: alloc::string::String
 impl core::clone::Clone for morpholog_core::Guarantee
 pub fn morpholog_core::Guarantee::clone(&self) -> morpholog_core::Guarantee
 impl core::cmp::Eq for morpholog_core::Guarantee
+pub fn morpholog_core::Guarantee::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Guarantee
 pub fn morpholog_core::Guarantee::eq(&self, &morpholog_core::Guarantee) -> bool
 impl core::fmt::Debug for morpholog_core::Guarantee
@@ -1906,6 +1957,7 @@ pub fn morpholog_core::ImpactPlan::new(&morpholog_core::Invariant) -> Self
 impl core::clone::Clone for morpholog_core::ImpactPlan
 pub fn morpholog_core::ImpactPlan::clone(&self) -> morpholog_core::ImpactPlan
 impl core::cmp::Eq for morpholog_core::ImpactPlan
+pub fn morpholog_core::ImpactPlan::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::ImpactPlan
 pub fn morpholog_core::ImpactPlan::eq(&self, &morpholog_core::ImpactPlan) -> bool
 impl core::fmt::Debug for morpholog_core::ImpactPlan
@@ -1924,6 +1976,7 @@ pub morpholog_core::Intent::name: morpholog_core::IntentName
 impl core::clone::Clone for morpholog_core::Intent
 pub fn morpholog_core::Intent::clone(&self) -> morpholog_core::Intent
 impl core::cmp::Eq for morpholog_core::Intent
+pub fn morpholog_core::Intent::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Intent
 pub fn morpholog_core::Intent::eq(&self, &morpholog_core::Intent) -> bool
 impl core::fmt::Debug for morpholog_core::Intent
@@ -1942,6 +1995,7 @@ pub morpholog_core::IntentDecl::name: morpholog_core::IntentName
 impl core::clone::Clone for morpholog_core::IntentDecl
 pub fn morpholog_core::IntentDecl::clone(&self) -> morpholog_core::IntentDecl
 impl core::cmp::Eq for morpholog_core::IntentDecl
+pub fn morpholog_core::IntentDecl::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::IntentDecl
 pub fn morpholog_core::IntentDecl::eq(&self, &morpholog_core::IntentDecl) -> bool
 impl core::fmt::Debug for morpholog_core::IntentDecl
@@ -1964,6 +2018,7 @@ pub morpholog_core::IntentInstance::name: morpholog_core::IntentName
 impl core::clone::Clone for morpholog_core::IntentInstance
 pub fn morpholog_core::IntentInstance::clone(&self) -> morpholog_core::IntentInstance
 impl core::cmp::Eq for morpholog_core::IntentInstance
+pub fn morpholog_core::IntentInstance::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::IntentInstance
 pub fn morpholog_core::IntentInstance::eq(&self, &morpholog_core::IntentInstance) -> bool
 impl core::fmt::Debug for morpholog_core::IntentInstance
@@ -1986,6 +2041,7 @@ pub fn morpholog_core::IntentName::as_str(&self) -> &str
 impl core::clone::Clone for morpholog_core::IntentName
 pub fn morpholog_core::IntentName::clone(&self) -> morpholog_core::IntentName
 impl core::cmp::Eq for morpholog_core::IntentName
+pub fn morpholog_core::IntentName::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::IntentName
 pub fn morpholog_core::IntentName::eq(&self, &morpholog_core::IntentName) -> bool
 impl core::cmp::PartialEq<&str> for morpholog_core::IntentName
@@ -2027,6 +2083,7 @@ pub morpholog_core::Invariant::version: u32
 impl core::clone::Clone for morpholog_core::Invariant
 pub fn morpholog_core::Invariant::clone(&self) -> morpholog_core::Invariant
 impl core::cmp::Eq for morpholog_core::Invariant
+pub fn morpholog_core::Invariant::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Invariant
 pub fn morpholog_core::Invariant::eq(&self, &morpholog_core::Invariant) -> bool
 impl core::fmt::Debug for morpholog_core::Invariant
@@ -2071,6 +2128,7 @@ pub morpholog_core::InvariantFrontLoad::triggered_by_transformations: alloc::vec
 impl core::clone::Clone for morpholog_core::InvariantFrontLoad
 pub fn morpholog_core::InvariantFrontLoad::clone(&self) -> morpholog_core::InvariantFrontLoad
 impl core::cmp::Eq for morpholog_core::InvariantFrontLoad
+pub fn morpholog_core::InvariantFrontLoad::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::InvariantFrontLoad
 pub fn morpholog_core::InvariantFrontLoad::eq(&self, &morpholog_core::InvariantFrontLoad) -> bool
 impl core::fmt::Debug for morpholog_core::InvariantFrontLoad
@@ -2093,6 +2151,7 @@ pub fn morpholog_core::InvariantName::as_str(&self) -> &str
 impl core::clone::Clone for morpholog_core::InvariantName
 pub fn morpholog_core::InvariantName::clone(&self) -> morpholog_core::InvariantName
 impl core::cmp::Eq for morpholog_core::InvariantName
+pub fn morpholog_core::InvariantName::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::InvariantName
 pub fn morpholog_core::InvariantName::eq(&self, &morpholog_core::InvariantName) -> bool
 impl core::cmp::PartialEq<&str> for morpholog_core::InvariantName
@@ -2131,6 +2190,7 @@ pub morpholog_core::InvariantRejection::rule: alloc::string::String
 impl core::clone::Clone for morpholog_core::InvariantRejection
 pub fn morpholog_core::InvariantRejection::clone(&self) -> morpholog_core::InvariantRejection
 impl core::cmp::Eq for morpholog_core::InvariantRejection
+pub fn morpholog_core::InvariantRejection::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::InvariantRejection
 pub fn morpholog_core::InvariantRejection::eq(&self, &morpholog_core::InvariantRejection) -> bool
 impl core::fmt::Debug for morpholog_core::InvariantRejection
@@ -2173,6 +2233,7 @@ pub morpholog_core::MissingClaim::rendered: alloc::string::String
 impl core::clone::Clone for morpholog_core::MissingClaim
 pub fn morpholog_core::MissingClaim::clone(&self) -> morpholog_core::MissingClaim
 impl core::cmp::Eq for morpholog_core::MissingClaim
+pub fn morpholog_core::MissingClaim::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::MissingClaim
 pub fn morpholog_core::MissingClaim::eq(&self, &morpholog_core::MissingClaim) -> bool
 impl core::fmt::Debug for morpholog_core::MissingClaim
@@ -2196,6 +2257,7 @@ pub morpholog_core::PredicateDecl::name: morpholog_core::PredicateName
 impl core::clone::Clone for morpholog_core::PredicateDecl
 pub fn morpholog_core::PredicateDecl::clone(&self) -> morpholog_core::PredicateDecl
 impl core::cmp::Eq for morpholog_core::PredicateDecl
+pub fn morpholog_core::PredicateDecl::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::PredicateDecl
 pub fn morpholog_core::PredicateDecl::eq(&self, &morpholog_core::PredicateDecl) -> bool
 impl core::fmt::Debug for morpholog_core::PredicateDecl
@@ -2218,6 +2280,7 @@ pub fn morpholog_core::PredicateName::as_str(&self) -> &str
 impl core::clone::Clone for morpholog_core::PredicateName
 pub fn morpholog_core::PredicateName::clone(&self) -> morpholog_core::PredicateName
 impl core::cmp::Eq for morpholog_core::PredicateName
+pub fn morpholog_core::PredicateName::assert_fields_are_eq(&self)
 impl core::cmp::Ord for morpholog_core::PredicateName
 pub fn morpholog_core::PredicateName::cmp(&self, &morpholog_core::PredicateName) -> core::cmp::Ordering
 impl core::cmp::PartialEq for morpholog_core::PredicateName
@@ -2273,6 +2336,7 @@ pub fn morpholog_core::Program::validated(&self) -> core::result::Result<morphol
 impl core::clone::Clone for morpholog_core::Program
 pub fn morpholog_core::Program::clone(&self) -> morpholog_core::Program
 impl core::cmp::Eq for morpholog_core::Program
+pub fn morpholog_core::Program::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Program
 pub fn morpholog_core::Program::eq(&self, &morpholog_core::Program) -> bool
 impl core::default::Default for morpholog_core::Program
@@ -2293,6 +2357,7 @@ pub morpholog_core::RenderedClaim::rendered: alloc::string::String
 impl core::clone::Clone for morpholog_core::RenderedClaim
 pub fn morpholog_core::RenderedClaim::clone(&self) -> morpholog_core::RenderedClaim
 impl core::cmp::Eq for morpholog_core::RenderedClaim
+pub fn morpholog_core::RenderedClaim::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::RenderedClaim
 pub fn morpholog_core::RenderedClaim::eq(&self, &morpholog_core::RenderedClaim) -> bool
 impl core::fmt::Debug for morpholog_core::RenderedClaim
@@ -2315,6 +2380,7 @@ pub fn morpholog_core::RuleName::as_str(&self) -> &str
 impl core::clone::Clone for morpholog_core::RuleName
 pub fn morpholog_core::RuleName::clone(&self) -> morpholog_core::RuleName
 impl core::cmp::Eq for morpholog_core::RuleName
+pub fn morpholog_core::RuleName::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::RuleName
 pub fn morpholog_core::RuleName::eq(&self, &morpholog_core::RuleName) -> bool
 impl core::cmp::PartialEq<&str> for morpholog_core::RuleName
@@ -2353,6 +2419,7 @@ pub morpholog_core::SharedWriterPeer::transformation: alloc::string::String
 impl core::clone::Clone for morpholog_core::SharedWriterPeer
 pub fn morpholog_core::SharedWriterPeer::clone(&self) -> morpholog_core::SharedWriterPeer
 impl core::cmp::Eq for morpholog_core::SharedWriterPeer
+pub fn morpholog_core::SharedWriterPeer::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::SharedWriterPeer
 pub fn morpholog_core::SharedWriterPeer::eq(&self, &morpholog_core::SharedWriterPeer) -> bool
 impl core::fmt::Debug for morpholog_core::SharedWriterPeer
@@ -2463,6 +2530,7 @@ pub fn morpholog_core::Subject::as_str(&self) -> &str
 impl core::clone::Clone for morpholog_core::Subject
 pub fn morpholog_core::Subject::clone(&self) -> morpholog_core::Subject
 impl core::cmp::Eq for morpholog_core::Subject
+pub fn morpholog_core::Subject::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Subject
 pub fn morpholog_core::Subject::eq(&self, &morpholog_core::Subject) -> bool
 impl core::cmp::PartialEq<&str> for morpholog_core::Subject
@@ -2502,6 +2570,7 @@ pub morpholog_core::Transformation::parameters: alloc::vec::Vec<morpholog_core::
 impl core::clone::Clone for morpholog_core::Transformation
 pub fn morpholog_core::Transformation::clone(&self) -> morpholog_core::Transformation
 impl core::cmp::Eq for morpholog_core::Transformation
+pub fn morpholog_core::Transformation::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Transformation
 pub fn morpholog_core::Transformation::eq(&self, &morpholog_core::Transformation) -> bool
 impl core::fmt::Debug for morpholog_core::Transformation
@@ -2520,6 +2589,7 @@ pub morpholog_core::TransformationControls::transformation: alloc::string::Strin
 impl core::clone::Clone for morpholog_core::TransformationControls
 pub fn morpholog_core::TransformationControls::clone(&self) -> morpholog_core::TransformationControls
 impl core::cmp::Eq for morpholog_core::TransformationControls
+pub fn morpholog_core::TransformationControls::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::TransformationControls
 pub fn morpholog_core::TransformationControls::eq(&self, &morpholog_core::TransformationControls) -> bool
 impl core::fmt::Debug for morpholog_core::TransformationControls
@@ -2542,6 +2612,7 @@ pub fn morpholog_core::TransformationName::as_str(&self) -> &str
 impl core::clone::Clone for morpholog_core::TransformationName
 pub fn morpholog_core::TransformationName::clone(&self) -> morpholog_core::TransformationName
 impl core::cmp::Eq for morpholog_core::TransformationName
+pub fn morpholog_core::TransformationName::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::TransformationName
 pub fn morpholog_core::TransformationName::eq(&self, &morpholog_core::TransformationName) -> bool
 impl core::cmp::PartialEq<&str> for morpholog_core::TransformationName
@@ -2601,6 +2672,7 @@ pub morpholog_core::Transition::transformation_name: morpholog_core::Transformat
 impl core::clone::Clone for morpholog_core::Transition
 pub fn morpholog_core::Transition::clone(&self) -> morpholog_core::Transition
 impl core::cmp::Eq for morpholog_core::Transition
+pub fn morpholog_core::Transition::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Transition
 pub fn morpholog_core::Transition::eq(&self, &morpholog_core::Transition) -> bool
 impl core::fmt::Debug for morpholog_core::Transition
@@ -2624,6 +2696,7 @@ pub morpholog_core::TransitionRef::transformation: alloc::string::String
 impl core::clone::Clone for morpholog_core::TransitionRef
 pub fn morpholog_core::TransitionRef::clone(&self) -> morpholog_core::TransitionRef
 impl core::cmp::Eq for morpholog_core::TransitionRef
+pub fn morpholog_core::TransitionRef::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::TransitionRef
 pub fn morpholog_core::TransitionRef::eq(&self, &morpholog_core::TransitionRef) -> bool
 impl core::fmt::Debug for morpholog_core::TransitionRef
@@ -2646,6 +2719,7 @@ pub fn morpholog_core::Unit::as_str(&self) -> &str
 impl core::clone::Clone for morpholog_core::Unit
 pub fn morpholog_core::Unit::clone(&self) -> morpholog_core::Unit
 impl core::cmp::Eq for morpholog_core::Unit
+pub fn morpholog_core::Unit::assert_fields_are_eq(&self)
 impl core::cmp::Ord for morpholog_core::Unit
 pub fn morpholog_core::Unit::cmp(&self, &morpholog_core::Unit) -> core::cmp::Ordering
 impl core::cmp::PartialEq for morpholog_core::Unit
@@ -2687,6 +2761,7 @@ impl<'a> morpholog_core::ValidatedProgram<'a>
 pub fn morpholog_core::ValidatedProgram<'a>::as_program(&self) -> &'a morpholog_core::Program
 impl<'a> core::clone::Clone for morpholog_core::ValidatedProgram<'a>
 pub fn morpholog_core::ValidatedProgram<'a>::clone(&self) -> morpholog_core::ValidatedProgram<'a>
+impl<'a> core::clone::TrivialClone for morpholog_core::ValidatedProgram<'a>
 impl<'a> core::fmt::Debug for morpholog_core::ValidatedProgram<'a>
 pub fn morpholog_core::ValidatedProgram<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::Copy for morpholog_core::ValidatedProgram<'a>
@@ -2703,6 +2778,7 @@ pub fn morpholog_core::Var::as_str(&self) -> &str
 impl core::clone::Clone for morpholog_core::Var
 pub fn morpholog_core::Var::clone(&self) -> morpholog_core::Var
 impl core::cmp::Eq for morpholog_core::Var
+pub fn morpholog_core::Var::assert_fields_are_eq(&self)
 impl core::cmp::Ord for morpholog_core::Var
 pub fn morpholog_core::Var::cmp(&self, &morpholog_core::Var) -> core::cmp::Ordering
 impl core::cmp::PartialEq for morpholog_core::Var
@@ -2745,6 +2821,7 @@ pub morpholog_core::WitnessBinding::var: morpholog_core::Var
 impl core::clone::Clone for morpholog_core::WitnessBinding
 pub fn morpholog_core::WitnessBinding::clone(&self) -> morpholog_core::WitnessBinding
 impl core::cmp::Eq for morpholog_core::WitnessBinding
+pub fn morpholog_core::WitnessBinding::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::WitnessBinding
 pub fn morpholog_core::WitnessBinding::eq(&self, &morpholog_core::WitnessBinding) -> bool
 impl core::fmt::Debug for morpholog_core::WitnessBinding
@@ -2768,7 +2845,6 @@ pub fn morpholog_core::effective_delta(&morpholog_core::State, &[morpholog_core:
 pub fn morpholog_core::enumerate_derived(&morpholog_core::DerivedClaim, &morpholog_core::State, &[morpholog_core::Definition]) -> core::result::Result<alloc::vec::Vec<morpholog_core::ClaimInstance>, morpholog_core::EvalError>
 pub fn morpholog_core::eval_invariant(&morpholog_core::Invariant, &morpholog_core::State, core::option::Option<&morpholog_core::State>, &[morpholog_core::Definition]) -> core::result::Result<bool, morpholog_core::EvalError>
 pub fn morpholog_core::explain(&morpholog_core::Program, &morpholog_core::Transition, &morpholog_core::State) -> morpholog_core::Explanation
-pub fn morpholog_core::finish_staged_delta(morpholog_core::StagedDelta, &morpholog_core::State, &[morpholog_core::Invariant], &[morpholog_core::Definition]) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
 pub fn morpholog_core::finish_staged_delta_with(morpholog_core::StagedDelta, &morpholog_core::State, &morpholog_core::Admission<'_>) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
 pub fn morpholog_core::guarantees(&morpholog_core::CompiledProgram) -> alloc::vec::Vec<morpholog_core::Guarantee>
 pub fn morpholog_core::has_admission_gate(&morpholog_core::Transformation) -> bool

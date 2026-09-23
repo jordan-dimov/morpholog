@@ -308,21 +308,6 @@ impl<'p> CoverageTracker<'p> {
         }
     }
 
-    /// True when this transition needs a state snapshot: `delta` touches
-    /// a tracked antecedent's predicates, or some antecedent reads the
-    /// pre-state. An irrelevant transition is still counted but evaluates
-    /// nothing, so the driver may pass any state.
-    pub fn delta_is_relevant(&self, delta: &BTreeSet<PredicateName>) -> bool {
-        self.entries.iter().any(|entry| match &entry.shape {
-            Shape::Implication {
-                footprint,
-                uses_pre,
-                ..
-            } => *uses_pre || footprint.intersection(delta).next().is_some(),
-            Shape::AlwaysOn => false,
-        })
-    }
-
     /// True when any tracked antecedent contains `pre(...)`, so the driver
     /// must keep the previous state at every step. When false, the
     /// pre-state argument is never read.

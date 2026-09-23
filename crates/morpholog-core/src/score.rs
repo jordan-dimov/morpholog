@@ -22,7 +22,7 @@ use crate::fold::mentions_pre;
 use crate::format::canonical_hash;
 use crate::impact::{Impact, ImpactPlan};
 use crate::ir::{Definition, Invariant, Program};
-use crate::state::{ClaimInstance, State};
+use crate::state::State;
 
 /// Bumped when the report shape or the scoring semantics change
 /// incompatibly, so a stored result is never misread. New optional fields
@@ -182,11 +182,6 @@ pub struct CandidateScorer<'p> {
     initially_held: Vec<bool>,
     /// One impact plan per invariant, built once.
     plans: Vec<ImpactPlan>,
-    /// The last post-state [`observe_post`] saw, for the driver that
-    /// supplies post-states alone.
-    ///
-    /// [`observe_post`]: CandidateScorer::observe_post
-    last_post: Option<State>,
     refused: Vec<Vec<String>>,
     transitions: u64,
     /// Where the training slice ended: the boundary, the transition count
@@ -214,7 +209,6 @@ impl<'p> CandidateScorer<'p> {
             definitions: &program.definitions,
             initially_held: held,
             plans: program.invariants.iter().map(ImpactPlan::new).collect(),
-            last_post: None,
             refused,
             transitions: 0,
             split_mark: None,
@@ -259,50 +253,6 @@ impl<'p> CandidateScorer<'p> {
             }
         }
         Ok(())
-    }
-
-    /// [`observe_transition`] for a driver that has states, not deltas:
-    /// the delta is computed from `pre` to `post`, at extra cost.
-    ///
-    /// [`observe_transition`]: CandidateScorer::observe_transition
-    #[deprecated(note = "use observe_transition; the driver already has the delta")]
-    pub fn observe(
-        &mut self,
-        post: &State,
-        pre: &State,
-        transition_id: &str,
-    ) -> Result<(), EvalError> {
-        let asserted: Vec<ClaimInstance> = post
-            .claims()
-            .iter()
-            .filter(|c| !pre.contains(c))
-            .cloned()
-            .collect();
-        let retracted: Vec<ClaimInstance> = pre
-            .claims()
-            .iter()
-            .filter(|c| !post.contains(c))
-            .cloned()
-            .collect();
-        let effective = crate::admission::effective_delta(pre, &asserted, &retracted);
-        self.observe_transition(post, &effective, transition_id)
-    }
-
-    /// [`observe_transition`] for a driver that has only post-states. The
-    /// scorer keeps the previous one (empty before the first) to compute
-    /// the delta, at the cost of one state copy per transition.
-    ///
-    /// [`observe_transition`]: CandidateScorer::observe_transition
-    #[deprecated(note = "use observe_transition; the driver already has the delta")]
-    pub fn observe_post(&mut self, post: &State, transition_id: &str) -> Result<(), EvalError> {
-        let pre = self
-            .last_post
-            .take()
-            .unwrap_or_else(|| State::from_claims(Vec::new()));
-        #[allow(deprecated)]
-        let outcome = self.observe(post, &pre, transition_id);
-        self.last_post = Some(post.clone());
-        outcome
     }
 
     pub fn into_report(self) -> CandidateScore {

@@ -374,7 +374,7 @@ fn summary(program: &PgProgram, file: &Path) -> String {
         p.derived_claims.len(),
     );
     match program.plan() {
-        InvariantPlan::Compiled { .. } => out.push_str("  invariant checks: compiled\n"),
+        InvariantPlan::Compiled => out.push_str("  invariant checks: compiled\n"),
         InvariantPlan::Interpreted { refusals } => {
             out.push_str("  invariant checks: interpreted\n");
             for refusal in refusals {

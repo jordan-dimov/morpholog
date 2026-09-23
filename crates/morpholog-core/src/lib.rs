@@ -81,8 +81,8 @@ pub use ir::{
 pub use lint::{Lint, SharedWriterPeer, lints, shared_writer_lints};
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RejectionReason, RequireOutcome, StagedDelta,
-    TraceEntry, TracedProposal, Transition, WitnessBinding, finish_staged_delta,
-    finish_staged_delta_with, propose, propose_stage_delta, propose_with, propose_with_trace,
+    TraceEntry, TracedProposal, Transition, WitnessBinding, finish_staged_delta_with, propose,
+    propose_stage_delta, propose_with, propose_with_trace,
 };
 pub use schema::{intent_arg_schema, transformation_arg_schema};
 pub use score::{

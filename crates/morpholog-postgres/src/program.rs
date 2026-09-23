@@ -24,8 +24,8 @@ pub(crate) enum InvariantBackend {
 /// programme is interpreted.
 #[derive(Debug, Clone, Copy)]
 pub enum InvariantPlan<'a> {
-    /// Every invariant compiles; the count is the whole programme's.
-    Compiled { invariants: usize },
+    /// Every invariant compiles.
+    Compiled,
     /// The interpreter runs every invariant; each refusal names its
     /// invariant and the construct that kept it out. Empty when the
     /// interpreter was chosen directly rather than forced by a refusal.
@@ -111,9 +111,7 @@ impl PgProgram {
 
     pub fn plan(&self) -> InvariantPlan<'_> {
         match &self.backend {
-            InvariantBackend::Compiled(set) => InvariantPlan::Compiled {
-                invariants: set.invariants.len(),
-            },
+            InvariantBackend::Compiled(_) => InvariantPlan::Compiled,
             InvariantBackend::Interpreted(refusals) => InvariantPlan::Interpreted { refusals },
         }
     }

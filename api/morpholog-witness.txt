@@ -9,6 +9,7 @@ pub morpholog_witness::Refusal::Unsupported::detail: alloc::string::String
 impl core::clone::Clone for morpholog_witness::Refusal
 pub fn morpholog_witness::Refusal::clone(&self) -> morpholog_witness::Refusal
 impl core::cmp::Eq for morpholog_witness::Refusal
+pub fn morpholog_witness::Refusal::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_witness::Refusal
 pub fn morpholog_witness::Refusal::eq(&self, &morpholog_witness::Refusal) -> bool
 impl core::fmt::Debug for morpholog_witness::Refusal
@@ -51,6 +52,7 @@ pub morpholog_witness::WitnessStatus::Verified::attested_at: jiff::timestamp::Ti
 impl core::clone::Clone for morpholog_witness::WitnessStatus
 pub fn morpholog_witness::WitnessStatus::clone(&self) -> morpholog_witness::WitnessStatus
 impl core::cmp::Eq for morpholog_witness::WitnessStatus
+pub fn morpholog_witness::WitnessStatus::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_witness::WitnessStatus
 pub fn morpholog_witness::WitnessStatus::eq(&self, &morpholog_witness::WitnessStatus) -> bool
 impl core::fmt::Debug for morpholog_witness::WitnessStatus
@@ -80,6 +82,7 @@ pub morpholog_witness::Checked::attested_at: jiff::timestamp::Timestamp
 impl core::clone::Clone for morpholog_witness::Checked
 pub fn morpholog_witness::Checked::clone(&self) -> morpholog_witness::Checked
 impl core::cmp::Eq for morpholog_witness::Checked
+pub fn morpholog_witness::Checked::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_witness::Checked
 pub fn morpholog_witness::Checked::eq(&self, &morpholog_witness::Checked) -> bool
 impl core::fmt::Debug for morpholog_witness::Checked

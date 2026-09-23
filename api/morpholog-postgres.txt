@@ -5,6 +5,7 @@ pub mod morpholog_postgres::testing
 pub struct morpholog_postgres::testing::AlwaysDelivers
 impl core::clone::Clone for morpholog_postgres::testing::AlwaysDelivers
 pub fn morpholog_postgres::testing::AlwaysDelivers::clone(&self) -> morpholog_postgres::testing::AlwaysDelivers
+impl core::clone::TrivialClone for morpholog_postgres::testing::AlwaysDelivers
 impl core::default::Default for morpholog_postgres::testing::AlwaysDelivers
 pub fn morpholog_postgres::testing::AlwaysDelivers::default() -> morpholog_postgres::testing::AlwaysDelivers
 impl core::fmt::Debug for morpholog_postgres::testing::AlwaysDelivers
@@ -40,6 +41,7 @@ pub struct morpholog_postgres::testing::AlwaysTransient
 pub morpholog_postgres::testing::AlwaysTransient::next_attempt_at: jiff::timestamp::Timestamp
 impl core::clone::Clone for morpholog_postgres::testing::AlwaysTransient
 pub fn morpholog_postgres::testing::AlwaysTransient::clone(&self) -> morpholog_postgres::testing::AlwaysTransient
+impl core::clone::TrivialClone for morpholog_postgres::testing::AlwaysTransient
 impl core::fmt::Debug for morpholog_postgres::testing::AlwaysTransient
 pub fn morpholog_postgres::testing::AlwaysTransient::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for morpholog_postgres::testing::AlwaysTransient
@@ -61,6 +63,7 @@ pub struct morpholog_postgres::wire_time::ParseError(_)
 impl core::clone::Clone for morpholog_postgres::wire_time::ParseError
 pub fn morpholog_postgres::wire_time::ParseError::clone(&self) -> morpholog_postgres::wire_time::ParseError
 impl core::cmp::Eq for morpholog_postgres::wire_time::ParseError
+pub fn morpholog_postgres::wire_time::ParseError::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::wire_time::ParseError
 pub fn morpholog_postgres::wire_time::ParseError::eq(&self, &morpholog_postgres::wire_time::ParseError) -> bool
 impl core::error::Error for morpholog_postgres::wire_time::ParseError
@@ -86,6 +89,7 @@ pub morpholog_postgres::ActorAttestation::Gateway::actor: morpholog_core::ir::Su
 impl core::clone::Clone for morpholog_postgres::ActorAttestation
 pub fn morpholog_postgres::ActorAttestation::clone(&self) -> morpholog_postgres::ActorAttestation
 impl core::cmp::Eq for morpholog_postgres::ActorAttestation
+pub fn morpholog_postgres::ActorAttestation::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::ActorAttestation
 pub fn morpholog_postgres::ActorAttestation::eq(&self, &morpholog_postgres::ActorAttestation) -> bool
 impl core::fmt::Debug for morpholog_postgres::ActorAttestation
@@ -104,6 +108,7 @@ pub morpholog_postgres::AuditAttestation::Gateway::authenticated_by: alloc::stri
 impl core::clone::Clone for morpholog_postgres::AuditAttestation
 pub fn morpholog_postgres::AuditAttestation::clone(&self) -> morpholog_postgres::AuditAttestation
 impl core::cmp::Eq for morpholog_postgres::AuditAttestation
+pub fn morpholog_postgres::AuditAttestation::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::AuditAttestation
 pub fn morpholog_postgres::AuditAttestation::eq(&self, &morpholog_postgres::AuditAttestation) -> bool
 impl core::fmt::Debug for morpholog_postgres::AuditAttestation
@@ -126,6 +131,7 @@ pub morpholog_postgres::CheckpointOutcome::NoNewRows(morpholog_postgres::Checkpo
 impl core::clone::Clone for morpholog_postgres::CheckpointOutcome
 pub fn morpholog_postgres::CheckpointOutcome::clone(&self) -> morpholog_postgres::CheckpointOutcome
 impl core::cmp::Eq for morpholog_postgres::CheckpointOutcome
+pub fn morpholog_postgres::CheckpointOutcome::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::CheckpointOutcome
 pub fn morpholog_postgres::CheckpointOutcome::eq(&self, &morpholog_postgres::CheckpointOutcome) -> bool
 impl core::fmt::Debug for morpholog_postgres::CheckpointOutcome
@@ -156,6 +162,7 @@ pub morpholog_postgres::CompileReason::UnvalidatedShape::detail: alloc::string::
 impl core::clone::Clone for morpholog_postgres::CompileReason
 pub fn morpholog_postgres::CompileReason::clone(&self) -> morpholog_postgres::CompileReason
 impl core::cmp::Eq for morpholog_postgres::CompileReason
+pub fn morpholog_postgres::CompileReason::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::CompileReason
 pub fn morpholog_postgres::CompileReason::eq(&self, &morpholog_postgres::CompileReason) -> bool
 impl core::fmt::Debug for morpholog_postgres::CompileReason
@@ -179,6 +186,7 @@ pub morpholog_postgres::DeliveryOutcome::Transient::next_attempt_at: jiff::times
 impl core::clone::Clone for morpholog_postgres::DeliveryOutcome
 pub fn morpholog_postgres::DeliveryOutcome::clone(&self) -> morpholog_postgres::DeliveryOutcome
 impl core::cmp::Eq for morpholog_postgres::DeliveryOutcome
+pub fn morpholog_postgres::DeliveryOutcome::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::DeliveryOutcome
 pub fn morpholog_postgres::DeliveryOutcome::eq(&self, &morpholog_postgres::DeliveryOutcome) -> bool
 impl core::fmt::Debug for morpholog_postgres::DeliveryOutcome
@@ -200,6 +208,7 @@ pub morpholog_postgres::IndexAction::SatisfiedExternally
 pub morpholog_postgres::IndexAction::Stale
 impl core::clone::Clone for morpholog_postgres::IndexAction
 pub fn morpholog_postgres::IndexAction::clone(&self) -> morpholog_postgres::IndexAction
+impl core::clone::TrivialClone for morpholog_postgres::IndexAction
 impl core::cmp::Eq for morpholog_postgres::IndexAction
 impl core::cmp::PartialEq for morpholog_postgres::IndexAction
 pub fn morpholog_postgres::IndexAction::eq(&self, &morpholog_postgres::IndexAction) -> bool
@@ -221,6 +230,7 @@ pub morpholog_postgres::InitOutcome::AlreadyInitialised
 pub morpholog_postgres::InitOutcome::Initialised
 impl core::clone::Clone for morpholog_postgres::InitOutcome
 pub fn morpholog_postgres::InitOutcome::clone(&self) -> morpholog_postgres::InitOutcome
+impl core::clone::TrivialClone for morpholog_postgres::InitOutcome
 impl core::cmp::Eq for morpholog_postgres::InitOutcome
 impl core::cmp::PartialEq for morpholog_postgres::InitOutcome
 pub fn morpholog_postgres::InitOutcome::eq(&self, &morpholog_postgres::InitOutcome) -> bool
@@ -237,11 +247,11 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::InitOutcome
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::InitOutcome
 pub enum morpholog_postgres::InvariantPlan<'a>
 pub morpholog_postgres::InvariantPlan::Compiled
-pub morpholog_postgres::InvariantPlan::Compiled::invariants: usize
 pub morpholog_postgres::InvariantPlan::Interpreted
 pub morpholog_postgres::InvariantPlan::Interpreted::refusals: &'a [morpholog_postgres::CompileRefusal]
 impl<'a> core::clone::Clone for morpholog_postgres::InvariantPlan<'a>
 pub fn morpholog_postgres::InvariantPlan<'a>::clone(&self) -> morpholog_postgres::InvariantPlan<'a>
+impl<'a> core::clone::TrivialClone for morpholog_postgres::InvariantPlan<'a>
 impl<'a> core::fmt::Debug for morpholog_postgres::InvariantPlan<'a>
 pub fn morpholog_postgres::InvariantPlan<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::Copy for morpholog_postgres::InvariantPlan<'a>
@@ -263,6 +273,7 @@ impl morpholog_postgres::OutboxStatus
 pub fn morpholog_postgres::OutboxStatus::as_str(self) -> &'static str
 impl core::clone::Clone for morpholog_postgres::OutboxStatus
 pub fn morpholog_postgres::OutboxStatus::clone(&self) -> morpholog_postgres::OutboxStatus
+impl core::clone::TrivialClone for morpholog_postgres::OutboxStatus
 impl core::cmp::Eq for morpholog_postgres::OutboxStatus
 impl core::cmp::PartialEq for morpholog_postgres::OutboxStatus
 pub fn morpholog_postgres::OutboxStatus::eq(&self, &morpholog_postgres::OutboxStatus) -> bool
@@ -284,6 +295,19 @@ impl core::marker::Unpin for morpholog_postgres::OutboxStatus
 impl core::marker::UnsafeUnpin for morpholog_postgres::OutboxStatus
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::OutboxStatus
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::OutboxStatus
+pub enum morpholog_postgres::OutboxUpdate
+pub morpholog_postgres::OutboxUpdate::Applied
+pub morpholog_postgres::OutboxUpdate::LeaseLost
+impl core::clone::Clone for morpholog_postgres::OutboxUpdate
+pub fn morpholog_postgres::OutboxUpdate::clone(&self) -> morpholog_postgres::OutboxUpdate
+impl core::cmp::Eq for morpholog_postgres::OutboxUpdate
+impl core::cmp::PartialEq for morpholog_postgres::OutboxUpdate
+pub fn morpholog_postgres::OutboxUpdate::eq(&self, &morpholog_postgres::OutboxUpdate) -> bool
+impl core::fmt::Debug for morpholog_postgres::OutboxUpdate
+pub fn morpholog_postgres::OutboxUpdate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::OutboxUpdate
+impl serde_core::ser::Serialize for morpholog_postgres::OutboxUpdate
+pub fn morpholog_postgres::OutboxUpdate::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 pub enum morpholog_postgres::PackError
 pub morpholog_postgres::PackError::Encoding(serde_json::error::Error)
 pub morpholog_postgres::PackError::Malformed
@@ -473,6 +497,7 @@ pub morpholog_postgres::ProcessOutcome::TransientRetry::next_attempt_at: jiff::t
 impl core::clone::Clone for morpholog_postgres::ProcessOutcome
 pub fn morpholog_postgres::ProcessOutcome::clone(&self) -> morpholog_postgres::ProcessOutcome
 impl core::cmp::Eq for morpholog_postgres::ProcessOutcome
+pub fn morpholog_postgres::ProcessOutcome::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::ProcessOutcome
 pub fn morpholog_postgres::ProcessOutcome::eq(&self, &morpholog_postgres::ProcessOutcome) -> bool
 impl core::fmt::Debug for morpholog_postgres::ProcessOutcome
@@ -507,6 +532,7 @@ pub morpholog_postgres::SelectiveVerification::SignatureRequired::tree_size: i64
 impl core::clone::Clone for morpholog_postgres::SelectiveVerification
 pub fn morpholog_postgres::SelectiveVerification::clone(&self) -> morpholog_postgres::SelectiveVerification
 impl core::cmp::Eq for morpholog_postgres::SelectiveVerification
+pub fn morpholog_postgres::SelectiveVerification::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::SelectiveVerification
 pub fn morpholog_postgres::SelectiveVerification::eq(&self, &morpholog_postgres::SelectiveVerification) -> bool
 impl core::fmt::Debug for morpholog_postgres::SelectiveVerification
@@ -530,6 +556,7 @@ pub morpholog_postgres::SignaturePolicyViolation::SigningKeyRequired::tree_size:
 impl core::clone::Clone for morpholog_postgres::SignaturePolicyViolation
 pub fn morpholog_postgres::SignaturePolicyViolation::clone(&self) -> morpholog_postgres::SignaturePolicyViolation
 impl core::cmp::Eq for morpholog_postgres::SignaturePolicyViolation
+pub fn morpholog_postgres::SignaturePolicyViolation::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::SignaturePolicyViolation
 pub fn morpholog_postgres::SignaturePolicyViolation::eq(&self, &morpholog_postgres::SignaturePolicyViolation) -> bool
 impl core::convert::From<morpholog_postgres::SignaturePolicyViolation> for morpholog_postgres::TreeVerification
@@ -565,6 +592,7 @@ pub morpholog_postgres::SplitBoundary::AtOrBefore(jiff::timestamp::Timestamp)
 pub morpholog_postgres::SplitBoundary::Transition(uuid::Uuid)
 impl core::clone::Clone for morpholog_postgres::SplitBoundary
 pub fn morpholog_postgres::SplitBoundary::clone(&self) -> morpholog_postgres::SplitBoundary
+impl core::clone::TrivialClone for morpholog_postgres::SplitBoundary
 impl core::fmt::Debug for morpholog_postgres::SplitBoundary
 pub fn morpholog_postgres::SplitBoundary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for morpholog_postgres::SplitBoundary
@@ -609,6 +637,7 @@ pub morpholog_postgres::TreeVerification::UnauthorizedKey::tree_size: i64
 impl core::clone::Clone for morpholog_postgres::TreeVerification
 pub fn morpholog_postgres::TreeVerification::clone(&self) -> morpholog_postgres::TreeVerification
 impl core::cmp::Eq for morpholog_postgres::TreeVerification
+pub fn morpholog_postgres::TreeVerification::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::TreeVerification
 pub fn morpholog_postgres::TreeVerification::eq(&self, &morpholog_postgres::TreeVerification) -> bool
 impl core::convert::From<morpholog_postgres::SignaturePolicyViolation> for morpholog_postgres::TreeVerification
@@ -663,6 +692,7 @@ pub morpholog_postgres::ViewRefusal::ViewNameCollision::sources: alloc::vec::Vec
 impl core::clone::Clone for morpholog_postgres::ViewRefusal
 pub fn morpholog_postgres::ViewRefusal::clone(&self) -> morpholog_postgres::ViewRefusal
 impl core::cmp::Eq for morpholog_postgres::ViewRefusal
+pub fn morpholog_postgres::ViewRefusal::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::ViewRefusal
 pub fn morpholog_postgres::ViewRefusal::eq(&self, &morpholog_postgres::ViewRefusal) -> bool
 impl core::fmt::Debug for morpholog_postgres::ViewRefusal
@@ -737,6 +767,7 @@ pub morpholog_postgres::WindowVerification::SignatureRequired::tree_size: i64
 impl core::clone::Clone for morpholog_postgres::WindowVerification
 pub fn morpholog_postgres::WindowVerification::clone(&self) -> morpholog_postgres::WindowVerification
 impl core::cmp::Eq for morpholog_postgres::WindowVerification
+pub fn morpholog_postgres::WindowVerification::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::WindowVerification
 pub fn morpholog_postgres::WindowVerification::eq(&self, &morpholog_postgres::WindowVerification) -> bool
 impl core::fmt::Debug for morpholog_postgres::WindowVerification
@@ -755,6 +786,7 @@ pub enum morpholog_postgres::WitnessScheme
 pub morpholog_postgres::WitnessScheme::Rfc3161
 impl core::clone::Clone for morpholog_postgres::WitnessScheme
 pub fn morpholog_postgres::WitnessScheme::clone(&self) -> morpholog_postgres::WitnessScheme
+impl core::clone::TrivialClone for morpholog_postgres::WitnessScheme
 impl core::cmp::Eq for morpholog_postgres::WitnessScheme
 impl core::cmp::PartialEq for morpholog_postgres::WitnessScheme
 pub fn morpholog_postgres::WitnessScheme::eq(&self, &morpholog_postgres::WitnessScheme) -> bool
@@ -781,6 +813,7 @@ pub morpholog_postgres::WitnessStanding::Unverified
 pub morpholog_postgres::WitnessStanding::Verified
 impl core::clone::Clone for morpholog_postgres::WitnessStanding
 pub fn morpholog_postgres::WitnessStanding::clone(&self) -> morpholog_postgres::WitnessStanding
+impl core::clone::TrivialClone for morpholog_postgres::WitnessStanding
 impl core::cmp::Eq for morpholog_postgres::WitnessStanding
 impl core::cmp::PartialEq for morpholog_postgres::WitnessStanding
 pub fn morpholog_postgres::WitnessStanding::eq(&self, &morpholog_postgres::WitnessStanding) -> bool
@@ -835,6 +868,7 @@ pub fn morpholog_postgres::AuditRow::validate_shape(&self) -> core::result::Resu
 impl core::clone::Clone for morpholog_postgres::AuditRow
 pub fn morpholog_postgres::AuditRow::clone(&self) -> morpholog_postgres::AuditRow
 impl core::cmp::Eq for morpholog_postgres::AuditRow
+pub fn morpholog_postgres::AuditRow::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::AuditRow
 pub fn morpholog_postgres::AuditRow::eq(&self, &morpholog_postgres::AuditRow) -> bool
 impl core::fmt::Debug for morpholog_postgres::AuditRow
@@ -867,6 +901,7 @@ pub morpholog_postgres::AuditedInvariantCheck::version: u32
 impl core::clone::Clone for morpholog_postgres::AuditedInvariantCheck
 pub fn morpholog_postgres::AuditedInvariantCheck::clone(&self) -> morpholog_postgres::AuditedInvariantCheck
 impl core::cmp::Eq for morpholog_postgres::AuditedInvariantCheck
+pub fn morpholog_postgres::AuditedInvariantCheck::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::AuditedInvariantCheck
 pub fn morpholog_postgres::AuditedInvariantCheck::eq(&self, &morpholog_postgres::AuditedInvariantCheck) -> bool
 impl core::fmt::Debug for morpholog_postgres::AuditedInvariantCheck
@@ -893,6 +928,7 @@ pub morpholog_postgres::Checkpoint::witnesses: alloc::vec::Vec<morpholog_postgre
 impl core::clone::Clone for morpholog_postgres::Checkpoint
 pub fn morpholog_postgres::Checkpoint::clone(&self) -> morpholog_postgres::Checkpoint
 impl core::cmp::Eq for morpholog_postgres::Checkpoint
+pub fn morpholog_postgres::Checkpoint::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::Checkpoint
 pub fn morpholog_postgres::Checkpoint::eq(&self, &morpholog_postgres::Checkpoint) -> bool
 impl core::fmt::Debug for morpholog_postgres::Checkpoint
@@ -925,6 +961,7 @@ pub morpholog_postgres::CheckpointWitnesses::witnesses: alloc::vec::Vec<morpholo
 impl core::clone::Clone for morpholog_postgres::CheckpointWitnesses
 pub fn morpholog_postgres::CheckpointWitnesses::clone(&self) -> morpholog_postgres::CheckpointWitnesses
 impl core::cmp::Eq for morpholog_postgres::CheckpointWitnesses
+pub fn morpholog_postgres::CheckpointWitnesses::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::CheckpointWitnesses
 pub fn morpholog_postgres::CheckpointWitnesses::eq(&self, &morpholog_postgres::CheckpointWitnesses) -> bool
 impl core::fmt::Debug for morpholog_postgres::CheckpointWitnesses
@@ -983,7 +1020,9 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::CompileRefusal
 pub struct morpholog_postgres::Digest(_)
 impl core::clone::Clone for morpholog_postgres::Digest
 pub fn morpholog_postgres::Digest::clone(&self) -> morpholog_postgres::Digest
+impl core::clone::TrivialClone for morpholog_postgres::Digest
 impl core::cmp::Eq for morpholog_postgres::Digest
+pub fn morpholog_postgres::Digest::assert_fields_are_eq(&self)
 impl core::cmp::Ord for morpholog_postgres::Digest
 pub fn morpholog_postgres::Digest::cmp(&self, &morpholog_postgres::Digest) -> core::cmp::Ordering
 impl core::cmp::PartialEq for morpholog_postgres::Digest
@@ -1016,6 +1055,7 @@ pub struct morpholog_postgres::DigestError(_)
 impl core::clone::Clone for morpholog_postgres::DigestError
 pub fn morpholog_postgres::DigestError::clone(&self) -> morpholog_postgres::DigestError
 impl core::cmp::Eq for morpholog_postgres::DigestError
+pub fn morpholog_postgres::DigestError::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::DigestError
 pub fn morpholog_postgres::DigestError::eq(&self, &morpholog_postgres::DigestError) -> bool
 impl core::error::Error for morpholog_postgres::DigestError
@@ -1038,6 +1078,7 @@ pub morpholog_postgres::EvidencePack::rows: alloc::vec::Vec<morpholog_postgres::
 impl core::clone::Clone for morpholog_postgres::EvidencePack
 pub fn morpholog_postgres::EvidencePack::clone(&self) -> morpholog_postgres::EvidencePack
 impl core::cmp::Eq for morpholog_postgres::EvidencePack
+pub fn morpholog_postgres::EvidencePack::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::EvidencePack
 pub fn morpholog_postgres::EvidencePack::eq(&self, &morpholog_postgres::EvidencePack) -> bool
 impl core::fmt::Debug for morpholog_postgres::EvidencePack
@@ -1080,6 +1121,7 @@ pub morpholog_postgres::MigrationRef::version: i32
 impl core::clone::Clone for morpholog_postgres::MigrationRef
 pub fn morpholog_postgres::MigrationRef::clone(&self) -> morpholog_postgres::MigrationRef
 impl core::cmp::Eq for morpholog_postgres::MigrationRef
+pub fn morpholog_postgres::MigrationRef::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::MigrationRef
 pub fn morpholog_postgres::MigrationRef::eq(&self, &morpholog_postgres::MigrationRef) -> bool
 impl core::fmt::Debug for morpholog_postgres::MigrationRef
@@ -1108,6 +1150,7 @@ pub fn morpholog_postgres::MigrationReport::is_current(&self) -> bool
 impl core::clone::Clone for morpholog_postgres::MigrationReport
 pub fn morpholog_postgres::MigrationReport::clone(&self) -> morpholog_postgres::MigrationReport
 impl core::cmp::Eq for morpholog_postgres::MigrationReport
+pub fn morpholog_postgres::MigrationReport::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::MigrationReport
 pub fn morpholog_postgres::MigrationReport::eq(&self, &morpholog_postgres::MigrationReport) -> bool
 impl core::fmt::Debug for morpholog_postgres::MigrationReport
@@ -1144,6 +1187,7 @@ pub morpholog_postgres::OutboxRow::transition_id: uuid::Uuid
 impl core::clone::Clone for morpholog_postgres::OutboxRow
 pub fn morpholog_postgres::OutboxRow::clone(&self) -> morpholog_postgres::OutboxRow
 impl core::cmp::Eq for morpholog_postgres::OutboxRow
+pub fn morpholog_postgres::OutboxRow::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::OutboxRow
 pub fn morpholog_postgres::OutboxRow::eq(&self, &morpholog_postgres::OutboxRow) -> bool
 impl core::fmt::Debug for morpholog_postgres::OutboxRow
@@ -1166,6 +1210,7 @@ pub morpholog_postgres::PackManifest::tree_size: i64
 impl core::clone::Clone for morpholog_postgres::PackManifest
 pub fn morpholog_postgres::PackManifest::clone(&self) -> morpholog_postgres::PackManifest
 impl core::cmp::Eq for morpholog_postgres::PackManifest
+pub fn morpholog_postgres::PackManifest::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::PackManifest
 pub fn morpholog_postgres::PackManifest::eq(&self, &morpholog_postgres::PackManifest) -> bool
 impl core::fmt::Debug for morpholog_postgres::PackManifest
@@ -1201,6 +1246,7 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::PackVerificati
 pub struct morpholog_postgres::PgProgram
 impl morpholog_postgres::PgProgram
 pub fn morpholog_postgres::PgProgram::core(&self) -> &morpholog_core::compiled::CompiledProgram
+pub fn morpholog_postgres::PgProgram::interpreted(morpholog_core::compiled::CompiledProgram) -> Self
 pub fn morpholog_postgres::PgProgram::new(morpholog_core::compiled::CompiledProgram) -> Self
 pub fn morpholog_postgres::PgProgram::plan(&self) -> morpholog_postgres::InvariantPlan<'_>
 impl core::marker::Freeze for morpholog_postgres::PgProgram
@@ -1216,6 +1262,7 @@ pub morpholog_postgres::PolicyDeclarationError::predicate: alloc::string::String
 impl core::clone::Clone for morpholog_postgres::PolicyDeclarationError
 pub fn morpholog_postgres::PolicyDeclarationError::clone(&self) -> morpholog_postgres::PolicyDeclarationError
 impl core::cmp::Eq for morpholog_postgres::PolicyDeclarationError
+pub fn morpholog_postgres::PolicyDeclarationError::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::PolicyDeclarationError
 pub fn morpholog_postgres::PolicyDeclarationError::eq(&self, &morpholog_postgres::PolicyDeclarationError) -> bool
 impl core::fmt::Debug for morpholog_postgres::PolicyDeclarationError
@@ -1240,6 +1287,7 @@ pub fn morpholog_postgres::Proposal::gateway(&morpholog_core::propose::Transitio
 impl core::clone::Clone for morpholog_postgres::Proposal
 pub fn morpholog_postgres::Proposal::clone(&self) -> morpholog_postgres::Proposal
 impl core::cmp::Eq for morpholog_postgres::Proposal
+pub fn morpholog_postgres::Proposal::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::Proposal
 pub fn morpholog_postgres::Proposal::eq(&self, &morpholog_postgres::Proposal) -> bool
 impl core::fmt::Debug for morpholog_postgres::Proposal
@@ -1259,6 +1307,7 @@ pub morpholog_postgres::ProposalPhases::kernel: core::time::Duration
 pub morpholog_postgres::ProposalPhases::load: core::time::Duration
 impl core::clone::Clone for morpholog_postgres::ProposalPhases
 pub fn morpholog_postgres::ProposalPhases::clone(&self) -> morpholog_postgres::ProposalPhases
+impl core::clone::TrivialClone for morpholog_postgres::ProposalPhases
 impl core::default::Default for morpholog_postgres::ProposalPhases
 pub fn morpholog_postgres::ProposalPhases::default() -> morpholog_postgres::ProposalPhases
 impl core::fmt::Debug for morpholog_postgres::ProposalPhases
@@ -1304,6 +1353,7 @@ pub morpholog_postgres::RefreshSummary::write: core::time::Duration
 impl core::clone::Clone for morpholog_postgres::RefreshSummary
 pub fn morpholog_postgres::RefreshSummary::clone(&self) -> morpholog_postgres::RefreshSummary
 impl core::cmp::Eq for morpholog_postgres::RefreshSummary
+pub fn morpholog_postgres::RefreshSummary::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::RefreshSummary
 pub fn morpholog_postgres::RefreshSummary::eq(&self, &morpholog_postgres::RefreshSummary) -> bool
 impl core::fmt::Debug for morpholog_postgres::RefreshSummary
@@ -1330,6 +1380,7 @@ pub morpholog_postgres::RejectionRow::witness: core::option::Option<alloc::vec::
 impl core::clone::Clone for morpholog_postgres::RejectionRow
 pub fn morpholog_postgres::RejectionRow::clone(&self) -> morpholog_postgres::RejectionRow
 impl core::cmp::Eq for morpholog_postgres::RejectionRow
+pub fn morpholog_postgres::RejectionRow::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::RejectionRow
 pub fn morpholog_postgres::RejectionRow::eq(&self, &morpholog_postgres::RejectionRow) -> bool
 impl core::fmt::Debug for morpholog_postgres::RejectionRow
@@ -1361,6 +1412,7 @@ pub morpholog_postgres::RenderedViews::sql: alloc::string::String
 impl core::clone::Clone for morpholog_postgres::RenderedViews
 pub fn morpholog_postgres::RenderedViews::clone(&self) -> morpholog_postgres::RenderedViews
 impl core::cmp::Eq for morpholog_postgres::RenderedViews
+pub fn morpholog_postgres::RenderedViews::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::RenderedViews
 pub fn morpholog_postgres::RenderedViews::eq(&self, &morpholog_postgres::RenderedViews) -> bool
 impl core::fmt::Debug for morpholog_postgres::RenderedViews
@@ -1379,6 +1431,7 @@ pub morpholog_postgres::RowInclusionProof::proof: alloc::vec::Vec<morpholog_post
 impl core::clone::Clone for morpholog_postgres::RowInclusionProof
 pub fn morpholog_postgres::RowInclusionProof::clone(&self) -> morpholog_postgres::RowInclusionProof
 impl core::cmp::Eq for morpholog_postgres::RowInclusionProof
+pub fn morpholog_postgres::RowInclusionProof::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::RowInclusionProof
 pub fn morpholog_postgres::RowInclusionProof::eq(&self, &morpholog_postgres::RowInclusionProof) -> bool
 impl core::fmt::Debug for morpholog_postgres::RowInclusionProof
@@ -1403,6 +1456,7 @@ pub morpholog_postgres::SelectiveEvidencePack::rows: alloc::vec::Vec<morpholog_p
 impl core::clone::Clone for morpholog_postgres::SelectiveEvidencePack
 pub fn morpholog_postgres::SelectiveEvidencePack::clone(&self) -> morpholog_postgres::SelectiveEvidencePack
 impl core::cmp::Eq for morpholog_postgres::SelectiveEvidencePack
+pub fn morpholog_postgres::SelectiveEvidencePack::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::SelectiveEvidencePack
 pub fn morpholog_postgres::SelectiveEvidencePack::eq(&self, &morpholog_postgres::SelectiveEvidencePack) -> bool
 impl core::fmt::Debug for morpholog_postgres::SelectiveEvidencePack
@@ -1428,6 +1482,7 @@ pub morpholog_postgres::SelectivePackManifest::tree_size: i64
 impl core::clone::Clone for morpholog_postgres::SelectivePackManifest
 pub fn morpholog_postgres::SelectivePackManifest::clone(&self) -> morpholog_postgres::SelectivePackManifest
 impl core::cmp::Eq for morpholog_postgres::SelectivePackManifest
+pub fn morpholog_postgres::SelectivePackManifest::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::SelectivePackManifest
 pub fn morpholog_postgres::SelectivePackManifest::eq(&self, &morpholog_postgres::SelectivePackManifest) -> bool
 impl core::fmt::Debug for morpholog_postgres::SelectivePackManifest
@@ -1453,6 +1508,7 @@ pub fn morpholog_postgres::SignaturePolicy::violation<'a>(&self, impl core::iter
 impl core::clone::Clone for morpholog_postgres::SignaturePolicy
 pub fn morpholog_postgres::SignaturePolicy::clone(&self) -> morpholog_postgres::SignaturePolicy
 impl core::cmp::Eq for morpholog_postgres::SignaturePolicy
+pub fn morpholog_postgres::SignaturePolicy::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::SignaturePolicy
 pub fn morpholog_postgres::SignaturePolicy::eq(&self, &morpholog_postgres::SignaturePolicy) -> bool
 impl core::fmt::Debug for morpholog_postgres::SignaturePolicy
@@ -1495,6 +1551,7 @@ pub morpholog_postgres::TreeHeadSignature::signature: alloc::string::String
 impl core::clone::Clone for morpholog_postgres::TreeHeadSignature
 pub fn morpholog_postgres::TreeHeadSignature::clone(&self) -> morpholog_postgres::TreeHeadSignature
 impl core::cmp::Eq for morpholog_postgres::TreeHeadSignature
+pub fn morpholog_postgres::TreeHeadSignature::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::TreeHeadSignature
 pub fn morpholog_postgres::TreeHeadSignature::eq(&self, &morpholog_postgres::TreeHeadSignature) -> bool
 impl core::fmt::Debug for morpholog_postgres::TreeHeadSignature
@@ -1539,6 +1596,7 @@ pub morpholog_postgres::WindowEvidencePack::to_checkpoint: morpholog_postgres::C
 impl core::clone::Clone for morpholog_postgres::WindowEvidencePack
 pub fn morpholog_postgres::WindowEvidencePack::clone(&self) -> morpholog_postgres::WindowEvidencePack
 impl core::cmp::Eq for morpholog_postgres::WindowEvidencePack
+pub fn morpholog_postgres::WindowEvidencePack::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::WindowEvidencePack
 pub fn morpholog_postgres::WindowEvidencePack::eq(&self, &morpholog_postgres::WindowEvidencePack) -> bool
 impl core::fmt::Debug for morpholog_postgres::WindowEvidencePack
@@ -1567,6 +1625,7 @@ pub morpholog_postgres::WindowPackManifest::to_tree_size: i64
 impl core::clone::Clone for morpholog_postgres::WindowPackManifest
 pub fn morpholog_postgres::WindowPackManifest::clone(&self) -> morpholog_postgres::WindowPackManifest
 impl core::cmp::Eq for morpholog_postgres::WindowPackManifest
+pub fn morpholog_postgres::WindowPackManifest::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::WindowPackManifest
 pub fn morpholog_postgres::WindowPackManifest::eq(&self, &morpholog_postgres::WindowPackManifest) -> bool
 impl core::fmt::Debug for morpholog_postgres::WindowPackManifest
@@ -1590,6 +1649,7 @@ pub morpholog_postgres::Witness::submitted_to: alloc::string::String
 impl core::clone::Clone for morpholog_postgres::Witness
 pub fn morpholog_postgres::Witness::clone(&self) -> morpholog_postgres::Witness
 impl core::cmp::Eq for morpholog_postgres::Witness
+pub fn morpholog_postgres::Witness::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::Witness
 pub fn morpholog_postgres::Witness::eq(&self, &morpholog_postgres::Witness) -> bool
 impl core::fmt::Debug for morpholog_postgres::Witness
@@ -1615,6 +1675,7 @@ pub morpholog_postgres::WitnessVerdict::submitted_to: alloc::string::String
 impl core::clone::Clone for morpholog_postgres::WitnessVerdict
 pub fn morpholog_postgres::WitnessVerdict::clone(&self) -> morpholog_postgres::WitnessVerdict
 impl core::cmp::Eq for morpholog_postgres::WitnessVerdict
+pub fn morpholog_postgres::WitnessVerdict::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::WitnessVerdict
 pub fn morpholog_postgres::WitnessVerdict::eq(&self, &morpholog_postgres::WitnessVerdict) -> bool
 impl core::fmt::Debug for morpholog_postgres::WitnessVerdict
@@ -1637,6 +1698,7 @@ pub fn morpholog_postgres::WitnessesReport::any_invalid(&self) -> bool
 impl core::clone::Clone for morpholog_postgres::WitnessesReport
 pub fn morpholog_postgres::WitnessesReport::clone(&self) -> morpholog_postgres::WitnessesReport
 impl core::cmp::Eq for morpholog_postgres::WitnessesReport
+pub fn morpholog_postgres::WitnessesReport::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::WitnessesReport
 pub fn morpholog_postgres::WitnessesReport::eq(&self, &morpholog_postgres::WitnessesReport) -> bool
 impl core::fmt::Debug for morpholog_postgres::WitnessesReport
@@ -1668,6 +1730,9 @@ pub async fn morpholog_postgres::attach_witness(&sqlx_postgres::PgPool, i64, &mo
 pub async fn morpholog_postgres::audit_cursor_for(&mut sqlx_postgres::connection::PgConnection, uuid::Uuid) -> core::result::Result<(jiff::timestamp::Timestamp, uuid::Uuid), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::audit_resume_watermark(&sqlx_postgres::PgPool, core::option::Option<&[alloc::string::String]>) -> core::result::Result<jiff::timestamp::Timestamp, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::begin_audit_tail<'p>(&'p sqlx_postgres::PgPool, core::option::Option<uuid::Uuid>, core::option::Option<&[alloc::string::String]>) -> core::result::Result<morpholog_postgres::AuditTail<'p>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::begin_compensation(&sqlx_postgres::PgPool, uuid::Uuid, &str, core::time::Duration) -> core::result::Result<core::option::Option<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::claim_pending_outbox_row(&sqlx_postgres::PgPool, &str, &str, core::time::Duration, jiff::timestamp::Timestamp) -> core::result::Result<core::option::Option<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::complete_compensation(&sqlx_postgres::PgPool, uuid::Uuid, &str, uuid::Uuid) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub fn morpholog_postgres::compute_idempotency_key(uuid::Uuid, &morpholog_core::state::IntentInstance) -> core::result::Result<alloc::string::String, serde_json::error::Error>
 pub async fn morpholog_postgres::coverage_replay(&sqlx_postgres::PgPool, &morpholog_core::ir::Program) -> core::result::Result<morpholog_core::coverage::CoverageReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::create_checkpoint(&sqlx_postgres::PgPool, core::option::Option<&morpholog_postgres::CheckpointSigner>, core::option::Option<&[alloc::string::String]>) -> core::result::Result<morpholog_postgres::CheckpointOutcome, morpholog_postgres::PgError>
@@ -1693,6 +1758,10 @@ pub async fn morpholog_postgres::list_pending_outbox(&sqlx_postgres::PgPool) -> 
 pub async fn morpholog_postgres::list_rejection_rows(&sqlx_postgres::PgPool, u32) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::RejectionRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::load_checkpoint(&sqlx_postgres::PgPool, i64) -> core::result::Result<core::option::Option<morpholog_postgres::Checkpoint>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::load_scoped_state(&sqlx_postgres::PgPool, &morpholog_core::compiled::CompiledProgram, &morpholog_core::ir::Transformation) -> core::result::Result<morpholog_core::state::State, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::mark_compensation_failed(&sqlx_postgres::PgPool, uuid::Uuid, &str, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::mark_outbox_delivered(&sqlx_postgres::PgPool, uuid::Uuid, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::mark_outbox_failed(&sqlx_postgres::PgPool, uuid::Uuid, &str, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::mark_outbox_transient_attempt(&sqlx_postgres::PgPool, uuid::Uuid, &str, jiff::timestamp::Timestamp) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::migration_status(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub fn morpholog_postgres::parse_public_key(&str) -> core::result::Result<ed25519_dalek::verifying::VerifyingKey, morpholog_postgres::SigningError>
 pub fn morpholog_postgres::parse_signature(&str) -> core::result::Result<ed25519::Signature, morpholog_postgres::SigningError>
@@ -1706,8 +1775,10 @@ pub async fn morpholog_postgres::propose_all_against_pg(&sqlx_postgres::PgPool, 
 pub async fn morpholog_postgres::provision_indexes(&sqlx_postgres::PgPool, &morpholog_postgres::PgProgram, bool) -> core::result::Result<morpholog_postgres::ProvisionReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::provision_least_privilege(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::reconstruct_state_at(&sqlx_postgres::PgPool, uuid::Uuid) -> core::result::Result<morpholog_core::state::State, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::record_compensation(&sqlx_postgres::PgPool, uuid::Uuid, uuid::Uuid) -> core::result::Result<(), morpholog_postgres::PgError>
 pub fn morpholog_postgres::redact_database_url(&str) -> alloc::string::String
 pub async fn morpholog_postgres::refresh_derived(&sqlx_postgres::PgPool, morpholog_core::validate::ValidatedProgram<'_>, &str) -> core::result::Result<morpholog_postgres::RefreshSummary, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::release_outbox_claim(&sqlx_postgres::PgPool, uuid::Uuid, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub fn morpholog_postgres::render_public_key(&ed25519_dalek::verifying::VerifyingKey) -> alloc::string::String
 pub fn morpholog_postgres::render_signature(&ed25519::Signature) -> alloc::string::String
 pub fn morpholog_postgres::render_views(morpholog_core::validate::ValidatedProgram<'_>, &str, &str) -> core::result::Result<morpholog_postgres::RenderedViews, alloc::vec::Vec<morpholog_postgres::ViewRefusal>>

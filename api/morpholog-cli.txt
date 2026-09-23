@@ -15,6 +15,7 @@ impl morpholog_cli::envelopes::ErrorCode
 pub const morpholog_cli::envelopes::ErrorCode::ALL: &'static [morpholog_cli::envelopes::ErrorCode]
 impl core::clone::Clone for morpholog_cli::envelopes::ErrorCode
 pub fn morpholog_cli::envelopes::ErrorCode::clone(&self) -> morpholog_cli::envelopes::ErrorCode
+impl core::clone::TrivialClone for morpholog_cli::envelopes::ErrorCode
 impl core::cmp::Eq for morpholog_cli::envelopes::ErrorCode
 impl core::cmp::PartialEq for morpholog_cli::envelopes::ErrorCode
 pub fn morpholog_cli::envelopes::ErrorCode::eq(&self, &morpholog_cli::envelopes::ErrorCode) -> bool
@@ -47,6 +48,7 @@ impl morpholog_cli::envelopes::ProposeCode
 pub const morpholog_cli::envelopes::ProposeCode::ALL: &'static [morpholog_cli::envelopes::ProposeCode]
 impl core::clone::Clone for morpholog_cli::envelopes::ProposeCode
 pub fn morpholog_cli::envelopes::ProposeCode::clone(&self) -> morpholog_cli::envelopes::ProposeCode
+impl core::clone::TrivialClone for morpholog_cli::envelopes::ProposeCode
 impl core::cmp::Eq for morpholog_cli::envelopes::ProposeCode
 impl core::cmp::PartialEq for morpholog_cli::envelopes::ProposeCode
 pub fn morpholog_cli::envelopes::ProposeCode::eq(&self, &morpholog_cli::envelopes::ProposeCode) -> bool

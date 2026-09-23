@@ -4,6 +4,11 @@
 # any difference; `--update` writes them. A change to the public
 # surface is then an ordinary diff of api/ in the PR that makes it.
 #
+# Hidden items (`#[doc(hidden)]`) are rendered too: another crate can
+# still call them, so a change to one is a change to what compiles
+# against us. That includes the standard library's hidden derive
+# internals; they move only when the pinned nightly does.
+#
 # The crate list is explicit: a crate is API because it is named here,
 # never because it has a lib target. The toolchain that renders
 # rustdoc JSON is pinned here and nowhere else; stable and the declared
@@ -59,7 +64,8 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p api
 failed=()
 for crate in "${CRATES[@]}"; do
-    cargo "+$NIGHTLY" public-api \
+    RUSTDOCFLAGS="-Zunstable-options --document-hidden-items" \
+        cargo "+$NIGHTLY" public-api \
         --manifest-path "crates/$crate/Cargo.toml" \
         --all-features --simplified --color never \
         > "$tmp/$crate.txt" 2> "$tmp/$crate.err" || {
