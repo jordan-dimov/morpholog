@@ -1,5 +1,6 @@
 use crate::as_of::reconstruct_inner;
 use crate::audit::REPLAY_CHUNK;
+use crate::audit_pages::{ReplayPages, ReplayRow};
 use crate::checkpoints::TreeVerification;
 use crate::claims::decode_claim_rows;
 use crate::error::{PgError, classify, classify_checked_query};
@@ -238,59 +239,16 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
     // the first transition - never absent, so pre(...) evaluates
     // instead of erroring).
     let mut pre_state = State::from_claims(Vec::new());
-    // Keyset-paginated read inside the one deferrable snapshot: the
-    // replay is linear and streamable, so the whole log never needs to
-    // sit in memory at once - only one chunk of rows does. The cursor
-    // is the same (committed_at, transition_id) tuple every replay
-    // path orders by.
-    struct Row {
-        transition_id: Uuid,
-        transformation_name: String,
-        asserted_claims: serde_json::Value,
-        retracted_claims: serde_json::Value,
-        committed_at: Timestamp,
-    }
-    let mut cursor: Option<(Timestamp, Uuid)> = None;
+    // Paged inside the one deferrable snapshot: the replay is linear and
+    // streamable, so only one chunk of rows is ever in memory.
+    let mut pages = ReplayPages::new(None);
     loop {
-        let rows: Vec<Row> = match &cursor {
-            None => {
-                sqlx::query_as!(
-                    Row,
-                    "SELECT transition_id, transformation_name,
-                            asserted_claims, retracted_claims, committed_at
-                     FROM morpholog.audit
-                     ORDER BY committed_at, transition_id
-                     LIMIT $1",
-                    REPLAY_CHUNK,
-                )
-                .fetch_all(&mut *tx)
-                .await
-            }
-            Some((after_at, after_id)) => {
-                sqlx::query_as!(
-                    Row,
-                    "SELECT transition_id, transformation_name,
-                            asserted_claims, retracted_claims, committed_at
-                     FROM morpholog.audit
-                     WHERE (committed_at, transition_id) > ($2, $3)
-                     ORDER BY committed_at, transition_id
-                     LIMIT $1",
-                    REPLAY_CHUNK,
-                    after_at.to_sqlx(),
-                    *after_id,
-                )
-                .fetch_all(&mut *tx)
-                .await
-            }
-        }
-        .map_err(classify)?;
-        let Some(last) = rows.last() else {
+        let rows = pages.next(&mut tx).await?;
+        if rows.is_empty() {
             break;
-        };
-        cursor = Some((last.committed_at, last.transition_id));
-        let exhausted = (rows.len() as i64) < REPLAY_CHUNK;
+        }
         for row in rows {
-            let Row {
+            let ReplayRow {
                 transition_id,
                 transformation_name,
                 asserted_claims: asserted_json,
@@ -336,9 +294,6 @@ pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<Coverag
                     )
                     .map_err(PgError::Kernel)?;
             }
-        }
-        if exhausted {
-            break;
         }
     }
     // Second pass: the rejection log, inside the same deferrable

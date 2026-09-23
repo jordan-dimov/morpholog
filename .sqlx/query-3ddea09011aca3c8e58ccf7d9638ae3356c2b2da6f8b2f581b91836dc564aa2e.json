@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT transition_id, asserted_claims, retracted_claims, committed_at\n                     FROM morpholog.audit\n                     WHERE (committed_at, transition_id) <= ($1, $2)\n                     ORDER BY committed_at, transition_id\n                     LIMIT $3",
+  "query": "SELECT transition_id, transformation_name,\n                        asserted_claims, retracted_claims, committed_at\n                 FROM morpholog.audit\n                 ORDER BY committed_at, transition_id\n                 LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -16,6 +16,17 @@
       },
       {
         "ordinal": 1,
+        "name": "transformation_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "transformation_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
         "name": "asserted_claims",
         "type_info": "Jsonb",
         "origin": {
@@ -26,7 +37,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "retracted_claims",
         "type_info": "Jsonb",
         "origin": {
@@ -37,7 +48,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "committed_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -50,8 +61,6 @@
     ],
     "parameters": {
       "Left": [
-        "Timestamptz",
-        "Uuid",
         "Int8"
       ]
     },
@@ -59,8 +68,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "c9bfd513918f7d660e434143f0a60aeec7707d5a4081f93d505a89743892861b"
+  "hash": "3ddea09011aca3c8e58ccf7d9638ae3356c2b2da6f8b2f581b91836dc564aa2e"
 }

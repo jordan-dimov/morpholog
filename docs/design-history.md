@@ -936,3 +936,17 @@ The spike's reconciliation table closes:
 **Landed:** `jiff::Timestamp` for every operational instant, through `jiff-sqlx`. One line of `sqlx.toml` in the adapter maps `TIMESTAMPTZ` for every query macro, so there are no per-column overrides; binds call `.to_sqlx()`. chrono remains only inside the witness crate, which needs it to check certificate dates, and leaves the public API entirely. Nothing moved: the wire-time vectors, every golden envelope, pack byte-equality, and the signing and witness vectors are unchanged. Before the swap, turning off chrono's `serde` feature proved that nothing serialized a clock type except through `wire_time`. A scratch comparison sent the same instants through both libraries to one database, and they stored identically, before 1970 and around PostgreSQL's 2000 epoch included. The epoch case is now a test.
 
 **The review changed the parser.** The plan was to let jiff's parser define what `wire_time::parse` accepts. Review pointed out that jiff accepts a growing, open-ended set of spellings (hour-only offsets, zone annotations, the basic format). It also corrected the plan's belief that an odd spelling in an evidence pack would fail verification: a pack is read into typed rows, and the leaf commits to the instant, not its spelling. So the accepted language is now a small fixed shape checked in front of jiff, which only computes the instant: RFC 3339 without leap seconds or fractions finer than a nanosecond. Both the forms it accepts and the forms it refuses, including several jiff would take, are pinned by a table. `--as-of` and `--train-until` read through it, so the CLI has one timestamp parser.
+
+### One paging contract for the audit log
+
+**Forced by:** #347. Every walk over the audit log in replay order owned its own keyset loop, and two owned their own SQL. The subtraction round named the duplication and left it.
+
+**Landed:** one crate-internal pager with two projections that share a single cursor and bound contract. The claims replays (as-of reconstruction, coverage) read a narrow row. The whole-row walks (the tail, scoring, pack export, checkpoint leaves and signing-key rows) read `AuditRow`. Each consumer keeps its own fold, and a new replay writes no SQL.
+
+The walk's range belongs to the pager. As-of reads through its target transition in SQL, so no caller can apply a row past the coordinate it asked for.
+
+The plan review reversed one decision: the plan had one row type for every walk. That would have made a reconstruction read, and fail on, columns it never judged, so a corrupted attestation on an old row would break as-of queries that never look at attestations. Each bound stays a literal query, because a flagged single query loses the index condition under a generic plan (#338). A plan-shape test now pins that for every query, with an anti-vacuity case showing that the flagged form does lose it.
+
+One break-check stayed green for the wrong reason. Dropping the id tie-break from a query changed nothing, because the audit index hands back tied rows in id order by itself. The paging tests now run with index scans off, and the same break fails, showing its real cost: tied rows ahead of the cursor are skipped, not reordered.
+
+Measured with `scripts/bench_ab.sh main`, four interleaved runs a side: every as-of and replay row was within noise, with ratios from 0.95 to 1.05.

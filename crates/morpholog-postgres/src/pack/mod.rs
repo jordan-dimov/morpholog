@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::audit::{AuditRow, REPLAY_CHUNK, list_audit_rows_page};
+use crate::audit::AuditRow;
+use crate::audit_pages::AuditPages;
 use crate::checkpoints::{
     Checkpoint, TreeVerification, checkpoint_hash, load_checkpoint_chain, same_tree_head,
     signature_crypto_violation, verify_tree,
@@ -85,14 +86,13 @@ async fn load_prefix_rows(
     tree_size: i64,
 ) -> Result<Vec<AuditRow>, PgError> {
     let mut rows: Vec<AuditRow> = Vec::new();
-    let mut cursor = None;
+    let mut pages = AuditPages::new(None);
     while (rows.len() as i64) < tree_size {
-        let page = list_audit_rows_page(conn, cursor, None, REPLAY_CHUNK).await?;
+        let page = pages.next(conn).await?;
         if page.is_empty() {
             break;
         }
         for row in page {
-            cursor = Some((row.committed_at, row.transition_id));
             rows.push(row);
             if (rows.len() as i64) >= tree_size {
                 break;
