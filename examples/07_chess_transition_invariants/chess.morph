@@ -150,9 +150,10 @@ invariant turn_alternates:
 invariant single_capture_per_move:
   (PieceCount(after) and pre(PieceCount(before))) implies ((after = before) or (after = (before - 1)))
 
--- The ways the board may change. A move proposes a set of changes;
--- the runtime applies them only if every invariant still holds.
--- `admit` adds a claim, `retract` removes one, `require` gates the move.
+-- The ways the board may change. A move proposes a set of changes; the
+-- runtime applies them only if everything they touch still obeys every
+-- invariant. `admit` adds a claim, `retract` removes one, `require`
+-- gates the move.
 
 -- Set up the opening position: all 32 pieces on their starting squares,
 -- the move counter at zero, the piece count at 32, white to play. Files

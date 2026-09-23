@@ -9,10 +9,10 @@ your app, a script, an AI agent
         |
         |  proposes a change
         v
-   +----------+     every rule holds  -->  saved, with an audit record
+   +----------+     all it touches obeys the rules  -->  saved, with an audit record
    |  rules   |
-   +----------+     a rule would break -->  refused, with the reason;
-                                            nothing changes
+   +----------+     a rule would break               -->  refused, with the reason;
+                                                          nothing changes
 ```
 
 That flips the usual burden. When someone asks *"how do you know this number is right?"*, the answer is no longer an investigation. It is: **the system could not have saved it otherwise**, and here is the audit trail that proves it.
@@ -38,7 +38,7 @@ A refusal is not an error code. It names the rule that failed and the values tha
 Morpholog has two building blocks:
 
 - An **invariant** is a rule that must always hold across the records.
-- A **transformation** is the only way records change. It proposes what to add, what to remove and who to notify. If the result would break any invariant, nothing happens.
+- A **transformation** is the only way records change. It proposes what to add, what to remove and who to notify. If anything it touches would break an invariant, nothing happens.
 
 Everything else is built from these two.
 
@@ -90,7 +90,7 @@ One word before going further. Morpholog calls a record a **claim**: something s
 - **Policy engines** (OPA, Cedar) answer "may this happen?" but hold no records: no commit, no audit trail, no history to replay. Morpholog's rules guard the change itself and leave the proof behind.
 - **Immutable or bitemporal databases** (Datomic, XTDB) remember everything but enforce nothing: an invalid record enters history like any other. Morpholog keeps the history *and* refuses the invalid record.
 - **BDD test suites** (Cucumber) describe behaviour beside the code, and drift from it. In Morpholog the rules *are* the enforcement, checked on every real change, so they cannot drift.
-- **Workflow engines** decide the order of steps. They do not make a wrong outcome impossible. Morpholog does not care about order, only that the result breaks no rule.
+- **Workflow engines** decide the order of steps. They do not make a wrong outcome impossible. Morpholog does not care about order, only that the change breaks no rule.
 
 None of the ideas underneath is new. What did not exist is all of them in one small runtime on plain PostgreSQL, enforced at the moment something becomes a record. [`docs/prior-art.md`](docs/prior-art.md) has the longer comparison.
 

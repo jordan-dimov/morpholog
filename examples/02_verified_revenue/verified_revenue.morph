@@ -114,8 +114,8 @@ invariant admissibility_excludes_revocation:
 
 
 -- The only ways state may change. A transformation proposes a set of
--- changes; the runtime applies them only if every invariant still holds
--- once they are in place. `admit` adds a claim; `retract` removes one.
+-- changes; the runtime applies them only if everything they touch still
+-- obeys every invariant. `admit` adds a claim; `retract` removes one.
 
 -- The first time a figure is verified for an asset and period. It
 -- records the figure and sets the "current" pointer to it. The gate

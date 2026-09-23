@@ -672,8 +672,8 @@ pub type CompensationArgsFromRow = Box<dyn Fn(&OutboxRow) -> Vec<EvalValue> + Se
 /// `args_from_row` runs after [`begin_compensation`] claims the lease, so
 /// the row carries the new `failure_reason`.
 ///
-/// The compensation is an ordinary proposal: every invariant, its own
-/// audit row and outbox intents. The audit log keeps the full lineage.
+/// The compensation is an ordinary proposal: the same invariant checks,
+/// its own audit row and outbox intents. The audit log keeps the full lineage.
 pub struct CompensationSpec {
     pub transformation: Transformation,
     pub invariants: Vec<Invariant>,

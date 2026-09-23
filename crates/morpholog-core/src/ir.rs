@@ -160,9 +160,9 @@ pub enum SumSeed {
     Quantity(Unit),
 }
 
-/// A named, versioned rule that must hold over admitted state. It is
-/// checked against the candidate state a [`Transformation`] produces; if
-/// any invariant fails, the whole transformation is rejected.
+/// A named, versioned rule that must hold over admitted state. A
+/// [`Transformation`] is admitted only if every case it touches satisfies
+/// the rule afterwards; otherwise the whole transformation is rejected.
 ///
 /// `version` (always 1 for now) lets audit rows record exactly which
 /// invariant versions governed each commit.

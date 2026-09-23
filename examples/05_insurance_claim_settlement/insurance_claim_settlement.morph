@@ -150,8 +150,8 @@ invariant coverage_terms_within_range:
 
 
 -- The only ways state may change. A transformation proposes a set of
--- changes; the runtime applies them only if every rule above still holds
--- once they are in place.
+-- changes; the runtime applies them only if everything they touch still
+-- obeys every rule above.
 
 -- Open a policy. This records the contractual cap (set once, never
 -- touched again) and starts the headroom counter at the full aggregate,

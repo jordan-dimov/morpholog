@@ -163,8 +163,8 @@ invariant consent_obtained_before_randomisation:
 
 
 -- The ways state may change. A transformation proposes a set of
--- changes; the runtime applies them only if every invariant still holds
--- once they are in place. `admit` adds a claim; `require` is the gate
+-- changes; the runtime applies them only if everything they touch still
+-- obeys every invariant. `admit` adds a claim; `require` is the gate
 -- that must pass before the change goes through.
 
 -- Setup steps - just enough to make a real randomisation reachable.

@@ -100,8 +100,8 @@ invariant outstanding_within_advance_limit:
 
 
 -- The only ways state may change. A transformation proposes a set of
--- changes; the runtime applies them only if every invariant still holds
--- once they are in place.
+-- changes; the runtime applies them only if everything they touch still
+-- obeys every invariant.
 
 -- Open a facility, fixing its advance rate. The gate refuses a second
 -- facility under the same id.

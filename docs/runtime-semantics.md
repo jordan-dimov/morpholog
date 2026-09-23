@@ -215,7 +215,7 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
 4. Construct CandidateState = Snapshot − Retracted + Asserted.
 5. Revalidate each active invariant over the cases the change could
    affect (see "Admission: case-local revalidation").
-6. If any invariant fails: rollback. Nothing commits. No business audit record.
+6. If any revalidation fails: rollback. Nothing commits. No business audit record.
    No intents. After the rollback, the refusal is recorded in the
    operational rejection log (see below).
 7. If all pass: commit claims + audit record + outbox rows in one

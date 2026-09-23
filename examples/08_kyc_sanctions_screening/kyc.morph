@@ -136,8 +136,8 @@ invariant onboarded_requires_no_confirmed_match:
 
 
 -- The ways state may change. A transformation proposes a set of
--- changes; the runtime applies them only if every invariant still holds
--- once they are in place. `admit` adds a claim, `retract` removes one,
+-- changes; the runtime applies them only if everything they touch still
+-- obeys every invariant. `admit` adds a claim, `retract` removes one,
 -- `require` is a gate the action must pass first.
 
 -- Register a new customer. The gate refuses to register someone who is

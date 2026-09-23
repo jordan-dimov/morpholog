@@ -464,7 +464,7 @@ class Session:
         explain_on_reject: bool = False,
     ) -> envelopes.Committed | envelopes.Rejected:
         """Propose a change through the session: it commits only if
-        every rule holds; a refusal is a lawful outcome, returned as
+        everything it touches still obeys every rule; a refusal is a lawful outcome, returned as
         ``Rejected``."""
         body: dict[str, object] = {
             "op": "propose",

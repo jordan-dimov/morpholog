@@ -100,7 +100,7 @@ enum Command {
     /// to run against a live database precisely because it never alters one.
     Migrate(MigrateArgs),
 
-    /// Propose a change: it commits only if every rule holds.
+    /// Propose a change: it commits only if everything it touches still obeys every rule.
     ///
     /// Parses and validates the `.morph` source, then proposes the
     /// named transformation with the supplied actor and arguments

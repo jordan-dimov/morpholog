@@ -80,8 +80,8 @@ invariant journal_entry_has_lines:
 
 
 -- The only ways state may change. A transformation proposes a set of
--- changes; the runtime applies them only if every invariant still
--- holds once they are in place. `admit` adds a claim.
+-- changes; the runtime applies them only if everything they touch
+-- still obeys every invariant. `admit` adds a claim.
 
 -- The everyday case: one account debited, one credited, same amount.
 -- The gate allows posting only into an open period; the two equal-and-

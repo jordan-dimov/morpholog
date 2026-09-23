@@ -281,8 +281,8 @@ invariant within_position_limit:
 
 
 -- The only ways state may change. A transformation proposes a set of
--- changes; the runtime applies them only if every invariant still holds
--- once they are in place. `admit` adds a claim; `retract` removes one;
+-- changes; the runtime applies them only if everything they touch still
+-- obeys every invariant. `admit` adds a claim; `retract` removes one;
 -- `emit` queues a message to the outside world for after the commit.
 
 -- A trader captures a new trade: its identity, the price they believe
