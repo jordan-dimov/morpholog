@@ -1,7 +1,9 @@
 //! Morpholog PostgreSQL persistence adapter.
 //!
-//! Thin async I/O layer around the existing synchronous
-//! [`morpholog_core::propose`] kernel. The kernel itself is unchanged.
+//! Runs the synchronous [`morpholog_core`] kernel against PostgreSQL:
+//! one `SERIALIZABLE` transaction per proposal, invariants compiled to
+//! SQL where they can be, and the audit log, outbox and evidence packs
+//! around it.
 //!
 //! See `crates/morpholog-core/sql/schema.sql` for the canonical schema
 //! and `docs/scope-and-ambition.md` for the runtime's positioning.
@@ -20,9 +22,6 @@ mod audit;
 mod audit_pages;
 mod checkpoints;
 mod claims;
-// Test-gated in rung 1 of the compiled-invariant arc: the compiler's
-// only consumer is the differential gate below, and no production path
-// changes until integration lands. Rung 2 drops the cfg.
 mod compiled;
 #[cfg(test)]
 mod compiled_differential;
