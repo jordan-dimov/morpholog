@@ -260,7 +260,7 @@ predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
 
 Keep the two apart. If the grants did the arming, retracting the last grant would return the actor to unrestricted at exactly the moment you are revoking access. Here it **locks the actor out**; returning it to unrestricted means retracting the arming claim, which is its own governed act.
 
-Refusal surfaces as an operational failure on `propose` (non-zero exit, nothing on stdout), a per-row error receipt in `--batch`, and the `actor_assertion_unauthorised` code in a session - a receipt, so the session stays healthy.
+Refusal surfaces as the `actor_assertion_unauthorised` code everywhere: in `propose`'s error object (exit 1), in a per-row error receipt in `--batch`, and in a session receipt, so the session stays healthy.
 
 An admitted policy claim whose shape the runtime cannot read stops every durable proposal with an error, rather than being ignored. That is deliberate and it is where the fail-closed guarantee actually lives: `check` and the library facades refuse a misshapen DECLARATION early, but compensation reaches the kernel with a decomposed transformation and no programme, so only a check keyed off the claims themselves covers every path.
 
@@ -628,12 +628,14 @@ must never parse prose. `serialization_failure` is safe to re-submit
 on as is; `not_committed` (the database refused or failed before
 anything was recorded - nothing changed) once its cause is fixed;
 `commit_outcome_unknown` (COMMIT failed without a server verdict)
-only after reading the record. The session stays healthy after every
-coded receipt. What aborts the process with a non-zero exit and no
-receipt is a failure that cannot be a receipt: a broken stream, an
-operational failure on a read, or a rejection that was decided but
-could not be recorded in the operational log - a receipt code would
-misdescribe a decided verdict. The batch aborts on the same failure.
+only after reading the record. A rejection that was decided but could
+not be recorded in the operational log is `not_committed` too: the
+rollback came first, so nothing became durable. The session stays
+healthy after every coded receipt. What aborts the process with a
+non-zero exit and no receipt is a failure that cannot be a receipt: a
+broken stream, an operational failure on a read, or a proposal's
+receipt that could not be written after the proposal returned - that
+one leaves the outcome unknown. The batch aborts on the same failure.
 
 **A lost response is an unknown outcome.** Once a propose request has
 been written, a session that dies, hangs, or answers garbage leaves

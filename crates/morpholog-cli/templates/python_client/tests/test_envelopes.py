@@ -99,6 +99,19 @@ class RunOutcomes(unittest.TestCase):
             envelopes.NOTHING_RECORDED_CODES, published - {"commit_outcome_unknown"}
         )
 
+    def test_the_developer_intro_recipe_lists_the_same_codes(self):
+        # The hand-written recipe in the developer introduction carries its
+        # own copy of the list; it must not drift from the client's.
+        intro = (GOLDEN_DIR.parents[4] / "docs" / "developer-intro.md").read_text()
+        start = intro.index("NOTHING_RECORDED = {")
+        literal = intro[start + len("NOTHING_RECORDED = ") : intro.index("}", start) + 1]
+        self.assertEqual(eval(literal), set(envelopes.NOTHING_RECORDED_CODES))
+
+    def test_a_traced_error_with_another_code_is_drift(self):
+        payload = dict(golden("traced_errored.json")["result"], code="not_committed")
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.Errored.from_json(payload)
+
     def test_a_trace_is_typed_steps_not_raw_dicts(self):
         # The trace used to arrive as list[object] - a pinned wrapper around
         # an unpinned payload, so an embedder reading a step was parsing

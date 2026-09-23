@@ -188,6 +188,8 @@ class Errored:
     @classmethod
     def from_json(cls, payload: object) -> Errored:
         data = _strict("errored result", payload, {"status", "code", "error"})
+        if data["code"] != "kernel_error":
+            raise EnvelopeError(f"errored result: unexpected code {data['code']!r}")
         return cls(code=str(data["code"]), error=str(data["error"]))
 
 

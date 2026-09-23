@@ -663,6 +663,15 @@ import subprocess
 class OutcomeUnknown(Exception):
     """It may have committed: read the record before trying again."""
 
+# The codes that mean nothing was recorded (the generated client ships
+# this list as NOTHING_RECORDED_CODES). Any other code - a newer one
+# included - says nothing, so it is unknown.
+NOTHING_RECORDED = {
+    "actor_assertion_unauthorised", "duplicate_intent", "invalid_arguments",
+    "invalid_request", "kernel_error", "not_committed",
+    "serialization_failure", "unknown_transformation",
+}
+
 def propose(transformation: str, actor: str, args: dict) -> dict:
     result = subprocess.run(
         ["morpholog", "propose", "revenue.morph", transformation,
@@ -675,7 +684,7 @@ def propose(transformation: str, actor: str, args: dict) -> dict:
         raise OutcomeUnknown(result.stderr)       # no statement at all
     if receipt.get("status") in ("committed", "rejected"):
         return receipt                            # a decided outcome, either way
-    if receipt.get("status") == "error" and receipt.get("code") != "commit_outcome_unknown":
+    if receipt.get("status") == "error" and receipt.get("code") in NOTHING_RECORDED:
         raise RuntimeError(receipt["error"])      # the binary says nothing was committed
     raise OutcomeUnknown(result.stderr)
 
