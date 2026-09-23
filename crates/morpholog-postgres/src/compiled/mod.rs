@@ -48,7 +48,7 @@ use std::fmt::Write as _;
 
 use morpholog_core::{
     ClaimInstance, EvalError, EvalValue, Impact, ImpactPlan, Invariant, InvariantName,
-    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Prop, SumSeed, Term,
+    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Prop, RejectionReason, SumSeed, Term,
     ValidatedProgram, Value, ValueExpr, Var, WitnessBinding,
 };
 use sqlx::{Postgres, Row, Transaction};
@@ -158,6 +158,16 @@ pub(crate) struct SqlViolation {
     pub(crate) name: InvariantName,
     pub(crate) version: u32,
     pub(crate) witness: Vec<WitnessBinding>,
+}
+
+impl From<SqlViolation> for RejectionReason {
+    fn from(v: SqlViolation) -> Self {
+        RejectionReason::Invariant {
+            name: v.name,
+            version: v.version,
+            witness: v.witness,
+        }
+    }
 }
 
 /// Correlated-subquery estimates inflate planned cost past the JIT

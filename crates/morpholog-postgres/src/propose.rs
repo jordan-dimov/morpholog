@@ -322,14 +322,10 @@ pub(crate) async fn propose_against_pg_run(
                         )
                         .await?;
                     match violation {
-                        Some(v) => {
-                            let reason = RejectionReason::Invariant {
-                                name: v.name,
-                                version: v.version,
-                                witness: v.witness,
-                            };
-                            (Decided::Kernel(Outcome::Rejected { reason }), None)
-                        }
+                        Some(v) => (
+                            Decided::Kernel(Outcome::Rejected { reason: v.into() }),
+                            None,
+                        ),
                         None => (
                             Decided::Checked {
                                 transition_id,
@@ -514,20 +510,48 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
     }
 }
 
+/// A refusal as a caller reports it.
+pub(crate) struct Refusal {
+    pub(crate) reason: String,
+    pub(crate) rule: Option<String>,
+    pub(crate) witness: Vec<WitnessBinding>,
+}
+
+/// Roll back, then record the refusal in `morpholog.rejections`. Every
+/// refusing path records here, once.
+///
+/// The record is a separate autocommit insert on `pool`, because the
+/// refusing transaction rolls back. A crash between the two loses it:
+/// the log is operational evidence, and audit stays the record that
+/// counts. A failed insert is an error, not a rejected envelope - the
+/// database is broken, and reporting a cleanly recorded refusal would
+/// not be honest.
+pub(crate) async fn record_refusal(
+    pool: &PgPool,
+    tx: Transaction<'_, Postgres>,
+    transformation: &Transformation,
+    transition: &Transition,
+    reason: &RejectionReason,
+) -> Result<Refusal, PgError> {
+    tx.rollback().await.map_err(classify)?;
+    write_rejection(pool, transformation, transition, reason)
+        .await
+        .map_err(|e| PgError::RejectionLogFailure(Box::new(e)))?;
+    let witness = match reason {
+        RejectionReason::Invariant { witness, .. } => witness.clone(),
+        RejectionReason::Require { .. } | RejectionReason::BindNone { .. } => Vec::new(),
+    };
+    Ok(Refusal {
+        reason: reason.to_string(),
+        rule: rule_identity(reason),
+        witness,
+    })
+}
+
 /// Shared post-kernel persistence path used by both
 /// `propose_against_pg` and `propose_against_pg_with_trace`. Takes
 /// the kernel's [`Outcome`], commits or rolls back, and returns
 /// the [`PgProposalOutcome`] the public API exposes.
-///
-/// A rejection is recorded in `morpholog.rejections` AFTER the
-/// rollback, in a separate autocommit insert on `pool` - it cannot
-/// live inside the transaction that refused, because that
-/// transaction rolls back. At-most-once: a crash between rollback
-/// and insert loses the record. Operational evidence only; the
-/// audit table remains the legitimacy-grade record. An insert
-/// failure surfaces as `Err(PgError)` rather than a rejected
-/// envelope - the database is broken, and pretending the refusal
-/// was cleanly recorded would not be honest.
 pub(crate) async fn finalise_outcome(
     pool: &PgPool,
     mut tx: Transaction<'_, Postgres>,
@@ -539,17 +563,14 @@ pub(crate) async fn finalise_outcome(
 ) -> Result<PgProposalOutcome, PgError> {
     match outcome {
         Outcome::Rejected { reason } => {
-            tx.rollback().await.map_err(classify)?;
-            write_rejection(pool, transformation, transition, &reason)
-                .await
-                .map_err(|e| PgError::RejectionLogFailure(Box::new(e)))?;
-            let witness = match &reason {
-                RejectionReason::Invariant { witness, .. } => witness.clone(),
-                RejectionReason::Require { .. } | RejectionReason::BindNone { .. } => Vec::new(),
-            };
+            let Refusal {
+                reason,
+                rule,
+                witness,
+            } = record_refusal(pool, tx, transformation, transition, &reason).await?;
             Ok(PgProposalOutcome::Rejected {
-                reason: reason.to_string(),
-                rule: rule_identity(&reason),
+                reason,
+                rule,
                 witness,
             })
         }

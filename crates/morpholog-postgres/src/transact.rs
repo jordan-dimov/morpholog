@@ -24,11 +24,11 @@ use uuid::Uuid;
 use crate::PgPool;
 use crate::attestation::Proposal;
 use crate::compiled::{Stage, disable_jit};
-use crate::error::{PgError, classify, classify_commit};
+use crate::error::{PgError, classify_commit};
 use crate::program::{PgProgram, Route};
 use crate::propose::{
-    load_state, resolve, rule_identity, write_acceptance_record, write_accepted, write_claim_delta,
-    write_rejection,
+    Refusal, load_state, record_refusal, resolve, write_acceptance_record, write_accepted,
+    write_claim_delta,
 };
 use crate::txn::begin_authorised_proposal_tx;
 
@@ -169,12 +169,8 @@ pub async fn propose_all_against_pg(
                             )
                             .await?
                         {
-                            let reason = RejectionReason::Invariant {
-                                name: v.name,
-                                version: v.version,
-                                witness: v.witness,
-                            };
-                            return refuse(pool, tx, transformation, transition, reason, row).await;
+                            return refuse(pool, tx, transformation, transition, v.into(), row)
+                                .await;
                         }
                         write_acceptance_record(
                             &mut tx,
@@ -222,18 +218,15 @@ async fn refuse(
     reason: RejectionReason,
     row: u64,
 ) -> Result<PgAtomicOutcome, PgError> {
-    tx.rollback().await.map_err(classify)?;
-    write_rejection(pool, transformation, transition, &reason)
-        .await
-        .map_err(|e| PgError::RejectionLogFailure(Box::new(e)))?;
-    let witness = match &reason {
-        RejectionReason::Invariant { witness, .. } => witness.clone(),
-        RejectionReason::Require { .. } | RejectionReason::BindNone { .. } => Vec::new(),
-    };
+    let Refusal {
+        reason,
+        rule,
+        witness,
+    } = record_refusal(pool, tx, transformation, transition, &reason).await?;
     Ok(PgAtomicOutcome::Rejected {
         act: row,
-        reason: reason.to_string(),
-        rule: rule_identity(&reason),
+        reason,
+        rule,
         witness,
     })
 }
