@@ -18,7 +18,7 @@ These entries record kernel work in the order it happened. Each says what was fo
 
 **Forced by:** claim standing example. A rule like "every X claim implies an active Y" written as an invariant would either reject revocations or cascade-retract history. Neither matches the real semantic (decisions made under valid standing remain valid even after revocation).
 
-**Resolution:** `require` is the admission gate (checked at admission, never re-checked); `invariant` is the eternal rule (must always hold against admitted state). The two answer different questions and are not interchangeable. This is the most reused doctrine in the codebase; pinned in [`runtime-semantics.md`](runtime-semantics.md).
+**Resolution:** `require` is the admission gate (checked at admission, never re-checked); `invariant` is the standing rule (checked again by every change that touches what it governs). The two answer different questions and are not interchangeable. This is the most reused doctrine in the codebase; pinned in [`runtime-semantics.md`](runtime-semantics.md).
 
 ### Currentness and standing as distinct constructs
 

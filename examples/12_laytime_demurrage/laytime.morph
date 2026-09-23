@@ -27,13 +27,15 @@
 -- of the NOR at an exact instant, the commencement of the clock, each
 -- stretch of time that counted. Two kinds of rule do the work below:
 --
---   * an `invariant` is a rule that must hold for all admitted state,
---     forever. Here the invariants are the *bookkeeping truths*: an
---     interval's recorded length is exactly the gap between its ends;
---     no counted time exists before the clock started. Notice what is
---     deliberately NOT an invariant: using up the allowance. Running
---     over the laytime is the normal story - that is what demurrage
---     *is* - so the model must record it calmly, not forbid it.
+--   * an `invariant` is a standing rule: it says what lawful records
+--     look like, and every change that touches what it governs is
+--     checked against it. Here the invariants are the *bookkeeping
+--     truths*: an interval's recorded length is exactly the gap
+--     between its ends; no counted time exists before the clock
+--     started. Notice what is deliberately NOT an invariant: using up
+--     the allowance. Running over the laytime is the normal story -
+--     that is what demurrage *is* - so the model must record it
+--     calmly, not forbid it.
 --   * a `require` is a gate on one action, checked at the moment you
 --     act. The clock may not start before the notice is tendered;
 --     counted time may not be recorded before the clock starts. Gates

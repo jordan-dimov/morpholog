@@ -37,6 +37,7 @@ use morpholog_postgres::{
 use rust_decimal::Decimal;
 use sqlx::postgres::PgPoolOptions;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -955,9 +956,14 @@ fn in_memory_book(n: usize) -> Vec<ClaimInstance> {
     claims
 }
 
+/// Read once from the example, so every posting names the transformation the
+/// example declares and no timed loop pays for looking it up.
+static POST_SIMPLE_ENTRY: LazyLock<TransformationName> =
+    LazyLock::new(|| double_entry_ledger::post_simple_entry().name);
+
 fn ledger_posting(entry: &str, period: &str) -> Transition {
     Transition {
-        transformation_name: TransformationName::from("post_simple_entry"),
+        transformation_name: POST_SIMPLE_ENTRY.clone(),
         args: vec![
             subj(entry),
             subj("d_2026_05_17"),

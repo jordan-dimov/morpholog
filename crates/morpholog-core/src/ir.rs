@@ -160,7 +160,7 @@ pub enum SumSeed {
     Quantity(Unit),
 }
 
-/// A named, versioned rule that must hold over admitted state. A
+/// A named, versioned rule that says what lawful state is. A
 /// [`Transformation`] is admitted only if every case it touches satisfies
 /// the rule afterwards; otherwise the whole transformation is rejected.
 ///

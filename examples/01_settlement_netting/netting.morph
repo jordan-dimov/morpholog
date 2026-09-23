@@ -27,10 +27,11 @@
 -- it stores *claims* it has agreed to admit because they obey the rules.
 -- Two kinds of rule do the work below:
 --
---   * an `invariant` is a rule that must hold for all admitted state,
---     forever. The runtime refuses to commit any change that would
---     break one - so the "net equals the sum of its lines" rule can
---     never be quietly false, even for an instant.
+--   * an `invariant` is a standing rule: it says what lawful records
+--     look like, and every change that touches what it governs is
+--     checked against it. The runtime refuses to commit any change
+--     that would break one - so the "net equals the sum of its lines"
+--     rule can never be quietly false, even for an instant.
 --   * a `require` is a gate on a single action, checked at the moment
 --     you act and never again. The distinction matters here: "the lines
 --     must be approved and not already netted" is a gate on the act of
@@ -58,8 +59,8 @@ predicate Netted(line_id: Subject)
 -- payment now exists and can be acted on.
 intent NetSettlementCreated(net: Subject)
 
--- The rules that must always hold. If any change below would leave the
--- world violating one of these, the whole change is rejected.
+-- The standing rules. If any change below would break one of these,
+-- the whole change is rejected.
 
 -- A net settlement that folds in no lines is meaningless: it would be a
 -- payment for nothing. Every net must reference at least one line. Read

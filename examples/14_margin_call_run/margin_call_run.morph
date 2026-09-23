@@ -109,11 +109,12 @@ intent MarginCallIssued(run: Subject, account: Subject, amount: Decimal[USD])
 -- ---------------------------------------------------------------------
 -- The correctness rule: a call is exactly the top-up.
 --
--- An invariant holds over all admitted state, forever. This one says:
--- wherever a margin call exists, its amount is precisely the account's
--- required level minus its current equity - the gap that brings the
--- account back to where it should be. A call for a made-up number cannot
--- be admitted, because committing it would break this rule.
+-- An invariant is a standing rule, checked against every change that
+-- touches what it governs. This one says: wherever a margin call exists,
+-- its amount is precisely the account's required level minus its current
+-- equity - the gap that brings the account back to where it should be. A
+-- call for a made-up number cannot be admitted, because committing it
+-- would break this rule.
 --
 -- Note what this does NOT say. It does not, by itself, demand that any
 -- account be called. Forbidding wrong amounts is not the same as

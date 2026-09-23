@@ -52,7 +52,7 @@ predicate Announced(version: Subject)
 
 intent ReleaseAnnounced(version: Subject)
 
--- The rules that must always hold, whatever anyone does.
+-- The standing rules, whatever anyone does.
 
 -- A tag exists only at a commit whose gate ran green. Both sides are
 -- append-only, so this is safe as an always-rule: no later change can

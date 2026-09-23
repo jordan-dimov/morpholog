@@ -22,7 +22,7 @@ use crate::ir::Prop;
 pub struct Guarantee {
     /// The invariant's name.
     pub invariant: String,
-    /// The invariant body, rendered (the rule that must always hold).
+    /// The invariant body, rendered.
     pub rule: String,
     /// For a `not(...)` invariant, the inner expression rendered - the
     /// state the model forbids outright. `None` when the forbidden state

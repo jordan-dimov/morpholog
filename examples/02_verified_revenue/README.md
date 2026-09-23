@@ -87,7 +87,7 @@ In-memory tests cover restatement, standing, and the combined load-bearing test 
 
 The natural rule "every `DebtServiceRevenue` claim implies an active `AdmissibleFor`" is an invariant trap. As an invariant, revoking standing later would either reject the revoke (breaking the rule that standing can be lost) or cascade-retract every historical decision that relied on it (breaking the rule that history is preserved). The legitimacy of a decision made under valid standing at time T stays valid even if standing is revoked at T + 1.
 
-`require` is the *admission gate* - checked at admission, never again. `invariant` is the *eternal rule* - must always hold against admitted state. Different questions.
+`require` is the *admission gate* - checked at admission, never again. `invariant` is the *standing rule* - checked again by every change that touches what it governs. Different questions.
 
 ### What this example deliberately does not cover
 

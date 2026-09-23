@@ -153,16 +153,16 @@ invariant use_cannot_end_before_its_matches:
 
 -- Article 14(5), as a permanent property of the record: every
 -- decision rests on at least two verifications by distinct people,
--- both of which happened at or before the decision. The "before"
--- half is load-bearing: the statute requires verification *before*
--- action, not merely that two verification records exist by the time
--- someone files the decision. The condition itself is declared once
--- above; this rule holds it over all admitted state, forever. That is
--- safe as an invariant (not just a gate) because verification records
--- are DECLARED append only on the predicate itself: the runtime
--- refuses any transformation that would retract one, so a decision
--- admitted under two prior verifications keeps them forever. The
--- *authority* check lives in the gates below, never here - so
+-- both of which happened at or before the decision. The "before" half
+-- is load-bearing: the statute requires verification *before* action,
+-- not merely that two verification records exist by the time someone
+-- files the decision. The condition itself is declared once above;
+-- this rule checks it again for every change that touches a decision.
+-- That is safe as an invariant (not just a gate) because verification
+-- records are DECLARED append only on the predicate itself: the
+-- runtime refuses any transformation that would retract one, so a
+-- decision admitted under two prior verifications keeps them forever.
+-- The *authority* check lives in the gates below, never here - so
 -- revoking an overseer never reaches back into history.
 invariant decision_rests_on_two_distinct_prior_verifications:
     IdentificationDecision(d, m, _, decided_at, _) implies two_distinct_prior_verifications(m, decided_at)

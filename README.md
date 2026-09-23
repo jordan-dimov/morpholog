@@ -37,7 +37,7 @@ A refusal is not an error code. It names the rule that failed and the values tha
 
 Morpholog has two building blocks:
 
-- An **invariant** is a rule that must always hold across the records.
+- An **invariant** is a standing rule about the records. Every change is checked against it.
 - A **transformation** is the only way records change. It proposes what to add, what to remove and who to notify. If anything it touches would break an invariant, nothing happens.
 
 Everything else is built from these two.
@@ -198,7 +198,7 @@ Capture Energy, a licensed electricity supplier in Great Britain, was a design p
 
 **What about GDPR's right to erasure, if nothing is deleted?** Keep personal data in an ordinary store you can erase, keyed by an opaque id, and keep personal details out of the governed records. The design encourages this but cannot make it automatic. Erasing inside the history cryptographically is a known future direction.
 
-**How does the shape of a record change once history exists?** The same way records change: declare the new shape, carry the data forward with a governed transformation, and history stays as it was recorded. Tooling for this is future work.
+**How does the shape of a record change once history exists?** The same way records change: declare the new shape, carry the data forward with a governed transformation, and history stays as it was recorded. Tooling that automates this is future work; `morpholog migrate` already upgrades Morpholog's own tables between releases.
 
 **Do I have to call a command-line tool for every request?** No. One-off calls are the simple path (about 9ms each). `morpholog session` keeps one process running with your rules loaded and a warm connection, and answers several times faster per call, with the same JSON either way. `morpholog generate python-client` writes a typed, dependency-free Python client from your rules, session support included, stamped with the fingerprint of the rules it was built from. Rust programs use the library directly. A network server and more languages will come when a real integration needs them.
 
