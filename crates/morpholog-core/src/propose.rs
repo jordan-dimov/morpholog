@@ -390,7 +390,7 @@ pub enum StagedDelta {
 }
 
 /// Run only the transformation body, stopping before the invariants.
-/// `propose` is exactly this followed by [`finish_staged_delta`].
+/// `propose` is exactly this followed by [`finish_staged_delta_with`].
 pub fn propose_stage_delta(
     transformation: &Transformation,
     transition: &Transition,
@@ -407,24 +407,9 @@ pub fn propose_stage_delta(
 }
 
 /// Evaluate the invariants over the candidate state a staged delta
-/// implies, completing what [`propose_stage_delta`] began. A staged
-/// rejection passes through unchanged.
-pub fn finish_staged_delta(
-    staged: StagedDelta,
-    pre_state: &State,
-    invariants: &[Invariant],
-    definitions: &[Definition],
-) -> Result<Outcome, EvalError> {
-    finish_staged_inner(
-        staged,
-        pre_state,
-        &Admission::of(invariants, definitions),
-        &mut TraceSink::Off,
-    )
-}
-
-/// [`finish_staged_delta`] under rules whose impact plans were built
-/// once.
+/// implies, completing what [`propose_stage_delta`] began, under rules
+/// whose impact plans were built once. A staged rejection passes through
+/// unchanged.
 pub fn finish_staged_delta_with(
     staged: StagedDelta,
     pre_state: &State,

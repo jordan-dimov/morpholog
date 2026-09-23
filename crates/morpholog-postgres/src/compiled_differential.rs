@@ -215,7 +215,7 @@ fn governed_contract(obs: &ProbeObservation) -> Result<bool, String> {
                 witness,
             } = reason
             else {
-                // finish_staged_delta over a staged (not rejected)
+                // finish_staged_delta_with over a staged (not rejected)
                 // delta only ever rejects on an invariant; anything
                 // else is a comparator bug worth failing loudly.
                 return Err(disagreement(

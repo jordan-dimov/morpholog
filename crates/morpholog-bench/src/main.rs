@@ -638,7 +638,7 @@ impl Implementation {
             Implementation::Compiled | Implementation::CompiledIndexed => {
                 let program = PgProgram::new(compiled);
                 match program.plan() {
-                    InvariantPlan::Compiled { .. } => Ok(program),
+                    InvariantPlan::Compiled => Ok(program),
                     InvariantPlan::Interpreted { refusals } => Err(anyhow!(
                         "`{}` requested but the programme `{}` would be interpreted: {}",
                         self.label(),

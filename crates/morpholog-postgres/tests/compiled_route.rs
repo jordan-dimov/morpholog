@@ -59,7 +59,7 @@ fn eligible_gallery() -> Vec<Program> {
         .into_iter()
         .filter(|p| {
             let program = PgProgram::new(CompiledProgram::new(p.clone()).unwrap());
-            matches!(program.plan(), InvariantPlan::Compiled { .. })
+            matches!(program.plan(), InvariantPlan::Compiled)
         })
         .collect()
 }
@@ -331,7 +331,7 @@ async fn an_excess_that_cancels_is_representable_on_both_routes() {
 /// itself.
 fn ledger() -> PgProgram {
     let program = PgProgram::new(CompiledProgram::new(double_entry_ledger::program()).unwrap());
-    assert!(matches!(program.plan(), InvariantPlan::Compiled { .. }));
+    assert!(matches!(program.plan(), InvariantPlan::Compiled));
     program
 }
 
@@ -510,7 +510,7 @@ transformation churn(e, side, dr, cr):
 ";
     let program = morpholog_surface::parse_program(source).expect("parses");
     let compiled = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
-    assert!(matches!(compiled.plan(), InvariantPlan::Compiled { .. }));
+    assert!(matches!(compiled.plan(), InvariantPlan::Compiled));
     let interpreted = PgProgram::interpreted(CompiledProgram::new(program).unwrap());
     (compiled, interpreted)
 }

@@ -38,7 +38,7 @@ impl<'a> Admission<'a> {
     }
 
     /// Rules with plans built earlier, one per invariant in order.
-    pub fn with_plans(
+    pub(crate) fn with_plans(
         invariants: &'a [Invariant],
         definitions: &'a [Definition],
         plans: &'a [ImpactPlan],
@@ -55,7 +55,7 @@ impl<'a> Admission<'a> {
         }
     }
 
-    pub fn plans(&self) -> &[ImpactPlan] {
+    pub(crate) fn plans(&self) -> &[ImpactPlan] {
         &self.plans
     }
 }
@@ -69,10 +69,6 @@ pub struct EffectiveDelta {
 }
 
 impl EffectiveDelta {
-    pub fn is_empty(&self) -> bool {
-        self.asserted.is_empty() && self.retracted.is_empty()
-    }
-
     /// Computes the delta, with `present` answering pre-state membership.
     /// An admission counts only if the claim was absent. A retraction
     /// counts only if the claim was present and is not re-admitted in

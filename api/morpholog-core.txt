@@ -1339,8 +1339,6 @@ pub morpholog_core::Admission::definitions: &'a [morpholog_core::Definition]
 pub morpholog_core::Admission::invariants: &'a [morpholog_core::Invariant]
 impl<'a> morpholog_core::Admission<'a>
 pub fn morpholog_core::Admission<'a>::of(&'a [morpholog_core::Invariant], &'a [morpholog_core::Definition]) -> Self
-pub fn morpholog_core::Admission<'a>::plans(&self) -> &[morpholog_core::ImpactPlan]
-pub fn morpholog_core::Admission<'a>::with_plans(&'a [morpholog_core::Invariant], &'a [morpholog_core::Definition], &'a [morpholog_core::ImpactPlan]) -> Self
 impl<'a> core::marker::Freeze for morpholog_core::Admission<'a>
 impl<'a> core::marker::Send for morpholog_core::Admission<'a>
 impl<'a> core::marker::Sync for morpholog_core::Admission<'a>
@@ -1415,8 +1413,6 @@ impl<'p> morpholog_core::CandidateScorer<'p>
 pub fn morpholog_core::CandidateScorer<'p>::into_report(self) -> morpholog_core::CandidateScore
 pub fn morpholog_core::CandidateScorer<'p>::mark_split(&mut self, morpholog_core::SplitBoundaryReport)
 pub fn morpholog_core::CandidateScorer<'p>::new(&'p morpholog_core::Program) -> core::result::Result<Self, morpholog_core::ScoreError>
-pub fn morpholog_core::CandidateScorer<'p>::observe(&mut self, &morpholog_core::State, &morpholog_core::State, &str) -> core::result::Result<(), morpholog_core::EvalError>
-pub fn morpholog_core::CandidateScorer<'p>::observe_post(&mut self, &morpholog_core::State, &str) -> core::result::Result<(), morpholog_core::EvalError>
 pub fn morpholog_core::CandidateScorer<'p>::observe_transition(&mut self, &morpholog_core::State, &morpholog_core::EffectiveDelta, &str) -> core::result::Result<(), morpholog_core::EvalError>
 impl<'p> core::marker::Freeze for morpholog_core::CandidateScorer<'p>
 impl<'p> core::marker::Send for morpholog_core::CandidateScorer<'p>
@@ -1573,7 +1569,6 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::CoverageReport
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::CoverageReport
 pub struct morpholog_core::CoverageTracker<'p>
 impl<'p> morpholog_core::CoverageTracker<'p>
-pub fn morpholog_core::CoverageTracker<'p>::delta_is_relevant(&self, &alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>) -> bool
 pub fn morpholog_core::CoverageTracker<'p>::into_report(self) -> morpholog_core::CoverageReport
 pub fn morpholog_core::CoverageTracker<'p>::needs_pre_state(&self) -> bool
 pub fn morpholog_core::CoverageTracker<'p>::new(&'p morpholog_core::Program) -> Self
@@ -1690,7 +1685,6 @@ pub struct morpholog_core::EffectiveDelta
 pub morpholog_core::EffectiveDelta::asserted: alloc::vec::Vec<morpholog_core::ClaimInstance>
 pub morpholog_core::EffectiveDelta::retracted: alloc::vec::Vec<morpholog_core::ClaimInstance>
 impl morpholog_core::EffectiveDelta
-pub fn morpholog_core::EffectiveDelta::is_empty(&self) -> bool
 pub fn morpholog_core::EffectiveDelta::of(&[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance], impl core::ops::function::Fn(&morpholog_core::ClaimInstance) -> bool) -> Self
 impl core::clone::Clone for morpholog_core::EffectiveDelta
 pub fn morpholog_core::EffectiveDelta::clone(&self) -> morpholog_core::EffectiveDelta
@@ -2768,7 +2762,6 @@ pub fn morpholog_core::effective_delta(&morpholog_core::State, &[morpholog_core:
 pub fn morpholog_core::enumerate_derived(&morpholog_core::DerivedClaim, &morpholog_core::State, &[morpholog_core::Definition]) -> core::result::Result<alloc::vec::Vec<morpholog_core::ClaimInstance>, morpholog_core::EvalError>
 pub fn morpholog_core::eval_invariant(&morpholog_core::Invariant, &morpholog_core::State, core::option::Option<&morpholog_core::State>, &[morpholog_core::Definition]) -> core::result::Result<bool, morpholog_core::EvalError>
 pub fn morpholog_core::explain(&morpholog_core::Program, &morpholog_core::Transition, &morpholog_core::State) -> morpholog_core::Explanation
-pub fn morpholog_core::finish_staged_delta(morpholog_core::StagedDelta, &morpholog_core::State, &[morpholog_core::Invariant], &[morpholog_core::Definition]) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
 pub fn morpholog_core::finish_staged_delta_with(morpholog_core::StagedDelta, &morpholog_core::State, &morpholog_core::Admission<'_>) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
 pub fn morpholog_core::guarantees(&morpholog_core::CompiledProgram) -> alloc::vec::Vec<morpholog_core::Guarantee>
 pub fn morpholog_core::has_admission_gate(&morpholog_core::Transformation) -> bool
