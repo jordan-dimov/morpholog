@@ -31,5 +31,12 @@
       }
     ],
     "earliest_attested_at": "2026-09-16T10:20:05Z"
+  },
+  "role_rebindings": {
+    "status": "evaluated",
+    "scope": "complete_prefix",
+    "rows_with_oid": 2,
+    "rows_without_oid": 0,
+    "changes": []
   }
 }

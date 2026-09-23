@@ -73,5 +73,13 @@ pub enum AuditAttestation {
     /// The login role of the proposing connection asserted the actor.
     /// The adapter reads it from `session_user` inside the committing
     /// transaction; the caller never supplies it.
-    Gateway { authenticated_by: String },
+    Gateway {
+        authenticated_by: String,
+        /// The role's OID when it asserted: which incarnation of the name,
+        /// since a dropped role's name can be created again. Local to the
+        /// cluster, not a permanent identity. Absent on rows written
+        /// before it was recorded, which then hash exactly as before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authenticated_by_oid: Option<u32>,
+    },
 }

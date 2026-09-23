@@ -8,8 +8,9 @@
 use morpholog_postgres::{
     Checkpoint, EvidencePack, PackVerdict, PackVerificationReport, SelectiveEvidencePack,
     SelectiveVerification, SignaturePolicy, TreeVerification, WindowEvidencePack, WindowStart,
-    WindowVerification, WitnessesReport, export_pack, export_selective, export_window, verify_pack,
-    verify_selective, verify_window, with_anchor_signatures, witnesses_report,
+    WindowVerification, WitnessesReport, export_pack, export_selective, export_window,
+    pack_role_rebindings, verify_pack, verify_selective, verify_window, with_anchor_signatures,
+    witnesses_report,
 };
 
 use anyhow::Context;
@@ -108,17 +109,23 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
             | PackVerdict::Selective(SelectiveVerification::Intact { .. })
     );
 
-    // Witnesses are judged apart from the verdict. They change the output
-    // shape, so they appear only when asked for.
+    // Witnesses are judged apart from the verdict, and only when asked for.
+    // Role rebindings are read from the rows only an intact verdict
+    // established, and never fail the check.
     let mut witness_invalid = false;
-    if args.witnesses || args.trusted_tsa_file.is_some() {
+    let witnesses = if args.witnesses || args.trusted_tsa_file.is_some() {
         let anchors = witness_anchors(args.trusted_tsa_file.as_deref())?;
         let witnesses = witnesses_report(&pack_checkpoints(&bytes), anchors.as_ref());
         witness_invalid = witnesses.as_ref().is_some_and(WitnessesReport::any_invalid);
-        print_json(&PackVerificationReport { verdict, witnesses })?;
+        witnesses
     } else {
-        print_json(&verdict)?;
-    }
+        None
+    };
+    print_json(&PackVerificationReport {
+        verdict,
+        witnesses,
+        role_rebindings: pack_role_rebindings(&bytes, intact),
+    })?;
 
     if !intact || witness_invalid {
         return Err(AlreadyReported.into());

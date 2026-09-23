@@ -27,5 +27,12 @@
       }
     ],
     "earliest_attested_at": "2026-09-16T10:20:05Z"
+  },
+  "role_rebindings": {
+    "status": "evaluated",
+    "scope": "window",
+    "rows_with_oid": 1,
+    "rows_without_oid": 0,
+    "changes": []
   }
 }

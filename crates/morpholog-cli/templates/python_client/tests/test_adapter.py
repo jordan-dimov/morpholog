@@ -624,7 +624,12 @@ class AdapterDiscrimination(unittest.TestCase):
                     "selective_verification_signature_required.json",
                 ),
             ]:
-                os.environ["STUB_STDOUT"] = (GOLDEN_DIR / verdict_golden).read_text()
+                os.environ["STUB_STDOUT"] = json.dumps(
+                    {
+                        "verdict": json.loads((GOLDEN_DIR / verdict_golden).read_text()),
+                        "role_rebindings": {"status": "not_evaluated"},
+                    }
+                )
                 argv = argv_after(
                     lambda m=method: m("pack.json", require_signatures=True)
                 )
@@ -644,10 +649,10 @@ class AdapterDiscrimination(unittest.TestCase):
                 self.assertEqual(argv[argv.index("--require-signing-key") + 1], "k.pub")
 
     def test_the_witness_axis_flags_and_the_wrapper_report(self):
-        # Trust anchors land on the live verify; on the pack verifiers
-        # asking for witnesses (or supplying anchors) switches the reply
-        # to the wrapper report, and each kind's parser still reads the
-        # verdict inside it.
+        # Trust anchors land on the live verify. The pack verifiers always
+        # reply with the wrapper report; asking for witnesses (or
+        # supplying anchors) adds them, and each kind's parser still reads
+        # the verdict inside it.
         self._mode("record_argv_stdout")
         os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "verify_report_witnessed.json").read_text()
         self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
@@ -676,10 +681,17 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertEqual(argv[argv.index("--trusted-tsa-file") + 1], "tsa.pem")
 
             os.environ["STUB_STDOUT"] = (
-                GOLDEN_DIR / "window_verification_intact.json"
+                GOLDEN_DIR / "pack_verification_report_selective_rebinding.json"
             ).read_text()
-            bare = self.client.audit_verify_pack_window("pack.json")
-            self.assertIsInstance(bare, envelopes.WindowIntact)
+            report = self.client.audit_verify_pack_selective("pack.json")
+            self.assertIsInstance(report.verdict, envelopes.SelectiveIntact)
+            self.assertIsNone(report.witnesses)
+            rebindings = report.role_rebindings
+            self.assertIsInstance(rebindings, envelopes.RoleRebindingsEvaluated)
+            self.assertEqual(rebindings.scope, "selective")
+            change = rebindings.changes[0]
+            self.assertEqual((change.role, change.previous_oid, change.new_oid),
+                             ("gm_human", 16384, 16391))
 
     def test_audit_empty_tail_is_a_lawful_empty_list(self):
         self._mode("record_argv_empty")

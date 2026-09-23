@@ -27,9 +27,10 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
         args.require_signatures_from,
         args.require_signing_key.as_deref(),
     )?;
-    let (tree, chain) = verify_audit_tree_with_chain(&pool, anchor, policy.as_ref())
-        .await
-        .context("verify_audit_tree failed")?;
+    let (tree, chain, role_rebindings) =
+        verify_audit_tree_with_chain(&pool, anchor, policy.as_ref())
+            .await
+            .context("verify_audit_tree failed")?;
     // Witnesses are judged on the same chain but apart from the tree
     // verdict: a witness dates a head whether or not the log still matches
     // it.
@@ -46,11 +47,14 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
         None => None,
     };
 
+    // A rebinding is a finding, never a failure: it does not affect the
+    // exit code.
     let report = VerifyReport {
         replay,
         tree,
         views,
         witnesses,
+        role_rebindings,
     };
     print_json(&report)?;
 

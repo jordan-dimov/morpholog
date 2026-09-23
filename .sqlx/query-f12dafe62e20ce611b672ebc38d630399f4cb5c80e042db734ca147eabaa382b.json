@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT session_user AS \"name!\",\n                  (SELECT oid FROM pg_roles WHERE rolname = session_user) AS oid",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "oid",
+        "type_info": "Oid",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "f12dafe62e20ce611b672ebc38d630399f4cb5c80e042db734ca147eabaa382b"
+}

@@ -50,6 +50,9 @@
     "only_in_replay": [],
     "status": "divergent"
   },
+  "role_rebindings": {
+    "status": "not_evaluated"
+  },
   "tree": {
     "recomputed_root": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "recorded_root": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

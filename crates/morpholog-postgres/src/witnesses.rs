@@ -4,6 +4,7 @@
 //! head existed no later than T" whether or not the log still matches it.
 //! Only an `invalid` witness fails the command.
 
+use crate::role_rebindings::RoleRebindings;
 use jiff::Timestamp;
 use morpholog_witness::{Anchors, WitnessStatus, verify_rfc3161};
 use serde::Serialize;
@@ -169,6 +170,9 @@ pub struct PackVerificationReport {
     pub verdict: PackVerdict,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub witnesses: Option<WitnessesReport>,
+    /// Login-role names seen under a new OID among the pack's rows.
+    /// Reported only when the verdict is intact, and never a failure.
+    pub role_rebindings: RoleRebindings,
 }
 
 /// One of the three pack verdicts, serialised as itself.

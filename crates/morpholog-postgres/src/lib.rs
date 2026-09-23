@@ -39,6 +39,7 @@ mod program;
 mod propose;
 mod provision;
 mod rejections;
+mod role_rebindings;
 #[cfg(test)]
 mod scope_differential;
 mod score;
@@ -90,8 +91,8 @@ pub use outbox::{
 pub use pack::{
     EvidencePack, PackError, PackManifest, RowInclusionProof, SelectiveEvidencePack,
     SelectivePackManifest, SelectiveVerification, WindowEvidencePack, WindowPackManifest,
-    WindowStart, WindowVerification, export_pack, export_selective, export_window, verify_pack,
-    verify_selective, verify_window,
+    WindowStart, WindowVerification, export_pack, export_selective, export_window,
+    pack_role_rebindings, verify_pack, verify_selective, verify_window,
 };
 pub use program::{InvariantPlan, PgProgram};
 pub use propose::{
@@ -107,6 +108,7 @@ pub use provision::{
     with_user,
 };
 pub use rejections::{RejectionRow, list_rejection_rows};
+pub use role_rebindings::{RebindingScope, RoleRebinding, RoleRebindings};
 pub use score::{
     SplitBoundary, score_candidate, score_candidate_against_pack, score_candidate_against_packs,
 };

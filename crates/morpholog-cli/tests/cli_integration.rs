@@ -34,6 +34,15 @@ fn run_cli(args: &[&str]) -> (std::process::ExitStatus, String, String) {
 
 /// Run `morpholog` with exactly the given args and no `--database-url`,
 /// for offline subcommands such as `audit verify-pack`.
+/// The verdict inside a `verify-pack` report, which always carries the
+/// role-rebinding finding beside it.
+fn pack_verdict(stdout: &str) -> Value {
+    let report: Value = serde_json::from_str(stdout)
+        .unwrap_or_else(|e| panic!("a verify-pack report on stdout ({e}): {stdout:?}"));
+    assert!(report.get("role_rebindings").is_some(), "{stdout}");
+    report["verdict"].clone()
+}
+
 fn run_cli_no_db(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     let output = Command::new(common::bin())
         .args(args)
@@ -721,7 +730,7 @@ async fn a_full_prefix_pack_is_pinned_offline_against_a_rogue_authorised_signer(
         &honest_pub,
     ]);
     assert!(!status.success());
-    let verdict: Value = serde_json::from_str(&stdout).unwrap();
+    let verdict = pack_verdict(&stdout);
     assert_eq!(verdict["status"], "signing_key_required", "{stdout}");
     assert_eq!(
         verdict["public_key"],
@@ -743,10 +752,7 @@ async fn a_full_prefix_pack_is_pinned_offline_against_a_rogue_authorised_signer(
         "1",
     ]);
     assert!(status.success(), "{stdout}");
-    assert_eq!(
-        serde_json::from_str::<Value>(&stdout).unwrap()["status"],
-        "intact"
-    );
+    assert_eq!(pack_verdict(&stdout)["status"], "intact");
 }
 
 /// A broken sparse pack reports as broken whatever the policy: the pin's
@@ -791,11 +797,7 @@ async fn the_pin_never_masks_a_sparse_packs_intrinsic_verdict() {
             &honest_pub,
         ]);
         assert!(!status.success());
-        assert_eq!(
-            serde_json::from_str::<Value>(&without).unwrap()["status"],
-            expected,
-            "{without}"
-        );
+        assert_eq!(pack_verdict(&without)["status"], expected, "{without}");
         assert_eq!(
             with, without,
             "the verdict must be byte-identical with the pin: {with}\n{stderr}"
@@ -852,11 +854,7 @@ async fn evidence_export_then_verify_offline() {
         status.success(),
         "offline verify should pass; {stderr}\n{stdout}"
     );
-    assert_eq!(
-        serde_json::from_str::<Value>(&stdout).unwrap()["status"],
-        "intact",
-        "got: {stdout}"
-    );
+    assert_eq!(pack_verdict(&stdout)["status"], "intact", "got: {stdout}");
 
     // Edit a row in the pack file: verify must catch it and exit non-zero.
     let mut tampered_json: Value = serde_json::from_str(&pack_stdout).unwrap();
@@ -872,11 +870,7 @@ async fn evidence_export_then_verify_offline() {
         !status.success(),
         "a tampered pack must exit non-zero: {stdout}"
     );
-    assert_eq!(
-        serde_json::from_str::<Value>(&stdout).unwrap()["status"],
-        "tampered",
-        "got: {stdout}"
-    );
+    assert_eq!(pack_verdict(&stdout)["status"], "tampered", "got: {stdout}");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -932,7 +926,7 @@ async fn evidence_selective_export_then_verify_offline() {
         status.success(),
         "offline verify should pass; {stderr}\n{stdout}"
     );
-    let verdict: Value = serde_json::from_str(&stdout).unwrap();
+    let verdict = pack_verdict(&stdout);
     assert_eq!(verdict["status"], "intact", "got: {stdout}");
     assert_eq!(verdict["rows_disclosed"], 2, "got: {stdout}");
 
@@ -951,7 +945,7 @@ async fn evidence_selective_export_then_verify_offline() {
         "a tampered selective pack must exit non-zero: {stdout}"
     );
     assert_eq!(
-        serde_json::from_str::<Value>(&stdout).unwrap()["status"],
+        pack_verdict(&stdout)["status"],
         "row_not_included",
         "got: {stdout}"
     );
@@ -962,7 +956,7 @@ async fn evidence_selective_export_then_verify_offline() {
         run_cli_no_db(&["audit", "verify-pack", pack_path, "--require-signatures"]);
     assert!(!status.success(), "unsigned must fail the policy: {stdout}");
     assert_eq!(
-        serde_json::from_str::<Value>(&stdout).unwrap()["status"],
+        pack_verdict(&stdout)["status"],
         "signature_required",
         "got: {stdout}"
     );
@@ -980,7 +974,7 @@ async fn evidence_verify_names_an_unknown_future_pack_version() {
     let (status, stdout, _stderr) =
         run_cli_no_db(&["audit", "verify-pack", packfile.path().to_str().unwrap()]);
     assert!(!status.success());
-    let verdict: Value = serde_json::from_str(&stdout).unwrap();
+    let verdict = pack_verdict(&stdout);
     assert_eq!(verdict["status"], "malformed_pack", "got: {stdout}");
     assert!(
         verdict["detail"].as_str().unwrap().contains("newer"),
@@ -1001,11 +995,9 @@ async fn evidence_verify_on_a_readable_but_invalid_pack_is_a_malformed_verdict()
         "an invalid pack must exit non-zero: {stdout}"
     );
     assert_eq!(
-        serde_json::from_str::<Value>(&stdout).unwrap_or_else(|_| panic!(
-            "verdict on stdout, got stdout={stdout:?} stderr={stderr:?}"
-        ))["status"],
+        pack_verdict(&stdout)["status"],
         "malformed_pack",
-        "got: {stdout}"
+        "got stdout={stdout:?} stderr={stderr:?}"
     );
 }
 
@@ -1025,7 +1017,7 @@ async fn evidence_verify_refuses_a_pack_whose_hash_is_not_a_digest() {
     let (status, stdout, _stderr) =
         run_cli_no_db(&["audit", "verify-pack", packfile.path().to_str().unwrap()]);
     assert!(!status.success(), "got: {stdout}");
-    let verdict: Value = serde_json::from_str(&stdout).unwrap();
+    let verdict = pack_verdict(&stdout);
     assert_eq!(verdict["status"], "malformed_pack", "got: {stdout}");
     let detail = verdict["detail"].as_str().unwrap();
     assert!(
@@ -3724,12 +3716,12 @@ async fn verify_pack_reports_witnesses_only_when_asked() {
     std::io::Write::write_all(&mut packfile, pack.to_string().as_bytes()).unwrap();
     let path = packfile.path().to_str().unwrap();
 
-    // Not asked: the bare verdict, unchanged.
+    // Not asked: the report, with no witnesses in it.
     let (status, stdout, _) = run_cli_no_db(&["audit", "verify-pack", path]);
     assert!(status.success(), "{stdout}");
-    let bare: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(bare["status"], "intact", "{stdout}");
-    assert!(bare.get("witnesses").is_none() && bare.get("verdict").is_none());
+    assert_eq!(pack_verdict(&stdout)["status"], "intact", "{stdout}");
+    let report: Value = serde_json::from_str(&stdout).unwrap();
+    assert!(report.get("witnesses").is_none(), "{stdout}");
 
     // Asked: the wrapper, and the grafted token is judged invalid.
     let (status, stdout, _) = run_cli_no_db(&["audit", "verify-pack", path, "--witnesses"]);
