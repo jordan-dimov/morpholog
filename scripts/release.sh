@@ -44,7 +44,10 @@ MORPHOLOG=target/debug/morpholog
 # a local copy of it is routinely stale.
 git fetch --quiet origin main 'refs/tags/v*:refs/tags/v*'
 if git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
-    # Resuming: the tag already names the commit.
+    # Resuming: the tag already names the commit. A release tag is an
+    # annotated tag, a deliberate act with its own object.
+    [ "$(git cat-file -t "refs/tags/$TAG")" = tag ] \
+        || die "$TAG is a lightweight tag; release tags are annotated"
     SHA="$(git rev-parse "$TAG^{commit}")"
     say "$TAG exists at $SHA; resuming"
 else
@@ -107,12 +110,14 @@ step() {
     refresh_claims
 }
 
-# A gate already recorded for another commit means the tag would name a
-# commit the register never saw pass.
-recorded="$(jq -r --arg v "$SUBJECT" \
-    '.[] | select(.predicate == "GateGreen" and .args[0].value == $v) | .args[1].value' <<< "$claims")"
-[ -z "$recorded" ] || [ "$recorded" = "$SHA" ] \
-    || die "the register's gate for $TAG is $recorded, not $SHA"
+# A gate or tag already recorded for another commit means this release
+# would name a commit the register never saw pass.
+for predicate in GateGreen Tagged; do
+    recorded="$(jq -r --arg v "$SUBJECT" --arg p "$predicate" \
+        '.[] | select(.predicate == $p and .args[0].value == $v) | .args[1].value' <<< "$claims")"
+    [ -z "$recorded" ] || [ "$recorded" = "$SHA" ] \
+        || die "the register's $predicate for $TAG is $recorded, not $SHA"
+done
 
 # ---------------------------------------------------------------- the gate
 ci="$(gh run list --commit "$SHA" --workflow CI --json status,conclusion --jq '.[0] // empty')"
@@ -124,8 +129,6 @@ step record_gate GateGreen \
     "{\"version\": \"$SUBJECT\", \"commit\": \"$SHA\"}" "$SUBJECT" "$SHA"
 
 # ----------------------------------------------------------------- the tag
-step tag_release Tagged \
-    "{\"version\": \"$SUBJECT\", \"commit\": \"$SHA\"}" "$SUBJECT" "$SHA"
 if ! git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
     git tag -a "$TAG" -m "$TAG" "$SHA"
 fi
@@ -139,20 +142,25 @@ if [ -z "$remote" ]; then
 elif [ "$remote" != "$SHA" ]; then
     die "origin's $TAG points at $remote, not $SHA"
 fi
+remote="$(git ls-remote --tags origin "refs/tags/$TAG^{}" | cut -f1)"
+[ "$remote" = "$SHA" ] || die "origin's $TAG does not resolve to $SHA after the push"
+step tag_release Tagged \
+    "{\"version\": \"$SUBJECT\", \"commit\": \"$SHA\"}" "$SUBJECT" "$SHA"
 
 # -------------------------------------------------------------- the assets
-if ! gh release view "$TAG" > /dev/null 2>&1; then
-    say "waiting for the release workflow"
-    run=""
-    for _ in $(seq 30); do
-        run="$(gh run list --workflow release --branch "$TAG" --json databaseId --jq '.[0].databaseId // empty')"
-        [ -n "$run" ] && break
-        sleep 10
-    done
-    [ -n "$run" ] || die "no release workflow run started for $TAG"
-    gh run watch "$run" --exit-status --interval 30 > /dev/null \
-        || die "the release workflow failed: gh run view $run --log-failed"
-fi
+# Assets count only if the tag's own workflow run built, smoke-tested
+# and published them - whether a release already exists does not matter.
+run=""
+for _ in $(seq 30); do
+    run="$(gh run list --workflow release --branch "$TAG" --json databaseId,headSha \
+        | jq -r --arg sha "$SHA" '[.[] | select(.headSha == $sha)][0].databaseId // empty')"
+    [ -n "$run" ] && break
+    sleep 10
+done
+[ -n "$run" ] || die "no release workflow run for $TAG at $SHA"
+say "release workflow: run $run"
+gh run watch "$run" --exit-status --interval 30 > /dev/null \
+    || die "the release workflow did not succeed: gh run view $run --log-failed"
 assets="$(gh release view "$TAG" --json assets --jq '[.assets[].name]')"
 
 target_of() {
@@ -193,9 +201,14 @@ for platform in $(jq -r '.[] | select(.predicate == "PlatformDeclared") | .args[
 done
 
 # ------------------------------------------------- the notes, and the end
+# The workflow publishes the notes, a blank line, then its install
+# paragraph; anything else in the body was not reviewed.
+install="$(git show "$SHA:.github/workflows/release.yml" \
+    | grep -o 'Prebuilt binaries for linux[^"]*' | head -1)"
+[ -n "$install" ] || die "no install paragraph in the release workflow at $SHA"
 body="$(gh release view "$TAG" --json body --jq .body)"
-[ "${body:0:${#notes}}" = "$notes" ] \
-    || die "the published notes do not begin with $NOTES; fix the release, not the file"
+[ "$body" = "$(printf '%s\n\n%s' "$notes" "$install")" ] \
+    || die "the published notes are not exactly $NOTES plus the install paragraph; fix the release, not the file"
 step record_changelog ChangelogEntry "{\"version\": \"$SUBJECT\"}" "$SUBJECT"
 step announce Announced "{\"version\": \"$SUBJECT\"}" "$SUBJECT"
 
