@@ -2,7 +2,7 @@ use crate::attestation::{AuditAttestation, Proposal};
 use crate::compiled::{Stage, disable_jit};
 use crate::error::{PgError, classify, classify_checked_query, classify_commit};
 use crate::program::{PgProgram, Route};
-use crate::txn::begin_authorised_proposal_tx;
+use crate::txn::{LoginRole, begin_authorised_proposal_tx};
 use morpholog_core::{
     Admission, ClaimInstance, CompiledProgram, Definition, EffectiveDelta, EvalError, EvalValue,
     IntentInstance, Invariant, InvariantName, Outcome, PredicateName, RejectionReason, RuleName,
@@ -509,7 +509,7 @@ pub(crate) async fn finalise_outcome(
     transition: &Transition,
     invariants: &[Invariant],
     outcome: Outcome,
-    login_role: &str,
+    login_role: &LoginRole,
 ) -> Result<PgProposalOutcome, PgError> {
     match outcome {
         Outcome::Rejected { reason } => {
@@ -818,7 +818,7 @@ pub(crate) async fn write_accepted(
     asserted_claims: &[ClaimInstance],
     retracted_claims: &[ClaimInstance],
     emitted_intents: &[IntentInstance],
-    login_role: &str,
+    login_role: &LoginRole,
 ) -> Result<(), PgError> {
     let _ = write_claim_delta(tx, transition_id, asserted_claims, retracted_claims).await?;
     write_acceptance_record(
@@ -849,7 +849,7 @@ pub(crate) async fn write_acceptance_record(
     asserted_claims: &[ClaimInstance],
     retracted_claims: &[ClaimInstance],
     emitted_intents: &[IntentInstance],
-    login_role: &str,
+    login_role: &LoginRole,
 ) -> Result<(), PgError> {
     let checked: Vec<AuditedInvariantCheck> = invariants
         .iter()
@@ -862,7 +862,8 @@ pub(crate) async fn write_acceptance_record(
     // transaction opened and checked against the actor policy, so the
     // identity CHECKED and the identity RECORDED cannot differ.
     let attestation = AuditAttestation::Gateway {
-        authenticated_by: login_role.to_string(),
+        authenticated_by: login_role.name.clone(),
+        authenticated_by_oid: Some(login_role.oid),
     };
     // The actor is stored as a tagged `EvalValue::Subject`; `actor_repr`
     // only applies when serialising through `Transition`.

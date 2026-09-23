@@ -59,12 +59,37 @@ pub(crate) async fn begin_isolated_tx(
 pub(crate) async fn begin_authorised_proposal_tx<'a>(
     pool: &'a PgPool,
     actor: &Subject,
-) -> Result<(Transaction<'a, Postgres>, String), PgError> {
+) -> Result<(Transaction<'a, Postgres>, LoginRole), PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::Serializable).await?;
-    let login_role = sqlx::query_scalar!(r#"SELECT session_user AS "session_user!""#)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(classify_checked_query)?;
-    crate::actor_policy::authorise(&mut tx, actor, &login_role).await?;
-    Ok((tx, login_role))
+    // Name and OID in one statement. If the session's role was dropped,
+    // or dropped and created again, `session_user` itself errors, so a
+    // session never records its successor's OID.
+    let row = sqlx::query!(
+        r#"SELECT session_user AS "name!",
+                  (SELECT oid FROM pg_roles WHERE rolname = session_user) AS oid"#
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(classify_checked_query)?;
+    let Some(oid) = row.oid else {
+        return Err(PgError::InvalidState(format!(
+            "the login role `{}` has no entry in pg_roles",
+            row.name
+        )));
+    };
+    let login = LoginRole {
+        name: row.name,
+        oid: oid.0,
+    };
+    crate::actor_policy::authorise(&mut tx, actor, &login.name).await?;
+    Ok((tx, login))
+}
+
+/// The role that asserted a proposal's actor: its name, which the actor
+/// policy grants by, and its OID, which tells one incarnation of the name
+/// from another.
+#[derive(Debug, Clone)]
+pub(crate) struct LoginRole {
+    pub(crate) name: String,
+    pub(crate) oid: u32,
 }

@@ -8,8 +8,9 @@
 use morpholog_postgres::{
     Checkpoint, EvidencePack, PackVerdict, PackVerificationReport, SelectiveEvidencePack,
     SelectiveVerification, SignaturePolicy, TreeVerification, WindowEvidencePack, WindowStart,
-    WindowVerification, WitnessesReport, export_pack, export_selective, export_window, verify_pack,
-    verify_selective, verify_window, with_anchor_signatures, witnesses_report,
+    WindowVerification, WitnessesReport, export_pack, export_selective, export_window,
+    pack_role_rebindings, verify_pack, verify_selective, verify_window, with_anchor_signatures,
+    witnesses_report,
 };
 
 use anyhow::Context;
@@ -67,7 +68,7 @@ pub(crate) async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
 /// `audit verify-pack`: check a pack offline. A prefix pack recomputes its
 /// root from every row; a window pack checks a consistency proof and
 /// per-row inclusion proofs; `pack_format_version` says which. Prints one
-/// JSON verdict and exits 1 on any tamper, divergence or malformed pack,
+/// JSON report and exits 1 on any tamper, divergence or malformed pack,
 /// like `audit verify`.
 pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     let bytes = std::fs::read(&args.pack_file)
@@ -101,24 +102,26 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
         }),
         _ => PackVerdict::Prefix(verify_prefix_pack(&bytes, anchor.as_ref(), policy.as_ref())),
     };
-    let intact = matches!(
-        verdict,
-        PackVerdict::Prefix(TreeVerification::Intact { .. })
-            | PackVerdict::Window(WindowVerification::Intact { .. })
-            | PackVerdict::Selective(SelectiveVerification::Intact { .. })
-    );
+    let intact = verdict.is_intact();
 
-    // Witnesses are judged apart from the verdict. They change the output
-    // shape, so they appear only when asked for.
+    // Witnesses are judged apart from the verdict, and only when asked for.
+    // Role rebindings are read from the rows only an intact verdict
+    // established, and never fail the check.
     let mut witness_invalid = false;
-    if args.witnesses || args.trusted_tsa_file.is_some() {
+    let witnesses = if args.witnesses || args.trusted_tsa_file.is_some() {
         let anchors = witness_anchors(args.trusted_tsa_file.as_deref())?;
         let witnesses = witnesses_report(&pack_checkpoints(&bytes), anchors.as_ref());
         witness_invalid = witnesses.as_ref().is_some_and(WitnessesReport::any_invalid);
-        print_json(&PackVerificationReport { verdict, witnesses })?;
+        witnesses
     } else {
-        print_json(&verdict)?;
-    }
+        None
+    };
+    let role_rebindings = pack_role_rebindings(&bytes, &verdict);
+    print_json(&PackVerificationReport {
+        verdict,
+        witnesses,
+        role_rebindings,
+    })?;
 
     if !intact || witness_invalid {
         return Err(AlreadyReported.into());

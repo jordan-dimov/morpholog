@@ -111,7 +111,7 @@ pub async fn propose_all_against_pg(
         let row = index as u64 + 1;
         if index > 0 {
             // Against the policy as the acts before this one left it.
-            crate::actor_policy::authorise(&mut tx, &transition.actor, &login_role).await?;
+            crate::actor_policy::authorise(&mut tx, &transition.actor, &login_role.name).await?;
         }
         let transition_id = Uuid::now_v7();
         let (asserted_claims, retracted_claims, emitted_intents) = match route {

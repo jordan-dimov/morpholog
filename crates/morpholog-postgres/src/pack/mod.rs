@@ -11,6 +11,8 @@
 //! else revealed). None proves that a pack holds *all* of one subject's
 //! history; that needs a subject-indexed commitment.
 
+use crate::role_rebindings::{RebindingFold, RebindingScope, RoleRebindings};
+use crate::witnesses::PackVerdict;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -956,3 +958,34 @@ fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackE
 
 #[cfg(test)]
 mod tests;
+
+/// The role rebindings among a pack's rows, in log order, given the
+/// verdict that pack received. Only an intact verdict establishes the
+/// rows; any other leaves them unevaluated.
+pub fn pack_role_rebindings(bytes: &[u8], verdict: &PackVerdict) -> RoleRebindings {
+    if !verdict.is_intact() {
+        return RoleRebindings::NotEvaluated;
+    }
+    let (scope, rows) = match verdict {
+        PackVerdict::Prefix(_) => (
+            RebindingScope::CompletePrefix,
+            serde_json::from_slice::<EvidencePack>(bytes).map(|p| p.rows),
+        ),
+        PackVerdict::Window(_) => (
+            RebindingScope::Window,
+            serde_json::from_slice::<WindowEvidencePack>(bytes).map(|p| p.rows),
+        ),
+        PackVerdict::Selective(_) => (
+            RebindingScope::Selective,
+            serde_json::from_slice::<SelectiveEvidencePack>(bytes).map(|p| p.rows),
+        ),
+    };
+    let Some(rows) = rows.ok().and_then(|rows| canonically_sorted(&rows).ok()) else {
+        return RoleRebindings::NotEvaluated;
+    };
+    let mut fold = RebindingFold::default();
+    for row in &rows {
+        fold.observe(row);
+    }
+    fold.finish(scope, true)
+}

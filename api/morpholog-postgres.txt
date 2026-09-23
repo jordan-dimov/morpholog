@@ -105,6 +105,7 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ActorAttestati
 pub enum morpholog_postgres::AuditAttestation
 pub morpholog_postgres::AuditAttestation::Gateway
 pub morpholog_postgres::AuditAttestation::Gateway::authenticated_by: alloc::string::String
+pub morpholog_postgres::AuditAttestation::Gateway::authenticated_by_oid: core::option::Option<u32>
 impl core::clone::Clone for morpholog_postgres::AuditAttestation
 pub fn morpholog_postgres::AuditAttestation::clone(&self) -> morpholog_postgres::AuditAttestation
 impl core::cmp::Eq for morpholog_postgres::AuditAttestation
@@ -331,6 +332,8 @@ pub enum morpholog_postgres::PackVerdict
 pub morpholog_postgres::PackVerdict::Prefix(morpholog_postgres::TreeVerification)
 pub morpholog_postgres::PackVerdict::Selective(morpholog_postgres::SelectiveVerification)
 pub morpholog_postgres::PackVerdict::Window(morpholog_postgres::WindowVerification)
+impl morpholog_postgres::PackVerdict
+pub fn morpholog_postgres::PackVerdict::is_intact(&self) -> bool
 impl core::clone::Clone for morpholog_postgres::PackVerdict
 pub fn morpholog_postgres::PackVerdict::clone(&self) -> morpholog_postgres::PackVerdict
 impl core::fmt::Debug for morpholog_postgres::PackVerdict
@@ -510,6 +513,54 @@ impl core::marker::Unpin for morpholog_postgres::ProcessOutcome
 impl core::marker::UnsafeUnpin for morpholog_postgres::ProcessOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ProcessOutcome
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ProcessOutcome
+pub enum morpholog_postgres::RebindingScope
+pub morpholog_postgres::RebindingScope::CompletePrefix
+pub morpholog_postgres::RebindingScope::Selective
+pub morpholog_postgres::RebindingScope::Window
+impl core::clone::Clone for morpholog_postgres::RebindingScope
+pub fn morpholog_postgres::RebindingScope::clone(&self) -> morpholog_postgres::RebindingScope
+impl core::clone::TrivialClone for morpholog_postgres::RebindingScope
+impl core::cmp::Eq for morpholog_postgres::RebindingScope
+impl core::cmp::PartialEq for morpholog_postgres::RebindingScope
+pub fn morpholog_postgres::RebindingScope::eq(&self, &morpholog_postgres::RebindingScope) -> bool
+impl core::fmt::Debug for morpholog_postgres::RebindingScope
+pub fn morpholog_postgres::RebindingScope::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_postgres::RebindingScope
+impl core::marker::StructuralPartialEq for morpholog_postgres::RebindingScope
+impl serde_core::ser::Serialize for morpholog_postgres::RebindingScope
+pub fn morpholog_postgres::RebindingScope::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::RebindingScope
+impl core::marker::Send for morpholog_postgres::RebindingScope
+impl core::marker::Sync for morpholog_postgres::RebindingScope
+impl core::marker::Unpin for morpholog_postgres::RebindingScope
+impl core::marker::UnsafeUnpin for morpholog_postgres::RebindingScope
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RebindingScope
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RebindingScope
+pub enum morpholog_postgres::RoleRebindings
+pub morpholog_postgres::RoleRebindings::Evaluated
+pub morpholog_postgres::RoleRebindings::Evaluated::changes: alloc::vec::Vec<morpholog_postgres::RoleRebinding>
+pub morpholog_postgres::RoleRebindings::Evaluated::rows_with_oid: u64
+pub morpholog_postgres::RoleRebindings::Evaluated::rows_without_oid: u64
+pub morpholog_postgres::RoleRebindings::Evaluated::scope: morpholog_postgres::RebindingScope
+pub morpholog_postgres::RoleRebindings::NotEvaluated
+impl core::clone::Clone for morpholog_postgres::RoleRebindings
+pub fn morpholog_postgres::RoleRebindings::clone(&self) -> morpholog_postgres::RoleRebindings
+impl core::cmp::Eq for morpholog_postgres::RoleRebindings
+pub fn morpholog_postgres::RoleRebindings::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::RoleRebindings
+pub fn morpholog_postgres::RoleRebindings::eq(&self, &morpholog_postgres::RoleRebindings) -> bool
+impl core::fmt::Debug for morpholog_postgres::RoleRebindings
+pub fn morpholog_postgres::RoleRebindings::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::RoleRebindings
+impl serde_core::ser::Serialize for morpholog_postgres::RoleRebindings
+pub fn morpholog_postgres::RoleRebindings::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::RoleRebindings
+impl core::marker::Send for morpholog_postgres::RoleRebindings
+impl core::marker::Sync for morpholog_postgres::RoleRebindings
+impl core::marker::Unpin for morpholog_postgres::RoleRebindings
+impl core::marker::UnsafeUnpin for morpholog_postgres::RoleRebindings
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RoleRebindings
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RoleRebindings
 pub enum morpholog_postgres::SelectiveVerification
 pub morpholog_postgres::SelectiveVerification::AnchorMismatch
 pub morpholog_postgres::SelectiveVerification::AnchorMismatch::anchor_checkpoint_hash: morpholog_postgres::Digest
@@ -1228,6 +1279,7 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::PackManifest
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::PackManifest
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::PackManifest
 pub struct morpholog_postgres::PackVerificationReport
+pub morpholog_postgres::PackVerificationReport::role_rebindings: morpholog_postgres::RoleRebindings
 pub morpholog_postgres::PackVerificationReport::verdict: morpholog_postgres::PackVerdict
 pub morpholog_postgres::PackVerificationReport::witnesses: core::option::Option<morpholog_postgres::WitnessesReport>
 impl core::clone::Clone for morpholog_postgres::PackVerificationReport
@@ -1425,6 +1477,30 @@ impl core::marker::Unpin for morpholog_postgres::RenderedViews
 impl core::marker::UnsafeUnpin for morpholog_postgres::RenderedViews
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RenderedViews
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RenderedViews
+pub struct morpholog_postgres::RoleRebinding
+pub morpholog_postgres::RoleRebinding::first_observed_transition: uuid::Uuid
+pub morpholog_postgres::RoleRebinding::last_observed_transition: uuid::Uuid
+pub morpholog_postgres::RoleRebinding::new_oid: u32
+pub morpholog_postgres::RoleRebinding::previous_oid: u32
+pub morpholog_postgres::RoleRebinding::role: alloc::string::String
+impl core::clone::Clone for morpholog_postgres::RoleRebinding
+pub fn morpholog_postgres::RoleRebinding::clone(&self) -> morpholog_postgres::RoleRebinding
+impl core::cmp::Eq for morpholog_postgres::RoleRebinding
+pub fn morpholog_postgres::RoleRebinding::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::RoleRebinding
+pub fn morpholog_postgres::RoleRebinding::eq(&self, &morpholog_postgres::RoleRebinding) -> bool
+impl core::fmt::Debug for morpholog_postgres::RoleRebinding
+pub fn morpholog_postgres::RoleRebinding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::RoleRebinding
+impl serde_core::ser::Serialize for morpholog_postgres::RoleRebinding
+pub fn morpholog_postgres::RoleRebinding::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::RoleRebinding
+impl core::marker::Send for morpholog_postgres::RoleRebinding
+impl core::marker::Sync for morpholog_postgres::RoleRebinding
+impl core::marker::Unpin for morpholog_postgres::RoleRebinding
+impl core::marker::UnsafeUnpin for morpholog_postgres::RoleRebinding
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RoleRebinding
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RoleRebinding
 pub struct morpholog_postgres::RowInclusionProof
 pub morpholog_postgres::RowInclusionProof::leaf_index: i64
 pub morpholog_postgres::RowInclusionProof::proof: alloc::vec::Vec<morpholog_postgres::Digest>
@@ -1570,6 +1646,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::TreeHeadSig
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::TreeHeadSignature
 pub struct morpholog_postgres::VerifyReport
 pub morpholog_postgres::VerifyReport::replay: morpholog_postgres::VerifyOutcome
+pub morpholog_postgres::VerifyReport::role_rebindings: morpholog_postgres::RoleRebindings
 pub morpholog_postgres::VerifyReport::tree: morpholog_postgres::TreeVerification
 pub morpholog_postgres::VerifyReport::views: core::option::Option<morpholog_postgres::ViewsVerification>
 pub morpholog_postgres::VerifyReport::witnesses: core::option::Option<morpholog_postgres::WitnessesReport>
@@ -1763,6 +1840,7 @@ pub async fn morpholog_postgres::mark_outbox_delivered(&sqlx_postgres::PgPool, u
 pub async fn morpholog_postgres::mark_outbox_failed(&sqlx_postgres::PgPool, uuid::Uuid, &str, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::mark_outbox_transient_attempt(&sqlx_postgres::PgPool, uuid::Uuid, &str, jiff::timestamp::Timestamp) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::migration_status(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
+pub fn morpholog_postgres::pack_role_rebindings(&[u8], &morpholog_postgres::PackVerdict) -> morpholog_postgres::RoleRebindings
 pub fn morpholog_postgres::parse_public_key(&str) -> core::result::Result<ed25519_dalek::verifying::VerifyingKey, morpholog_postgres::SigningError>
 pub fn morpholog_postgres::parse_signature(&str) -> core::result::Result<ed25519::Signature, morpholog_postgres::SigningError>
 pub async fn morpholog_postgres::plan_indexes(&sqlx_postgres::PgPool, &morpholog_postgres::PgProgram) -> core::result::Result<morpholog_postgres::ProvisionReport, morpholog_postgres::PgError>
@@ -1795,7 +1873,7 @@ pub fn morpholog_postgres::tree_head_witness_bytes(&morpholog_postgres::TreeHead
 pub fn morpholog_postgres::validate_declarations(&morpholog_core::ir::Program) -> alloc::vec::Vec<morpholog_postgres::PolicyDeclarationError>
 pub async fn morpholog_postgres::verify_audit_tree(&sqlx_postgres::PgPool, core::option::Option<morpholog_postgres::Checkpoint>) -> core::result::Result<morpholog_postgres::TreeVerification, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::verify_audit_tree_under(&sqlx_postgres::PgPool, core::option::Option<morpholog_postgres::Checkpoint>, core::option::Option<&morpholog_postgres::SignaturePolicy>) -> core::result::Result<morpholog_postgres::TreeVerification, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::verify_audit_tree_with_chain(&sqlx_postgres::PgPool, core::option::Option<morpholog_postgres::Checkpoint>, core::option::Option<&morpholog_postgres::SignaturePolicy>) -> core::result::Result<(morpholog_postgres::TreeVerification, alloc::vec::Vec<morpholog_postgres::Checkpoint>), morpholog_postgres::PgError>
+pub async fn morpholog_postgres::verify_audit_tree_with_chain(&sqlx_postgres::PgPool, core::option::Option<morpholog_postgres::Checkpoint>, core::option::Option<&morpholog_postgres::SignaturePolicy>) -> core::result::Result<(morpholog_postgres::TreeVerification, alloc::vec::Vec<morpholog_postgres::Checkpoint>, morpholog_postgres::RoleRebindings), morpholog_postgres::PgError>
 pub fn morpholog_postgres::verify_pack(&morpholog_postgres::EvidencePack, core::option::Option<&morpholog_postgres::Checkpoint>) -> core::result::Result<morpholog_postgres::TreeVerification, morpholog_postgres::PackError>
 pub async fn morpholog_postgres::verify_replay(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::VerifyOutcome, morpholog_postgres::PgError>
 pub fn morpholog_postgres::verify_selective(&morpholog_postgres::SelectiveEvidencePack, core::option::Option<&morpholog_postgres::Checkpoint>) -> core::result::Result<morpholog_postgres::SelectiveVerification, morpholog_postgres::PackError>

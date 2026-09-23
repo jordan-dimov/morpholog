@@ -4,6 +4,13 @@
     "status": "consistent",
     "transitions": 2
   },
+  "role_rebindings": {
+    "changes": [],
+    "rows_with_oid": 2,
+    "rows_without_oid": 0,
+    "scope": "complete_prefix",
+    "status": "evaluated"
+  },
   "tree": {
     "checkpoints": 1,
     "status": "intact",

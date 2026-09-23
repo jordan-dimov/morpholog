@@ -87,9 +87,52 @@ fn attested_fixed_row() -> AuditRow {
     AuditRow {
         attestation: Some(crate::AuditAttestation::Gateway {
             authenticated_by: "morpholog_writer".to_string(),
+            authenticated_by_oid: None,
         }),
         ..fixed_row()
     }
+}
+
+fn attested_with_oid(oid: Option<u32>) -> AuditRow {
+    AuditRow {
+        attestation: Some(crate::AuditAttestation::Gateway {
+            authenticated_by: "morpholog_writer".to_string(),
+            authenticated_by_oid: oid,
+        }),
+        ..stamped_fixed_row()
+    }
+}
+
+/// The role's OID is inside the leaf: changing only the OID changes the
+/// hash, and a row without one hashes exactly as rows always have (the
+/// frozen vectors above hold that byte for byte).
+#[test]
+fn the_role_oid_is_committed_to_by_the_leaf() {
+    let leaf = |oid| audit_leaf_hash(&attested_with_oid(oid)).unwrap();
+    assert_ne!(leaf(Some(100)), leaf(Some(200)));
+    assert_ne!(leaf(Some(100)), leaf(None));
+    assert_eq!(leaf(None), audit_leaf_hash(&stamped_fixed_row()).unwrap());
+}
+
+/// The attestation is hashed as its JSON bytes, so those bytes are the
+/// encoding: the OID follows the name, and is absent when unknown.
+#[test]
+fn the_attestation_bytes_with_and_without_an_oid() {
+    let bytes = |oid| {
+        serde_json::to_string(&crate::AuditAttestation::Gateway {
+            authenticated_by: "gm_human".to_string(),
+            authenticated_by_oid: oid,
+        })
+        .unwrap()
+    };
+    assert_eq!(
+        bytes(Some(9_778_843)),
+        r#"{"mode":"gateway","authenticated_by":"gm_human","authenticated_by_oid":9778843}"#
+    );
+    assert_eq!(
+        bytes(None),
+        r#"{"mode":"gateway","authenticated_by":"gm_human"}"#
+    );
 }
 
 fn stamped_fixed_row() -> AuditRow {

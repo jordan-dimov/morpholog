@@ -648,7 +648,8 @@
       "required": ["mode", "authenticated_by"],
       "properties": {
         "mode": { "const": "gateway" },
-        "authenticated_by": { "type": "string" }
+        "authenticated_by": { "type": "string" },
+        "authenticated_by_oid": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
       }
     },
     "audit_row": {
@@ -1283,15 +1284,58 @@
         }
       ]
     },
+    "role_rebindings": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "scope", "rows_with_oid", "rows_without_oid", "changes"],
+          "properties": {
+            "status": { "const": "evaluated" },
+            "scope": { "enum": ["complete_prefix", "window", "selective"] },
+            "rows_with_oid": { "type": "integer", "minimum": 0 },
+            "rows_without_oid": { "type": "integer", "minimum": 0 },
+            "changes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "role",
+                  "previous_oid",
+                  "last_observed_transition",
+                  "new_oid",
+                  "first_observed_transition"
+                ],
+                "properties": {
+                  "role": { "type": "string" },
+                  "previous_oid": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+                  "last_observed_transition": { "type": "string", "format": "uuid" },
+                  "new_oid": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+                  "first_observed_transition": { "type": "string", "format": "uuid" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": { "status": { "const": "not_evaluated" } }
+        }
+      ]
+    },
     "verify_report": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["replay", "tree"],
+      "required": ["replay", "tree", "role_rebindings"],
       "properties": {
         "replay": { "$ref": "#/$defs/verify_outcome" },
         "tree": { "$ref": "#/$defs/tree_verification" },
         "views": { "$ref": "#/$defs/views_verification" },
-        "witnesses": { "$ref": "#/$defs/witnesses_report" }
+        "witnesses": { "$ref": "#/$defs/witnesses_report" },
+        "role_rebindings": { "$ref": "#/$defs/role_rebindings" }
       }
     },
     "witness_verdict": {
@@ -1327,7 +1371,7 @@
     "pack_verification_report": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["verdict"],
+      "required": ["verdict", "role_rebindings"],
       "properties": {
         "verdict": {
           "oneOf": [
@@ -1336,7 +1380,8 @@
             { "$ref": "#/$defs/selective_verification" }
           ]
         },
-        "witnesses": { "$ref": "#/$defs/witnesses_report" }
+        "witnesses": { "$ref": "#/$defs/witnesses_report" },
+        "role_rebindings": { "$ref": "#/$defs/role_rebindings" }
       }
     },
     "pack_manifest": {

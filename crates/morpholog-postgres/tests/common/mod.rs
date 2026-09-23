@@ -213,22 +213,23 @@ pub async fn propose_pg_as(
 pub async fn commit_entry(pool: &PgPool, id: &str) -> Uuid {
     let compiled = compiled(morpholog_examples::double_entry_ledger::program());
     let t = morpholog_examples::double_entry_ledger::post_simple_entry();
-    let outcome = propose_pg_with_test_actor(
-        pool,
-        &compiled,
-        &t,
-        vec![
-            morpholog_test_support::subj(id),
-            morpholog_test_support::subj("d_2026_05_17"),
-            morpholog_test_support::subj("p1"),
-            morpholog_test_support::subj(&format!("cash_{id}")),
-            morpholog_test_support::subj(&format!("rev_{id}")),
-            morpholog_test_support::dec(100),
-        ],
-    )
-    .await
-    .unwrap();
+    let outcome = propose_pg_with_test_actor(pool, &compiled, &t, ledger_args(id))
+        .await
+        .unwrap();
     expect_committed(outcome)
+}
+
+/// A balanced ledger posting's arguments, keyed by `id` so each is its own
+/// entry and pair of accounts.
+pub fn ledger_args(id: &str) -> Vec<EvalValue> {
+    vec![
+        morpholog_test_support::subj(id),
+        morpholog_test_support::subj("d_2026_05_17"),
+        morpholog_test_support::subj("p1"),
+        morpholog_test_support::subj(&format!("cash_{id}")),
+        morpholog_test_support::subj(&format!("rev_{id}")),
+        morpholog_test_support::dec(100),
+    ]
 }
 
 /// Wait (bounded) for other sessions' open transactions to end. A

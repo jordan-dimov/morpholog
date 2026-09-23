@@ -37,6 +37,7 @@ use crate::audit::AuditRow;
 use crate::audit_pages::AuditPages;
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::merkle::{Digest, Hash, audit_leaf_hash, merkle_root};
+use crate::role_rebindings::{RebindingFold, RebindingScope, RoleRebindings};
 use crate::signing;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 
@@ -320,13 +321,15 @@ fn stored_digest(text: &str) -> Result<Digest, PgError> {
         .map_err(|e| PgError::InvalidState(format!("a stored checkpoint hash is malformed: {e}")))
 }
 
-/// Page the audit log in canonical order, hashing each row to its leaf.
-/// `horizon` bounds by `committed_at`; `max` stops after that many rows.
+/// Page the audit log in canonical order, hashing each row to its leaf
+/// and handing it to `observe`. `horizon` bounds by `committed_at`; `max`
+/// stops after that many rows, so no row past it is hashed or observed.
 /// Returns the leaves and the last row's coordinates.
 async fn collect_leaves(
     conn: &mut sqlx::PgConnection,
     horizon: Option<Timestamp>,
     max: Option<i64>,
+    observe: &mut dyn FnMut(&AuditRow),
 ) -> Result<(Vec<[u8; 32]>, Option<(Uuid, Timestamp)>), PgError> {
     let mut leaves = Vec::new();
     let mut last = None;
@@ -337,11 +340,12 @@ async fn collect_leaves(
             break;
         }
         for row in &page {
-            leaves.push(audit_leaf_hash(row)?);
-            last = Some((row.transition_id, row.committed_at));
             if max.is_some_and(|m| leaves.len() as i64 >= m) {
                 return Ok((leaves, last));
             }
+            leaves.push(audit_leaf_hash(row)?);
+            observe(row);
+            last = Some((row.transition_id, row.committed_at));
         }
     }
     Ok((leaves, last))
@@ -423,7 +427,7 @@ pub async fn create_checkpoint(
     let horizon = crate::audit::audit_resume_watermark(pool, writers).await?;
 
     let mut read_tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
-    let (leaves, last) = collect_leaves(&mut read_tx, Some(horizon), None).await?;
+    let (leaves, last) = collect_leaves(&mut read_tx, Some(horizon), None, &mut |_| {}).await?;
     let tree_size = leaves.len() as i64;
     // When signing, judge authority over the same prefix in the same
     // snapshot, so the check and the leaves agree; on failure the withheld
@@ -778,22 +782,42 @@ pub async fn verify_audit_tree_under(
 ) -> Result<TreeVerification, PgError> {
     verify_audit_tree_with_chain(pool, anchor, policy)
         .await
-        .map(|(verdict, _)| verdict)
+        .map(|(verdict, _, _)| verdict)
 }
 
 /// [`verify_audit_tree_under`], also returning the checkpoint chain the
-/// verdict saw, so witnesses are judged on exactly those checkpoints.
+/// verdict saw, so witnesses are judged on exactly those checkpoints, and
+/// the role rebindings in the rows the verdict covered, read in the same
+/// walk that hashed them.
 pub async fn verify_audit_tree_with_chain(
     pool: &PgPool,
     anchor: Option<Checkpoint>,
     policy: Option<&SignaturePolicy>,
-) -> Result<(TreeVerification, Vec<Checkpoint>), PgError> {
+) -> Result<(TreeVerification, Vec<Checkpoint>, RoleRebindings), PgError> {
+    let (verdict, checkpoints, rebindings) = verify_audit_tree_walk(pool, anchor, policy).await?;
+    let established = matches!(verdict, TreeVerification::Intact { .. });
+    Ok((
+        verdict,
+        checkpoints,
+        rebindings.finish(RebindingScope::CompletePrefix, established),
+    ))
+}
+
+async fn verify_audit_tree_walk(
+    pool: &PgPool,
+    anchor: Option<Checkpoint>,
+    policy: Option<&SignaturePolicy>,
+) -> Result<(TreeVerification, Vec<Checkpoint>, RebindingFold), PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
 
     let checkpoints = load_checkpoint_chain(&mut tx).await?;
 
     let max_size = checkpoints.last().map(|c| c.tree_size).unwrap_or(0);
-    let (leaves, _) = collect_leaves(&mut tx, None, Some(max_size)).await?;
+    let mut rebindings = RebindingFold::default();
+    let (leaves, _) = collect_leaves(&mut tx, None, Some(max_size), &mut |row| {
+        rebindings.observe(row)
+    })
+    .await?;
 
     let verdict = verify_tree(&leaves, &checkpoints, anchor.as_ref());
     // An intact tree must still show each signing key, the anchor's
@@ -805,7 +829,7 @@ pub async fn verify_audit_tree_with_chain(
     {
         let rows = load_audit_rows(&mut tx, max_size).await?;
         if let Some(violation) = authority_violation(&checkpoints, anchor.as_ref(), &rows) {
-            return Ok((violation, checkpoints));
+            return Ok((violation, checkpoints, rebindings));
         }
     }
     if let Some(policy) = policy
@@ -813,9 +837,9 @@ pub async fn verify_audit_tree_with_chain(
         && let Some(violation) =
             policy.violation(&with_anchor_signatures(&checkpoints, anchor.as_ref()))
     {
-        return Ok((violation.into(), checkpoints));
+        return Ok((violation.into(), checkpoints, rebindings));
     }
-    Ok((verdict, checkpoints))
+    Ok((verdict, checkpoints, rebindings))
 }
 
 /// Tree-head identity: the commitment, *excluding* its signatures. The

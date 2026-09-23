@@ -51,10 +51,19 @@ async fn a_commit_records_the_sessions_authenticated_role() {
         .fetch_one(&pool)
         .await
         .unwrap();
+    let role_oid: sqlx::postgres::types::Oid =
+        sqlx::query_scalar("SELECT oid FROM pg_roles WHERE rolname = session_user")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     let rows = list_audit_rows(&pool).await.unwrap();
-    let AuditAttestation::Gateway { authenticated_by } =
-        rows.last().unwrap().attestation.clone().expect("attested");
+    let AuditAttestation::Gateway {
+        authenticated_by,
+        authenticated_by_oid,
+    } = rows.last().unwrap().attestation.clone().expect("attested");
     assert_eq!(authenticated_by, session_user);
+    // Which incarnation of the name: the role's OID when it committed.
+    assert_eq!(authenticated_by_oid, Some(role_oid.0));
 }
 
 #[tokio::test]

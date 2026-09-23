@@ -31,10 +31,11 @@ use morpholog_core::{
 use morpholog_postgres::{
     AtomicAct, AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, CheckpointWitnesses,
     EvidencePack, OutboxRow, PackManifest, PackVerdict, PackVerificationReport, PgAtomicOutcome,
-    PgProposalOutcome, RowInclusionProof, SelectiveEvidencePack, SelectivePackManifest,
-    SelectiveVerification, TreeHeadSignature, TreeVerification, VerifyOutcome, VerifyReport,
-    ViewsVerification, WindowEvidencePack, WindowPackManifest, WindowVerification, WitnessScheme,
-    WitnessStanding, WitnessVerdict, WitnessesReport,
+    PgProposalOutcome, RebindingScope, RoleRebinding, RoleRebindings, RowInclusionProof,
+    SelectiveEvidencePack, SelectivePackManifest, SelectiveVerification, TreeHeadSignature,
+    TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification, WindowEvidencePack,
+    WindowPackManifest, WindowVerification, WitnessScheme, WitnessStanding, WitnessVerdict,
+    WitnessesReport,
 };
 use rust_decimal::Decimal;
 use std::path::PathBuf;
@@ -665,10 +666,23 @@ fn audit_rows_serialize_as_pinned() {
     let attested = AuditRow {
         attestation: Some(morpholog_postgres::AuditAttestation::Gateway {
             authenticated_by: "morpholog_writer".to_string(),
+            authenticated_by_oid: None,
         }),
         ..row.clone()
     };
     assert_golden("audit_row_attested.json", &to_value(&attested));
+    // As the runtime writes it now: the role's OID beside its name.
+    let with_oid = AuditRow {
+        attestation: Some(morpholog_postgres::AuditAttestation::Gateway {
+            authenticated_by: "morpholog_writer".to_string(),
+            authenticated_by_oid: Some(16_384),
+        }),
+        ..row.clone()
+    };
+    assert_golden(
+        "audit_row_attested_with_role_oid.json",
+        &to_value(&with_oid),
+    );
 
     // The attested row plus the parameter names the writer stamped, one
     // per argument, so the row outlives the programme that wrote it.
@@ -1117,6 +1131,32 @@ fn sample_audit_row() -> AuditRow {
     }
 }
 
+/// An evaluated finding with nothing to report.
+fn no_rebindings() -> RoleRebindings {
+    RoleRebindings::Evaluated {
+        scope: RebindingScope::CompletePrefix,
+        rows_with_oid: 2,
+        rows_without_oid: 0,
+        changes: Vec::new(),
+    }
+}
+
+/// A role dropped and created again under the same name between two rows.
+fn rebindings_with_one_change() -> RoleRebindings {
+    RoleRebindings::Evaluated {
+        scope: RebindingScope::CompletePrefix,
+        rows_with_oid: 2,
+        rows_without_oid: 0,
+        changes: vec![RoleRebinding {
+            role: "gm_human".to_string(),
+            previous_oid: 16_384,
+            last_observed_transition: "01900000-0000-7000-8000-000000000001".parse().unwrap(),
+            new_oid: 16_391,
+            first_observed_transition: "01900000-0000-7000-8000-000000000002".parse().unwrap(),
+        }],
+    }
+}
+
 #[test]
 fn tamper_evidence_envelopes_serialize_as_pinned() {
     // `verify`: replay verdict beside tamper-evidence verdict.
@@ -1133,6 +1173,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             },
             views: None,
             witnesses: None,
+            role_rebindings: rebindings_with_one_change(),
         }),
     );
     // With the opt-in views leg: one golden per verdict shape.
@@ -1149,6 +1190,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             },
             views: Some(ViewsVerification::Intact { views_checked: 4 }),
             witnesses: None,
+            role_rebindings: no_rebindings(),
         }),
     );
     assert_golden(
@@ -1175,6 +1217,8 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             },
             views: None,
             witnesses: None,
+            // Rows a tampered tree did not establish support no finding.
+            role_rebindings: RoleRebindings::NotEvaluated,
             tree: TreeVerification::Tampered {
                 tree_size: 2,
                 recorded_root: format!("sha256:{}", "a".repeat(64)).parse().unwrap(),
@@ -1292,6 +1336,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             },
             views: None,
             witnesses: Some(witnesses_report.clone()),
+            role_rebindings: no_rebindings(),
         },
     );
     assert_golden_bytes(
@@ -1303,7 +1348,40 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 rows: 1,
             }),
             witnesses: Some(witnesses_report),
+            role_rebindings: RoleRebindings::Evaluated {
+                scope: RebindingScope::Window,
+                rows_with_oid: 1,
+                rows_without_oid: 0,
+                changes: Vec::new(),
+            },
         },
+    );
+    // `verify-pack` prints the report whether or not witnesses were asked
+    // for. A selective pack reports a change as observed between the rows
+    // it discloses; rows it does not disclose may sit between them.
+    assert_golden(
+        "pack_verification_report_selective_rebinding.json",
+        &to_value(&PackVerificationReport {
+            verdict: PackVerdict::Selective(SelectiveVerification::Intact {
+                tree_size: 9,
+                rows_disclosed: 2,
+            }),
+            witnesses: None,
+            role_rebindings: match rebindings_with_one_change() {
+                RoleRebindings::Evaluated {
+                    rows_with_oid,
+                    rows_without_oid,
+                    changes,
+                    ..
+                } => RoleRebindings::Evaluated {
+                    scope: RebindingScope::Selective,
+                    rows_with_oid,
+                    rows_without_oid,
+                    changes,
+                },
+                RoleRebindings::NotEvaluated => unreachable!(),
+            },
+        }),
     );
     assert_golden(
         "witness_verdict_invalid.json",
@@ -1895,6 +1973,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("batch_score.json", "batch_score"),
         ("audit_row.json", "audit_row"),
         ("audit_row_attested.json", "audit_row"),
+        ("audit_row_attested_with_role_oid.json", "audit_row"),
         ("audit_row_self_describing.json", "audit_row"),
         ("audit_row_named.json", "audit_row_named"),
         ("check_report.json", "check_report"),
@@ -1922,6 +2001,10 @@ fn every_golden_validates_against_its_defs_entry() {
         ("checkpoint_witnessed.json", "checkpoint"),
         ("verify_report_witnessed.json", "verify_report"),
         ("pack_verification_report.json", "pack_verification_report"),
+        (
+            "pack_verification_report_selective_rebinding.json",
+            "pack_verification_report",
+        ),
         ("witness_verdict_invalid.json", "witness_verdict"),
         ("witness_verdict_unverified.json", "witness_verdict"),
         ("witness_verdict_unsupported.json", "witness_verdict"),

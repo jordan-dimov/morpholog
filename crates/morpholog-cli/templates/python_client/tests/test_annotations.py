@@ -55,6 +55,10 @@ NOT_A_SINGLE_ENVELOPE = {
     "pack_verification_report.json": (
         "a pack verdict of any kind beside its witnesses; parsed with the kind's own verdict parser"
     ),
+    "pack_verification_report_selective_rebinding.json": (
+        "a pack verdict of any kind beside its role rebindings; parsed with the kind's own "
+        "verdict parser"
+    ),
 }
 
 # The element-type check is only as strong as the payloads it sees:

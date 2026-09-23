@@ -5,6 +5,7 @@ use crate::checkpoints::TreeVerification;
 use crate::claims::decode_claim_rows;
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::propose::REJECTION_KIND_INVARIANT;
+use crate::role_rebindings::RoleRebindings;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use crate::witnesses::WitnessesReport;
 use jiff::Timestamp;
@@ -55,6 +56,9 @@ pub struct VerifyReport {
     pub views: Option<ViewsVerification>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub witnesses: Option<WitnessesReport>,
+    /// Login-role names seen under a new OID in the checkpointed rows.
+    /// Reported only when the tree is intact, and never a failure.
+    pub role_rebindings: RoleRebindings,
 }
 
 /// The verdict over a generated SQL view surface: the seal recorded at
