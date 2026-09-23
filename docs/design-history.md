@@ -880,3 +880,15 @@ The plan review reversed one decision: the plan had one row type for every walk.
 One break-check stayed green for the wrong reason. Dropping the id tie-break from a query changed nothing, because the audit index hands back tied rows in id order by itself. The paging tests now run with index scans off, and the same break fails, showing its real cost: tied rows ahead of the cursor are skipped, not reordered.
 
 Measured with `scripts/bench_ab.sh main`, four interleaved runs a side: every as-of and replay row was within noise, with ratios from 0.95 to 1.05.
+
+### A known non-commit is something the binary says
+
+**Forced by:** etrmbiz's upgrade of its register to v0.0.11 (#323, reopened). The generated client decided "nothing committed" by elimination: exit 3 or a timeout was unknown, and any other failure with empty stdout was "nothing changed". A binary killed after it sent COMMIT exits by signal with empty stdout, so a proposal that may have committed read as one that had not. The register could not use the distinction and went on treating every error as unknown.
+
+**Landed:** the binary states every outcome it knows, and the client trusts nothing else. One-shot `propose` and `transact` print an error object (`request_error`, the shape `transact` already used) for every failure before or inside the proposal: a programme that does not parse, an unknown transformation, bad arguments, a failed connection, a database error. The client reads a decided envelope or a published code as a statement, and everything else - silence, a signal, garbage, a code it does not know, a timeout - as unknown. The exit code agrees but decides nothing. A traced kernel error gains its code and keeps its trace.
+
+Batches follow the same rule, which closes #330. Each receipt is flushed as its row finishes, a timeout keeps the output that arrived, and a batch refused before its first row prints one object with no `row`. The client returns the receipts only when every row has one; otherwise `MorphologBatchIncomplete` names the receipts, the one row that may have committed, and the rows that never ran.
+
+**One classification changed.** A rejection whose record could not be written had been left uncoded on purpose, because the rejection was decided and a "not decided" code would misdescribe it. `not_committed` now means "no proposal commit became durable", which is true of it: the rollback comes before the record. So it is `not_committed` everywhere, and a session carries on after it instead of aborting into an unknown. The only uncoded failure left comes after the adapter returned - a receipt that could not be written - and it stays unknown, because the row may have committed.
+
+**What the plan review changed:** batch flushing and partial output on timeout, which the incomplete-batch report depends on; the orderly refusal before the first row, kept apart from an ending nobody explained; the session following the new classification; the trace kept on a kernel error; and the version claim. Nothing checks a client's version against the binary's at run time, so the guides now say to pin the binary per project instead.
