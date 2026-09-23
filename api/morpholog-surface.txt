@@ -70,6 +70,7 @@ pub morpholog_surface::lexer::Token::Wildcard
 impl core::clone::Clone for morpholog_surface::lexer::Token
 pub fn morpholog_surface::lexer::Token::clone(&self) -> morpholog_surface::lexer::Token
 impl core::cmp::Eq for morpholog_surface::lexer::Token
+pub fn morpholog_surface::lexer::Token::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_surface::lexer::Token
 pub fn morpholog_surface::lexer::Token::eq(&self, &morpholog_surface::lexer::Token) -> bool
 impl core::fmt::Debug for morpholog_surface::lexer::Token
@@ -96,6 +97,7 @@ pub morpholog_surface::DeclKind::Predicate
 pub morpholog_surface::DeclKind::Transformation
 impl core::clone::Clone for morpholog_surface::DeclKind
 pub fn morpholog_surface::DeclKind::clone(&self) -> morpholog_surface::DeclKind
+impl core::clone::TrivialClone for morpholog_surface::DeclKind
 impl core::cmp::Eq for morpholog_surface::DeclKind
 impl core::cmp::PartialEq for morpholog_surface::DeclKind
 pub fn morpholog_surface::DeclKind::eq(&self, &morpholog_surface::DeclKind) -> bool
@@ -117,6 +119,7 @@ pub morpholog_surface::Severity::Error
 pub morpholog_surface::Severity::Hint
 impl core::clone::Clone for morpholog_surface::Severity
 pub fn morpholog_surface::Severity::clone(&self) -> morpholog_surface::Severity
+impl core::clone::TrivialClone for morpholog_surface::Severity
 impl core::cmp::Eq for morpholog_surface::Severity
 impl core::cmp::PartialEq for morpholog_surface::Severity
 pub fn morpholog_surface::Severity::eq(&self, &morpholog_surface::Severity) -> bool
@@ -146,6 +149,7 @@ pub fn morpholog_surface::Diagnostic::with_secondary(self, morpholog_surface::Sp
 impl core::clone::Clone for morpholog_surface::Diagnostic
 pub fn morpholog_surface::Diagnostic::clone(&self) -> morpholog_surface::Diagnostic
 impl core::cmp::Eq for morpholog_surface::Diagnostic
+pub fn morpholog_surface::Diagnostic::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_surface::Diagnostic
 pub fn morpholog_surface::Diagnostic::eq(&self, &morpholog_surface::Diagnostic) -> bool
 impl core::fmt::Debug for morpholog_surface::Diagnostic

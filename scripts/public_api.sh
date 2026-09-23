@@ -6,8 +6,8 @@
 #
 # Hidden items (`#[doc(hidden)]`) are rendered too: another crate can
 # still call them, so a change to one is a change to what compiles
-# against us. The derive internals the standard library hides are
-# filtered out; they are not ours and move with the nightly.
+# against us. That includes the standard library's hidden derive
+# internals; they move only when the pinned nightly does.
 #
 # The crate list is explicit: a crate is API because it is named here,
 # never because it has a lib target. The toolchain that renders
@@ -68,13 +68,11 @@ for crate in "${CRATES[@]}"; do
         cargo "+$NIGHTLY" public-api \
         --manifest-path "crates/$crate/Cargo.toml" \
         --all-features --simplified --color never \
-        > "$tmp/$crate.raw" 2> "$tmp/$crate.err" || {
+        > "$tmp/$crate.txt" 2> "$tmp/$crate.err" || {
         cat "$tmp/$crate.err" >&2
         echo "error: rendering the public API of $crate failed" >&2
         exit 1
     }
-    grep -vE '::assert_fields_are_eq\(&self\)$|^impl(<[^>]*>)? core::clone::TrivialClone for ' \
-        "$tmp/$crate.raw" > "$tmp/$crate.txt" || true
     if [ "$mode" = update ]; then
         cp "$tmp/$crate.txt" "api/$crate.txt"
     elif [ ! -e "api/$crate.txt" ]; then
