@@ -29,8 +29,7 @@ impl TxIsolation {
     }
 }
 
-/// Begin a transaction and set its isolation level. Every adapter entry
-/// point opens this way.
+/// Begin a transaction at the given isolation level.
 pub(crate) async fn begin_isolated_tx(
     pool: &PgPool,
     isolation: TxIsolation,
