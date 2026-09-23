@@ -1178,7 +1178,7 @@ async fn ledger_closed_period_rejects_new_entry_and_writes_nothing() {
     reset_db(&pool).await;
 
     // Pre-state: period already closed.
-    seed_claims(&pool, &vec![claim("PeriodClosed", vec![ledger_period()])]).await;
+    seed_claims(&pool, &[claim("PeriodClosed", vec![ledger_period()])]).await;
 
     // A normal posting must be rejected by `require not PeriodClosed`,
     // with no writes to claims, audit, or outbox.
@@ -1564,7 +1564,7 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
 
     // Period already closed: a normal posting is rejected by
     // `require not PeriodClosed`.
-    seed_claims(&pool, &vec![claim("PeriodClosed", vec![ledger_period()])]).await;
+    seed_claims(&pool, &[claim("PeriodClosed", vec![ledger_period()])]).await;
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
