@@ -1,7 +1,6 @@
-//! Tests for the per-transformation argument-kind analysis - the
-//! embedder-facing input contract. Companion to the worked-example
-//! integration tests over `trade_lifecycle`; these pin the smaller
-//! invariants that the example test will assume.
+//! Tests for the per-transformation argument-kind analysis, the input
+//! contract embedders build against. The `trade_lifecycle` integration
+//! tests rely on the smaller rules pinned here.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -10,14 +9,10 @@ use morpholog_core::{
     AnalysisError, ParamKind, PredicateArgKind, TransformationName, Var, transformation_param_kinds,
 };
 
-/// **The regression test for the `Require` trap** (ChatGPT's
-/// must-have). The static checker walks `Require` in a cloned scope,
-/// so a parameter observed only inside a `require` is dropped from
-/// the outer kind environment. A naive "re-run the checker's walk"
-/// implementation of the param-kind accessor would report this
-/// parameter as `Unconstrained`. Authority-gated transformations
-/// (the `require can_approve(actor, asset)` shape) make this the
-/// most-likely real failure mode.
+/// A parameter seen only inside a `require` still gets its kind. The
+/// checker walks `require` in a scoped copy, so simply reusing its walk
+/// would report `Unconstrained`. Authority gates
+/// (`require can_approve(actor, asset)`) hit this most often.
 #[test]
 fn param_used_only_inside_require_resolves_to_concrete() {
     let prog = program("authority_test")
@@ -59,9 +54,8 @@ fn param_used_only_inside_require_resolves_to_concrete() {
 }
 
 /// Returned vec is in `transformation.parameters` declaration order,
-/// never hash-iteration order. Picked param names whose alphabetical
-/// order differs from declaration order, so a HashMap-iteration bug
-/// would fail the test loudly.
+/// never hash order. The names sort differently from their declaration
+/// order so a HashMap bug fails here.
 #[test]
 fn returned_order_matches_declaration_order() {
     let prog = program("ordering_test")
@@ -130,8 +124,8 @@ fn param_never_observed_is_unconstrained() {
 }
 
 /// Each declared concrete kind (Subject / Decimal / Date / Bool /
-/// Collection) round-trips through the accessor. Coverage of the
-/// kind-mapping path that the schema layer will lean on.
+/// Collection) round-trips through the accessor, as the schema layer
+/// relies on.
 #[test]
 fn every_concrete_kind_round_trips() {
     let prog = program("kinds_test")
@@ -209,21 +203,11 @@ fn unknown_transformation_returns_error() {
     assert_eq!(name.as_str(), "ghost");
 }
 
-/// **The regression test for silent-conflict-dropping** (the
-/// blocking issue from ChatGPT's review and Copilot's comment on
-/// `observe`). The static checker walks `Or` branches in cloned
-/// scopes whose refinements do not export, so a programme can
-/// validate even when the same parameter is observed at one
-/// concrete kind in one branch and a different concrete kind in
-/// another. An earlier implementation refined into one
-/// `InferredKind` per variable and silently dropped the second
-/// observation on conflict, which produced a `Concrete(_)` result
-/// that lied about the contract. The fix accumulates a *set* of
-/// observed kinds per variable and projects multi-kind sets to
-/// `Ambiguous`. The disjunctive shape is legitimate at runtime
-/// (the runtime picks the `Or` branch that matches the actual
-/// input), so the embedder needs the disjunctive contract, not a
-/// false narrowing or a hard error.
+/// A parameter seen at different kinds in different `Or` branches is
+/// `Ambiguous`, never one of the kinds with the other dropped. Such a
+/// programme validates (branch scopes do not export) and is lawful at
+/// runtime, which picks the branch that matches, so the embedder needs
+/// the either-or contract, not a false narrowing or an error.
 #[test]
 fn param_observed_in_different_kinds_across_or_branches_is_ambiguous() {
     let prog = program("ambiguous_test")
@@ -265,13 +249,9 @@ fn param_observed_in_different_kinds_across_or_branches_is_ambiguous() {
     }
 }
 
-/// **The regression test for the let-alias bug** (Copilot's
-/// comment). `let amt = amount; admit Payment(amt)` - the
-/// externally-supplied parameter is `amount`, but the
-/// kind-bearing observation lands on `amt`. Without alias
-/// tracking the param would resolve to `Unconstrained` and the
-/// embedder would learn nothing about a parameter the model is
-/// actually using.
+/// `let amt = amount; admit Payment(amt)`: the kind is observed on the
+/// alias `amt`, and must reach the parameter `amount` rather than leave
+/// it `Unconstrained`.
 #[test]
 fn param_aliased_through_let_inherits_the_aliased_observation() {
     let prog = program("alias_test")
@@ -300,12 +280,9 @@ fn param_aliased_through_let_inherits_the_aliased_observation() {
     );
 }
 
-/// Alias propagation can ALSO create ambiguity (ChatGPT's
-/// nuance): if `x` and `y` are aliased and one is observed at
-/// Decimal while the other is observed at Subject, the
-/// equivalence-class projection naturally unions the two
-/// observations and the parameter falls out as `Ambiguous`. The
-/// alias chain does not hide branch-level disagreement.
+/// Aliases can also create ambiguity: if `x` and `y` are aliased and
+/// one is seen at Decimal and the other at Subject, the parameter is
+/// `Ambiguous`. Aliasing does not hide the disagreement.
 #[test]
 fn param_aliased_to_disagreeing_observations_is_ambiguous() {
     let prog = program("alias_ambiguous_test")
@@ -342,12 +319,9 @@ fn param_aliased_to_disagreeing_observations_is_ambiguous() {
     }
 }
 
-/// Alias expansion must not affect declaration-order projection:
-/// the returned vec carries parameters in `transformation.parameters`
-/// order, never alias-iteration order or HashMap-iteration order.
-/// ChatGPT explicitly requested this test - without it, a refactor
-/// could quietly start returning alias names or scrambled order
-/// without breaking other tests.
+/// Aliases do not change the output: parameters come back in
+/// `transformation.parameters` order, with no alias names and no hash
+/// order.
 #[test]
 fn aliased_params_preserve_declaration_order() {
     let prog = program("alias_order_test")
@@ -392,19 +366,14 @@ fn aliased_params_preserve_declaration_order() {
     );
 }
 
-/// **The regression test for the let-rebinding bug** (Copilot's
-/// second-review finding). A transformation like
+/// Rebinding breaks an alias. A transformation like
 ///
 ///     let y = x        -- alias (y, x)
 ///     let y = literal  -- rebind: alias broken, y is now a fresh value
 ///     admit DecimalSlot(y)
 ///
-/// must NOT propagate the later Decimal observation back to the
-/// parameter `x` - the rebinding broke the alias. An earlier
-/// lazy-class implementation kept the `(y, x)` pair around forever
-/// and unioned observations at projection time; this test fails
-/// against that implementation and passes against the flow-sensitive
-/// (eager) one.
+/// must not pass the later Decimal observation back to `x`. Aliases are
+/// tracked in statement order, not unioned at the end.
 #[test]
 fn param_alias_broken_by_let_rebinding_does_not_inherit_later_observations() {
     let prog = program("rebinding_test")
@@ -434,23 +403,15 @@ fn param_alias_broken_by_let_rebinding_does_not_inherit_later_observations() {
     );
 }
 
-/// **The regression test for the `For`-binding shadowing bug**
-/// (ChatGPT's third-review finding). `For` is the one statement
-/// the runtime walks under scoped iteration semantics (and the
-/// static checker walks under a cloned scope) - the loop binding
-/// shadows any outer name of the same name for the body's
-/// duration. So in
+/// A `for` binding shadows an outer name of the same name inside the
+/// body. So in
 ///
 ///     transformation t(x, items):
 ///         for x in items:
 ///             assert decimal_slot(x)
 ///
-/// the `assert decimal_slot(x)` inside the body is observing the
-/// LOOP binding x, not the external parameter x. The external
-/// parameter must remain `Unconstrained`. An earlier flat
-/// implementation (no scope handling for For) would falsely
-/// report the external x as `Concrete(Decimal)` - the same class
-/// of bug as the `let`-rebinding case, but for `for`.
+/// the body observes the loop's x, not the parameter x, which must stay
+/// `Unconstrained` rather than become `Concrete(Decimal)`.
 #[test]
 fn for_binding_reusing_param_name_does_not_type_the_external_param() {
     let prog = program("for_shadow_test")
@@ -491,10 +452,9 @@ fn for_binding_reusing_param_name_does_not_type_the_external_param() {
     );
 }
 
-/// A collection parameter iterated by `for`, whose loop binding lands
-/// at a Subject slot, infers `Collection(Concrete(Subject))` - the
-/// element kind an embedder needs to type a `list[str]`. This is the
-/// shape an external engine submits a whole batch through.
+/// A collection parameter iterated by `for`, whose loop binding lands at
+/// a Subject slot, infers `Collection(Concrete(Subject))`, so an
+/// embedder can type a whole submitted batch as `list[str]`.
 #[test]
 fn an_iterated_collection_infers_its_element_kind() {
     let prog = program("batch_test")
@@ -535,11 +495,9 @@ fn an_iterated_collection_infers_its_element_kind() {
     );
 }
 
-/// A collection iterated with a binding that is never used at a
-/// kind-bearing position has no observable element kind, so it stays
-/// the opaque `Concrete(Collection)` - the same as a parameter passed
-/// only to a Collection-declared predicate arg. The element kind is
-/// inferred only when the body actually constrains the binding.
+/// A collection whose loop binding is never used at a kind-bearing
+/// position stays the opaque `Concrete(Collection)`: an element kind is
+/// inferred only when the body constrains the binding.
 #[test]
 fn an_iterated_collection_with_an_unused_binding_stays_opaque() {
     let prog = program("opaque_batch")
@@ -565,12 +523,9 @@ fn an_iterated_collection_with_an_unused_binding_stays_opaque() {
 }
 
 /// `forall x in xs: ...` infers the element kind the same way `for`
-/// does - the quantifier binding's body usage becomes `xs`'s element
-/// kind. The natural author-facing completeness shape (`require forall
-/// acct in batch: Eligible(acct)`) must type the batch as a collection
-/// of subjects, not leave it opaque. This mirrors the surface lowering
-/// of `forall acct in called_accounts: ...` to a `Forall` whose source
-/// is the auto-lifted `In(acct, called_accounts)`.
+/// does, so a batch checked with `require forall acct in batch: ...`
+/// is typed as a collection of subjects. The IR below is what the
+/// surface lowers that to: a `Forall` over `In(acct, called_accounts)`.
 #[test]
 fn a_forall_over_a_collection_infers_its_element_kind() {
     let prog = program("forall_batch")
@@ -602,11 +557,9 @@ fn a_forall_over_a_collection_infers_its_element_kind() {
     );
 }
 
-/// An invalid programme surfaces its validation errors at the
-/// `Program::validated` gate, before the analysis surface is even
-/// reachable. The type system enforces this: `transformation_param_kinds`
-/// takes a `ValidatedProgram`, which is only constructible via
-/// `validated()`, so an invalid programme cannot even be analysed.
+/// An invalid programme stops at `Program::validated`:
+/// `transformation_param_kinds` takes a `ValidatedProgram`, which it
+/// cannot construct.
 #[test]
 fn invalid_program_surfaces_at_the_validated_gate() {
     let prog = program("invalid_test")

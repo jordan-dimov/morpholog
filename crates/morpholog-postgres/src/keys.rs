@@ -2,25 +2,20 @@
 //! at a point in its own history.
 //!
 //! A signing key is authorised by an admitted `AuditSigningKey(key_id,
-//! purpose, public_key)` claim - an ordinary governed claim, admitted and
-//! retracted through the operator's own transformations under their own
-//! authority gate; the runtime does not own the authorisation rules, the
-//! operator does. The verifier recognises only this exact shape - the name
-//! `AuditSigningKey` with three `Subject` arguments in that order - so a
-//! differently-shaped declaration of the same name authorises nothing.
-//! That is not silent in practice: `checkpoint --signing-key` refuses to
-//! sign with a key this fold does not find authorised, so a misshapen
-//! declaration fails loudly at signing time, not quietly at verify.
+//! purpose, public_key)` claim. It is an ordinary claim: the operator's own
+//! transformations admit and retract it, under the operator's own rules.
+//! The verifier recognises only this exact shape (three `Subject`
+//! arguments, in that order), so a differently-shaped declaration authorises
+//! nothing. `checkpoint --signing-key` refuses a key this fold does not find
+//! authorised, so a misshapen declaration fails loudly at signing time.
 //!
 //! Authorisation is judged **as of the checkpoint's prefix**: a key valid
-//! when a checkpoint was signed stays valid for that checkpoint even after
-//! it is later revoked. Revocation stops *future* signing; it does not
-//! rewrite past evidence - the same doctrine as a decision that keeps its
-//! standing after the authority behind it is rescinded.
+//! when a checkpoint was signed stays valid for that checkpoint after it is
+//! revoked. Revocation stops future signing; it does not rewrite past
+//! evidence.
 //!
-//! Pure and synchronous: a fold over audit rows, no I/O. The live verifier
-//! folds rows read from the database; the offline pack verifier folds the
-//! pack's own rows - one implementation, so they cannot drift.
+//! Pure: a fold over audit rows, no I/O. The live verifier and the offline
+//! pack verifier share it, so they cannot drift.
 
 use std::collections::HashSet;
 

@@ -1,7 +1,5 @@
-//! Programme-level `const`: parse-time substitution across every body
-//! sort, so the named and hand-inlined spellings yield the SAME
-//! `Program` and the same canonical hash. Refusals are parser-side
-//! with spans; nothing about a const reaches the IR.
+//! Programme-level `const`: a named figure and its hand-inlined spelling give the same `Program`
+//! and hash in every kind of body. Refusals carry spans; nothing of a const reaches the IR.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -90,9 +88,7 @@ fn a_const_may_use_earlier_consts() {
 
 #[test]
 fn a_const_in_a_claim_pattern_is_refused_not_filtered() {
-    // The action-at-a-distance trap: substituting here would turn the
-    // pattern variable into a literal filter, silently shrinking the
-    // rule's universe. Refused - match a variable and compare.
+    // Substituting here would turn a pattern variable into a filter from far away.
     refusal_containing(
         "const house_cap = (250)\n\n\
          invariant the_house_cap_exists:\n    Cap(c, _) implies Cap(c, house_cap)",
@@ -120,8 +116,7 @@ fn a_const_in_a_bind_pattern_or_defined_call_is_refused() {
              admit Line(l, net)",
         "stands in the `Cap` claim pattern",
     );
-    // A defined call is claim-shaped until resolution, which runs
-    // AFTER the const pass - so the refusal names it as a pattern.
+    // Definition calls are resolved after the const pass, so the refusal calls it a pattern.
     refusal_containing(
         "const cap = (250)\n\n\
          define within(limit):\n    Cap(_, limit)\n\n\
@@ -132,8 +127,7 @@ fn a_const_in_a_bind_pattern_or_defined_call_is_refused() {
 
 #[test]
 fn constructive_and_resolved_slots_still_take_consts() {
-    // admit builds a claim, retract resolves its arguments, emit
-    // constructs an intent - none bind, so a const is an ordinary use.
+    // None of admit, retract, or emit binds, so a const there is an ordinary use.
     assert_equivalent(
         "const default_net = (10)\n\n\
          intent Posted(l: Subject, net: Decimal)\n\n\
@@ -263,8 +257,7 @@ fn derived_key_collisions_are_refused() {
 
 #[test]
 fn body_let_collisions_are_refused_not_shadowed() {
-    // The body let would otherwise win silently (it substitutes
-    // first); the collision is refused at the let, naming the const.
+    // Otherwise the body let would silently win; the let is refused, naming the const.
     refusal_containing(
         "const penny = (0.01)\n\n\
          define rounded(net):\n    \
@@ -277,8 +270,7 @@ fn body_let_collisions_are_refused_not_shadowed() {
 
 #[test]
 fn a_computed_const_in_a_term_slot_is_refused() {
-    // Patterns refuse consts outright, so the computed-value refusal
-    // is now reachable only through the constructive slots.
+    // Patterns refuse consts outright, so only non-binding slots reach the computed-value refusal.
     refusal_containing(
         "const cap = (100 + 50)\n\n\
          transformation post(l, net):\n    admit Line(l, cap)",
@@ -288,8 +280,7 @@ fn a_computed_const_in_a_term_slot_is_refused() {
 
 #[test]
 fn an_open_initialiser_is_refused() {
-    // A free variable would capture whichever local exists at each
-    // use site - an unhygienic macro, not a constant.
+    // A free variable would pick up whatever local exists at each use site.
     refusal_containing(
         "const uplifted = (rate + 0.01)\n\n\
          transformation post(l, rate):\n    \
@@ -317,8 +308,7 @@ fn actor_and_wildcards_cannot_be_const_values() {
 
 #[test]
 fn a_state_reading_initialiser_is_refused() {
-    // sum/value read the ledger; a figure that changes with state is
-    // a rule's job, not a const's.
+    // sum and value read state, so the figure would change with it.
     refusal_containing(
         "const total = (sum(n | Line(_, n)))\n\n\
          invariant r:\n    Line(_, net) implies net <= total",

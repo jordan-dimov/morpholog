@@ -1,15 +1,11 @@
-//! Durable integration test for the biometric-identification-oversight
-//! example (EU AI Act Articles 12 / 14(5)) through `propose_against_pg`.
+//! The biometric-identification-oversight example (EU AI Act Articles
+//! 12 / 14(5)) through `propose_against_pg`.
 //!
-//! Scope is what the in-memory tests cannot show: that the whole
-//! statute-shaped lifecycle commits through PostgreSQL (Timestamp /
-//! Duration round-trip the JSONB columns, the machine actor and the
-//! human verifiers persist to `audit.actor`), and - the example's
-//! title concept - that **as-of replay** reconstructs the oversight
-//! that was in force at a past transition, so a revocation today does
-//! not rewrite who was authorised when a past decision was made. The
-//! per-gate rejection paths stay in the in-memory suite; the surface
-//! does not change between in-memory and PG evaluation.
+//! Covers what the in-memory tests cannot: the whole lifecycle commits
+//! through PostgreSQL, timestamps and durations round-trip, and as-of
+//! replay recovers the oversight in force at a past transition, so a
+//! revocation today does not rewrite who was authorised then. Gate
+//! rejections are tested in memory.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -46,11 +42,9 @@ async fn commit_as(
     }
 }
 
-/// The full governed lifecycle, durably: deploy, assess a version,
-/// assign two overseers, start a use, the machine records a match,
-/// two distinct overseers verify, a decision commits. Returns the
-/// transition id immediately after the decision - the moment whose
-/// oversight an Article 86 enquiry would reconstruct.
+/// The full lifecycle: deploy, assess a version, assign two overseers,
+/// start a use, record a machine match, two distinct overseers verify,
+/// a decision commits. Returns the decision's transition id.
 async fn run_to_decision(pool: &PgPool) -> Uuid {
     commit_as(
         pool,
@@ -163,9 +157,8 @@ async fn the_lifecycle_commits_durably_and_revocation_does_not_rewrite_the_past(
         "two verifications stand on the record"
     );
 
-    // Anna's authority is revoked - her training lapsed. This commits
-    // against current state (the decision already stands, so no
-    // invariant is troubled), and it governs only the future.
+    // Anna's authority is revoked: her training lapsed. It governs only
+    // the future.
     commit_as(
         &pool,
         &bio::revoke_oversight(),
@@ -184,11 +177,8 @@ async fn the_lifecycle_commits_durably_and_revocation_does_not_rewrite_the_past(
         "revocation removed anna's current authority"
     );
 
-    // The Article 86 enquiry: as-of the decision's transition, anna's
-    // oversight WAS in force - the as-of replay reconstructs the
-    // authority that held then, untouched by today's revocation. This
-    // is the signal the in-memory tests cannot produce: real
-    // time-travel over the audit log, not a snapshot of "now".
+    // The Article 86 enquiry: as of the decision, anna's oversight WAS
+    // in force, whatever was revoked since.
     let then = list_claims_at(&pool, at_decision).await.unwrap();
     let anna_held_then = then.iter().any(|c| {
         c.predicate.as_str() == "OversightAssigned" && c.args.first() == Some(&subj("anna"))

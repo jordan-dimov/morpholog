@@ -1,12 +1,6 @@
-//! End-to-end tests for the `morpholog schema` subcommand.
-//! Spawns the built binary against the trade_lifecycle example,
-//! asserts on the stdout JSON Schema shape, stderr, and exit code.
-//!
-//! Distinct from the `transformation_arg_schema` unit tests in
-//! morpholog-core (which pin per-kind property shapes against
-//! hand-built programmes): this test catches regressions in the
-//! CLI wiring - file reading, validation, schema generation, JSON
-//! emission, exit codes.
+//! End-to-end tests for `morpholog schema` through the built binary: the
+//! JSON Schema on stdout, stderr, and exit codes. Per-kind property shapes
+//! are pinned in morpholog-core; this covers the CLI wiring.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -52,8 +46,7 @@ fn schema_emits_json_schema_for_known_transformation() {
         required.iter().any(|v| v == "trade"),
         "capture_trade must require `trade` as a parameter",
     );
-    // Sanity: the property shapes are pinned in the morpholog-core
-    // unit tests; here we just confirm the CLI delivered them.
+    // Shapes are pinned in morpholog-core; just confirm they arrived.
     assert!(
         schema["properties"]["trade"]["type"] == "string",
         "trade is a Subject (uuid string)",
@@ -81,9 +74,8 @@ fn schema_intent_emits_json_schema_for_known_intent() {
     let schema: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is JSON");
     assert_eq!(schema["title"], "TradeSettlementRequested");
     assert_eq!(schema["type"], "object");
-    // `x-morpholog-arg-order` is the positional contract a deliverer
-    // decodes the emitted payload by - not the incidental order of the
-    // `required` set keyword.
+    // A deliverer decodes the payload by `x-morpholog-arg-order`, not by
+    // the incidental order of `required`.
     assert_eq!(
         schema["x-morpholog-arg-order"],
         serde_json::json!(["settlement_id", "trade", "settled_qty"]),
@@ -136,11 +128,7 @@ fn schema_unknown_transformation_errors_to_stderr_and_exits_nonzero() {
 
 #[test]
 fn schema_parse_error_renders_diagnostic_and_exits_nonzero() {
-    // Parser-level rejection: `Money` is not a declared
-    // `PredicateArgKind`, so the parser refuses the predicate
-    // declaration. Triggers the same `parse_or_report` path every
-    // other subcommand uses, so we confirm the schema subcommand
-    // wires it in.
+    // `Money` is not a known kind, so the parser refuses the declaration.
     let path = write_fixture("bad", "program demo\npredicate Foo(amount: Money)\n");
     let out = Command::new(bin())
         .args(["schema", path.to_str().unwrap(), "anything"])
@@ -167,9 +155,8 @@ fn schema_parse_error_renders_diagnostic_and_exits_nonzero() {
 
 #[test]
 fn hash_is_formatting_insensitive_and_rule_sensitive() {
-    // Same rules, different formatting and different comments: same
-    // hash. Change a rule: different hash. This is the
-    // rules-identity-not-file-identity contract.
+    // Same rules with different formatting and comments: same hash.
+    // A changed rule: different hash.
     let original = write_fixture(
         "hash_a",
         "program demo\n\
@@ -248,10 +235,8 @@ fn schema_all_emits_one_manifest_covering_the_whole_programme() {
     assert!(m["transformations"]["post"]["properties"]["amount"].is_object());
     assert!(m["transformations"]["wipe"]["properties"]["acct"].is_object());
     assert!(m["intents"]["Posted"]["properties"]["acct"].is_object());
-    // Declaration order is the explicit arrays, never object key
-    // order. The fixture declares `wipe` before `post` precisely so
-    // declaration order differs from alphabetical - a sorted-map
-    // accident cannot satisfy this assertion.
+    // Declaration order comes from the explicit arrays. The fixture
+    // declares `wipe` before `post` so it differs from alphabetical order.
     assert_eq!(
         m["transformation_order"],
         serde_json::json!(["wipe", "post"]),
@@ -316,8 +301,8 @@ fn schema_result_emits_the_envelope_contract() {
     let doc: serde_json::Value =
         serde_json::from_slice(&out.stdout).expect("stdout is one JSON document");
     let defs = doc["$defs"].as_object().expect("$defs object");
-    // The load-bearing entries an embedder discriminates on; the full
-    // set is pinned by the result_schema_contract suite.
+    // The entries an embedder branches on; result_schema_contract pins
+    // the full set.
     for key in [
         "run_outcome",
         "explanation",

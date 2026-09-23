@@ -1,31 +1,18 @@
 //! The explanation engine: a deterministic, structured account of why a
 //! proposed transition was admitted or rejected.
 //!
-//! `explain` is a read-side interpretation of the kernel's execution
-//! data, not a second evaluator. It runs [`propose_with_trace`] (sharing
-//! the one executor), then maps the rejection trace onto a structured
-//! [`Explanation`] and attaches candidate suppliers via the static
-//! [`transformations_asserting`] walker. There is no new IR primitive, no
-//! surface syntax, and no natural-language generation: the words come
-//! only from predicate and transformation names plus fixed templates, so
-//! an explanation an auditor relies on is reproducible and faithful to
-//! the exact failing claim.
+//! Not a second evaluator: it runs [`propose_with_trace`], maps the trace
+//! onto an [`Explanation`], and names candidate suppliers via
+//! [`transformations_asserting`]. The words come only from predicate and
+//! transformation names plus fixed templates, so an explanation is
+//! reproducible.
 //!
-//! Scope (v0) is deliberately one-hop. The structured object speaks
-//! Morpholog's internal truth - *positive claim-shaped gate conjuncts
-//! that did not match under the current binding context* - which is why
-//! the field is `directly_missing_claims`, not "missing evidence":
-//! some unmatched claims are authority, standing, prior use, or
-//! currentness, not evidence in the narrow sense. The renderer keeps the
-//! term *claims* in v0 too; a domain-specific front-end may choose
-//! "evidence" where the narrow sense fits.
-//!
-//! Out of scope until a later tier (the moment we surface these we are
-//! explaining the *semantics* of failure, not formatting the trace):
-//! present blockers (`not X` where `X` holds), comparator failures,
-//! existential or disjunctive remedies, bounded abduction or repairs,
-//! and any claim of minimality. Those rejections render a faithful
-//! reason with an empty `directly_missing_claims`.
+//! It looks one step deep: the positive claims a failing gate needed and
+//! did not find. They are called claims, not evidence, because some are
+//! authority, standing or prior use. It does not explain a blocker that is
+//! present (`not X` where `X` holds), a failed comparison, or `exists` /
+//! `or` alternatives, and it suggests no repairs. Those rejections carry
+//! the reason with an empty `directly_missing_claims`.
 
 use serde::{Deserialize, Serialize};
 
@@ -63,12 +50,11 @@ pub enum Verdict {
     Rejected(Rejection),
 }
 
-/// Why a transition was rejected. A `require` / `bind_one` gate did not
-/// hold ([`Rejection::Gate`]); the candidate state would violate an
-/// invariant ([`Rejection::Invariant`]); or the kernel raised an error
-/// before reaching a verdict ([`Rejection::Error`] - a multi-match
-/// `bind_one`, a type mismatch, an unbound actor, an unknown
-/// transformation).
+/// Why a transition was rejected: a `require` / `bind_one` gate did not
+/// hold ([`Rejection::Gate`]), the candidate state would violate an
+/// invariant ([`Rejection::Invariant`]), or the kernel raised an error
+/// first ([`Rejection::Error`], e.g. a multi-match `bind_one`, a type
+/// mismatch, an unknown transformation).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Rejection {
@@ -78,29 +64,24 @@ pub enum Rejection {
 }
 
 /// A `require` or `bind_one` gate that did not hold. `gate` is the
-/// rendered gate expression; `statement_kind` distinguishes the two so
-/// the structured object is not purely string-shaped.
+/// rendered gate expression; `statement_kind` says which of the two.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GateRejection {
     pub gate: String,
-    /// The gate's stable identifier, when its author gave it one. `gate`
-    /// is prose that any rewording changes; this does not move. Carried
-    /// here and not only on the rejection envelope because `explain` is a
-    /// command in its own right - a dry run has no envelope to fall back
-    /// on.
+    /// The gate's stable name, when its author gave it one. Unlike `gate`,
+    /// it survives rewording. A dry run has no rejection envelope to carry
+    /// it, so it lives here too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule: Option<String>,
     pub statement_kind: GateKind,
-    /// v0 reports the first directly-missing positive claim that kills
-    /// the gate chain - not the exhaustive set of missing instances, and
-    /// not a bounded why-not search. Exhaustive enumeration and abduction
-    /// are later tiers; do not read this field as "every claim that would
-    /// make the gate pass". Empty for present blockers, comparator
-    /// failures, and any gate whose chain-killer is not a positive claim.
+    /// The first positive claim the gate needed and did not find. It is
+    /// not every claim that would make the gate pass. Empty when the gate
+    /// failed on something other than a missing positive claim (a present
+    /// blocker, a comparison).
     pub directly_missing_claims: Vec<MissingClaim>,
 }
 
-/// Which binding-quartet gate rejected.
+/// Which kind of gate rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GateKind {
@@ -128,19 +109,14 @@ pub struct ErrorRejection {
 pub struct MissingClaim {
     pub predicate: String,
     pub rendered: String,
-    /// Transformations that assert this predicate. **Candidate by output
-    /// predicate only**: this does *not* imply the transformation can
-    /// supply this specific claim instance under the current actor,
-    /// arguments, dates, or state - it may carry its own `require`
-    /// gates, authority, or windows. Honest candidate-supplier lookup,
-    /// not instance matching or multi-hop reachability.
+    /// Transformations that admit this predicate. A candidate only: it may
+    /// not be able to supply this exact claim for this actor, arguments or
+    /// state, since it has gates of its own.
     pub candidate_supplier_transformations: Vec<String>,
 }
 
 /// Explain why `transition` is admissible or rejected against
-/// `pre_state`, using `program`'s transformation, invariants, and
-/// vocabulary. Pure and synchronous: it runs the kernel in-memory and
-/// derives the explanation from the trace.
+/// `pre_state`. Pure: it runs the kernel in memory and reads the trace.
 pub fn explain(program: &Program, transition: &Transition, pre_state: &State) -> Explanation {
     let transition_ref = TransitionRef {
         transformation: transition.transformation_name.to_string(),
@@ -191,9 +167,8 @@ pub fn explain(program: &Program, transition: &Transition, pre_state: &State) ->
 }
 
 impl Explanation {
-    /// Render this explanation as deterministic, claim-shaped prose. The
-    /// same `Explanation` renders identically every time; the only inputs
-    /// are predicate and transformation names plus fixed templates.
+    /// Render this explanation as deterministic prose, built only from
+    /// names and fixed templates.
     pub fn render(&self) -> String {
         let head = format!(
             "{}({}) proposed by {}",
@@ -247,11 +222,9 @@ impl Explanation {
     }
 }
 
-/// Map the failing trace entry onto a structured rejection. The failing
-/// entry is unique (the kernel short-circuits at the first rejecting
-/// gate or violated invariant); `failing_entry` finds it, recursing into
-/// the last iteration of a `For`. The `reason` string is the fallback if
-/// no failing entry is found, which should not happen on a rejection.
+/// Map the failing trace entry onto a structured rejection. The kernel
+/// stops at the first failure, so there is one. `reason` is a fallback
+/// for the case where none is found, which should not happen.
 fn verdict_from_rejection(program: &Program, reason: &str, trace: &[TraceEntry]) -> Verdict {
     match failing_entry(trace) {
         Some(TraceEntry::Require {
@@ -324,10 +297,9 @@ fn gate_verdict(
     }))
 }
 
-/// Find the single trace entry responsible for a rejection: a rejecting
-/// `Require`, a no-match `BindOne`, or a failed `InvariantCheck`. Scans
-/// from the end (the failing entry is the last thing recorded before the
-/// rejection bubbled up) and recurses into the last iteration of a `For`.
+/// Find the trace entry that caused a rejection: a rejecting `Require`, a
+/// no-match `BindOne`, or a failed `InvariantCheck`. Scans from the end,
+/// where the failure was recorded, and into the last iteration of a `For`.
 fn failing_entry(trace: &[TraceEntry]) -> Option<&TraceEntry> {
     for entry in trace.iter().rev() {
         match entry {

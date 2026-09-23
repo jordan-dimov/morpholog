@@ -1,19 +1,16 @@
 //! Lowering pass resolving each `sum(...)`'s empty-case seed.
 //!
-//! A sum's runtime kind is driven by its values, but the empty sum has
-//! none - and a bare-decimal zero satisfies no quantity or duration
-//! comparison, so an aggregate rule detonated the first time its book
-//! was empty unless a zero-valued seed claim opened it. This pass makes
-//! that ritual unnecessary: the summed variable's declared kind is
-//! static knowledge, so the typed zero is resolved here, once, and
-//! stamped on the node for the evaluator to return.
+//! A sum's kind comes from its values, but an empty sum has none. A
+//! bare-decimal zero fails every quantity or duration comparison, so an
+//! aggregate rule would break on an empty book. The summed variable's
+//! declared kind is known statically, so this pass stamps the typed zero
+//! on the node for the evaluator to return.
 //!
-//! Runs in `parse_program` after `resolve_defined_calls` (the kind of a
-//! variable bound inside a definition call is found by descending into
-//! the definition's body). Idempotent; hand-built IR that skips it
-//! keeps the decimal default, and validation refuses the programme
-//! (`EmptySumUntyped`) wherever that default disagrees with a duration
-//! or quantity target the checker can see.
+//! Runs in `parse_program` after `resolve_defined_calls`, since a
+//! variable bound inside a definition call takes its kind from the
+//! definition's body. Idempotent. Hand-built IR that skips it keeps the
+//! decimal zero, and validation refuses it (`EmptySumUntyped`) wherever
+//! the checker sees a duration or quantity target.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,8 +21,7 @@ use crate::ir::{
 use crate::validate::MAX_EXPR_DEPTH;
 
 /// Resolve every `Sum` node's empty-case seed from the summed
-/// variable's declared kind. See the module doc for why this is a
-/// lowering concern, not an evaluation-time lookup.
+/// variable's declared kind.
 pub fn lower_sum_seeds(program: &mut Program) {
     let kinds: BTreeMap<String, Vec<PredicateArgKind>> = program
         .predicates
@@ -108,9 +104,8 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
             lower_in_value(left, ctx);
             lower_in_value(right, ctx);
         }
-        // No seed to resolve: an empty extremum has no value, so there
-        // is nothing to type. The body still needs the pass, since a sum
-        // can sit inside it.
+        // An empty extremum has no value to type, but a sum can sit in
+        // its body.
         ValueExpr::Extremum { body, .. } => lower_in_prop(body, ctx),
         ValueExpr::Sum { value, body, seed } => {
             lower_in_prop(body, ctx);
@@ -119,9 +114,8 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
                 *seed = resolved;
             }
         }
-        // Like Extremum, nothing of the conditional's own to type -
-        // but a sum inside the condition or either branch still needs
-        // its seed resolved.
+        // Nothing of its own to type, but a sum can sit in the
+        // condition or either branch.
         ValueExpr::Cond {
             when,
             then,
@@ -155,22 +149,20 @@ fn lower_in_stmt(stmt: &mut Stmt, ctx: &SeedContext<'_>) {
     }
 }
 
-/// The seed for an expression target. Each shape resolves from static
-/// knowledge of its own: a variable from the claim position that binds
-/// it, a literal from its own kind (`sum(1 t | ...)` counts in tonnes,
-/// empty or not), a `value` lookup from the declared kind of the
-/// position it extracts, a conditional from its branches where their
-/// seeds agree, a nested sum from its own already-resolved seed, and
-/// arithmetic through the rule matrix over its operands' seeds - with
-/// one side unresolved, the matrix's unique-counterpart rule still
-/// pins the result where only one rule fits (`qty * factor` is a
-/// quantity of `qty`'s unit whatever `factor` turns out to be).
+/// The seed for an expression target:
+/// - a variable: the kind of the claim position that binds it;
+/// - a literal: its own kind (`sum(1 t | ...)` counts in tonnes);
+/// - a `value` lookup: the declared kind of the extracted position;
+/// - a conditional: its branches, when they agree;
+/// - a nested sum: its own resolved seed;
+/// - arithmetic: the rule matrix over the operands' seeds. With one side
+///   unknown, a unique rule still decides (`qty * factor` is a quantity
+///   of `qty`'s unit).
 ///
-/// What remains unresolved - an outer-bound variable, a builtin call,
-/// an operand no rule pins - leaves the decimal default standing; when
-/// the checker's richer scope reads a duration or quantity there, the
-/// disagreement is refused at authoring time (`EmptySumUntyped`), so
-/// the default is never a wrong zero in a committed programme.
+/// Anything else (an outer-bound variable, a builtin call) keeps the
+/// decimal default. If the checker then sees a duration or quantity
+/// there, it refuses the programme (`EmptySumUntyped`), so the default
+/// is never a wrong zero in a committed programme.
 fn value_seed(value: &ValueExpr, body: &Prop, ctx: &SeedContext<'_>) -> Option<SumSeed> {
     let kind = match value {
         ValueExpr::Term(Term::Var(v)) => return var_seed(v, body, ctx, &mut BTreeSet::new()),
@@ -189,9 +181,8 @@ fn value_seed(value: &ValueExpr, body: &Prop, ctx: &SeedContext<'_>) -> Option<S
                 (None, None) => return None,
             }
         }
-        // The lookup's kind is the declaration's, at the position the
-        // wildcard extracts - the same authority `value_of_result_kind`
-        // consults in the checker.
+        // The declared kind at the extracted position, as the checker's
+        // `value_of_result_kind` reads it.
         ValueExpr::ValueOf {
             predicate, extract, ..
         } => {
@@ -210,8 +201,7 @@ fn value_seed(value: &ValueExpr, body: &Prop, ctx: &SeedContext<'_>) -> Option<S
             }
             return Some(t);
         }
-        // A nested sum's own seed was resolved by the recursion just
-        // above this call; it IS the nested sum's empty-case kind.
+        // The recursion above already resolved the nested sum's seed.
         ValueExpr::Sum { seed, .. } => return Some(seed.clone()),
         _ => return None,
     };
@@ -232,10 +222,9 @@ fn seed_kind(seed: SumSeed) -> PredicateArgKind {
 }
 
 /// The seed for a variable summed over `body`: the declared kind of the
-/// first claim position that binds it, descending into definition calls
-/// by mapping the call argument onto the parameter it binds. `None`
-/// (no summable position found - a pre-bound variable, a subject join)
-/// leaves the decimal default standing.
+/// first claim position that binds it, following definition calls
+/// through their parameters. `None` (a pre-bound variable, a subject
+/// join) keeps the decimal default.
 fn var_seed(
     var: &Var,
     body: &Prop,
@@ -258,20 +247,11 @@ fn var_seed(
                     _ => None,
                 })
         }
-        // The shared table's stack guard stops cycles; the budget
-        // stops depth. Both are needed and they answer different
-        // hazards: `seen` catches a definition already on this path,
-        // while a chain of DISTINCT definitions is acyclic and would
-        // otherwise recurse until the stack ran out - this pass runs
-        // during parsing, before validation's own depth guard gets to
-        // refuse the programme.
-        //
-        // The budget is validation's constant, not a number of this
-        // pass's own. A definition call is charged its callee's
-        // expanded depth there, so a chain longer than this is a
-        // programme validation is about to reject anyway: nothing
-        // resolvable is lost by stopping, and the diagnostic the
-        // author gets is `NestingTooDeep` rather than a crash.
+        // `seen` stops cycles; this budget stops long acyclic chains,
+        // which would otherwise overflow the stack. The pass runs before
+        // validation's depth guard. It uses validation's own limit, so
+        // any chain cut here is one validation rejects anyway with
+        // `NestingTooDeep`.
         Prop::Defined { .. } if seen.len() >= MAX_EXPR_DEPTH => None,
         Prop::Defined { name, args } => ctx.definitions.enter(name, seen, |def, seen| {
             args.iter()
@@ -350,10 +330,9 @@ mod tests {
         seed.clone()
     }
 
-    /// A duration literal as the sum target carries its kind itself,
-    /// like the quantity literal beside it - and a sum sitting in a
-    /// transformation STATEMENT (a `let`, not an invariant) is lowered
-    /// by the statement walker, not only the invariant walker.
+    /// A duration literal as the sum target carries its own kind, like
+    /// a quantity literal. A sum in a transformation statement (a `let`)
+    /// is lowered too, not only one in an invariant.
     #[test]
     fn literal_targets_and_statement_sums_lower() {
         use crate::ir_builder::{let_, params, transformation};
@@ -398,29 +377,23 @@ mod tests {
         );
     }
 
-    /// A chain of DISTINCT definitions resolves the summed variable's
-    /// kind all the way down, right up to the depth validation
-    /// permits. The old cap truncated at 16 and silently fell back to
-    /// the decimal default - a wrong answer for a programme that had
-    /// done nothing unusual.
+    /// A chain of distinct definitions resolves the summed variable's
+    /// kind all the way down, up to the depth validation permits.
     #[test]
     fn a_long_chain_of_definitions_still_resolves_the_summed_kind() {
         let mut deep = chained(64);
         lower_sum_seeds(&mut deep);
         assert_eq!(seed_of(&deep), SumSeed::Quantity("t".into()));
 
-        // The deepest chain validation will accept still resolves, so
-        // the budget never truncates a programme that would be lawful.
+        // The deepest chain validation accepts still resolves.
         let mut at_limit = chained(MAX_EXPR_DEPTH - 1);
         lower_sum_seeds(&mut at_limit);
         assert_eq!(seed_of(&at_limit), SumSeed::Quantity("t".into()));
     }
 
-    /// The budget's real job. Lowering runs during parsing, BEFORE
-    /// validation's depth guard, so an acyclic chain long enough to
-    /// exhaust the stack has to stop here - and the author still gets
-    /// the diagnostic rather than a crash, because validation refuses
-    /// the same programme moments later.
+    /// Lowering runs before validation's depth guard, so a huge acyclic
+    /// chain must stop here. The author then gets validation's
+    /// diagnostic, not a crash.
     #[test]
     fn an_oversized_acyclic_chain_returns_instead_of_exhausting_the_stack() {
         let mut huge = chained(50_000);
@@ -435,10 +408,9 @@ mod tests {
         );
     }
 
-    /// The hazard the descent bound actually existed for: a CYCLE in
-    /// hand-built IR, which validation would refuse but this pass runs
-    /// before. The stack guard stops it - the pass terminates and the
-    /// unresolvable variable keeps the decimal default.
+    /// A cycle in hand-built IR, which this pass sees before validation
+    /// refuses it: the pass terminates and the variable keeps the
+    /// decimal default.
     #[test]
     fn a_cyclic_definition_terminates_and_falls_back() {
         let mut p = chained(3);

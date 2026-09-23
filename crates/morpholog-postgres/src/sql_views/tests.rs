@@ -165,10 +165,9 @@ fn quantity_and_any_and_collection_render() {
 
 #[test]
 fn derived_heads_get_a_derived_view_over_the_cache() {
-    // trade_lifecycle declares TermsTimeline as a predicate AND a
-    // derived block: it gets a view over the read cache (filtered by
-    // predicate + the generated model hash), while base predicates get
-    // views over morpholog.claims.
+    // TermsTimeline is both a predicate and a derived block: its view reads
+    // the read cache (filtered by predicate and model hash), while base
+    // predicates read morpholog.claims.
     let program = morpholog_examples::trade_lifecycle::program();
     let validated = program.validated().expect("validates");
     let r = render_views(validated, "morpholog_views", "sha256:x").expect("renders");
@@ -221,9 +220,8 @@ fn reserved_keyword_field_is_quoted_not_refused() {
 
 #[test]
 fn morpholog_prefixed_field_is_refused() {
-    // The surface grammar may not even permit a leading-underscore
-    // field, but the prefix reservation is a defensive guarantee on
-    // the rendered surface - exercise the sweep directly.
+    // The grammar may not allow a leading-underscore field, so exercise the
+    // sweep directly.
     let p = decl(
         "P",
         &[
@@ -266,10 +264,8 @@ fn colliding_view_names_are_refused_naming_both() {
 
 #[test]
 fn a_base_and_derived_view_name_collision_is_refused() {
-    // The sweep spans both surfaces: a base predicate and a derived
-    // head that snake to the same view name collide in the shared
-    // schema. `TradeID` (base) and `TradeId` (derived head) both snake
-    // to `trade_id`.
+    // A base predicate and a derived head collide too: `TradeID` (base)
+    // and `TradeId` (derived head) both snake to `trade_id`.
     let src = "program mixcoll\n\
             predicate TradeID(id: Subject)\n\
             predicate TradeId(id: Subject, n: Decimal)\n\
@@ -324,10 +320,9 @@ fn keyword_view_names_are_quoted_not_refused() {
 
 #[test]
 fn morpholog_prefixed_view_name_is_refused() {
-    // A predicate whose snake_case enters the `_morpholog_` namespace
-    // would collide with `_morpholog_catalog`; refuse it. Exercised
-    // via the sweep directly - the surface grammar may not permit such
-    // a predicate name.
+    // A name snaking into the `_morpholog_` namespace could collide with
+    // `_morpholog_catalog`. Exercised via the sweep, since the grammar may
+    // not allow the name.
     let p = decl("_morphologThing", &[("id", PredicateArgKind::Subject)]);
     let found = sweep("morpholog_views", &[&p], &[]);
     assert!(found.iter().any(|r| matches!(
@@ -338,9 +333,8 @@ fn morpholog_prefixed_view_name_is_refused() {
 
 #[test]
 fn header_values_cannot_break_out_of_the_comment() {
-    // render() is reachable with an arbitrary programme name / hash
-    // through the public API; a newline must not escape the `--`
-    // header comment and inject SQL after it.
+    // The public API accepts any programme name and hash; a newline must
+    // not escape the `--` header comment and inject SQL.
     let sql = render(
         "evil\nDROP TABLE x;",
         "morpholog_views",

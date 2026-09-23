@@ -1,7 +1,5 @@
-//! End-to-end test of `morpholog inspect controls` against a real
-//! `.morph` fixture: the static control-matrix view (prose and JSON),
-//! spawned through the built binary. No database - controls is a pure
-//! read over the parsed programme.
+//! End-to-end test of `morpholog inspect controls` through the built
+//! binary: the control matrix as prose and JSON. No database.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -85,9 +83,8 @@ fn controls_json_carries_the_structured_matrix() {
     assert!(gates.iter().any(|g| g["form"] == "require"));
     assert!(!v["guarantees"].as_array().unwrap().is_empty());
 
-    // The require gate front-loads the standing invariant; the bind, whose
-    // lookup is disjoint from the consequent, carries no link (the field is
-    // omitted when empty).
+    // The require gate front-loads the standing invariant. The bind looks
+    // up something else, so it has no link (and the field is omitted).
     let require_gate = gates.iter().find(|g| g["form"] == "require").unwrap();
     let link = &require_gate["front_loads"][0];
     assert_eq!(link["invariant"], "decision_needs_two_distinct");
@@ -134,8 +131,8 @@ fn controls_json_carries_the_structured_matrix() {
         );
     }
 
-    // The invariant-side inverse view: front_line_coverage names the
-    // implication front-loaded by the decide gate.
+    // From the invariant side: front_line_coverage names the implication
+    // the decide gate front-loads.
     let cov = v["front_line_coverage"]
         .as_array()
         .expect("front_line_coverage present");

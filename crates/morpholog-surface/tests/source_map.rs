@@ -1,8 +1,5 @@
-//! The SourceMap: declaration and statement spans that survive
-//! parsing, and the lookups that place a kernel finding (a
-//! ValidationError, a Lint) back in the `.morph` text. Spans are
-//! asserted by slicing the source - the test reads what the span
-//! points at, not magic offsets.
+//! The SourceMap places declarations, statements, and kernel findings (a ValidationError, a
+//! Lint) back in the `.morph` text. Spans are checked by slicing the source, not by offsets.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -47,8 +44,7 @@ fn text_at(span: std::ops::Range<usize>) -> &'static str {
     &SOURCE[span]
 }
 
-/// Build a CompiledProgram for the analysis entry points, which now
-/// take `&CompiledProgram`.
+/// Build a CompiledProgram for the analysis entry points.
 fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
     morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
 }
@@ -84,12 +80,8 @@ fn every_declaration_kind_is_mapped() {
     }
 }
 
-// A declaration that ends in an indented block (discipline clauses,
-// a transformation body) ends AT its own last token: the Dedent the
-// declaration consumes is anchored at the block's end, so blank
-// lines and comments before the next declaration stay outside the
-// span. Trust-sensitive once carets render - an over-wide span
-// reads as a wrong span.
+// A declaration ending in an indented block ends at its own last token, not after the blank
+// lines and comments that follow. An over-wide caret reads as a wrong one.
 #[test]
 fn declaration_spans_end_at_their_own_last_token() {
     let (_, map) = parsed();
@@ -153,9 +145,7 @@ invariant refers_to_nothing:
     );
 }
 
-// A finding made inside a transformation body resolves to the
-// statement it was made in, via the statement index the check
-// carries in its context.
+// A finding inside a transformation body resolves to its statement.
 #[test]
 fn a_statement_level_error_resolves_to_the_statement() {
     let source = r#"
@@ -225,9 +215,7 @@ fn findings_against_generated_invariants_resolve_to_none() {
 fn a_lint_resolves_to_its_invariant() {
     let (program, map) = parsed();
     let found = lints(&compiled(&program));
-    // Find the gate finding rather than pinning a count: this test is
-    // about span mapping, and a future lint firing on the shared
-    // fixture must not redden it.
+    // Find the finding rather than pin a count, so a new lint on this fixture does not break it.
     let finding = found
         .iter()
         .find(|l| matches!(l, morpholog_core::Lint::GateVsInvariant { .. }))

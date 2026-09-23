@@ -1,11 +1,9 @@
 //! Integration tests for the outbox delivery-state helpers
 //! (doctrine in `docs/outbox-sketch.md`).
 //!
-//! Covered in this file: `mark_outbox_delivered`,
-//! `mark_outbox_transient_attempt`, `mark_outbox_failed`,
-//! `record_compensation`. The lease-management helpers
-//! (`claim_pending_outbox_row`, `release_outbox_claim`) live in a
-//! sibling file (`outbox_lease.rs`) so each file stays focused.
+//! Covers `mark_outbox_delivered`, `mark_outbox_transient_attempt`,
+//! `mark_outbox_failed` and `record_compensation`. Lease helpers are in
+//! `outbox_lease.rs`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -51,10 +49,8 @@ async fn enqueue_one_pending(pool: &PgPool) -> Uuid {
     list_pending_outbox(pool).await.unwrap()[0].intent_id
 }
 
-/// Take the lease on a pending row directly (the helper that does
-/// this lives in `outbox_lease.rs` and is the subject of a sibling
-/// test file; here we just need the lease in place so we can
-/// exercise the mark_* helpers, so we set the columns ourselves).
+/// Take the lease on a pending row by setting the columns directly; the
+/// real lease helper is tested in `outbox_lease.rs`.
 async fn force_lease(pool: &PgPool, intent_id: Uuid, worker_id: &str, lease_secs: i64) {
     sqlx::query(
         "UPDATE morpholog.outbox
@@ -71,9 +67,8 @@ async fn force_lease(pool: &PgPool, intent_id: Uuid, worker_id: &str, lease_secs
     .unwrap();
 }
 
-/// Fetch a single outbox row by intent_id for assertions, regardless
-/// of status. (The public `list_pending_outbox` filters to pending
-/// only.)
+/// Fetch one outbox row by intent_id, whatever its status
+/// (`list_pending_outbox` returns pending rows only).
 async fn fetch_row(
     pool: &PgPool,
     intent_id: Uuid,
@@ -175,12 +170,10 @@ async fn mark_outbox_transient_attempt_schedules_retry_and_releases_lease() {
 
 #[tokio::test]
 async fn mark_outbox_transient_attempt_accepts_past_next_attempt_at() {
-    // The helper does NOT validate that next_attempt_at is in the
-    // future. Loop-safety against same-pass reclaim lives at
-    // `claim_pending_outbox_row`'s pass boundary; adding a
-    // validation here would conflict with the lease-loss-as-signal
-    // contract and would spuriously fail a slow legitimate
-    // delivery whose retry instant elapsed during transit.
+    // The helper does not require next_attempt_at to be in the future.
+    // `claim_pending_outbox_row` already prevents a same-pass reclaim,
+    // and such a check would fail a slow delivery whose retry time
+    // passed while it ran.
     let pool = test_pool().await;
     reset_db(&pool).await;
     let intent_id = enqueue_one_pending(&pool).await;
@@ -229,10 +222,9 @@ async fn record_compensation_links_compensation_to_failed_row() {
         .await
         .unwrap();
 
-    // Run a real second transformation through the kernel to get a
-    // genuine transition_id we can attach as the compensation linkage.
-    // Using post_simple_entry with debit/credit swapped, mirroring the
-    // outbox-spike compensation shape.
+    // A real second transformation, for a genuine transition_id to link
+    // as the compensation: post_simple_entry with debit and credit
+    // swapped.
     let compensation_outcome = common::propose_pg_with_test_actor(
         &pool,
         &common::compiled(double_entry_ledger::program()),
@@ -320,9 +312,8 @@ async fn record_compensation_errors_on_double_record() {
         .await
         .unwrap();
 
-    // Attempting to record a second compensation against the same
-    // outbox row is a programming bug and must error rather than
-    // silently overwrite.
+    // A second compensation on the same row is a programming bug and
+    // must error rather than overwrite.
     let comp_outcome_b = common::propose_pg_with_test_actor(
         &pool,
         &common::compiled(double_entry_ledger::program()),
@@ -361,11 +352,8 @@ async fn record_compensation_errors_on_double_record() {
 async fn record_compensation_errors_when_intent_does_not_exist() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    // No outbox row at all; just try to record compensation against
-    // a random UUID. The helper should surface the not-found case
-    // explicitly rather than blaming status only.
-    // Any UUID that is not in the outbox suffices; nil is convenient
-    // and matches the no-FK-needed pattern used elsewhere in this file.
+    // No outbox row at all: the helper must say not found, not blame
+    // the status.
     let missing_intent_id = Uuid::nil();
     let any_transition_id = Uuid::nil();
     let err = record_compensation(&pool, missing_intent_id, any_transition_id)

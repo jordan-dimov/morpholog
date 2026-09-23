@@ -1,10 +1,5 @@
-//! Smoke test for [`morpholog_outbox::StdoutDeliverer`].
-//!
-//! Verifies that the worker happy-path works end-to-end with a
-//! concrete deliverer (not a test-only stub): commit a row,
-//! process it via the StdoutDeliverer, observe `delivered` status.
-//! Output to stdout is not captured or asserted here - the test's
-//! job is to pin the wiring, not the format.
+//! Smoke test for [`morpholog_outbox::StdoutDeliverer`]: a committed row drained through it
+//! ends up `delivered`. The printed output is not checked.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

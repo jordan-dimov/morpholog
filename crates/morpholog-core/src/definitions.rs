@@ -1,32 +1,26 @@
-//! The canonical home for definition machinery: name lookup
-//! ([`DefinitionTable`]), the definition reference graph
-//! ([`definition_topo_order`], shared by cycle detection, kind
-//! inference, and the depth budget), and the direct-call collector they
-//! build on. Every subsystem that must see through a [`Prop::Defined`]
-//! call resolves it here, so there is exactly one notion of "what does
-//! this call expand to" - the evaluator, the failure walk, the static
-//! checks, and the analysis walkers cannot drift apart on it.
+//! Definition machinery: name lookup ([`DefinitionTable`]), the call graph
+//! ([`definition_topo_order`]), and the direct-call collector. Everything
+//! that looks through a [`Prop::Defined`] call resolves it here, so the
+//! evaluator, the static checks and the analysis walkers agree on what a
+//! call expands to.
 //!
-//! [`DefinitionTable`] is a borrowed view, not a built structure: it is
-//! `Copy`, constructed wherever a definitions slice is in hand, and
-//! passed by value.
+//! [`DefinitionTable`] is a cheap `Copy` view over a definitions slice.
 
 use std::collections::{BTreeSet, HashMap};
 
 use crate::ir::{Definition, DefinitionName, Program, Prop, Stmt, ValueExpr};
 
-/// Resolve claim-shaped references against the programme's definitions:
-/// every `Prop::Claim` whose name is a declared definition becomes the
-/// `Prop::Defined` call it means. The parser runs this at the end of
-/// lowering (a reference can precede the definition it names, so
-/// resolution needs the whole programme); hand-built IR that authors
-/// `Prop::Claim` nodes directly runs it before validating, or constructs
-/// calls with `ir_builder::defined` and skips it.
+/// Turn every `Prop::Claim` whose name is a declared definition into the
+/// `Prop::Defined` call it means.
 ///
-/// Only proposition positions resolve. `admit` / `retract` / `emit`
-/// targets and `value` lookups stay claim-shaped: a definition is
-/// proposition-valued only, so a definition name there surfaces the
-/// dedicated unresolved-call error with its own guidance.
+/// The parser runs this once the whole programme is read, since a call can
+/// come before the definition it names. Hand-built IR with such
+/// `Prop::Claim` nodes must run it before validating, or build calls with
+/// `ir_builder::defined` instead.
+///
+/// Only proposition positions resolve. `admit` / `retract` / `emit` targets
+/// and `value` lookups stay claim-shaped, so a definition name there gets
+/// its own unresolved-call error.
 pub fn resolve_defined_calls(program: &mut Program) {
     let names: BTreeSet<String> = program
         .definitions
@@ -95,8 +89,8 @@ fn resolve_in_prop(prop: &mut Prop, names: &BTreeSet<String>) {
 
 fn resolve_in_value(value: &mut ValueExpr, names: &BTreeSet<String>) {
     match value {
-        // `ValueOf` is a value lookup against a claim, never a call.
         ValueExpr::Term(_) => {}
+        // `ValueOf` is a value lookup against a claim, never a call.
         ValueExpr::ValueOf { default, .. } => {
             if let Some(d) = default {
                 resolve_in_value(d, names);
@@ -159,31 +153,21 @@ impl<'a> DefinitionTable<'a> {
         Self { definitions }
     }
 
-    /// Deliberately a scan. Programmes name few definitions and no
-    /// measured hot path asks for more, so a second index would be
-    /// weight without evidence. Lookup is centralised here precisely
-    /// so indexing can go behind this method if profiling ever forces
-    /// it - the point of one table is one authority for "which
-    /// definition is this".
+    /// A linear scan: programmes have few definitions. If profiling ever
+    /// asks for an index, it goes behind this method.
     pub(crate) fn get(&self, name: &DefinitionName) -> Option<&'a Definition> {
         self.definitions.iter().find(|d| &d.name == name)
     }
 
-    /// Run `f` against `name`'s body under the recursion-STACK guard
-    /// every static walker shares: returns `T::default()` when the
-    /// name is already on the stack (a cycle) or undeclared;
-    /// otherwise pushes, runs, pops. A stack guard, not a visited
-    /// set - a polarity-sensitive walker must re-expand a definition
-    /// reached again once it is off the stack. `Default` for both
-    /// refusals is the shared policy on purpose: validation already
-    /// guarantees every call resolves, so the undeclared arm is
-    /// unreachable on a compiled programme, and every walker treats
-    /// a cycle as contributing nothing.
-    /// The callback receives the whole [`Definition`], not just its
-    /// body: a walker that needs the parameter list to match call
-    /// arguments against would otherwise have to look the definition
-    /// up a second time, which is how a third lookup site grew here
-    /// once already.
+    /// Run `f` on `name`'s definition, guarding against recursion.
+    ///
+    /// Returns `T::default()` when `name` is already on the stack (a cycle)
+    /// or undeclared; otherwise pushes, runs, pops. It is a stack, not a
+    /// visited set, because a polarity-sensitive walker must expand a
+    /// definition again once it is off the stack. Every walker treats a
+    /// cycle as contributing nothing, and validation rules out undeclared
+    /// calls. `f` gets the whole [`Definition`] so it can match call
+    /// arguments to parameters without a second lookup.
     pub(crate) fn enter<T: Default>(
         &self,
         name: &DefinitionName,
@@ -203,9 +187,7 @@ impl<'a> DefinitionTable<'a> {
 }
 
 /// Collect the definitions a proposition calls directly (not
-/// transitively). The recursion mirrors `predicates_referenced_by_prop`:
-/// every `Prop` position that can carry a sub-proposition is walked,
-/// including `Sum` bodies on the value sort.
+/// transitively), including inside value positions such as `Sum` bodies.
 pub(crate) fn defined_calls_in_prop(prop: &Prop, out: &mut BTreeSet<DefinitionName>) {
     match prop {
         Prop::Defined { name, .. } => {
@@ -268,11 +250,9 @@ pub(crate) fn defined_calls_in_value(value: &ValueExpr, out: &mut BTreeSet<Defin
     }
 }
 
-/// Order definitions so every definition appears after the definitions
-/// its body calls. `Err` carries the names participating in a reference
-/// cycle, sorted, for the validation error. Calls to names that are not
-/// definitions (predicates, or simply undeclared) are ignored here -
-/// they are the resolution pass's and the reference check's concern.
+/// Order definitions so each one comes after the definitions it calls.
+/// `Err` carries the sorted names in a call cycle. Calls to names that are
+/// not definitions are ignored; other checks report those.
 pub(crate) fn definition_topo_order(definitions: &[Definition]) -> Result<Vec<usize>, Vec<String>> {
     let position: HashMap<&str, usize> = definitions
         .iter()
@@ -319,12 +299,9 @@ pub(crate) fn definition_topo_order(definitions: &[Definition]) -> Result<Vec<us
                         marks[callee] = Mark::Grey;
                         stack.push((callee, 0));
                     }
-                    // A grey callee is on the current path: a cycle. The
-                    // cycle's members are the stack's sub-path from that
-                    // callee back to the top - NOT the whole grey stack,
-                    // whose lower entries merely *reach* the cycle and
-                    // would mislead the diagnostic. Names sorted for
-                    // determinism.
+                    // A grey callee is on the current path: a cycle. Report
+                    // only the stack from that callee up; entries below it
+                    // merely reach the cycle.
                     Mark::Grey => {
                         let cycle_start = stack.iter().position(|&(i, _)| i == callee).unwrap_or(0);
                         let mut names: Vec<String> = stack[cycle_start..]

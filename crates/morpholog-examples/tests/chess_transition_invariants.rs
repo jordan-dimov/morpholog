@@ -1,18 +1,10 @@
 //! Integration tests for the chess transition invariants example
 //! (`examples/07_chess_transition_invariants/`).
 //!
-//! The example's first reason to exist is to force `Prop::Pre` into the
-//! kernel. These tests pin the load-bearing claim: a transition
-//! invariant catches a bug that a state invariant cannot. It is also the
-//! forcing home for `ArithOp::Mod`: squares are `(file, rank)`
-//! coordinates and a square's colour is `(file + rank) % 2`, which the
-//! `bishops_on_opposite_square_colors` invariant uses.
-//!
-//! Layers covered: IR-shape sanity, full-chain `propose()` over the
-//! initialisation and movement transformations, the parity invariant
-//! (a bishop changing square colour is rejected, keeping it is allowed),
-//! and a hand-built broken transformation that violates `move_count_
-//! strictly_increases` to prove the transition invariants actually gate.
+//! The key claim: a transition invariant (one using `pre(...)`) catches a
+//! bug that a state invariant cannot. Also covers the census invariants and
+//! square colour, `(file + rank) % 2`, used by
+//! `bishops_on_opposite_square_colors`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -61,10 +53,8 @@ fn program_has_expected_invariant_set() {
     );
 }
 
-/// Capturing a king is now structurally impossible. `exactly_one_
-/// black_king` pins the count of black kings to one, so a move that
-/// removes the last black king (count -> 0) is rejected - something the
-/// old at-most-one rule, which only forbade duplicates, could not do.
+/// Capturing a king is impossible: `exactly_one_black_king` pins the count
+/// of black kings to one, so a move that takes the last one is rejected.
 #[test]
 fn capturing_a_king_is_rejected() {
     use common::claim_instance;
@@ -95,25 +85,20 @@ fn capturing_a_king_is_rejected() {
     );
 }
 
-/// The census invariant `piece_count_matches_board` has teeth: a move
-/// that leaves a stray piece on the board without updating `PieceCount`
-/// is rejected, because the hand-maintained counter no longer equals
-/// `sum(1 | PieceAt(...))`.
+/// `piece_count_matches_board` rejects a move that leaves a stray piece on
+/// the board, because `PieceCount` no longer equals `sum(1 | PieceAt(...))`.
 #[test]
 fn piece_count_drift_is_rejected() {
-    // Adversarial (IR-builder) test: constructs the real transition minus
-    // one statement to prove an invariant has teeth - a kernel-teeth test,
-    // not a business story, so the Rust IR builder is the right tool here,
-    // not `.morph`.
+    // Built in Rust IR: the real transition minus one statement, to prove
+    // the invariant has teeth.
     use morpholog_core::ir_builder;
 
     let mut program = chess_transition_invariants::program();
     let state = run_start_game(&program);
 
-    // A knight move that admits the piece at the destination but forgets
-    // to retract it from the source - so the board gains a piece while
-    // PieceCount stays at 32. MoveCount and CurrentTurn are handled
-    // correctly, so the census invariant is the one that must fire.
+    // A knight move that forgets to retract the piece from its source. The
+    // board gains a piece while PieceCount stays at 32, so only the census
+    // invariant can fire.
     let drifting_move = ir_builder::transformation(
         "drifting_move",
         ir_builder::params(&["src_f", "src_r", "dst_f", "dst_r", "new_turn"]),
@@ -177,17 +162,13 @@ fn piece_count_drift_is_rejected() {
     );
 }
 
-/// Dropping the counter entirely is also caught. `piece_count_matches_
-/// board` is vacuous with no `PieceCount` present, but `board_with_
-/// pieces_has_a_counter` requires a non-empty board to carry a counter,
-/// so a move that retracts `PieceCount` without re-admitting it is
-/// refused.
+/// Dropping the counter is also caught. `piece_count_matches_board` is
+/// vacuous with no `PieceCount`, so `board_with_pieces_has_a_counter`
+/// requires a non-empty board to carry one.
 #[test]
 fn dropping_the_piece_counter_is_rejected() {
-    // Adversarial (IR-builder) test: constructs the real transition minus
-    // one statement to prove an invariant has teeth - a kernel-teeth test,
-    // not a business story, so the Rust IR builder is the right tool here,
-    // not `.morph`.
+    // Built in Rust IR: the real transition minus one statement, to prove
+    // the invariant has teeth.
     use morpholog_core::ir_builder;
 
     let mut program = chess_transition_invariants::program();
@@ -240,10 +221,9 @@ fn dropping_the_piece_counter_is_rejected() {
 // Full-chain propose: start_game and a legal move.
 // ============================================================
 
-/// `start_game` on an empty pre-state admits 35 claims (32 pieces
-/// plus `MoveCount`, `PieceCount`, `CurrentTurn`) and clears every
-/// invariant. The transition invariants are vacuously true on the
-/// first transition (no pre-state `MoveCount` exists).
+/// `start_game` on an empty state admits 35 claims (32 pieces plus
+/// `MoveCount`, `PieceCount`, `CurrentTurn`). The transition invariants
+/// hold vacuously: there is no earlier `MoveCount`.
 #[test]
 fn start_game_admits_opening_position() {
     let program = chess_transition_invariants::program();
@@ -270,8 +250,7 @@ fn quiet_move_after_opening_succeeds() {
         state,
     );
 
-    // The move count advanced by exactly one - the transition
-    // invariant `move_count_strictly_increases` enforced this.
+    // Enforced by `move_count_strictly_increases`.
     assert!(
         next.claims()
             .iter()
@@ -306,13 +285,10 @@ fn quiet_move_after_opening_succeeds() {
 // Square colour: the `(file + rank) % 2` parity invariant.
 // ============================================================
 
-/// A bishop that changes square colour is rejected once it would put
-/// both bishops of a colour on the same colour. White's dark-squared
-/// bishop starts on c1 (file 3, rank 1; `(3+1) % 2 = 0`, dark). Sliding
-/// it to d3 (file 4, rank 3; `(4+3) % 2 = 1`, light) would join white's
-/// other bishop on f1 (file 6, rank 1; `(6+1) % 2 = 1`, light) - two
-/// light-squared white bishops - and `bishops_on_opposite_square_colors`
-/// turns the move away. This is the parity arithmetic doing the work.
+/// A bishop may not end up on the same colour as its partner. c1
+/// (`(3+1) % 2 = 0`, dark) to d3 (`(4+3) % 2 = 1`, light) would join the
+/// f1 bishop (`(6+1) % 2 = 1`, light), so
+/// `bishops_on_opposite_square_colors` rejects it.
 #[test]
 fn bishop_changing_square_color_is_rejected() {
     let program = chess_transition_invariants::program();
@@ -332,10 +308,8 @@ fn bishop_changing_square_color_is_rejected() {
     );
 }
 
-/// The same bishop sliding to another square of its *own* colour is
-/// allowed. c1 (dark, parity 0) to e3 (file 5, rank 3; `(5+3) % 2 = 0`,
-/// dark) keeps the two white bishops on opposite colours, so the parity
-/// invariant is satisfied and the move commits.
+/// The same bishop may move within its own colour: c1 to e3
+/// (`(5+3) % 2 = 0`, dark) keeps the bishops on opposite colours.
 #[test]
 fn bishop_keeping_square_color_is_allowed() {
     let program = chess_transition_invariants::program();
@@ -358,33 +332,23 @@ fn bishop_keeping_square_color_is_allowed() {
 }
 
 // ============================================================
-// The load-bearing test: pre(...) catches a buggy transformation.
+// pre(...) catches a buggy transformation.
 //
-// Construct a transformation body that does the right thing
-// EVERYWHERE except the MoveCount bump - it forgets to advance the
-// counter. Then propose against it. The `move_count_strictly_
-// increases` transition invariant must reject the candidate,
-// because `MoveCount(0)` after the transition would not equal
-// `pre(MoveCount(0)) + 1 = 1`. A state invariant alone could not
-// catch this - `MoveCount(0)` is a perfectly admissible
-// state. Only the relationship between pre and post falsifies the
-// rule.
+// A move that forgets to advance MoveCount. `MoveCount(0)` is a valid
+// state on its own; only comparing it with `pre(MoveCount(0)) + 1`
+// shows the bug, so `move_count_strictly_increases` must reject it.
 // ============================================================
 
 #[test]
 fn transition_invariant_catches_missing_move_count_bump() {
-    // Adversarial (IR-builder) test: constructs the real transition minus
-    // one statement to prove an invariant has teeth - a kernel-teeth test,
-    // not a business story, so the Rust IR builder is the right tool here,
-    // not `.morph`.
+    // Built in Rust IR: the real transition minus one statement, to prove
+    // the invariant has teeth.
     use morpholog_core::ir_builder;
 
     let mut program = chess_transition_invariants::program();
     let state = run_start_game(&program);
 
-    // A buggy quiet_move that does everything except advance
-    // MoveCount. The move count claim is left untouched in the
-    // candidate state. The transition invariant must catch this.
+    // A quiet_move that does everything except advance MoveCount.
     let buggy_move = ir_builder::transformation(
         "buggy_quiet_move",
         ir_builder::params(&["src_f", "src_r", "dst_f", "dst_r", "new_turn"]),
@@ -474,16 +438,13 @@ fn transition_invariant_catches_missing_move_count_bump() {
 // Helpers
 // ============================================================
 
-/// Run the example's `start_game` against the empty state. Returns
-/// the resulting candidate.
+/// Run `start_game` against the empty state and return the result.
 fn run_start_game(program: &Program) -> State {
     run_named(program, "start_game", vec![], State::default())
 }
 
-/// Look up `transformation_name` in `program`, propose it with the
-/// supplied args against `state`, and `must_accept` the result.
-/// `program` is only a transformation source; the rules always come
-/// from `ex()`.
+/// Propose `transformation_name` from `program` against `state` and
+/// `must_accept` the result. The rules always come from `ex()`.
 fn run_named(
     program: &Program,
     transformation_name: &str,

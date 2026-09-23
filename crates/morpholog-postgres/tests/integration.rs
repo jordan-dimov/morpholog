@@ -1,6 +1,6 @@
 //! Integration tests for `propose_against_pg`.
 //!
-//! Require a running PostgreSQL 17 with the `morpholog` schema applied
+//! Require a running PostgreSQL 18 with the `morpholog` schema applied
 //! (`crates/morpholog-core/sql/schema.sql`). The connection string comes
 //! from `DATABASE_URL`; tests panic if it is unset.
 //!
@@ -26,30 +26,11 @@ use uuid::Uuid;
 
 mod common;
 use common::{claim_instance, dec, intent_instance, subj};
-use common::{reset_db, test_pool};
+use common::{reset_db, seed_claims, test_pool};
 
 // ============================================================
 // Test infrastructure
 // ============================================================
-
-async fn insert_pre_state(pool: &PgPool, claims: Vec<ClaimInstance>) {
-    // Pre-state claims need a non-null `asserted_in`; a fixed nil UUID
-    // makes fixture rows identifiable and carries no semantic meaning.
-    let fixture_transition = Uuid::nil();
-    for claim in claims {
-        let args_json = serde_json::to_value(&claim.args).unwrap();
-        sqlx::query(
-            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
-             VALUES ($1, $2, $3)",
-        )
-        .bind(claim.predicate.as_str())
-        .bind(&args_json)
-        .bind(fixture_transition)
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-}
 
 fn claim(predicate: &str, args: Vec<EvalValue>) -> ClaimInstance {
     claim_instance(predicate, &args)
@@ -88,7 +69,7 @@ fn netting_args() -> Vec<EvalValue> {
 async fn settlement_netting_happy_path_commits_claims_audit_and_outbox() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    insert_pre_state(&pool, netting_pre_state_claims()).await;
+    seed_claims(&pool, &netting_pre_state_claims()).await;
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
@@ -157,10 +138,8 @@ async fn settlement_netting_happy_path_commits_claims_audit_and_outbox() {
     assert_eq!(outbox_intent_type, "NetSettlementCreated");
 }
 
-/// Predicate-scoped load: noise claims of a predicate the
-/// transformation does not reference must not affect the outcome. The
-/// PG adapter's `load_state` must scope past the `UnrelatedNoise`
-/// claims so the kernel never sees them.
+/// Claims of a predicate the transformation never reads must not affect
+/// the outcome: the adapter does not load them.
 #[tokio::test]
 async fn propose_against_pg_does_not_load_unreferenced_predicates() {
     let pool = test_pool().await;
@@ -173,7 +152,7 @@ async fn propose_against_pg_does_not_load_unreferenced_predicates() {
             vec![subj(&format!("noise_{i}")), dec(i as i64)],
         ));
     }
-    insert_pre_state(&pool, claims).await;
+    seed_claims(&pool, &claims).await;
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
@@ -184,9 +163,8 @@ async fn propose_against_pg_does_not_load_unreferenced_predicates() {
     .await
     .expect("propose_against_pg should commit despite noise claims");
 
-    // Pin the FULL outcome against the no-noise baseline: the
-    // observable result must be identical to the noise-free happy
-    // path, not merely Committed.
+    // The whole outcome must match the noise-free baseline, not merely
+    // be Committed.
     let PgProposalOutcome::Committed {
         asserted_claims,
         retracted_claims,
@@ -246,7 +224,7 @@ async fn require_failure_writes_nothing() {
     // Extra Netted(l1) makes the require check fail before any staging.
     let mut claims = netting_pre_state_claims();
     claims.push(claim("Netted", vec![subj("l1")]));
-    insert_pre_state(&pool, claims).await;
+    seed_claims(&pool, &claims).await;
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
@@ -282,15 +260,14 @@ async fn require_failure_writes_nothing() {
     assert_eq!(outbox_count, 0);
 }
 
-/// `propose_against_pg_with_trace` returns the trace alongside the
-/// outcome on both Committed and Rejected paths. Pinned end-to-end
-/// against the PG adapter rather than just the kernel.
+/// `propose_against_pg_with_trace` returns the trace with the outcome on
+/// both the Committed and Rejected paths.
 #[tokio::test]
 async fn propose_against_pg_with_trace_returns_trace_on_committed() {
     use morpholog_core::TraceEntry;
     let pool = test_pool().await;
     reset_db(&pool).await;
-    insert_pre_state(&pool, netting_pre_state_claims()).await;
+    seed_claims(&pool, &netting_pre_state_claims()).await;
 
     let traced = common::propose_pg_with_trace_using_test_actor(
         &pool,
@@ -334,11 +311,9 @@ async fn propose_against_pg_with_trace_returns_trace_on_committed() {
     );
 }
 
-/// Kernel-errored path: when the kernel raises an `EvalError` mid-run
-/// (here, a multi-match `BindOne`), the trace must be preserved on
-/// the `PgTracedOutcome::KernelErrored` variant rather than dropped
-/// at the PG boundary. The SERIALIZABLE transaction is rolled back
-/// so the connection is released and no state is admitted.
+/// When the kernel raises an `EvalError` mid-run (here, a multi-match
+/// `BindOne`), the trace survives on `PgTracedOutcome::KernelErrored`
+/// and the transaction is rolled back.
 #[tokio::test]
 async fn propose_against_pg_with_trace_preserves_trace_on_kernel_error() {
     use morpholog_core::{EvalError, TraceEntry};
@@ -349,7 +324,7 @@ async fn propose_against_pg_with_trace_preserves_trace_on_kernel_error() {
     // `bind_one(LineAmount(line, amt))` multi-match and raise EvalError.
     let mut claims = netting_pre_state_claims();
     claims.push(claim("LineAmount", vec![subj("l1"), dec(99)]));
-    insert_pre_state(&pool, claims).await;
+    seed_claims(&pool, &claims).await;
 
     let traced = common::propose_pg_with_trace_using_test_actor(
         &pool,
@@ -367,11 +342,10 @@ async fn propose_against_pg_with_trace_preserves_trace_on_kernel_error() {
         matches!(error, EvalError::TypeMismatch(_)),
         "expected TypeMismatch (bind_one multi-match), got {error:?}"
     );
-    // Trace must be non-empty: the require held and statements ran up
-    // to the For body's bind_one trip on iteration 0.
+    // The require held and statements ran up to the failing bind_one.
     assert!(!trace.is_empty(), "trace must not be empty on kernel error");
-    // Walk into the For to pin the MultipleMatches BindOne shape, not
-    // merely that a For entry exists.
+    // Check the MultipleMatches BindOne inside the For, not just that a
+    // For entry exists.
     use morpholog_core::{BindOneOutcome, ForIterationTrace};
     let saw_multi_match = trace.iter().any(|e| match e {
         TraceEntry::For { iterations, .. } => iterations.iter().any(|iter: &ForIterationTrace| {
@@ -420,7 +394,7 @@ async fn propose_against_pg_with_trace_returns_trace_on_rejected() {
     // Extra Netted(l1) makes the forall require's `not Netted` fail.
     let mut claims = netting_pre_state_claims();
     claims.push(claim("Netted", vec![subj("l1")]));
-    insert_pre_state(&pool, claims).await;
+    seed_claims(&pool, &claims).await;
 
     let traced = common::propose_pg_with_trace_using_test_actor(
         &pool,
@@ -457,15 +431,15 @@ async fn invariant_violation_on_candidate_state_writes_nothing() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    // Orphan SettlementLine for l1 (legacy data: in another net but not
-    // flagged Netted). `require not Netted(l1)` passes, but the
-    // candidate state would violate no_double_netting.
+    // An orphan SettlementLine for l1: in another net but not marked
+    // Netted. `require not Netted(l1)` passes, but the candidate state
+    // would violate no_double_netting.
     let mut claims = netting_pre_state_claims();
     claims.push(claim(
         "SettlementLine",
         vec![subj("l1"), subj("old_net"), dec(60)],
     ));
-    insert_pre_state(&pool, claims).await;
+    seed_claims(&pool, &claims).await;
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
@@ -508,9 +482,9 @@ fn idempotency_key_matches_golden_hash() {
     // with transition_id = nil, name = "TestIntent", args =
     // [Subject("net1")] -> canonical_json `[{"type":"subject","value":"net1"}]`.
     //
-    // The expected hex was computed independently (Python hashlib).
-    // Do NOT recompute via the production helper - the point is to
-    // catch formula drift, including delimiter changes.
+    // The expected hex was computed independently (Python hashlib). Do
+    // not recompute it with the production helper: the point is to catch
+    // formula drift, delimiters included.
     let transition_id = Uuid::nil();
     let intent = intent_instance("TestIntent", &[EvalValue::Subject("net1".into())]);
 
@@ -531,8 +505,7 @@ fn retract_marker_transformation() -> Transformation {
     )
 }
 
-/// Minimal valid programme wrapping `retract_marker_transformation` so it
-/// can be proposed through the `CompiledProgram` facade.
+/// Minimal valid programme wrapping `retract_marker_transformation`.
 fn marker_program() -> morpholog_core::Program {
     use morpholog_core::ir_builder::{predicate, program};
     program("marker")
@@ -545,9 +518,9 @@ fn marker_program() -> morpholog_core::Program {
 async fn retraction_deletes_targeted_row_and_preserves_others() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    insert_pre_state(
+    seed_claims(
         &pool,
-        vec![
+        &[
             claim("Marker", vec![subj("x")]),
             claim("Marker", vec![subj("y")]),
             claim("Marker", vec![subj("z")]),
@@ -608,7 +581,7 @@ async fn retraction_deletes_targeted_row_and_preserves_others() {
 async fn audit_jsonb_columns_round_trip_through_codec() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    insert_pre_state(&pool, netting_pre_state_claims()).await;
+    seed_claims(&pool, &netting_pre_state_claims()).await;
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
@@ -712,12 +685,10 @@ async fn claim_exists(pool: &PgPool, predicate: &str, args: &[EvalValue]) -> boo
 }
 
 // ============================================================
-// Verified revenue - durable proof that currentness-with-restatement
-// and admissibility-for-purpose compose end to end through
-// propose_against_pg. One scenario walks admission, multi-authority
-// standing, decisions, correction (retracting standing on the prior
-// verification), rejection of unstanding decisions, and re-grant on
-// the corrected figure.
+// Verified revenue through propose_against_pg: admission, standing from
+// several authorities, decisions, a correction that retracts standing on
+// the prior verification, refusal of a decision without standing, and
+// a new grant on the corrected figure.
 // ============================================================
 
 #[tokio::test]
@@ -916,9 +887,8 @@ async fn verified_revenue_full_chain_through_pg() {
         .await
     );
 
-    // 7. A new bank decision against ver_002 is rejected (no standing
-    //    on the corrected figure yet). Pin no durable trace: claims,
-    //    audit, and outbox must all be unchanged.
+    // 7. A new bank decision against ver_002 is rejected: no standing on
+    //    the corrected figure yet. Claims, audit and outbox are unchanged.
     let claims_before = list_claims(&pool).await.unwrap().len();
     let audit_before = list_audit_rows(&pool).await.unwrap().len();
     let outbox_before = list_pending_outbox(&pool).await.unwrap().len();
@@ -1019,9 +989,8 @@ async fn verified_revenue_full_chain_through_pg() {
 }
 
 // ============================================================
-// Double-entry ledger - durable proof of balanced posting, period
-// close, and restatement through propose_against_pg, inspecting the
-// durable claims, audit, and outbox rows directly.
+// Double-entry ledger through propose_against_pg: balanced posting,
+// period close and restatement, checked against the stored rows.
 // ============================================================
 
 fn ledger_period() -> EvalValue {
@@ -1132,7 +1101,7 @@ async fn double_entry_full_chain_through_pg() {
     assert_eq!(count(&pool, "audit").await, 3);
     assert_eq!(count(&pool, "outbox").await, 3);
 
-    // Original entry preserved (the load-bearing property).
+    // Original entry preserved.
     assert!(
         claim_exists(
             &pool,
@@ -1209,7 +1178,7 @@ async fn ledger_closed_period_rejects_new_entry_and_writes_nothing() {
     reset_db(&pool).await;
 
     // Pre-state: period already closed.
-    insert_pre_state(&pool, vec![claim("PeriodClosed", vec![ledger_period()])]).await;
+    seed_claims(&pool, &[claim("PeriodClosed", vec![ledger_period()])]).await;
 
     // A normal posting must be rejected by `require not PeriodClosed`,
     // with no writes to claims, audit, or outbox.
@@ -1243,9 +1212,7 @@ async fn ledger_closed_period_rejects_new_entry_and_writes_nothing() {
 // ============================================================
 // Read API - current-state inspection helpers
 //
-// These tests pin the codec round-trips and stable orderings, not the
-// kernel semantics, against scenarios the propose_against_pg tests
-// already exercise.
+// These test codec round-trips and stable ordering, not kernel semantics.
 // ============================================================
 
 #[tokio::test]
@@ -1421,12 +1388,9 @@ async fn list_pending_outbox_returns_intents_in_enqueue_order() {
 
 #[tokio::test]
 async fn list_derived_trial_balance_over_pg_ledger_state() {
-    // Two ledger entries through the PG adapter, then trial-balance
-    // enumeration over the durable state: claims persisted by
-    // `propose_against_pg` reach `list_derived`, through
-    // `enumerate_derived`, to one row per account at the expected
-    // debit-minus-credit balance. Pinning the full rows (not just the
-    // count) catches a dropped row, a wrong balance, or unstable order.
+    // Two ledger entries, then the trial balance over stored state: one
+    // row per account at debit minus credit. Checking whole rows catches
+    // a dropped row, a wrong balance, or unstable order.
     let pool = test_pool().await;
     reset_db(&pool).await;
 
@@ -1503,9 +1467,7 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
 
 #[tokio::test]
 async fn list_derived_on_empty_state_returns_no_rows() {
-    // With no JournalLine claims, the `domain` enumerates no key
-    // bindings, so the derived extension is empty - structural (zero
-    // bindings -> zero rows), not an error.
+    // With no JournalLine claims there are no rows, and no error.
     let pool = test_pool().await;
     reset_db(&pool).await;
 
@@ -1524,15 +1486,10 @@ async fn list_derived_on_empty_state_returns_no_rows() {
 
 #[tokio::test]
 async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
-    // Black-box equivalence test for predicate-scoped loading.
-    // `trial_balance_row` references only `JournalLine`, so under a
-    // pile of unrelated `IndependentlyVerifiedRevenue` noise
-    // `list_derived` must return byte-identical rows to the noise-free
-    // state. If `predicates_referenced_by_derived` ever missed a
-    // predicate the kernel reads, the read path would silently skip
-    // needed claims and this equivalence would fail - the runtime
-    // safety net complementing the analysis's compile-time exhaustive
-    // `match`.
+    // Predicate-scoped loading, black box. `trial_balance_row` reads only
+    // `JournalLine`, so unrelated `IndependentlyVerifiedRevenue` noise
+    // must not change `list_derived`'s rows. If the scope missed a
+    // predicate the kernel reads, this would fail.
     let pool = test_pool().await;
     reset_db(&pool).await;
 
@@ -1568,7 +1525,7 @@ async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
             )
         })
         .collect();
-    insert_pre_state(&pool, noise).await;
+    seed_claims(&pool, &noise).await;
 
     // Sanity: the noise is present and dominates the claims table.
     let total_claims = list_claims(&pool).await.unwrap();
@@ -1607,7 +1564,7 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
 
     // Period already closed: a normal posting is rejected by
     // `require not PeriodClosed`.
-    insert_pre_state(&pool, vec![claim("PeriodClosed", vec![ledger_period()])]).await;
+    seed_claims(&pool, &[claim("PeriodClosed", vec![ledger_period()])]).await;
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
@@ -1631,8 +1588,7 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0].predicate.as_str(), "PeriodClosed");
 
-    // audit and outbox are empty - rejected transformations leave no
-    // governed trace.
+    // Audit and outbox are empty: a rejection leaves no trace there.
     let audit = list_audit_rows(&pool).await.unwrap();
     assert!(audit.is_empty(), "rejected transformation must not audit");
 
@@ -1643,9 +1599,9 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
     );
 }
 
-// Pins that the Transition actor round-trips unchanged through the
-// kernel, the audit-write codec, and list_audit_rows(), and surfaces on
-// PgProposalOutcome::Committed so the commit receipt is self-describing.
+// The Transition actor round-trips unchanged through the kernel, the
+// audit write, and list_audit_rows(), and appears on the Committed
+// receipt.
 #[tokio::test]
 async fn audit_row_records_actor() {
     use morpholog_core::Transition;
@@ -1701,13 +1657,10 @@ async fn audit_row_records_actor() {
     );
 }
 
-// A non-subject actor can no longer reach the kernel: `Transition.actor`
-// is a `Subject` by type, so the old "actor must be a subject" runtime
-// check is gone. The one place a non-subject actor could still enter is
-// the IO boundary - the audit `actor` column - so the read path validates
-// the tag there. This pins that surviving guarantee: an audit row whose
-// `actor` JSONB is not a tagged subject surfaces as a typed
-// `PgError::InvalidState`, never a silently-decoded nonsense actor.
+// `Transition.actor` is a `Subject` by type, so the only way in for a
+// non-subject actor is the audit `actor` column. An audit row whose actor
+// is not a tagged subject reads back as `PgError::InvalidState`, never a
+// silently decoded wrong actor.
 #[tokio::test]
 async fn audit_read_rejects_non_subject_actor() {
     use morpholog_postgres::PgError;
@@ -1715,8 +1668,7 @@ async fn audit_read_rejects_non_subject_actor() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    // Hand-write an audit row whose actor column holds a tagged *decimal*
-    // rather than a subject - the corruption the read boundary must catch.
+    // An audit row whose actor is a tagged decimal, not a subject.
     let non_subject_actor = serde_json::json!({ "type": "decimal", "value": "42" });
     sqlx::query(
         "INSERT INTO morpholog.audit (
@@ -1811,10 +1763,9 @@ async fn duplicate_intent_in_one_transformation_surfaces_named_error() {
 }
 
 // ============================================================
-// Approval controls - durable proof that Term::Actor and a decimal Prop::Compare flow
-// through propose_against_pg into the audit log and the asserted
-// Approval / LimitedApproval claims. One scenario walks both the
-// unconditional and quantitative authority shapes.
+// Approval controls through propose_against_pg: the actor and a decimal
+// comparison reach the audit log and the Approval / LimitedApproval
+// claims, for both unconditional and quantitative authority.
 // ============================================================
 
 #[tokio::test]
@@ -1909,9 +1860,8 @@ async fn approval_controls_full_chain_through_pg() {
     .expect("grant_approval_limit should not error");
     assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
 
-    // 6. jordan approves a 750 invoice; the decimal Prop::Compare admits. Pin the full
-    // round-trip: receipt actor, asserted claim, emitted intent
-    // staged to the outbox, and the audit row's actor column.
+    // 6. jordan approves a 750 invoice, within the limit. Check the
+    // receipt actor, the claim, the outbox intent and the audit actor.
     let outcome = common::propose_pg_as(
         &pool,
         &common::compiled(approval_controls::program()),
@@ -2031,13 +1981,10 @@ async fn approval_controls_full_chain_through_pg() {
 // Example 5: insurance claim settlement
 // ============================================================
 
-/// Walks the full insurance_claim_settlement chain through
-/// `propose_against_pg`: policy issuance, claim reporting, authority
-/// grant, a first under-cap settlement (admitted), a boundary-equality
-/// settlement that exactly fills the aggregate (admitted), an over-cap
-/// attempt (rejected, no audit/outbox), and the `PolicyLimitUsage`
-/// derived claim read back. Pins the addition-based aggregate under
-/// durable commit semantics.
+/// The insurance_claim_settlement chain through `propose_against_pg`:
+/// issue a policy, report claims, grant authority, settle under the cap
+/// (admitted), settle exactly to the cap (admitted), try to exceed it
+/// (rejected, nothing written), then read `PolicyLimitUsage` back.
 #[tokio::test]
 async fn insurance_claim_settlement_full_chain_through_pg() {
     let pool = test_pool().await;
@@ -2238,10 +2185,9 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     );
 }
 
-/// `load_scoped_state` - the read-only pre-state load behind `explain` -
-/// must apply the same predicate scope as `propose_against_pg`: claims a
-/// transformation could never read are not fetched, so an explanation
-/// runs the kernel against exactly the state a real proposal would see.
+/// `load_scoped_state`, the pre-state load behind `explain`, uses the same
+/// predicate scope as `propose_against_pg`, so an explanation sees exactly
+/// the state a real proposal would.
 #[tokio::test]
 async fn load_scoped_state_loads_only_in_scope_predicates() {
     let pool = test_pool().await;
@@ -2249,9 +2195,9 @@ async fn load_scoped_state_loads_only_in_scope_predicates() {
 
     // One claim the netting transformation actually reads, and one of a
     // predicate nothing in the programme references.
-    insert_pre_state(
+    seed_claims(
         &pool,
-        vec![
+        &[
             claim("ApprovedSettlementLine", vec![subj("l1")]),
             claim("UnrelatedNoise", vec![subj("x")]),
         ],

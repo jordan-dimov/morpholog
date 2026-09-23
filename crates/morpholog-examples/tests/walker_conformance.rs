@@ -1,17 +1,13 @@
 //! The walker-conformance corpus: constructs in adversarial contexts,
 //! run through every tree-walking pass at once.
 //!
-//! The recurring bug class this guards is construct-in-context: a pass
-//! handles a construct at top level but misses it nested (a chained
-//! comparison inside a wider `and`, `pre` inside a comparison operand,
-//! a sum target bound through a defined call). Most walkers hand-roll
-//! their descent - mutation, polarity, kind collection, and
-//! definition expansion each need more than the shared fold offers -
-//! so a fix in one walker never propagates to the others. This corpus
-//! is the shared gate: every fragment runs the same battery (parse,
-//! validate, format round-trip, lints/controls/coverage without panic
-//! and deterministically, footprints transitive, parameter kinds
-//! total), plus targeted pins where the nesting is the point.
+//! It guards against a pass that handles a construct at top level but
+//! misses it nested (`pre` inside a comparison operand, a sum target bound
+//! through a defined call). Most walkers write their own descent, so a fix
+//! in one does not reach the others. Every fragment runs the same checks:
+//! parse, validate, format round-trip, lints/controls/coverage run
+//! deterministically, footprints are transitive, parameter kinds are total.
+//! Targeted tests cover the cases where the nesting is the point.
 //!
 //! The rule: a new construct, or a new walker, adds a fragment or an
 //! assertion here first.
@@ -44,10 +40,9 @@ transformation load(p, qty):
     admit Parcel(p, qty)
 ";
 
-/// `pre(...)` wrapping a defined call, once in a consequent and once
-/// in an antecedent: the pre-detector and the footprint walkers must
-/// see through the wrapper AND the call - and the two positions cue
-/// coverage differently on purpose.
+/// `pre(...)` wrapping a defined call, once in a consequent and once in an
+/// antecedent. The walkers must see through both the wrapper and the call;
+/// the two positions affect coverage differently on purpose.
 const PRE_AROUND_DEFINED: &str = "\
 program pre_around_defined
 predicate Sealed(box: Subject)
@@ -86,10 +81,9 @@ transformation install(s):
     admit Sensor(s)
 ";
 
-/// Named-field claim patterns in every position that takes them: the
-/// sugar lowers to positional IR at parse time, and the wall-carrying
-/// invariant pins the formatter's named canonical form through this
-/// battery's round-trip leg.
+/// Named-field claim patterns in every position that takes them. They
+/// become positional IR at parse time; the round-trip check pins the
+/// formatter's named output.
 const NAMED_PATTERNS: &str = "\
 program named_patterns
 predicate Line(id: Subject, invoice: Subject, rate: Decimal, volume: Decimal, net: Decimal)
@@ -104,10 +98,8 @@ transformation drop(inv):
     retract Line(invoice: inv, ..)
 ";
 
-/// A chained DATE comparison: the temporal comparators in the chain
-/// sugar, with the free parameter's kind arriving only through
-/// `on_or_before` - the lawful shape whose decimal-spelled sibling
-/// the check tier refuses by name.
+/// A chained date comparison, where the free parameter's kind comes only
+/// from `on_or_before`. (The same chain spelled with `<=` is refused.)
 const DATE_CHAIN: &str = "\
 program date_chain
 predicate Window(w: Subject, opens_on: Date, closes_on: Date)
@@ -121,9 +113,8 @@ transformation probe(w, asked_on):
     admit Window(w, asked_on, closes_on)
 ";
 
-/// `xor` with claim branches nested as an `implies` consequent: the
-/// polarity-aware walkers meet the one construct the property
-/// generators never emit.
+/// `xor` with claim branches as an `implies` consequent, a construct the
+/// property generators never emit.
 const XOR_IN_IMPLIES: &str = "\
 program xor_in_implies
 predicate Case(c: Subject)
@@ -215,9 +206,8 @@ transformation materialise(r):
     admit Real(r)
 ";
 
-/// A define body opening with `let` lines: the sugar is substituted
-/// away at parse time, so every walker must see the desugared body -
-/// and see it identically to the hand-expanded spelling.
+/// A define body opening with `let` lines. They are substituted at parse
+/// time, so every walker must see the same body as the hand-expanded form.
 const LET_SUGARED_DEFINE: &str = "\
 program let_sugared_define
 predicate Line(l: Subject, rate: Decimal, volume: Decimal, net: Decimal)
@@ -232,8 +222,7 @@ transformation post(l, rate, volume, net):
 ";
 
 /// `round` nested in arithmetic inside a let-sugared invariant, plus a
-/// literal-quantum boundary: the new node meets every walker in the
-/// context the billing example actually uses it.
+/// literal-quantum boundary, as the billing example uses it.
 const ROUND_IN_LET_SUGARED_BODY: &str = "\
 program round_in_let_sugared_body
 predicate Line(l: Subject, rate: Decimal, volume: Decimal, net: Decimal)
@@ -244,10 +233,9 @@ transformation post(l, rate, volume, net):
     admit Line(l, rate, volume, net)
 ";
 
-/// A programme-level `const` reaching an invariant, a define, and a
-/// transformation statement: substituted away at parse time, so every
-/// walker must see the inlined bodies - identically to the
-/// hand-inlined spelling.
+/// A programme-level `const` used in an invariant, a define, and a
+/// transformation. It is inlined at parse time, so every walker must see
+/// the same bodies as the hand-inlined form.
 const CONST_ACROSS_BODY_SORTS: &str = "\
 program const_across_body_sorts
 const penny = (0.01)
@@ -261,10 +249,8 @@ transformation post(l, net):
     admit Line(l, net)
 ";
 
-/// A `span(P3M)` calendar-span literal and a date subtraction nested
-/// in a let-sugared invariant body and reached through a defined call:
-/// the new literal kind meets every walker in the contexts the
-/// covenant example actually uses it.
+/// A `span(P3M)` literal and a date subtraction in a let-sugared invariant,
+/// reached through a defined call, as the covenant example uses them.
 const SPAN_IN_DATE_ARITHMETIC: &str = "\
 program span_in_date_arithmetic
 predicate Period(p: Subject, ends_on: Date)
@@ -281,12 +267,10 @@ transformation notice(p, as_of, days_late):
     admit Notice(p, as_of, days_late)
 ";
 
-/// `if(...)` in a let-sugared invariant with a defined call inside
-/// the condition and a `sum` inside a branch: the new node meets
-/// every walker in the contexts the scoped-charges example uses it,
-/// with each of the three children carrying a predicate the others
-/// do not (so a walker that skips one child reddens the targeted
-/// footprint assertion below, not just the generic sweep).
+/// `if(...)` in a let-sugared invariant, with a defined call in the
+/// condition and a `sum` in a branch, as the scoped-charges example uses
+/// it. Each child reads a predicate the others do not, so a walker that
+/// skips one fails the targeted footprint test below.
 const COND_ACROSS_CHILDREN: &str = "\
 program cond_across_children
 predicate OnlyWhen(w: Subject)
@@ -302,12 +286,9 @@ transformation record(x, v):
     admit Out(x, v)
 ";
 
-/// `period_index` nested in a let-sugared invariant, reached through
-/// a defined call, and with EACH SLOT carrying a predicate the other
-/// slots lack (an anchor lookup, an `if` over a mode claim in the
-/// span slot, an observation lookup in the position slot): an omitted
-/// per-slot walker arm reddens the targeted footprint assertion, not
-/// just the generic sweep.
+/// `period_index` in a let-sugared invariant, reached through a defined
+/// call. Each argument reads a predicate the others do not, so a walker
+/// that skips one fails the targeted footprint test.
 const PERIOD_INDEX_ACROSS_CONTEXTS: &str = "\
 program period_index_across_contexts
 predicate AnchorDate(d: Date)
@@ -328,12 +309,9 @@ transformation waive(r):
     admit Waived(r)
 ";
 
-/// `period_start_of` with EACH SLOT carrying a predicate the other
-/// slots lack (an anchor lookup, an `if` over a mode claim in the
-/// span slot, an index lookup in the third slot), its Date result
-/// compared against a claim-bound date inside a let-sugared
-/// consequent: an omitted per-slot walker arm reddens the targeted
-/// footprint assertion, not just the generic sweep.
+/// `period_start_of` with each argument reading a predicate the others do
+/// not, its date compared inside a let-sugared consequent. A walker that
+/// skips an argument fails the targeted footprint test.
 const PERIOD_START_OF_ACROSS_CONTEXTS: &str = "\
 program period_start_of_across_contexts
 predicate AnchorDate(d: Date)
@@ -348,12 +326,10 @@ transformation record_sheet(r, starts_on, i):
     admit Sheet(r, starts_on)
 ";
 
-/// An expression-valued sum target in adversarial position: the
-/// target multiplies a body-bound quantity by a factor read through a
-/// `value` lookup whose predicate appears NOWHERE else, and the sum
-/// sits in a let-sugared consequent. A walker that still treats the
-/// target as a leaf loses the lookup's predicate from the footprint;
-/// a seed pass that stops at arithmetic loses the tonnes.
+/// A sum whose target multiplies a quantity by a `value` lookup whose
+/// predicate appears nowhere else, inside a let-sugared consequent. A walker
+/// that treats the target as a leaf loses that predicate from the
+/// footprint; a seed pass that stops at arithmetic loses the unit.
 const EXPRESSION_TARGET_SUM: &str = "\
 program expression_target_sum
 predicate Holding(h: Subject, qty: Decimal[t])
@@ -372,11 +348,9 @@ transformation hold(h, qty):
     admit Holding(h, qty)
 ";
 
-/// A subset-head derived (the domain binds more than the head carries)
-/// whose value reaches a coordinate through a named `value` lookup with
-/// a NON-FIRST extraction hole, nested inside a sum's arithmetic: the
-/// key-only value scope, the explicit extract index, and the forced
-/// named rendering all have to hold at once, two constructs deep.
+/// A derived claim whose domain binds more than its head carries, with a
+/// named `value` lookup extracting a non-first field inside a sum's
+/// arithmetic. Several lookup rules must hold at once, two constructs deep.
 const PROJECTED_DERIVED_NAMED_HOLE: &str = "\
 program projected_derived_named_hole
 predicate Reading(meter: Subject, read_on: Date, figure: Decimal)
@@ -464,10 +438,9 @@ fn the_period_start_of_footprint_carries_all_three_slots() {
     }
 }
 
-/// The conditional's three children each carry a predicate the others
-/// do not; a broken walker that visits the condition but skips a
-/// branch (or vice versa) fails HERE, where the generic sweep's
-/// non-empty footprint check would still pass.
+/// The conditional's three children each read a predicate the others do
+/// not; a walker that skips one fails here, where the generic sweep's
+/// non-empty check would still pass.
 #[test]
 fn the_conditional_footprint_carries_all_three_children() {
     let program = parsed("cond_across_children", COND_ACROSS_CHILDREN);
@@ -497,12 +470,8 @@ fn a_sum_inside_a_branch_receives_its_seed() {
         .iter()
         .find(|i| i.name.as_str() == "picked_is_lawful")
         .expect("the fragment's invariant");
-    // Walk to the conditional's `then` branch by the fragment's known
-    // shape (let-substituted: Implies { Out(..), v = if(..) }): the
-    // sum over a Decimal-declared position keeps the decimal seed -
-    // the point is that lowering REACHED it (an unlowered sum in a
-    // quantity position elsewhere would keep a wrong default
-    // silently).
+    // Walk to the `then` branch by the fragment's known shape
+    // (Implies { Out(..), v = if(..) }).
     let Prop::Implies { right, .. } = &invariant.body else {
         panic!("fragment shape: implies; got {:?}", invariant.body);
     };
@@ -515,9 +484,8 @@ fn a_sum_inside_a_branch_receives_its_seed() {
     let ValueExpr::Sum { seed, .. } = then.as_ref() else {
         panic!("the then branch is a sum; got {then:?}");
     };
-    // Decimal is the UNLOWERED default, so asserting it would pass
-    // whether or not the lowering ever reached the branch; the
-    // quantity seed only appears if it did.
+    // Decimal is the unlowered default; the kWh seed appears only if
+    // lowering reached the branch.
     assert_eq!(*seed, SumSeed::Quantity("kWh".into()));
 }
 
@@ -641,10 +609,9 @@ fn the_expression_target_keeps_its_lookup_in_the_footprint() {
 
 #[test]
 fn the_expression_target_seed_resolves_through_the_arithmetic() {
-    // `qty * (value Haircut(_))`: the left side is `Decimal[t]`, the
-    // right side statically unknown - the matrix's unique-counterpart
-    // rule still pins the result, so the empty book is `0 t`, not a
-    // bare decimal no quantity comparison could accept.
+    // `qty * (value Haircut(_))`: the left side is `Decimal[t]` and the
+    // right unknown, yet the result is still tonnes, so the empty sum is
+    // `0 t`, not a bare decimal.
     use morpholog_core::{Prop, SumSeed, ValueExpr};
     let program = parsed("expression_target_sum", EXPRESSION_TARGET_SUM);
     let Prop::Implies { right, .. } = &program.invariants[0].body else {
@@ -689,14 +656,10 @@ fn the_chained_comparison_desugars_identically_in_both_contexts() {
 
 #[test]
 fn the_pre_detector_sees_through_the_wrapping() {
-    // needs_pre_state cues coverage to carry the previous state on
-    // every replay step, and it is ANTECEDENT-only by design: replay
-    // evaluates antecedents to decide firing and never evaluates
-    // consequents, so `pre` in a consequent must not cue it while
-    // `pre(defined_call(...))` in an antecedent must - through both
-    // the wrapper and the call. The whole-body scan behind the
-    // scorer's pre-gate sees both. The xor fragment is the negative
-    // control: no pre anywhere, no cue.
+    // Coverage replay evaluates only antecedents, so needs_pre_state looks
+    // only there: `pre(defined_call(...))` in an antecedent must set it.
+    // `invariants_using_pre` scans whole bodies and sees both positions.
+    // The xor fragment has no `pre` at all.
     let program = parsed("pre_around_defined", PRE_AROUND_DEFINED);
     assert!(CoverageTracker::new(&program).needs_pre_state());
     assert_eq!(

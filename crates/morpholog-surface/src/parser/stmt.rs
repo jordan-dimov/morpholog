@@ -17,38 +17,15 @@
 //! claim_pattern ::= Ident "(" term_list ")"
 //! ```
 //!
-//! Surface verb / IR mapping (the predicate + args pair is the
-//! same shape across four verbs; the verb decides the wrapper):
+//! The claim-shaped verbs share one pattern and differ only in the IR they build:
 //!
 //! - `bind Foo(args)`    -> `Stmt::BindOne(Prop::Claim { .. })`
 //! - `admit Foo(args)`   -> `Stmt::Assert(Claim { predicate, args })`
 //! - `retract Foo(args)` -> `Stmt::Retract { predicate, args }`
 //! - `emit Foo(args)`    -> `Stmt::Emit(Intent { name, args })`
 //!
-//! The `claim_pattern` helper produces the raw `(String, Vec<Term>)`
-//! tuple; each statement form wraps it in its own IR shape.
-//!
-//! Why `bind`/`admit`/`retract`/`emit` share the claim-pattern
-//! restriction: each verb operates on a single claim shape; the
-//! meaningful authoring form is `Verb Name(args)`. The IR's
-//! `Stmt::BindOne` could carry any `Prop`, but the surface stays
-//! narrower per Position A doctrine - surface less permissive
-//! than IR when the meaningful authoring form is narrower.
-//!
-//! `let x = new Subject()` is a binding-context extension (fresh
-//! subject identifier), distinct from `admit`/`retract`/`emit`
-//! which actually mutate admitted state.
-//!
-//! `for x in coll: body` is the only statement that introduces
-//! nested layout (an Indent inside the transformation's outer
-//! Indent). The statement parser is therefore recursive: the
-//! `for_stmt` production references the statement parser for the
-//! body's `stmt+` repetition.
-//!
-//! Statement separators are not needed: each statement begins with
-//! its own keyword, so the boundary between adjacent statements is
-//! "the next statement keyword". The body of a transformation
-//! parses as `stmt+` with no explicit punctuation.
+//! `bind` accepts only a claim pattern although the IR's `Stmt::BindOne` could hold any `Prop`:
+//! the surface allows only what authors meaningfully write.
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
@@ -61,21 +38,14 @@ use super::expr::{
 };
 use super::field_table::{FieldTable, Vocabulary};
 
-/// Build a parser for a single statement.
-///
-/// Recursive: `for_stmt`'s body references the statement parser
-/// itself (so `for` blocks can nest other statements, including
-/// other `for` blocks). The recursion is bounded by the layout
-/// pass's matched `Indent` / `Dedent` token pairs.
+/// Build a parser for a single statement. Recursive, so a `for` body can hold any statement,
+/// including another `for`.
 pub(super) fn statement_parser<'a, I>(
     table: &'a FieldTable,
 ) -> impl Parser<'a, I, Stmt, extra::Err<Rich<'a, Token>>>
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
-    // `require` bodies are propositions; `let` values and `for`
-    // collections are value expressions. The two sorts have separate
-    // parsers, used in their respective statement positions below.
     let proposition = expression_parser(table);
     let value_expr = value_expr_parser(table);
 
@@ -84,16 +54,11 @@ where
 
         // claim_pattern ::= Ident "(" pattern_args ")"
         //
-        // Returns a (name, PatternArgs) pair. Each statement verb
-        // resolves the pattern against its own vocabulary and wraps
-        // the result in its IR shape - see the module doc for the
-        // mapping.
+        // Each verb resolves the pattern against its own vocabulary.
         let claim_pattern = ident
             .then(pattern_args_parser().delimited_by(just(Token::LParen), just(Token::RParen)));
 
-        // An optional `<name>:` prefix on a refusing statement. Unambiguous
-        // because every proposition that can open a body starts with a
-        // keyword or is a claim call `Ident(`, so `Ident :` cannot begin one.
+        // An optional `<name>:` prefix. No proposition starts with `Ident :`, so it is unambiguous.
         let rule_name = ident.then_ignore(just(Token::Colon)).or_not();
 
         // require [<name>:] <proposition>
@@ -129,22 +94,13 @@ where
 
         // admit <claim_pattern>
         //
-        // Wildcards are rejected at parse time. The kernel emits
-        // "wildcard not allowed in assert" at runtime for any
-        // wildcard arg; the surface refuses to produce IR the
-        // kernel will refuse to evaluate, per the doctrine of
-        // "no surface form without a meaningful IR mapping". The
-        // `validate` here surfaces the diagnostic with the
-        // statement's span.
+        // Wildcards are refused here, with a span, since the kernel would refuse them anyway.
         let admit_stmt = just(Token::KwAdmit)
             .ignore_then(claim_pattern.clone())
             .validate(move |(predicate, args), e, emitter| {
                 let span: SimpleSpan = e.span();
-                // `..` would mean "leave fields unfilled" - the same
-                // hole the wildcard ban below closes - so it is refused
-                // by name before resolution fills the wildcards in, and
-                // the ban then stays quiet about those synthetic `_`s:
-                // one authored mistake, one diagnostic.
+                // `..` leaves fields unfilled, the same mistake as a wildcard. Refuse it by name
+                // and skip the wildcard check, so one mistake gives one diagnostic.
                 let rest_refused = matches!(&args, PatternArgs::Named { rest: true, .. });
                 if rest_refused {
                     emitter.emit(Rich::custom(
@@ -175,10 +131,7 @@ where
 
         // retract <claim_pattern>
         //
-        // Wildcards ARE meaningful in retract: they widen the
-        // pattern (e.g. `retract Foo(x, _)` retracts every Foo
-        // claim whose first arg matches x, regardless of the
-        // second). No surface-level wildcard restriction.
+        // Wildcards are allowed: `retract Foo(x, _)` retracts every `Foo` whose first arg is `x`.
         let retract_stmt = just(Token::KwRetract)
             .ignore_then(claim_pattern.clone())
             .validate(move |(predicate, args), e, emitter| {
@@ -198,14 +151,7 @@ where
 
         // emit <claim_pattern>
         //
-        // `Intent { name, args }` shares the predicate-and-args
-        // shape with `Claim`; the field is named `name` rather
-        // than `predicate` in the IR (intents are not claims even
-        // though they look syntactically alike).
-        //
-        // Wildcards are rejected at parse time, same reasoning
-        // as `admit`: the kernel emits "wildcard not allowed in
-        // emit" for any wildcard arg in an intent.
+        // Intents look like claims but are not. Wildcards and `..` are refused as in `admit`.
         let emit_stmt = just(Token::KwEmit)
             .ignore_then(claim_pattern.clone())
             .validate(move |(name, args), e, emitter| {
@@ -240,15 +186,8 @@ where
 
         // let <name> = <rhs>
         //
-        // rhs has two forms:
-        //   1. `new Subject ( )`  -> Stmt::LetNewSubject { name }
-        //   2. <expression>        -> Stmt::Let { name, value }
-        //
-        // The `new Subject()` form is recognised by the specific token
-        // sequence `KwNew Kind(Subject) LParen RParen`. `Kind(Subject)`
-        // is what the lexer produces for the bare identifier `Subject`
-        // (kind keywords are lexer-reserved). The parser checks the
-        // discriminant via `select!`.
+        // The right-hand side is `new Subject()` or a value expression. `Subject` lexes as a
+        // kind keyword, not an identifier.
         let new_subject_rhs = just(Token::KwNew)
             .ignore_then(select! { Token::Kind(PredicateArgKind::Subject) => () })
             .then_ignore(just(Token::LParen))
@@ -273,14 +212,7 @@ where
 
         // for <name> in <value-expression> : Indent statement+ Dedent
         //
-        // The collection is parsed as a value expression. The kernel's
-        // `Stmt::For.collection` is a `ValueExpr`; whatever it evaluates
-        // to must be an `EvalValue::Collection` at runtime, but the
-        // surface accepts any value expression.
-        //
-        // The body is `Indent statement+ Dedent`, identical in shape
-        // to the transformation body itself. `statement` is the
-        // recursive reference; chumsky resolves the cycle.
+        // Any value expression parses as the collection; the runtime checks it is one.
         let for_stmt = just(Token::KwFor)
             .ignore_then(ident)
             .then_ignore(just(Token::KwIn))
@@ -313,9 +245,7 @@ where
     })
 }
 
-/// Discriminator for the two `let` RHS forms. Internal to the
-/// parser; the surface keywords (`new Subject ( )` vs an
-/// expression) drive the choice.
+/// The two right-hand sides a `let` can have.
 enum LetRhs {
     NewSubject,
     Value(ValueExpr),

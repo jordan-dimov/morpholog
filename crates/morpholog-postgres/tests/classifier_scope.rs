@@ -1,17 +1,13 @@
 //! `classify_checked_query` may only appear where a checked macro query does.
 //!
-//! Its whole justification is that `sqlx::query!` / `query_as!` /
-//! `query_scalar!` are verified against `sql/schema.sql` at build time, so a
-//! missing column at runtime means the database is behind rather than the
-//! query being wrong. Attach it to anything else - dynamic SQL, a commit, a
-//! rollback, acquiring a connection - and it can report a real bug, or a
+//! Checked macro queries are verified against `sql/schema.sql` at build
+//! time, so a missing column at runtime means the database is behind, not
+//! that the query is wrong. On anything else - dynamic SQL, a commit, a
+//! rollback, acquiring a connection - it could report a real bug, or a
 //! tampered view-defs table, as an upgrade problem.
 //!
-//! This is a gate rather than a convention because care already failed
-//! twice: a blanket rewrite put it on 38 sites that are not queries at all,
-//! and the measurement that justified the rewrite came from a grep narrow
-//! enough to miss `query_scalar(`, `query_as(` and `.commit()`. Reviewers
-//! caught both. A rule the compiler cannot express needs something that can.
+//! The compiler cannot express this rule, and it is easy to break by
+//! hand, so a test enforces it.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -49,10 +45,9 @@ fn the_checked_classifier_only_guards_checked_queries() {
         }
         let source = std::fs::read_to_string(&path).expect("read source");
         for (offset, _) in source.match_indices("classify_checked_query") {
-            // The import names it without calling it. Checked on the LINE,
-            // not the statement: the `{` of a braced import is itself a
-            // statement boundary, so the statement view sees only the names
-            // inside the braces.
+            // The import names it without calling it. Checked by line: a
+            // braced import's `{` is a statement boundary, so the statement
+            // view would see only the names inside the braces.
             let line_start = source[..offset].rfind('\n').map_or(0, |i| i + 1);
             let line_end = source[offset..]
                 .find('\n')

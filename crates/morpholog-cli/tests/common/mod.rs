@@ -1,6 +1,5 @@
-//! Shared scaffolding for the CLI integration suites: the binary
-//! path, the repo root, temp-`.morph` writers, and the connecting
-//! role - each previously copied per test file.
+//! Shared helpers for the CLI integration suites: the binary path, the
+//! repo root, temp `.morph` writers, and the connecting role.
 
 #![allow(dead_code)]
 
@@ -17,8 +16,7 @@ pub fn repo_root() -> PathBuf {
         .expect("repo root resolves")
 }
 
-/// A temp `.morph` fixture that owns its directory: the file lives
-/// exactly as long as the binding, nothing leaks.
+/// A temp `.morph` fixture that owns its directory, removed when dropped.
 pub struct Fixture {
     pub path: PathBuf,
     _dir: tempfile::TempDir,

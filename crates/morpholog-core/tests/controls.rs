@@ -65,8 +65,7 @@ fn mini() -> morpholog_core::Program {
         .build()
 }
 
-/// Build a CompiledProgram from a freshly-built programme for the
-/// analysis entry points, which now take `&CompiledProgram`.
+/// Compile the programme for the analysis entry points.
 fn cc(p: &Program) -> CompiledProgram {
     CompiledProgram::new(p.clone()).expect("fixture is valid")
 }
@@ -160,11 +159,10 @@ fn a_gate_front_loads_the_invariant_it_pre_checks() {
 
 #[test]
 fn a_shared_predicate_with_unrelated_arguments_still_links_as_syntactic() {
-    // The relation is predicate-name overlap, not entailment: a gate and
-    // an invariant consequent that both mention `Standing` link even when
-    // the arguments are unrelated. That is honest only because the surface
-    // calls it a shared predicate / front-loads, never a proof. This test
-    // pins the no-overclaim behaviour, not a desirable precise link.
+    // The link is a shared predicate name, not entailment: a gate and a
+    // consequent that both mention `Standing` link even with unrelated
+    // arguments. That is fine only because the output never calls it a
+    // proof. This pins the modest wording, not a desirable precise link.
     let p = program("syntactic_overlap")
         .predicates(vec![
             predicate("Thing").subject("t").build(),
@@ -332,11 +330,9 @@ fn a_dormant_implication_is_distinguished_from_a_backstop() {
 
 #[test]
 fn two_invariants_with_the_same_failure_shape_keep_separate_front_loaders() {
-    // The inversion keys on (invariant, failure_shape), not the shape
-    // alone. Two invariants with identical bodies render the same failure
-    // shape; one gate front-loads both. Shape-only keying would collect
-    // the gate ref twice and list a duplicate on each row - this pins one
-    // ref per invariant.
+    // Two invariants with identical bodies render the same failure shape,
+    // and one gate front-loads both. Each row must list the gate once,
+    // so rows are keyed by invariant and shape, not shape alone.
     let p = program("same_shape")
         .predicates(vec![
             predicate("A").subject("x").build(),
@@ -401,12 +397,9 @@ fn a_gateless_transformation_renders_its_invariant_only_admission() {
 
 #[test]
 fn gates_inside_a_for_body_are_not_lifted_as_preconditions() {
-    // Doctrine pin: a `require` inside a `for` body is an iteration
-    // condition, not an admission precondition, so the control matrix
-    // does not surface it among the transformation's gates. Only the
-    // top-level statements count. If this ever changes, the matrix
-    // would start reporting per-item conditions as if they gated the
-    // whole transformation - a misreading an auditor must not be given.
+    // A `require` inside a `for` body is a per-item condition, not a gate
+    // on the whole transformation, so the matrix leaves it out. Only
+    // top-level statements count; anything else would mislead an auditor.
     let p = program("loops")
         .predicates(vec![
             predicate("Batch")

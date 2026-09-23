@@ -1,9 +1,8 @@
 //! `period_index(anchor, span, at)` semantics: the unique n with
-//! `anchor + n*span <= at < anchor + (n+1)*span`, the nth boundary
-//! computed by multiplying the span's components ONCE - never n
-//! repeated clamped hops, whose drift #283 pinned. Negative before
-//! the anchor, total over representable dates, and a zero span
-//! refused by name at both tiers.
+//! `anchor + n*span <= at < anchor + (n+1)*span`. The nth boundary
+//! multiplies the span's components once, never n clamped hops, which
+//! drift. Negative before the anchor, total over representable dates,
+//! and a zero span refused by name at both tiers.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -53,13 +52,10 @@ fn index_of(anchor: &str, sp: &str, at: &str, expected: &str) {
         };
         let t = transformation("bound", params(&[]), vec![require(prop)]);
         match propose_with_test_actor(&t, vec![], &State::default(), &[], &[]) {
-            // The boundary shift left the calendar. The clipping is
-            // DIRECTIONAL: a negative multiple escapes below and
-            // reads as negative infinity (lawful only for the lower
-            // bound), a positive multiple escapes above and reads as
-            // positive infinity (lawful only for the upper bound).
-            // Accepting either direction blindly would bless exactly
-            // the clipping mistakes this oracle exists to catch.
+            // The boundary left the calendar. A negative multiple reads
+            // as negative infinity (lawful only for the lower bound), a
+            // positive one as positive infinity (only for the upper).
+            // Accepting either blindly would hide clipping mistakes.
             Err(err) => {
                 assert!(
                     format!("{err}").contains("leaves the calendar"),
@@ -151,9 +147,8 @@ fn the_calendar_ends_stay_total() {
 
 #[test]
 fn the_outermost_periods_are_clipped_to_the_calendar() {
-    // The reviewer's reproducer: the first representable anniversary
-    // in year -9999 is AFTER the position, and the boundary before it
-    // is unrepresentable - the clipped contract reads that boundary
+    // The first representable anniversary in year -9999 is after the
+    // position, and the boundary before it is unrepresentable. It reads
     // as negative infinity, so the outermost period still answers.
     index_of("0000-04-01", "P1Y", "-009999-01-01", "-10000");
     // And a span so large that adjacent boundaries both leave the
@@ -375,15 +370,11 @@ fn the_extractor_round_trips_through_the_formatter() {
     );
 }
 
-/// Arity belongs to the builtin and is total. The surface fixes the
-/// count per call form, so only hand-built IR can get it wrong -
-/// validation refuses it by name, and the evaluator keeps its own
-/// backstop for IR that never went through validation.
+/// Only hand-built IR can get a builtin's arity wrong. Validation refuses
+/// it by name, and the evaluator has its own backstop for unvalidated IR.
 ///
-/// The evaluator half checks arity BEFORE evaluating arguments, so a
-/// misshapen call is reported as misshapen. Evaluating first would
-/// answer with whatever the surplus argument happened to be wrong
-/// about, which tells a reader nothing about the real mistake.
+/// The evaluator checks arity before evaluating arguments, so the error
+/// names the real mistake rather than whatever a surplus argument hit.
 #[test]
 fn a_builtin_called_with_the_wrong_arity_is_refused_at_both_tiers() {
     use morpholog_core::Builtin;
@@ -423,9 +414,8 @@ fn a_builtin_called_with_the_wrong_arity_is_refused_at_both_tiers() {
 }
 
 /// `min`/`max` over the ordered kinds, evaluated - not merely accepted.
-/// The trap this guards is a static domain wider than the evaluator's:
-/// a programme that validates and then fails at runtime is worse than
-/// one refused at authoring time.
+/// This guards against validation allowing kinds the evaluator cannot
+/// handle.
 #[test]
 fn min_and_max_compute_over_every_ordered_kind() {
     use morpholog_core::ir_builder::{max, min};

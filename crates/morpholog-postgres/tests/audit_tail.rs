@@ -1,10 +1,8 @@
-//! The audit tail's read contract: keyset pages in `(committed_at,
-//! transition_id)` order, a strictly-greater resume cursor, and the
-//! start-time watermark that makes resume lossless - including the
-//! race test that IS the contract's proof: an in-flight writer's row
-//! sorts below rows a naive pager would already have emitted, so the
-//! horizon must withhold it now and surface it next time, never lose
-//! it.
+//! The audit tail's read contract: pages in `(committed_at,
+//! transition_id)` order, a resume cursor that excludes its own row,
+//! and a watermark that makes resume lossless. An in-flight writer's
+//! row sorts below rows already emitted, so it must be withheld now and
+//! surfaced next time, never lost.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -62,9 +60,8 @@ async fn pages_are_ordered_and_the_cursor_is_strictly_greater() {
 
     let mut conn = pool.acquire().await.unwrap();
 
-    // Limit 2 yields the first two in commit order; resuming from the
-    // second's cursor yields exactly the third - the cursor row
-    // itself is excluded.
+    // Limit 2 yields the first two; resuming from the second yields
+    // only the third.
     let page = list_audit_rows_page(&mut conn, None, None, 2)
         .await
         .unwrap();
@@ -104,13 +101,12 @@ async fn an_unknown_cursor_is_an_error_never_a_silent_restart() {
     );
 }
 
-// THE RACE TEST - the proof-in-code behind the lossless-resume
-// guarantee. `committed_at` is the WRITER's transaction start, while
-// visibility follows commit order: a writer that started before the
-// reader's snapshot but commits after it leaves a row that sorts
-// BELOW rows the reader emits. Without the horizon, a resume cursor
-// would skip that row forever. With it, the row is withheld now and
-// surfaced by the next invocation's fresh horizon - no loss, no skip.
+// The race behind lossless resume. `committed_at` is the writer's
+// transaction start, but rows become visible in commit order. A writer
+// that starts before the reader and commits after it leaves a row that
+// sorts below rows already emitted. Without the horizon a resume cursor
+// would skip it forever; with it, the row is withheld now and surfaced
+// next time.
 #[tokio::test]
 async fn the_watermark_withholds_an_in_flight_writers_row_instead_of_losing_it() {
     let pool = test_pool().await;
@@ -118,11 +114,8 @@ async fn the_watermark_withholds_an_in_flight_writers_row_instead_of_losing_it()
     let p = fixture();
     let t1 = post(&pool, &p, "e1").await;
 
-    // Writer A: an open transaction whose start time is pinned before
-    // the horizon is computed. The hand-written audit row stands in
-    // for a propose whose SERIALIZABLE transaction is still in
-    // flight; committed_at takes the schema default, A's now() = A's
-    // transaction start.
+    // Writer A: an open transaction started before the horizon is
+    // computed, standing in for a propose still in flight.
     let mut writer = pool.begin().await.unwrap();
     let writer_start: Timestamp =
         sqlx::query_scalar::<_, jiff_sqlx::Timestamp>("SELECT transaction_timestamp()")
@@ -140,13 +133,10 @@ async fn the_watermark_withholds_an_in_flight_writers_row_instead_of_losing_it()
         "the horizon must trail the in-flight writer: {horizon} > {writer_start}"
     );
 
-    // A commits AFTER the horizon was computed - the naive-pager
-    // poison: its row's committed_at sorts at A's start, below
-    // anything a horizon-free reader would now emit.
+    // A commits after the horizon, but its row sorts at A's start.
     writer.commit().await.unwrap();
 
-    // First invocation: reads under the horizon. A's row is
-    // withheld; t1 (committed long before) is emitted.
+    // First read: A's row is withheld; t1 is emitted.
     let mut conn = pool.acquire().await.unwrap();
     let page = list_audit_rows_page(&mut conn, None, Some(horizon), 10)
         .await
@@ -158,8 +148,7 @@ async fn the_watermark_withholds_an_in_flight_writers_row_instead_of_losing_it()
         "the in-flight row is withheld, t1 emitted"
     );
 
-    // Second invocation: a fresh horizon (no open transactions now)
-    // surfaces A's row after the resume cursor. Nothing was lost.
+    // Second read: a fresh horizon surfaces A's row after the cursor.
     let fresh = audit_resume_watermark(&pool, None).await.unwrap();
     let cursor = audit_cursor_for(&mut conn, t1).await.unwrap();
     let page = list_audit_rows_page(&mut conn, Some(cursor), Some(fresh), 10)
@@ -218,13 +207,11 @@ async fn a_session_the_reader_cannot_see_refuses_the_watermark() {
 }
 
 // ============================================================
-// The writer assertion - the managed-Postgres opt-in. The horizon is
-// computed over the asserted roles' sessions only, after a same-
-// statement catalog census verifies the assertion covers every
-// non-superuser role that can write audit. The genuinely-hidden-
-// session path cannot be reproduced here (it needs a second
-// authenticated connection the dev/CI setup cannot make); the live
-// managed deployment is that path's acceptance test.
+// The writer assertion, for managed Postgres. The horizon covers only
+// the asserted roles' sessions, once a catalog census confirms they
+// include every non-superuser role that can write audit. A truly
+// hidden session needs a second login this setup cannot make, so a
+// live managed deployment tests that path.
 // ============================================================
 
 #[tokio::test]
@@ -307,9 +294,8 @@ async fn the_census_names_every_unasserted_writer_and_a_complete_assertion_passe
          path and must not be demanded: {missing:?}"
     );
 
-    // Asserting exactly what the census demanded (plus ourselves)
-    // passes - built from the refusal so the test holds on databases
-    // with pre-existing writer roles too.
+    // Asserting what the census demanded (plus ourselves) passes. Built
+    // from the refusal, so pre-existing writer roles don't break it.
     let mut complete = missing;
     complete.push(me);
     audit_resume_watermark(&pool, Some(&complete))
@@ -331,20 +317,17 @@ async fn the_asserted_horizon_ignores_sessions_outside_the_assertion() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     if !session_is_superuser(&pool).await {
-        // A non-superuser test role would itself be in the census and
-        // the unasserted-session setup below could not exist. The
-        // superuser residue this test rides on is the documented one.
+        // A non-superuser test role would be in the census itself, so
+        // the unasserted session below could not exist.
         eprintln!("skipping: needs a superuser test role");
         return;
     }
     let roles = ["mtest209_idle"];
     recreate_roles(&pool, &roles, &["CREATE ROLE mtest209_idle LOGIN"]).await;
 
-    // Our own (superuser, therefore census-exempt and unasserted)
-    // session holds an open transaction. The all-sessions horizon
-    // would trail it; the asserted horizon must ignore it - that is
-    // exactly the managed-host shape, where the ignored sessions are
-    // the platform's.
+    // Our own superuser session, exempt from the census and unasserted,
+    // holds an open transaction. The asserted horizon must ignore it,
+    // as it ignores a managed host's platform sessions.
     let mut writer = pool.begin().await.unwrap();
     let writer_start: Timestamp =
         sqlx::query_scalar::<_, jiff_sqlx::Timestamp>("SELECT transaction_timestamp()")
@@ -365,9 +348,8 @@ async fn the_asserted_horizon_ignores_sessions_outside_the_assertion() {
     drop_roles_if_present(&pool, &roles).await;
 }
 
-// The race test, replayed through the assertion: sessions OF the
-// asserted role still constrain the horizon, so withhold-then-surface
-// holds exactly as in the unasserted form above.
+// The race test with an assertion: sessions of an asserted role still
+// hold the horizon back, so the row is withheld, then surfaced.
 #[tokio::test]
 async fn the_asserted_watermark_still_withholds_the_asserted_writers_in_flight_row() {
     let pool = test_pool().await;

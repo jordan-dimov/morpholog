@@ -1,24 +1,17 @@
-//! Probes for derived-head projection (the shape behind subset heads
-//! and named value lookups).
+//! Derived-head projection: heads that carry fewer variables than their
+//! domain binds, and value lookups.
 //!
-//! Each test pins a piece of today's behaviour that the projection
-//! work builds on:
+//! - `subset_head_collapses_witnesses_and_orders_rows`: one row per distinct
+//!   projected key tuple, in a fixed order. A derived value depends on the
+//!   key bindings, never on which witness produced them.
 //!
-//! - `subset_head_collapses_witnesses_and_orders_rows`: a head that
-//!   carries fewer variables than its domain binds already enumerates
-//!   one row per distinct projected key tuple, in deterministic order.
-//!   For a fixed admitted state, a derived value depends on the
-//!   projected key bindings, never on which witness produced the tuple.
+//! - `non_key_value_reference_refuses_at_both_tiers`: a value that names a
+//!   variable the head does not carry is refused at authoring (naming both
+//!   remedies) and at eval.
 //!
-//! - `non_key_value_reference_refuses_at_both_tiers`: a value
-//!   expression naming a variable the domain binds but the head does
-//!   not carry refuses at authoring (naming both remedies) and at eval.
-//!
-//! - `positional_lookup_extracts_the_first_wildcard_only`: `value
-//!   P(_, x, _)` extracts the FIRST wildcard position. There is no
-//!   positional spelling that leaves an earlier coordinate
-//!   unconstrained while extracting a later one - the gap the named
-//!   extraction hole closes.
+//! - `positional_lookup_extracts_the_first_wildcard_only`: `value P(_, x, _)`
+//!   extracts the FIRST wildcard. Only a named lookup can skip an earlier
+//!   coordinate to read a later one.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -160,11 +153,9 @@ fn positional_lookup_extracts_the_first_wildcard_only() {
 
 #[test]
 fn a_kind_learned_inside_a_value_expression_still_reaches_the_output_check() {
-    // The domain says only `id: Any`; the value lookup refines `id` to
-    // Date; the output declaration says Subject. The refinement happens
-    // while inferring values under the key-only scope, and the output
-    // key check must read THAT scope - reading the domain scope alone
-    // would see Any and let the inconsistency through to refresh.
+    // The domain says `id: Any`, the value lookup refines it to Date, and the
+    // output says Subject. The output key check must see the refined kind;
+    // the domain alone says Any and would let the mismatch through.
     let derived = morpholog_core::DerivedClaim {
         predicate: "Output".into(),
         keys: vec!["id".into()],

@@ -1,24 +1,15 @@
-//! Integration tests for the v0 expression parsers.
+//! The expression parsers: atoms, arithmetic, comparators, boolean composition, precedence,
+//! quantifiers, and the term-only rule for `in`.
 //!
-//! Covers: atoms (vars, literals, wildcards, actor, claim calls),
-//! arithmetic, comparators, boolean composition, precedence,
-//! associativity, the term-only restriction on `in`.
-//!
-//! The two-sort split means tests target the right entry point:
-//! proposition-shaped surface (`require`/invariant bodies - claims,
-//! comparators, boolean composition, quantifiers, `pre`) goes through
-//! `parse_expression`, which returns a [`Prop`]; value-shaped surface
-//! (a bare variable / literal / `actor` / `_`, arithmetic, `sum`,
-//! `value`) goes through `parse_value_expr`, which returns a
-//! [`ValueExpr`].
+//! Propositions go through `parse_expression` (a [`Prop`]); values such as arithmetic, `sum`
+//! and `value` go through `parse_value_expr` (a [`ValueExpr`]).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::format::format_prop_inline;
 use morpholog_core::{ArithOp, CompareOp, OrderedDomain, Prop, Term, Value, ValueExpr};
 
-/// Build a `Prop::Compare` for the assertions below (the eight comparator
-/// variants were collapsed into one `Compare { op, domain }`).
+/// Build a `Prop::Compare` for the assertions below.
 fn cmp(op: CompareOp, domain: OrderedDomain, l: ValueExpr, r: ValueExpr) -> Prop {
     Prop::Compare {
         op,
@@ -28,8 +19,6 @@ fn cmp(op: CompareOp, domain: OrderedDomain, l: ValueExpr, r: ValueExpr) -> Prop
     }
 }
 
-/// Build a `ValueExpr::Arith` for the assertions below (the per-operator
-/// arithmetic variants were collapsed into one `Arith { op, .. }`).
 fn call(builtin: morpholog_core::Builtin, args: Vec<ValueExpr>) -> ValueExpr {
     ValueExpr::Call { builtin, args }
 }
@@ -251,9 +240,8 @@ value_ok!(
     "a % b",
     arith(ArithOp::Mod, var_value("a"), var_value("b"))
 );
-// `a + b % c` parses as `Add(a, Mod(b, c))` - `%` binds with `*`/`/`,
-// tighter than `+`. The parity shape `(file + rank) % 2` relies on the
-// explicit parens, since `+` is the looser operator.
+// `a + b % c` parses as `Add(a, Mod(b, c))`: `%` binds like `*`, so `(file + rank) % 2` needs
+// its parens.
 value_ok!(
     modulo_shares_multiplicative_precedence,
     "a + b % c",
@@ -318,9 +306,7 @@ prop_ok!(
     "a != b",
     Prop::Neq(Box::new(var_value("a")), Box::new(var_value("b")))
 );
-// `!=` is symmetric with `=`: `Prop::Neq` takes full expressions, so
-// `a + 1 != b` parses to `Neq(Add(a, 1), b)` rather than being rejected
-// as it was when Neq operated on terms only.
+// `!=` takes full expressions, like `=`: `a + 1 != b` parses to `Neq(Add(a, 1), b)`.
 prop_ok!(
     neq_accepts_arithmetic_operand,
     "a + 1 != b",
@@ -451,8 +437,7 @@ fn parses_or_two_operands() {
 #[test]
 fn or_flattens_three_operands_into_single_vec() {
     // `A or B or C` should be a single `Or([A, B, C])`, not
-    // `Or([Or([A, B]), C])`. Mirrors `and_flattens_three_operands_...`
-    // for the And flattening.
+    // `Or([Or([A, B]), C])`.
     let got = parse_expression("A() or B() or C()").unwrap();
     let Prop::Or(operands) = got else {
         panic!("expected Or, got {got:?}");
@@ -462,9 +447,7 @@ fn or_flattens_three_operands_into_single_vec() {
 
 #[test]
 fn and_binds_tighter_than_or() {
-    // `A and B or C` parses as `(A and B) or C` (standard logical
-    // precedence). The disjunction's first branch is an And, the
-    // second is a leaf Claim.
+    // `A and B or C` parses as `(A and B) or C`.
     let got = parse_expression("A() and B() or C()").unwrap();
     let Prop::Or(ops) = got else {
         panic!("expected Or, got {got:?}");
@@ -572,9 +555,7 @@ fn pre_composes_with_and_inside() {
 
 #[test]
 fn pre_at_primary_level_composes_with_outer_and() {
-    // `pre(A(x)) and B(x)` parses as And([Pre(A(x)), B(x)])
-    // because `pre(...)` is a function-call-shape primary, no
-    // outer parens needed.
+    // `pre(A(x)) and B(x)` parses as And([Pre(A(x)), B(x)]) with no outer parens.
     let got = parse_expression("pre(A(x)) and B(x)").unwrap();
     let Prop::And(ops) = got else {
         panic!("expected And, got {got:?}");
@@ -610,16 +591,8 @@ fn pre_value_position_inside_sum() {
     assert!(matches!(*body, Prop::Pre(_)));
 }
 
-/// Round-trip property over a mixed-precedence boolean expression:
-/// parse, format, parse again, and the IR must be unchanged. Pins the
-/// formatter's behaviour for `Or` operands that are themselves
-/// composite (an `And`, an `Implies`) - they must be parenthesised so
-/// the surface text reparses to the original tree, not a precedence-
-/// reshuffled one.
-///
-/// The kernel-wide `every_worked_example_round_trips` test will cover
-/// this transitively once a worked example uses `or`; until then, this
-/// is the local pin.
+/// Parse, format, and reparse a mixed-precedence expression: the IR must not change. The
+/// formatter must parenthesise compound `or` operands so precedence cannot reshuffle them.
 #[test]
 fn formatter_preserves_mixed_and_or_implies_precedence() {
     // `A and B or C implies D` parses as `((A and B) or C) implies D`
@@ -651,9 +624,7 @@ fn implies_is_right_associative() {
 
 #[test]
 fn realistic_insurance_cap_rule() {
-    // The cap rule from the insurance settlement example, but
-    // simplified (no sum yet (no sum yet).
-    // `already_paid + proposed <= limit`.
+    // The insurance cap rule without its sum: `already_paid + proposed <= limit`.
     let got = parse_expression("already_paid + proposed <= limit").unwrap();
     let Prop::Compare {
         left: lhs,
@@ -702,12 +673,8 @@ prop_err!(dangling_operator_is_error, "a +");
 // `Foo(x + 1, y)` is not representable: claim args are Terms, not Exprs.
 prop_err!(claim_call_with_arithmetic_arg_is_error, "Foo(x + 1, y)");
 
-/// `true` and `false` are reserved at the lexer level but not
-/// parseable in v0 (no `Value::Bool` in the IR). They must fail
-/// to parse with a clear "unexpected" diagnostic rather than
-/// silently lower to `Term::Var("true")` and explode at runtime
-/// as `UnboundVariable`. Lifts to bool-literal parsing when a
-/// worked example forces `Value::Bool`.
+/// `true` and `false` are reserved but not parseable, since the IR has no boolean value. They must
+/// fail at parse time, not become an unbound variable at runtime.
 #[test]
 fn true_and_false_are_reserved_not_parseable() {
     for source in ["true", "false", "require true", "Le(true, false)"] {
@@ -1123,9 +1090,7 @@ fn realistic_verified_revenue_admissibility() {
 
 #[test]
 fn realistic_clinical_trial_window_via_claims() {
-    // Before on_or_before existed in the surface, the date-window check is
-    // represented purely as claim queries. This pins that the
-    // claim-args date-literal flow works.
+    // Date literals as claim arguments.
     let got = parse_expression(
         "Protocol(version, @2026-05-22) and InvestigatorDelegation(investigator, @2026-05-22)",
     )
@@ -1177,15 +1142,11 @@ fn in_as_comparator_inside_forall_body() {
 }
 
 // ============================================================
-// Review tightenings: forall source restriction +
-// strict date literal lexing
+// forall source restriction + strict date literal lexing
 // ============================================================
 
-// The parser must refuse value-shaped primaries in unparenthesised
-// `forall` source position, even though they would parse as `primary`
-// elsewhere. The kernel's `Forall.source` is predicate-shaped (calls
-// `find_matches`), so the parser cannot let surface syntax produce
-// ill-shaped IR.
+// A `forall` source must be something the kernel can enumerate, so value-shaped sources are
+// refused at parse time.
 prop_err!(forall_source_rejects_decimal_literal, "forall x in 5: P(x)");
 prop_err!(
     forall_source_rejects_date_literal,
@@ -1205,11 +1166,8 @@ prop_err!(
     "forall x in sum(v | Foo(v)): P(x)"
 );
 
-/// Parenthesised proposition sources pass through as-is - the user
-/// signalled explicit intent by parenthesising. A value-shaped
-/// expression inside parens is still not a proposition, so it fails at
-/// parse time (the source production is proposition-shaped), not as an
-/// ill-shaped case the kernel has to catch.
+/// A parenthesised proposition source is used as it is. A value inside parens still fails to
+/// parse, since it is not a proposition.
 #[test]
 fn forall_source_accepts_parenthesised_predicate_form() {
     let got = parse_expression("forall x in (x in lines): P(x)").unwrap();
@@ -1220,14 +1178,11 @@ fn forall_source_accepts_parenthesised_predicate_form() {
         panic!("expected Forall");
     };
     assert_eq!(binding.as_str(), "x");
-    // Source was an explicit `In(_, _)` inside parens; passes
-    // through without auto-lift.
+    // An explicit `In(_, _)`, not lifted again.
     assert!(matches!(*source, Prop::In(_, _)));
 }
 
-/// Date-literal lexer is strict about 4-2-2 digit shape. Wrong
-/// digit counts surface as lex errors at parse time, not at
-/// runtime when the date is interpreted.
+/// Date literals must be exactly 4-2-2 digits; anything else is a lex error, not a runtime one.
 #[test]
 fn date_literal_requires_exactly_yyyy_mm_dd() {
     // Each of these has the wrong digit count somewhere.
@@ -1257,13 +1212,8 @@ fn date_literal_strict_shape_accepts_valid() {
     }
 }
 
-/// `actor` is reserved as the special term that resolves to the
-/// proposing transition's actor (`Term::Actor`). Using it as a
-/// binder name in `exists`, `forall`, or as a `sum` target would
-/// silently change its meaning - references inside the body would
-/// either always resolve to `Term::Actor` or to a regular
-/// `Term::Var("actor")` depending on parse path. The parser
-/// refuses these cases with clear diagnostics.
+/// `actor` always means the proposing actor. As a quantifier binder or `sum` target its meaning
+/// inside the body would be unclear, so the parser refuses it.
 #[test]
 fn exists_rejects_actor_as_binder() {
     let errs = parse_expression("exists actor: Foo(actor)")
@@ -1294,11 +1244,7 @@ fn sum_rejects_actor_as_target() {
     );
 }
 
-/// Quantifier bodies (exists, forall) accept indented bodies via
-/// the `(Indent body Dedent | body)` choice. earlier-era tests only
-/// exercised the inline form; this pins the indented-body path
-/// and the layout pass's interaction with nested quantifier
-/// scoping.
+/// A quantifier body may be indented on the next line.
 #[test]
 fn forall_body_can_be_indented_on_next_line() {
     let source = "program demo\n\
@@ -1331,7 +1277,6 @@ fn on_or_before_lowers_to_date_le() {
 
 #[test]
 fn decimal_le_still_lowers_to_le() {
-    // Regression: do not change decimal `<=` lowering.
     let got = parse_expression("amount <= limit").unwrap();
     assert_eq!(
         got,

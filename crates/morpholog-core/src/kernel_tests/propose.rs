@@ -3,17 +3,11 @@
 
 use super::*;
 
+// Stmt::BindOne: unique lookup that exports its bindings, unlike
+// `require`, which is only a gate.
+
 /// `bind_one` with a uniquely matching claim binds the variable
 /// for use by subsequent statements.
-// ============================================================
-// Stmt::BindOne - the deterministic unique-lookup binding statement.
-//
-// Binding quartet:
-//   require  = gate; does not export bindings
-//   bind_one = unique lookup; exports bindings
-//   let      = compute a value expression
-// ============================================================
-
 #[test]
 fn bind_one_with_unique_match_extends_bindings_for_subsequent_stmts() {
     use ir_builder::*;
@@ -49,9 +43,8 @@ fn bind_one_with_unique_match_extends_bindings_for_subsequent_stmts() {
     );
 }
 
-/// `bind_one` against a state with no matching claim rejects
-/// lawfully. The rejection reason names the expression so
-/// debugging is possible from the reason alone.
+/// `bind_one` with no matching claim rejects, and the reason names the
+/// expression.
 #[test]
 fn bind_one_with_zero_matches_rejects_with_named_predicate() {
     use ir_builder::*;
@@ -76,20 +69,9 @@ fn bind_one_with_zero_matches_rejects_with_named_predicate() {
     );
 }
 
-/// The Display strings ARE the wire format: every envelope, trace
-/// entry, and rejection-log row renders the reason through Display,
-/// so these three strings are pinned byte-exactly. Changing one is
-/// a contract change, not a wording tweak.
-/// A witness reports a binding assignment, so it is empty exactly
-/// when there is none to report - not because of which operator
-/// failed. Here the whole body is a top-level `not`, which the
-/// drill-down does not enter and which binds nothing on the way.
-///
-/// The complement is pinned by the worked examples: a comparison
-/// nested under an implication DOES witness, because the antecedent
-/// bound its variables before the comparison failed. Stating the rule
-/// in terms of operators, as an earlier draft of the docs did, gets
-/// that case backwards.
+/// A witness is empty when nothing was bound, whatever operator failed.
+/// Here the body is a top-level `not`, which binds nothing. (A comparison
+/// under an implication does witness; the worked examples pin that.)
 #[test]
 fn a_failure_with_nothing_bound_has_an_empty_witness() {
     use ir_builder::*;
@@ -110,6 +92,9 @@ fn a_failure_with_nothing_bound_has_an_empty_witness() {
     );
 }
 
+/// These Display strings are the wire format for envelopes, traces and
+/// the rejection log, so they are pinned byte for byte. Changing one is a
+/// contract change.
 #[test]
 fn rejection_reason_display_strings_are_pinned() {
     assert_eq!(
@@ -143,9 +128,8 @@ fn rejection_reason_display_strings_are_pinned() {
         .to_string(),
         "require failed: Approved(doc) did not hold over pre-state"
     );
-    // A named gate says which rule refused, mirroring the invariant
-    // form. Unnamed stays byte-identical above, so every programme
-    // written before names existed reports exactly as it did.
+    // A named gate says which rule refused; an unnamed one reads as
+    // above.
     assert_eq!(
         RejectionReason::Require {
             name: Some("approval_on_file".into()),
@@ -234,9 +218,8 @@ fn analysis_error_display_string_is_pinned() {
     );
 }
 
-/// `bind_one` against two matching claims surfaces a kernel error,
-/// not a lawful rejection: the programme expected unique state but
-/// admitted ambiguous state.
+/// `bind_one` against two matching claims is a kernel error, not a
+/// rejection: the programme expected one match and its state holds two.
 #[test]
 fn bind_one_with_multiple_matches_is_kernel_error() {
     use ir_builder::*;
@@ -275,10 +258,8 @@ fn bind_one_with_multiple_matches_is_kernel_error() {
     }
 }
 
-/// A bind_one whose pattern uses an already-bound variable narrows
-/// the candidate set by that variable. With `policy_id` pre-bound
-/// (e.g. by an enclosing parameter or earlier bind_one), the
-/// pattern matches only the row carrying that policy_id.
+/// A bind_one pattern using an already-bound variable matches only rows
+/// with that value.
 #[test]
 fn bind_one_with_pre_bound_var_constrains_match() {
     use ir_builder::*;
@@ -298,10 +279,8 @@ fn bind_one_with_pre_bound_var_constrains_match() {
             ],
         },
     ]);
-    // Two bind_ones in sequence: the first binds policy_id from
-    // a literal subject; the second uses that binding to narrow
-    // the Policy pattern. Without the narrowing, the second
-    // bind_one would see two Policy candidates and error.
+    // The first bind_one binds policy_id; the second uses it to narrow
+    // Policy. Without that, it would see two candidates and error.
     let t = transformation(
         "narrow_by_var",
         vec![],
@@ -327,9 +306,8 @@ fn bind_one_with_pre_bound_var_constrains_match() {
     );
 }
 
-/// `bind_one` composes inside `For` bodies. Also pins the
-/// For-scoping rule: iteration 2 must not see iteration 1's `amt`
-/// binding, or its bind_one would narrow to the wrong row.
+/// `bind_one` works inside a `For` body, and iteration 2 does not see
+/// iteration 1's `amt` binding.
 #[test]
 fn bind_one_inside_for_body_composes() {
     use ir_builder::*;
@@ -388,9 +366,8 @@ fn bind_one_inside_for_body_composes() {
     );
 }
 
-/// `Term::Actor` resolves inside a `bind_one` expression, because
-/// `bind_one` runs inside a transformation body (which has a
-/// transition in scope). Authority-lookup patterns depend on this.
+/// `Term::Actor` resolves inside a `bind_one` expression, as authority
+/// lookups need.
 #[test]
 fn bind_one_with_actor_in_pattern() {
     use ir_builder::*;
@@ -426,24 +403,11 @@ fn bind_one_with_actor_in_pattern() {
     );
 }
 
-// The two-sort IR makes a value-producing expression inside
-// `bind_one` unrepresentable - `BindOne` holds a `Prop`, and `add`
-// builds a `ValueExpr` - so the former `bind_one_rejects_value_expr`
-// test (which depended on the now-deleted `EvalError::NotPredicate`)
-// no longer has a construction to exercise.
+// propose_with_trace: one entry per statement that ran (a For wraps its
+// iterations in one). A rejection gives Completed { Rejected, trace }; a
+// kernel error gives Errored { error, trace }, keeping the trace.
 
-// ============================================================
-// propose_with_trace - structured per-statement diagnostic trace.
-//
-// The contract these pin: every statement that ran produces one
-// entry (For wraps its iterations in one); rejections produce
-// Completed { Rejected, trace }; kernel errors produce
-// Errored { error, trace } - the trace is NOT dropped on error.
-// ============================================================
-
-/// Happy-path trace: every statement variant produces one entry,
-/// invariant checks appear at the end, the overall outcome is
-/// Accepted.
+/// Accepted: one entry per statement, then the invariant checks.
 #[test]
 fn propose_with_trace_records_every_statement_on_accept() {
     use ir_builder::*;
@@ -488,10 +452,8 @@ fn propose_with_trace_records_every_statement_on_accept() {
     assert!(matches!(trace[5], TraceEntry::Emit { .. }));
 }
 
-/// Require rejection: trace contains the failing entry, outcome
-/// is Rejected. The rendered expression appears verbatim in the
-/// trace, so callers can assert on the failing predicate name
-/// instead of pattern-matching on reason strings.
+/// A require rejection: the trace holds the failing entry with its
+/// rendered expression, so callers need not parse reason strings.
 #[test]
 fn propose_with_trace_records_failing_require_with_rendered_expression() {
     use ir_builder::*;
@@ -551,9 +513,8 @@ fn propose_with_trace_records_bind_one_no_match() {
     ));
 }
 
-/// BindOne unique match: trace records the full bound binding set,
-/// sorted by variable name. The "replace, not extend" doctrine
-/// means the trace shows the new authoritative context, not a delta.
+/// BindOne unique match: the trace records the whole new binding set,
+/// sorted by variable, not a delta.
 #[test]
 fn propose_with_trace_records_bind_one_bound_with_sorted_bindings() {
     use ir_builder::*;
@@ -589,9 +550,8 @@ fn propose_with_trace_records_bind_one_bound_with_sorted_bindings() {
     assert_eq!(bindings[1].var.as_str(), "pid");
 }
 
-/// BindOne multi-match is a kernel error. The trace MUST still
-/// carry the entry showing why - dropping the trace on Err is
-/// exactly the case the trace-on-both-paths contract prevents.
+/// BindOne multi-match is a kernel error, and the trace still carries
+/// the entry showing why.
 #[test]
 fn propose_with_trace_preserves_trace_on_bind_one_multi_match_error() {
     use ir_builder::*;
@@ -633,10 +593,8 @@ fn propose_with_trace_preserves_trace_on_bind_one_multi_match_error() {
     ));
 }
 
-/// Retract trace carries the **actual retracted claims**, not
-/// just a count. Wildcard retractions that take out the wrong
-/// thing are exactly where debugging gets hard; the trace must
-/// show what was removed.
+/// The retract trace lists the claims actually removed, not a count,
+/// so a wildcard that removes the wrong thing is visible.
 #[test]
 fn propose_with_trace_records_retract_with_actual_claims() {
     use ir_builder::*;
@@ -668,9 +626,8 @@ fn propose_with_trace_records_retract_with_actual_claims() {
     assert_eq!(retracted.len(), 2);
 }
 
-/// For trace nests: outer trace gets one For entry, the inner
-/// per-iteration traces carry the iteration items so a caller
-/// can attribute a failing iteration to its element.
+/// A For trace nests: one For entry whose per-iteration traces carry
+/// each item.
 #[test]
 fn propose_with_trace_records_for_with_per_iteration_items() {
     use ir_builder::*;
@@ -723,9 +680,8 @@ fn propose_with_trace_records_for_with_per_iteration_items() {
     assert!(matches!(iterations[0].trace[0], TraceEntry::BindOne { .. }));
 }
 
-/// Invariant check: trace records one InvariantCheck per
-/// invariant, with the rendered body expression. An invariant
-/// rejection produces the entry plus an Outcome::Rejected.
+/// One InvariantCheck per checked invariant, with its rendered body. A
+/// failure also yields Outcome::Rejected.
 #[test]
 fn propose_with_trace_records_invariant_check_and_failure() {
     use ir_builder::*;
@@ -738,9 +694,7 @@ fn propose_with_trace_records_invariant_check_and_failure() {
             vec![Term::Literal(Value::Subject("x1".into()))],
         )],
     );
-    // Invariant: claim X(x1) must imply Y(x1). The transformation
-    // asserts X but not Y, so the invariant fails on the
-    // candidate state.
+    // X(x1) implies Y(x1); the body admits X but not Y.
     let inv = invariant(
         "x_implies_y",
         implies(
@@ -771,9 +725,7 @@ fn propose_with_trace_records_invariant_check_and_failure() {
     assert!(expression.contains("implies"));
 }
 
-/// Sanity: `propose` (without trace) produces the same outcome
-/// as `propose_with_trace`. The two paths share an executor; if
-/// they ever diverged, this would catch it.
+/// `propose` and `propose_with_trace` give the same outcome.
 #[test]
 fn propose_and_propose_with_trace_produce_identical_outcomes() {
     use ir_builder::*;

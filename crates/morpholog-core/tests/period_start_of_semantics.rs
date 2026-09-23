@@ -1,10 +1,9 @@
-//! `period_start_of(anchor, span, index)` semantics: the boundary
-//! date back from the coordinate - period `index`'s first day,
-//! computed by multiplying the span's components ONCE from the anchor,
-//! exactly as `period_index` defines boundary n. Inverse round trip
-//! wherever the boundary is representable; a boundary outside the
-//! calendar refused by name (never clamped); a zero span and a
-//! fractional index refused by name at both tiers.
+//! `period_start_of(anchor, span, index)` semantics: the first day of
+//! period `index`, computed from the anchor exactly as `period_index`
+//! defines boundary n. It inverts `period_index` wherever the boundary
+//! is representable. A boundary outside the calendar is refused by name,
+//! never clamped; a zero span and a fractional index are refused by name
+//! at both tiers.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -333,12 +332,9 @@ fn a_parameter_refined_by_the_span_slot_cannot_escape_the_expression() {
 
 #[test]
 fn the_round_trip_refuses_in_the_clipped_lowermost_period() {
-    // period_index answers for EVERY representable date - its
-    // lowermost period is clipped, so this date sits in a period
-    // whose own starting boundary is unrepresentable. Composing back
-    // therefore refuses rather than returning some wrong date: the
-    // anniversary round-trip test is total only where the period's
-    // starting boundary is representable.
+    // period_index answers for every date, but this one sits in the
+    // clipped lowermost period, whose start is unrepresentable. Composing
+    // back refuses rather than return a wrong date.
     let t = transformation(
         "probe",
         params(&[]),

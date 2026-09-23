@@ -1,15 +1,9 @@
 //! `morpholog migrate` - bring an existing database up to the schema this
 //! binary expects.
 //!
-//! The gap this closes: `init` provisions and never migrates, so upgrading
-//! was an instruction naming a path inside the source tree - and the release
-//! artifact contains the binary and a licence, no SQL. An embedder following
-//! the versioning policy had to fetch migrations out of a git tag. The
-//! binary already detected an out-of-date database and named the remedy; it
-//! simply could not apply it.
-//!
-//! `--check` exists for the question that has to be answerable *before* a
-//! workload: is this database ready for this binary?
+//! The migrations ship inside the binary, since a release carries no SQL
+//! files. `--check` answers, before any workload runs: is this database
+//! ready for this binary?
 
 use anyhow::Context;
 use morpholog_postgres::{apply_migrations, migration_status};
@@ -24,16 +18,14 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
         let report = migration_status(&pool)
             .await
             .context("reading the database's migration state failed")?;
-        // Ask the report, not one field of it. Gating on `pending` alone
-        // green-lights a database AHEAD of this binary - nothing is pending
-        // there, and it is the case a readiness check exists to catch,
-        // because a rollback cannot know whether a migration it never saw
-        // still fits.
+        // Ask the whole report, not just `pending`. A database ahead of
+        // this binary has nothing pending but is not ready: an older binary
+        // cannot know whether a newer migration still fits it.
         let ready = report.is_current();
         print_json(&report)?;
         if !ready {
-            // The report is on stdout either way, so the caller reads WHAT
-            // is outstanding rather than only that something is.
+            // The report is already on stdout, so the caller sees what is
+            // outstanding.
             return Err(AlreadyReported.into());
         }
         return Ok(());

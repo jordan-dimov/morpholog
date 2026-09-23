@@ -1,26 +1,10 @@
 //! Integration tests for the insurance-claim-settlement example
 //! (`examples/05_insurance_claim_settlement/`).
 //!
-//! Four-section coverage:
-//!
-//! - **Policy and claim plumbing.** `issue_policy` admits a `Policy`;
-//!   `report_claim` requires the policy to exist.
-//!
-//! - **Actor authority gate.** `authorise_settlement` rejects without
-//!   a covering `SettlementAuthority`; rejects when proposed amount
-//!   exceeds the actor's limit; admits at the boundary.
-//!
-//! - **Cumulative aggregate-limit gate.** This is the load-bearing
-//!   addition (`ValueExpr::Arith`) shape. Pins under-cap admission,
-//!   exact-fill boundary equality, and over-cap rejection that surfaces
-//!   from the `running + proposed <= aggregate` require.
-//!
-//! - **Read-side projection.** `PolicyLimitUsage` enumeration matches
-//!   the sum of admitted `SettlementPaid` per policy.
-//!
-//! Plus a kernel-level guard: the `paid_implies_authorised` invariant
-//! rejects a hand-constructed state where a payment exists without a
-//! matching authorisation.
+//! Covers policy and claim plumbing, the actor authority gate, the
+//! cumulative aggregate-limit gate (`running + proposed <= aggregate`), the
+//! invariants, the `PolicyLimitUsage` projection, headroom conservation,
+//! and the per-claim deductible-and-limit layer.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -76,10 +60,8 @@ fn issue_policy_admits_policy_claim_with_aggregate_limit() {
     ));
 }
 
-/// `issue_policy` also admits initial `PolicyHeadroom(policy_id,
-/// aggregate_limit)` - the operational remaining-capacity counter
-/// that the conservation invariant (added in the next commit) will
-/// constrain. At issuance, remaining equals the aggregate limit.
+/// `issue_policy` also admits the remaining-capacity counter
+/// `PolicyHeadroom(policy_id, aggregate_limit)`, starting at the full limit.
 #[test]
 fn issue_policy_admits_initial_headroom_equal_to_aggregate_limit() {
     let post = issue(State::default(), "policy_001", 100_000);
@@ -190,19 +172,9 @@ fn authorise_settlement_happy_path_admits_authorisation_and_payment() {
 
 #[test]
 fn authorise_settlement_without_authority_is_rejected_at_require() {
-    // Migrated to propose_with_trace as the canonical demonstration
-    // of the PR D DX win. The old assertion was `reason.contains
-    // ("require")`, which proved a require failed but not *which*
-    // one. The trace assertion below proves:
-    //
-    //   1. All three bind_ones succeeded (claim_001's policy_id,
-    //      policy_001's aggregate_limit, and policy_001's
-    //      current PolicyHeadroom were all bound).
-    //   2. The subsequent require - the SettlementAuthority + Le
-    //      gate - is the one that rejected.
-    //
-    // That is the kind of precision a future test author should
-    // reach for instead of `reason.contains(...)`.
+    // The trace shows which gate refused, not just that one did: all three
+    // bind_ones succeeded, then the authority gate rejected. Prefer this to
+    // `reason.contains(...)`.
     use morpholog_core::{
         BindOneOutcome, RequireOutcome, Subject, TraceEntry, TracedProposal, Transition,
         propose_with_trace,
@@ -231,7 +203,7 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
         "expected Rejected, got {outcome:?}"
     );
 
-    // Step 1: both bind_ones (ClaimReported, Policy) succeeded.
+    // Step 1: all three bind_ones succeeded.
     let bound_count = trace
         .iter()
         .filter(|e| {
@@ -249,11 +221,8 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
         "expected all three bind_ones (ClaimReported, Policy, PolicyHeadroom) to succeed before the require fails; trace: {trace:#?}"
     );
 
-    // Step 2: WHICH gate rejected, held by name. The earlier version of
-    // this assertion searched the rendered expression for
-    // "SettlementAuthority" - true today, and false the moment anyone
-    // rewords the gate. The name is the author's, and rewording the
-    // condition beneath it does not move it.
+    // Step 2: which gate rejected, by name. The name survives a rewording
+    // of the condition; matching rendered text would not.
     let failing = trace.iter().find_map(|e| match e {
         TraceEntry::Require {
             name,
@@ -278,9 +247,8 @@ fn authorise_settlement_above_actor_limit_is_rejected_at_require() {
         "alex",
         &pre,
     );
-    // "a require failed" is all this could say before gates had names,
-    // and it cannot tell an authority refusal from any of the four other
-    // ways this transformation can refuse.
+    // The gate name tells an authority refusal apart from the other ways
+    // this transformation can refuse.
     assert!(
         matches!(
             &reason,
@@ -312,12 +280,11 @@ fn authorise_settlement_at_actor_boundary_admits() {
 }
 
 // ============================================================
-// Cumulative aggregate-limit gate (the addition forcing function)
+// Cumulative aggregate-limit gate
 // ============================================================
 
-/// Setup for cumulative-cap tests: actor authority high enough that
-/// the actor gate does not interact with the aggregate gate (the cap
-/// being tested). Same policy / claim shape as `happy_pre`.
+/// Setup for cumulative-cap tests: authority high enough that only the
+/// aggregate gate can refuse. Same policy and claim shape as `happy_pre`.
 fn cap_pre() -> State {
     let s = issue(State::default(), "policy_001", 100_000);
     let s = report(s, "claim_001", "policy_001", 60_000);
@@ -381,14 +348,8 @@ fn second_settlement_at_aggregate_boundary_admits() {
 
 #[test]
 fn second_settlement_over_aggregate_is_rejected_at_require() {
-    // 60 + 50 = 110 > 100.
-    //
-    // Asserts via the trace that the actor-authority require Held
-    // (alex's 100k limit covers a 50k settlement) but the aggregate
-    // require Rejected (cumulative paid + proposed exceeds the
-    // policy's aggregate). The old `reason.contains("require")`
-    // could only prove a require failed; the trace identifies the
-    // specific gate.
+    // 60 + 50 = 110 > 100. The trace shows the authority gate held (alex's
+    // 100k limit covers 50k) and the aggregate gate rejected.
     use morpholog_core::{
         RequireOutcome, Subject, TraceEntry, TracedProposal, Transition, propose_with_trace,
     };
@@ -421,9 +382,7 @@ fn second_settlement_over_aggregate_is_rejected_at_require() {
             _ => None,
         })
         .collect();
-    // Two gates, told apart by name: the authority gate holds and the
-    // cumulative cap rejects. Matching rendered substrings said the same
-    // thing until someone renamed a variable inside either one.
+    // Told apart by name, which survives renaming a variable inside a gate.
     let outcome_of = |rule: &str| {
         require_outcomes
             .iter()
@@ -485,9 +444,7 @@ fn aggregate_limit_scoped_per_policy() {
 
 #[test]
 fn settlement_id_must_be_unique_across_payments() {
-    // Two settlements with the same settlement_id but different
-    // claim_ids would violate identity uniqueness. The invariant
-    // catches this on the candidate state.
+    // One settlement_id on two different claims violates its uniqueness.
     let s = issue(State::default(), "policy_001", 100_000);
     let s = report(s, "claim_001", "policy_001", 10_000);
     let s = report(s, "claim_002", "policy_001", 10_000);
@@ -516,10 +473,8 @@ fn settlement_id_must_be_unique_across_payments() {
 
 #[test]
 fn paid_without_authorised_violates_invariant() {
-    // Hand-construct a state with a payment but no matching
-    // authorisation. The transformations never produce this; the
-    // invariant exists so the runtime contract holds against
-    // candidate states regardless of how they arrived.
+    // A payment with no matching authorisation. No transformation produces
+    // this; the invariant refuses it however it arrives.
     let orphan_payment = claim_instance(
         "SettlementPaid",
         &[
@@ -540,12 +495,8 @@ fn paid_without_authorised_violates_invariant() {
 
 #[test]
 fn paid_without_headroom_violates_invariant() {
-    // Pairs with the conservation invariant: without this
-    // existence pairing, a candidate state with SettlementPaid but
-    // no PolicyHeadroom for that policy would slip through
-    // headroom_consumed_by_payment (the conservation rule's
-    // pre/post guard fails, the implies is vacuously true). The
-    // pairing closes the gap.
+    // Without this rule, a payment on a policy with no PolicyHeadroom would
+    // slip past headroom_consumed_by_payment, which is vacuously true there.
     let orphan_payment = claim_instance(
         "SettlementPaid",
         &[
@@ -632,17 +583,13 @@ fn policy_limit_usage_empty_when_no_settlements_paid() {
 // ============================================================
 // PolicyHeadroom conservation
 //
-// The transition-invariant payoff: every payment must consume
-// exactly its amount of headroom, enforced by the
-// `headroom_consumed_by_payment` transition invariant. The
-// require gate ("is there enough?") and the invariant ("did the
-// payment actually consume?") answer different questions; both
-// are kept and both are tested here.
+// Every payment must consume exactly its amount of headroom
+// (`headroom_consumed_by_payment`). The gate asks "is there enough?"; the
+// invariant asks "did the payment actually consume it?". Both are tested.
 // ============================================================
 
-/// Happy path: an authorised settlement reduces PolicyHeadroom by
-/// exactly the payment amount. Pre-state headroom for `policy_001`
-/// is 100k (the aggregate at issuance); a 30k payment leaves 70k.
+/// An authorised settlement reduces PolicyHeadroom by exactly its amount:
+/// 100k less a 30k payment leaves 70k.
 #[test]
 fn authorised_settlement_decrements_policy_headroom_by_payment_amount() {
     let pre = happy_pre();
@@ -663,32 +610,19 @@ fn authorised_settlement_decrements_policy_headroom_by_payment_amount() {
     );
 }
 
-/// Load-bearing test: the transition invariant catches a payment
-/// that did not properly consume headroom. Constructs a buggy
-/// transformation that admits SettlementPaid without touching
-/// PolicyHeadroom - the aggregate-limit require still passes
-/// (there's been no spending yet) but the conservation invariant
-/// fails because pre-headroom and post-headroom are identical
-/// while a new SettlementPaid was admitted.
-///
-/// This is the kind of bug a state invariant alone could not catch.
-/// Both PolicyHeadroom(p, 100_000) and SettlementPaid(p, ..., 30_000)
-/// are perfectly admissible singly; only the relationship between
-/// the pre-state and post-state falsifies the rule.
+/// The conservation invariant catches a payment that leaves headroom
+/// untouched. The gates still pass; only comparing the state before and
+/// after reveals the bug, which a state invariant alone could not catch.
 #[test]
 fn conservation_invariant_catches_payment_that_skips_headroom_update() {
-    // Adversarial (IR-builder) test: constructs the real transition minus
-    // one statement to prove an invariant has teeth - a kernel-teeth test,
-    // not a business story, so the Rust IR builder is the right tool here,
-    // not `.morph`.
+    // Built with the IR builder, not `.morph`: it is the real
+    // transformation minus one statement, to show the invariant has teeth.
     use morpholog_core::ir_builder;
 
     let pre = happy_pre();
 
-    // A buggy authorise_settlement that does everything the real
-    // one does EXCEPT retract+assert PolicyHeadroom. The require
-    // gates still hold (alex has 50k authority; 30k <= 100k
-    // aggregate); the conservation invariant must reject.
+    // Everything the real one does except update PolicyHeadroom. The
+    // gates still hold; the conservation invariant must reject.
     let buggy = ir_builder::transformation(
         "buggy_authorise_settlement",
         ir_builder::params(&["claim_id", "settlement_id", "amount"]),
@@ -784,21 +718,14 @@ fn conservation_invariant_catches_payment_that_skips_headroom_update() {
     }
 }
 
-/// The sum-based form's payoff: a hypothetical buggy
-/// transformation that admits two same-amount `SettlementPaid`
-/// claims while decrementing `PolicyHeadroom` only once would pass
-/// a per-row equality form of the invariant (each per-row equation
-/// `70 = 100 - 30` would hold) but consume 60 of headroom while
-/// only crediting 30. The sum-based conservation rule rejects it:
-/// 70 != 100 - sum(30, 30) = 40.
+/// Two 30k payments with a single 30k headroom decrement. A per-payment
+/// check (`70 = 100 - 30`) would pass; the sum-based rule refuses it:
+/// 70 != 100 - (30 + 30) = 40.
 #[test]
 fn conservation_invariant_catches_multi_payment_with_single_decrement() {
     use morpholog_core::ir_builder;
 
-    // Pre-state: policy_001 with 100k headroom, two reported
-    // claims (so two payments can be admitted in the buggy
-    // transformation against legitimate claim_ids), and alex's
-    // authority.
+    // Two reported claims, so the two payments have real claim ids.
     let pre = {
         let s = issue(State::default(), "policy_001", 100_000);
         let s = report(s, "claim_a", "policy_001", 20_000);
@@ -806,11 +733,8 @@ fn conservation_invariant_catches_multi_payment_with_single_decrement() {
         grant(s, "alex", 50_000)
     };
 
-    // Buggy: admits two SettlementPaid claims (30k each) but only
-    // decrements PolicyHeadroom once. The aggregate-limit require
-    // would still pass because the sum check (0 + 60 <= 100k) holds
-    // in pre-state at evaluation time. Only the sum-based
-    // conservation invariant catches the discrepancy.
+    // Two 30k payments, one headroom decrement. The aggregate gate passes
+    // (0 + 60 <= 100k); only the conservation invariant catches it.
     let buggy = ir_builder::transformation(
         "buggy_multi_payment",
         ir_builder::params(&["amount"]),
@@ -847,11 +771,8 @@ fn conservation_invariant_catches_multi_payment_with_single_decrement() {
                     ir_builder::var("new_headroom"),
                 ],
             ),
-            // Two SettlementAuthorised + SettlementPaid pairs, both
-            // for `amount`. The authorisations satisfy
-            // paid_implies_authorised; the two SettlementPaid claims
-            // are the structural bug - they total 2*amount but only
-            // 1*amount of headroom is consumed.
+            // Two authorised payments of `amount`: 2*amount paid, but only
+            // 1*amount of headroom consumed.
             ir_builder::assert_(
                 "SettlementAuthorised",
                 vec![

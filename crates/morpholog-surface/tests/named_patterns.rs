@@ -1,9 +1,6 @@
-//! Named-field claim patterns: `Pred(field: x, ..)` is parse-time sugar
-//! lowered to the positional pattern - no IR change - and the
-//! formatter's canonical form for wildcard walls. These tests hold the
-//! acceptance side (IR equality with the positional twin), every
-//! refusal by message, and the rules-identity property: a named source
-//! and its positional twin share one canonical hash.
+//! Named-field claim patterns: `Pred(field: x, ..)` parses to the same IR as its positional twin,
+//! and is the formatter's form for long runs of wildcards. Covers that equality, every refusal by
+//! message, and that the named and positional sources share one canonical hash.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -127,8 +124,7 @@ fn a_multi_line_named_pattern_needs_no_layout_care() {
 
 #[test]
 fn the_same_name_resolves_per_vocabulary() {
-    // One name, two vocabularies, different field lists: the statement
-    // verb picks the table, so both resolve correctly side by side.
+    // One name as both predicate and intent, with different fields: the verb picks which.
     let src = "\
 program two_vocabularies
 predicate Notice(account: Subject, code: Subject)
@@ -219,8 +215,7 @@ fn rest_is_refused_on_admit_and_emit() {
 
 #[test]
 fn a_named_pattern_on_a_definition_is_refused_by_kind() {
-    // The definition may follow its attempted use - the refusal must
-    // still name what it is.
+    // The definition comes after its use; the refusal must still name it as one.
     let src = "\
 program defs
 predicate Reading(r: Subject, level: Decimal)
@@ -283,8 +278,8 @@ fn a_named_value_lookup_with_a_first_wildcard_hole_equals_its_positional_twin() 
 
 #[test]
 fn a_named_value_lookup_extracts_a_non_first_field() {
-    // `id` is elided by `..`, so the resolved argument list has a
-    // wildcard BEFORE the hole - the IR no positional spelling reaches.
+    // `..` skips `id`, putting a wildcard before the read field, which no positional spelling
+    // can express.
     let src =
         format!("{DECLS}invariant capped:\n    value Line(invoice: inv, rate: _, ..) <= 100\n");
     let morpholog_core::ValueExpr::ValueOf { args, extract, .. } = lookup_in(&src) else {
@@ -376,11 +371,8 @@ fn parse_expression_has_no_declarations_to_resolve_against() {
 
 #[test]
 fn the_gallery_hashes_did_not_move_when_named_patterns_arrived() {
-    // Recorded from the positional sources BEFORE the named sugar and
-    // the named canonical form existed; the same files now carry named
-    // patterns, so these literals prove both halves at once: the hash
-    // renders positionally, and a named source shares its positional
-    // twin's identity.
+    // Hashes of the positional spellings of files that now use named patterns. Matching them
+    // shows the hash renders positionally, so a named source shares its positional twin's hash.
     let cases = [
         (
             "../../examples/15_metered_billing/metered_billing.morph",
@@ -446,9 +438,7 @@ fn a_declaration_repeating_a_field_name_is_refused_at_parse() {
 
 #[test]
 fn the_naming_context_reaches_inside_if() {
-    // The one formatter arm that escaped the recursive context in the
-    // first landing: a wall in an if(...) condition, and another under
-    // a branch, must both take the named canonical form.
+    // Wildcard runs inside an `if(...)` condition and under a branch also get the named form.
     let src = "\
 program cond
 predicate Line(id: Subject, invoice: Subject, rate: Decimal, volume: Decimal, net: Decimal)
@@ -472,9 +462,8 @@ transformation act(inv):
 
 #[test]
 fn admit_and_retract_name_the_definition_without_a_false_repair() {
-    // "use the positional form" is a true repair in claim positions and
-    // bind; on retract/admit a definition is not lawful at all, so the
-    // refusal says what it is instead.
+    // In propositions and bind the fix is the positional form; admit and retract take no
+    // definitions at all, so the refusal just says what it is.
     let src = "\
 program defs
 predicate Reading(r: Subject, level: Decimal)
@@ -488,8 +477,7 @@ transformation bad(l):
 
 #[test]
 fn a_refused_rest_on_admit_yields_one_diagnostic_not_two() {
-    // The `..` refusal must not cascade into a second complaint about
-    // the wildcards resolution synthesised to keep the parse alive.
+    // One `..` mistake, one diagnostic: no second complaint about the wildcards it fills in.
     let errs = parse_program(&format!(
         "{DECLS}transformation bad(id):\n    admit Line(id: id, ..)\n"
     ))

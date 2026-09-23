@@ -24,9 +24,11 @@
 -- "facts" - it stores *claims* that it has agreed to admit because they
 -- obey the rules. Two kinds of rule do the work below:
 --
---   * an `invariant` is a rule that must hold for all admitted state,
---     forever. The runtime refuses to commit any change that would
---     break one. This is how we make a broken state impossible to save.
+--   * an `invariant` is a standing rule: it says what lawful records
+--     look like, and every change that touches what it governs is
+--     checked against it. The runtime refuses to commit any change that
+--     would break one. This is how we make an unbalanced entry
+--     impossible to save.
 --   * a `require` is a gate on a single action - a condition checked at
 --     the moment you act, and never again. The difference matters: the
 --     balance rule is an invariant (the books must always balance), but
@@ -59,8 +61,8 @@ intent PeriodClosed(period: Subject)
 intent JournalEntryRestated(new_entry_id: Subject, prior_entry_id: Subject)
 
 
--- The rules that must always hold. If any change below would leave the
--- world violating one of these, the whole change is rejected.
+-- The standing rules. If any change below would break one of these,
+-- the whole change is rejected.
 
 -- The five-hundred-year-old rule itself: for every entry, its debits
 -- and its credits sum to the same amount. Read `implies` as "whenever
@@ -80,8 +82,8 @@ invariant journal_entry_has_lines:
 
 
 -- The only ways state may change. A transformation proposes a set of
--- changes; the runtime applies them only if every invariant still
--- holds once they are in place. `admit` adds a claim.
+-- changes; the runtime applies them only if everything they touch
+-- still obeys every invariant. `admit` adds a claim.
 
 -- The everyday case: one account debited, one credited, same amount.
 -- The gate allows posting only into an open period; the two equal-and-

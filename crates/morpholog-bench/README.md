@@ -131,13 +131,13 @@ The same binary (sha256 `e18f9e3c...`, commit `2d0473d`), run twice 23 seconds a
 
 Judged over runs instead: eight runs of one binary (sha256 `8afcdfee...`), interleaved as two labels x1 y1 x2 y2 x3 y3 x4 y4, no throttling events, compared four against four. One row of 156 was called changed - `kernel/acts` at 1,000, 172.8 against 176.7 ms, a ratio of 1.02 - and the other 155 read `within noise`, every family judged, the capped-repeat ones included.
 
-### Rung 2b: case-local admission, paired against stage 1 (2026-09-18, `suite --repeat 5` requested, PostgreSQL 18.6)
+### Case-local admission, paired against the whole-state check (2026-09-18, `suite --repeat 5` requested, PostgreSQL 18.6)
 
-The same ruler again after case-local admission landed (#365), with the stage-1 binary (6174bef) and the rung-2b binary (1746237) run back to back in one session. The machine was thermally throttled that day, so every absolute number is roughly twice the earlier run's, the read families included; the within-session ratios are the claim and the earlier table is historical context, not a baseline.
+The same ruler again after case-local admission landed, with the whole-state binary (6174bef) and the case-local binary (1746237) run back to back in one session. The machine was thermally throttled that day, so every absolute number is roughly twice the earlier run's, the read families included; the within-session ratios are the claim and the earlier table is historical context, not a baseline.
 
 The quick ladder, both binaries run back to back in one session; the decomposition reads left to right: what case-local semantics bought inside the kernel, what pushing the same bounded obligation into PostgreSQL added, and the total production effect.
 
-| case, point | stage 1 interpreted | rung 2b interpreted | rung 2b compiled, indexed | stage 1 compiled, indexed | 2b/1 production |
+| case, point | whole-state interpreted | case-local interpreted | case-local compiled, indexed | whole-state compiled, indexed | production ratio |
 |---|--:|--:|--:|--:|--:|
 | write/base 1,000, one proposal (ms) | 32.67 | 30.25 | 7.46 | 28.60 | 0.26 |
 | write/noise 1,000, one proposal (ms) | 33.69 | 31.25 | 8.37 | 26.70 | 0.31 |
@@ -149,9 +149,9 @@ The quick ladder, both binaries run back to back in one session; the decompositi
 | replay/retract 1,000, coverage replay (ms) | 16.24 | 15.79 | 10.20 | 15.66 | 0.65 |
 | asof/retract 1,000, reconstruct (ms) | 13.28 | 12.54 | 13.45 | 12.74 | 1.06 |
 
-The full ladder, indexed compiled route, stage 1 against rung 2b, same session:
+The full ladder, indexed compiled route, whole-state against case-local, same session:
 
-| case, point | stage 1 | rung 2b | ratio |
+| case, point | whole-state | case-local | ratio |
 |---|--:|--:|--:|
 | write/base 1,000, one proposal (ms) | 32.05 | 8.96 | 0.28 |
 | write/base 10,000 | 205.41 | 6.80 | 0.03 |
@@ -169,13 +169,11 @@ The full ladder, indexed compiled route, stage 1 against rung 2b, same session:
 | replay/retract 100,000, coverage replay (ms) | 844.42 | 1,211 | 1.43 |
 | asof/retract 100,000, reconstruct (ms) | 1,194 | 1,286 | 1.08 |
 
-The read control did not move. Replay and as-of, also untouched by this change, sit inside the day's noise band on a throttled machine: replay at a hundred thousand moved 1.43 one way on the full ladder and 0.65 the other way at the quick ladder.
-
 - **Semantics:** inherited violations outside the transition's affected cases no longer block admission, on either evaluator.
 - **Computational scaling:** an ordinary posting on the indexed compiled route is flat across a hundred-fold state sweep, the case-local shape rather than a better constant; irrelevant state barely registers.
-- **Concurrency scaling:** the shared-key workload no longer carries an excess retry penalty (0.72 retries per commit at sixteen writers against 2.39 for the disjoint control), and the paired stage-1 comparison (11.03 retries, 22 commits per second) attributes it: narrowing the read footprint to the touched entry removed the relation-wide dependency pattern stage 1 suffered under SERIALIZABLE.
+- **Concurrency scaling:** the shared-key workload no longer carries an excess retry penalty (0.72 retries per commit at sixteen writers against 2.39 for the disjoint control), and the paired whole-state comparison (11.03 retries, 22 commits per second) attributes it: narrowing the read footprint to the touched entry removed the relation-wide dependency pattern stage 1 suffered under SERIALIZABLE.
 - **Import** from an empty table no longer depends on PostgreSQL having learned global statistics: about 5.3 ms per transition end to end at 3,000.
-- **The limitation, stated with the claim:** case locality removes scaling with unrelated state; it does not remove scaling with the size of the affected case. The wide case at 100k rows, whose invariant quantifies over rows so every row is the affected case, still costs 30.2 s per proposal (stage 1: 327 s).
+- **The limitation, stated with the claim:** case locality removes scaling with unrelated state; it does not remove scaling with the size of the affected case. The wide case at 100k rows, whose invariant quantifies over rows so every row is the affected case, still costs 30.2 s per proposal (whole-state: 327 s).
 - **Controls:** the read control did not move; replay and as-of, untouched by this change, sit inside the day's noise band, replay at 100k moving 1.43 one way on the full ladder and 0.65 the other at the quick ladder.
 
 ### Three-way verdict on the compiled route (2026-09-18, `suite --repeat 5` requested, PostgreSQL 18.6, one binary)
@@ -212,12 +210,9 @@ The full ladder, interpreter against the indexed compiled route, steady median w
 | read families, all points | flat | flat | 0.96 to 1.07 |
 
 - **Compilation without indexes is strongly superlinear over the measured range and far behind the interpreter** (74x slower at 1,000 entries for a 10x size step). The unindexed configuration is measured at the quick ladder only; one proposal at 100k would take hours. Indexes are necessary but not sufficient: unindexed compilation is far worse than the interpreter, indexed stage 1 restores the ledger path to roughly the interpreter's cost, and stage 2 is what produced the spike's flat scaling.
-- **Stage 1 with indexes tracks the interpreter, both linear, same slope.** The spike's flat ~2 ms curve at 100k and its ten-fold retry reduction were stage-2 effects (the case-bound check); production runs stage 1, which proves every invariant over the whole relation on every proposal. Under shared contention throughput rises by half because each proposal is cheaper; retries per commit do not fall.
+- **The whole-state check with indexes tracks the interpreter, both linear, same slope.** The spike's flat ~2 ms curve at 100k and its ten-fold retry reduction came from the case-bound check, which production did not yet run; case-local admission, above, then made it the production rule. Under shared contention throughput rises by half because each proposal is cheaper; retries per commit do not fall.
 - **Import gains nothing from indexes on a table growing from empty**, and loses at 1,000: the statistics are the empty table's until something analyses it (verified: the same violation query scans by primary key before one `ANALYZE` and seeks the provisioned indexes after). At 3,000 autovacuum has caught up and the journey is within a quarter. The ruler stays as it is; this is what a fresh deployment sees.
 - **Controls:** the read, replay and kernel families are flat across configurations; the indexed configuration's one collateral cost is fixture building, up a fifth to a third at 1,000 entries from index maintenance on bulk inserts, measured with the index condition established outside the timer.
-
-
-Indicative, not benchmark-grade; reproduce locally for any decision that depends on the numbers.
 
 ### Contract-1 baseline (2026-08-22, `suite --ladder full --repeat 5`, PostgreSQL 18.6)
 
@@ -237,7 +232,7 @@ The detailed tables below were taken on 2026-05-29 against PostgreSQL 17. A 2026
 | `build_state` (build both indexes) | ~153 ms | ~11% |
 | `enumerate` (trial balance) | ~352 ms | ~26% |
 
-`list_scoped` dominates and is fetch + decode of the full in-scope set, not index lookup - the primary key `(predicate_name, arguments)` already serves the predicate-scoped read as an index-only scan, so a dedicated `predicate_name` index would not help. The only real levers here are materialised derived claims or streaming the fetch, both deferred. Adding 200 000 unreferenced noise claims leaves the read path unchanged (the `ANY([...])` filter skips them server-side).
+`list_scoped` dominates and is fetch + decode of the full in-scope set, not index lookup - the primary key `(predicate_name, arguments)` served the predicate-scoped read as an index-only scan when this was measured, so a dedicated `predicate_name` index would not help. The key has since become `(predicate_name, arguments_hash)`. The only real levers here are materialised derived claims or streaming the fetch, both deferred. Adding 200 000 unreferenced noise claims leaves the read path unchanged (the `ANY([...])` filter skips them server-side).
 
 ### Write path (N=100 000 ledger entries, K=2)
 
@@ -307,7 +302,3 @@ So the fixed per-call tax a subprocess embedder pays is **single-digit milliseco
 - **Incremental snapshots** for as-of replay. Replay is linear in N and now confirmed linear under retraction too, so the materialise-every-K-transitions checkpoint is not forced; revisit if linear-in-N becomes unacceptable for an interactive query.
 - **Streaming `sqlx::query::fetch`** instead of `fetch_all`. Memory scales with audit rows fetched; not pressing until past N=1M (per-row payload is ~200-500 bytes).
 - **Materialised derived claims**, with invalidation modelled as ordinary claims (not cache machinery). The current `list_scoped`-dominated read cost is the pressure; awaits a worked example.
-
-### History
-
-The write path was once structurally quadratic (~31 s per propose at N=10 000); the predicate-and-argument-position indexed `State` brought it down ~200x. The as-of `reconstruct_inner` had its own asserts-only quadratic, fixed by the `ReplaySet` (Vec + HashMap + live bits) that turned replay linear. The PRs: the bench's introduction; indexed `State`; the `--accounts K` axis + read-path phase split; predicate-scoped read loading; the `as-of` scenario and its replay quadratic; the `ReplaySet` fix; the scenario set that added the retraction axis, concurrency, and the smoke test (plus the `as-of` fabricator's overdue `actor` column); the `--periods` partition axis that measured value-level partitioning as no help against SSI contention; and the `--disjoint` predicate-partition mode plus the `scripts/embedder_latency.sh` CLI harness, which proved the positive half of the law (predicate-disjoint footprints scale) and put a single-digit-millisecond number on the subprocess embedder's per-call tax. The suite-discipline PR then turned the instrument itself benchmark-grade ahead of the compiled-checking arc: `--repeat` with first/steady-median reporting, `ANALYZE` after fixtures, sub-millisecond resolution, the frozen `suite` case matrix with per-case provenance and a machine-readable JSON mode, and the consumer-derived `import` (cumulative core-import curve) and `wide` (argument-count axis) scenarios.

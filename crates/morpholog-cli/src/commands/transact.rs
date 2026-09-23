@@ -1,5 +1,5 @@
-//! `morpholog transact` - several proposals as one decision, and the
-//! act decoding the session's `transact` op shares.
+//! `morpholog transact` - several proposals as one decision. The act
+//! decoding here is shared with the session's `transact` op.
 
 use anyhow::Context;
 use morpholog_postgres::{PgAtomicOutcome, Proposal, propose_all_against_pg};
@@ -11,8 +11,8 @@ use crate::commands::{
 };
 use morpholog_cli::envelopes;
 
-/// One act: the batch row shape, strict - a misspelt field is a refusal
-/// of the whole batch, never a silently ignored key.
+/// One act: the batch row shape, but strict. A misspelt field refuses the
+/// whole batch rather than being ignored.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Act {
@@ -35,10 +35,9 @@ impl From<Act> for BatchRow {
     }
 }
 
-/// Every act decoded, or the first that cannot be, named by its
-/// 1-based position among the acts - the same numbering a refusal
-/// uses. A batch with a malformed act is one invalid request: it never
-/// reaches the database.
+/// Decode every act, or name the first that fails by its 1-based position
+/// (the numbering refusals use). A malformed act makes the whole request
+/// invalid; it never reaches the database.
 pub(crate) fn decode_acts(
     file: &std::path::Path,
     compiled: &morpholog_core::CompiledProgram,
@@ -63,10 +62,9 @@ pub(crate) fn decode_acts(
         .collect()
 }
 
-/// Run `transact`: parse and validate once, decode every act, propose
-/// them as one decision, and print the one object the outcome is. The
-/// exit code follows `propose`: 0 committed, 1 refused or a known
-/// error, 3 when the commit outcome is unknown.
+/// Run `transact`: decode every act, propose them as one decision, and
+/// print one outcome object. Exit codes follow `propose`: 0 committed,
+/// 1 refused or a known error, 3 when the commit outcome is unknown.
 pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
     let program = morpholog_postgres::PgProgram::new(compile_or_report(&parsed)?);
@@ -80,9 +78,8 @@ pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
         std::fs::read_to_string(&args.acts)
             .with_context(|| format!("failed to read acts from {}", args.acts.display()))?
     };
-    // Blank lines skip silently, as in a batch; an act's number is its
-    // position among the acts, the numbering a refusal uses, with the
-    // file line beside it for the reader.
+    // Blank lines are skipped, as in a batch. An act is numbered by its
+    // position among the acts, as refusals are; the file line is kept too.
     let rows: Result<Vec<Act>, RowError> = input
         .lines()
         .enumerate()
@@ -114,9 +111,9 @@ pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
     }
 }
 
-/// A coded failure is the printed error object, then the exit its code
-/// earns; an operational one (a rejection the log could not record)
-/// stays a diagnostic with nothing on stdout.
+/// A coded failure prints the error object and exits by its code. An
+/// operational one (a rejection the log could not record) prints only a
+/// diagnostic, with nothing on stdout.
 fn report_failure(failure: RowError) -> anyhow::Result<()> {
     let RowError { code, reason } = failure;
     let Some(code) = code else {

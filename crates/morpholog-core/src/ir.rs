@@ -1,47 +1,34 @@
 //! IR types: the structural surface of a Morpholog programme.
 //!
-//! `Invariant`, `Prop`, `ValueExpr`, `Term`, `Value`, `Claim`, `Intent`,
-//! `Stmt`, `Transformation`, `Program`, `DerivedClaim`, `DerivedValue`,
-//! plus the predicate-declaration types `PredicateDecl`, `ArgDecl`,
-//! `PredicateArgKind`. These are pure data; runtime concerns (state,
-//! evaluation, proposal execution, validation, persistence) live in
-//! sibling modules.
+//! These types are pure data. State, evaluation, validation, and
+//! persistence live in sibling modules.
 //!
-//! The body grammar of invariants and transformations is two mutually
-//! recursive sorts, not one. A [`Prop`] *searches* governed state and
-//! produces binding witnesses (zero, one, or many satisfying binding
-//! contexts) - it is relational, not boolean. A [`ValueExpr`] *computes
-//! one value* from a binding context. The split makes the
-//! predicate-vs-value boundary a Rust type instead of a runtime error
-//! plus a static shape check: the evaluator for each sort is total, with
-//! no wrong-shape arm. The cross-references between the sorts encode the
-//! grammar - a comparison relates two values, a sum ranges over a
-//! proposition.
+//! Bodies use two mutually recursive sorts. A [`Prop`] *searches* state
+//! and yields zero, one, or many binding contexts: it is relational, not
+//! boolean. A [`ValueExpr`] *computes one value* from a binding context.
+//! Keeping them as separate Rust types means a value can never sit where
+//! a proposition belongs. They meet where the grammar says: a comparison
+//! relates two values, a sum ranges over a proposition.
 
 use serde::{Deserialize, Serialize};
 
 use crate::validate::{ValidationError, validate_program};
 
-/// Defines an opaque identifier newtype over `String`. Every kernel identifier
-/// kind (subjects, variables, predicate / intent / transformation / invariant
-/// names) is one of these: `#[serde(transparent)]`, `From<String>` /
-/// `From<&str>` / `Display` / `as_str`, and a symmetric `PartialEq<str>` so a
-/// literal compares either way - but deliberately no `Deref` / `AsRef` /
-/// `Borrow`, so the inner string never leaks into general string APIs and the
-/// kinds stay un-confusable at the type level.
+/// Defines an opaque identifier newtype over `String`, used for every
+/// kernel identifier. It has `From`, `Display`, `as_str`, and a symmetric
+/// `PartialEq<str>`, but no `Deref` / `AsRef` / `Borrow`, so the kinds of
+/// identifier cannot be mixed up or passed around as plain strings.
 macro_rules! opaque_id {
-    // Default: no ordering. `Ord` is a capability some ids never need, so it
-    // is opt-in rather than uniform - a `Subject` is not orderable.
+    // Default: no ordering. A `Subject`, for one, must not be orderable.
     ($(#[$meta:meta])* $name:ident) => {
         opaque_id!(@define $(#[$meta])* $name; Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize);
     };
     // `ord`: also derive `PartialOrd` / `Ord`, for ids that are sorted or used
-    // as `BTreeSet` / `BTreeMap` keys (the per-id doc says why it is load-bearing).
+    // as `BTreeSet` / `BTreeMap` keys.
     ($(#[$meta:meta])* ord $name:ident) => {
         opaque_id!(@define $(#[$meta])* $name; Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize);
     };
-    // The shared body: the derive set is the only thing that varies between the
-    // two public forms, so everything below is written once.
+    // The shared body; only the derive set differs.
     (@define $(#[$meta:meta])* $name:ident; $($derive:path),+ $(,)?) => {
         $(#[$meta])*
         #[derive($($derive),+)]
@@ -98,96 +85,73 @@ macro_rules! opaque_id {
 }
 
 opaque_id! {
-    /// An opaque subject identifier - Morpholog's one primitive noun. Predicates
-    /// attach to subjects, but there are no types *over* a subject and nothing in
-    /// the surface language inspects its structure, so the newtype keeps a subject
-    /// distinct at the type level from a predicate name, a variable, or any other
-    /// string the kernel handles. It is deliberately not orderable: sorting
-    /// subjects would imply a sequence semantics the surface language never
-    /// gives them. Where the kernel must order subjects it does so explicitly
-    /// through `as_str`, not through the type.
+    /// An opaque subject identifier, Morpholog's one primitive noun.
+    /// Predicates attach to subjects, but there are no types over them and
+    /// nothing inspects their structure. Not orderable, since subjects have
+    /// no sequence; where the kernel must sort them it uses `as_str`.
     Subject
 }
 
 opaque_id! {
-    /// A bound variable - a name introduced by a comprehension binder
-    /// (`forall` / `exists` / `for`), a `let`, or matched by a `Term::Var`, and
-    /// resolved against the [`crate::EvalValue`] bindings during evaluation.
-    /// Bindings are reported sorted by variable name in the trace, so the
-    /// derived `Ord` is load-bearing here (not merely uniform with the others).
+    /// A variable: bound by `forall` / `exists` / `for`, a `let`, or a
+    /// `Term::Var` match, and resolved against the [`crate::EvalValue`]
+    /// bindings. Ordered because the trace sorts bindings by name.
     ord Var
 }
 
 opaque_id! {
-    /// An opaque predicate name - the identifier of a claim predicate. Distinct
-    /// at the type level from a subject id, a bound variable, an intent name, or
-    /// a declaration name, so the compiler keeps the kernel's nouns un-confusable.
-    /// Ordered: the analysis walkers collect predicate names into `BTreeSet`s.
+    /// The name of a claim predicate. Ordered because the analysis walkers
+    /// collect predicate names into `BTreeSet`s.
     ord PredicateName
 }
 
 opaque_id! {
-    /// An opaque intent name - the identifier of an outbox intent type. Distinct
-    /// at the type level from a predicate name (the other declared vocabulary) and
-    /// from every other identifier the kernel handles.
+    /// The name of an outbox intent type.
     IntentName
 }
 
 opaque_id! {
-    /// An opaque transformation name - the identifier of a declared transformation,
-    /// and the name a [`crate::Transition`] proposes against. Distinct at the type
-    /// level from an invariant name and every other identifier.
+    /// The name of a declared transformation, which a [`crate::Transition`]
+    /// proposes against.
     TransformationName
 }
 
 opaque_id! {
-    /// An opaque invariant name - the identifier of a declared invariant, carried
-    /// into the audit log and the trace's invariant-check entries. Distinct at the
-    /// type level from a transformation name and every other identifier.
+    /// The name of a declared invariant, carried into the audit log and
+    /// the trace.
     InvariantName
 }
 
 opaque_id! {
-    /// An opaque rule name - the optional identifier an author gives a `require`
-    /// gate or a `bind` lookup, so a refusal names the rule rather than quoting
-    /// the expression that failed. Unique within one transformation, not across
-    /// the programme: two acts legitimately carry the same gate verbatim.
+    /// The optional name an author gives a `require` or `bind`, so a
+    /// refusal names the rule instead of quoting the expression. Unique
+    /// within one transformation; two transformations may share one.
     RuleName
 }
 
 opaque_id! {
-    /// An opaque definition name - the identifier of a declared
-    /// [`Definition`] (a named, parameterised proposition), and the name a
-    /// [`Prop::Defined`] call resolves against. Distinct at the type level
-    /// from a predicate name, although the two share the reference
-    /// namespace in body position (a claim-shaped reference resolves to
-    /// exactly one of them; [`Program::validate`] enforces the
-    /// disjointness). Ordered: cycle detection and diagnostics sort
-    /// definition names for deterministic output.
+    /// The name of a [`Definition`], which a [`Prop::Defined`] call
+    /// resolves against. Definitions and predicates share one namespace in
+    /// bodies; [`Program::validate`] keeps them disjoint. Ordered for
+    /// deterministic cycle detection and diagnostics.
     ord DefinitionName
 }
 
 opaque_id! {
-    /// An opaque unit symbol on a quantity - `USD`, `t`, `MWh`. A unit in
-    /// Morpholog is a contractual label on an exact decimal, not a physical
-    /// dimension: the kernel enforces that arithmetic and comparison only
-    /// combine like-labelled amounts, and knows nothing else. Case-sensitive,
-    /// no registry, no aliases, no compound symbols (`USD/day` is a business
-    /// concept expressed in a predicate's field name and formula, never a
-    /// unit). Conversions between units are domain knowledge with provenance and
-    /// time, so they enter as claims when a worked example forces them - the
-    /// same doctrine that keeps timezone interpretation out of the runtime.
-    /// Ordered because [`PredicateArgKind`] is ordered (the analysis walkers
-    /// collect kind sets into `BTreeSet`s) and the unit is part of the kind.
+    /// A unit symbol on a quantity: `USD`, `t`, `MWh`. A label on an exact
+    /// decimal, not a physical dimension: the kernel only ensures that
+    /// arithmetic and comparison combine amounts with the same label.
+    /// Case-sensitive, with no registry, aliases, or compound symbols
+    /// (`USD/day` is a formula, not a unit). Conversions are domain
+    /// knowledge, so they belong in claims. Ordered because it is part of
+    /// the ordered [`PredicateArgKind`].
     ord Unit
 }
 
-/// The typed zero an empty [`ValueExpr::Sum`] evaluates to. A sum's
-/// runtime kind is driven by its values, but the empty sum has none, so
-/// the kind comes from the summed variable's declaration instead -
-/// resolved once, at lowering, never during evaluation. Decimal is the
-/// default and the fallback wherever no declaration decides (a count
-/// sum's literal target, a pre-bound variable).
+/// The typed zero an empty [`ValueExpr::Sum`] evaluates to. An empty sum
+/// has no values to take a kind from, so the kind comes from the summed
+/// variable's declaration, resolved at lowering. Decimal is the default
+/// wherever no declaration decides.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum SumSeed {
     #[default]
@@ -196,37 +160,28 @@ pub enum SumSeed {
     Quantity(Unit),
 }
 
-/// A named, versioned rule that must hold over admitted state. Invariants
-/// are evaluated against the candidate state produced by a
-/// [`Transformation`]; if any active invariant fails, the transformation is
-/// rejected atomically.
+/// A named, versioned rule that says what lawful state is. A
+/// [`Transformation`] is admitted only if every case it touches satisfies
+/// the rule afterwards; otherwise the whole transformation is rejected.
 ///
-/// The `version` field is carried from day one (v0 is `version: 1`
-/// everywhere) so that audit rows can record exactly which invariant
-/// version-set governed each committed transition. Adding versioning later
-/// would be painful; the empty cost of carrying it now is cheap.
+/// `version` (always 1 for now) lets audit rows record exactly which
+/// invariant versions governed each commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invariant {
     pub name: InvariantName,
     pub version: u32,
     pub body: Prop,
-    /// Whether the invariant was authored in source or generated by a
-    /// declared [`Discipline`]'s lowering. Enforcement is identical -
-    /// the origin exists so the formatter can omit generated invariants
-    /// (the declaration clauses imply them, and reparsing regenerates
-    /// them deterministically) and so the legibility surfaces can trace
-    /// a generated rule back to its declaration.
+    /// Whether the invariant was written in source or generated from a
+    /// [`Discipline`]. Enforcement is the same; the origin lets the
+    /// formatter omit generated ones and lets reports trace them back to
+    /// their declaration.
     pub origin: InvariantOrigin,
     /// The predicate this invariant declares itself the totality backstop
-    /// for: "whatever else I say, a version of `P` exists where one is
-    /// needed."
+    /// for (`total over P`): a version of `P` exists wherever one is needed.
     ///
-    /// An effective-dated selection passes vacuously when no version is in
-    /// force, so the rule silently stops applying at the edges. The
-    /// governing-selection lint has always looked for a backstop by SHAPE;
-    /// this lets the author say so, which makes the pairing checked rather
-    /// than guessed - an unusual but intended backstop is recognised, and
-    /// a shape that matches by accident no longer counts as one.
+    /// Without a version in force, a rule that selects one silently does
+    /// not apply. Declaring the backstop lets the lints check the pairing
+    /// instead of guessing it from the rule's shape.
     pub totality_for: Option<PredicateName>,
 }
 
@@ -237,32 +192,25 @@ pub enum InvariantOrigin {
     Discipline,
 }
 
-/// A proposition: the predicate-shaped sort of the body grammar. A
-/// `Prop` *searches* a state and a binding set, producing the set of
-/// extended binding contexts that satisfy it (zero, one, or many) - it
-/// is relational, not boolean. Evaluated by `find_matches`.
+/// A proposition. It *searches* a state from a binding set and yields
+/// every extended binding context that satisfies it (zero, one, or
+/// many): relational, not boolean. Evaluated by `find_matches`.
 ///
-/// Used inside invariant bodies, transformation `require`/`bind`
-/// statements, derived-claim domains, and quantifier composition. The
-/// variants are deliberately narrow - composition, claim and
-/// (in)equality matching, ordered comparison, and bounded quantification.
-/// Where a `Prop` relates values (`Eq`, `Neq`, `Compare`), its operands
-/// are [`ValueExpr`]s; the two sorts are mutually recursive.
+/// Used in invariant bodies, `require` / `bind`, derived-claim domains,
+/// and quantifiers. Where it relates values (`Eq`, `Neq`, `Compare`), its
+/// operands are [`ValueExpr`]s.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Prop {
     Claim {
         predicate: PredicateName,
         args: Vec<Term>,
     },
-    /// A call to a named [`Definition`]: claim-shaped on the surface
-    /// (`name(args)`), resolved against the programme's definitions.
-    /// Relational substitution with projection: the body evaluates under
-    /// a fresh context carrying only the parameters (ground arguments
-    /// pre-bind theirs; unbound ones act as generators), and each body
-    /// match projects parameter values back onto the argument terms.
-    /// Yields each distinct argument-binding witness once - internal
-    /// multiplicity is not observable, so a call composes in `Sum`
-    /// bodies without internal witnesses double-counting.
+    /// A call to a named [`Definition`], written like a claim
+    /// (`name(args)`). The body runs in a fresh context holding only the
+    /// parameters: ground arguments pre-bind theirs, unbound ones are
+    /// generators. Each match maps parameter values back onto the
+    /// arguments. Each distinct result is yielded once, so a call inside
+    /// a `Sum` never double-counts.
     Defined {
         name: DefinitionName,
         args: Vec<Term>,
@@ -276,52 +224,39 @@ pub enum Prop {
         body: Box<Prop>,
     },
     And(Vec<Prop>),
-    /// Predicate-shaped disjunction. Concatenates the binding sets each
-    /// branch produces against the same base context; empty when every
-    /// branch is empty. No deduplication (matches `And`'s convention).
-    /// Flattened `Vec<Prop>` so `a or b or c` is one node.
+    /// Disjunction: concatenates each branch's binding sets, all from the
+    /// same base context, without deduplication. Flat, so `a or b or c`
+    /// is one node.
     Or(Vec<Prop>),
-    /// Evaluates the wrapped subtree against the pre-transition state
-    /// instead of the candidate (post) state, so one invariant can
-    /// relate pre and post values. Raises
-    /// [`crate::EvalError::PreStateUnavailable`] where no pre-state is in
-    /// scope (derived-claim bodies, transformation `require`s, a context
-    /// built with `pre_state: None`, the inner of a nested `Pre`).
+    /// Evaluates the subtree against the pre-transition state instead of
+    /// the candidate, so an invariant can relate before and after. Raises
+    /// [`crate::EvalError::PreStateUnavailable`] where there is no
+    /// pre-state (derived claims, `require`, a context with
+    /// `pre_state: None`, inside another `Pre`).
     ///
-    /// Quantifier composition is non-commutative: `pre(forall x in C:
-    /// ...)` resolves both the domain and the body against pre, while
-    /// `forall x in C: pre(...)` iterates the post-state domain and flips
-    /// only the body - they diverge when the iteration set changes.
+    /// `pre(forall x in C: ...)` reads both domain and body from the
+    /// pre-state; `forall x in C: pre(...)` iterates the post-state domain.
+    /// They differ when `C` changes.
     Pre(Box<Prop>),
     Not(Box<Prop>),
-    /// Exclusive or: exactly one of the two operands holds. Defined as,
-    /// and evaluated by lowering to, `(left or right) and not (left and
-    /// right)` - so it is purely a more legible spelling of that
-    /// combination, with identical binding semantics, not new
-    /// expressiveness. Binary, not flattened: `a xor b xor c` would be
-    /// ambiguous (exactly-one versus odd-parity), so chained `xor` nests
-    /// rather than forming one node. Earns its place where the operands
-    /// are long claim patterns and the hand-written form reads poorly.
+    /// Exclusive or: exactly one operand holds. Evaluated as
+    /// `(left or right) and not (left and right)`, with the same bindings;
+    /// just a clearer spelling. Binary, because `a xor b xor c` would be
+    /// ambiguous (exactly one, or odd parity), so chains nest.
     Xor(Box<Prop>, Box<Prop>),
-    /// Value equality and inequality. Both operate on [`ValueExpr`]
-    /// operands (a bare `Term`, arithmetic, `Sum`, or `ValueOf`),
-    /// evaluated to a value and compared. Predicate-shaped: the unchanged
-    /// binding set when the (in)equality holds, empty otherwise. `Eq` and
-    /// `Neq` are symmetric - neither restricts its operands to bare terms.
+    /// Value equality and inequality over two [`ValueExpr`] operands.
+    /// Yields the bindings unchanged when it holds, nothing otherwise.
     Eq(Box<ValueExpr>, Box<ValueExpr>),
     Neq(Box<ValueExpr>, Box<ValueExpr>),
-    /// Ordered comparison: an operator (`<=` `<` `>=` `>`) over an ordered
-    /// domain (decimal or civil date). Predicate-shaped - the unchanged
-    /// binding set when the comparison holds, empty otherwise.
+    /// Ordered comparison: an operator (`<=` `<` `>=` `>`) over an
+    /// [`OrderedDomain`]. Yields the bindings unchanged when it holds,
+    /// nothing otherwise.
     ///
-    /// `op` is first-class so the comparison renders and round-trips as
-    /// written: `amount > limit` stays `amount > limit`, never `not (amount
-    /// <= limit)`. `domain` is carried explicitly rather than inferred from
-    /// operand kind, so there is no operator overloading by operand kind -
-    /// the surface picks the domain by token (`<` decimal, `before` date)
-    /// and each domain type-checks its own operands (`EvalValue::Decimal` /
-    /// `EvalValue::Date`). Date windows built from `<=` are inclusive at
-    /// both ends: `to == d` admits.
+    /// `op` is kept as written, so `amount > limit` round-trips as is.
+    /// `domain` is explicit, never inferred from operand kinds: the surface
+    /// picks it by token (`<` decimal, `before` date) and each domain
+    /// checks its own operands. Date windows built from `<=` include both
+    /// ends.
     Compare {
         op: CompareOp,
         domain: OrderedDomain,
@@ -336,119 +271,91 @@ pub enum Prop {
     In(Term, Term),
 }
 
-/// A value expression: the value-producing sort of the body grammar. A
-/// `ValueExpr` *computes exactly one value* from a binding context (or a
-/// structural error). Evaluated by `eval_value`.
+/// A value expression. It *computes exactly one value* from a binding
+/// context, or an error. Evaluated by `eval_value`.
 ///
-/// Appears only nested: as a comparator or (in)equality operand, a `let`
-/// value, a `sum` target's enclosing arithmetic, a `for` collection, or a
-/// derived-claim value expression. Where a `ValueExpr` ranges over a
-/// proposition (`Sum`), its body is a [`Prop`]; the two sorts are
-/// mutually recursive.
+/// Appears only nested: as a comparison operand, a `let` value, a `for`
+/// collection, or a derived-claim value. Forms that range over state
+/// (`Sum`, `Extremum`) take a [`Prop`] body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueExpr {
     Term(Term),
-    /// Binary arithmetic: `left <op> right`. The operator is the
-    /// [`ArithOp`] field rather than a variant per operator - the
-    /// value-sort analogue of [`Prop::Compare`] carrying a
-    /// [`CompareOp`]. Operand kinds follow the rule matrix
-    /// (`arith_result_kind`): decimals support every operator;
-    /// instants shift by durations (`Add`/`Sub`) and difference into
-    /// durations (`Sub`); durations add, subtract, cap (`Min`/`Max`),
-    /// and divide into a dimensionless ratio; same-unit quantities
-    /// add, subtract, cap, and ratio, with a bare decimal scaling
-    /// them (`Mul`/`Div`); `Mod` stays decimal-only. A pair with
-    /// no rule is `NoArithRule` at validation and `TypeMismatch` at
-    /// evaluation. `Div` and `Mod` surface
-    /// [`crate::EvalError::DivisionByZero`] on a zero divisor; the
-    /// rest are total. Admission gates express ratio rules in the
-    /// multiplied form (`a <= c*b`, not `a/b <= c`) to stay exact;
-    /// `Div` is reserved for read-side projections.
+    /// Binary arithmetic: `left <op> right`. Operand kinds follow the rule
+    /// matrix (`arith_result_kind`):
+    /// - decimals support every operator;
+    /// - instants shift by durations (`Add`/`Sub`) and subtract into a
+    ///   duration;
+    /// - dates shift by calendar spans and subtract into a day count;
+    /// - durations add, subtract, and divide into a plain ratio;
+    /// - same-unit quantities add, subtract, and divide into a ratio, and
+    ///   a bare decimal scales them (`Mul`/`Div`);
+    /// - `Mod` is decimal-only.
+    ///
+    /// A pair with no rule is `NoArithRule` at validation and
+    /// `TypeMismatch` at evaluation. `Div` and `Mod` raise
+    /// [`crate::EvalError::DivisionByZero`] on a zero divisor; the rest
+    /// are total. Admission rules stay exact by multiplying
+    /// (`a <= c*b`, not `a/b <= c`); `Div` is for read-side projections.
     Arith {
         op: ArithOp,
         left: Box<ValueExpr>,
         right: Box<ValueExpr>,
     },
-    /// Sums `value` over every binding the `body` produces. `value` is
-    /// any value expression consuming the body's bindings, evaluated
-    /// exactly once per witness: a variable (`sum(amount | ...)`), a
-    /// decimal literal counting matches (`sum(1 | ...)`), or a computed
-    /// quantity (`sum(probability * loss | ...)` - the expected-loss
-    /// recompute that forced the generalisation).
+    /// Sums `value` over every binding the `body` produces, evaluating it
+    /// once per witness: a variable (`sum(amount | ...)`), a literal that
+    /// counts matches (`sum(1 | ...)`), or a computed value
+    /// (`sum(probability * loss | ...)`).
     ///
-    /// `seed` is the zero an empty sum evaluates to, resolved statically
-    /// by [`crate::lower_sum_seeds`] from the summed expression's
-    /// declared kinds - so an empty sum over a `Decimal[t]` position is
-    /// `0 t`, not a bare decimal that no quantity comparison could
-    /// accept. Un-lowered hand-built IR keeps the decimal default, and
-    /// validation refuses it (`EmptySumUntyped`) wherever the checker
-    /// reads a duration or quantity target that default would betray.
+    /// `seed` is what an empty sum returns, set by
+    /// [`crate::lower_sum_seeds`] from declared kinds: an empty sum over a
+    /// `Decimal[t]` position is `0 t`. Hand-built IR that skips lowering
+    /// keeps the decimal zero, and validation refuses it
+    /// (`EmptySumUntyped`) wherever the target is a duration or quantity.
     Sum {
         value: Box<ValueExpr>,
         body: Box<Prop>,
         seed: SumSeed,
     },
     /// The largest or smallest `value` over the bindings satisfying
-    /// `body` - the selection a governing-claim rule needs on the commit
-    /// path ("the version in force at this date" is the greatest
-    /// `effective_from` not after it).
+    /// `body`. "The version in force at this date" is the greatest
+    /// `effective_from` not after it.
     ///
-    /// Shaped like [`ValueExpr::Sum`] without a seed, because that is the
-    /// whole difference: an empty sum is a typed zero, and an empty
-    /// extremum has no answer to give. It raises
-    /// [`crate::EvalError::EmptyExtremum`] rather than inventing one, so
-    /// an author who wants a lawful refusal writes a `require` first -
-    /// the same division of labour as [`ValueExpr::ValueOf`] (errors)
-    /// against [`Stmt::BindOne`] (rejects).
+    /// Like [`ValueExpr::Sum`] without a seed: an empty extremum has no
+    /// answer, so it raises [`crate::EvalError::EmptyExtremum`]. To reject
+    /// cleanly instead, put a `require` first, as with
+    /// [`ValueExpr::ValueOf`] versus [`Stmt::BindOne`].
     ///
-    /// Ordered kinds only - decimals, dates, timestamps, durations, and
-    /// same-unit quantities. Subjects are opaque identifiers, booleans are
-    /// not a scale, and a collection is not a point on one, so none has a
-    /// largest member; all are refused at validation rather than given an
-    /// arbitrary order. The check is an allow-list, so a kind added later
-    /// has no order until someone decides it does.
+    /// Ordered kinds only: decimals, dates, timestamps, durations, and
+    /// same-unit quantities. Validation refuses any other kind.
     Extremum {
         op: ExtremumOp,
         value: Term,
         body: Box<Prop>,
     },
     /// Reads exactly one matching claim and yields the argument at
-    /// `extract`; wildcards in `args` are unconstrained positions, and
-    /// `args[extract]` must be one of them (validation refuses
-    /// otherwise). Zero matches errors unless `default` is supplied;
-    /// multiple matches always errors.
+    /// `extract`, which must be a wildcard in `args` (validation refuses
+    /// otherwise). Zero matches is an error unless `default` is given;
+    /// several matches is always an error.
     ///
-    /// The positional surface form always extracts the FIRST wildcard;
-    /// the named form (`value P(field: x, hole: _, ..)`) can place the
-    /// hole at any declared field, which is why the index is explicit
-    /// IR rather than recomputed from the argument list.
+    /// The positional surface form extracts the first wildcard; the named
+    /// form (`value P(field: x, hole: _, ..)`) can pick any field, so the
+    /// index is stored explicitly.
     ///
-    /// Prefer [`Stmt::BindOne`] in transformation bodies (it rejects
-    /// lawfully on zero matches, where `ValueOf` raises a kernel error).
-    /// `ValueOf` is for value positions that are not statement-level
-    /// binding extensions: inside `Sum`/`Add`/`Sub`/`Eq`/`Compare`,
-    /// a `Let` value, or a `DerivedClaim` value expression.
+    /// In transformation bodies prefer [`Stmt::BindOne`], which rejects
+    /// cleanly on zero matches where `ValueOf` raises a kernel error.
+    /// `ValueOf` is for value positions: inside sums, arithmetic,
+    /// comparisons, a `Let` value, or a `DerivedClaim` value.
     ValueOf {
         predicate: PredicateName,
         args: Vec<Term>,
         extract: usize,
         default: Option<Box<ValueExpr>>,
     },
-    /// `if(when, then, otherwise)`: the value selected by whether a
-    /// proposition holds. The test is exists-style - at least one
-    /// witness selects `then`, none selects `otherwise` - and the
-    /// witnesses' bindings are DISCARDED, the same non-export rule
-    /// `require` carries: nothing bound inside `when` reaches the
-    /// branches or the surrounding expression. Only the selected
-    /// branch evaluates (an error in the untaken branch cannot
-    /// surface), while an error in the condition itself propagates -
-    /// a condition that cannot be decided never silently selects
-    /// `otherwise`. Branch kinds unify with no ordering requirement:
-    /// selection is not ordering, so subject tags, booleans, and
-    /// collections are lawful branch kinds. A kernel node, not sugar:
-    /// no existing `ValueExpr` selects, and the relational spelling
-    /// (an `or` of tests) can only TEST an already-bound value, never
-    /// produce one.
+    /// `if(when, then, otherwise)`: `then` if `when` has at least one
+    /// witness, else `otherwise`. As with `require`, bindings made in
+    /// `when` are discarded. Only the selected branch is evaluated. An
+    /// error in `when` propagates; it never silently selects `otherwise`.
+    /// The branches must have the same kind, which may be any kind.
     Cond {
         when: Box<Prop>,
         then: Box<ValueExpr>,
@@ -470,9 +377,7 @@ impl From<Term> for ValueExpr {
 }
 
 /// A comparison operator, independent of operand domain. Carried by
-/// [`Prop::Compare`] together with an [`OrderedDomain`]; the pair replaces
-/// what were once eight flat comparator variants (`Le` through `DateGt`) -
-/// the operator stays first-class without the enum exploding by kind.
+/// [`Prop::Compare`] together with an [`OrderedDomain`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompareOp {
     Le,
@@ -483,12 +388,9 @@ pub enum CompareOp {
 
 /// Which end of the ordering an [`ValueExpr::Extremum`] takes.
 ///
-/// Distinct from [`Builtin::Min`] / [`Builtin::Max`], which cap one value
-/// against another and are strict calls. This picks from a set the body
-/// defines - it binds a variable and ranges over state, which is what
-/// makes it a construct rather than a builtin. The two never appear in
-/// the same position, and the surface tells them apart by the `|` that
-/// introduces a body.
+/// Distinct from [`Builtin::Min`] / [`Builtin::Max`], which compare two
+/// values. This picks from the set a body defines, ranging over state.
+/// The surface tells them apart by the `|` that introduces a body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtremumOp {
     Max,
@@ -507,12 +409,10 @@ impl ExtremumOp {
 
 /// A strict function over already-evaluated values.
 ///
-/// The line against a [`ValueExpr`] variant is evaluation topology: a
-/// CONSTRUCT decides how its children are evaluated - lazily, or
-/// repeatedly under bindings it produces, or against a proposition -
-/// while a BUILTIN is handed finished values and returns one. Every
-/// builtin obeys the same contract, and a candidate that cannot is
-/// promoted to a variant instead:
+/// A [`ValueExpr`] variant decides how its children are evaluated
+/// (lazily, under bindings it makes, or against a proposition). A
+/// builtin is just handed finished values. Every builtin obeys this
+/// contract; anything that cannot becomes a variant instead:
 ///
 /// - every argument is a `ValueExpr`, evaluated exactly once, in order;
 /// - it sees only those values - never state, bindings, actor,
@@ -521,71 +421,46 @@ impl ExtremumOp {
 /// - its predicate footprint is exactly the union of its arguments';
 /// - it yields one value or a named refusal.
 ///
-/// Kept closed, and every semantic authority matches it exhaustively -
-/// surface name, arity, kind inference, static refusal, evaluation -
-/// so a new builtin still has to declare its behaviour to the
-/// compiler. What it no longer does is redden a dozen walkers whose
-/// only answer was "recurse through the arguments".
+/// Name, arity, kind inference, static refusal, and evaluation each
+/// match on it exhaustively, so a new builtin must define all of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Builtin {
-    /// The magnitude of a signed value: `abs(x)`. Unary and
-    /// unit-preserving (`abs` of a `Decimal[USD]` is a `Decimal[USD]`),
-    /// defined on decimals, quantities, and durations - never
-    /// `max(x, 0 - x)`, so the operand evaluates once and the form
-    /// round-trips as `abs`.
+    /// The magnitude of a signed value: `abs(x)`. Keeps the unit
+    /// (`abs` of a `Decimal[USD]` is a `Decimal[USD]`). Defined on
+    /// decimals, quantities, and durations.
     Abs,
     /// `round(x, quantum)`: the multiple of `quantum` nearest to `x`,
-    /// exact halves rounding AWAY FROM ZERO (2.345 to a 0.01 quantum
-    /// is 2.35; -2.345 is -2.35). One mode only - a second rounding
-    /// policy joins as a parameter when a real domain forces it, not
-    /// before. Decimal-only in v0: both operands are bare decimals and
-    /// the result is a bare decimal (money convention: currency lives
-    /// in field names). A non-positive quantum is refused by name at
-    /// validation when written literally and raises
-    /// [`crate::EvalError::RoundQuantumNotPositive`] at evaluation
-    /// otherwise.
+    /// with exact halves rounding away from zero (2.345 to 0.01 is 2.35;
+    /// -2.345 is -2.35). Bare decimals in and out. A non-positive quantum
+    /// is refused at validation when literal, and otherwise raises
+    /// [`crate::EvalError::RoundQuantumNotPositive`] at evaluation.
     Round,
-    /// `period_index(anchor, span, at)`: which anniversary-anchored
-    /// period `at` falls in - the greatest integer n (as an
-    /// integer-valued decimal) whose nth boundary is at or before
-    /// `at`. Boundary n is the anchor shifted by the span's
-    /// components multiplied by n ONCE and applied with the standard
-    /// clamped walk - never n repeated clamped hops, which the
-    /// calendar's non-associativity would let drift. Representable
-    /// boundaries form half-open periods; a boundary beyond either
-    /// end of the representable calendar acts as an infinity, so the
-    /// outermost periods are clipped and the extractor is total,
-    /// with negative indexes before the anchor. The operator itself
-    /// reads no state (its children are ordinary value expressions,
-    /// walked as such), so a fully-literal use is lawful in a
-    /// `const`. A non-positive span is refused by name at validation
-    /// when written literally and at evaluation otherwise (the round
-    /// quantum pattern).
+    /// `period_index(anchor, span, at)`: which anchored period `at` falls
+    /// in - the greatest integer n (as a decimal) whose nth boundary is at
+    /// or before `at`. Boundary n shifts the anchor by the span times n in
+    /// one clamped step, never n clamped hops, which would drift.
+    /// Periods are half-open. Boundaries beyond the calendar's ends act
+    /// as infinities, so the outermost periods are clipped and every date
+    /// has an index; indexes before the anchor are negative. Reads no
+    /// state, so a fully literal use is allowed in a `const`. A
+    /// non-positive span is refused at validation when literal, and at
+    /// evaluation otherwise.
     PeriodIndex,
     /// `period_start_of(anchor, span, index)`: the first day of period
-    /// `index` - boundary n computed exactly as [`Builtin::PeriodIndex`]
-    /// defines it (span components multiplied by n ONCE, one clamped
-    /// walk from the anchor), so the two are inverse spellings of one
-    /// boundary: `period_index(a, s, period_start_of(a, s, n)) = n`
-    /// wherever the boundary is representable. Where `period_index`
-    /// clips (a date outside the representable boundaries still belongs
-    /// to an outermost period), this refuses: an index whose boundary
-    /// leaves the calendar has no honest date to return and raises
-    /// [`crate::EvalError::ArithOutOfRange`], the same refusal a
-    /// calendar-escaping `date + span` earns. The index must be a
-    /// whole-number decimal - a literal fraction is refused by name at
-    /// validation, anything else at evaluation - and negative indexes
-    /// name the periods before the anchor, mirroring `period_index`'s
-    /// negative results. Deliberately NOT span arithmetic: spans still
-    /// do not combine, and `anchor + n * span` stays inexpressible -
-    /// only the boundary computation `period_index` already owns is
-    /// exposed. Reads no state, so a fully-literal use is lawful in a
-    /// `const`; the span rules (positive, refused two-tier) are shared
-    /// with `period_index`.
+    /// `index`, with the boundary computed exactly as in
+    /// [`Builtin::PeriodIndex`], so
+    /// `period_index(a, s, period_start_of(a, s, n)) = n` wherever the
+    /// boundary exists. Where `period_index` clips, this refuses: a
+    /// boundary outside the calendar raises
+    /// [`crate::EvalError::ArithOutOfRange`], like `date + span` would.
+    /// The index must be a whole number (a literal fraction is refused at
+    /// validation, anything else at evaluation); negative indexes are
+    /// before the anchor. This is not span arithmetic: `anchor + n * span`
+    /// stays inexpressible. Reads no state, so a fully literal use is
+    /// allowed in a `const`. Span rules are as for `period_index`.
     PeriodStartOf,
     /// `min(a, b)` / `max(a, b)`: the smaller or larger of two values.
-    /// Spelled like the calls they are - the aggregate forms over a
-    /// proposition are [`ValueExpr::Extremum`], a construct.
+    /// The forms over a proposition are [`ValueExpr::Extremum`].
     Min,
     Max,
 }
@@ -613,29 +488,24 @@ impl Builtin {
     }
 }
 
-/// A binary decimal arithmetic operator. Carried by [`ValueExpr::Arith`];
-/// the value-sort analogue of [`CompareOp`], replacing what would be a flat
-/// variant per operator. A new operator is one row here, not a fresh
-/// `ValueExpr` variant rippled across every match.
+/// A binary infix arithmetic operator, carried by [`ValueExpr::Arith`].
+/// Operators written as calls (`min`, `max`) are [`Builtin`]s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Infix only, by construction: `min`/`max` read as calls and live in
-/// [`Builtin`], so nothing here needs an is-it-infix predicate.
 pub enum ArithOp {
     Add,
     Sub,
     Mul,
     Div,
-    /// Decimal remainder (`%`). Like `Div`, a zero divisor surfaces
-    /// [`crate::EvalError::DivisionByZero`]. Expresses parity and cyclic
-    /// rules - `(file + rank) % 2` for a chess square's colour.
+    /// Decimal remainder (`%`). Like `Div`, a zero divisor raises
+    /// [`crate::EvalError::DivisionByZero`]. For parity and cycles:
+    /// `(file + rank) % 2` is a chess square's colour.
     Mod,
 }
 
-/// The ordered domain an [`Prop::Compare`] compares over. Explicit in the
-/// IR, never inferred from operand kind: the surface picks it by token (`<`
-/// decimal, `before` date, `strictly_before` timestamp, `shorter_than`
-/// duration), so there is no runtime operator overloading and each domain
-/// type-checks its own operands.
+/// The ordered domain a [`Prop::Compare`] compares over. Never inferred
+/// from operand kinds: the surface picks it by token (`<` decimal,
+/// `before` date, `strictly_before` timestamp, `shorter_than` duration),
+/// and each domain checks its own operands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderedDomain {
     Decimal,
@@ -646,12 +516,9 @@ pub enum OrderedDomain {
 
 impl OrderedDomain {
     /// Whether an operand of this kind may appear under this domain's
-    /// comparators. The membership authority shared by the check tier's
-    /// operand rules; the runtime match in `eval` is its executable
-    /// twin. `Any` (the declaration-time escape hatch) is admitted
-    /// everywhere; the decimal domain's two flavours (bare decimal,
-    /// unit-tagged quantity) agree with each other per the pair rule,
-    /// not here.
+    /// comparators, for the static check (the evaluator has its own
+    /// match). `Any` is admitted everywhere. Whether a bare decimal and a
+    /// quantity may be compared with each other is decided elsewhere.
     pub fn admits(self, kind: &PredicateArgKind) -> bool {
         matches!(
             (self, kind),
@@ -666,12 +533,10 @@ impl OrderedDomain {
         )
     }
 
-    /// The domain that orders a CONCRETE kind - the diagnostic reverse
-    /// lookup ("this operand is a Date; date ordering is spelled
-    /// `on_or_before`"). Deliberately not the inverse of [`Self::admits`]:
-    /// `Any` belongs to every domain and so names none, and the kinds
-    /// nothing orders (subjects, bools, collections, calendar spans)
-    /// return `None`.
+    /// The domain that orders a concrete kind, for diagnostics ("this
+    /// operand is a Date; use `on_or_before`"). `None` for `Any` and for
+    /// kinds nothing orders (subjects, bools, collections, calendar
+    /// spans).
     pub fn for_concrete_kind(kind: &PredicateArgKind) -> Option<OrderedDomain> {
         match kind {
             PredicateArgKind::Decimal | PredicateArgKind::Quantity(_) => {
@@ -702,14 +567,10 @@ pub(crate) fn arith_unique_counterpart(
     known_is_left: bool,
 ) -> Option<(PredicateArgKind, PredicateArgKind)> {
     use PredicateArgKind::{CalendarSpan, Date, Decimal, Duration, Timestamp};
-    // Candidate counterparts: the unit-less arithmetic kinds, plus the
-    // known side's own unit when the known side is a quantity. A unit
-    // the expression has not already named cannot be INFERRED - only
-    // declared - so a bare-decimal known side never infers a quantity
-    // counterpart, even though the scaling rule would evaluate one.
-    // Note `Sub` with a known left-hand `Date` fits two rules (a span
-    // counterpart yields a date, a date counterpart yields days), so
-    // nothing is inferred there; both-sides-known checking still runs.
+    // Candidates: the unit-less kinds, plus the known side's own unit if
+    // it is a quantity. A unit is never inferred from nothing, so a bare
+    // decimal never implies a quantity counterpart. `Date - x` fits two
+    // rules (span or date), so nothing is inferred there.
     let mut candidates = vec![Decimal, Timestamp, Duration, Date, CalendarSpan];
     if let PredicateArgKind::Quantity(u) = known {
         candidates.push(PredicateArgKind::Quantity(u.clone()));
@@ -738,26 +599,20 @@ pub(crate) fn arith_result_kind(
         (_, Decimal, Decimal) => Some(Decimal),
         (ArithOp::Add | ArithOp::Sub, Timestamp, Duration) => Some(Timestamp),
         (ArithOp::Sub, Timestamp, Timestamp) => Some(Duration),
-        // The civil-date rules. A calendar span shifts a date (months
-        // first, day clamped to the destination month, then days); the
-        // difference of two dates is their signed count of actual days,
-        // as a decimal. Deliberately absent: `Date +/- Duration` (exact
-        // seconds cannot shift a day-less-precise value), and
-        // `Timestamp +/- CalendarSpan` (a calendar shift of an instant
-        // needs a time zone, which the kernel refuses to guess).
+        // A calendar span shifts a date (months first, clamped to the
+        // month's end, then days). Two dates subtract to a signed count of
+        // days, as a decimal. No `Date +/- Duration` (a date has no time
+        // of day) and no `Timestamp +/- CalendarSpan` (that needs a time
+        // zone).
         (ArithOp::Add | ArithOp::Sub, Date, CalendarSpan) => Some(Date),
         (ArithOp::Sub, Date, Date) => Some(Decimal),
         (ArithOp::Add | ArithOp::Sub, Duration, Duration) => Some(Duration),
-        // The ratio of two spans is a dimensionless decimal - how many
-        // days of demurrage, how many turn-times in the gap. Exact for
-        // terminating ratios; see the evaluator's arm for the precision
-        // contract.
+        // Two spans divide into a plain decimal ("how many days").
+        // Precision is covered in the evaluator.
         (ArithOp::Div, Duration, Duration) => Some(Decimal),
-        // The unit algebra, deliberately minimal: amounts combine only
-        // under the SAME label; the ratio of two same-unit amounts is
-        // a bare decimal; a bare decimal scales a quantity. Nothing
-        // here produces a unit that was not already written down - no
-        // compound units, no unit-producing multiplication.
+        // Units: amounts combine only with the same unit; two same-unit
+        // amounts divide into a bare decimal; a bare decimal scales a
+        // quantity. No rule creates a unit that was not written down.
         (ArithOp::Add | ArithOp::Sub, Quantity(u), Quantity(v)) if u == v => {
             Some(Quantity(u.clone()))
         }
@@ -769,12 +624,11 @@ pub(crate) fn arith_result_kind(
     }
 }
 
-/// A positional argument in a claim, intent, or expression: a variable
-/// bound by the surrounding context, a wildcard matching anything, a
-/// literal constant, or `Actor`. `Term::Actor` resolves only inside a
-/// transformation body; in an invariant it surfaces as
-/// `EvalError::UnboundActor` - the require-vs-invariant doctrine made
-/// enforceable: authority checks belong in `require`, not invariants.
+/// A positional argument in a claim, intent, or expression: a variable,
+/// a wildcard, a literal, or `Actor`. `Term::Actor` resolves only in a
+/// transformation body; in an invariant it raises
+/// `EvalError::UnboundActor`, because authority checks belong in
+/// `require`, not invariants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Var(Var),
@@ -786,55 +640,40 @@ pub enum Term {
     Actor,
 }
 
-/// Literal constants embeddable in IR `Term`s. Distinct from `EvalValue`
-/// (a runtime value, including the booleans and collections that cannot
-/// appear as IR literals).
+/// A literal constant in an IR `Term`. Unlike the runtime `EvalValue`, it
+/// has no booleans or collections.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
-    /// Arbitrary-precision decimal stored as its exact source string.
-    /// Parsing into a numeric type is the evaluator's concern, not the IR's.
+    /// Arbitrary-precision decimal, kept as its exact source string and
+    /// parsed at evaluation.
     Decimal(String),
-    /// Opaque subject identifier embedded as a literal in the IR.
-    /// Lets predicates and requires reference named constants
-    /// (purposes, statuses, named authorities, etc.) without forcing
-    /// every transformation to take them as extra parameters.
+    /// A named subject constant (a purpose, status, or authority), so it
+    /// need not be passed as a parameter.
     Subject(Subject),
-    /// ISO-8601 civil date (`YYYY-MM-DD`) stored as its exact source string.
-    /// Parsing into [`jiff::civil::Date`] is the evaluator's concern, not the
-    /// IR's; mirrors how [`Value::Decimal`] defers parsing to evaluation.
-    /// No time-of-day, no time zone: the civil-date kind for
-    /// validity-window modelling, beside the exact-instant
-    /// [`Value::Timestamp`] and exact-span [`Value::Duration`] kinds.
+    /// ISO-8601 civil date (`YYYY-MM-DD`), kept as its source string and
+    /// parsed into [`jiff::civil::Date`] at evaluation. No time of day and
+    /// no time zone.
     Date(String),
-    /// An exact instant on the UTC timeline (RFC 3339, e.g.
-    /// `2026-10-24T14:00:00Z`), stored as its exact source string;
-    /// parsing into [`jiff::Timestamp`] is the evaluator's concern.
-    /// Deliberately zone-less: civil-time interpretation (port-local
-    /// days, DST boundaries) is domain knowledge to be admitted as
-    /// claims, not a hidden runtime assumption.
+    /// An exact UTC instant (RFC 3339, e.g. `2026-10-24T14:00:00Z`), kept
+    /// as its source string and parsed into [`jiff::Timestamp`] at
+    /// evaluation. No time zone: local time is domain knowledge, admitted
+    /// as claims.
     Timestamp(String),
-    /// An exact span of time (ISO 8601, e.g. `PT6H`), stored as its
-    /// exact source string; parsing into [`jiff::SignedDuration`] is
-    /// the evaluator's concern. Exact seconds only - no calendar
-    /// units (months, years), whose lengths depend on context the
-    /// kernel refuses to guess. Calendar shifts are the separate
-    /// [`Value::CalendarSpan`], which only date arithmetic accepts.
+    /// An exact span of time (ISO 8601, e.g. `PT6H`), kept as its source
+    /// string and parsed into [`jiff::SignedDuration`] at evaluation.
+    /// Exact seconds only; months and years vary in length, so they are
+    /// [`Value::CalendarSpan`].
     Duration(String),
-    /// A calendar span (`P3M`, `P45D`), stored as its exact source
-    /// string; parsing via [`crate::calendar::parse_calendar_span`] is
-    /// the evaluator's concern. An arithmetic operand only - it shifts
-    /// a `Date` and is refused everywhere else: not declarable as an
-    /// argument kind, not admissible into a claim or intent, never
-    /// ordered or summed. Equality over the normalised value is
-    /// lawful (`span(P1Y) = span(P12M)` holds). Kept apart from
-    /// [`Value::Duration`] because a month has no exact length until
-    /// it lands on a date.
+    /// A calendar span (`P3M`, `P45D`), kept as its source string and
+    /// parsed via [`crate::calendar::parse_calendar_span`] at evaluation.
+    /// It only shifts a `Date`: it cannot be declared as an argument kind,
+    /// admitted in a claim or intent, ordered, or summed. Equality compares
+    /// normalised values (`span(P1Y) = span(P12M)` holds). Separate from
+    /// [`Value::Duration`] because a month has no fixed length.
     CalendarSpan(String),
-    /// A unit-tagged exact decimal quantity (`25000 USD`, `0 t`). The
-    /// amount is stored as its exact source string, like
-    /// [`Value::Decimal`]; the unit is an opaque [`Unit`] symbol. The
-    /// evaluator enforces same-unit arithmetic and comparison; the
-    /// kernel holds no unit knowledge beyond label equality.
+    /// A unit-tagged exact decimal (`25000 USD`, `0 t`). The amount is
+    /// kept as its source string, like [`Value::Decimal`]; the unit is an
+    /// opaque [`Unit`].
     Quantity { amount: String, unit: Unit },
 }
 
@@ -861,32 +700,25 @@ pub struct Intent {
     pub args: Vec<Term>,
 }
 
-/// One step inside a transformation body, run in declared order against
-/// a binding context. `Require` and `BindOne` can short-circuit the
-/// transformation; `Assert`, `Retract`, `Emit`, `Let`, `LetNewSubject`,
-/// and `For` extend the staged outcome or the bindings. The
-/// require/bind_one/let/for binding quartet is documented per variant
-/// below and in full in `docs/runtime-semantics.md`.
+/// One step in a transformation body, run in order. `Require` and
+/// `BindOne` can reject the transformation; the others stage changes or
+/// extend the bindings. Binding rules are in `docs/runtime-semantics.md`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
-    /// A yes/no gate over the pre-state. `name` is the author's optional
-    /// stable identifier: a refusal quotes the rendered expression, which
-    /// any rewording changes, so anything that must name the rule that
-    /// refused - a test, a runbook, refusals grouped by cause - needs
-    /// something the prose cannot invalidate.
+    /// A yes/no gate over the pre-state; its matches do not export.
+    /// `name` is an optional stable name for refusals, which otherwise
+    /// quote the expression and change with every rewording.
     Require {
         prop: Prop,
         name: Option<RuleName>,
     },
-    /// Deterministic unique-lookup binding statement. Evaluates a
-    /// predicate-shaped proposition against current state and bindings:
-    /// - Zero matches: transformation rejected (lawful: the expected
-    ///   governed record is absent).
-    /// - One match: the returned binding set *replaces* the current
-    ///   bindings; later statements see the newly-bound variables.
-    /// - Multiple matches: `EvalError::TypeMismatch` (the programme
-    ///   expected unique state but admitted ambiguous state - a missing
-    ///   structural-uniqueness invariant, or corruption).
+    /// Unique lookup. Evaluates the proposition against state and
+    /// bindings:
+    /// - zero matches: the transformation is rejected;
+    /// - one match: its bindings *replace* the current ones for later
+    ///   statements;
+    /// - several: `EvalError::TypeMismatch`, since the state was expected
+    ///   to be unique (a missing uniqueness invariant, or corruption).
     BindOne {
         prop: Prop,
         name: Option<RuleName>,
@@ -899,10 +731,9 @@ pub enum Stmt {
         name: Var,
     },
     Assert(Claim),
-    /// Pattern-based retraction. Each Var in `args` is resolved against
-    /// the current bindings; each Wildcard matches anything. All claims
-    /// in the pre-state matching the resolved pattern are staged for
-    /// retraction. Zero matches is an idempotent no-op (not an error).
+    /// Retracts every pre-state claim matching the pattern. Variables in
+    /// `args` must be bound; wildcards match anything. Zero matches is a
+    /// no-op, not an error.
     Retract {
         predicate: PredicateName,
         args: Vec<Term>,
@@ -917,15 +748,13 @@ pub enum Stmt {
     Emit(Intent),
 }
 
-/// A named, parameterised proposal to change admitted state. A
-/// transformation is the only path by which governed state may change.
-/// Its body is a sequence of [`Stmt`]s; when invoked via [`crate::propose`],
-/// the body executes against a snapshot of pre-state, stages assertions
-/// and retractions and intents, and produces an [`crate::Outcome`] that the
-/// caller can either commit or discard.
+/// A named, parameterised proposal to change admitted state: the only way
+/// governed state changes. Run via [`crate::propose`], its [`Stmt`]s read a
+/// snapshot of the pre-state, stage admissions, retractions, and intents,
+/// and produce an [`crate::Outcome`] for the caller to commit or discard.
 ///
-/// Reads inside a transformation always see the *pre-transformation*
-/// snapshot. Writes are staged and become real only at commit.
+/// Reads always see the pre-transformation snapshot. Writes take effect
+/// only at commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transformation {
     pub name: TransformationName,
@@ -933,44 +762,31 @@ pub struct Transformation {
     pub body: Vec<Stmt>,
 }
 
-/// A named, parameterised proposition: a reusable condition declared once
-/// and called from invariant bodies, transformation gates, derived-claim
-/// domains, and other definitions. Body grammar, not a third first-class
-/// construct: a definition never changes state and carries no standing -
-/// it only names a [`Prop`] so the rules that use it read as the business
-/// speaks.
+/// A named, parameterised proposition: a condition declared once and
+/// called from invariants, gates, derived-claim domains, and other
+/// definitions. It changes no state; it only names a [`Prop`] so rules
+/// read the way the business speaks.
 ///
-/// A call site is a [`Prop::Defined`] node whose `args` pair positionally
-/// with `parameters`. Evaluation is relational substitution with
-/// projection: the body is evaluated under a fresh binding context
-/// carrying only the parameters (ground call arguments pre-bind their
-/// parameter; unbound ones leave it free, acting as a generator), and
-/// each body match projects the parameter values back onto the call's
-/// argument terms. The body cannot see the caller's other bindings, and
-/// the caller never sees the body's internal names - a call binds exactly
-/// its argument variables, like a claim match.
+/// A [`Prop::Defined`] call pairs its `args` with `parameters` by
+/// position. The body runs with only the parameters bound (ground
+/// arguments pre-bind; unbound ones are generators), and each match maps
+/// back onto the arguments. The body cannot see the caller's other
+/// bindings, and the caller never sees the body's names.
 ///
-/// Bodies are context-free in v0: `Term::Actor` and `Prop::Pre` inside a
-/// definition body are validation errors, so a definition means the same
-/// thing in a gate as in an invariant. (`actor` is passed as an ordinary
-/// call argument where a gate needs it; a *call* wrapped in `pre(...)`
-/// works, because the context swap applies to the body's evaluation.)
-/// Definitions may call other definitions; cycles are a validation
-/// error. A parameter the body binds is generator-capable (a call may
-/// pass an unbound variable there); a parameter the body only uses
-/// must arrive bound at every call; a parameter the body never
-/// references is refused.
+/// Bodies are context-free: `Term::Actor` and `Prop::Pre` inside one are
+/// validation errors, so a definition means the same in a gate as in an
+/// invariant. Pass `actor` as an argument, or wrap the call in
+/// `pre(...)`. Definitions may call each other; cycles are errors. A
+/// parameter the body binds may arrive unbound; one it only uses must
+/// arrive bound; one it never references is refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Definition {
     pub name: DefinitionName,
     pub parameters: Vec<Var>,
     pub body: Prop,
-    /// Who wrote this definition. Discipline-generated selectors must be
-    /// distinguishable from authored ones: the formatter has to omit them
-    /// (printing one makes it authored on reparse), the lowering has to
-    /// know whether it has already run, and a hand-built programme that
-    /// shadows a generated name must not lose it silently. Matching on
-    /// the name alone got all three subtly wrong.
+    /// Whether this was written or generated from a discipline. The
+    /// formatter omits generated ones, and lowering uses it to tell whether
+    /// it already ran; a name alone cannot tell them apart.
     pub origin: DefinitionOrigin,
 }
 
@@ -986,16 +802,11 @@ pub enum DefinitionOrigin {
     Discipline,
 }
 
-/// A governed domain model: a named set of predicate and intent
-/// vocabularies, invariants, transformations, and derived claims,
-/// packaged so the runtime, CLI, and external callers can refer to it as
-/// one unit. It is the smallest possible container - it owns no state,
-/// no connection, no schema, just the rules and the admitted
-/// state-change paths. A caller proposes by looking up a transformation
-/// by name and passing it to [`crate::propose`] (or the PostgreSQL
-/// adapter's `propose_against_pg`) with the invariants and arguments.
-/// `name` is a stable snake_case identifier the CLI selects on; each
-/// worked example exposes a `program()` constructor.
+/// A governed domain model: vocabularies, definitions, invariants,
+/// transformations, and derived claims as one unit. It holds no state,
+/// connection, or schema, only the rules. A caller proposes by looking up
+/// a transformation by name and passing it to [`crate::propose`] (or the
+/// PostgreSQL adapter's `propose_against_pg`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Program {
     pub name: String,
@@ -1004,16 +815,12 @@ pub struct Program {
     /// `DerivedClaim` output must target a declared predicate (validated
     /// by [`Program::validate`]).
     pub predicates: Vec<PredicateDecl>,
-    /// The vocabulary of outbox intent shapes this programme may emit.
-    /// Every `Stmt::Emit` must target a declared intent, so a misspelled
-    /// name is a validation error, not a silent route-to-nowhere.
-    /// Separate namespace from predicates.
+    /// The outbox intents this programme may emit. Every `Stmt::Emit` must
+    /// target one, so a misspelling is a validation error. Separate
+    /// namespace from predicates.
     pub intents: Vec<IntentDecl>,
-    /// Named, parameterised propositions (see [`Definition`]). Shares the
-    /// claim-shaped reference namespace with `predicates` - a body
-    /// reference `name(args)` resolves to a predicate or a definition,
-    /// never both - so a definition name colliding with a predicate name
-    /// is a validation error.
+    /// Named propositions (see [`Definition`]). They share a namespace
+    /// with `predicates`, so a name used by both is a validation error.
     pub definitions: Vec<Definition>,
     pub invariants: Vec<Invariant>,
     pub transformations: Vec<Transformation>,
@@ -1034,8 +841,7 @@ impl Program {
     }
 
     /// Look up a derived claim by predicate name. Returns `None` if no
-    /// derived claim in the program has that name. Symmetric with
-    /// [`Program::transformation`] and [`Program::invariant`].
+    /// derived claim in the program has that name.
     pub fn derived_claim(&self, name: &str) -> Option<&DerivedClaim> {
         self.derived_claims
             .iter()
@@ -1043,13 +849,9 @@ impl Program {
     }
 
     /// Look up a predicate declaration by name. Returns `None` if no
-    /// declaration in the program has that name. Symmetric with the
-    /// other lookup methods.
-    ///
-    /// If duplicate declarations exist this returns the first; the
-    /// validator's arity lookup uses the last. Either way, duplicate
-    /// declarations are invalid and are reported by
-    /// [`Program::validate`] as `ValidationError::DuplicateDecl`.
+    /// declaration in the program has that name, and the first of any
+    /// duplicates, which [`Program::validate`] reports as
+    /// `ValidationError::DuplicateDecl`.
     pub fn predicate(&self, name: &str) -> Option<&PredicateDecl> {
         self.predicates.iter().find(|p| p.name.as_str() == name)
     }
@@ -1061,171 +863,111 @@ impl Program {
         self.intents.iter().find(|i| i.name.as_str() == name)
     }
 
-    /// Full static validation of the whole programme. Several checks
-    /// contribute to a single error list:
+    /// Full static validation of the programme:
     ///
-    /// - **Structural**: every predicate and intent reference targets
-    ///   a declaration at the declared arity; no two declarations in a
-    ///   vocabulary share a name.
-    /// - **Kind/type**: every value flowing into a slot, comparator,
-    ///   or arithmetic operand carries a compatible kind; variables
-    ///   refine-and-conflict across their uses; `Any` is unconstrained,
-    ///   not a kind-eraser.
-    /// - **Binding flow**: a name consumed where a bound value is
-    ///   required must have been bound first, following the runtime
-    ///   quartet's export rules.
-    /// - **Actor context**: `Term::Actor` in an invariant or
-    ///   derived-claim body, where no proposing transition is in scope.
-    /// - **Nesting depth**: a body whose expressions or `for`-statements
-    ///   nest past a fixed limit, which the recursive evaluator would
-    ///   otherwise risk exhausting the stack on.
+    /// - **Structural**: every predicate and intent reference targets a
+    ///   declaration at the declared arity; no duplicate names within a
+    ///   vocabulary.
+    /// - **Kinds**: every value in a slot, comparator, or arithmetic
+    ///   operand has a compatible kind; a variable's uses must agree;
+    ///   `Any` is unconstrained, not a kind-eraser.
+    /// - **Binding flow**: a name must be bound before it is used, under
+    ///   the runtime's export rules.
+    /// - **Actor context**: no `Term::Actor` in an invariant or
+    ///   derived-claim body.
+    /// - **Nesting depth**: expressions and `for` statements may not nest
+    ///   so deep that evaluation could overflow the stack.
+    /// - **Derived claims**: no rule, including another derived claim's
+    ///   domain, may read a derived claim; nothing admits one.
     ///
-    /// Returns the **full** error list on failure (not just the
-    /// first); a programme migration that adds declarations should
-    /// see every site at once.
+    /// Returns every error found, not just the first.
     ///
-    /// A derived claim's domain naming a derived claim - its own or
-    /// another's - is refused: a derived is computed from admitted
-    /// claims, and nothing admits a derived, so deriveds do not compose.
-    ///
-    /// Out of scope for v0: source spans on diagnostics (the IR drops
-    /// parser spans on lowering).
-    ///
-    /// `validate` is **not** called automatically by `propose`. The
-    /// kernel boundary is statement-level, not programme-level;
-    /// adding a programme validation pass to every proposal would
-    /// muddle that distinction. `morpholog check` runs it
-    /// explicitly; tests over the worked examples do the same.
+    /// `propose` does **not** call this; `morpholog check` does, and so
+    /// do the tests over the worked examples.
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
         validate_program(self)
     }
 
-    /// Validate and return a proof-of-validity handle. Same checks
-    /// as [`Self::validate`], but the success case carries a
-    /// [`crate::ValidatedProgram`] the analysis surface
+    /// Validate and return a proof-of-validity handle. Same checks and
+    /// errors as [`Self::validate`]; on success, a
+    /// [`crate::ValidatedProgram`] for the analysis API
     /// ([`crate::transformation_param_kinds`],
-    /// [`crate::transformation_arg_schema`]) consumes - so callers
-    /// that need both validation and analysis only pay the
-    /// validation cost once, and the analysis API can drop its
-    /// defensive re-validation. The error shape is unchanged.
+    /// [`crate::transformation_arg_schema`]), so validation runs once.
     pub fn validated(&self) -> Result<crate::ValidatedProgram<'_>, Vec<ValidationError>> {
         self.validate()
             .map(|()| crate::ValidatedProgram::from_validated(self))
     }
 }
 
-/// A predicate declaration: the name of a predicate and the named-and-
-/// kinded shape of its argument list. Declarations appear in
-/// [`Program::predicates`]; references appear inside `Prop::Claim`,
-/// `Stmt::Assert`, `Stmt::Retract`, `ValueExpr::ValueOf`, and
-/// `DerivedClaim` output positions.
+/// A predicate declaration: its name and its named, kinded arguments.
 ///
-/// Argument *names* in a declaration are documentation - they describe
-/// what each position means, surface in `morpholog inspect predicates`,
-/// and inform future parser diagnostics. They have no runtime effect on
-/// matching, which remains positional.
-///
-/// Argument *kinds* (see [`PredicateArgKind`]) constrain the kinds of
-/// values flowing through the binding context: [`Program::validate`]
-/// checks every value reaching an argument position against the
-/// declared kind and rejects incompatible ones.
+/// Matching is positional. Argument *names* serve the named surface
+/// forms and `morpholog inspect predicates`. Argument *kinds* (see
+/// [`PredicateArgKind`]) are checked by [`Program::validate`] against
+/// every value reaching that position.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PredicateDecl {
     pub name: PredicateName,
     pub args: Vec<ArgDecl>,
     /// Declared claim disciplines (see [`Discipline`]). Serialised only
-    /// when present, so manifests and `inspect predicates` output for
-    /// undisciplined programmes are byte-identical to before the field
-    /// existed - the wire change is purely additive.
+    /// when present, so output for programmes without any is unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disciplines: Vec<Discipline>,
 }
 
-/// A declared property of a claim shape - a modelling commitment the
-/// predicate carries on its face, enforced by lowering to ordinary
-/// generated invariants (see `lower_disciplines`) or, where cheaper, by
-/// a static authoring-time check. Disciplines are deliberately boring,
-/// deterministic, generated, visible, and few: properties of claim
-/// shapes, never a back door for arbitrary rule templates.
+/// A declared property of a claim shape, enforced by lowering to ordinary
+/// generated invariants or definitions (see `lower_disciplines`) or by a
+/// static check. Properties of claim shapes only, never a way to write
+/// arbitrary rule templates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "discipline", rename_all = "snake_case")]
 pub enum Discipline {
-    /// `unique by (fields)`: the named fields determine the whole
-    /// claim - any two claims agreeing on the key fields agree on
-    /// every field (SQL-UNIQUE-style full agreement). Lowers to one
-    /// generated invariant per clause; several clauses may coexist.
+    /// `unique by (fields)`: two claims agreeing on these fields agree on
+    /// every field. One generated invariant per clause; several clauses
+    /// may coexist.
     UniqueBy { fields: Vec<String> },
-    /// `effective by (keys) on (date_field)`: this predicate is
-    /// effective-dated - one version per key per date, and the version
-    /// governing a moment is the latest whose date is not after it.
+    /// `effective by (keys) on (date_field)`: effective-dated, with one
+    /// version per key per date; the version in force at a moment is the
+    /// latest whose date is not after it.
     ///
-    /// Lowers to a generated DEFINITION rather than an invariant: the
-    /// selector is something the author calls, not a rule the runtime
-    /// enforces. `current pointer by` governs corrections *within* a
-    /// version; this governs time *across* versions, and the two compose.
+    /// Lowers to a selector definition the author calls, plus a uniqueness
+    /// invariant. It composes with `current pointer by`, which governs
+    /// corrections within a version.
     EffectiveBy {
         keys: Vec<String>,
         on: String,
-        /// `partial`: coverage gaps are intended.
-        ///
-        /// An effective-dated rule passes vacuously where no version is in
-        /// force, so a predicate with no totality companion earns a hint.
-        /// That hint is right for the usual case and wrong for a model
-        /// where a rule genuinely should not apply before the first version
-        /// exists - and under `--strict` there was no way to say so, which
-        /// left an author choosing between a companion that is not true and
-        /// abandoning strict checking entirely.
-        ///
-        /// A declaration, not a suppression: it states what the author
-        /// believes about the model, and contradicting it by also declaring
-        /// `total over` this predicate is an error rather than a
-        /// preference.
+        /// `partial`: gaps in coverage are intended, so no hint is given
+        /// for a missing totality backstop. Also declaring `total over`
+        /// this predicate is an error.
         partial: bool,
     },
     /// `append only`: no transformation may `retract` this predicate.
-    /// Enforced statically (retraction only happens through a
-    /// `retract` statement, so the authoring-time ban is complete and
-    /// costs nothing at runtime). Ordinary programmes correct
-    /// append-only claims by supersession or exception claims, never
-    /// retraction.
+    /// Checked statically, since only a `retract` statement retracts.
+    /// Corrections go through supersession or exception claims.
     AppendOnly,
-    /// `current pointer by (fields)`: this predicate is a retractable
-    /// current-pointer (the doctrine's middle class). Lowers the
-    /// pointer singleton - exactly a `unique by (fields)` generated
-    /// invariant - and records the class as metadata.
+    /// `current pointer by (fields)`: a retractable current pointer.
+    /// Lowers exactly like `unique by (fields)` and records the class.
     CurrentPointerBy { fields: Vec<String> },
-    /// `superseded via L`: names the lineage predicate recording this
-    /// pointer's supersession history. `L` must have exactly two
-    /// arguments in the `(successor, prior)` convention the worked
-    /// examples established; the lowering generates **no-fork only** -
-    /// `unique by` the prior (second) field on `L`, so one prior has
-    /// at most one successor - and marks `L` append-only. It does NOT
-    /// claim well-formed lineage: joins (two priors sharing a
-    /// successor) and cycles are not prevented. Only meaningful on a
-    /// `current pointer by` predicate; required to accompany one.
+    /// `superseded via L`: names the lineage predicate `L(successor,
+    /// prior)` recording this pointer's history. Lowers to **no-fork
+    /// only** (`unique by` the prior on `L`: one prior, at most one
+    /// successor) and makes `L` append-only. Joins and cycles are not
+    /// prevented. Requires `current pointer by` on the same predicate.
     SupersededVia { lineage: PredicateName },
 }
 
-/// One argument-position declaration. Used by both
-/// [`PredicateDecl`] and [`IntentDecl`]; both vocabularies share
-/// the same `name`-plus-kind shape.
+/// One argument declaration, used by [`PredicateDecl`] and
+/// [`IntentDecl`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArgDecl {
     pub name: String,
     pub kind: PredicateArgKind,
 }
 
-/// A declaration of an outbox intent: the intent name and the
-/// shape of its argument list. Declarations appear in
-/// [`Program::intents`]; references appear inside [`Stmt::Emit`].
-///
-/// Mirrors [`PredicateDecl`] structurally - intents and predicates
-/// have the same shape (named, kinded positional args) but live in
-/// distinct vocabularies because they play distinct roles: predicates
-/// describe admitted claim shapes, intents describe outbox-effect
-/// shapes. The check pass validates `emit` arg kinds against
-/// these declarations the same way it validates `assert` against
-/// [`PredicateDecl`].
+/// An outbox intent declaration: its name and its argument list. Shaped
+/// like [`PredicateDecl`] but a separate vocabulary: predicates describe
+/// claims, intents describe outbox effects. `emit` arguments are checked
+/// against it as `admit` arguments are against predicates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntentDecl {
     pub name: IntentName,
@@ -1234,18 +976,11 @@ pub struct IntentDecl {
 
 /// The expected kind of a predicate argument position.
 ///
-/// Deliberately a separate type from [`Value`] and [`crate::EvalValue`] - this
-/// names a *declaration-time* expectation about an argument position,
-/// not a runtime value or an IR literal. Conflating them in a single
-/// enum was considered and rejected: the `Value` / `EvalValue` duality
-/// is already a delicate distinction (IR-literal vs runtime-value), and
-/// a declaration-kind annotation should not be tangled into it.
+/// A declared expectation, separate from the IR literal [`Value`] and the
+/// runtime [`crate::EvalValue`].
 ///
-/// `Any` is the kind escape hatch for argument positions whose kind
-/// is genuinely polymorphic (e.g. a future audit-row payload that may
-/// hold any admitted value), or for declarations that are not yet
-/// ready to commit to a kind. Use it sparingly; the value of the
-/// declaration metadata is highest when kinds are specific.
+/// `Any` is for positions whose kind is genuinely open. Use it sparingly;
+/// specific kinds catch more mistakes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PredicateArgKind {
     Subject,
@@ -1255,23 +990,19 @@ pub enum PredicateArgKind {
     Duration,
     Bool,
     Collection,
-    /// A unit-tagged exact decimal - declared `Decimal[USD]` on the
-    /// surface. Two quantity kinds are compatible only when their
-    /// units are equal; the unit is the whole of the kind's meaning
-    /// (a contractual label, not a physical dimension).
+    /// A unit-tagged exact decimal, declared `Decimal[USD]`. Two
+    /// quantity kinds are compatible only when their units are equal.
     Quantity(Unit),
-    /// The kind of a `span(P3M)` calendar-span literal. Expression-only:
-    /// the surface has no declaration spelling for it, so no claim,
-    /// intent, or transformation argument can carry one - it exists so
-    /// kind inference has a name for the literal inside date arithmetic.
+    /// The kind of a `span(P3M)` literal. It cannot be declared, so no
+    /// claim, intent, or argument carries one; it exists for kind
+    /// inference inside date arithmetic.
     CalendarSpan,
     Any,
 }
 
-/// Renders the declaration syntax - `Decimal[USD]`, never a
-/// unit-erased "Quantity" - so every diagnostic that names a kind
-/// names the unit. The formatter and the validation errors both
-/// route through this impl; they cannot drift.
+/// Renders the declaration syntax (`Decimal[USD]`, never "Quantity"), so
+/// every diagnostic names the unit. Shared by the formatter and the
+/// validation errors.
 impl std::fmt::Display for PredicateArgKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1296,11 +1027,9 @@ pub struct DerivedClaim {
     pub domain: Prop,
 }
 
-/// One computed value in a [`DerivedClaim`]. `name` is the variable
-/// name within the derived claim's scope (used only for documentation
-/// today; the output [`crate::ClaimInstance`] is positional, key values
-/// followed by computed values in declaration order). `expr` is a
-/// [`ValueExpr`] that runs once per distinct key binding.
+/// One computed value in a [`DerivedClaim`]. `name` is descriptive
+/// only: the output [`crate::ClaimInstance`] is positional, keys then
+/// values in declaration order. `expr` runs once per distinct key tuple.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivedValue {
     pub name: String,

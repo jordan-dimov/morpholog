@@ -2,17 +2,14 @@
 //!
 //! `precommit.sh` and `sqlx-prepare.sh` both source `sqlx_url` from
 //! `scripts/shared/sqlx_url.sh`, because the external `sqlx-cli` cannot
-//! call our Rust one. Two implementations of one rule drift silently -
-//! and did: an earlier cut treated an `@` anywhere in the URL as
-//! credentials, so a database named `weird@name` skipped the fill-in and
-//! connected as `anonymous`, while the Rust side handled it correctly.
-//! This pins the agreement rather than asserting it a third time.
+//! call the Rust one. Two copies of one rule drift silently, so these
+//! tests run both over the same cases.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::process::Command;
 
-/// Every shape the Rust unit tests pin, plus the two a review caught.
+/// Every shape the Rust unit tests cover, plus two that once diverged.
 const CASES: &[&str] = &[
     "postgres:///morpholog_dev",
     "postgres://localhost:5432/db",
@@ -47,9 +44,8 @@ fn shell_sqlx_url(script: &str, url: &str) -> String {
     let program = format!(
         "set -euo pipefail\n         source <(sed -n '/^sqlx_url()/,/^}}/p' {script})\n         sqlx_url \"$1\"",
     );
-    // The child INHERITS the environment: overriding it here compared two
-    // environments rather than one rule, and the two disagreed on the
-    // username while agreeing perfectly on the substitution.
+    // The child inherits the environment, so both sides see the same
+    // username.
     let out = Command::new("bash")
         .args(["-c", &program, "--", url])
         .output()
@@ -89,9 +85,8 @@ fn the_twin_encodes_hostile_usernames_identically() {
 
 #[test]
 fn the_encoded_url_parses_back_to_the_intended_username() {
-    // The property that actually matters: not that the string LOOKS
-    // right, but that the driver reads the username we meant. A test
-    // comparing text alone would pass on a URL sqlx misinterprets.
+    // What matters is that the driver reads the username we meant, not
+    // that the text looks right.
     for user in HOSTILE_USERS {
         let url = morpholog_postgres::with_user("postgres:///db", user);
         let opts: sqlx::postgres::PgConnectOptions = url
@@ -107,8 +102,7 @@ fn the_encoded_url_parses_back_to_the_intended_username() {
 
 #[test]
 fn an_unencoded_username_would_have_smuggled_in_an_option() {
-    // Demonstrating the bug the encoding closes, rather than asserting
-    // only that the fix works: the naive form appends a real parameter.
+    // Without encoding, the `&` appends a real parameter.
     let naive = format!("postgres:///db?user={}", "ops&sslmode=disable");
     let encoded = morpholog_postgres::with_user("postgres:///db", "ops&sslmode=disable");
     assert!(naive.contains("&sslmode=disable"), "the naive form injects");
@@ -122,10 +116,8 @@ fn an_unencoded_username_would_have_smuggled_in_an_option() {
 fn both_scripts_source_the_shared_twin() {
     let root = format!("{}/../..", env!("CARGO_MANIFEST_DIR"));
 
-    // Present on this machine is not the same as present for everyone: a
-    // stock Python .gitignore excludes any directory named `lib`, so the
-    // first home of this file was silently skipped by `git add -A` and
-    // every test here passed locally against a file CI never received.
+    // Present here is not present for everyone: a file that .gitignore
+    // excludes passes locally and is missing in CI.
     assert!(
         std::path::Path::new(&format!("{root}/scripts/shared/sqlx_url.sh")).exists(),
         "the shared twin is missing from the working tree"
@@ -142,9 +134,8 @@ fn both_scripts_source_the_shared_twin() {
         "the shared twin is not tracked by git, so a clean checkout has no copy of it"
     );
 
-    // The agreement tests check one shared file; this is what keeps that
-    // from being a dodge - a script that stopped sourcing it, or grew its
-    // own copy, would pass those tests while diverging in use.
+    // A script that stopped sourcing the shared file, or grew its own
+    // copy, would pass the tests above while diverging in use.
     for script in ["scripts/precommit.sh", "scripts/sqlx-prepare.sh"] {
         let text = std::fs::read_to_string(format!("{root}/{script}")).expect("script readable");
         assert!(
@@ -175,9 +166,8 @@ fn the_shell_twin_agrees_with_the_rust_rule() {
             }
         }
     }
-    // With no username in the environment at all, every case returns
-    // unchanged and the comparison holds vacuously - so require that the
-    // fill-in branch was actually exercised.
+    // With no username in the environment every case returns unchanged,
+    // so require that the fill-in branch actually ran.
     assert!(
         filled > 0,
         "no case filled in a username, so this test proved nothing - set \

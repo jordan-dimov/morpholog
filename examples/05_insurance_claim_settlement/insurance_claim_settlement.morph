@@ -33,11 +33,11 @@
 --     already paid on the policy plus the proposed amount and refuses if
 --     that would breach the aggregate. This is the "am I allowed to do
 --     this?" question a handler interacts with.
---   * An `invariant` is a rule that must hold for all admitted state,
---     and the runtime refuses to commit any change that would break it.
---     We also track the policy's *remaining headroom* as a running
---     counter, and an invariant insists that every payment must drop
---     that headroom by exactly its own amount. This is the "did I
+--   * An `invariant` is a standing rule about what lawful records look
+--     like, and the runtime refuses to commit any change that would
+--     break it. We also track the policy's *remaining headroom* as a
+--     running counter, and an invariant insists that every payment must
+--     drop that headroom by exactly its own amount. This is the "did I
 --     actually do it correctly?" question. A buggy action that recorded
 --     a payment but forgot to lower the headroom would pass the gate and
 --     still be caught by the invariant.
@@ -91,8 +91,8 @@ intent ClaimPaymentRequested(settlement_id: Subject, amount: Decimal, actor: Sub
 intent CoverageTermsSet(policy_id: Subject)
 
 
--- The rules that must always hold. Any change that would leave the
--- world violating one of these is rejected outright.
+-- The standing rules. Any change that would break one of these is
+-- rejected outright.
 
 -- No payment may exist without a matching authorisation behind it. A
 -- hand-constructed payment with no one's sign-off is refused. Read
@@ -150,8 +150,8 @@ invariant coverage_terms_within_range:
 
 
 -- The only ways state may change. A transformation proposes a set of
--- changes; the runtime applies them only if every rule above still holds
--- once they are in place.
+-- changes; the runtime applies them only if everything they touch still
+-- obeys every rule above.
 
 -- Open a policy. This records the contractual cap (set once, never
 -- touched again) and starts the headroom counter at the full aggregate,

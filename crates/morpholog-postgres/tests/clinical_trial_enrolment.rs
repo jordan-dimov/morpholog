@@ -1,16 +1,10 @@
-//! Integration test for the clinical-trial-enrolment example
-//! through `propose_against_pg`. Confirms that `Value::Date` /
-//! `EvalValue::Date` round-trip through the PG JSONB `arguments`
-//! columns (claims and audit) without loss, and that the
-//! load-bearing `randomise_participant` transformation commits the
-//! expected claim, audit row and outbox intent.
+//! The clinical-trial-enrolment example through `propose_against_pg`.
+//! Dates round-trip through the claims and audit columns without loss,
+//! and `randomise_participant` commits the expected claim, audit row and
+//! outbox intent.
 //!
-//! Scope is the happy path only. Per-gate rejection paths are
-//! covered by the in-memory tests in
-//! `crates/morpholog-examples/tests/clinical_trial_enrolment.rs`;
-//! that surface does not change between in-memory and PG
-//! evaluation, so re-running every rejection through PG would buy
-//! no extra signal.
+//! Happy path only. Gate rejections are covered in memory by
+//! `crates/morpholog-examples/tests/clinical_trial_enrolment.rs`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -25,9 +19,8 @@ mod common;
 use common::{date, subj};
 use common::{reset_db, test_pool};
 
-/// Helper: run a setup transformation and assert it committed,
-/// returning the next test step's pre-state implicitly (PG holds
-/// state in tables; no value returned). Panics on rejection.
+/// Run a setup transformation and return its transition id. Panics on
+/// rejection.
 async fn commit(pool: &PgPool, t: &morpholog_core::Transformation, args: Vec<EvalValue>) -> Uuid {
     let outcome =
         common::propose_pg_with_test_actor(pool, &common::compiled(cte::program()), t, args)
@@ -55,7 +48,7 @@ async fn randomise_participant_happy_path_through_pg() {
     let participant = "p_001";
     let randomised_on = "2026-03-12";
 
-    // Setup chain: every claim the load-bearing require gates on.
+    // Setup: every claim the randomisation gates on.
     commit(&pool, &cte::open_trial(), vec![subj(trial)]).await;
     commit(
         &pool,
@@ -126,9 +119,8 @@ async fn randomise_participant_happy_path_through_pg() {
     )
     .await;
 
-    // Load-bearing call: randomise_participant with the investigator
-    // as the actor. The DelegatedInvestigator gate consults Term::Actor;
-    // a different actor would reject here.
+    // The investigator is the actor: the DelegatedInvestigator gate
+    // would reject anyone else.
     let outcome = common::propose_pg_as(
         &pool,
         &common::compiled(cte::program()),

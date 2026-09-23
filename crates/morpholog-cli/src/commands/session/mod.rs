@@ -1,29 +1,25 @@
-//! `morpholog session` - a resident process over stdio: parse and
-//! validate the programme once, hold one warm connection, then answer
-//! NDJSON requests on stdin with the same pinned envelopes the
-//! one-shot commands print, one compact line per request, in order.
+//! `morpholog session` - a resident process over stdio. It validates the
+//! programme once, holds one warm connection, and answers NDJSON requests
+//! on stdin with the same envelopes the one-shot commands print, one line
+//! per request, in order.
 //!
-//! The protocol is deliberately lockstep: one request in, one
-//! response out, no correlation ids and no interleaving. A propose
-//! answers with the batch receipt shape (`row` = the 1-based request
-//! line number); the reads answer with the pinned claim arrays; a
-//! per-request failure answers with a session error receipt carrying
-//! a stable `code`, because a caller deciding whether a retry is safe
-//! must never parse prose. A proposal's database failure is such a
-//! receipt too: `not_committed` when the adapter knows nothing was
-//! recorded, `commit_outcome_unknown` when COMMIT failed without a
-//! server verdict - and the session stays in step either way. What
-//! aborts the process with a non-zero exit is a failure that cannot be
-//! a receipt: a broken stream, an operational failure on a read, or a
-//! rejection that was decided but could not be recorded (a receipt
-//! code would misdescribe a decided verdict).
-//! To a caller with a request in flight an abort means the outcome is
-//! UNKNOWN, which the generated client surfaces as its outcome-unknown
-//! error, never as a silent retry.
+//! The protocol is lockstep: one request in, one response out, no
+//! correlation ids. A propose answers with the batch receipt (`row` is the
+//! 1-based request line); reads answer with the claim arrays. A
+//! per-request failure answers with an error receipt carrying a stable
+//! `code`. A proposal's database failure is a receipt too:
+//! `not_committed` when nothing was recorded, `commit_outcome_unknown`
+//! when COMMIT failed without a verdict.
 //!
-//! The programme is pinned at start: the ready line's `model_hash` is
-//! the staleness token, and editing the file never changes a running
-//! session - rolling out a new model means starting new sessions.
+//! The process aborts, non-zero, only on a failure that cannot be a
+//! receipt: a broken stream, an operational failure on a read, or a
+//! decided rejection that could not be recorded. To a caller with a
+//! request in flight, an abort means the outcome is unknown; the generated
+//! client reports it as such and never retries silently.
+//!
+//! The programme is fixed at start; the ready line's `model_hash` tells a
+//! caller which one. Editing the file never changes a running session, so
+//! a new model means new sessions.
 
 use anyhow::{Context, anyhow};
 use std::io::{BufRead, Write};
@@ -39,15 +35,13 @@ use morpholog_core::CompiledProgram;
 use morpholog_postgres::PgPool;
 use morpholog_postgres::PgProgram;
 
-/// A runaway guard, not a working limit: a request line larger than
-/// this aborts the session (there is no way to resynchronise a
-/// half-read line, so it cannot be a receipt).
+/// A runaway guard, not a working limit. A longer request line aborts the
+/// session: a half-read line cannot be resynchronised, so it cannot be a
+/// receipt.
 const MAX_REQUEST_LINE: usize = 64 * 1024 * 1024;
 
-/// A per-request failure becomes a receipt and the session continues;
-/// an operational failure aborts the process, because pretending the
-/// stream is still healthy would make infrastructure failure look
-/// like answered requests.
+/// A per-request failure becomes a receipt and the session continues. An
+/// operational failure aborts, so it never looks like an answered request.
 enum SessionFailure {
     Request {
         code: ErrorCode,
@@ -63,15 +57,12 @@ impl SessionFailure {
 }
 
 pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
-    // Startup failures keep the one-shot exit shape: nothing has been
-    // promised on stdout yet, so diagnostics + exit is the contract.
+    // Before the ready line, failures behave as in one-shot commands:
+    // diagnostics, then exit.
     let parsed = parse_or_report(&args.file)?;
     let program = morpholog_postgres::PgProgram::new(compile_or_report(&parsed)?);
     let compiled = program.core();
 
-    // One connection: a lockstep protocol cannot use more, and the
-    // cap bounds database connection load when many application
-    // workers each hold a session.
     let pool = crate::commands::connect_single(&args.db.database_url).await?;
 
     let stdout = std::io::stdout();
@@ -111,21 +102,18 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// One compact response line, flushed before the next request is
-/// read: the caller is blocked on this line, so buffering it would
-/// deadlock the conversation.
+/// Write one compact response line and flush it: the caller is waiting on
+/// it, so buffering would deadlock.
 fn write_line(out: &mut impl Write, value: &serde_json::Value) -> anyhow::Result<()> {
     writeln!(out, "{}", serde_json::to_string(value)?).context("writing a response line")?;
     out.flush().context("flushing a response line")?;
     Ok(())
 }
 
-/// `read_line` with the runaway guard: accumulates through the
-/// buffered reader so an input that never supplies a newline cannot
-/// allocate without bound. Bytes accumulate first and decode ONCE at
-/// the end of the line - a multibyte character split across two
-/// buffer fills is valid UTF-8 only in whole. Returns the bytes
-/// read; 0 is EOF.
+/// `read_line` with the runaway guard, so input with no newline cannot
+/// allocate without bound. Decodes UTF-8 once per whole line, since a
+/// character can straddle two buffer fills. Returns the bytes read; 0 is
+/// EOF.
 fn read_line_capped(input: &mut impl BufRead, line: &mut String) -> anyhow::Result<usize> {
     let mut bytes = Vec::new();
     loop {
@@ -156,11 +144,9 @@ fn read_line_capped(input: &mut impl BufRead, line: &mut String) -> anyhow::Resu
 #[cfg(test)]
 mod tests;
 
-/// Decode and dispatch one request line. The `op` discriminator is
-/// read and removed by hand rather than through an internally tagged
-/// enum, because serde's tagged enums cannot enforce
-/// `deny_unknown_fields` on their variants - and a misspelt field
-/// must be a refusal, never silently "all predicates".
+/// Decode and dispatch one request line. `op` is removed by hand, not via
+/// a serde tagged enum, because those cannot `deny_unknown_fields`, and a
+/// misspelt field must be refused, never read as "all predicates".
 async fn handle_line(
     args: &SessionArgs,
     program: &PgProgram,
@@ -250,10 +236,8 @@ struct TransactBody {
     acts: Vec<Act>,
 }
 
-/// Several proposals as one decision, answered with the one atomic
-/// outcome plus this request's row. A known error of the whole batch
-/// is the session's ordinary coded receipt; the session stays in step
-/// either way.
+/// Several proposals as one decision, answered with the outcome plus this
+/// request's row. A known error for the batch is an ordinary coded receipt.
 async fn handle_transact(
     args: &SessionArgs,
     program: &PgProgram,
@@ -310,9 +294,8 @@ async fn handle_claims(
     let body: ClaimsBody = serde_json::from_value(body)
         .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
     let program = compiled.program();
-    // The named read keeps its one-shot contract: the programme is
-    // the authority, and a requested predicate it does not declare is
-    // the typo this mode exists to catch.
+    // As in the one-shot named read, a predicate the programme does not
+    // declare is an error.
     if body.named {
         for requested in &body.predicates {
             if !program
@@ -334,9 +317,8 @@ async fn handle_claims(
         .await
         .map_err(SessionFailure::Operational)?;
     if body.named {
-        // Skew between the programme and the stored rows is not the
-        // request's fault: it aborts, exactly as the one-shot read
-        // errors rather than answering.
+        // A mismatch between programme and stored rows is not the
+        // request's fault, so it aborts, as the one-shot read errors.
         let rows = decode_claims_named(program, &args.file, &claims)
             .map_err(SessionFailure::Operational)?;
         serde_json::to_value(rows).map_err(|e| SessionFailure::Operational(e.into()))
@@ -396,9 +378,8 @@ async fn handle_derived(
     }
 }
 
-/// Resolve a claims-read `where` map under the one-shot contract: it
-/// needs the named read (field names resolve against a declaration)
-/// and exactly one predicate (the fields belong to one claim shape).
+/// Resolve a claims-read `where` map as the one-shot read does: it needs
+/// the named read, to resolve field names, and exactly one predicate.
 fn resolve_filters(
     filters: &Option<std::collections::BTreeMap<String, String>>,
     named: bool,
@@ -414,9 +395,8 @@ fn resolve_filters(
         .map_err(|e| SessionFailure::request(ErrorCode::InvalidArguments, e))
 }
 
-/// Parse and resolve an `as_of` coordinate. A malformed coordinate is
-/// the request's fault; resolving a well-formed one touches the
-/// database, where failure is operational.
+/// Parse and resolve an `as_of` coordinate. A malformed one is the
+/// request's fault; failing to resolve a valid one is operational.
 async fn parse_as_of(
     pool: &PgPool,
     as_of: &Option<String>,

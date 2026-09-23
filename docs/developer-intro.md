@@ -33,8 +33,8 @@ cannot express - the ones that live in application code today, and drift.
 
 **The governed path is the only door for writes.** In Morpholog, state
 changes one way: you propose a change - some records to add, some to remove -
-and the runtime checks every invariant against the result. If anything would
-break, nothing happens, and the database is byte-for-byte what it was before.
+and the runtime checks that everything it touches still obeys every invariant.
+If anything would break, nothing happens, and the database is byte-for-byte what it was before.
 Morpholog calls that proposal a **transformation**. Inside your application
 there is no second door - no ORM path or forgotten service that writes its own
 way and skips the checks; every write goes through the gate. One honest
@@ -281,7 +281,7 @@ program: reported_revenue
   invariant checks: compiled
 ```
 
-The last line says how your invariants are checked when you propose: every one here is inside the fragment the runtime compiles to SQL, so the checks run in the database against the candidate state, and `morpholog provision indexes` gives them indexes to seek on. A programme with an invariant outside the fragment reports `interpreted` and names the invariant and the construct that kept it out; the interpreter then checks the whole programme. Either way the rules mean the same thing, and the same proposal reaches the same decision.
+The last line says how your invariants are checked when you propose: every one here is inside the fragment the runtime compiles to SQL, so the checks run in the database, over the records the change touches, and `morpholog provision indexes` gives them indexes to seek on. A programme with an invariant outside the fragment reports `interpreted` and names the invariant and the construct that kept it out; the interpreter then checks the whole programme. Either way the rules mean the same thing, and the same proposal reaches the same decision.
 
 ## Make it happen
 

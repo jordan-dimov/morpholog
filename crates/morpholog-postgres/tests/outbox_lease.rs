@@ -1,11 +1,7 @@
 //! Integration tests for the outbox lease helpers
 //! (`claim_pending_outbox_row`, `release_outbox_claim`; doctrine in
-//! `docs/outbox-sketch.md`).
-//!
-//! The state-mutating helpers (`mark_outbox_delivered`,
-//! `mark_outbox_transient_attempt`, `mark_outbox_failed`,
-//! `record_compensation`) are exercised in the sibling file
-//! `outbox_helpers.rs` so each file stays focused.
+//! `docs/outbox-sketch.md`). The state-changing helpers are tested in
+//! `outbox_helpers.rs`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -63,8 +59,8 @@ async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
     intent_id
 }
 
-/// Directly set the next_attempt_at on a pending row (used to
-/// simulate a row whose backoff has not yet elapsed).
+/// Set next_attempt_at on a pending row, as if its backoff has not
+/// elapsed.
 async fn set_next_attempt_at(pool: &PgPool, intent_id: Uuid, when: Timestamp) {
     sqlx::query("UPDATE morpholog.outbox SET next_attempt_at=$2 WHERE intent_id=$1")
         .bind(intent_id)
@@ -74,8 +70,8 @@ async fn set_next_attempt_at(pool: &PgPool, intent_id: Uuid, when: Timestamp) {
         .unwrap();
 }
 
-/// Directly force a row into in_progress with an already-expired
-/// lease (used to simulate a worker that crashed mid-delivery).
+/// Force a row into in_progress with an expired lease, as if its worker
+/// crashed mid-delivery.
 async fn force_expired_lease(pool: &PgPool, intent_id: Uuid, worker_id: &str) {
     sqlx::query(
         "UPDATE morpholog.outbox
@@ -176,8 +172,7 @@ async fn claim_returns_oldest_pending_row_first() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     let first = enqueue_pending(&pool, "entry_001").await;
-    // Insert a small wall-clock gap so the second row's
-    // enqueued_at is provably later.
+    // A small gap so the second row's enqueued_at is later.
     tokio::time::sleep(Duration::from_millis(15)).await;
     let _second = enqueue_pending(&pool, "entry_002").await;
 
@@ -273,12 +268,11 @@ async fn release_returns_row_to_pending_and_clears_lease() {
 async fn claim_rejects_sub_second_lease_duration() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    // A pending row is irrelevant - the validation happens before
-    // any SQL is issued.
+    // The pending row is irrelevant: validation happens before any SQL.
     let _ = enqueue_pending(&pool, "entry_001").await;
 
-    // A zero-duration lease would expire before the worker could
-    // ever call mark_*, leaving the row effectively un-updatable.
+    // A zero-length lease would expire before the worker could call
+    // mark_*, so the row could never be updated.
     let zero = claim_pending_outbox_row(
         &pool,
         "worker_a",
@@ -328,12 +322,9 @@ async fn release_returns_lease_lost_when_worker_does_not_hold_lease() {
 
 #[tokio::test]
 async fn claim_before_excludes_rows_scheduled_after_the_boundary() {
-    // The pass-boundary variant treats next_attempt_at <= claim_before
-    // as eligible, but anything scheduled later is invisible -
-    // even if wall-clock time has moved past the row's
-    // next_attempt_at by the time of the query. This is the loop
-    // safety the drain relies on against deliverers that schedule
-    // sub-second retries.
+    // Only rows with next_attempt_at <= claim_before are eligible, even
+    // if the clock has passed a later row's next_attempt_at by query
+    // time. This stops a drain looping on sub-second retries.
     let pool = test_pool().await;
     reset_db(&pool).await;
     let intent_id = enqueue_pending(&pool, "entry_001").await;
@@ -347,10 +338,8 @@ async fn claim_before_excludes_rows_scheduled_after_the_boundary() {
         .await
         .unwrap();
 
-    // Pretend the pass started just before that schedule. The
-    // row's next_attempt_at > claim_before, so the claim must
-    // return None even though wall-clock has presumably moved
-    // forward by the time the query runs.
+    // The pass started just before that schedule, so the claim returns
+    // None even if the clock has moved on by query time.
     let pass_start = scheduled - SignedDuration::from_millis(1);
     let claimed = claim_pending_outbox_row(&pool, "worker_a", INTENT_TYPE, LEASE, pass_start)
         .await

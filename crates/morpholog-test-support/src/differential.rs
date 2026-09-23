@@ -1,11 +1,8 @@
-//! Deterministic generators and observers for the semantic-differential
-//! harnesses: tests that make two subsystems answer the same question
-//! over many generated cases and require agreement (scoped loading vs
-//! full state, traced vs untraced execution).
+//! Generators and observers for differential tests: two subsystems answer the same question
+//! over many generated cases and must agree (scoped vs full state, traced vs untraced).
 //!
-//! Everything here is deterministic - values derive from an integer
-//! salt, never from a clock or an RNG - so a differential failure
-//! replays exactly from its printed case.
+//! Values derive from an integer salt, never a clock or an RNG, so a failure replays exactly
+//! from its printed case.
 
 use morpholog_core::{
     ClaimInstance, EvalError, EvalValue, Outcome, ParamKind, PredicateArgKind, Program, State,
@@ -14,9 +11,8 @@ use morpholog_core::{
 
 use crate::{bool_, coll, date, dec, dur, qty, subj, ts};
 
-/// A deterministic value of the given declared kind. `None` only for
-/// kinds no declaration can carry (a calendar span), so a generated
-/// state or argument vector is total over real programmes.
+/// A deterministic value of the given kind. `None` only for a calendar span, which no
+/// declaration can carry.
 pub fn sample_value(kind: &PredicateArgKind, salt: u64) -> Option<EvalValue> {
     Some(match kind {
         PredicateArgKind::Subject => subj(&format!("s{}", salt % 5)),
@@ -35,9 +31,8 @@ pub fn sample_value(kind: &PredicateArgKind, salt: u64) -> Option<EvalValue> {
     })
 }
 
-/// A state with `witnesses` deterministic claims per declared
-/// predicate, plus one claim of a predicate the programme does not
-/// declare - noise a correct load scope must be free to drop.
+/// A state with `witnesses` claims per declared predicate, plus one claim of an undeclared
+/// predicate: noise a correct load scope must be free to drop.
 pub fn sample_state(program: &Program, witnesses: u64, salt: u64) -> State {
     let mut claims = Vec::new();
     for (p_idx, decl) in program.predicates.iter().enumerate() {
@@ -71,10 +66,9 @@ pub fn sample_state(program: &Program, witnesses: u64, salt: u64) -> State {
     State::from_claims(claims)
 }
 
-/// Deterministic arguments for a transformation, derived from its
-/// inferred parameter kinds. `None` when the programme does not
-/// validate or a parameter's kind resolution fails - callers count
-/// and bound their skips so a generator collapse fails loudly.
+/// Deterministic arguments for a transformation, from its inferred parameter kinds.
+/// `None` if the programme does not validate or a kind does not resolve. Callers should bound
+/// their skips so a broken generator fails loudly.
 pub fn sample_args(program: &Program, t: &Transformation, salt: u64) -> Option<Vec<EvalValue>> {
     let validated = program.validated().ok()?;
     let kinds = transformation_param_kinds(&validated, &t.name).ok()?;
@@ -91,8 +85,7 @@ fn sample_param(kind: &ParamKind, salt: u64) -> Option<EvalValue> {
         ParamKind::Polymorphic | ParamKind::Unconstrained => {
             Some(subj(&format!("poly{}", salt % 4)))
         }
-        // An ambiguous parameter has no single lawful kind; the case
-        // is skipped rather than guessed (callers bound their skips).
+        // No single lawful kind, so skip rather than guess.
         ParamKind::Ambiguous(_) => None,
         ParamKind::Collection(element) => Some(EvalValue::Collection(vec![
             sample_param(element, salt.wrapping_mul(5))?,
@@ -101,17 +94,12 @@ fn sample_param(kind: &ParamKind, salt: u64) -> Option<EvalValue> {
     }
 }
 
-/// The comparable face of a proposal result: outcome variant, the
-/// asserted/retracted claims, the emitted intents, and the rejection
-/// reason or error text - with `candidate_state` deliberately
-/// excluded (it lawfully differs between a full and a projected run)
-/// and fresh subjects alpha-normalised (see [`normalize_uuids`]).
+/// The comparable text of a proposal result, with fresh subjects renamed by
+/// [`normalize_uuids`].
 ///
-/// The rejection arm renders the STRUCTURAL reason (`{:?}`), not its
-/// `Display`: the pinned wire string deliberately omits the invariant
-/// version and the witness bindings, and a differential that compared
-/// it would bless a run that rejects the same rule on a DIFFERENT
-/// witness - exactly the divergence a dropped predicate produces.
+/// `candidate_state` is left out: it lawfully differs between a full and a scoped run.
+/// Rejections render with `{:?}`, not `Display`, because the display string omits the witness;
+/// comparing it would pass a run that rejects the same rule on a different witness.
 pub fn observable(result: &Result<Outcome, EvalError>) -> String {
     let raw = match result {
         Ok(Outcome::Accepted {
@@ -129,12 +117,11 @@ pub fn observable(result: &Result<Outcome, EvalError>) -> String {
     normalize_uuids(&raw)
 }
 
-/// Replace each distinct UUID in the text with `<fresh-N>` in first-
-/// occurrence order. `let x = new Subject()` mints a fresh UUIDv7 per
-/// execution, so two lawful runs of one proposal differ exactly in
-/// those identifiers; no other test fixture value is UUID-shaped, so
-/// this normalisation is precise. See the characterisation test for
-/// why the raw identifiers must never be compared.
+/// Replace each distinct UUID in the text with `<fresh-N>`, numbered in order of first
+/// appearance.
+///
+/// `new Subject()` mints a fresh UUID on every run, so two lawful runs differ exactly there.
+/// No other fixture value looks like a UUID.
 pub fn normalize_uuids(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut seen: Vec<String> = Vec::new();
@@ -173,30 +160,25 @@ fn is_uuid(s: &str) -> bool {
 }
 
 // ============================================================
-// Boundary argument cases (shared by eval_totality and the
-// compiled-invariant differential)
+// Boundary argument cases
 // ============================================================
 
-/// The name every shared-subject witness uses, so "two parameters
-/// naming the same subject" is among the tried shapes.
+/// Every shared-subject witness uses this name, so two parameters naming the same subject is
+/// among the cases tried.
 const SHARED_SUBJECT: &str = "shared";
 
-/// The exact decimal ceiling: the witness that drives recompute
-/// arithmetic past the representable range.
+/// The largest exact decimal, to push arithmetic past the representable range.
 const DECIMAL_MAX: &str = "79228162514264337593543950335";
 
-/// One generated proposal: the argument vector, and whether it carries
-/// the range-extreme witness - the only case in which the named
-/// out-of-range refusals are lawful. Baseline and ordinary boundary
-/// vectors keep the strict contract: any kernel error fails.
+/// One generated proposal. `permits_range_refusal` is set only when the vector carries a
+/// range-extreme value; on every other vector, any kernel error is a failure.
 pub struct ArgumentCase {
     pub args: Vec<EvalValue>,
     pub permits_range_refusal: bool,
 }
 
-/// Whether a kernel error is one of the named out-of-range refusals
-/// that an `ArgumentCase` with `permits_range_refusal` lawfully
-/// produces - the checked-arithmetic contract working, not a bug.
+/// Whether a kernel error is an out-of-range refusal, which is expected (not a bug) on an
+/// `ArgumentCase` with `permits_range_refusal`.
 pub fn is_permitted_range_error(e: &EvalError) -> bool {
     matches!(
         e,
@@ -204,12 +186,9 @@ pub fn is_permitted_range_error(e: &EvalError) -> bool {
     )
 }
 
-/// The boundary argument vectors for one transformation: the baseline
-/// vector, then every one-parameter variation across the boundary
-/// witnesses (zero, negative, and maximum numerics; both booleans;
-/// empty collections; a shared subject; the calendar's own edges).
-/// One-at-a-time variation around a deterministic baseline - not a
-/// proof of totality, the documented witness policy.
+/// Boundary argument vectors for one transformation: a baseline, then the baseline with one
+/// parameter at a time set to a boundary value (zero, negative and maximum numbers, `false`,
+/// empty collections, a shared subject, the calendar's ends). A probe, not a proof.
 pub fn boundary_argument_cases(
     validated: &ValidatedProgram<'_>,
     name: &TransformationName,
@@ -237,8 +216,7 @@ pub fn boundary_argument_cases(
     vectors
 }
 
-/// The baseline argument for one parameter: kind-lawful,
-/// deterministic, with subjects named after the parameter so values
+/// The baseline argument for one parameter. Subjects are named after the parameter so values
 /// join across transformations.
 fn baseline(kind: &ParamKind, name: &str) -> EvalValue {
     match kind {
@@ -262,16 +240,12 @@ fn baseline_concrete(kind: &PredicateArgKind, name: &str) -> EvalValue {
         PredicateArgKind::Bool => crate::bool_(true),
         PredicateArgKind::Quantity(unit) => crate::qty("1", unit.as_str()),
         PredicateArgKind::Collection => crate::coll(vec![crate::subj(name)]),
-        // Expression-only: validation refuses declaring it and propose
-        // refuses receiving it, so no parameter ever infers to it. The
-        // subject stand-in keeps this total if that ever changes.
+        // No parameter can have this kind; the stand-in keeps the match total.
         PredicateArgKind::CalendarSpan => crate::subj(name),
     }
 }
 
-/// One boundary witness: the value, and whether it is the RANGE
-/// EXTREME - the only witness for which the named out-of-range
-/// refusals are an expected outcome.
+/// One boundary value. `extreme` marks a value for which out-of-range refusals are expected.
 struct Witness {
     value: EvalValue,
     extreme: bool,
@@ -284,11 +258,9 @@ fn ordinary(value: EvalValue) -> Witness {
     }
 }
 
-/// The boundary witnesses for one parameter, beyond its baseline.
-/// Zero and negative numerics reach division/remainder and band
-/// checks; the shared subject reaches equality joins; the empty
-/// collection reaches loops over nothing; the decimal maximum reaches
-/// recompute arithmetic past the exact range.
+/// The boundary values for one parameter. Zero and negatives probe division and range checks,
+/// the shared subject probes equality joins, the empty collection probes loops over nothing,
+/// and the maximum decimal probes overflow.
 fn boundary_witnesses(kind: &ParamKind, name: &str) -> Vec<Witness> {
     match kind {
         ParamKind::Concrete(k) => boundary_concrete(k, name),
@@ -328,10 +300,7 @@ fn boundary_concrete(kind: &PredicateArgKind, _name: &str) -> Vec<Witness> {
         }
         PredicateArgKind::Bool => vec![ordinary(crate::bool_(false))],
         PredicateArgKind::Collection => vec![ordinary(crate::coll(vec![]))],
-        // The calendar's own edges: a date at either end of the
-        // representable range makes any span shift or day count near
-        // the boundary reachable. Extreme, so the named out-of-range
-        // refusal is lawful on vectors carrying them.
+        // Dates at either end of the calendar, so date arithmetic can overflow.
         PredicateArgKind::Date => vec![
             Witness {
                 value: crate::date("-009999-01-01"),
@@ -342,15 +311,11 @@ fn boundary_concrete(kind: &PredicateArgKind, _name: &str) -> Vec<Witness> {
                 extreme: true,
             },
         ],
-        // Instant and duration arithmetic has no zero-like boundary an
-        // argument can supply on its own; a second distinct value is
-        // still needed, or a generated pair of same-kind parameters
-        // could never DISAGREE - equality joins on these kinds would
-        // only ever probe the matching side.
+        // No natural boundary here, but a second value lets two parameters of this kind
+        // disagree, so equality joins see the non-matching side too.
         PredicateArgKind::Timestamp => vec![ordinary(crate::ts("2026-07-02T09:30:00Z"))],
         PredicateArgKind::Duration => vec![ordinary(crate::dur("PT2H30M"))],
-        // Expression-only; unreachable as a parameter kind (see
-        // `baseline_concrete`).
+        // No parameter can have this kind.
         PredicateArgKind::CalendarSpan => vec![],
     }
 }

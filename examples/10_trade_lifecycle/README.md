@@ -136,7 +136,7 @@ money actually moves (that is computed downstream).
 | `settled_within_effective_terms` | The total settled effective on or before any date may never exceed the quantity the terms in force on that date allow (inclusive) - the cumulative cap, judged on the effective clock. |
 | `settled_date_has_effective_terms` | Every settled date has a terms version effective by it, so a slice cannot fall before the trade had any terms and escape the cap by vacuity. |
 | `settlement_id_identifies_one_settlement` | A settlement id names one slice, so slices cannot be double-counted or hidden under a shared id. |
-| `settled_trade_was_confirmed` | Settlement can never run ahead of confirmation, for all admitted state by any path. |
+| `settled_trade_was_confirmed` | Settlement can never run ahead of confirmation, whatever path a change takes. |
 | `trade_terms_quantity_is_positive` | A terms quantity is positive - no zero-size or negative trade. |
 | `settled_quantity_is_positive` | A settled slice is positive - a negative slice cannot make room under the running cap for an over-large one. |
 

@@ -27,10 +27,12 @@
 -- Morpholog does not store "facts" - it stores *claims* it has agreed to
 -- admit because they obey the rules. Two kinds of rule do the work:
 --
---   * an `invariant` is a rule that must hold for all admitted state,
---     forever. The runtime refuses to commit any change that would break
---     one - this is how an impossible state (two credits for the same
---     measurement, one credit held in two places) becomes uncommittable.
+--   * an `invariant` is a standing rule: it says what lawful records
+--     look like, and every change that touches what it governs is
+--     checked against it. The runtime refuses to commit any change that
+--     would break one - this is how an impossible state (two credits for
+--     the same measurement, one credit held in two places) becomes
+--     uncommittable.
 --   * a `require` is a gate on a single action, checked at the moment you
 --     act and never again. "Only an accredited verifier may attest" is a
 --     gate; "no two credits may back the same measurement" is an

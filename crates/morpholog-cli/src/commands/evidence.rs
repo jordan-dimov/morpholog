@@ -2,9 +2,8 @@
 //! log (a complete prefix, or a window between two checkpoints), and verify
 //! one offline.
 //!
-//! `export` needs the database; `verify` deliberately does not - a third
-//! party checks a pack with zero database access, which is the whole
-//! product promise.
+//! `export` needs the database; `verify-pack` does not, so a third party
+//! can check a pack with no database access at all.
 
 use morpholog_postgres::{
     Checkpoint, EvidencePack, PackVerdict, PackVerificationReport, SelectiveEvidencePack,
@@ -19,14 +18,13 @@ use crate::commands::verify::{signature_policy, witness_anchors};
 use crate::commands::{AlreadyReported, connect, print_json, read_anchor, read_json};
 use crate::{EvidenceExportArgs, EvidenceVerifyArgs};
 
-/// `audit export`: a complete-prefix pack by default, a window between
-/// two checkpoints with a `--from-*` start, or - with `--transition` - a
-/// selective pack disclosing only the named transitions, each proven
-/// included. Printed as JSON; redirect it to a file. Prefix and window
-/// packs carry the FULL audit rows they cover - actors, arguments, claims,
-/// intents - and may contain confidential business data; a selective pack
-/// carries only the chosen rows, and proves them authentic without
-/// proving the selection complete.
+/// `audit export`: a complete-prefix pack by default, a window between two
+/// checkpoints with a `--from-*` start, or, with `--transition`, a
+/// selective pack of only the named transitions. Printed as JSON.
+///
+/// Prefix and window packs carry the full audit rows (actors, arguments,
+/// claims, intents), which may be confidential. A selective pack proves its
+/// rows authentic but not that the selection is complete.
 pub(crate) async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
     let pool = connect(&args.db.database_url).await?;
 
@@ -37,9 +35,8 @@ pub(crate) async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
         return print_json(&pack);
     }
 
-    // The window start: a whole anchor file (the trust object - export
-    // refuses if the stored start has diverged from it), or the weaker
-    // tree-size convenience. Either turns this into a window export.
+    // A window start: an anchor file (export refuses if the stored start
+    // has diverged from it), or just a tree size, which is weaker.
     let start = match (&args.from_anchor, args.from_tree_size) {
         (Some(path), _) => Some(WindowStart::Anchor(read_json(
             path,
@@ -67,23 +64,21 @@ pub(crate) async fn export(args: EvidenceExportArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `audit verify-pack`: check a pack offline, with no database. A prefix pack
-/// recomputes its root from every row; a window pack checks a consistency
-/// proof plus per-row inclusion proofs. The pack's `pack_format_version`
-/// selects which. One JSON verdict on stdout; exit one on any tamper,
-/// divergence, or malformed pack - the same data-on-stdout,
-/// exit-code-as-verdict shape as `verify`.
+/// `audit verify-pack`: check a pack offline. A prefix pack recomputes its
+/// root from every row; a window pack checks a consistency proof and
+/// per-row inclusion proofs; `pack_format_version` says which. Prints one
+/// JSON verdict and exits 1 on any tamper, divergence or malformed pack,
+/// like `audit verify`.
 pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     let bytes = std::fs::read(&args.pack_file)
         .with_context(|| format!("reading pack file {}", args.pack_file.display()))?;
 
     let anchor = read_anchor(args.anchor_file.as_deref())?;
 
-    // The pack kind is part of the contract: peek the format version so
-    // each pack kind gets its own verifier and verdict shape. An unknown
-    // FUTURE version is named as such rather than falling through to the
-    // prefix path and reading as a malformed v1; a file that is not a pack
-    // at all is still a decided verdict, not an operational error.
+    // Each pack kind has its own verifier and verdict shape, chosen by the
+    // format version. An unknown future version is named as such, not read
+    // as a malformed v1. A file that is not a pack is still a verdict, not
+    // an operational error.
     let policy = signature_policy(
         args.require_signatures,
         args.require_signatures_from,
@@ -113,9 +108,8 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
             | PackVerdict::Selective(SelectiveVerification::Intact { .. })
     );
 
-    // The witness axis is judged over the pack's own checkpoints and is
-    // independent of the verdict; it changes the output shape, so it is
-    // emitted only when asked for.
+    // Witnesses are judged apart from the verdict. They change the output
+    // shape, so they appear only when asked for.
     let mut witness_invalid = false;
     if args.witnesses || args.trusted_tsa_file.is_some() {
         let anchors = witness_anchors(args.trusted_tsa_file.as_deref())?;
@@ -150,18 +144,17 @@ fn pack_checkpoints(bytes: &[u8]) -> Vec<Checkpoint> {
     }
 }
 
-/// What an offline verifier answers: the pack's verdict, or - only once
-/// the pack has proven intact - that the policy asked of it cannot be
-/// judged here. A broken pack reports as broken whatever the policy.
+/// An offline verifier's answer: the pack's verdict, or, once the pack is
+/// proven intact, that the requested policy cannot be judged here. A
+/// broken pack reports as broken whatever the policy.
 enum Offline<V> {
     Verdict(V),
     PinNeedsFullPrefix,
 }
 
-/// A sparse pack checks signatures cryptographically only; it cannot say
-/// whether a key was authorised as of its prefix. A pin is an
-/// intersection with that authority, so here it would silently become
-/// "signed by this key" - a different claim. Refused, remedy named.
+/// A sparse pack can check signatures but not whether the key was
+/// authorised at the time. A key pin checked here would quietly mean only
+/// "signed by this key", so it is refused with the remedy.
 fn pin_needs_full_prefix() -> anyhow::Error {
     anyhow::anyhow!(
         "--require-signing-key needs a complete-prefix pack: a window or selective pack \
@@ -170,9 +163,8 @@ fn pin_needs_full_prefix() -> anyhow::Error {
     )
 }
 
-/// The `manifest.pack_format_version`, if the bytes parse as JSON with that
-/// field - the cheap discriminator between a v1 prefix pack and a v2 window
-/// pack, before committing to a typed deserialization.
+/// The `manifest.pack_format_version`, if present: a cheap way to tell
+/// pack kinds apart before a typed deserialization.
 fn pack_format_version(bytes: &[u8]) -> Option<u64> {
     serde_json::from_slice::<serde_json::Value>(bytes)
         .ok()?
@@ -197,9 +189,8 @@ fn verify_prefix_pack(
     let verdict = verify_pack(&pack, anchor).unwrap_or_else(|e| TreeVerification::MalformedPack {
         detail: e.to_string(),
     });
-    // Verifier policy, offline from the pack's own checkpoints, over an
-    // intact tree only - every signature it inspects is already proven
-    // genuine and authorised by the pack's full prefix.
+    // Policy runs over the pack's own checkpoints, and only on an intact
+    // tree, so every signature it sees is already proven and authorised.
     if let Some(policy) = policy
         && matches!(verdict, TreeVerification::Intact { .. })
         && let Some(violation) =
@@ -230,9 +221,8 @@ fn verify_selective_pack(
     if !matches!(verdict, SelectiveVerification::Intact { .. }) {
         return Offline::Verdict(verdict);
     }
-    // Policy over the one covering checkpoint, and presence only: a
-    // sparse pack cannot judge authority, so a pin cannot be an
-    // intersection with it here.
+    // Policy checks the one covering checkpoint for a signature only; a
+    // sparse pack cannot judge key authority, so a pin is refused.
     if let Some(policy) = policy {
         if policy.required_public_key.is_some() {
             return Offline::PinNeedsFullPrefix;
@@ -264,10 +254,9 @@ fn verify_window_pack(
     if !matches!(verdict, WindowVerification::Intact { .. }) {
         return Offline::Verdict(verdict);
     }
-    // Policy over the window's end only (REMIT attribution wants a signed
-    // window end; the trusted start is the anchor's business), and
-    // presence only: a sparse pack cannot judge authority, so a pin
-    // cannot be an intersection with it here.
+    // Policy checks only the window's end for a signature; the anchor
+    // vouches for the start. A sparse pack cannot judge key authority, so
+    // a pin is refused.
     if let Some(policy) = policy {
         if policy.required_public_key.is_some() {
             return Offline::PinNeedsFullPrefix;

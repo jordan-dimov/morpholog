@@ -1,10 +1,6 @@
 //! Evidence packs: export a checkpointed prefix of the audit log and
-//! verify it OFFLINE (no pool), the way a third party would. The realistic
-//! complement to the pure envelope tests in `pack.rs`: here the rows and
-//! checkpoints are real, so the cryptographic verdicts (intact, tampered,
-//! chain-broken, anchor-mismatch) are exercised end to end. Tampering is
-//! done by editing the pack's JSON, exactly as an attacker holding the
-//! file would.
+//! verify it offline, as a third party would, with real rows and
+//! checkpoints. The attacker holds the file and edits the pack's JSON.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -105,8 +101,7 @@ async fn editing_an_earlier_checkpoint_breaks_the_chain() {
     assert_eq!(pack.checkpoints.len(), 2);
 
     // Rewrite the earlier checkpoint's root without fixing its hash. The
-    // manifest references the covering (last) checkpoint, so it still
-    // agrees - the break is in the chain, not the envelope.
+    // manifest names the last checkpoint, so the break is in the chain.
     let mut broken = pack.clone();
     broken.checkpoints[0].root_hash =
         "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -188,9 +183,9 @@ async fn export_refuses_when_a_covered_row_is_missing() {
     }
     common::make_checkpoint(&pool).await; // commits to 3 rows
 
-    // Delete a covered audit row directly - the checkpoint still claims 3.
-    // The exporter must fail rather than mint a known-incomplete pack.
-    // (Clear the outbox FK to that transition first.)
+    // Delete a covered audit row; the checkpoint still claims 3. The
+    // exporter must fail rather than produce an incomplete pack. The
+    // outbox row referencing it goes first.
     let first =
         "SELECT transition_id FROM morpholog.audit ORDER BY committed_at, transition_id LIMIT 1";
     sqlx::query(sqlx::AssertSqlSafe(format!(

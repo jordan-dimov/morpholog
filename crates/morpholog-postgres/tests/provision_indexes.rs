@@ -171,10 +171,9 @@ async fn an_equivalent_index_under_another_name_satisfies_and_is_never_pruned() 
     );
 }
 
-/// Morpholog's own name over a different definition is a conflict:
-/// reported, and the run applies nothing at all - no build, no
-/// registry write - because a partial reconciliation would drop this
-/// programme's requirement and let a later prune take the operator's
+/// Morpholog's own name over a different definition is a conflict. It is
+/// reported and the run applies nothing: a partial run would drop this
+/// programme's requirement, and a later prune could take the operator's
 /// index for stale.
 #[tokio::test]
 async fn a_conflicting_definition_under_our_name_applies_nothing() {
@@ -220,10 +219,9 @@ async fn a_conflicting_definition_under_our_name_applies_nothing() {
     assert_eq!(registry_counts(&pool).await, (0, 0), "no registry write");
 }
 
-/// A requirement satisfied by an operator's index is still a
-/// requirement: when that index goes and another programme has Morpholog
-/// build the same specification, the first programme's need protects it
-/// from the second's prune.
+/// A requirement met by an operator's index still counts. If that index
+/// goes and another programme has Morpholog build the same one, the first
+/// programme's requirement protects it from the second's prune.
 #[tokio::test]
 async fn a_requirement_once_satisfied_externally_still_protects_the_index() {
     let pool = test_pool().await;

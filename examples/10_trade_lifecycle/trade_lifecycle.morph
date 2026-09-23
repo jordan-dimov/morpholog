@@ -61,10 +61,11 @@
 -- it stores *claims* it has agreed to admit because they obey the
 -- rules. Two kinds of rule do the work:
 --
---   * an `invariant` is a rule that must hold for all admitted state,
---     forever. The runtime refuses to commit any change that would
---     break one - a trade can never be settled, in total, for more than
---     the quantity effective on the date being settled.
+--   * an `invariant` is a standing rule: it says what lawful records
+--     look like, and every change that touches what it governs is
+--     checked against it. The runtime refuses to commit any change that
+--     would break one - a trade can never be settled, in total, for
+--     more than the quantity effective on the date being settled.
 --   * a `require` is a gate on a single action, checked the moment you
 --     act and never again. Whether the actor confirming or amending
 --     holds authority for that commodity is settled when they act; a
@@ -193,9 +194,9 @@ define current_quantity(trade, qty):
     and not (exists later: TradeTerms(trade, _, _, _, later) and later after ef)
 
 
--- The rules that must always hold. Any change that would leave the
--- world violating one of these is rejected outright. Read `implies` as
--- "whenever the left is true, the right must be too".
+-- The standing rules. Any change that would break one of these is
+-- rejected outright. Read `implies` as "whenever the left is true, the
+-- right must be too".
 
 -- The official price in force can never point at nothing: every current
 -- pointer must name an official price figure that actually exists.
@@ -256,8 +257,8 @@ invariant settled_quantity_is_positive:
 
 -- Settlement can never run ahead of confirmation: a settled trade must
 -- have been confirmed. The settle action relies on the official price in
--- force, which only a confirmed trade has, so this invariant guarantees
--- the property for all admitted state, by any path.
+-- force, which only a confirmed trade has, so this invariant guards the
+-- property whatever path a change takes.
 invariant settled_trade_was_confirmed:
     TradeSettled(trade, _, _, _, _) implies TradeConfirmed(trade, _, _, _)
 
@@ -281,8 +282,8 @@ invariant within_position_limit:
 
 
 -- The only ways state may change. A transformation proposes a set of
--- changes; the runtime applies them only if every invariant still holds
--- once they are in place. `admit` adds a claim; `retract` removes one;
+-- changes; the runtime applies them only if everything they touch still
+-- obeys every invariant. `admit` adds a claim; `retract` removes one;
 -- `emit` queues a message to the outside world for after the commit.
 
 -- A trader captures a new trade: its identity, the price they believe

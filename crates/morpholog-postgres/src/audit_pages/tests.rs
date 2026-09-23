@@ -1,13 +1,9 @@
 //! The paging contract at a chunk of two, so every walk crosses chunk
-//! edges, over rows whose timestamps tie. The tied rows' ids sort in the
-//! opposite order to their insertion, so a query that dropped the
-//! `transition_id` tie-break would return them in insertion order and
-//! fail here, rather than pass by accident. The connections run with
-//! index scans off: the audit index returns tied rows in id order by
-//! itself, which would hide a query that lost its tie-break. That the
-//! index is used is pinned apart, in `tests/plan_shapes.rs`; here the
-//! order must come from the query. `DATABASE_URL`-gated like every PG
-//! suite.
+//! edges, over rows with tied timestamps. Tied rows are inserted in
+//! reverse id order, so a query that lost the `transition_id` tie-break
+//! fails here. Index scans are off, because the index alone would return
+//! tied rows in id order and hide that loss; `tests/plan_shapes.rs` pins
+//! the index use. `DATABASE_URL`-gated.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

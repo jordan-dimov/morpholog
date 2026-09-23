@@ -1,16 +1,12 @@
 //! Integration test for the trade-lifecycle example on the
 //! transaction-time axis: bitemporal replay of effective-dated terms.
 //!
-//! The sync suite in `morpholog-examples` covers the effective (valid)
-//! axis - the cap, amendment mechanics, and a settlement surviving a
-//! later amendment. What needs PostgreSQL is the *other* axis: the audit
-//! log and `--as-of` replay. The headline here is that one fixed
-//! effective-date question (what quantity was effective on 2026-02-20?)
-//! gets two different truthful answers depending on the transaction-time
-//! coordinate you ask it at, because a backdated amendment arrives between
-//! them. That is bitemporality, achieved with an ordinary date-carrying
-//! claim plus the append-only audit log - no valid-time columns, no
-//! temporal database.
+//! The in-memory suite in `morpholog-examples` covers effective time.
+//! This one covers transaction time, which needs the audit log and as-of
+//! replay. One question - what quantity was effective on 2026-02-20? - has
+//! two true answers depending on when you ask, because a backdated
+//! amendment arrives in between. A date-carrying claim plus the audit log
+//! is enough; no temporal database is needed.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -107,10 +103,8 @@ async fn captured_then_amended(pool: &PgPool) -> (Uuid, Uuid) {
     (tid1, tid2)
 }
 
-/// The bitemporal headline: one fixed effective-date question, two
-/// truthful answers across transaction time. As of tid1 the backdated
-/// amendment is not yet known, so 2026-02-20 sees qty 100; as of tid2 it
-/// is known, so the same date sees qty 120.
+/// As of tid1 the backdated amendment is not yet known, so 2026-02-20
+/// sees qty 100; as of tid2 it is known, so the same date sees qty 120.
 #[tokio::test]
 async fn backdated_amendment_changes_the_effective_answer_across_transaction_time() {
     let pool = test_pool().await;
@@ -150,9 +144,8 @@ async fn backdated_amendment_changes_the_effective_answer_across_transaction_tim
     );
 }
 
-/// The replayed timeline contains only what was known at the coordinate:
-/// one version as of tid1, two as of tid2. Pins that the as-of read does
-/// not leak a later amendment into an earlier knowledge state.
+/// The replayed timeline holds only what was known then: one version as
+/// of tid1, two as of tid2. A later amendment does not leak backwards.
 #[tokio::test]
 async fn as_of_tid1_timeline_omits_the_later_amendment() {
     let pool = test_pool().await;

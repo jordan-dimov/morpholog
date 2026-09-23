@@ -1,8 +1,7 @@
-//! The shared-writer lint: two programmes deployed against one database
-//! share rows for any same-named predicate, each ungoverned by the
-//! other's gates. The finding is the shared WRITE - admit or retract -
-//! never a read; and "guarded" claims only what the controls surface
-//! claims, a top-level admission gate.
+//! The shared-writer lint: two programmes on one database share rows for any
+//! same-named predicate, and neither's gates govern the other's writes. It
+//! reports shared writes (admit or retract), never reads. "Guarded" means only
+//! what the controls surface means: a top-level admission gate.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

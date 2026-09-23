@@ -1,18 +1,11 @@
 //! Source locations that survive parsing.
 //!
-//! The kernel IR is deliberately source-agnostic: a `Program` can be
-//! hand-built, deserialised, or parsed, and nothing downstream of the
-//! parser carries byte offsets. The [`SourceMap`] is the surface-side
-//! companion that remembers where each declaration (and each top-level
-//! transformation-body statement) came from, so a finding produced
-//! over the IR - a [`ValidationError`], a [`Lint`] - can be rendered
-//! with a caret against the original `.morph` text.
+//! The kernel IR carries no byte offsets, since a `Program` need not come from source. The
+//! [`SourceMap`] remembers where each declaration and each top-level transformation statement
+//! came from, so a [`ValidationError`] or [`Lint`] can be shown against the `.morph` text.
 //!
-//! Granularity is declaration + top-level statement. Sub-expression
-//! spans are a later tier; a statement nested inside a `for` inherits
-//! the `for`'s span. Findings the map cannot place (a generated
-//! discipline invariant, a hand-built name with no source) resolve to
-//! `None` and render as plain text.
+//! A statement nested in a `for` gets the `for`'s span; there are no sub-expression spans.
+//! Findings the map cannot place, such as a generated discipline invariant, resolve to `None`.
 
 use std::collections::HashMap;
 
@@ -20,10 +13,8 @@ use morpholog_core::{Lint, ValidationContext, ValidationError, VocabularyKind};
 
 use crate::diagnostics::Span;
 
-/// Which declaration table a span lives in. Mirrors the top-level
-/// declaration kinds of a programme; names are unique per kind, not
-/// across kinds (a definition may not collide with a predicate, but
-/// an invariant and a transformation can share a name).
+/// The kind of top-level declaration a span belongs to. Names are unique per kind, not across
+/// kinds: an invariant and a transformation can share a name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeclKind {
     Predicate,
@@ -72,11 +63,9 @@ impl SourceMap {
         self.statements.get(transformation)?.get(index).cloned()
     }
 
-    /// Resolve a validation error to the source span it concerns.
-    /// Context-carrying errors resolve through their context;
-    /// declaration-naming errors resolve by name. `None` when the
-    /// finding has no source anchor (a generated invariant, a name
-    /// this programme never declared).
+    /// Resolve a validation error to the source span it concerns, through its context or the
+    /// declaration it names. `None` when it has no place in the source, such as a generated
+    /// invariant or a name this programme never declared.
     pub fn span_for_error(&self, error: &ValidationError) -> Option<Span> {
         match error {
             ValidationError::Undeclared { context, .. }
@@ -106,9 +95,7 @@ impl SourceMap {
             | ValidationError::PreNotAvailable { context }
             | ValidationError::CalendarSpanEscapesExpression { context, .. }
             | ValidationError::RetractsAppendOnly { context, .. }
-            // Anchored on the top-level statement the later duplicate sits
-            // in, which for one inside a `for` is the `for` itself - the
-            // statement index never reaches into a nested body.
+            // Points at the top-level statement holding the duplicate; inside a `for`, the `for`.
             | ValidationError::DuplicateRuleName { context, .. } => self.context_span(context),
             ValidationError::DuplicateDecl { vocabulary, name } => {
                 let kind = match vocabulary {
@@ -119,13 +106,11 @@ impl SourceMap {
                 };
                 self.decl_span(kind, name)
             }
-            // The clause is on the invariant's own declaration line, which
-            // is what the author can act on - the unknown predicate has no
-            // declaration to point at, that being the complaint.
             // On the predicate, which is where `partial` is written.
             ValidationError::PartialContradictsTotality { predicate, .. } => {
                 self.decl_span(DeclKind::Predicate, predicate)
             }
+            // On the invariant: the unknown predicate has no declaration to point at.
             ValidationError::UnknownTotalityTarget { invariant, .. } => {
                 self.decl_span(DeclKind::Invariant, invariant)
             }
@@ -148,9 +133,7 @@ impl SourceMap {
                 };
                 self.decl_span(kind, name)
             }
-            // Anchored on the declaration, with its discipline siblings:
-            // the clause the author wrote is there, not in the invariant
-            // the lowering would have generated.
+            // On the predicate, where the author wrote the clause, not the generated invariant.
             ValidationError::MultipleEffectiveClauses { predicate }
             | ValidationError::EffectiveDateIsAKey { predicate, .. }
             | ValidationError::EffectiveDateNotATime { predicate, .. }
@@ -166,10 +149,7 @@ impl SourceMap {
             ValidationError::DisciplineLineageUnfit { pointer, .. } => {
                 self.decl_span(DeclKind::Predicate, pointer)
             }
-            // Unreachable from parsed source: the surface has no
-            // spelling for declaring a CalendarSpan argument. Anchored
-            // on the declaration defensively for hand-built IR routed
-            // through a source map.
+            // Only hand-built IR can declare a CalendarSpan argument; point at the declaration.
             ValidationError::CalendarSpanNotDeclarable { declaration, .. } => self
                 .decl_span(DeclKind::Predicate, declaration)
                 .or_else(|| self.decl_span(DeclKind::Intent, declaration)),
@@ -184,15 +164,11 @@ impl SourceMap {
             | Lint::GoverningSelectionWithoutTotality { invariant, .. } => {
                 self.decl_span(DeclKind::Invariant, invariant)
             }
-            // Anchored on the PREDICATE: the omission is the missing
-            // companion, and the declaration that opted into
-            // effective-dating is the line the author can act on.
+            // On the predicate: its effective-dating clause is the line the author can act on.
             Lint::EffectiveWithoutDeclaredTotality { predicate } => {
                 self.decl_span(DeclKind::Predicate, predicate)
             }
-            // Anchored on THIS programme's writing transformation - the
-            // declaration the author can act on; the other programme is
-            // named in the message, its file by the caller.
+            // On this programme's transformation; the message names the other programme.
             Lint::SharedWriter { transformation, .. } => {
                 self.decl_span(DeclKind::Transformation, transformation)
             }

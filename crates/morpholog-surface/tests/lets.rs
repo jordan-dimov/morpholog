@@ -1,8 +1,5 @@
-//! Body-level `let` in `define` and `invariant` bodies: parse-time
-//! substitution, so the sugared and hand-desugared sources yield the
-//! SAME `Program` - the direct property, stronger than round-trip.
-//! Refusals are parser-side with spans; nothing about `let` reaches
-//! the IR.
+//! Body-level `let` in `define` and `invariant` bodies: a source using lets and its hand-inlined
+//! twin give the same `Program`. Refusals carry spans; nothing of a `let` reaches the IR.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -90,9 +87,7 @@ fn term_valued_let_flows_into_a_claim_argument_position() {
 
 #[test]
 fn canonical_hash_is_identical_for_sugared_and_desugared() {
-    // Rules identity: the hash is over the formatter's desugared
-    // rendering, so naming an intermediate value cannot change what
-    // rule the programme is.
+    // The hash is over the inlined form, so naming a value cannot change the rules.
     let sugared = parse_program(&header(
         "define rounded_ok(a, b, divisor, committed):\n    \
              let raw = ((a * b) / divisor)\n    \
@@ -109,10 +104,8 @@ fn canonical_hash_is_identical_for_sugared_and_desugared() {
 
 #[test]
 fn substitution_is_algebraic_not_hygienic() {
-    // A let value mentioning `m` used under `forall ... Reading(m, _)`
-    // reads the quantified `m` - the value is an abbreviation inlined
-    // at the use site, not a closure over an outer scope. Deliberate:
-    // pinned here so a future "fix" has to argue with this test.
+    // A let value mentioning `m`, used under `forall ... Reading(m, _)`, reads the quantified
+    // `m`: a let is inlined text, not a closure. Deliberate.
     assert_equivalent(
         "invariant scaled:\n    \
              let doubled = (kwh * 2)\n    \
@@ -126,8 +119,7 @@ fn substitution_is_algebraic_not_hygienic() {
 
 #[test]
 fn inline_body_takes_no_lets() {
-    // `invariant x: let ...` (inline form) is not grammar; the let
-    // prefix belongs to the indented form only.
+    // Lets belong to the indented form only.
     let errs = parse_program(&header("invariant cap: let c = (1)\n"))
         .expect_err("inline let must be refused");
     assert!(!errs.is_empty());
@@ -160,9 +152,7 @@ fn let_colliding_with_a_parameter_is_refused() {
 
 #[test]
 fn let_colliding_with_a_quantifier_binder_is_refused() {
-    // Shadowing is refused, not implemented. The collision is with
-    // the explicit `forall` binding; claim-bound variables are NOT
-    // binders for this rule (see the non-hygienic test above).
+    // Shadowing a `forall` binder is refused. Claim-bound variables do not count (see above).
     refusal_containing(
         "invariant cap:\n    \
              let r = (100)\n    \
@@ -174,9 +164,7 @@ fn let_colliding_with_a_quantifier_binder_is_refused() {
 
 #[test]
 fn term_valued_let_flows_into_a_sum_target() {
-    // The sum target is CONSUMED against bindings the sum body
-    // supplies - it is not a binder, so a term-valued let substitutes
-    // into it like any other term slot.
+    // A sum target is not a binder, so a term-valued let substitutes into it.
     assert_equivalent(
         "define f(total):\n    \
              let selected = (kwh)\n    \
@@ -188,8 +176,7 @@ fn term_valued_let_flows_into_a_sum_target() {
 
 #[test]
 fn self_referential_let_is_refused() {
-    // Even the no-op spelling: `let a = (a)` would otherwise vanish
-    // as a term swap instead of being diagnosed.
+    // Even `let a = (a)`, which would otherwise vanish silently.
     refusal_containing(
         "define f(a):\n    \
              let raw = (raw)\n    \
@@ -200,10 +187,7 @@ fn self_referential_let_is_refused() {
 
 #[test]
 fn forward_reference_is_refused() {
-    // A let may use earlier lets only. Refused whether or not the
-    // later let is also used by the body directly - without the order
-    // check, substitution order resolves the first spelling and calls
-    // the second dead, so legality would hinge on an unrelated use.
+    // Refused whether or not the body also uses the later let directly.
     for body in ["committed = ((first) + (later))", "committed = (first)"] {
         refusal_containing(
             &format!(
@@ -219,8 +203,7 @@ fn forward_reference_is_refused() {
 
 #[test]
 fn actor_cannot_name_a_let() {
-    // `actor` in any body position is Term::Actor, never a variable,
-    // so the binding could never be referenced. Refused by name.
+    // `actor` always means the actor, so a let by that name could never be used.
     refusal_containing(
         "define f(a, committed):\n    \
              let actor = ((a) + 1)\n    \
@@ -241,8 +224,7 @@ fn unused_let_is_refused() {
 
 #[test]
 fn transitively_dead_let_chain_is_refused_whole() {
-    // `head` is referenced only by `tail`, and `tail` is dead:
-    // liveness runs backwards, so BOTH are refused.
+    // `head` is used only by the unused `tail`, so both are refused.
     let errs = parse_program(&header(
         "define f(a, committed):\n    \
              let head = ((a) + 1)\n    \
@@ -260,9 +242,7 @@ fn transitively_dead_let_chain_is_refused_whole() {
     }
 }
 
-// Computed lets in term-only positions: the structurally distinct
-// slots share one refusal rule, so they are pinned table-style. Each
-// body uses `let net = (a + 1)` (computed, not a plain term) in a slot
+// Computed lets in term-only positions. Each body puts `let net = (a + 1)` in a different slot
 // that takes terms only.
 #[test]
 fn computed_let_is_refused_in_every_term_only_position() {
@@ -308,9 +288,7 @@ fn computed_let_is_refused_in_every_term_only_position() {
 
 #[test]
 fn computed_let_substitutes_into_a_sum_target() {
-    // The sum target is a full value expression, so a computed let
-    // flowing into it is ordinary substitution, identical to writing
-    // the arithmetic in place.
+    // A sum target takes any value, so a computed let is fine there.
     assert_equivalent(
         "define f(a, total):\n    \
              let net = ((a) + 1)\n    \
@@ -322,9 +300,7 @@ fn computed_let_substitutes_into_a_sum_target() {
 
 #[test]
 fn term_slot_refusal_inside_a_later_let_names_the_referenced_let() {
-    // The computed value hitting the term slot belongs to `net`, not
-    // to the let being expanded into - the diagnostic must blame the
-    // owner, or the author is sent to the wrong declaration.
+    // The diagnostic must blame `net`, whose value lands in the slot, not the let using it.
     let errs = parse_program(&header(
         "define f(a, total):\n    \
              let net = ((a) + 1)\n    \
@@ -352,12 +328,8 @@ fn term_slot_refusal_inside_a_later_let_names_the_referenced_let() {
 
 #[test]
 fn a_long_term_valued_chain_expands_linearly() {
-    // Each link is one node, so neither the node budget nor the depth
-    // guard is in play - what this pins is the expansion ALGORITHM:
-    // each value resolves once against the already-expanded earlier
-    // lets, so a chain costs one substitution per link. The quadratic
-    // shape (rewriting every later value after every declaration)
-    // would grind on this input.
+    // Small enough for both guards; this checks that a long chain expands in linear time. A
+    // quadratic expansion would grind on it.
     let mut body = String::from("    let a0 = (x)\n");
     for i in 1..10_000 {
         body.push_str(&format!("    let a{i} = (a{})\n", i - 1));
@@ -372,11 +344,8 @@ fn a_long_term_valued_chain_expands_linearly() {
 
 #[test]
 fn term_slot_refusal_wins_over_the_budget_projection() {
-    // A computed let used only in term slots can never grow the tree
-    // (each use is a refusal, not an expansion), so a body large
-    // enough to inflate a naive all-occurrences projection past the
-    // budget must still surface the term-slot refusal - not a budget
-    // error counting unsubstitutable occurrences.
+    // Term-slot uses never grow the tree, so a large body must still report the term-slot
+    // refusal, not a budget error.
     let conjuncts = vec!["Reading(m, net)"; 4000].join(" and ");
     let source = format!("define f(a):\n    let net = ((a) + 1)\n    {conjuncts}");
     let errs = parse_program(&header(&source)).expect_err("computed let in term slots refuses");
@@ -393,9 +362,8 @@ fn term_slot_refusal_wins_over_the_budget_projection() {
 
 #[test]
 fn shallow_exponential_let_chain_is_refused_by_the_node_budget() {
-    // Each let doubles the node count while depth grows linearly -
-    // the shape MAX_EXPR_DEPTH cannot see. The budget refuses before
-    // allocating the blowup.
+    // Each let doubles the size while depth grows by one, which MAX_EXPR_DEPTH cannot see.
+    // The budget refuses before the blowup is allocated.
     let mut body = String::from("    let a0 = ((x + x) + (x + x))\n");
     for i in 1..24 {
         body.push_str(&format!(
@@ -413,9 +381,7 @@ fn shallow_exponential_let_chain_is_refused_by_the_node_budget() {
 
 #[test]
 fn depth_from_substitution_is_caught_by_validation() {
-    // Node budget passes (linear growth), but the substituted body
-    // nests past MAX_EXPR_DEPTH - the existing validation guard
-    // covers post-substitution shapes.
+    // Within the size budget but nested past MAX_EXPR_DEPTH: validation still catches it.
     let mut body = String::from("    let a0 = ((x) + 1)\n");
     for i in 1..300 {
         body.push_str(&format!("    let a{i} = ((a{}) + 1)\n", i - 1));
@@ -436,10 +402,8 @@ fn depth_from_substitution_is_caught_by_validation() {
 
 #[test]
 fn unparenthesised_let_value_is_refused_loudly() {
-    // The parens are required grammar, precisely so `let cap = 100`
-    // followed by `amount <= cap` can never lex `100 amount` as a
-    // quantity. The refusal is a parse error at the value, not a
-    // silent misparse.
+    // Parens are required so `let cap = 100` followed by `amount <= cap` cannot read
+    // `100 amount` as a quantity.
     let errs = parse_program(&header(
         "invariant cap:\n    \
              let ceiling = 100\n    \
@@ -452,8 +416,7 @@ fn unparenthesised_let_value_is_refused_loudly() {
 
 #[test]
 fn let_value_spans_lines_freely_inside_its_parens() {
-    // Parens disable layout, so a long value can break lines without
-    // ceremony - the whole point of requiring them.
+    // Inside the parens, a long value can break across lines.
     assert_equivalent(
         "define f(a, b, committed):\n    \
              let raw = ((a * b)\n\

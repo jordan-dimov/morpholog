@@ -1,12 +1,8 @@
-//! `morpholog propose` - parse and validate a `.morph` source file, then
-//! propose a named transformation against a Morpholog PostgreSQL
-//! database. The CLI's commit path: JSON-encoded args, a required
-//! `--actor`, optional `--trace`, committed/rejected JSON output and the
-//! matching exit code.
-//!
-//! This closes the input boundary of the compute/commit/outbox split:
-//! an external system proposes against its own `.morph` programme by
-//! path, without forking the CLI or compiling Rust.
+//! `morpholog propose` - parse and validate a `.morph` file, then propose
+//! a named transformation against the database. JSON args in, a required
+//! `--actor`, optional `--trace`; committed or rejected JSON out, with the
+//! matching exit code. Any system can propose against its own programme
+//! without compiling Rust.
 
 use anyhow::Context;
 use morpholog_core::{Subject, Transition, explain};
@@ -24,14 +20,7 @@ use crate::commands::{
 use morpholog_cli::envelopes;
 
 pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
-    // 1. Parse the source file. Exits on parse failure with rendered
-    //    diagnostics (same path `check` and `parse` use).
     let parsed = parse_or_report(&args.file)?;
-
-    // 2. Validate. Same error shape as `check`; returns a reported
-    //    failure so a malformed programme never reaches the proposal
-    //    path. The returned `ValidatedProgram` handle
-    //    threads through to the codec so it does not re-validate.
     let program = PgProgram::new(compile_or_report(&parsed)?);
     let compiled = program.core();
 
@@ -39,21 +28,12 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         return run_batch(&args, &program, batch_path).await;
     }
 
-    // 3. Resolve the transformation. Clap guarantees it is present
-    //    outside batch mode.
     let Some(transformation_name) = args.transformation.as_deref() else {
-        // Clap's required_unless_present("batch") makes this
-        // unreachable; the bail keeps the invariant honest without a
-        // panic path in the binary.
+        // Clap requires it outside batch mode; bail rather than panic.
         anyhow::bail!("a transformation name is required outside --batch");
     };
     let transformation = lookup_transformation(compiled, transformation_name, &args.file)?;
 
-    // 4. Decode --args or --args-named into `Vec<EvalValue>`. Clap
-    //    has already enforced exactly-one-of via `conflicts_with` +
-    //    `required_unless_present`, so `unwrap_either` would be
-    //    safe; the explicit match keeps the intent clear and gives
-    //    the codec a typed handle.
     let codec_input = match (&args.args, &args.args_named) {
         (Some(tagged), None) => CliArgs::Tagged(tagged.as_str()),
         (None, Some(named)) => CliArgs::Named(named.as_str()),
@@ -66,8 +46,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         codec_input,
     )?;
 
-    // 5. Connect and propose. Same retry caveat as `propose`:
-    //    `PgError::SerializationFailure` is the caller's to retry.
+    // Retrying a `PgError::SerializationFailure` is the caller's job.
     let pool = connect(&args.db.database_url).await?;
     let transition = Transition {
         transformation_name: transformation.name.clone(),
@@ -102,11 +81,8 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             }
         }
     } else if args.explain_on_reject {
-        // Same-snapshot diagnosis: the variant hands back the exact
-        // pre-state the gates evaluated, and the explanation engine
-        // (pure, in-memory) runs against it - never a second read
-        // that could describe different state than the one that
-        // refused.
+        // Explain against the exact state that refused, not a second
+        // read that could have moved on.
         let morpholog_postgres::RejectionStateOutcome {
             outcome,
             rejection_state,
@@ -149,27 +125,21 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A decided rejection on a single-proposal path: locate the rule on
-/// stderr and carry the exit code out (the envelope is already on
-/// stdout, so nothing further is printed).
+/// A decided rejection on a single-proposal path: point stderr at the rule
+/// and carry the exit code out. The envelope is already on stdout.
 ///
-/// Returns `Result` rather than a bare `anyhow::Error` so the compiler
-/// enforces what a caller must do with it. An earlier draft of this
-/// refactor handed back the error, a caller built it and dropped it,
-/// and a decided refusal started exiting 0 - reported as success.
-/// `Result` is `#[must_use]`; a bare error is not.
+/// Returns `Result`, not a bare error, because `Result` is `#[must_use]`:
+/// a dropped error would let a rejection exit 0.
 fn report_rejection(reason: &str, parsed: &ParsedSource) -> anyhow::Result<()> {
     print_rule_location(reason, parsed);
     Err(AlreadyReported.into())
 }
 
-/// On a single-run rejection, point stderr at the rule: take the
-/// first backticked name in the reason, resolve it as an invariant
-/// declared in the source, and print `rule at <file>:<line>:<col>
-/// (<name>)`. A name the map cannot place (a generated discipline
-/// invariant, a gate refusal that names no invariant) prints
-/// nothing. Stderr only - every stdout envelope stays byte-identical
-/// - and single-run only: batch receipts are the machine contract.
+/// On a single-run rejection, point stderr at the rule: resolve the first
+/// backticked name in the reason as a declared invariant and print
+/// `rule at <file>:<line>:<col> (<name>)`. Prints nothing when the name
+/// cannot be placed (a generated invariant, a gate). Stderr only, so
+/// stdout envelopes are unchanged; never in batch mode.
 fn print_rule_location(reason: &str, parsed: &ParsedSource) {
     let Some(name) = reason.split('`').nth(1) else {
         return;
@@ -184,10 +154,9 @@ fn print_rule_location(reason: &str, parsed: &ParsedSource) {
     eprintln!("rule at {}:{line}:{col} ({name})", parsed.source_name);
 }
 
-/// One NDJSON batch row: a self-contained transition naming its own
-/// transformation and actor, with args in either codec (exactly one).
-/// Also the propose body of a session request, which is the same
-/// self-contained shape plus a per-request explanation flag.
+/// One NDJSON batch row: a transition naming its own transformation and
+/// actor, with args in exactly one codec. Also the body of a session's
+/// propose request, which adds a per-request explanation flag.
 #[derive(serde::Deserialize)]
 pub(crate) struct BatchRow {
     pub(crate) transformation: String,
@@ -198,10 +167,9 @@ pub(crate) struct BatchRow {
     pub(crate) args_named: Option<serde_json::Value>,
 }
 
-/// A per-row failure: the stable code its receipt carries, or none for
-/// an operational failure - a dead connection, a schema mismatch - which
-/// aborts the batch or the session and never becomes a receipt. The
-/// reason renders into the receipt's human prose.
+/// A per-row failure: the stable code its receipt carries, or none for an
+/// operational failure (a dead connection, a schema mismatch), which aborts
+/// the batch or session instead. The reason becomes the receipt's prose.
 pub(crate) struct RowError {
     pub(crate) code: Option<envelopes::ProposeCode>,
     pub(crate) reason: anyhow::Error,
@@ -219,10 +187,9 @@ impl RowError {
     }
 }
 
-/// A one-shot proposal's adapter failure, worded for what the adapter
-/// knows: every error but one means the proposal was not committed;
-/// the one is a commit whose outcome could not be proven, which exits
-/// on its own code so a caller need not parse this prose.
+/// Word a one-shot proposal's adapter failure. Every error but one means
+/// nothing was committed. The exception, a commit whose outcome is
+/// unknown, gets its own exit code.
 fn one_shot_failure(err: morpholog_postgres::PgError) -> anyhow::Error {
     use morpholog_postgres::PgError;
     match err {
@@ -232,16 +199,15 @@ fn one_shot_failure(err: morpholog_postgres::PgError) -> anyhow::Error {
     }
 }
 
-/// Classify a proposal-path error into its receipt code. Exhaustive on
-/// purpose: a new adapter error must be placed here - safe to
-/// re-submit, must inspect first, or operational - before it compiles.
-/// `SerializationFailure` is the documented per-row outcome (the caller
-/// re-submits that row; retries stay the caller's); a kernel error or
-/// colliding intent is that row's data speaking; every other adapter
-/// error on this path is a known non-commit, except the commit whose
-/// outcome the adapter could not prove, and a decided rejection whose
-/// record could not be written - which is operational, because the
-/// verdict was reached and a pre-decision code would misdescribe it.
+/// Classify a proposal-path error into its receipt code. The match is
+/// exhaustive, so a new adapter error must be placed before it compiles:
+/// safe to re-submit, check the record first, or operational.
+///
+/// `SerializationFailure` is the caller's to retry. A kernel error or a
+/// colliding intent is about the row's data. Most other errors mean nothing
+/// was committed. Two are exceptions: an unknown commit outcome, and a
+/// rejection that could not be recorded. The latter is operational, since
+/// the verdict was reached and a "not decided" code would be wrong.
 pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
     use envelopes::ProposeCode;
     use morpholog_postgres::PgError;
@@ -297,14 +263,11 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
 }
 
 /// Batch mode: one receipt per row, in row order, each row its own
-/// SERIALIZABLE commit - an import is explicitly NOT all-or-nothing.
-/// A malformed row (bad JSON, unknown transformation, undecodable
-/// args) gets an error receipt and processing continues; rejections
-/// are lawful outcomes. The exit code is zero whenever every row was
-/// processed; non-zero is reserved for operational failure (unreadable
-/// input, a broken connection - see [`RowError`]). `row` is the
-/// 1-based line number in the input; blank lines are skipped without
-/// receipts.
+/// SERIALIZABLE commit. Not all-or-nothing. A malformed row gets an error
+/// receipt and the batch goes on; a rejection is a normal outcome. Exits
+/// zero once every row is processed; non-zero only on operational failure
+/// (see [`RowError`]). `row` is the 1-based input line; blank lines are
+/// skipped.
 async fn run_batch(
     args: &ProposeArgs,
     program: &PgProgram,
@@ -341,8 +304,7 @@ async fn run_batch(
                 }
                 envelope
             }
-            // Infrastructure failure aborts: the summary names how far
-            // the batch got, and the exit code tells the truth.
+            // An operational failure aborts, saying how far the batch got.
             Err(RowError { code: None, reason }) => {
                 eprintln!(
                     "batch aborted at row {row}: {committed} committed, \
@@ -350,8 +312,7 @@ async fn run_batch(
                 );
                 return Err(reason.context(format!("operational failure at row {row}")));
             }
-            // A row-level failure is a receipt, never a process
-            // failure: the rows after it still run.
+            // A row failure is a receipt; later rows still run.
             Err(RowError {
                 code: Some(code),
                 reason,
@@ -371,9 +332,8 @@ async fn run_batch(
     Ok(())
 }
 
-/// Process one row to its single-run envelope (without the `row`
-/// field). Thin parse step over [`propose_row_outcome`], which the
-/// session shares.
+/// Parse one row and hand it to [`propose_row_outcome`], which the session
+/// shares. Returns the single-run envelope without `row`.
 async fn batch_row_outcome(
     args: &ProposeArgs,
     program: &PgProgram,
@@ -386,10 +346,9 @@ async fn batch_row_outcome(
     propose_row_outcome(&args.file, args.explain_on_reject, program, pool, row).await
 }
 
-/// A batch row to the kernel transition it names: the transformation
-/// looked up, the arguments decoded by the row's codec. Shared by the
-/// batch, the session, and `transact`, so every row-shaped surface
-/// refuses a malformed row with the same code.
+/// Turn a batch row into its transition: look up the transformation and
+/// decode the arguments. Shared by batch, session and `transact`, so all
+/// refuse a malformed row with the same code.
 pub(crate) fn decode_row(
     file: &std::path::Path,
     compiled: &morpholog_core::CompiledProgram,
@@ -423,12 +382,9 @@ pub(crate) fn decode_row(
     })
 }
 
-/// One self-contained transition to its single-run envelope (without
-/// the `row` field): the same codecs, the same propose calls, the
-/// same JSON shapes as the non-batch path, so the receipt contract
-/// cannot drift from the pinned single-run contract. Shared by the
-/// batch (whose explanation flag is batch-wide) and the session
-/// (whose flag is per request).
+/// Propose one transition and return its single-run envelope, without
+/// `row`. It uses the same codecs, calls and JSON shapes as the single-run
+/// path, so receipts cannot drift from it. Shared by batch and session.
 pub(crate) async fn propose_row_outcome(
     file: &std::path::Path,
     explain_on_reject: bool,

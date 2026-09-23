@@ -1,7 +1,6 @@
-//! Kernel-internal unit tests: the ones that reach crate-private
-//! items (`unify_args`, `resolve_term`, `Bindings`) and so cannot live
-//! in `tests/`. One file per kernel area; the helpers every area
-//! shares live here.
+//! Unit tests that need crate-private items (`unify_args`, `resolve_term`,
+//! `Bindings`) and so cannot live in `tests/`. One file per kernel area;
+//! shared helpers live here.
 
 mod eval;
 mod explain;
@@ -12,9 +11,7 @@ mod validate;
 use super::*;
 use crate::eval::{EvalContext, eval_value, find_matches, resolve_term, unify_args};
 
-// Boxed-operand builders keep comparator-heavy test call
-// sites terse. Operands
-// are value expressions; the comparison itself is a proposition.
+// Comparator builders over boxed operands, to keep test call sites short.
 fn le_(l: Box<ValueExpr>, r: Box<ValueExpr>) -> Prop {
     Prop::Compare {
         op: CompareOp::Le,
@@ -96,7 +93,7 @@ fn ctx<'a>(state: &'a State, bindings: &'a Bindings) -> EvalContext<'a> {
 }
 
 /// No-actor EvalContext with both pre and post states, for `Prop::Pre`
-/// tests where the wrapped subtree flips into pre-state lookup.
+/// tests.
 fn ctx_with_pre<'a>(state: &'a State, pre: &'a State, bindings: &'a Bindings) -> EvalContext<'a> {
     EvalContext::new(
         state,
@@ -107,9 +104,8 @@ fn ctx_with_pre<'a>(state: &'a State, pre: &'a State, bindings: &'a Bindings) ->
     )
 }
 
-/// One-statement parameterless transformation body. BindOne tests
-/// drive the full `propose` path, not `find_matches` directly, so
-/// the statement contract is exercised against a real transformation.
+/// A parameterless transformation of one statement, so BindOne tests go
+/// through `propose` rather than `find_matches`.
 fn single_stmt_transformation(name: &str, body: Vec<Stmt>) -> Transformation {
     ir_builder::transformation(name, vec![], body)
 }

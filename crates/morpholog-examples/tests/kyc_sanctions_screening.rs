@@ -1,17 +1,12 @@
 //! Integration tests for the KYC sanctions/PEP screening example
 //! (`examples/08_kyc_sanctions_screening/`).
 //!
-//! The example's first reason to exist is to force `IntentDecl` into the
-//! kernel: a domain with distinct intent types and distinct downstream
-//! consumers (screening provider, analyst queue, core banking, compliance
-//! reporting). It is also the forcing home for `Prop::Xor`: the
-//! adjudication fork (a reviewed match is a false positive xor a confirmed
-//! hit) is a genuine exactly-one decision. These tests pin the
-//! load-bearing claims: onboarding requires current clean screenings on
-//! both lists; an unresolved match against a current screening blocks
-//! admission; the round-trip request/result pattern advances the
-//! currentness pointer correctly; and the xor invariant rejects both an
-//! adjudicated marker with no disposition and a confirmed-hit back door.
+//! These tests pin that: onboarding requires current clean screenings on
+//! both lists; an unresolved match blocks onboarding; a request/result
+//! round trip moves the currentness pointer; and a reviewed match must be
+//! exactly one of false positive or confirmed hit (`xor`), refusing both a
+//! missing disposition and a confirmed-hit back door. Intents are emitted
+//! for the distinct downstream consumers.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -306,13 +301,11 @@ fn onboarding_rejects_when_screening_has_expired_by_onboarding_date() {
 // blocks onboarding; adjudication as false-positive admits it.
 // ============================================================
 
-/// The load-bearing compliance test. A customer with clean current
-/// screenings on both lists gets a NEWER sanctions screening that
-/// returns a match. Recording the match does not move the
-/// currentness pointer (the old clean screening still holds it),
-/// so a naive "match against current screening" rule would let
+/// A customer with clean current screenings gets a newer sanctions
+/// screening that returns a match. The match does not move the currentness
+/// pointer, so a rule that only checked the current screening would let
 /// onboarding through. The invariant joins through Screening, not
-/// CurrentScreening, so the unresolved match blocks onboarding.
+/// CurrentScreening, so the match blocks.
 #[test]
 fn onboarding_rejects_when_newer_screening_returns_match_even_if_old_clean_current_exists() {
     let program = kyc_sanctions_screening::program();
@@ -434,13 +427,10 @@ fn match_adjudicated_false_positive_enables_onboarding() {
     );
 }
 
-/// The other side of the adjudication fork: a confirmed match is a
-/// durable bar that closes a back door. Bob has an older clean sanctions
-/// screening (still the current one) and a clean PEP, so the current-clean
-/// rules are satisfied - but a newer re-screen was adjudicated a confirmed
-/// hit. Confirming clears the review flag, so the "no unresolved match"
-/// rule no longer bites; `onboarded_requires_no_confirmed_match` is what
-/// keeps onboarding refused.
+/// A confirmed match is a lasting bar. Bob's current screenings are
+/// clean, but a newer re-screen was confirmed a hit. Confirming clears the
+/// review flag, so "no unresolved match" no longer applies;
+/// `onboarded_requires_no_confirmed_match` keeps onboarding refused.
 #[test]
 fn confirmed_match_blocks_onboarding_even_behind_a_clean_current_screening() {
     let program = kyc_sanctions_screening::program();
@@ -504,12 +494,10 @@ fn confirmed_match_blocks_onboarding_even_behind_a_clean_current_screening() {
     }
 }
 
-/// The XOR invariant's distinctive teeth: it forbids not just *both*
-/// dispositions but *neither*. A hand-built transformation that marks a
-/// match adjudicated without recording any adjudicated disposition is
-/// rejected by `adjudicated_match_resolves_exactly_one_way` - the
-/// "at least one" half a plain `not (clear and confirmed)` exclusion
-/// would miss. This is what `xor` buys over hand-written exclusion.
+/// `xor` forbids *neither* disposition as well as *both*. Marking a match
+/// adjudicated with no disposition is rejected by
+/// `adjudicated_match_resolves_exactly_one_way`; a plain
+/// `not (clear and confirmed)` would miss it.
 #[test]
 fn adjudicated_marker_without_a_disposition_is_rejected() {
     use morpholog_core::ir_builder;
@@ -543,9 +531,8 @@ fn adjudicated_marker_without_a_disposition_is_rejected() {
         state,
     );
 
-    // Adversarial (IR-builder) transformation: stamp the screening
-    // adjudicated but record no disposition - exactly the "neither" case
-    // the XOR's totality half must reject.
+    // A hand-built transformation that marks the screening adjudicated
+    // with no disposition: the "neither" case.
     let bad = ir_builder::transformation(
         "adjudicate_without_disposition",
         ir_builder::params(&["screening_id"]),

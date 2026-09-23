@@ -6,7 +6,7 @@ This document fixes what Morpholog is *for*, what it should grow into, and - equ
 
 ## The thesis
 
-Morpholog governs **commit legitimacy**. The only way governed state changes is through a transformation; a transformation commits only if every active invariant holds against the candidate state. The product is not a programming language. It is a runtime where the question "may this state be admitted as legitimate?" is decidable by the language itself, not by code somebody remembered to write.
+Morpholog governs **commit legitimacy**. The only way governed state changes is through a transformation; a transformation commits only if it introduces no violation in any case it touches. The product is not a programming language. It is a runtime where the question "may this state be admitted as legitimate?" is decidable by the language itself, not by code somebody remembered to write.
 
 Everything else - UI, reporting, analytics, optimisation, market data ingestion, OCR, ML, scheduling, integrations - lives outside Morpholog and interacts with governed state only through transformations and reads.
 
@@ -54,7 +54,7 @@ The boundary above says what belongs in Morpholog; the next question is how an e
 | Zone | What runs there | Examples |
 |---|---|---|
 | **Compute** | Anything heavy, non-deterministic, or arbitrary. Outside the database transaction. | Monte Carlo simulations, OU price-process integration, ML inference, merit-order dispatch, optimisation solvers, web scraping, image processing. |
-| **Commit** | Small, bounded, deterministic transformations that propose state changes. Inside the transaction; must satisfy every active invariant to become durable. | Admitting a settlement claim, recording a verified figure, posting a journal entry, registering a payment intent. |
+| **Commit** | Small, bounded, deterministic transformations that propose state changes. Inside the transaction; must introduce no violation in any case it touches to become durable. | Admitting a settlement claim, recording a verified figure, posting a journal entry, registering a payment intent. |
 | **Outbox** | Post-commit intents staged inside the same transaction, delivered at-least-once after commit. | Sending an invoice, posting a webhook, calling a downstream service, triggering a recompute. |
 
 The doctrinal statement, in one sentence:

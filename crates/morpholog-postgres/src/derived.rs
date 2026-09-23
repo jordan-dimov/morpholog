@@ -13,35 +13,25 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 /// Enumerate a derived claim's extension against the current durable state.
 ///
-/// Loads only the admitted claims for predicates the derived claim's
-/// body references (via [`list_claims_for_predicates`] and
-/// [`morpholog_core::predicates_referenced_by_derived`]), wraps them
-/// in an in-memory [`State`], and calls the synchronous
-/// [`enumerate_derived`] kernel primitive. The result is a
-/// [`ClaimInstance`] per distinct key binding the `domain` produces,
-/// with each `DerivedValue` evaluated and appended to the key
-/// positions.
+/// Loads only the claims of predicates the body references (see
+/// [`morpholog_core::predicates_referenced_by_derived`]) and runs
+/// [`enumerate_derived`] over them. Returns one [`ClaimInstance`] per
+/// distinct key binding, with each computed value appended to the keys.
 ///
-/// Read-only: no claims written, no audit row, no outbox row. Repeated
-/// calls recompute from scratch; there is no materialised view.
+/// Read-only, and recomputed from scratch on every call.
 ///
-/// The predicate-scoped load is safe because the footprint analysis's
-/// exhaustive `match` fails to compile if a new predicate-referencing
-/// `Prop` or `ValueExpr` variant is added without handling it, so this
-/// read path cannot silently produce wrong answers under a partial state.
+/// The scoped load is safe because the footprint analysis matches
+/// exhaustively: a new predicate-reading variant fails to compile until
+/// it is handled.
 ///
 /// Errors:
-/// - [`PgError::Database`] / [`PgError::Encoding`] from the underlying
-///   `list_claims_for_predicates` call.
+/// - [`PgError::Database`] / [`PgError::Encoding`] from the claims read.
 /// - [`PgError::Kernel`] if the kernel rejects the derived claim's body
-///   (type mismatch in a `DerivedValue.expr`, unbound variable in
-///   `domain`, etc.). Each is a programmer error in the derived claim's
-///   definition, not a runtime data condition.
+///   (a type mismatch, an unbound variable): an authoring error, not a
+///   data condition.
 ///
-/// Output ordering matches the kernel's contract: sorted by the
-/// concatenated `(keys ++ computed values)` tuple under structural
-/// `EvalValue` ordering, so results are deterministic across runs for a
-/// given state.
+/// Output is sorted by the `(keys ++ computed values)` tuple, so it is
+/// deterministic for a given state.
 pub async fn list_derived(
     pool: &PgPool,
     derived: &DerivedClaim,
@@ -57,8 +47,7 @@ pub async fn list_derived(
     Ok(rows)
 }
 /// The outcome of [`refresh_derived`]: what was written, the audit point
-/// the projection reflects, and per-phase timings. Surfaced by
-/// `morpholog refresh derived` so an operator sees the cost of a refresh.
+/// the projection reflects, and per-phase timings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefreshSummary {
     pub refresh_id: Uuid,
@@ -66,9 +55,8 @@ pub struct RefreshSummary {
     pub derived_predicate_count: usize,
     pub source_claim_count: usize,
     pub derived_claim_count: usize,
-    /// The latest audit transition VISIBLE in the refresh snapshot - a
-    /// coarse freshness marker, not a lossless audit-resume coordinate
-    /// (see the field doc on `morpholog_read.derived_refreshes`).
+    /// The latest audit transition VISIBLE in the refresh snapshot: a
+    /// rough freshness marker, not a lossless audit-resume coordinate.
     pub source_snapshot_transition_id: Option<Uuid>,
     pub source_snapshot_committed_at: Option<Timestamp>,
     pub read: Duration,
@@ -76,36 +64,28 @@ pub struct RefreshSummary {
     pub write: Duration,
 }
 /// Recompute every derived claim with the kernel and publish a new
-/// generation of the `morpholog_read` projection. The exact
-/// `enumerate_derived` output is stored as tagged-JSONB rows, byte-shaped
-/// like `morpholog.claims` - SQL never recomputes a derived value, it
-/// only stores what the kernel produced. A read model, never governed
-/// state: nothing in `propose`, invariant evaluation, or value lookups
-/// reads `morpholog_read`.
+/// generation of the `morpholog_read` projection.
 ///
-/// Three phases keep the long part (the kernel compute) outside any
-/// transaction:
-///  - **read** (short `REPEATABLE READ` snapshot): the latest visible
-///    audit transition then the scoped claims, in one snapshot. The
-///    recorded `source_snapshot_*` is a freshness marker, NOT a lossless
-///    high-water: `audit.committed_at` is transaction-start time while
-///    visibility follows commit order, so a transaction in flight at
-///    snapshot time (whose committed_at may sort earlier) is excluded and
-///    folded in by the next refresh. Lossless resume is `inspect audit`'s
-///    job; this is a discardable cache.
-///  - **compute** (no transaction open): the sync kernel builds the rows.
-///  - **write** (one short transaction): insert a new generation
-///    (`refresh_id`), bulk-load its rows, flip the single-row active
-///    pointer, and drop the prior generation. Readers stay on the prior
-///    generation until this commits; a failure rolls back, leaving it
-///    intact.
+/// Rows are stored exactly as the kernel produced them, shaped like
+/// `morpholog.claims`; SQL never recomputes a value. This is a read model,
+/// never governed state: nothing in `propose` or evaluation reads it.
 ///
-/// Full refresh, single-threaded: cost scales with the loaded claims,
-/// intermediate domain matches, and emitted rows. Good for operational
-/// stores; incremental and partitioned refresh are deliberately deferred.
+/// Three phases keep the kernel compute outside any transaction:
+///  - **read** (one short `REPEATABLE READ` snapshot): the latest visible
+///    audit transition, then the scoped claims. `source_snapshot_*` is a
+///    freshness marker, NOT a lossless high-water: `committed_at` is the
+///    writer's start time but visibility follows commit order, so an
+///    in-flight transaction may sort earlier and is picked up next time.
+///  - **compute** (no transaction): the kernel builds the rows.
+///  - **write** (one short transaction): insert a new generation, load its
+///    rows, flip the active pointer, drop the old generation. Readers see
+///    the old generation until commit; a failure leaves it intact.
 ///
-/// Takes a [`ValidatedProgram`] so a read contract cannot be materialised
-/// for an unvalidated programme by accident, mirroring `render_views`.
+/// A full, single-threaded refresh: cost scales with the claims loaded,
+/// the domain matches, and the rows emitted.
+///
+/// Takes a [`ValidatedProgram`] so an unvalidated programme cannot be
+/// materialised by accident.
 pub async fn refresh_derived(
     pool: &PgPool,
     program: ValidatedProgram<'_>,
@@ -121,10 +101,8 @@ pub async fn refresh_derived(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    // Phase: read. One short REPEATABLE READ snapshot - the latest visible
-    // audit transition and the scoped claims share it - then released
-    // before the compute. The marker reflects snapshot visibility, not a
-    // lossless audit order (see the function doc).
+    // Read: one short snapshot for the marker and the claims, released
+    // before the compute.
     let read_start = Instant::now();
     let mut read_tx = begin_isolated_tx(pool, TxIsolation::RepeatableRead).await?;
     let latest_visible = sqlx::query!(
@@ -154,8 +132,7 @@ pub async fn refresh_derived(
     let snapshot_at = latest_visible.map(|r| r.committed_at);
     let source_claim_count = claim_rows.len();
     let read = read_start.elapsed();
-    // Phase: compute. The sync kernel - the sole evaluator - runs with no
-    // transaction held.
+    // Compute: no transaction held.
     let compute_start = Instant::now();
     let state = State::from_claims(decode_claim_rows(claim_rows)?);
     let mut rows: Vec<ClaimInstance> = Vec::new();
@@ -163,8 +140,7 @@ pub async fn refresh_derived(
         rows.extend(enumerate_derived(derived, &state, definitions)?);
     }
     let compute = compute_start.elapsed();
-    // Phase: write. Build the new generation, flip the active pointer, drop
-    // the old generation - one short transaction, no kernel work.
+    // Write: one short transaction, no kernel work.
     let write_start = Instant::now();
     let refresh_id = Uuid::now_v7();
     let mut tx = pool.begin().await.map_err(classify)?;
@@ -183,8 +159,7 @@ pub async fn refresh_derived(
     .execute(&mut *tx)
     .await
     .map_err(classify_checked_query)?;
-    // Bulk insert in one statement (UNNEST of parallel arrays) rather than
-    // a round-trip per row. COPY is the next step if a profile demands it.
+    // One statement (UNNEST of parallel arrays), not a round-trip per row.
     if !rows.is_empty() {
         let predicates: Vec<String> = rows.iter().map(|r| r.predicate.to_string()).collect();
         let arguments: Vec<serde_json::Value> = rows
@@ -202,10 +177,8 @@ pub async fn refresh_derived(
         .await
         .map_err(classify_checked_query)?;
     }
-    // Flip the single-row active pointer, then drop every other generation
-    // (cascading its rows). The just-published generation is now the only
-    // one. Safe under MVCC: a reader mid-query keeps its snapshot of the
-    // old generation.
+    // Flip the active pointer, then drop every other generation (cascading
+    // its rows). A reader mid-query keeps its snapshot of the old one.
     sqlx::query!(
         "INSERT INTO morpholog_read.derived_active (singleton, refresh_id)
          VALUES (true, $1)
@@ -237,32 +210,13 @@ pub async fn refresh_derived(
         write,
     })
 }
-// ===========================================================================
-// As-of helpers - audit-log replay to recover historical state
-// ===========================================================================
-//
-// These helpers reconstruct the `State` that existed immediately after a
-// chosen `transition_id` committed, by replaying every audit row up to and
-// including that transition in causal order. The kernel is unchanged;
-// as-of evaluation is just a question of which `State` you hand it.
-//
-// The coordinate is "as of *this actual committed transition*". An
-// unknown id - smaller, larger, or between known ids - is rejected with
-// `PgError::TransitionNotFound`; there is no fallback to current state.
-//
-// Replay is O(transitions up to T); full replay, no materialisation.
 /// Enumerate a derived claim's extension against the state that
 /// existed immediately after `transition_id` committed.
 ///
-/// Mirrors [`list_derived`] but against historical state: the
-/// derived claim's predicate footprint is computed via
-/// [`morpholog_core::predicates_referenced_by_derived`], the audit
-/// log is replayed up to `transition_id` keeping only claims of
-/// those predicates, and `enumerate_derived` runs against the
-/// resulting partial state.
-///
-/// Output is byte-identical to what [`list_derived`] would have
-/// returned at the moment `transition_id` committed.
+/// [`list_derived`] over historical state: the audit log is replayed up to
+/// `transition_id`, keeping only the footprint's predicates. Output is
+/// byte-identical to what [`list_derived`] returned at that moment. An
+/// unknown id is [`PgError::TransitionNotFound`], never current state.
 pub async fn list_derived_at(
     pool: &PgPool,
     derived: &DerivedClaim,

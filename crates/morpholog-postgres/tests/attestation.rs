@@ -1,9 +1,12 @@
-//! Attestation lineage as the runtime records and evidences it: every
-//! commit carries which PostgreSQL-authenticated role asserted the
-//! actor, the lineage joins the Merkle leaf, a history whose legacy
-//! prefix predates attestation verifies whole - live and offline -
-//! and the database floor refuses any new unattested row, so
-//! attestation is a one-way boundary, not a per-row option.
+//! Attestation lineage: every commit records which authenticated
+//! PostgreSQL role asserted the actor, and that lineage is part of the
+//! Merkle leaf. A history with a pre-attestation prefix still verifies
+//! whole, live and offline. The database refuses any new unattested row,
+//! so a writer shaped like an older one cannot extend an older regime.
+//!
+//! Attackers modelled: a stale writer that omits the attestation, and one
+//! with full DDL control that drops the database's refusal and then
+//! rewrites or strips the lineage; the Merkle tree catches the second.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -60,10 +63,9 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     reset_db(&pool).await;
     let program = compiled(double_entry_ledger::program());
 
-    // Replay the real chronology of an upgraded deployment: rows from
-    // before attestation existed (written under a schema with no
-    // attestation column), then the activation boundary - the
-    // migration's NOT VALID constraint - then attested commits.
+    // The real order of an upgraded deployment: rows from before
+    // attestation, then the migration's NOT VALID constraint, then
+    // attested commits.
     sqlx::query("ALTER TABLE morpholog.audit DROP CONSTRAINT IF EXISTS audit_attestation_required")
         .execute(&pool)
         .await
@@ -147,8 +149,8 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         ),
         "a renamed parameter must break the leaf"
     );
-    // Names grafted onto an attested-but-unstamped row are not an
-    // encoding at all: malformed, never intact under the nearest one.
+    // Names grafted onto an attested but unstamped row match no
+    // encoding: malformed, not intact.
     let mut grafted = pack.clone();
     grafted.rows[0].parameters = Some(vec![]);
     assert!(
@@ -159,9 +161,8 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         "names on an unattested row are no encoding"
     );
 
-    // The boundaries are one-way: after activation, an insert shaped
-    // like an earlier writer is refused by the database itself - a
-    // stale binary cannot quietly extend a historical regime.
+    // After activation the database refuses an insert shaped like an
+    // earlier writer, so a stale binary cannot extend an older regime.
     let refused = legacy_insert(&pool).await;
     let err = refused.expect_err("an unattested insert must be refused after activation");
     assert!(
@@ -227,11 +228,10 @@ async fn tampering_with_the_attestation_breaks_the_root() {
     .unwrap();
     create_checkpoint(&pool, None, None).await.unwrap();
 
-    // An attacker with full DDL control can drop the database floor;
-    // the tree is the layer that still catches them. Rewriting the
-    // lineage changes the leaf and breaks the root; stripping it from
-    // a stamped row leaves a shape no writer produced, refused at the
-    // read boundary before anything hashes.
+    // Attacker: full DDL control, so it can drop the database floor.
+    // The tree still catches it. Rewriting the lineage changes the leaf
+    // and breaks the root. Stripping it leaves a row shape no writer
+    // produced, refused on read before anything is hashed.
     sqlx::query("ALTER TABLE morpholog.audit DROP CONSTRAINT IF EXISTS audit_attestation_required")
         .execute(&pool)
         .await
@@ -251,12 +251,9 @@ async fn tampering_with_the_attestation_breaks_the_root() {
         .unwrap();
     let stripped = verify_audit_tree(&pool, None).await;
 
-    // Restore the production floor BEFORE asserting, so a failing
-    // assertion cannot leave every later test binary running against a
-    // schema weaker than production (the tables are truncated between
-    // tests; constraints are not re-provisioned). NOT VALID is the
-    // restored upgraded-database state - the stripped rows above stay
-    // NULL.
+    // Restore the constraint before asserting, so a failure cannot leave
+    // later tests on a weaker schema; resets do not recreate it. NOT
+    // VALID leaves the stripped rows above as they are.
     sqlx::query(
         "ALTER TABLE morpholog.audit
          ADD CONSTRAINT audit_attestation_required

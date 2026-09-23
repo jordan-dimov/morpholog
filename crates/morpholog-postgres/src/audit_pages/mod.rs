@@ -1,20 +1,17 @@
 //! Every walk over the audit log in replay order: a keyset over
 //! `(committed_at, transition_id)`, one chunk in memory at a time, up to
-//! a bound. The walk's range belongs to the pager, not to its callers, so
-//! no consumer can apply a row past the coordinate it asked for, and a
-//! new replay writes no SQL.
+//! a bound. The pager owns the bound, so no caller can apply a row past
+//! the coordinate it asked for.
 //!
-//! Two projections share the one cursor and bound contract. A replay of
-//! claims reads only what it folds - `ReplayRow` - so it neither pays for
-//! nor fails on columns it never judged. Everything that needs the whole
-//! row - the tail, packs, checkpoints, scoring - reads `AuditRow`.
+//! A claims replay reads only `ReplayRow`, so it neither pays for nor
+//! fails on columns it never uses. Everything needing the whole row reads
+//! `AuditRow`.
 //!
-//! The pager is not bound to a pool or a transaction: each consumer opens
-//! the snapshot its guarantee needs and lends the connection.
+//! Each consumer opens the snapshot its guarantee needs and lends the
+//! connection.
 //!
-//! Each bound is spelled literally in its own query. A single query with
-//! the bounds behind flags loses the index condition under a generic
-//! plan, which is why the query count is what it is.
+//! Each bound combination has its own query: one query with the bounds
+//! behind flags loses the index condition under a generic plan.
 
 use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
@@ -43,8 +40,7 @@ impl Keyset {
     }
 
     /// A short page ends the walk, and so does a page ending on the
-    /// target of a walk through one transition, which saves one empty
-    /// query when the target is the last row of a full page.
+    /// `through` target, saving an empty query.
     fn advance(&mut self, len: usize, last: Option<(Timestamp, Uuid)>) {
         let Some(last) = last else {
             self.done = true;

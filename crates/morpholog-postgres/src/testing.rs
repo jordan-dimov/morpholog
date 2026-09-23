@@ -1,34 +1,23 @@
 //! Test-support [`Deliverer`] implementations.
 //!
-//! Constant-outcome deliverers, one per [`DeliveryOutcome`] variant.
-//! Integration tests in this crate and in `morpholog-outbox` use
-//! them as drop-in stubs whenever a test wants to exercise the
-//! processor or worker pipeline without tying behaviour to a
-//! specific external target.
+//! Constant-outcome deliverers, one per [`DeliveryOutcome`] variant, for
+//! tests that exercise the processor or worker without a real target.
 //!
-//! These types are always compiled (no feature flag) so integration
-//! tests can use them without configuring a feature. Production code
-//! should not import them - they are decision-pinned stubs, not
-//! deployable deliverers.
+//! Always compiled (no feature flag) so integration tests can use them.
+//! Production code should not import them.
 
 use jiff::Timestamp;
 
 use crate::{Deliverer, DeliveryOutcome, OutboxRow};
 
-/// The one authoritative reset for a disposable test database: every
-/// governed table, in one statement. Consumed by the integration
-/// suites here, in `morpholog-outbox`, in the CLI, and by the bench's
-/// `--reset` - a governed table added to the schema is added HERE,
-/// once (a hand-copied list in the bench once drifted and silently
-/// stopped truncating checkpoints).
+/// The one reset for a disposable test database: every governed table, in
+/// one statement. The test suites and the bench's `--reset` all use it, so
+/// a governed table added to the schema must be added here.
 pub const RESET_SQL: &str = "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, \
      morpholog.audit_checkpoints, morpholog.rejections, morpholog.index_requirement, \
      morpholog.managed_index CASCADE";
 
-/// Always returns [`DeliveryOutcome::Delivered`]. The simplest
-/// happy-path deliverer for tests that want to verify the processor
-/// moves rows to `delivered` and that the worker reports successful
-/// delivery counts.
+/// Always returns [`DeliveryOutcome::Delivered`].
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AlwaysDelivers;
 
@@ -39,9 +28,7 @@ impl Deliverer for AlwaysDelivers {
 }
 
 /// Always returns [`DeliveryOutcome::Transient`] with the configured
-/// `next_attempt_at`. Useful for tests that exercise the retry path,
-/// including ones that need to assert the processor honours the
-/// deliverer-chosen retry instant.
+/// `next_attempt_at`, for tests of the retry path.
 #[derive(Debug, Clone, Copy)]
 pub struct AlwaysTransient {
     pub next_attempt_at: Timestamp,
@@ -55,9 +42,8 @@ impl Deliverer for AlwaysTransient {
     }
 }
 
-/// Always returns [`DeliveryOutcome::NonRetryable`] with the
-/// configured `reason`. Useful for tests that exercise the
-/// failed-state and compensation paths.
+/// Always returns [`DeliveryOutcome::NonRetryable`] with the configured
+/// `reason`, for tests of the failed-state and compensation paths.
 #[derive(Debug, Clone)]
 pub struct AlwaysNonRetryable {
     pub reason: String,

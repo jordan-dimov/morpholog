@@ -1,7 +1,6 @@
-//! `morpholog generate python-client` end to end: the emitted package,
-//! its determinism (the embedder's whole drift discipline is
-//! regenerate-and-diff), the hash stamp, the verbatim-template
-//! guarantee, and the whole-run refusal contract.
+//! `morpholog generate python-client` end to end: the emitted package, its
+//! determinism (embedders catch drift by regenerate-and-diff), the hash
+//! stamp, verbatim templates, and whole-run refusal.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -68,15 +67,13 @@ fn generates_exactly_the_package_files() {
     for file in PACKAGE_FILES {
         assert!(package.join(file).is_file(), "{file} should exist");
     }
-    // The package directory holds exactly the listed files - nothing
-    // extra travels (in particular, not the template test suite).
+    // Exactly the listed files; in particular, not the template tests.
     let count = std::fs::read_dir(&package).unwrap().count();
     assert_eq!(count, PACKAGE_FILES.len(), "exactly the package files");
 }
 
-// The collection-argument contract, rendered: a transformation taking a
-// collection parameter (the margin run's batch of accounts) generates a
-// typed `list[str]` request field, encoded item by item for --args-named.
+// A collection parameter (the margin run's accounts) becomes a typed
+// `list[str]` request field, encoded item by item for --args-named.
 #[test]
 fn a_collection_parameter_renders_a_typed_list_field() {
     let out = tempfile::tempdir().unwrap();
@@ -97,9 +94,8 @@ fn a_collection_parameter_renders_a_typed_list_field() {
     );
 }
 
-// Determinism IS the drift contract: the same binary and programme
-// produce byte-identical trees, so an embedder's check is
-// regenerate-and-diff.
+// The same binary and programme give byte-identical trees, so an embedder
+// can check for drift by regenerating and diffing.
 #[test]
 fn generation_is_byte_deterministic() {
     let first = tempfile::tempdir().unwrap();
@@ -113,8 +109,8 @@ fn generation_is_byte_deterministic() {
     }
 }
 
-// The three static modules are emitted VERBATIM: the file the template
-// test suite runs is the file the embedder receives.
+// The static modules are copied verbatim: the file the template tests run
+// is the file the embedder gets.
 #[test]
 fn static_modules_are_byte_equal_to_their_templates() {
     let out = tempfile::tempdir().unwrap();
@@ -131,8 +127,8 @@ fn static_modules_are_byte_equal_to_their_templates() {
     }
 }
 
-// The stamp lets an embedder's CI assert generated code, manifest, and
-// live binary all name the same rules.
+// The stamp lets an embedder's CI check that generated code, manifest and
+// binary all name the same rules.
 #[test]
 fn the_model_hash_stamp_matches_morpholog_hash() {
     let out = tempfile::tempdir().unwrap();
@@ -157,11 +153,9 @@ fn the_model_hash_stamp_matches_morpholog_hash() {
     );
 }
 
-/// The pinned open is the easy one: `open_session` supplies the model
-/// hash this package was generated against, so an embedder reaching
-/// for the obvious call cannot silently open against other rules.
-/// Constructing `Session` stays available for a deliberately
-/// unpinned open.
+/// `open_session` passes the model hash the package was generated from,
+/// so the obvious call cannot open a session against other rules.
+/// Constructing `Session` directly still allows an unpinned open.
 #[test]
 fn the_emitted_factory_pins_the_model_hash() {
     let out = tempfile::tempdir().unwrap();
@@ -180,9 +174,8 @@ fn the_emitted_factory_pins_the_model_hash() {
         "open_session should be exported"
     );
 
-    // Textual emission is not the contract - forwarding is. Import the
-    // emitted package, stand in for `Session`, and check what the
-    // factory actually passes.
+    // What matters is what gets passed, not the emitted text. Import the
+    // package, stub `Session`, and check what the factory passes.
     let probe = r#"
 import sys, types
 sys.path.insert(0, sys.argv[1])
@@ -246,8 +239,8 @@ fn refusal_names_every_finding_and_writes_nothing() {
     );
 }
 
-// A field named after a generated metadata slot would corrupt the
-// very ClassVar `submit()` dispatches on; refused like a keyword.
+// A field named like generated class metadata would break what `submit()`
+// dispatches on, so it is refused like a keyword.
 #[test]
 fn fields_colliding_with_generated_members_are_refused() {
     let (_dir, path) = refusal_fixture(
@@ -265,8 +258,8 @@ fn fields_colliding_with_generated_members_are_refused() {
     );
 }
 
-// camel() is many-to-one: `capture_trade` and `CaptureTrade` are
-// distinct lawful Morpholog names that render the same Python class.
+// `capture_trade` and `CaptureTrade` are distinct names that make the same
+// Python class.
 #[test]
 fn class_name_collisions_are_refused_naming_both_sources() {
     let (_dir, path) = refusal_fixture(
@@ -293,9 +286,7 @@ fn class_name_collisions_are_refused_naming_both_sources() {
     );
 }
 
-// The committed package under the worked embedder is exactly what
-// this binary generates - the drift gate, caught locally under
-// precommit before CI's regenerate-and-diff sees it.
+// The committed embedder package is exactly what this binary generates.
 #[test]
 fn the_committed_example_package_is_current() {
     let out = tempfile::tempdir().unwrap();
@@ -314,9 +305,8 @@ fn the_committed_example_package_is_current() {
     }
 }
 
-// The worked examples that fit the supported kind set all generate;
-// the laytime example (Duration-shaped by design) is refused by name -
-// the documented consequence of the kind floor.
+// The laytime example is built on durations, which the client does not
+// support, so it is refused by name.
 #[test]
 fn laytime_is_refused_for_its_durations() {
     let out = tempfile::tempdir().unwrap();
@@ -330,8 +320,7 @@ fn laytime_is_refused_for_its_durations() {
 }
 
 // ============================================================
-// `--check`: the drift gate both consumer repos hand-rolled. Its
-// contract is the exit code, so every case asserts on that.
+// `--check`: the exit code is the contract, so every case asserts on it.
 // ============================================================
 
 #[test]
@@ -367,7 +356,7 @@ fn check_exits_non_zero_on_a_modified_file_and_writes_nothing() {
         stderr.contains("models.py: differs"),
         "stderr names the file: {stderr}"
     );
-    // The whole point of a check mode: it must not repair what it found.
+    // A check must not repair what it found.
     assert!(
         std::fs::read_to_string(&models)
             .expect("read")
@@ -405,9 +394,8 @@ fn check_exits_non_zero_when_nothing_has_been_generated_yet() {
 
 #[test]
 fn check_refuses_a_programme_the_generator_refuses() {
-    // The refusal sweep runs before the mode split, so --check reports
-    // the same refusals rather than silently passing an ungeneratable
-    // programme.
+    // --check reports the same refusals rather than passing a programme
+    // that cannot be generated.
     let dir = tempfile::tempdir().expect("tempdir");
     let checked = check(&margin_call_run(), dir.path());
     assert!(!checked.status.success());

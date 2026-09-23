@@ -1,18 +1,14 @@
-//! The durable half of the derived read-cache contract, against real
-//! PostgreSQL. `refresh_derived` recomputes derived claims with the
-//! kernel and publishes a generation into `morpholog_read`. These pin
-//! the properties only a live engine confirms:
-//!   - the cache equals the kernel's on-demand `enumerate_derived`
-//!     (exact, because both ARE the kernel - SQL never recomputes);
-//!     including a Timestamp-difference Duration, which round-trips
-//!     through the tagged-JSONB rows;
+//! The derived read cache against real PostgreSQL. `refresh_derived`
+//! computes derived claims with the kernel and publishes a generation
+//! into `morpholog_read`. These check that:
+//!   - the cache equals the kernel's `enumerate_derived` exactly, since
+//!     both are the kernel, including a Duration that round-trips through
+//!     the JSONB rows;
 //!   - refresh is idempotent and reflects source changes;
 //!   - each refresh publishes exactly one generation (the old one is
 //!     dropped) and records its metadata;
-//!   - an empty source is a lawful-empty projection;
+//!   - an empty source gives an empty projection;
 //!   - `propose` never touches the read model.
-//!
-//! Skipped unless `DATABASE_URL` is set, like the other PG suites.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -264,30 +260,25 @@ async fn propose_does_not_touch_the_read_model() {
         .unwrap();
     let before = repr(&cache_rows(&pool, "AccountTotal").await);
 
-    // A governed transition commits new claims but never updates the read
-    // model - the cache is stale-by-design until the next refresh.
+    // A commit never updates the read model: the cache is stale until the
+    // next refresh, by design.
     seed_entry(&pool, &p, "a2", 99).await;
     let after = repr(&cache_rows(&pool, "AccountTotal").await);
     assert_eq!(before, after, "propose must not refresh the read model");
 }
 
-/// `source_snapshot_*` is the latest VISIBLE transition, a freshness
-/// marker - not a lossless audit high-water. A transaction in flight when
-/// the refresh snapshot is taken (whose committed_at, a transaction-start
-/// time, sorts EARLIER than a later-committed one) is simply excluded and
-/// folded in next time. This pins that honest semantics, and is why the
-/// columns are not called `high-water`.
+/// `source_snapshot_*` is the latest visible transition: a freshness
+/// marker, not a lossless high-water mark. A transaction in flight at
+/// refresh (whose committed_at may sort earlier than a later commit) is
+/// left out and picked up next time.
 #[tokio::test]
 async fn the_snapshot_marker_is_latest_visible_not_a_lossless_high_water() {
     let pool = test_pool().await;
     reset_db_and_read_cache(&pool).await;
     let p = fixture();
 
-    // An in-flight writer: its transaction-start (and so its audit row's
-    // committed_at) precedes the later committed transaction below. It
-    // admits a claim and audit row but does not commit. (Hand-written, as
-    // in the audit-tail watermark test, to stand in for a propose whose
-    // transaction is still open.)
+    // An in-flight writer, standing in for a propose still open. Its
+    // committed_at precedes the transaction committed below.
     let mut writer = pool.begin().await.unwrap();
     let inflight_tid = uuid::Uuid::now_v7();
     common::insert_in_flight_audit_row(&mut writer, inflight_tid).await;
@@ -314,9 +305,7 @@ async fn the_snapshot_marker_is_latest_visible_not_a_lossless_high_water() {
     .await
     .unwrap();
 
-    // The refresh snapshot sees the committed transaction, not the
-    // in-flight one. The marker is the latest VISIBLE transition; the
-    // in-flight claim is excluded from the projection.
+    // The refresh sees the committed transaction, not the in-flight one.
     let summary = refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
@@ -331,8 +320,7 @@ async fn the_snapshot_marker_is_latest_visible_not_a_lossless_high_water() {
         "in-flight claim is excluded: {accounts:?}"
     );
 
-    // Once the writer commits, the next refresh folds it in: nothing was
-    // lost, it was simply not yet visible.
+    // Once the writer commits, the next refresh picks it up.
     writer.commit().await.unwrap();
     refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
         .await

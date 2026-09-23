@@ -100,7 +100,7 @@ enum Command {
     /// to run against a live database precisely because it never alters one.
     Migrate(MigrateArgs),
 
-    /// Propose a change: it commits only if every rule holds.
+    /// Propose a change: it commits only if everything it touches still obeys every rule.
     ///
     /// Parses and validates the `.morph` source, then proposes the
     /// named transformation with the supplied actor and arguments
@@ -1463,32 +1463,21 @@ pub(crate) struct ExplainArgs {
     pub(crate) json: bool,
 }
 
-/// The one place this binary decides the outcome of a dispatched
-/// command.
+/// The one place this binary turns a command's outcome into an exit code.
 ///
-/// Commands return their outcome rather than calling
-/// `std::process::exit` from wherever a diagnostic was printed, which
-/// is what makes them composable and testable in-process. Their pinned
-/// exit-code semantics are unchanged - success 0, failure 1 - only
-/// where they are enacted moves.
+/// Commands return their outcome instead of calling `std::process::exit`,
+/// so they stay testable in-process.
 ///
-/// Argument parsing is deliberately NOT routed through here. Clap owns
-/// that boundary along with its own conventions: a usage error exits
-/// 2, `--help` and `--version` exit 0 having printed to stdout. Taking
-/// it over would mean re-implementing those semantics to keep them
-/// identical, for no gain - a command that never ran has nothing to
-/// report.
+/// Argument parsing is not routed through here: clap keeps its own exit
+/// codes (2 for a usage error, 0 after `--help` or `--version`).
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     match run().await {
         Ok(()) => std::process::ExitCode::SUCCESS,
-        // The command has already rendered its diagnostics; printing
-        // `Error: ...` on top would say the same thing twice, in a
-        // worse voice.
+        // The command has already printed its diagnostics.
         Err(err) if err.is::<commands::AlreadyReported>() => std::process::ExitCode::FAILURE,
         Err(err) => {
-            // Byte-identical to what `Result`'s own `Termination` used
-            // to print when `main` returned it.
+            // Same text `Result`'s own `Termination` prints.
             eprintln!("Error: {err:?}");
             std::process::ExitCode::from(exit_code_for(&err))
         }

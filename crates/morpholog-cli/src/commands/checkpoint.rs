@@ -10,16 +10,15 @@ use crate::CheckpointArgs;
 use crate::commands::witness::{report_failures, witness_all};
 use crate::commands::{AlreadyReported, connect, print_json};
 
-/// Run `audit checkpoint`: compute the audit Merkle root over the committed
-/// prefix, chain it onto the previous checkpoint, optionally sign the new
-/// tree head, and print the checkpoint as JSON. Save that output outside
-/// the database - a later `verify --anchor-file` against it is the check a
-/// coordinated rewrite of the audit log and the checkpoint table cannot
-/// pass; a signature makes the anchor attributable as well, and an
-/// outside witness (`--witness`) dates it. Witnessing happens after the
-/// commit, outside any transaction: every authority named is attempted,
-/// the checkpoint is recorded and printed whatever they do, and any
-/// failed submission exits one naming the retry.
+/// Run `audit checkpoint`: compute the audit Merkle root, chain it onto the
+/// previous checkpoint, optionally sign it, and print it as JSON.
+///
+/// Keep the output outside the database. A later `verify --anchor-file`
+/// against it catches a rewrite of both the audit log and the checkpoint
+/// table. A signature says who made the anchor; a `--witness` dates it.
+/// Witnessing runs after the commit, outside any transaction: every named
+/// authority is tried, the checkpoint is kept and printed regardless, and
+/// any failed submission exits 1 naming the retry.
 pub(crate) async fn run(args: CheckpointArgs) -> anyhow::Result<()> {
     let signer = match (&args.signing_key, &args.key_id) {
         (Some(path), Some(key_id)) => {

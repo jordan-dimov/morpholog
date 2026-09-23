@@ -2,10 +2,9 @@
 //! author's own identifier, so a refusal names the rule instead of quoting
 //! the expression that failed.
 //!
-//! The property under test throughout is *stability*. Quoted expression
-//! text reads well and identifies nothing - it changes the moment anyone
-//! rewords the rule - so the tests here reword deliberately and check that
-//! what a caller holds does not move.
+//! The property under test is *stability*. Quoted expression text changes
+//! whenever someone rewords the rule, so these tests reword on purpose and
+//! check that the name a caller holds does not move.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -64,9 +63,7 @@ fn submitted() -> State {
 /// The whole point: rewording a gate leaves its identifier alone.
 ///
 /// Both spellings below mean the same thing and refuse the same proposal,
-/// but they render differently - so an assertion on the rendered text would
-/// pass for one and fail for the other. That is the fragility a trial hit,
-/// and the name is what removes it.
+/// but render differently, so an assertion on rendered text would break.
 #[test]
 fn rewording_a_gate_does_not_move_its_name() {
     let plain = refuse(&programme("MayApprove(actor, doc)"), &submitted());
@@ -95,8 +92,8 @@ fn rewording_a_gate_does_not_move_its_name() {
 }
 
 /// A named `bind` reports which lookup found nothing. Without the name, a
-/// refusal here and a refusal at either gate are the same string shape to a
-/// caller, which is how a trial's tests came to pass for the wrong reason.
+/// refusal here looks like a refusal at either gate, so a test could pass
+/// for the wrong reason.
 #[test]
 fn a_named_bind_says_which_lookup_failed() {
     // Nothing submitted, so the lookup refuses before any gate runs.
@@ -110,9 +107,8 @@ fn a_named_bind_says_which_lookup_failed() {
     );
 }
 
-/// The acceptance side: a gate with no name still refuses, and still
-/// reports its rendered text exactly as it always did. Naming is optional,
-/// and an unnamed programme must be unaffected by the feature existing.
+/// The acceptance side: naming is optional, and an unnamed gate still
+/// refuses and reports its rendered text.
 #[test]
 fn an_unnamed_gate_still_reports_its_rendered_text() {
     let source = "program unnamed
@@ -135,9 +131,8 @@ transformation approve(doc):
     );
 }
 
-/// A name identifies one rule, so two rules cannot share one inside a
-/// transformation - a refusal would be ambiguous, which is the defect the
-/// name exists to fix.
+/// Two rules in one transformation cannot share a name, or a refusal
+/// would be ambiguous.
 #[test]
 fn two_rules_in_one_transformation_cannot_share_a_name() {
     let source = "program dup
@@ -161,9 +156,8 @@ transformation approve(doc):
     );
 }
 
-/// The acceptance side of that check, and the reason it is scoped to one
-/// transformation: two acts legitimately carry the same gate verbatim, and
-/// programme-uniqueness would force meaningless suffixes on them.
+/// The acceptance side: the check is per transformation, because two acts
+/// may carry the same gate verbatim.
 #[test]
 fn two_transformations_may_share_a_rule_name() {
     let source = "program shared
@@ -212,9 +206,8 @@ transformation approve_many(docs):
     );
 }
 
-/// Formatting must not silently downgrade a stable identifier back to
-/// prose. If the formatter dropped the name, a programme would round-trip
-/// into one whose refusals identify nothing.
+/// Formatting keeps the name, or a round-tripped programme's refusals would
+/// identify nothing.
 #[test]
 fn names_survive_format_and_reparse() {
     let source = programme("MayApprove(actor, doc)");
@@ -229,10 +222,8 @@ fn names_survive_format_and_reparse() {
     );
 }
 
-/// `explain` is a command in its own right - a dry run against live state,
-/// with no rejection envelope around it - so it has to carry the name
-/// itself. The first cut discarded it here on the reasoning that the
-/// envelope already had one, which is true only of `--explain-on-reject`.
+/// `explain` is a dry run with no rejection envelope around it, so it must
+/// carry the name itself.
 #[test]
 fn explain_names_the_gate_that_would_refuse() {
     use morpholog_core::{GateRejection, Rejection, Transition, Verdict, explain};
@@ -285,12 +276,9 @@ transformation approve(doc):
 
 /// A `bind` through a definition call formats back to something that reads.
 ///
-/// The language supports it on purpose - the body finds the record and the
-/// call's arguments project the binding out - but the formatter asserted a
-/// claim pattern, so a valid programme validated and then PANICKED in
-/// `hash` and `generate`. The parser restricts `bind` to a claim shape and
-/// `resolve_defined_calls` rewrites the call afterwards, which is how the
-/// two disagreed.
+/// The parser only accepts a claim shape after `bind`, but
+/// `resolve_defined_calls` later turns a call into a definition call. The
+/// formatter must handle that form rather than panic in `hash` and `generate`.
 #[test]
 fn a_bind_through_a_definition_round_trips() {
     let source = "program binddef
@@ -306,7 +294,7 @@ transformation confirm(t):
     admit Captured(t)
 ";
     let program = parsed(source);
-    // Formatting is what used to panic.
+    // Formatting must not panic.
     let formatted = morpholog_core::format::format_program(&program);
     assert!(
         formatted.contains("bind the_trade: is_captured(t)"),

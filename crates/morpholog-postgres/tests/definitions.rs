@@ -1,10 +1,7 @@
-//! The scoped-loading red line for defined propositions, pinned
-//! against real PostgreSQL: a gate (and an invariant) whose predicates
-//! are reachable ONLY through a definition's body must still have those
-//! predicates loaded into the kernel's pre-state. If any walker on the
-//! read path stopped at the call instead of descending, the gate would
-//! evaluate against claims that were never loaded - a silent
-//! wrong-answer, not a test failure anywhere else.
+//! Scoped loading through definitions, against real PostgreSQL: a gate or
+//! invariant that reaches predicates only through a definition must still
+//! have them loaded. If the read path stopped at the call, the gate would
+//! silently evaluate against claims never loaded.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -16,11 +13,9 @@ use morpholog_core::Program;
 use morpholog_postgres::{PgPool, PgProposalOutcome};
 use morpholog_surface::parse_program;
 
-// `ship`'s own body references only `Shipped` directly; `Box` and
-// `Sealed` are consulted exclusively through `sealed_box` - one call
-// in the gate, one in the invariant, and the invariant's call sits
-// behind a second definition level to pin transitivity, not just one
-// hop.
+// `ship` names only `Shipped` directly; `Box` and `Sealed` are read only
+// through `sealed_box`, from the gate and from the invariant. The
+// invariant's call sits two definitions deep, to test more than one hop.
 const SHIPPING: &str = r#"
 program shipping
 
@@ -76,9 +71,8 @@ async fn a_gate_behind_two_definition_levels_sees_its_claims() {
         run(&pool, &p, "seal", "crate_1").await,
         PgProposalOutcome::Committed { .. }
     ));
-    // The commit is the proof: `ship` consults Box and Sealed only
-    // through `shippable` -> `sealed_box`, so this commits only if the
-    // read path loaded both predicates through two call levels.
+    // This commits only if the read path loaded Box and Sealed through
+    // `shippable` -> `sealed_box`.
     assert!(matches!(
         run(&pool, &p, "ship", "crate_1").await,
         PgProposalOutcome::Committed { .. }
@@ -95,9 +89,8 @@ async fn the_same_gate_refuses_honestly_when_the_condition_is_unmet() {
         run(&pool, &p, "register", "crate_2").await,
         PgProposalOutcome::Committed { .. }
     ));
-    // Registered but never sealed: the gate's call finds Box but not
-    // Sealed, and the proposal is a lawful rejection - the loaded
-    // state was complete enough to refuse for the right reason.
+    // Registered but never sealed: the gate finds Box but not Sealed and
+    // rejects for the right reason.
     assert!(matches!(
         run(&pool, &p, "ship", "crate_2").await,
         PgProposalOutcome::Rejected { .. }

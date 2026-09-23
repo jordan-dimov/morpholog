@@ -1,25 +1,16 @@
 //! The upgrade path for an existing database.
 //!
-//! `morpholog init` is day-zero only: it never drops and never migrates, so
-//! an existing deployment gets a new column by applying the numbered file in
-//! `crates/morpholog-core/sql/migrations/`. That makes each of those files a
-//! claim - "run this and your database matches the head schema" - and a
-//! claim needs a check. Without one, a binary that writes a column an
-//! operator's table lacks fails on the *refusal* path: the post-rollback
-//! insert names a column that is not there, so a lawful rejection surfaces
-//! as a database error.
+//! `morpholog init` never migrates, so an existing deployment upgrades by
+//! applying the numbered files in `crates/morpholog-core/sql/migrations/`.
+//! Each promises "run this and your database matches the head schema", and
+//! these tests check that. A missing column shows up on the refusal path:
+//! the rejection log insert fails, so a lawful rejection becomes a
+//! database error.
 //!
-//! **Isolation matters here.** `reset_db` only truncates, so DDL against the
-//! shared `morpholog` schema would leave every later test in the run against
-//! a shape nobody intended - the failure mode this repo has already been
-//! bitten by once.
-//!
-//! The migration test therefore works in a scratch schema it creates and
-//! drops. The drift test cannot: its whole point is what the production
-//! query does against the real table, so it removes a column from
-//! `morpholog` and puts it back through the shipped migration. That restore
-//! runs unconditionally, before any assertion, because an assertion that
-//! panics past it would break the rest of the run.
+//! `reset_db` only truncates, so DDL on the shared `morpholog` schema would
+//! leak into every later test. Tests that change the schema work in a
+//! scratch schema or database they create and drop, and restore anything
+//! shared before asserting.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -108,10 +99,8 @@ async fn wind_derived_key_back(pool: &PgPool, table: &str) {
 /// Applying the witness migration to a pre-witness table yields exactly the
 /// head schema's shape, and leaves the rows already there alone.
 ///
-/// The migration is applied verbatim except for its schema name, rewritten to
-/// the scratch schema. That substitution is the one thing this test does not
-/// prove; the column, its nullability, the constraint and idempotence are all
-/// the shipped file's own DDL.
+/// The migration runs verbatim except that its schema name is rewritten to
+/// the scratch schema.
 #[tokio::test]
 async fn the_witness_migration_brings_an_old_table_to_the_head_shape() {
     let pool = test_pool().await;
@@ -123,13 +112,11 @@ async fn the_witness_migration_brings_an_old_table_to_the_head_shape() {
         .await
         .unwrap();
 
-    // The pre-witness shape: the head table with the column removed, which is
-    // exactly what an operator who has not migrated is running.
+    // The pre-witness shape: the head table without the column.
     ddl(
         &pool,
-        // INCLUDING ALL so the copy carries NOT NULLs, defaults and checks -
-        // a bare CREATE TABLE AS drops them, and the comparison below would
-        // then pass on a table nobody runs.
+        // INCLUDING ALL keeps NOT NULLs, defaults and checks, which a bare
+        // CREATE TABLE AS would drop.
         format!(
             "CREATE TABLE {scratch}.rejections
              (LIKE morpholog.rejections INCLUDING ALL)"
@@ -203,18 +190,12 @@ async fn the_witness_migration_brings_an_old_table_to_the_head_shape() {
 
 /// An un-migrated database says so, on the path that actually breaks.
 ///
-/// The damaging scenario is not a read: it is the post-rollback INSERT in
-/// `write_rejection`, which turns a lawful refusal into an operational error
-/// when the column is absent. Commits keep working, so nothing looks wrong
-/// until the first refusal - and for an embedder that arrives as an
-/// exception where a decided outcome belongs.
+/// That path is the post-rollback INSERT in `write_rejection`: with the
+/// column absent, a lawful refusal becomes an operational error. Commits
+/// keep working, so nothing looks wrong until the first refusal.
 ///
-/// **On its own database.** An earlier version dropped the column from the
-/// shared `morpholog` schema and restored it afterwards, which is a
-/// contamination risk this module's own doctrine forbids: a panic, a kill,
-/// or a future refactor between the two leaves every later test facing a
-/// table missing a column. A database created and dropped here cannot reach
-/// anything else, whatever happens in between.
+/// It runs on its own database, so a panic midway cannot leave the shared
+/// schema missing a column.
 #[tokio::test]
 async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
     let Ok(base) = std::env::var("DATABASE_URL") else {
@@ -251,8 +232,8 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
 
     let err = outcome.expect_err("a refusal against a stale schema must fail operationally");
     let rendered = err.to_string();
-    // The refusal was decided; only its record failed - so the error
-    // carries that provenance, with the stale-schema diagnosis inside.
+    // The refusal was decided and only its record failed, so the error
+    // says that, with the stale-schema diagnosis inside.
     assert!(
         matches!(
             &err,
@@ -261,10 +242,8 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
         ),
         "the refusal path must diagnose a stale schema, got {err:?}"
     );
-    // The remedy must be something the reader can run. It used to name a
-    // directory inside the source tree, which a release consumer does not
-    // have - the binary knew the answer and pointed at the fix somewhere
-    // else.
+    // The remedy must be something the reader can run, not a path in the
+    // source tree a release user does not have.
     assert!(
         rendered.contains("morpholog migrate"),
         "the message must name the command that fixes it, got: {rendered}"
@@ -273,12 +252,8 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
 
 /// The same connection URL, pointing at a different database.
 ///
-/// Only the last path segment moves. An earlier version used
-/// `str::replace` on the database name, which rewrites EVERY occurrence -
-/// and CI's URL ends in `/postgres`, so it renamed the scheme too and the
-/// connection failed with something that looked nothing like the cause. A
-/// local URL whose database name does not collide with the scheme hides
-/// that completely.
+/// Only the last path segment changes. Replacing the name as text would
+/// also rewrite the scheme when the database is named `postgres`, as in CI.
 fn with_database(url: &str, name: &str) -> String {
     // Any query string is carried across untouched: `?sslmode=require` has
     // to survive, and it is not part of the database name.
@@ -349,10 +324,9 @@ async fn drift_probe(
         }
     };
 
-    // A commit still works against the stale schema - which is exactly why
-    // the failure hides until something is refused. Asserted, not ignored:
-    // if this one were refused instead, the refusal below would prove
-    // nothing about the path under test.
+    // A commit still works against the stale schema, which is why the
+    // failure hides until something is refused. Asserted, because if this
+    // were refused the refusal below would prove nothing.
     let accepted = propose(vec![subj("e1"), dec(100)])
         .await
         .expect("an accepted proposal touches no rejection row");
@@ -379,10 +353,9 @@ transformation post(entry_id, amount):
     admit Entry(entry_id, amount)
 "#;
 
-/// The URL rewrite, pinned against the shape that broke CI.
+/// The URL rewrite, including CI's URL shape.
 ///
-/// Runs without a database, so the trap stays covered even where the PG
-/// suites are skipped.
+/// Needs no database, so it runs even where the PG suites are skipped.
 #[test]
 fn with_database_only_moves_the_last_segment() {
     // The CI shape: the database is itself named `postgres`, so a
@@ -391,7 +364,7 @@ fn with_database_only_moves_the_last_segment() {
         with_database("postgres://u:p@localhost:5432/postgres", "probe"),
         "postgres://u:p@localhost:5432/probe"
     );
-    // The local shape, where that bug is invisible.
+    // The local shape.
     assert_eq!(
         with_database("postgres:///morpholog_dev", "probe"),
         "postgres:///probe"
@@ -410,11 +383,8 @@ fn with_database_only_moves_the_last_segment() {
 
 /// The upgrade an operator actually performs, with only the binary.
 ///
-/// This is the gap that forced the command: the release artifact is the
-/// binary and a licence, and the upgrade instruction named a path inside the
-/// source tree, so a consumer following the versioning policy had to fetch
-/// SQL out of a git tag. Nothing here reads the repository - the migrations
-/// come from the ones compiled in.
+/// A release ships the binary without the source tree, so the migrations
+/// come from the ones compiled in; nothing here reads the repository.
 #[tokio::test]
 async fn a_legacy_database_upgrades_from_the_binary_alone() {
     let Ok(base) = std::env::var("DATABASE_URL") else {
@@ -451,10 +421,9 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
         .await
         .expect("provision");
 
-    // A genuinely fresh database is at the head by construction: `init`
-    // records the migrations rather than running them. Asserted here, on a
-    // database this test created, because asserting it against a long-lived
-    // dev database proves only that someone migrated it once.
+    // A fresh database is at the head: `init` records the migrations
+    // rather than running them. Checked on a database this test created,
+    // not a long-lived dev one.
     let fresh = morpholog_postgres::migration_status(&pool)
         .await
         .map_err(|e| format!("status on a fresh database failed: {e}"))?;
@@ -492,8 +461,8 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     )
     .await
     .expect("simulate a database from before self-describing rows");
-    // A row that deployment wrote: attested, no names - the shape the
-    // migration must carry forward untouched.
+    // A row that deployment wrote: attested, no names. The migration must
+    // carry it forward untouched.
     sqlx::query(
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor,
@@ -566,9 +535,8 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
         ));
     }
 
-    // Migration 014's contract, proved on the migrated table rather than
-    // assumed from its record: the historical row survives unstamped,
-    // the column is back nullable, and each named constraint refuses
+    // Migration 014, checked on the migrated table: the old row survives
+    // unstamped, the column is nullable, and each named constraint refuses
     // what it is for.
     let stamped = columns(&pool, "morpholog", "audit")
         .await
@@ -634,8 +602,7 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
         }
     }
 
-    // And the column the whole thing was about is usable: a lawful refusal
-    // now writes its witness instead of failing operationally.
+    // A lawful refusal now writes its witness instead of failing.
     morpholog_postgres::list_rejection_rows(&pool, 10)
         .await
         .map_err(|e| format!("the rejection log is still unreadable: {e}"))?;
@@ -652,9 +619,8 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
         return Err("the derived cache must have lost its whole-array key".to_string());
     }
 
-    // Migration 015's contract: the index registry exists with its
-    // static shape, and nothing in it - the command that fills it has
-    // not run. Correctness never rests on either table.
+    // Migration 015: the index registry exists, empty, since the command
+    // that fills it has not run. Correctness never depends on either table.
     for (table, key) in [
         ("managed_index", "spec_digest"),
         ("index_requirement", "program_identity"),
@@ -670,13 +636,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
             ));
         }
     }
-    // And it refuses to bless a table of the same name and another shape,
-    // rather than recording the version and failing on the first run of
-    // the command that fills it. Proved with the migration's own SQL on
-    // a wrong-shaped twin, then the tables put back.
+    // It refuses a same-named table of another shape, rather than recording
+    // the version and failing later. Run with the migration's own SQL on a
+    // wrong-shaped twin, then the tables are put back.
     let migration_015 = include_str!("../../morpholog-core/sql/migrations/015_managed_indexes.sql");
-    // Two twins: the wrong columns, and - the dangerous one - the right
-    // columns without a constraint the command relies on.
+    // Two twins: the wrong columns, and the right columns without a
+    // constraint the command relies on.
     for (label, twin) in [
         (
             "wrong columns",
@@ -725,14 +690,9 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
 
 /// No embedded migration may control transactions.
 ///
-/// The runner opens one transaction per migration and writes the version
-/// record inside it, so the two cannot disagree. PostgreSQL does not nest,
-/// so a `COMMIT` in a script ENDS the runner's transaction - the schema
-/// change commits and the record lands outside it. Two migrations shipped
-/// with `BEGIN`/`COMMIT` and the guarantee in the runner's own doc comment
-/// was false for them.
-///
-/// A rule the compiler cannot express, over a set that grows.
+/// The runner applies each migration and writes its version record in one
+/// transaction, so the two cannot disagree. A `COMMIT` in a script would
+/// end that transaction early, leaving the record outside it.
 #[test]
 fn no_migration_controls_its_own_transaction() {
     let dir =
@@ -775,9 +735,9 @@ fn no_migration_controls_its_own_transaction() {
 /// A database recording a migration this binary has never seen is not
 /// current, and migrating it is refused.
 ///
-/// The dangerous shape: nothing is PENDING, so a naive check reports a green
-/// light at exactly the moment the binary cannot know whether the schema is
-/// still compatible - a rollback to an older binary.
+/// This is a rollback to an older binary. Nothing is pending, so a naive
+/// check would say all is well when the binary cannot know whether the
+/// schema is compatible.
 #[tokio::test]
 async fn a_database_ahead_of_the_binary_is_not_current() {
     let pool = test_pool().await;
@@ -825,13 +785,11 @@ async fn a_database_ahead_of_the_binary_is_not_current() {
 }
 
 /// Applying the claims-key migration to tables on the whole-array key
-/// yields exactly the head shape - columns, key, and the generated digest
-/// - keeps the rows already there, and refuses a table it does not
-/// recognise rather than declaring it current.
+/// yields exactly the head shape (columns, key, generated digest), keeps
+/// existing rows, and refuses a table it does not recognise.
 ///
-/// Applied verbatim except for the table names, rewritten to the scratch
-/// schema; the digest helper stays the real `morpholog.claim_digest`, so
-/// the surviving row's hash is the one production computes.
+/// Table names are rewritten to the scratch schema; the digest helper is
+/// the real `morpholog.claim_digest`, so row hashes match production.
 #[tokio::test]
 async fn the_claims_key_migration_brings_old_tables_to_the_head_shape() {
     let pool = test_pool().await;
@@ -868,8 +826,8 @@ async fn the_claims_key_migration_brings_old_tables_to_the_head_shape() {
     .expect("the copied lookup index has PostgreSQL's generated name");
     wind_derived_key_back(&pool, &format!("{scratch}.derived_claims")).await;
 
-    // Rows from before the upgrade, which must survive it - with the text
-    // shape the digest's text-to-bytes step has to carry through intact.
+    // Rows from before the upgrade, which must survive it, with awkward
+    // text the digest must carry intact.
     let hostile = r#"[{"type":"subject","value":"He said \"no\" \\ ünïcode"}]"#;
     ddl(
         &pool,
@@ -960,9 +918,8 @@ async fn the_claims_key_migration_brings_old_tables_to_the_head_shape() {
         "a drifted table must be refused by name, got {refused:?}"
     );
 
-    // The head key over a column that merely USES the helper: dependency
-    // present, expression wrong, every row unreachable by a retract that
-    // recomputes the plain digest. Refused, not declared current.
+    // The head key over a column that only uses the helper with the wrong
+    // expression, so a retract could never find a row. Refused.
     ddl(
         &pool,
         format!(
@@ -988,10 +945,9 @@ async fn the_claims_key_migration_brings_old_tables_to_the_head_shape() {
 }
 
 /// Digests stored under another definition of the helper are refused,
-/// whether the foreign helper is still in place or has since been put
-/// back: replacing a function never recomputes the stored column values
-/// generated under it, so a row keyed by a foreign digest is unreachable
-/// by the retract that recomputes the real one.
+/// whether or not the real helper has since been put back. Replacing a
+/// function does not recompute stored values, so a retract could never
+/// find such a row.
 ///
 /// On its own database, because it rewrites the shared helper.
 #[tokio::test]

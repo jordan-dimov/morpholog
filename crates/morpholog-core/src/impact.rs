@@ -1,18 +1,13 @@
-//! Which cases of an invariant a transition's delta can affect: the
-//! plan is built once beside the programme, then applied to each
-//! delta. It knows nothing of SQL; the PostgreSQL compiler renders a
-//! bounded answer as a disjunction over its antecedent columns, and the
-//! kernel will apply the same bindings to its own evaluation, so both
-//! evaluators bound a check to exactly the same cases.
+//! Which cases of an invariant a transition's delta can affect. The plan is
+//! built once per programme, then applied to each delta. The kernel and the
+//! PostgreSQL compiler use the same plan, so both check exactly the same
+//! cases.
 //!
-//! Sound by widening: an occurrence that cannot constrain a case
-//! variable widens the answer toward the whole invariant, never past a
-//! touched case. The shapes that bound are exactly those the compiled
-//! differential proves; a non-empty delta against a body carrying a
-//! construct outside them (a defined call, `pre`, `or`, `xor`,
-//! membership, or any value form but a term and a term-targeted sum)
-//! widens to the whole invariant. An empty delta touches nothing,
-//! whatever the body: the candidate is the pre-state.
+//! When in doubt, the answer widens toward the whole invariant; it never
+//! misses a touched case. A non-empty delta against a body holding a defined
+//! call, `pre`, `or`, `xor`, membership, or any value form but a term and a
+//! term-targeted sum checks the whole invariant. An empty delta touches
+//! nothing, whatever the body.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -101,8 +96,7 @@ impl ImpactPlan {
 
     /// The cases the delta can affect.
     pub fn classify(&self, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) -> Impact {
-        // Nothing changed, nothing affected: the first law, before any
-        // uncertainty about the body.
+        // Nothing changed, so nothing is affected, whatever the body holds.
         if asserted.is_empty() && retracted.is_empty() {
             return Impact::Untouched;
         }

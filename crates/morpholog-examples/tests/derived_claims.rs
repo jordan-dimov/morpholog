@@ -1,29 +1,8 @@
 //! Integration tests for derived claims.
 //!
-//! `DerivedClaim`, `DerivedValue`, `ValueExpr::Arith` (subtraction), and
-//! `enumerate_derived` make the trial balance over the double-entry ledger
-//! expressible and testable.
-//!
-//! Tests:
-//!
-//! - `trial_balance_over_simple_ledger_enumerates_one_row_per_account`:
-//!   the load-bearing case. Post a handful of journal entries against
-//!   the ledger, evaluate `double_entry_ledger::trial_balance_row()`,
-//!   and assert one TrialBalanceRow per distinct account with the
-//!   expected debit-minus-credit balance.
-//!
-//! - `trial_balance_returns_deterministic_order`: pin that
-//!   `enumerate_derived` returns rows in a stable order across runs.
-//!
-//! - `derived_claims_do_not_pollute_admitted_state`: pin the v0
-//!   contract that derived results are NOT added to `State.claims`.
-//!
-//! - `enumerate_derived_on_empty_state_is_empty`: edge case; no
-//!   rows in domain means no derived rows.
-//!
-//! - `expr_sub_subtracts_decimals_and_rejects_other_types`: pins the
-//!   subtraction (`ValueExpr::Arith`) contract independently of the
-//!   trial-balance use case.
+//! Uses the double-entry ledger's trial balance to pin `enumerate_derived`:
+//! one row per account with the right balance, a stable row order, no
+//! derived rows written into state, and the subtraction contract on its own.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -118,15 +97,10 @@ fn trial_balance_returns_deterministic_order() {
     let b = enumerate_derived(&trial_balance, &state, &[]).unwrap();
 
     // Two back-to-back evaluations must return rows in the same order.
-    // The ordering is contracted as deterministic; the specific order
-    // is whatever the dedup BTreeSet produces under EvalValueOrd's
-    // structural ordering (Subject values compare by their inner
-    // String).
     assert_eq!(a, b, "enumerate_derived must be deterministic across runs");
 
-    // Spot-check the actual order. Per EvalValueOrd's structural
-    // contract, Subject keys sort by their String content, so the
-    // three accounts sort alphabetically: cash < expenses < revenue.
+    // Subjects sort by their string content, so the accounts come out
+    // alphabetically: cash < expenses < revenue.
     let order: Vec<&str> = a
         .iter()
         .map(|r| match &r.args[0] {
@@ -142,18 +116,9 @@ fn trial_balance_returns_deterministic_order() {
 
 #[test]
 fn derived_claims_do_not_pollute_admitted_state() {
-    // v0 contract: a ClaimInstance returned by enumerate_derived is a
-    // computed view, NOT an admitted assertion. Nothing in the
-    // runtime adds it to state.claims. Pin this explicitly so any
-    // future refactor that tries to "be helpful" by integrating
-    // derived rows into State has to break a test.
-    //
-    // The current type signature (`&State`, not `&mut State`) makes
-    // direct mutation impossible in safe Rust; the test mostly
-    // documents the intent. Clone the state up front so we can
-    // assert byte-equality after the call: a future refactor that
-    // tried to weaken the signature to `&mut State` would fail
-    // either compilation or this assertion.
+    // A derived row is a computed view, never an admitted claim, so it
+    // must not appear in state.claims. The `&State` signature already
+    // forbids mutation; comparing against a clone catches any change to it.
     let state = small_ledger_state();
     let snapshot = state.clone();
 
@@ -169,9 +134,7 @@ fn derived_claims_do_not_pollute_admitted_state() {
         "enumerate_derived must not mutate the input State"
     );
 
-    // Also verify (post-call) that no derived predicate name has
-    // leaked into the live state, in case future refactoring routes
-    // results through some other side channel.
+    // No derived predicate name may appear in the live state either.
     assert!(
         state.claims_for("TrialBalanceRow").next().is_none(),
         "TrialBalanceRow must not appear among admitted claims after enumeration"
@@ -195,10 +158,8 @@ fn enumerate_derived_on_empty_state_is_empty() {
 
 #[test]
 fn expr_sub_subtracts_decimals_and_rejects_other_types() {
-    // Build a derived claim whose value is a simple subtraction of
-    // two literal decimals, so we can test subtraction directly without
-    // needing a ledger fixture. The domain is one synthetic claim
-    // that yields one key binding.
+    // Subtract two literal decimals over a one-claim domain, with no
+    // ledger fixture.
     use morpholog_core::Value;
 
     let state = State::from_claims(vec![claim_instance("Tag", &[subj("only")])]);
@@ -258,11 +219,8 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
     );
 }
 
-/// Sanity-check against the real worked example: the trial-balance
-/// derived claim from `double_entry_ledger` should extract exactly
-/// `{"JournalLine"}` - the `JournalEntry` claims in the ledger are
-/// not touched by `enumerate_derived`. This pays for the read-path
-/// optimization: the PG adapter knows to skip the JournalEntry rows.
+/// The trial balance reads only `JournalLine`, so the database adapter can
+/// skip loading the ledger's other predicates.
 #[test]
 fn predicates_referenced_by_trial_balance_derived_excludes_unused_predicates() {
     use morpholog_core::{PredicateName, predicates_referenced_by_derived};

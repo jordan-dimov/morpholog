@@ -1,66 +1,45 @@
 //! Programme-level validation. Owns the [`ValidationError`] vocabulary
-//! and orchestrates three contributions into one error list: a
-//! nesting-depth guard (run first, so the recursive walks it protects
-//! cannot overflow on the input that would trip it), a name-level
-//! duplicate-declaration pass, and the single static-check traversal in
-//! [`crate::check`] (declarations and arity for both predicate and
-//! intent vocabularies, kind/type compatibility, binding flow, and
-//! actor context).
+//! and merges several passes into one error list: a definition-cycle
+//! check and a nesting-depth guard (both first, so later recursive walks
+//! cannot loop or overflow), name-level declaration and discipline
+//! checks, and the static-check traversal in [`crate::check`].
 //!
-//! Called via [`crate::Program::validate`]. Strict mode: undeclared
-//! predicates and intents are errors, not passthrough. The validator
-//! collects every error rather than failing on the first; a migration
-//! that adds declarations should see the full work list at once.
+//! Called via [`crate::Program::validate`]. Strict: undeclared
+//! predicates and intents are errors. Every error is collected, so an
+//! author fixing a programme sees the whole list at once.
 
 use crate::ir::{DefinitionName, PredicateArgKind, Program, Prop, Stmt, ValueExpr};
 use std::collections::HashMap;
 
-/// Proof-of-validity handle: a reference to a [`Program`] that has
-/// been run through [`Program::validate`] and survived. Constructed
-/// via [`Program::validated`] (which fails if validation reports
-/// errors); the only way to obtain one is to go through that gate.
+/// Proof-of-validity handle: a reference to a [`Program`] that passed
+/// [`Program::validate`]. The only way to obtain one is
+/// [`Program::validated`], which fails if validation reports errors.
 ///
-/// Why a separate type instead of a documented contract
-/// ([`Program::validate`] alone): the analysis surface
-/// ([`crate::transformation_param_kinds`],
-/// [`crate::transformation_arg_schema`]) is only meaningful over a
-/// validated programme, since the kind inference these accessors
-/// depend on observes kinds the runtime would itself refuse to
-/// admit if validation has not passed. Taking `&ValidatedProgram`
-/// rather than `&Program` makes the precondition load-bearing at
-/// the type level: a caller cannot accidentally analyse an
-/// unvalidated programme, and the analysis layer no longer needs to
-/// defensively re-validate. The defensive re-validation also meant
-/// every CLI invocation paid the validation cost twice; the
-/// newtype removes that.
+/// The analysis accessors ([`crate::transformation_param_kinds`],
+/// [`crate::transformation_arg_schema`]) only make sense over a valid
+/// programme. Taking this type instead of `&Program` puts that
+/// precondition in the signature, so they need not re-validate.
 ///
-/// `Copy` because it wraps a single reference - passing it around
-/// has the same cost as passing `&Program`.
+/// `Copy` because it wraps a single reference.
 #[derive(Debug, Clone, Copy)]
 pub struct ValidatedProgram<'a>(&'a Program);
 
 impl<'a> ValidatedProgram<'a> {
-    /// Borrow the underlying programme. Used by callers that want
-    /// to read non-analysis fields (predicate declarations,
-    /// invariants, transformation bodies) without re-deriving the
-    /// validation guarantee.
+    /// Borrow the underlying programme.
     pub fn as_program(&self) -> &'a Program {
         self.0
     }
 
-    /// Used internally by [`Program::validated`] to assemble the
-    /// handle after successful validation. Pub(crate) because the
-    /// only path callers should reach this through is the
-    /// `validated()` gate.
+    /// Wraps a programme that has just passed validation. Crate-private
+    /// so [`Program::validated`] stays the only way in.
     pub(crate) fn from_validated(program: &'a Program) -> Self {
         Self(program)
     }
 }
 
-/// Which declared vocabulary a validation error refers to. Predicates
-/// and intents share four diagnostic shapes (undeclared reference,
-/// arity mismatch, duplicate declaration, arg-kind mismatch); the
-/// `vocabulary` field disambiguates them in the rendered message.
+/// Which declared vocabulary a validation error refers to. Several
+/// errors (undeclared, arity, duplicate, arg kind) apply to more than
+/// one vocabulary; their `vocabulary` field names which in the message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VocabularyKind {
     Predicate,
@@ -80,9 +59,7 @@ impl std::fmt::Display for VocabularyKind {
     }
 }
 
-/// Where in a programme a validation error was found. Reported alongside
-/// every [`ValidationError`] so migrations can find the right call site
-/// without trawling the whole programme.
+/// Where in a programme a validation error was found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationContext {
     Invariant {
@@ -90,11 +67,10 @@ pub enum ValidationContext {
     },
     Transformation {
         name: String,
-        /// 0-based index of the top-level body statement the finding
-        /// was made in, when the walk knows it; `None` for
-        /// transformation-level findings. A finding inside a `for`
-        /// carries the `for`'s own index. Surface tooling resolves
-        /// this to the statement's source span.
+        /// 0-based index of the top-level body statement, when known;
+        /// `None` for transformation-level findings. A finding inside a
+        /// `for` carries the `for`'s own index. Surface tooling maps it
+        /// to a source span.
         statement: Option<usize>,
     },
     DerivedClaim {
@@ -105,11 +81,8 @@ pub enum ValidationContext {
     },
 }
 
-/// The remedy sentence for an unbound variable is context-dependent:
-/// `require`/`bind`/`let` are transformation-body vocabulary, so the
-/// hint renders only where those statements exist. Invariant,
-/// definition, and derived-claim bodies bind through matching
-/// propositions and get no statement advice.
+/// The unbound-variable remedy talks about `require`/`bind`/`let`, which
+/// exist only in transformation bodies, so other contexts get no hint.
 fn unbound_variable_hint(context: &ValidationContext) -> &'static str {
     match context {
         ValidationContext::Transformation { .. } => {
@@ -123,9 +96,8 @@ fn unbound_variable_hint(context: &ValidationContext) -> &'static str {
 }
 
 /// The optional "; if these are Date operands, use `on_or_before`" tail
-/// of a [`ValidationError::OperandKindMismatch`]. Conditional wording on
-/// purpose: the other operand may be wrong too, so the hint never
-/// promises that swapping the operator alone fixes the expression.
+/// of a [`ValidationError::OperandKindMismatch`]. Worded as "if" because
+/// the other operand may be wrong too.
 fn suggestion_suffix(suggestion: &Option<&'static str>, actual: &PredicateArgKind) -> String {
     match suggestion {
         Some(token) => format!("; if these are {actual} operands, use `{token}`"),
@@ -133,23 +105,19 @@ fn suggestion_suffix(suggestion: &Option<&'static str>, actual: &PredicateArgKin
     }
 }
 
-/// A single failure surfaced by [`Program::validate`]. The validator
-/// collects every error rather than failing fast, so a programme
-/// migration that adds declarations sees the full work list rather
-/// than fixing one site, re-running, and discovering the next.
+/// A single failure surfaced by [`Program::validate`], which collects
+/// every error rather than stopping at the first.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ValidationError {
-    /// A predicate or intent referenced somewhere in the programme
-    /// is not declared. Strict mode: every reference must have a
-    /// declaration.
+    /// A reference names something that is not declared.
     #[error("undeclared {vocabulary} `{name}` referenced in {context}")]
     Undeclared {
         vocabulary: VocabularyKind,
         name: String,
         context: ValidationContext,
     },
-    /// A predicate or intent reference passes a different number of
-    /// arguments than the declaration calls for.
+    /// A reference passes a different number of arguments than the
+    /// declaration calls for.
     #[error(
         "{vocabulary} `{name}` declared with arity {expected} but referenced with {actual} args in {context}"
     )]
@@ -167,10 +135,8 @@ pub enum ValidationError {
         vocabulary: VocabularyKind,
         name: String,
     },
-    /// A predicate-call or intent-emit argument does not match the
-    /// kind declared for that position. Surfaces things like
-    /// `Policy(amount, 100)` where the first position is declared
-    /// `Subject`, or a date literal flowing into a `Decimal` slot.
+    /// An argument does not match the kind declared for its position,
+    /// e.g. a date literal in a `Decimal` slot.
     #[error(
         "{vocabulary} `{name}` arg #{position} expects {expected} but received {actual} in {context}"
     )]
@@ -182,15 +148,9 @@ pub enum ValidationError {
         actual: PredicateArgKind,
         context: ValidationContext,
     },
-    /// A predicate carries more than one `effective by` clause. Each would
-    /// generate the same selector name, so the second is silently skipped
-    /// and the doctrine ends up decided by declaration order.
-    ///
-    /// Unlike `unique by`, which composes because each clause generates
-    /// its own invariant, these cannot: there is one selector per
-    /// predicate. A predicate with two genuine time axes needs two
-    /// predicates, or a selector taking the axis as an argument - neither
-    /// of which this clause pretends to offer.
+    /// A predicate carries more than one `effective by` clause. There is
+    /// one selector per predicate, so a second clause would be silently
+    /// skipped. A predicate with two time axes needs to be split in two.
     #[error(
         "`{predicate}` carries more than one `effective by` clause: a predicate has \
          one in-force selector, so a second clause would be silently ignored"
@@ -199,17 +159,14 @@ pub enum ValidationError {
 
     /// `effective by (..) on (f)` named `f` as both a key and the date.
     /// Each version would then be its own group, so nothing could
-    /// supersede anything and the selector would return whatever row it
-    /// was handed.
+    /// supersede anything.
     #[error(
         "`{predicate}` is effective-dated by `{field}`, which is also one of its \
          keys: a version cannot be grouped by the date that orders it"
     )]
     EffectiveDateIsAKey { predicate: String, field: String },
 
-    /// `effective by (..) on (f)` where `f` is not a moment. Effective
-    /// dating orders versions in time; a field with no time in it has no
-    /// order to give.
+    /// `effective by (..) on (f)` where `f` is not a Date or Timestamp.
     #[error(
         "`{predicate}` is effective-dated by `{field}`, which is declared {actual}: \
          effective dating needs a Date or Timestamp field"
@@ -223,17 +180,10 @@ pub enum ValidationError {
     /// A predicate declaration carries a discipline and a `derived`
     /// declaration computes it.
     ///
-    /// Disciplines are promises about governed state - what may be
-    /// retracted, which claims must agree, which pointer is current. A
-    /// derived output is not governed state: it is computed on demand and
-    /// its materialised generations are replaced wholesale on refresh, so
-    /// it can honour none of them.
-    ///
-    /// Reported at the declaration rather than through the lowering,
-    /// because that is where the author wrote the clause. `unique by`
-    /// lowers to a generated invariant, so refusing it there names a rule
-    /// nobody typed; `append only` lowers to nothing at all and would
-    /// pass unnoticed.
+    /// Disciplines are promises about governed state. A derived output is
+    /// computed on demand and replaced wholesale on refresh, so it can keep
+    /// none of them. Reported at the declaration, where the author wrote
+    /// the clause, rather than at a generated rule nobody typed.
     #[error(
         "`{predicate}` is computed by a derived claim, so it cannot carry a \
          discipline: disciplines promise how governed state behaves, and a \
@@ -244,11 +194,9 @@ pub enum ValidationError {
     /// An invariant declared `total over P` for a `P` the programme does
     /// not declare.
     ///
-    /// Refused rather than ignored because the declaration is load-bearing:
-    /// it is what tells the vacuity lints that this rule is the backstop
-    /// for `P`. A typo therefore silently withdraws the guarantee it looks
-    /// like it is making, and the misspelling travels in the model hash as
-    /// if it meant something.
+    /// Refused rather than ignored: the declaration tells the vacuity lints
+    /// this rule is the backstop for `P`, so a typo would silently withdraw
+    /// the guarantee it appears to make.
     #[error(
         "invariant `{invariant}` declares `total over {predicate}`, but no \
          predicate `{predicate}` is declared. The totality declaration names \
@@ -263,11 +211,9 @@ pub enum ValidationError {
     /// Two refusing statements in one transformation answer to the same
     /// name.
     ///
-    /// A name exists so a refusal identifies one rule; two of them make the
-    /// refusal ambiguous, which is the defect the name was added to fix.
-    /// Scoped to the transformation deliberately - two acts may carry the
-    /// same gate verbatim, and programme-uniqueness would force
-    /// meaningless suffixes on them.
+    /// A rule name identifies which statement refused, so a duplicate makes
+    /// the refusal ambiguous. Checked per transformation, not programme-wide:
+    /// two transformations may carry the same gate verbatim.
     #[error(
         "{context} reuses the rule name `{name}`. A rule name identifies the statement \
          that refused, so a duplicate makes a refusal ambiguous - rename one, or leave \
@@ -280,18 +226,12 @@ pub enum ValidationError {
 
     /// A rule named a predicate that a `derived` declaration computes.
     ///
-    /// The kernel evaluates against admitted claims; a derived claim is a
-    /// read model, enumerated on demand and refreshed out of band, and no
-    /// transformation ever admits one. So `bind`, `require`, `for` and
-    /// the invariants cannot see it - the design type-checks and then
-    /// fails against a live database, which is where a trial lost an hour
-    /// to it.
+    /// Rules evaluate against admitted claims. A derived claim is a read
+    /// model computed on demand, never admitted, so no rule can see it.
     ///
-    /// Refused as a modelling error rather than reported as a rule that
-    /// matches nothing: state outlives a source file, so rows admitted
-    /// under that name by an older shape of the programme may well exist.
-    /// That is precisely the problem - the name would have two sources,
-    /// the computed view and the stale rows.
+    /// Refused outright rather than treated as a rule that matches nothing:
+    /// rows admitted under that name by an older version of the programme
+    /// may still exist, and the name would then have two sources.
     #[error(
         "`{predicate}` is a derived claim and {context} names it: a derived \
          claim is computed from admitted claims and refreshed out of band, \
@@ -302,13 +242,10 @@ pub enum ValidationError {
         predicate: String,
         context: ValidationContext,
     },
-    /// `max`/`min` ranged over a kind with no order: a subject is an
-    /// opaque identifier, a boolean is not a scale, a collection is not a
-    /// point on one. Refused here rather than given an arbitrary order.
-    ///
-    /// The message names the kinds that DO order, because the checker is
-    /// an allow-list - listing the excluded ones would go stale the next
-    /// time a kind is added, which is how it came to name only two.
+    /// `max`/`min` ranged over a kind with no order, such as a subject or a
+    /// collection. Refused rather than given an arbitrary order. The
+    /// message lists the kinds that do order, because the check is an
+    /// allow-list.
     #[error(
         "{op} needs an ordered kind but received {actual} in {context}; \
          only decimals, dates, timestamps, durations and quantities have an order"
@@ -318,22 +255,17 @@ pub enum ValidationError {
         actual: PredicateArgKind,
         context: ValidationContext,
     },
-    /// A wildcard stood where a value must be produced - an arithmetic
-    /// operand, a conditional branch, a sum target. `_` marks an unread
-    /// position in a claim pattern; it never carries a value, so the
-    /// kernel would raise `EvalError::TypeMismatch` the first time the
-    /// expression is evaluated.
+    /// A wildcard stood where a value must be produced, such as an
+    /// arithmetic operand or a sum target. `_` never carries a value, so
+    /// evaluation would raise `EvalError::TypeMismatch`.
     #[error(
         "`_` is not a value in {context}: a wildcard marks an unread claim-pattern \
          position; name the variable this expression reads"
     )]
     WildcardAsValue { context: ValidationContext },
-    /// A `value` lookup's extraction index does not point at a
-    /// wildcard in its own argument list. The surface parsers make
-    /// this unrepresentable (positional takes the first wildcard,
-    /// named takes the one `_`-valued field), so it reaches here only
-    /// through hand-built IR; the kernel would refuse the same shape
-    /// at evaluation.
+    /// A `value` lookup's extraction index does not point at a wildcard
+    /// in its own argument list. Only hand-built IR can reach this; the
+    /// parser cannot produce it.
     #[error(
         "value lookup on `{predicate}` extracts position {extract}, which is not a \
          wildcard hole in its argument list, in {context}"
@@ -343,13 +275,10 @@ pub enum ValidationError {
         extract: usize,
         context: ValidationContext,
     },
-    /// A sum's target reads as a duration or quantity, but the
-    /// statically resolved empty-case seed disagrees - so the first
-    /// empty book would evaluate to a bare-decimal zero no duration or
-    /// quantity comparison accepts, a kernel error at runtime. Refused
-    /// here instead: bind the summed value inside the sum's own body,
-    /// or pair the target with an operand that carries the kind, so
-    /// the seed pass can type the empty sum.
+    /// A sum's target reads as a duration or quantity, but its empty case
+    /// would be a bare-decimal zero, which fails at runtime the first time
+    /// the sum is empty. The fix is to bind the summed value inside the
+    /// sum's body, or pair the target with an operand of the right kind.
     #[error(
         "the empty case of this sum cannot be typed in {context}: the target reads as \
          {target}, but the empty sum would evaluate to {seed}; bind the summed value \
@@ -361,11 +290,9 @@ pub enum ValidationError {
         context: ValidationContext,
     },
     /// An operator (comparator, arithmetic, `sum`, `for`, `in`,
-    /// `value default`) received an operand of the wrong kind.
-    /// `Le(date, decimal)`, `Add(subject, decimal)`,
-    /// `For` over a Decimal value - the kernel raises these as
-    /// `EvalError::TypeMismatch` at runtime; this validator
-    /// surfaces them at authoring time.
+    /// `value default`) received an operand of the wrong kind, e.g.
+    /// `Le(date, decimal)`. Caught here instead of as
+    /// `EvalError::TypeMismatch` at runtime.
     #[error(
         "{operator} expects {expected} operand(s) but received {actual}{} in {context}",
         suggestion_suffix(suggestion, actual)
@@ -379,11 +306,8 @@ pub enum ValidationError {
         suggestion: Option<&'static str>,
         context: ValidationContext,
     },
-    /// An arithmetic operator was applied to a pair of known kinds for
-    /// which no rule exists (e.g. adding two timestamps, or multiplying
-    /// durations). The rule matrix is deliberately small: decimals
-    /// support every operator; instants shift by durations and
-    /// difference into durations; durations add, subtract, and cap.
+    /// An arithmetic operator was applied to a pair of kinds with no
+    /// rule, e.g. adding two timestamps.
     #[error("no arithmetic rule for {left} {operator} {right} in {context}")]
     NoArithRule {
         operator: &'static str,
@@ -391,10 +315,8 @@ pub enum ValidationError {
         right: PredicateArgKind,
         context: ValidationContext,
     },
-    /// `min`/`max` applied to a kind the language does not order - a
-    /// subject, a bool, a calendar span. Taking the smaller of two is
-    /// the comparator's question with the answer kept instead of the
-    /// verdict, so the domain is exactly the ordered kinds.
+    /// `min`/`max` applied to a kind with no order, such as a subject or
+    /// a calendar span.
     #[error(
         "{builtin} is defined on ordered values - decimals, quantities, durations, dates, \
          and timestamps - not {kind} in {context}"
@@ -411,9 +333,8 @@ pub enum ValidationError {
         kind: PredicateArgKind,
         context: ValidationContext,
     },
-    /// A `round(...)` whose quantum is a literal zero or negative
-    /// decimal. Refused at authoring time; a non-positive quantum
-    /// arriving through a variable is the runtime backstop
+    /// A `round(...)` whose quantum is a literal zero or negative decimal.
+    /// A non-positive quantum from a variable is caught at runtime by
     /// `EvalError::RoundQuantumNotPositive`.
     #[error("round quantum must be a positive decimal, got {quantum} in {context}")]
     RoundQuantumNotPositive {
@@ -421,10 +342,9 @@ pub enum ValidationError {
         context: ValidationContext,
     },
     /// A predicate or intent declaration names `CalendarSpan` as an
-    /// argument kind. The kind is expression-only - a span shifts a
-    /// date inside arithmetic and is never a governed value - and the
-    /// surface has no spelling for declaring it; this refusal keeps
-    /// hand-built IR to the same rule.
+    /// argument kind. A span only shifts dates inside arithmetic; it is
+    /// never a stored value. The parser cannot declare one, so only
+    /// hand-built IR reaches this.
     #[error(
         "argument `{argument}` of `{declaration}` declares CalendarSpan, an expression-only kind that no claim or intent can carry"
     )]
@@ -432,13 +352,10 @@ pub enum ValidationError {
         declaration: String,
         argument: String,
     },
-    /// A calendar span reached a place only governed values may
-    /// occupy: a claim or intent argument (even against an `Any`
-    /// declaration), a derived output value, or a transformation
-    /// parameter (which a transition argument must supply, and no
-    /// transition argument may carry a span). The runtime refuses
-    /// each of these too; this surfaces the mistake at `check` time
-    /// instead of as an operational proposal error.
+    /// A calendar span reached a place only stored values may occupy: a
+    /// claim or intent argument (even an `Any` one), a derived output
+    /// value, or a transformation parameter. The runtime refuses these
+    /// too; this catches them at `check` time.
     #[error(
         "a calendar span cannot leave expression position: {place} in {context}; a span shifts a date inside arithmetic and is never itself a governed value"
     )]
@@ -446,10 +363,8 @@ pub enum ValidationError {
         place: String,
         context: ValidationContext,
     },
-    /// A builtin called with the wrong number of arguments. Arity is
-    /// the builtin's own and total; hand-built IR is the only way to
-    /// get here, since the surface parser fixes the count per call
-    /// form.
+    /// A builtin called with the wrong number of arguments. Only
+    /// hand-built IR reaches this; the parser fixes the count.
     #[error("{builtin} takes {expected} argument(s), got {found} in {context}")]
     BuiltinArity {
         builtin: &'static str,
@@ -457,31 +372,25 @@ pub enum ValidationError {
         found: usize,
         context: ValidationContext,
     },
-    /// A period builtin (`period_index`, `period_start_of`) was given
-    /// a span of zero length, written literally. Every period would
-    /// begin where the last one did, so there is no partition to index
-    /// into. A span arriving through a variable is the evaluator's
-    /// backstop instead.
+    /// A period builtin (`period_index`, `period_start_of`) was given a
+    /// literal zero-length span, so there are no periods to index. A span
+    /// from a variable is caught at evaluation instead.
     #[error("{builtin} needs a positive span; got {span} in {context}")]
     PeriodSpanNotPositive {
         builtin: &'static str,
         span: String,
         context: ValidationContext,
     },
-    /// A `period_start_of` whose index is a literal fractional
-    /// decimal. Period coordinates are integers - there is no period
-    /// between periods - so a fraction is a computation error in the
-    /// rule, refused at authoring time when literal; an index arriving
-    /// computed is the evaluator's backstop instead.
+    /// A `period_start_of` whose index is a literal fraction. Period
+    /// indexes are whole numbers. A computed index is caught at
+    /// evaluation instead.
     #[error("period_start_of needs a whole-number index; got {index} in {context}")]
     PeriodIndexNotWhole {
         index: String,
         context: ValidationContext,
     },
-    /// A conditional's two branches carry distinct, incompatible
-    /// kinds. Whichever branch is selected must hand the surrounding
-    /// expression the same kind of value; `if(p, #meter, 100)` is a
-    /// kind error, not a runtime surprise.
+    /// A conditional's two branches have incompatible kinds, e.g.
+    /// `if(p, #meter, 100)`.
     #[error(
         "the branches of `if` must have the same kind; `then` is {then_kind}, `otherwise` is {otherwise_kind}, in {context}"
     )]
@@ -490,11 +399,9 @@ pub enum ValidationError {
         otherwise_kind: PredicateArgKind,
         context: ValidationContext,
     },
-    /// An equality (`==` or `!=`) had two operands of distinct,
-    /// incompatible kinds. Symmetric by nature: there is no
-    /// "expected" side - both kinds are equally constrained by the
-    /// other. `Subject == Decimal` is a kind error, not a silent
-    /// coercion to false.
+    /// An equality (`==` or `!=`) had operands of incompatible kinds,
+    /// e.g. `Subject == Decimal`. A kind error, not a silent false.
+    /// Symmetric, so neither side is "expected".
     #[error("{operator} operands must have the same kind; got {left} vs {right} in {context}")]
     EqualityKindMismatch {
         operator: &'static str,
@@ -502,10 +409,8 @@ pub enum ValidationError {
         right: PredicateArgKind,
         context: ValidationContext,
     },
-    /// A variable was bound at one kind and then used at a different
-    /// kind that is not compatible with the first. `amount` bound
-    /// from a `Decimal` slot and then used in a `Subject` slot is
-    /// the canonical case.
+    /// A variable was bound at one kind and later used at an incompatible
+    /// one, e.g. bound from a `Decimal` slot, then used in a `Subject` slot.
     #[error(
         "variable `{variable}` was first constrained to {previous} but later used as {new} in {context}"
     )]
@@ -515,33 +420,25 @@ pub enum ValidationError {
         new: PredicateArgKind,
         context: ValidationContext,
     },
-    /// `actor` was referenced in an invariant or derived-claim
-    /// body, where no proposing transition is in scope. The kernel
-    /// raises `EvalError::UnboundActor` for this at evaluation
-    /// time; the check surfaces it earlier. `actor` resolves only
-    /// inside transformation bodies - authority checks belong in a
-    /// `require`, not an invariant.
+    /// `actor` was referenced outside a transformation body, where no
+    /// proposer is in scope (evaluation would raise
+    /// `EvalError::UnboundActor`). Authority checks belong in a `require`.
     #[error(
         "`actor` is not available in {context}; it resolves only inside transformation bodies, so authority checks belong in a `require`"
     )]
     ActorNotAvailable { context: ValidationContext },
-    /// A body in this context nests deeper than the validator's fixed
-    /// maximum depth. The recursive evaluator and check walk descend
-    /// one stack frame per nesting level, so a pathologically deep
-    /// expression or `for`-statement chain would exhaust the stack
-    /// during `propose`. Validation rejects it first, which is why
-    /// untrusted IR must be validated before it is proposed.
+    /// A body nests deeper than the fixed maximum depth. Evaluation
+    /// recurses once per level, so a very deep body would overflow the
+    /// stack during `propose`. This is why untrusted IR must be validated
+    /// before it is proposed.
     #[error("nesting in {context} exceeds the maximum depth of {}", MAX_EXPR_DEPTH)]
     NestingTooDeep { context: ValidationContext },
-    /// A variable was used in a position that demands a bound value
-    /// (an `admit`/`retract`/`emit` argument, a comparator or
-    /// arithmetic operand, a `value` lookup key, a `sum` target)
-    /// without anything having bound it first. The binding rules
-    /// follow the runtime: parameters, `bind`, `let`, `for`, and
-    /// claim matches inside a `require`/invariant bind names;
-    /// `require` does not export its matches to later statements.
-    /// The kernel raises `EvalError::UnboundVariable` for this at
-    /// evaluation time.
+    /// A variable was used where a bound value is needed (an argument
+    /// to `admit`/`retract`/`emit`, an operand, a lookup key, a `sum`
+    /// target) before anything bound it. Names are bound by parameters,
+    /// `bind`, `let`, `for`, and claim matches; `require` does not export
+    /// its matches to later statements. Evaluation would raise
+    /// `EvalError::UnboundVariable`.
     #[error(
         "variable `{variable}` is used in {context} but nothing binds it{}",
         unbound_variable_hint(context)
@@ -551,11 +448,9 @@ pub enum ValidationError {
         context: ValidationContext,
     },
     /// A derived claim's value expression names a variable its domain
-    /// binds but its head does not carry. Values run once per distinct
-    /// head-key tuple, after witnesses collapse, so a non-key variable
-    /// has no single value there - the runtime raises
-    /// `EvalError::UnboundVariable`. Refused at authoring with both
-    /// remedies named.
+    /// binds but its head does not carry. Values are computed once per
+    /// distinct head key, so a non-key variable has no single value there
+    /// (evaluation would raise `EvalError::UnboundVariable`).
     #[error(
         "variable `{variable}` is bound by the domain of {context} but is not a head \
          key, so it is not available while computing values; add `{variable}` to the \
@@ -566,18 +461,15 @@ pub enum ValidationError {
         variable: String,
         context: ValidationContext,
     },
-    /// A definition shares a name with a predicate. The two vocabularies
-    /// share the claim-shaped reference namespace in body position - a
-    /// reference `name(args)` resolves to exactly one of them - so a
-    /// collision would let adding a definition silently change what
-    /// existing text means.
+    /// A definition shares a name with a predicate. In a rule body,
+    /// `name(args)` must resolve to exactly one of them; otherwise adding
+    /// a definition could silently change what existing text means.
     #[error(
         "definition `{name}` collides with predicate `{name}`; the two share the reference namespace in rule bodies, so a reference could mean either - rename one"
     )]
     DefinitionNameCollision { name: String },
-    /// Definitions reference each other in a cycle. A definition is a
-    /// named proposition expanded at evaluation; a cycle would never
-    /// terminate. `names` carries one cycle's members in sorted order.
+    /// Definitions reference each other in a cycle, so expanding them
+    /// would never terminate. `names` holds one cycle's members, sorted.
     #[error(
         "definitions reference each other in a cycle ({}); a definition must expand to claims and conditions, never back to itself",
         .names.join(", ")
@@ -586,11 +478,9 @@ pub enum ValidationError {
     /// A predicate declared `partial` that some invariant also declares
     /// `total over`.
     ///
-    /// The two say opposite things about the same model: one that coverage
-    /// gaps are intended, the other that a rule guarantees there are none.
-    /// Refused rather than resolved by precedence, because whichever way it
-    /// were resolved the author would have written something they did not
-    /// mean and nothing would say so.
+    /// One says coverage gaps are intended, the other that there are none.
+    /// Refused rather than resolved by precedence, since either choice
+    /// would silently override something the author wrote.
     #[error(
         "`{predicate}` is declared `partial`, but invariant `{invariant}` declares \
          `total over {predicate}`. Those contradict: one says coverage gaps are \
@@ -601,13 +491,10 @@ pub enum ValidationError {
         invariant: String,
     },
 
-    /// A reference names a definition where a predicate is required:
-    /// a hand-built `Prop::Claim` that skipped resolution, or an
-    /// `admit` / `retract` / `value` target. A definition names a
-    /// condition - it is proposition-valued only, so it can be called
-    /// in rule bodies but never changes state and never serves as a
-    /// value lookup; hand-built IR constructs body calls as
-    /// `Prop::Defined` (via `ir_builder::defined`) or runs
+    /// A reference names a definition where a predicate is required: an
+    /// `admit` / `retract` / `value` target, or a hand-built `Prop::Claim`
+    /// that skipped resolution. A definition is a condition only. Hand-built
+    /// IR builds calls with `ir_builder::defined` or runs
     /// [`crate::resolve_defined_calls`] before validating.
     #[error(
         "`{name}` names a definition where a predicate is required, in {context}; a definition is a condition - callable in rule bodies, never an `admit`/`retract`/`emit` target or a `value` lookup (hand-built body calls use `ir_builder::defined` or `resolve_defined_calls`)"
@@ -616,12 +503,9 @@ pub enum ValidationError {
         name: String,
         context: ValidationContext,
     },
-    /// A definition parameter is never referenced by the definition
-    /// body. Such a parameter is dead weight at best; at worst a call
-    /// passing an unbound variable for it is a guaranteed runtime
-    /// error, since nothing could ever give it a value. (A parameter
-    /// the body *uses* without binding is fine - it is a use-only
-    /// parameter, required bound at every call site.)
+    /// A definition parameter is never referenced by the body. A call
+    /// passing an unbound variable for it would always fail at runtime,
+    /// since nothing could give it a value.
     #[error(
         "parameter `{parameter}` of definition `{definition}` is not referenced by the definition body; remove it or reference it in a condition"
     )]
@@ -629,10 +513,8 @@ pub enum ValidationError {
         definition: String,
         parameter: String,
     },
-    /// A definition declares the same parameter name twice. Each
-    /// parameter is one binding slot in the call frame; a duplicate
-    /// would let the later argument silently overwrite the earlier
-    /// one during frame construction.
+    /// A definition declares the same parameter name twice, so the later
+    /// argument would silently overwrite the earlier one.
     #[error(
         "definition `{definition}` declares parameter `{parameter}` more than once; each parameter is one binding slot"
     )]
@@ -640,10 +522,9 @@ pub enum ValidationError {
         definition: String,
         parameter: String,
     },
-    /// A predicate or intent declaration repeats an argument name. A
-    /// field names one position - named claim patterns address
-    /// positions by field name, and every other field-name consumer
-    /// (views, schemas, the named codec) is ambiguous under a repeat.
+    /// A predicate or intent declaration repeats an argument name. Named
+    /// patterns, views, schemas and the named codec all address fields by
+    /// name, so a repeat is ambiguous.
     #[error(
         "{vocabulary} `{name}` declares argument `{field}` more than once; \
          each field names one position"
@@ -654,10 +535,8 @@ pub enum ValidationError {
         field: String,
     },
     /// `pre(...)` was used inside a definition body. Definitions are
-    /// context-free so a call means the same thing in a gate as in an
-    /// invariant; a body that read pre-state would break that. Wrap the
-    /// *call* in `pre(...)` instead - the context swap applies to the
-    /// body's evaluation.
+    /// context-free, so a call means the same everywhere. Wrap the *call*
+    /// in `pre(...)` instead.
     #[error(
         "pre(...) is used in {context}, but definitions are context-free and carry no pre-state; wrap the call in pre(...) at the use site instead"
     )]
@@ -684,10 +563,9 @@ pub enum ValidationError {
         "`{predicate}` is declared both `append only` and `current pointer`; a pointer must be retractable to move, which is the opposite commitment - drop one"
     )]
     DisciplinePointerCannotBeAppendOnly { predicate: String },
-    /// A `superseded via` clause whose lineage predicate cannot carry
-    /// the supersession chain: undeclared, not exactly two arguments
-    /// in the `(successor, prior)` convention, or itself declared a
-    /// current pointer.
+    /// A `superseded via` clause whose lineage predicate is undeclared,
+    /// does not have exactly two arguments `(successor, prior)`, or is
+    /// itself a current pointer.
     #[error(
         "`superseded via {lineage}` on `{pointer}`: {reason} (a lineage predicate has exactly two arguments, successor then prior, and is not itself a pointer)"
     )]
@@ -697,16 +575,13 @@ pub enum ValidationError {
         reason: String,
     },
     /// `superseded via` on a predicate that is not declared a current
-    /// pointer: supersession history is the pointer's history, so the
-    /// clause would be a dangling doctrine phrase anywhere else.
+    /// pointer. Supersession only has meaning for a pointer.
     #[error(
         "`superseded via` on `{predicate}`, which is not declared `current pointer by (...)`; supersession history is the pointer's history - declare the pointer, or drop the clause"
     )]
     DisciplineSupersededWithoutPointer { predicate: String },
-    /// A transformation retracts a predicate that is append-only
-    /// (declared, or the lineage of a `superseded via`). Ordinary
-    /// programmes correct append-only claims by supersession or
-    /// exception claims, never retraction.
+    /// A transformation retracts an append-only predicate (declared so,
+    /// or the lineage of a `superseded via`).
     #[error(
         "{context} retracts `{predicate}`, which is append only; corrections are admitted as supersessions or exception claims, never by retracting the record"
     )]
@@ -714,10 +589,9 @@ pub enum ValidationError {
         predicate: String,
         context: ValidationContext,
     },
-    /// A discipline that lowers to a generated invariant has no such
-    /// invariant in the programme: the IR was hand-built and
-    /// `lower_disciplines` was never run (the parser runs it), so the
-    /// declared commitment would be silently unenforced.
+    /// A discipline's generated invariant is missing: the IR was
+    /// hand-built and `lower_disciplines` never ran (the parser runs it),
+    /// so the discipline would go unenforced.
     #[error(
         "a discipline on `{predicate}` implies the generated invariant `{invariant}`, which this programme does not carry; run `lower_disciplines` before validating (the parser does this) so the declared commitment is actually enforced"
     )]
@@ -746,28 +620,14 @@ impl std::fmt::Display for ValidationContext {
     }
 }
 
-/// Strict programme validation. Two contributions merge into one
-/// `Vec<ValidationError>`: the name-level duplicate-declaration
-/// check below, and the single-traversal static check in
-/// [`crate::check::check_program`] (declared references, arity,
-/// kind compatibility). Called via [`Program::validate`].
-///
-/// Duplicate detection stays here because it is not a tree walk -
-/// it compares declaration names, not references. Everything that
-/// *is* a tree walk (declared/arity/kind at each reference) lives
-/// in the one `check` visitor, so a faulty programme sees the full
-/// work list from a single pass over its bodies.
+/// Strict programme validation, called via [`Program::validate`].
+/// Name-level checks (declarations, disciplines) live here because they
+/// compare names rather than walk bodies; every body walk lives in
+/// [`crate::check::check_program`].
 pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> {
-    // Depth guard runs first and short-circuits. The duplicate pass is
-    // harmless, but `check::check_program` recurses over every body, so
-    // a body deep enough to overflow that walk has to be rejected
-    // before it runs. A programme this malformed gets the depth errors
-    // alone, not a fuller work list - there is nothing useful to add.
-    // The definition reference graph must be acyclic before anything
-    // walks through calls: the depth budget charges a call its callee's
-    // expanded depth, and evaluation would recurse forever on a cycle.
-    // A cyclic programme gets the cycle (and duplicate) errors alone -
-    // nothing else is well-defined until the graph is sound.
+    // A definition cycle is checked first: the depth guard and
+    // evaluation both expand calls and would loop forever on one. A
+    // cyclic programme gets only the cycle and name-level errors.
     let order = match crate::definitions::definition_topo_order(&p.definitions) {
         Ok(order) => order,
         Err(names) => {
@@ -778,11 +638,10 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
         }
     };
 
-    // Expanded depth per definition, callees before callers, so a chain
-    // of definitions cannot multiply nesting past the budget while each
-    // body looks shallow. A body that itself exceeds the budget errors
-    // here and gets no entry; the short-circuit below keeps later walks
-    // off it.
+    // The depth guard runs next and short-circuits, because `check`
+    // recurses over every body and a deep enough one would overflow it.
+    // Definitions are measured callees first, at their expanded depth,
+    // so a chain of shallow-looking definitions cannot hide deep nesting.
     let mut definition_depths: HashMap<DefinitionName, usize> = HashMap::new();
     let mut depth_errors = Vec::new();
     for i in order {
@@ -812,10 +671,9 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
     }
 }
 
-/// Exact nesting depth of `prop` (at least 1), with definition calls
-/// charged at their callee's expanded depth, or `None` once the depth
-/// exceeds `budget`. Bails the instant the budget runs out, so its own
-/// recursion is bounded by the budget it enforces.
+/// Nesting depth of `prop` (at least 1), counting a definition call at
+/// its callee's expanded depth, or `None` once it exceeds `budget`. Stops
+/// as soon as the budget runs out, so its own recursion stays bounded.
 fn prop_depth_capped(
     prop: &Prop,
     budget: usize,
@@ -824,9 +682,7 @@ fn prop_depth_capped(
     let inner = budget.checked_sub(1)?;
     let below = match prop {
         Prop::Claim { .. } | Prop::In(_, _) => 0,
-        // A call expands to its callee's body. An unknown name charges
-        // nothing here - the dangling reference is the check pass's
-        // error, not a depth question.
+        // An unknown name counts as zero; `check` reports it.
         Prop::Defined { name, .. } => depths.get(name).copied().unwrap_or(0),
         Prop::And(items) | Prop::Or(items) => items.iter().try_fold(0usize, |acc, p| {
             Some(acc.max(prop_depth_capped(p, inner, depths)?))
@@ -890,13 +746,10 @@ fn value_depth_capped(
 }
 
 /// Maximum expression / nested-statement depth accepted by
-/// [`Program::validate`]. The recursive evaluator (`find_matches`,
-/// `eval_value`) and the recursive check walk both descend one stack
-/// frame per nesting level; a pathologically deep body would exhaust
-/// the stack before any invariant ran. Validation rejects it first, so
-/// `propose` never recurses on untrusted IR that would overflow.
-/// Generous for hand-authored programmes, far below a default stack's
-/// frame budget.
+/// [`Program::validate`]. The evaluator and the check walk recurse once
+/// per level, so this keeps `propose` from overflowing the stack on
+/// untrusted IR. Generous for hand-written programmes, well within a
+/// default stack.
 pub(crate) const MAX_EXPR_DEPTH: usize = 256;
 
 /// Collect a [`ValidationError::NestingTooDeep`] for every body that
@@ -948,8 +801,7 @@ fn collect_depth_errors(
 }
 
 /// True if `stmt` nests deeper than `budget` levels, counting both its
-/// expression bodies and nested `for` statements. Same bailing
-/// discipline as [`prop_depth_capped`].
+/// expressions and nested `for` statements.
 fn stmt_exceeds_depth(stmt: &Stmt, budget: usize, depths: &HashMap<DefinitionName, usize>) -> bool {
     let Some(budget) = budget.checked_sub(1) else {
         return true;
@@ -971,11 +823,8 @@ fn stmt_exceeds_depth(stmt: &Stmt, budget: usize, depths: &HashMap<DefinitionNam
     }
 }
 
-/// Name-level duplicate-declaration check across both vocabularies.
-/// Not a tree walk: it compares declaration names, so it has no
-/// place in the reference-visiting `check` pass.
-/// The names appearing more than once, sorted so the errors emit in a
-/// deterministic order whatever the count map's iteration order.
+/// The names appearing more than once, sorted so errors come out in a
+/// stable order.
 fn duplicated<'a>(names: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
     let mut seen = HashMap::<&str, usize>::new();
     for name in names {
@@ -990,6 +839,9 @@ fn duplicated<'a>(names: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
     duplicates
 }
 
+/// Name-level declaration checks: duplicate names in each vocabulary,
+/// repeated parameter and argument names, `CalendarSpan` arguments, and
+/// definition-predicate name collisions.
 fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     fn duplicate_decls(
@@ -1033,9 +885,7 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
         }
     }
 
-    // Intents, definitions, and derived heads are their own namespaces;
-    // a derived head declared twice would publish two answers under one
-    // name, and the read cache takes the kernel's output as a set.
+    // Intents, definitions, and derived heads are separate namespaces.
     duplicate_decls(
         &mut errors,
         VocabularyKind::Intent,
@@ -1052,8 +902,6 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
         duplicated(p.derived_claims.iter().map(|d| d.predicate.as_str())),
     );
 
-    // A parameter is one binding slot in the call frame, so a repeated
-    // name would let the later argument silently overwrite the earlier.
     for def in &p.definitions {
         for parameter in duplicated(def.parameters.iter().map(crate::ir::Var::as_str)) {
             errors.push(ValidationError::DuplicateParameter {
@@ -1063,7 +911,6 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
         }
     }
 
-    // A field names one position, so argument names are duplicate-free.
     for (vocabulary, name, args) in declared_args() {
         for field in duplicated(args.iter().map(|a| a.name.as_str())) {
             errors.push(ValidationError::DuplicateArgName {
@@ -1074,10 +921,7 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
         }
     }
 
-    // Definitions and predicates share the claim-shaped reference
-    // namespace (`name(args)` in a body resolves to exactly one of
-    // them), so a name in both vocabularies is a collision, not two
-    // independent declarations.
+    // Definitions and predicates share one namespace in rule bodies.
     let mut collisions: Vec<&str> = p
         .definitions
         .iter()
@@ -1096,18 +940,15 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
 }
 
 /// Name-level checks for declared disciplines, plus the static ban on
-/// retracting append-only predicates. Lowering (`lower_disciplines`)
-/// skips any clause flagged here; this pass owns the diagnostics.
+/// retracting append-only predicates. `lower_disciplines` skips any
+/// clause flagged here; the diagnostics live in this pass.
 fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
     use crate::ir::Discipline;
 
     let mut errors = Vec::new();
     for decl in &p.predicates {
-        // Duplicate detection compares clauses under a canonical key:
-        // a uniqueness key is a SET, so `unique by (a, b)` and
-        // `unique by (b, a)` are the same commitment (full agreement
-        // does not depend on field order) and declaring both would
-        // generate two same-meaning invariants under different names.
+        // Key fields are a set: `unique by (a, b)` and `unique by (b, a)`
+        // are the same clause, so compare them with fields sorted.
         let canonical = |d: &Discipline| match d {
             Discipline::UniqueBy { fields } => {
                 let mut fields = fields.clone();
@@ -1151,10 +992,6 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
                 predicate: decl.name.to_string(),
             });
         }
-        // Every clause would generate the SAME selector name, so a second
-        // one is silently skipped by the lowering and the doctrine ends up
-        // chosen by declaration order. Unlike `unique by`, these cannot
-        // coexist under one generated API.
         if decl
             .disciplines
             .iter()
@@ -1196,19 +1033,12 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
                             });
                         }
                     }
-                    // A date that is also a key would make each version
-                    // its own group, so nothing could ever supersede
-                    // anything - the selector would always return the row
-                    // it was handed.
                     if keys.contains(on) {
                         errors.push(ValidationError::EffectiveDateIsAKey {
                             predicate: decl.name.to_string(),
                             field: on.clone(),
                         });
                     }
-                    // Effective dating orders versions in time, so the
-                    // dating field has to be a moment. Refused by name
-                    // rather than given an invented ordering.
                     if let Some(arg) = decl.args.iter().find(|a| a.name == *on)
                         && !matches!(
                             arg.kind,
@@ -1339,10 +1169,8 @@ mod tests {
 
     #[test]
     fn expression_nested_past_the_limit_is_rejected() {
-        // A `not not not ... A()` chain deeper than the limit.
-        // Building and dropping it is heap work, not recursion; only
-        // the bailing depth check walks it, so the test itself cannot
-        // overflow on the input it is asserting gets rejected.
+        // A `not not not ... A()` chain deeper than the limit. Only the
+        // bounded depth check walks it, so the test cannot overflow.
         let mut body = claim("A", vec![]);
         for _ in 0..(MAX_EXPR_DEPTH + 50) {
             body = not(body);
@@ -1389,9 +1217,7 @@ mod tests {
 
     #[test]
     fn shallow_nesting_passes_the_depth_guard() {
-        // A handful of levels: the guard must leave it alone (the rest
-        // of validation passes too, so this also pins that the guard
-        // adds no spurious error to a clean programme).
+        // A few levels: the guard must add no error to a clean programme.
         let mut p = empty_program();
         p.predicates = vec![predicate("A").build()];
         p.invariants = vec![invariant("shallow", not(not(not(claim("A", vec![])))))];

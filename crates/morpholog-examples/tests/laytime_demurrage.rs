@@ -185,11 +185,9 @@ fn a_notice_needs_a_fixture_behind_it() {
 
 #[test]
 fn time_on_demurrage_is_safe_to_inspect_before_commencement() {
-    // Fixture only: the clock has not started, so the derived view has
-    // no row for the voyage - and does not error. The LaytimeCommenced
-    // conjunct keeps "how much demurrage?" unanswerable rather than
-    // zero before the clock exists; an empty count after commencement
-    // is a typed zero-length excess, not an error.
+    // The clock has not started, so the derived view has no row for the
+    // voyage, and no error. Before commencement "how much demurrage?" has no
+    // answer rather than zero; after it, an empty count is a zero excess.
     let state = ex().must_accept(
         &lay::fix_voyage(),
         vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
@@ -202,10 +200,8 @@ fn time_on_demurrage_is_safe_to_inspect_before_commencement() {
 
 #[test]
 fn two_voyages_enumerate_deterministically() {
-    // A second voyage alongside the first: two rows, in a stable
-    // order. This also exercises the derived-claim ordering over the
-    // new value kinds (subject keys, duration keys) - the silent
-    // failure mode there would be rows in a varying order.
+    // A second voyage: two rows, in a stable order over subject and
+    // duration keys.
     let state = commenced_voyage();
     let state = ex().must_accept(
         &lay::fix_voyage(),
@@ -230,8 +226,8 @@ fn two_voyages_enumerate_deterministically() {
 }
 
 // ============================================================
-// Stage 3: unit-tagged quantities - the cargo book in tonnes,
-// the money book in dollars.
+// Unit-tagged quantities: the cargo book in tonnes, the money book in
+// dollars.
 // ============================================================
 
 #[test]
@@ -266,10 +262,8 @@ fn cargo_book_caps_at_the_declared_capacity() {
 }
 
 /// Fixture: a commenced voyage that ran 132 hours past its 48-hour
-/// allowance (one 180-hour counting interval), with the demurrage
-/// rate agreed at 25000 USD per day and cargo ops completed - the
-/// state a settlement negotiation starts from. 132 hours is exactly
-/// 5.5 days, so the due figure is exactly 137500 USD.
+/// allowance (one 180-hour counting interval), at 25000 USD per day, with
+/// cargo ops completed. 132 hours is 5.5 days, so exactly 137500 USD is due.
 fn voyage_on_demurrage() -> State {
     let state = commenced_voyage();
     let state = ex().must_accept(
@@ -346,11 +340,9 @@ fn demurrage_due_has_no_row_before_the_rate_is_agreed() {
 
 #[test]
 fn settlement_before_the_rate_is_agreed_is_refused() {
-    // Without a rate the delay has no price, and the cap invariant's
-    // antecedent would be vacuously false - so both the gate and the
-    // settlement_requires_rate invariant refuse the attempt. Cargo
-    // ops are completed first, so the rate really is the only thing
-    // missing.
+    // Without a rate the cap invariant would pass emptily, so both the gate
+    // and settlement_requires_rate refuse. Cargo ops are completed first, so
+    // the rate is the only thing missing.
     let state = commenced_voyage();
     let state = ex().must_accept(
         &lay::complete_cargo_ops(),
@@ -366,10 +358,8 @@ fn settlement_before_the_rate_is_agreed_is_refused() {
 
 #[test]
 fn an_empty_cargo_book_counts_as_zero_tonnes() {
-    // Declaring capacity opens no parcel: the cargo book is genuinely
-    // empty, and `cargo_within_capacity` still evaluates - the empty
-    // sum is `0 t` by the summed variable's declared kind, not a bare
-    // decimal no tonne comparison could accept.
+    // With no parcels, `cargo_within_capacity` still evaluates: the empty
+    // sum is `0 t` from the summed variable's declared kind, not a bare zero.
     let state = ex().must_accept(
         &lay::fix_voyage(),
         vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],

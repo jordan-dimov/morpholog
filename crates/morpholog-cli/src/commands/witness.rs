@@ -48,9 +48,9 @@ impl FromStr for WitnessTarget {
 }
 
 /// Run `audit witness`: submit the recorded head at `--tree-size` to every
-/// authority named, storing each response as it arrives. Prints the
-/// checkpoint as now stored, then exits one if any authority failed,
-/// naming each and the one command that retries exactly those.
+/// named authority, storing each response as it arrives. Prints the stored
+/// checkpoint. If any authority failed, names each with the command that
+/// retries just those, and exits 1.
 pub(crate) async fn run(args: WitnessArgs) -> anyhow::Result<()> {
     let pool = connect(&args.db.database_url).await?;
     let checkpoint = load_checkpoint(&pool, args.tree_size)
@@ -102,8 +102,8 @@ pub(crate) async fn witness_all(
     Ok((checkpoint, failed))
 }
 
-/// Name each failed authority and the one command that retries exactly
-/// those. Whether anything failed.
+/// Name each failed authority and the command that retries just those.
+/// Returns whether anything failed.
 pub(crate) fn report_failures(tree_size: i64, failed: &[Failed]) -> bool {
     if failed.is_empty() {
         return false;
@@ -122,13 +122,11 @@ pub(crate) fn report_failures(tree_size: i64, failed: &[Failed]) -> bool {
     true
 }
 
-/// Ask the authority to witness this head. The response is self-checked
-/// before it is returned for storage: over this head's witness payload,
-/// echoing the request's nonce, granted. Trust is not judged here - that
-/// is the verifier's, with its own anchors. A response whose signature
-/// this build cannot check is still returned: it is over this head, a
-/// later verifier may check it, and it is never reported verified until
-/// one does.
+/// Ask the authority to witness this head. Before storage, the response is
+/// checked to cover this head, echo the nonce, and be granted. Trust is the
+/// verifier's call, with its own anchors. A response whose signature this
+/// build cannot check is still kept; it is never reported verified until a
+/// verifier checks it.
 pub(crate) async fn obtain(target: &WitnessTarget, head: &Checkpoint) -> anyhow::Result<Witness> {
     let payload = tree_head_witness_bytes(&TreeHead {
         tree_size: head.tree_size,

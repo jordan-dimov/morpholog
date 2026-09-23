@@ -1,17 +1,6 @@
-//! Tests for the layout normalisation pass.
-//!
-//! These exercise the pass in isolation - independent of any
-//! parser productions - so layout bugs surface here, not as
-//! confusing parse errors. The contract being tested is the
-//! pass's input/output: `(source, lex output) -> token stream
-//! enriched with Indent/Dedent` (or diagnostics).
-//!
-//! `apply_layout` is `pub` (so integration tests can call it
-//! directly); the crate's `parse_program` entry point applies
-//! layout transparently. The public surface is small - just
-//! `apply_layout` and the `Token` enum it reads from - and is
-//! kept that way to make future tooling work (formatter,
-//! source-mapper) easier to slot in.
+//! The layout pass on its own, apart from the parser, so layout bugs show up here rather than as
+//! confusing parse errors. Each test checks the tokens with Indent/Dedent inserted, or the
+//! diagnostics.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -84,8 +73,7 @@ fn invariant_body_indented_emits_one_indent_one_dedent() {
 
 #[test]
 fn single_indented_block_emits_one_indent_one_dedent() {
-    // One indented transformation body; one Indent at the body
-    // start, one Dedent at EOF.
+    // One Indent at the body start, one Dedent at EOF.
     let toks = tokens(
         "program demo\n\
          transformation foo(x):\n\
@@ -103,9 +91,7 @@ fn single_indented_block_emits_one_indent_one_dedent() {
 
 #[test]
 fn genuinely_nested_indentation_emits_two_indents_two_dedents() {
-    // An indented quantifier body inside an indented invariant.
-    // Two indent levels (col 4 for invariant body, col 8 for the
-    // quantifier body), so two Indents and (at EOF) two Dedents.
+    // A quantifier body (col 8) inside an invariant body (col 4): two Indents, two Dedents.
     let toks = tokens(
         "program demo\n\
          invariant cap:\n\
@@ -142,9 +128,7 @@ fn dedent_returns_to_outer_level() {
 
 #[test]
 fn same_indent_continues_block_without_extra_tokens() {
-    // Two statements at the same indentation inside one block
-    // should produce one Indent at the start and one Dedent at
-    // EOF; no Indent/Dedent between the statements.
+    // Nothing between two statements at the same indentation.
     let toks = tokens(
         "program demo\n\
          transformation foo():\n\
@@ -202,8 +186,7 @@ fn comment_only_lines_inside_block_do_not_break_layout() {
 
 #[test]
 fn parenthesised_expression_spans_lines_without_layout() {
-    // The body of sum(...) spans two lines but is inside parens;
-    // no Indent / Dedent should be emitted for the continuation.
+    // The sum(...) body spans two lines inside parens, so no layout tokens.
     let toks = tokens(
         "program demo\n\
          invariant cap:\n\
@@ -212,9 +195,7 @@ fn parenthesised_expression_spans_lines_without_layout() {
     );
     let indents = toks.iter().filter(|t| **t == Token::Indent).count();
     let dedents = toks.iter().filter(|t| **t == Token::Dedent).count();
-    // One Indent for the invariant body; one Dedent at EOF;
-    // the continuation inside sum(...) parens does NOT produce
-    // a deeper Indent/Dedent.
+    // Only the invariant body's Indent and Dedent.
     assert_eq!(
         indents, 1,
         "parenthesised continuation should not deepen layout; got {toks:?}"
@@ -240,8 +221,7 @@ fn tab_indentation_is_rejected() {
 
 #[test]
 fn misaligned_dedent_is_rejected() {
-    // Indent to column 4, then dedent to column 2 - which isn't
-    // on the indent stack ([0, 4]). Diagnostic.
+    // Column 2 is not an open level ([0, 4]).
     let errs = tokens_or_err(
         "program demo\n\
          transformation foo():\n\
@@ -260,8 +240,7 @@ fn misaligned_dedent_is_rejected() {
 
 #[test]
 fn eof_closes_all_open_blocks() {
-    // Three nested blocks open, no trailing newline; EOF should
-    // emit a Dedent for each.
+    // Three blocks open at EOF with no trailing newline: one Dedent each.
     let toks = tokens(
         "program demo\n\
          transformation foo():\n\
@@ -293,9 +272,7 @@ fn whitespace_only_input_returns_empty_stream() {
 
 #[test]
 fn leading_spaces_before_first_token_diagnosed() {
-    // Top-level declarations must start at column 0. Source that
-    // begins with leading spaces should produce a diagnostic, not
-    // silently parse as if there were no indentation.
+    // Top-level declarations start at column 0; leading spaces are an error, not ignored.
     let errs = tokens_or_err("    program demo\n").expect_err("leading spaces should fail");
     assert!(
         errs.iter().any(|m| m.contains("leading indentation")),
@@ -314,27 +291,16 @@ fn leading_tab_before_first_token_diagnosed() {
 
 #[test]
 fn tab_on_comment_only_line_is_diagnosed() {
-    // The lexer strips comments, so a `\t` in a comment-only line's
-    // indentation would be invisible to the per-token indent check.
-    // The whole-gap tab scan catches it.
+    // A comment-only line produces no token, so its indentation needs its own tab check.
     let source = "program demo\n\
                   transformation foo():\n\
                   \trequire A()\n";
-    // Note: the `\t` here is on the line that becomes the first
-    // statement of the body - already caught by the indent_text
-    // check. Use a separate case to specifically exercise the
-    // comment-line tab scan:
+    // That tab is on a statement line, caught by the ordinary check. This one is on a comment:
     let with_comment_tab = "program demo\n\
                             -- ok comment\n\
                             \t-- tab-indented comment\n\
                             predicate Foo(x: Subject)\n";
-    // The lexer strips both comment lines. The gap between the
-    // `\n` after `demo` and the first token of `predicate` contains
-    // a tab in indentation of a comment-only line. The full-gap
-    // scan should diagnose it.
     let errs = tokens_or_err(with_comment_tab);
-    // We expect a tab diagnostic; if the scan misses, this test
-    // would silently pass with `Ok(...)`. Be explicit.
     let _ = source; // keep referenced
     let errs = errs.expect_err("tab in comment-line indent should fail");
     assert!(
@@ -343,10 +309,7 @@ fn tab_on_comment_only_line_is_diagnosed() {
     );
 }
 
-/// Indentation that's "spaces then tab" (e.g. `"  \t-- comment"`)
-/// must also be rejected, not just a leading-tab line. The lexer
-/// strips comments, so the layout pass scans the raw gap for any
-/// tab in the leading-whitespace run of any line.
+/// A tab after spaces (`"  \t-- comment"`) is rejected too, not only a leading tab.
 #[test]
 fn space_then_tab_indentation_on_comment_line_diagnosed() {
     let source = "program demo\n  \t-- a tab-indented comment\npredicate Foo(x: Subject)\n";

@@ -1,13 +1,10 @@
 //! Integration tests for the double-entry ledger example
 //! (`examples/03_double_entry_ledger/`).
 //!
-//! Proves: posted entries must balance (sum of debits = sum of
-//! credits); period close gates further normal posting via
-//! `require`; closed periods can be restated through a separate
-//! transformation that preserves the original entry and records
-//! `Supersedes` lineage; re-restatement is forbidden by the
-//! at-most-one-direct-successor invariant; double-closing the same
-//! period is rejected.
+//! Proves: posted entries balance; a closed period refuses normal posting;
+//! a closed period can be restated, keeping the original entry and recording
+//! `Supersedes`; an entry cannot be restated twice; a period cannot be
+//! closed twice.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -103,11 +100,8 @@ fn split_entry_balances_and_commits() {
 
 #[test]
 fn unbalanced_entry_rejected_by_invariant() {
-    // Debit 100; credit 70 + 25 = 95. Mismatch of 5. The require
-    // checks pass (period is open, etc.), the transformation stages
-    // the journal entry and its lines, and the candidate state
-    // violates `balanced_posted_entry`. Atomic rollback: no claim
-    // is admitted.
+    // Debit 100; credit 70 + 25 = 95. The gates pass, but the candidate state
+    // violates `balanced_posted_entry`, so no claim is admitted.
     let reason = ex().must_reject(
         &double_entry_ledger::post_split_entry(),
         vec![
@@ -274,16 +268,9 @@ fn restatement_into_closed_period_preserves_original() {
 
 #[test]
 fn lone_journal_entry_without_lines_violates_invariant() {
-    // The `balanced_posted_entry` invariant trivially admits a
-    // JournalEntry with zero lines (both sums are 0). The
-    // `journal_entry_has_lines` invariant closes that gap: a
-    // JournalEntry must have at least one matching JournalLine.
-    //
-    // None of the supplied transformations can produce this state
-    // (post_simple_entry, post_split_entry, and restate_entry all
-    // assert at least two lines), so this test evaluates the
-    // invariant directly against a hand-crafted state that no
-    // legitimate path could reach.
+    // A JournalEntry with no lines balances trivially (both sums are 0), so
+    // `journal_entry_has_lines` requires at least one. No transformation can
+    // produce this state, so the invariant is evaluated directly.
     let state = State::from_claims(vec![claim_instance(
         "JournalEntry",
         &[subj("orphan"), subj("d_2026_04_15"), subj("p_2026_04")],
@@ -298,12 +285,9 @@ fn lone_journal_entry_without_lines_violates_invariant() {
 
 #[test]
 fn cannot_restate_already_restated_entry() {
-    // Post -> restate once -> attempt to restate the prior entry
-    // again. The second restatement must be rejected: either by
-    // the `require not exists newer: Supersedes(newer, prior)`
-    // check at admission, or (if that were bypassed somehow) by
-    // the at_most_one_direct_successor invariant on candidate
-    // state.
+    // Post, restate, then restate the original again. The second restatement
+    // is refused by the `require not exists newer: Supersedes(newer, prior)`
+    // gate, with the at_most_one_direct_successor invariant as backstop.
     let s1 = ex().must_accept(
         &double_entry_ledger::post_simple_entry(),
         vec![

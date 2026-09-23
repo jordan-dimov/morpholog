@@ -1,11 +1,9 @@
-//! End-to-end tests for `morpholog session`: the resident stdio
-//! process. The conversation itself is pinned as a golden transcript
+//! End-to-end tests for `morpholog session`, the resident stdio process.
+//! The conversation is pinned as a golden transcript
 //! (`tests/golden/session/transcript.ndjson`): the ready line, then
-//! request and response lines alternating, with the volatile fields
-//! (transition ids, the binary version) normalised. The generated
-//! Python client's session tests consume the same transcript - the
-//! requests it must emit byte-identically, the responses it must
-//! parse - so the two implementations answer to one conversation.
+//! alternating requests and responses, with transition ids and the binary
+//! version normalised. The generated Python client's tests read the same
+//! transcript, so both sides answer to one conversation.
 //!
 //! Regenerate after a deliberate protocol change:
 //! `UPDATE_GOLDENS=1 cargo test -p morpholog-cli --test session_e2e`
@@ -18,8 +16,8 @@ use common::{database_url, reset_db};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
-/// A small register of its own, so the transcript's `model_hash` and
-/// witnesses do not rot when the worked-example gallery changes.
+/// A programme of its own, so the transcript does not change when the
+/// worked examples do.
 const FIXTURE: &str = "\
 program session_fixture
 
@@ -42,9 +40,8 @@ transformation post_balance(account, figure):
     admit Balance(account, figure)
 ";
 
-/// The request half of the pinned conversation, in order. These exact
-/// bytes are what the generated client must emit; the golden carries
-/// them interleaved with the responses each one earned.
+/// The requests of the pinned conversation, in order: the exact bytes the
+/// generated client must emit.
 const REQUESTS: &[&str] = &[
     r#"{"actor":"teller","args_named":{"account":"acct_1","opened_on":"2026-01-15"},"op":"propose","transformation":"open_account"}"#,
     r#"{"actor":"teller","args_named":{"account":"acct_1","figure":"100"},"op":"propose","transformation":"post_balance"}"#,
@@ -68,9 +65,8 @@ fn spawn_session(file: &std::path::Path) -> std::process::Child {
         .expect("spawn morpholog session")
 }
 
-/// Normalise the volatile fields so the transcript pins the
-/// conversation, not the run: transition ids are fresh UUIDv7s every
-/// commit, and the version rots on every release.
+/// Normalise the fields that change per run or per release: transition
+/// ids and the version.
 fn normalised(line: &str) -> String {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(line) else {
         return line.to_string();
@@ -124,9 +120,8 @@ async fn the_pinned_transcript_is_the_conversation() {
         conversation.push_str(&normalised(response));
         conversation.push('\n');
     }
-    // Error prose may name the programme file, which lives in a fresh
-    // temp directory every run; the placeholder keeps the transcript
-    // about the conversation.
+    // Error prose may name the programme's temp path, which changes each
+    // run.
     let conversation = conversation.replace(&fixture.path.display().to_string(), "<fixture>");
 
     let path = transcript_path().join("transcript.ndjson");
@@ -150,7 +145,7 @@ async fn the_ready_line_arrives_before_any_request_and_matches_hash() {
     reset_db().await;
     let fixture = common::write_fixture("session_fixture", FIXTURE);
     let mut child = spawn_session(&fixture.path);
-    // Read the ready line WITHOUT writing anything: it must be
+    // Read the ready line before writing anything: it must arrive
     // unprompted and flushed, or a lockstep client would deadlock.
     let stdout = child.stdout.take().unwrap();
     let (send, recv) = std::sync::mpsc::channel();
@@ -187,9 +182,9 @@ async fn blank_lines_are_skipped_and_the_session_keeps_answering() {
     let fixture = common::write_fixture("session_fixture", FIXTURE);
     let mut child = spawn_session(&fixture.path);
     let mut stdin = child.stdin.take().unwrap();
-    // Blank, malformed, then a lawful request: the blank earns no
-    // receipt but consumes a line number, the malformed earns an
-    // error receipt, and the session still answers afterwards.
+    // Blank, malformed, then a valid request. The blank gets no receipt
+    // but uses a line number; the malformed one gets an error receipt; the
+    // session still answers afterwards.
     writeln!(stdin).unwrap();
     writeln!(stdin, "this is not json").unwrap();
     writeln!(stdin, r#"{{"op":"nonsense"}}"#).unwrap();
@@ -234,9 +229,8 @@ async fn requests_are_answered_lockstep_not_only_at_eof() {
     let timeout = std::time::Duration::from_secs(30);
     let ready = recv.recv_timeout(timeout).expect("ready line");
     assert!(ready.contains("\"ready\""));
-    // Write one request while stdin stays OPEN: the response must
-    // arrive anyway, or a lockstep client deadlocks on an unflushed
-    // buffer.
+    // Write one request with stdin still open: the response must arrive
+    // anyway, or a lockstep client deadlocks.
     writeln!(
         stdin,
         r#"{{"actor":"teller","args_named":{{"account":"a1","opened_on":"2026-01-15"}},"op":"propose","transformation":"open_account"}}"#
@@ -267,8 +261,8 @@ async fn operational_failure_aborts_with_a_nonzero_exit_not_a_receipt() {
     let timeout = std::time::Duration::from_secs(30);
     let _ready = recv.recv_timeout(timeout).expect("ready line");
 
-    // Break the substrate mid-session, then restore it before any
-    // assertion can bail out - the suite shares this database.
+    // Break the database mid-session, then restore it before any
+    // assertion can fail, since the suite shares it.
     let pool = morpholog_postgres::PgPool::connect(&database_url())
         .await
         .expect("second connection");
@@ -295,10 +289,9 @@ async fn operational_failure_aborts_with_a_nonzero_exit_not_a_receipt() {
     );
 }
 
-/// A programme whose actor policy is armed for one login only. The
-/// grant is a CLAIM compared against `session_user` as text, so this
-/// needs no role switching: granting some other login name is enough
-/// to make the connecting one unauthorised.
+/// A programme whose actor policy allows one login only. The grant is a
+/// claim compared with `session_user` as text, so naming some other login
+/// makes this connection unauthorised, with no role switching.
 const POLICY_FIXTURE: &str = "program policy_demo
 
 predicate ActorAssertionRestricted(actor: Subject)
@@ -354,8 +347,8 @@ async fn an_unauthorised_actor_is_a_coded_receipt_and_the_session_stays_usable()
         )
     )
     .unwrap();
-    // The session must still be healthy afterwards - a refusal here is
-    // about the caller's authority, not a broken conversation.
+    // The session stays healthy: the refusal is about authority, not the
+    // conversation.
     writeln!(
         stdin,
         "{}",
@@ -394,10 +387,9 @@ async fn an_unauthorised_actor_is_a_coded_receipt_and_the_session_stays_usable()
     assert!(output.status.success(), "session should exit 0 on EOF");
 }
 
-/// The session reads a `where` clause through the same resolver as the
-/// one-shot: without the named read there is nothing to resolve field
-/// names against, and the refusal is a coded receipt the session
-/// survives.
+/// A session `where` resolves as the one-shot read does: without the named
+/// read there is nothing to resolve field names against. The refusal is a
+/// coded receipt, and the session carries on.
 #[tokio::test]
 async fn a_where_clause_without_the_named_read_is_a_coded_receipt() {
     reset_db().await;
@@ -437,8 +429,8 @@ async fn a_where_clause_without_the_named_read_is_a_coded_receipt() {
     assert!(output.status.success(), "session should exit 0 on EOF");
 }
 
-/// The session's `transact`: the one decision, with this request's row,
-/// and the session in step after a refusal and after an empty batch.
+/// The session's `transact`: one decision with this request's row, and the
+/// session still in step after a refusal and after an empty batch.
 #[tokio::test]
 async fn transact_answers_with_the_one_decision_and_the_session_stays_in_step() {
     reset_db().await;

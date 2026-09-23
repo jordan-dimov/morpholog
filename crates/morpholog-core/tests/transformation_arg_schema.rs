@@ -1,7 +1,6 @@
-//! Tests for the JSON Schema adapter over the param-kind analysis.
-//! Pins the per-kind property shapes the external embedder will
-//! generate forms / request models against; the worked-example
-//! integration tests over trade_lifecycle live in
+//! Tests for the JSON Schema adapter over the param-kind analysis. Pins
+//! the per-kind property shapes embedders build forms and request models
+//! from; the trade_lifecycle integration tests live in
 //! `morpholog-examples`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -10,14 +9,10 @@ use morpholog_core::ir_builder::*;
 use morpholog_core::{AnalysisError, TransformationName, transformation_arg_schema};
 use serde_json::json;
 
-/// Concrete subject parameter renders as an opaque string with NO
-/// `format: "uuid"`. Subject is Morpholog's only primitive noun
-/// and naturally carries both minted entity identifiers (UUIDv7
-/// by runtime convention) and domain symbols (commodity codes,
-/// period names, direction enums). The schema describes the
-/// shape; the convention lives in the description, not as a
-/// validation rule. Embedders that want UUID enforcement for a
-/// specific parameter layer their own constraint on top.
+/// Concrete subject parameter renders as an opaque string with no
+/// `format: "uuid"`. A subject can be a minted UUIDv7 or a domain symbol
+/// (commodity code, period name), so the UUID convention lives in the
+/// description, not a validation rule.
 #[test]
 fn concrete_subject_renders_as_opaque_string() {
     let prog = program("subject_test")
@@ -50,13 +45,9 @@ fn concrete_subject_renders_as_opaque_string() {
     );
 }
 
-/// Concrete decimal parameter renders as a string with a strict
-/// numeric pattern. The exact pattern is pinned here as the
-/// external contract; whether a candidate string matches is the
-/// embedder's job to apply against its own runtime regex, not this
-/// test's. Pinning the pattern literally is what protects against
-/// silent drift if the encoding ever moves (e.g. relaxing to allow
-/// leading zeros, or switching to JSON number).
+/// Concrete decimal parameter renders as a string with a strict numeric
+/// pattern. The pattern is pinned literally because it is the external
+/// contract; any change to the encoding must show up here.
 #[test]
 fn concrete_decimal_renders_as_string_with_pinned_pattern() {
     let prog = program("decimal_test")
@@ -197,9 +188,7 @@ fn unconstrained_renders_as_typeless_with_unconstrained_description() {
 }
 
 /// The top-level shape: $schema, title, type=object,
-/// additionalProperties=false, required[] in declaration order. The
-/// required-list order specifically pins the same declaration order
-/// the analysis layer commits to.
+/// additionalProperties=false, required[] in declaration order.
 #[test]
 fn top_level_shape_carries_required_in_declaration_order() {
     let prog = program("ordering_test")
@@ -241,14 +230,10 @@ fn top_level_shape_carries_required_in_declaration_order() {
     assert_eq!(required, vec!["zebra", "apple", "mango"]);
 }
 
-/// A parameter projected as `Ambiguous` renders as `anyOf` over the
-/// per-kind bare fragments (type / format / pattern only), with the
-/// branch-local-observation signal carried by a property-level
-/// `description`. The per-kind descriptions are deliberately
-/// stripped from the alternatives - the embedder should not see
-/// "opaque Morpholog subject identifier" as one of several options
-/// when the parameter is not specifically a subject; the description
-/// belongs at the property level, naming the ambiguity itself.
+/// An `Ambiguous` parameter renders as `anyOf` over the bare per-kind
+/// fragments (type / format / pattern only). The per-kind descriptions
+/// are stripped from the alternatives; one property-level `description`
+/// names the ambiguity instead.
 #[test]
 fn ambiguous_renders_as_any_of_alternatives() {
     let prog = program("ambiguous_test")
@@ -327,11 +312,8 @@ fn unknown_transformation_bubbles_through() {
     );
 }
 
-/// Invalid programme surfaces at the `Program::validated` gate,
-/// before the schema layer is reachable. The schema function takes
-/// a `ValidatedProgram`, which an invalid programme cannot
-/// construct, so the validation precondition is enforced at the
-/// type level instead of repeated at every accessor boundary.
+/// An invalid programme stops at `Program::validated`: the schema
+/// function takes a `ValidatedProgram`, which it cannot construct.
 #[test]
 fn invalid_program_surfaces_at_the_validated_gate() {
     let prog = program("bubble_invalid")

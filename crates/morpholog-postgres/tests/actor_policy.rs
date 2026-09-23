@@ -2,24 +2,18 @@
 //!
 //! **The attacker this models.** An application that legitimately holds
 //! a Morpholog connection and proposes through the adapter, naming an
-//! actor it holds no authority for - the operator whose one gateway can
-//! sign as two different people, and so satisfy a two-distinct-person
-//! rule alone.
+//! actor it has no authority for - for example one gateway signing as
+//! two different people to satisfy a two-person rule alone.
 //!
-//! **What it deliberately does NOT model.** A compromised gateway
-//! executing its own SQL. The runtime's writer role holds
-//! `INSERT`/`DELETE` on `morpholog.claims` and `INSERT` on
-//! `morpholog.audit`, so code holding those credentials writes claims
-//! and attestation-shaped audit rows directly and never passes this
-//! check at all. The guarantee is about callers reaching the record
-//! through the adapter, and it is only as good as the separation
-//! between the gateway processes and their credentials.
+//! **Not modelled.** A compromised gateway running its own SQL. The
+//! writer role can insert claims and audit rows directly and never meets
+//! this check. The guarantee covers callers that go through the adapter,
+//! and is only as good as the separation of gateways' credentials.
 //!
 //! The check reads `session_user`, so each simulated gateway is a pool
-//! whose connections take on their own authenticated identity via
-//! `SET SESSION AUTHORIZATION`. That needs superuser, hence the skip -
-//! and it is the same accepted residue the writer-role census records:
-//! `session_user` resists `SET ROLE`, not a superuser.
+//! that takes its own identity via `SET SESSION AUTHORIZATION`. That
+//! needs superuser, hence the skip. A superuser can change
+//! `session_user`; `SET ROLE` cannot.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -38,9 +32,8 @@ use sqlx::postgres::PgPoolOptions;
 
 const DEPLOYER: &str = "deployer_1";
 
-/// Roles are cluster-global and these tests run in parallel, so every
-/// test names its own - a shared name means one test dropping a role
-/// another is still authenticating as.
+/// Roles are cluster-wide and these tests run in parallel, so each test
+/// uses its own names.
 fn deployer_login(tag: &str) -> String {
     format!("mtest_gw_{tag}_dep")
 }
@@ -56,9 +49,8 @@ fn subj(s: &str) -> EvalValue {
     EvalValue::Subject(Subject::from(s))
 }
 
-/// The logins standing in for gateway processes: each must be able to
-/// hold a session of its own and reach the governed tables, since it
-/// plays a real embedder connection.
+/// Logins standing in for gateway processes. Each can hold its own
+/// session and reach the governed tables, like a real embedder.
 async fn recreate_gateway_roles(pool: &PgPool, roles: &[&str]) {
     let statements: Vec<String> = roles
         .iter()
@@ -70,8 +62,6 @@ async fn recreate_gateway_roles(pool: &PgPool, roles: &[&str]) {
             ]
         })
         .collect();
-    // Named apart from the owned Vec above: the slice borrows it, and
-    // one name for both invites a refactor that drops the storage.
     let borrowed: Vec<&str> = statements.iter().map(String::as_str).collect();
     recreate_roles(pool, roles, &borrowed).await;
 }
@@ -101,9 +91,8 @@ async fn gateway_pool(role: impl Into<String>) -> PgPool {
 
 /// The system on the record, both verifiers holding live oversight.
 ///
-/// The bootstrap act arms the deployer and grants it this pool's
-/// login in the same transition, so every later enrolment act must
-/// come through the same pool.
+/// The bootstrap act restricts the deployer to this pool's login, so
+/// every later enrolment act must come through the same pool.
 async fn deploy(pool: &PgPool, deployer_login: &str) {
     let p = program();
     for (name, args) in [
@@ -166,8 +155,7 @@ fn proposal(t: &Transformation, args: Vec<EvalValue>, actor: &str) -> Proposal {
     })
 }
 
-/// `assign_oversight` under some actor - the simplest governed act to
-/// aim at an actor label.
+/// `assign_oversight`, the simplest governed act to propose as an actor.
 fn oversight_of(person: &str) -> (Transformation, Vec<EvalValue>) {
     let p = program();
     let t = p
@@ -191,8 +179,7 @@ async fn an_unarmed_actor_is_asserted_by_anyone_exactly_as_before() {
     let deployer = gateway_pool(dep.clone()).await;
     deploy(&deployer, &dep).await;
 
-    // No ActorAssertionRestricted claim exists, so nothing is armed:
-    // the promise to every deployment that adopts nothing.
+    // No ActorAssertionRestricted claim exists, so nothing is restricted.
     let gateway = gateway_pool("mtest_gw_a").await;
     let (t, args) = oversight_of("verifier_new");
     let outcome = propose_against_pg(&gateway, &program(), &proposal(&t, args, CHEN))
@@ -233,8 +220,7 @@ async fn an_armed_actor_is_refused_to_an_unauthorised_role_and_records_nothing()
         "{err:?}"
     );
 
-    // Never attributed: refusing an unauthorised assertion must not
-    // manufacture a record that the actor attempted anything.
+    // A refused assertion must not record that the actor attempted anything.
     assert_eq!(audit_count(&pool).await, audit_before, "audit grew");
     assert_eq!(
         rejection_count(&pool).await,
@@ -273,9 +259,8 @@ async fn the_authorised_role_proceeds() {
 
 #[tokio::test]
 async fn asking_for_a_trace_does_not_get_round_the_policy() {
-    // The traced path opens its own transaction and calls the kernel
-    // itself. A check wired into the ordinary path alone would be a
-    // gate you walk around by adding --trace.
+    // The traced path has its own transaction. A check only on the
+    // ordinary path could be bypassed by adding --trace.
     let pool = test_pool().await;
     reset_db(&pool).await;
     if !session_is_superuser(&pool).await {
@@ -303,9 +288,9 @@ async fn asking_for_a_trace_does_not_get_round_the_policy() {
 
 #[tokio::test]
 async fn withdrawing_the_last_grant_locks_the_actor_out_rather_than_freeing_it() {
-    // The whole reason the arming claim is separate from the grants.
-    // If the grants did the arming, this sequence would hand the name
-    // back to every gateway at the moment of revocation.
+    // Why the restricting claim is separate from the grants: if the
+    // grants did the restricting, revoking the last grant would open the
+    // name to every gateway.
     let pool = test_pool().await;
     reset_db(&pool).await;
     if !session_is_superuser(&pool).await {
@@ -377,9 +362,8 @@ async fn set_role_does_not_change_who_the_policy_thinks_you_are() {
     deploy(&deployer, &dep).await;
     arm(&deployer, CHEN).await;
     grant(&deployer, CHEN, "mtest_gw_borrowed").await;
-    // Membership, so the SET ROLE below genuinely succeeds: the point
-    // is not that borrowing is blocked, it is that borrowing does not
-    // change who the policy judges.
+    // Membership, so the SET ROLE below succeeds: borrowing a role is
+    // allowed, it just does not change who the policy judges.
     sqlx::raw_sql(sqlx::AssertSqlSafe(
         "GRANT mtest_gw_borrowed TO mtest_gw_real".to_string(),
     ))
@@ -421,9 +405,8 @@ async fn set_role_does_not_change_who_the_policy_thinks_you_are() {
 
 #[tokio::test]
 async fn two_verifiers_through_one_gateway_cannot_both_be_asserted() {
-    // Article 14(5) is the point of the whole rung: a decision needs
-    // two distinct verifiers, and one operator with one connection
-    // must not be able to be both of them.
+    // Article 14(5): a decision needs two distinct verifiers, and one
+    // operator with one connection must not be both.
     let pool = test_pool().await;
     reset_db(&pool).await;
     if !session_is_superuser(&pool).await {
@@ -447,8 +430,7 @@ async fn two_verifiers_through_one_gateway_cannot_both_be_asserted() {
             .await
             .expect("Chen's own gateway speaks for Chen"),
     );
-    // The same gateway cannot then be Okafor - which is exactly the
-    // move that made the two-person rule decorative.
+    // The same gateway cannot then be Okafor.
     let (t, args) = oversight_of("verifier_new2");
     assert!(
         matches!(

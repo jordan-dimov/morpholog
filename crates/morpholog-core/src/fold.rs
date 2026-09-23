@@ -1,10 +1,8 @@
 //! Shared structural descent over `Prop` / `ValueExpr` trees.
 //!
-//! The boolean "does any subterm satisfy this?" walkers used to
-//! hand-copy the same recursion, and the copies drifted. These folds
-//! own the descent once. The matches are exhaustive with no wildcard
-//! arm, so a new IR variant forces exactly one edit here instead of
-//! one per walker.
+//! "Does any subterm satisfy this?" walkers share this one descent, so
+//! hand copies cannot drift apart. The matches have no wildcard arm: a
+//! new IR variant forces one edit here, not one per walker.
 
 use crate::ir::{Prop, Term, ValueExpr, Var};
 
@@ -226,9 +224,8 @@ mod tests {
         matches!(t, Term::Var(v) if v.as_str() == "x")
     }
 
-    /// Each disjunctive descent must find a match sitting ONLY in its
-    /// first branch - the position a short-circuit `||` mutated to
-    /// `&&` silently stops seeing.
+    /// Each descent must find a match that sits only in its first
+    /// branch, which an `||` turned into `&&` would miss.
     #[test]
     fn a_match_in_the_first_branch_alone_is_found() {
         // Forall: pre only in the SOURCE, body clean.

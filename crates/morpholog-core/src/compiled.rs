@@ -1,22 +1,15 @@
 //! `CompiledProgram`: a validated programme with its by-name lookups
 //! indexed once.
 //!
-//! A [`Program`] is parsed, then validated, then read from - and callers
-//! reach into it with linear scans (`Program::transformation(name)` and
-//! friends). `CompiledProgram` owns a validated programme and builds
-//! those by-name lookups once, so the orchestration layer has a single,
-//! indexed model object to source from.
+//! [`Program`] lookups are linear scans. `CompiledProgram` owns a
+//! validated programme and indexes those lookups once.
 //!
-//! It does **not** replace [`ValidatedProgram`]. That stays the cheap,
-//! borrowed proof-of-validity handle the analysis API consumes;
-//! `CompiledProgram` is the owned home that hands one out via
-//! [`CompiledProgram::validated`]. One owns and indexes; the other is a
-//! borrowed view with the same validity guarantee.
+//! It does not replace [`ValidatedProgram`], the cheap borrowed
+//! proof-of-validity handle the analysis API takes. `CompiledProgram`
+//! owns the programme and hands one out via [`CompiledProgram::validated`].
 //!
-//! The indices map a name to a **position** in the owned vectors, never
-//! a reference into them: an owned struct holding `&Transformation` into
-//! its own field would be self-referential. Accessors resolve the
-//! position against `self.program` on demand.
+//! The indices store positions, not references, because a struct holding
+//! references into its own fields would be self-referential.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -59,15 +52,11 @@ pub struct CompiledProgram {
 }
 
 impl CompiledProgram {
-    /// Validate the programme, then index it. Constructing a
-    /// `CompiledProgram` *is* the validation gate: the error case is the
-    /// same `Vec<ValidationError>` [`Program::validate`] returns.
+    /// Validate the programme, then index it. The error is the same
+    /// `Vec<ValidationError>` [`Program::validate`] returns.
     ///
-    /// Each accessor resolves to the first declaration with that name,
-    /// matching the `iter().find()` semantics the `Program::*` lookups
-    /// have today. Validation rejects duplicate predicates, intents, and
-    /// definitions; for the rest the first-occurrence rule is what the
-    /// index guarantees.
+    /// Each accessor returns the first declaration with that name, like
+    /// the `Program::*` lookups.
     pub fn new(program: Program) -> Result<Self, Vec<ValidationError>> {
         program.validate()?;
         let impact = program.invariants.iter().map(ImpactPlan::new).collect();
@@ -120,11 +109,9 @@ impl CompiledProgram {
 
     /// The definition with this name, or `None`.
     ///
-    /// Routed through the same definition table every walker uses,
-    /// rather than a second index of its own. A programme names a
-    /// handful of definitions, so the scan is not the cost the map was
-    /// paying for - and one authority for "which definition is this"
-    /// is worth more than a lookup nothing measures.
+    /// Uses the same definition table as every walker, so there is one
+    /// answer to "which definition is this". Programmes have few
+    /// definitions, so the scan is cheap.
     pub fn definition(&self, name: &DefinitionName) -> Option<&Definition> {
         self.definition_table().get(name)
     }
@@ -148,11 +135,9 @@ impl CompiledProgram {
             .map(|&i| &self.program.derived_claims[i])
     }
 
-    /// The definition table over this programme's definitions - the
-    /// one handle every walker and the accessor above share. It
-    /// borrows the definitions slice, so it is constructed on demand
-    /// rather than cached (a cached `DefinitionTable<'_>` would be
-    /// self-referential); construction is a pointer copy.
+    /// The definition table over this programme's definitions. Built on
+    /// demand (it is a pointer copy) because caching it would be
+    /// self-referential.
     pub(crate) fn definition_table(&self) -> DefinitionTable<'_> {
         DefinitionTable::new(&self.program.definitions)
     }

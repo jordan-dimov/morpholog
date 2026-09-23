@@ -9,8 +9,8 @@ use crate::KeygenArgs;
 
 /// Generate a keypair and write the PKCS#8 PEM private key and the
 /// `ed25519-pub:<hex>` public key to the given files. The public key is
-/// also printed to stdout - it is the value to admit as an
-/// `AuditSigningKey` claim and hand to verifiers. No database, no network.
+/// also printed: admit it as an `AuditSigningKey` claim and give it to
+/// verifiers. No database, no network.
 pub(crate) fn run(args: &KeygenArgs) -> anyhow::Result<()> {
     let key = generate_signing_key();
     let pem = signing_key_to_pem(&key).context("encoding the private key as PKCS#8 PEM")?;
@@ -29,9 +29,8 @@ pub(crate) fn run(args: &KeygenArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Write a private key, refusing to overwrite an existing file and, on
-/// Unix, creating it `0600` so it is never world-readable - a private key
-/// is not a casual `fs::write`.
+/// Write a private key without overwriting an existing file, and on Unix
+/// create it `0600` so it is never world-readable.
 fn write_private_key(path: &std::path::Path, pem: &str) -> anyhow::Result<()> {
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);

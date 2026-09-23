@@ -8,15 +8,8 @@
 //! parse_program(&format_program(&p)) == Ok(p)
 //! ```
 //!
-//! This is the closing property test for the parser arc. It ties the
-//! formatter and the parser to each other: any drift between the two
-//! sides surfaces as a structural inequality. The kernel's `Program`
-//! derives `PartialEq`, so the comparison is exact.
-//!
-//! The corpus is the worked-example sources under `examples/`, read from
-//! disk - so this test depends only on the parser and formatter, not on
-//! the example enumeration. Adding a new `.morph` example extends the
-//! property's coverage automatically; no per-example test is needed.
+//! Any drift between formatter and parser shows up as an exact `Program` inequality. The
+//! examples are read from disk, so a new `.morph` example is covered automatically.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

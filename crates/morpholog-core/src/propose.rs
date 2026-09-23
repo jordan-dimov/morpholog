@@ -1,16 +1,13 @@
 //! Transformation execution: the `propose` API, the `propose_with_trace`
 //! diagnostic twin, and the supporting types they return.
 //!
-//! `propose` is the kernel's central entry point: it takes a
-//! transformation, a transition (the actor + arguments under which it's
-//! being proposed), a pre-state, and the active invariants, and returns
-//! an `Outcome`. `propose_with_trace` adds structured per-statement
-//! tracing alongside the outcome.
+//! `propose` is the kernel's central entry point: given a transformation,
+//! a transition (actor and arguments), a pre-state and the invariants, it
+//! returns an `Outcome`. `propose_with_trace` also returns a
+//! per-statement trace.
 //!
-//! Both share a single internal executor (`propose_inner` +
-//! `execute_stmt`) via a `TraceSink` enum. The non-trace path allocates
-//! no trace storage; per-statement work is a single-variant enum match
-//! the optimiser collapses.
+//! Both run the same executor, so they cannot drift. Without tracing, no
+//! trace storage is allocated.
 
 use serde::{Deserialize, Serialize};
 
@@ -29,17 +26,15 @@ use crate::ir::{
 };
 use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
 
-/// A proposed state transition. Evaluated, accepted-or-rejected, and
-/// persisted to the audit log on acceptance. Bundles:
+/// A proposed state transition. Persisted to the audit log when accepted.
 ///
-/// - `transformation_name`: which named transformation is being proposed.
-///   Must match the `name` of the [`Transformation`] passed to [`propose`].
-/// - `args`: the per-call positional arguments, matching the
-///   transformation's declared `parameters`.
-/// - `actor`: the [`Subject`] under whose authority the transition is
-///   proposed. Carried as transition context, not a transformation
-///   parameter, so domain payloads stay free of plumbing. Persists and
-///   renders as a tagged [`EvalValue::Subject`] (see [`crate::actor_repr`]).
+/// - `transformation_name`: must match the `name` of the
+///   [`Transformation`] passed to [`propose`].
+/// - `args`: positional arguments matching the transformation's
+///   `parameters`.
+/// - `actor`: the [`Subject`] proposing it. It is context, not a
+///   parameter, so domain arguments stay clean. Serialised as a tagged
+///   [`EvalValue::Subject`] (see [`crate::actor_repr`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transition {
     pub transformation_name: TransformationName,
@@ -48,8 +43,8 @@ pub struct Transition {
     pub actor: Subject,
 }
 
-/// The result of proposing a transformation. Either the candidate state is
-/// admissible (Accepted) or some predicate or invariant rejected it.
+/// The result of proposing a transformation: the candidate state is
+/// admissible (Accepted), or a gate or invariant rejected it.
 #[must_use = "a proposal outcome must be inspected; a dropped `Rejected` silently treats a refused change as if it had committed"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -66,31 +61,23 @@ pub enum Outcome {
 
 /// One variable and the value it held where an invariant failed.
 ///
-/// The values are the offending ones, so a reader is told *which* subject
-/// broke the rule and not only that the rule broke. Carried structurally
-/// rather than rendered into the reason string: the reason string is a
-/// pinned wire format, and an embedder that wants to show the account it
-/// refused should read a value, not parse prose.
+/// It tells a reader *which* subject broke the rule. It is kept as data,
+/// outside the reason string, because that string is a pinned wire format
+/// and an embedder should read values, not parse prose.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WitnessBinding {
     pub var: Var,
     pub value: EvalValue,
 }
 
-/// Why a proposal was rejected, structured at the source. Every consumer
-/// that needs prose (envelopes, trace entries, the operational rejection
-/// log's `reason` column) renders through [`std::fmt::Display`], whose
-/// output is the pinned wire string - consumers that need the rule name
-/// or kind match the variant instead of parsing display text.
+/// Why a proposal was rejected. [`std::fmt::Display`] gives the pinned
+/// wire string used in envelopes, traces and the rejection log. To get the
+/// rule name or kind, match the variant; never parse the display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RejectionReason {
-    /// An invariant did not hold over the candidate state. Carries the
-    /// version checked because the rejecting site is the only place
-    /// that knows it; Display deliberately omits it.
-    ///
-    /// `witness` is the binding assignment the failure was diagnosed
-    /// under, empty when no single iteration can be blamed. Display omits
-    /// it too - the pinned string is unchanged by this field's presence.
+    /// An invariant did not hold over the candidate state. `version` is
+    /// the version checked. `witness` holds the bindings where it failed,
+    /// empty when no single case can be blamed. Display omits both.
     Invariant {
         name: InvariantName,
         version: u32,
@@ -98,9 +85,8 @@ pub enum RejectionReason {
     },
     /// A `require` gate found no witness over the pre-state.
     ///
-    /// `name` is the gate's optional identifier. Present, it is what a
-    /// caller should hold on to: `rendered` changes the moment anyone
-    /// rewords the expression, so it reads well and identifies nothing.
+    /// `name` is the gate's optional stable identifier. Prefer it to
+    /// `rendered`, which changes whenever the expression is reworded.
     Require {
         name: Option<RuleName>,
         rendered: String,
@@ -139,58 +125,46 @@ pub(crate) enum StmtOutcome {
     Rejected(RejectionReason),
 }
 
-// ===========================================================================
-// Trace: per-statement diagnostic record produced by `propose_with_trace`
-// ===========================================================================
+// Trace: the per-statement record `propose_with_trace` produces.
 
-/// Structured outcome of `propose_with_trace`. Mirrors `propose`'s
-/// success/error split but carries a [`Vec<TraceEntry>`] on **both**
-/// paths, so the worst debugging cases (multi-match `BindOne`,
-/// type-mismatch `DateLe`, multi-match `ValueOf`, unbound actor) do not
-/// silently discard the run-up to the failure.
+/// The outcome of `propose_with_trace`. Like `propose`'s result, but a
+/// [`Vec<TraceEntry>`] comes back on **both** paths, so an error (a
+/// multi-match `BindOne`, a type mismatch, an unbound actor) keeps the
+/// steps that led to it.
 ///
-/// Trace is statement-level plus a failure-walk on rejection paths:
-/// each statement and invariant check produces one entry, and a
-/// rejecting `require`/`bind_one` carries a `failing_sub_expression`
-/// (see [`RequireOutcome`]).
+/// Each statement and invariant check adds one entry; a rejecting
+/// `require` / `bind_one` also names its failing sub-expression (see
+/// [`RequireOutcome`]).
 #[must_use = "a traced proposal carries the outcome (a dropped `Rejected` silently treats a refused change as committed) and the diagnostic trace"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TracedProposal {
-    /// The transformation ran to a normal outcome (Accepted or
-    /// Rejected). `trace` contains every statement that ran plus
-    /// every invariant that was checked.
+    /// The transformation reached Accepted or Rejected. `trace` holds
+    /// every statement that ran and every invariant that was checked.
     Completed {
         outcome: Outcome,
         trace: Vec<TraceEntry>,
     },
-    /// The transformation surfaced a kernel-level error (bad arguments,
-    /// evaluator failure, multi-match `BindOne`, etc.). `trace` contains
-    /// every statement that ran before the error - the surface a plain
-    /// `Result<_, EvalError>` would drop.
+    /// The transformation hit a kernel error (bad arguments, an evaluator
+    /// failure, a multi-match `BindOne`). `trace` holds every statement
+    /// that ran before it.
     Errored {
         error: EvalError,
         trace: Vec<TraceEntry>,
     },
 }
 
-/// One step in the trace produced by `propose_with_trace`: one entry
-/// per statement and one per invariant check. `For` is nested - its
-/// `iterations` carry a sub-trace per loop iteration.
+/// One step in the trace: one entry per statement and per invariant
+/// check. A `For` nests a sub-trace per iteration.
 ///
-/// Variants that record an expression render it via
-/// [`crate::format::format_prop_inline`]; the exact string format is
-/// not pinned by type, so formatter improvements propagate here.
-///
-/// Serde derives carry the wire format the CLI's `--trace` flag emits.
-/// The internally-tagged shape (`{ "kind": "...", ... }`) keeps each
-/// entry distinguishable in a flat JSON array.
+/// Expressions are rendered with [`crate::format::format_prop_inline`];
+/// their exact text is not pinned. The serde shape is what the CLI's
+/// `--trace` flag emits, tagged by `kind`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TraceEntry {
     Require {
         expression: String,
-        /// The gate's name, when it has one - so a trace assertion can hold
-        /// an identifier the author chose instead of a statement position.
+        /// The gate's name, when it has one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         outcome: RequireOutcome,
@@ -213,9 +187,8 @@ pub enum TraceEntry {
     Assert {
         claim: ClaimInstance,
     },
-    /// Carries the **actual retracted claims**, not just a count: a
-    /// wildcard retract that takes out more than expected is invisible
-    /// if only the count is recorded.
+    /// The claims actually retracted, not a count, so a wildcard that
+    /// removes more than expected shows up.
     Retract {
         predicate: PredicateName,
         retracted: Vec<ClaimInstance>,
@@ -227,9 +200,7 @@ pub enum TraceEntry {
         binding: Var,
         iterations: Vec<ForIterationTrace>,
     },
-    /// One invariant check. The expression string lets the trace
-    /// show which invariant body was evaluated; `held` records the
-    /// outcome. A failing invariant produces this entry plus an
+    /// One invariant check and whether it `held`. A failure also yields
     /// `Outcome::Rejected` in the surrounding `TracedProposal`.
     InvariantCheck {
         name: InvariantName,
@@ -238,10 +209,7 @@ pub enum TraceEntry {
     },
 }
 
-/// One iteration's worth of trace inside a `For` statement. The
-/// `item` value lets a caller identify which iteration produced
-/// which sub-trace - without it, a failing third iteration is hard
-/// to attribute to the right collection element.
+/// The trace of one `For` iteration, with the `item` it ran for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForIterationTrace {
     pub item: EvalValue,
@@ -251,29 +219,20 @@ pub struct ForIterationTrace {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum RequireOutcome {
-    /// The require's expression admitted at least one matching binding
-    /// extension. `match_count` is the cardinality of `find_matches`'s
-    /// return; `require` does not export these bindings (that is
-    /// `BindOne`'s job), but the count explains downstream behaviour.
+    /// The expression matched. `match_count` is how many bindings
+    /// matched; `require` does not keep them (that is `BindOne`'s job).
     Held { match_count: usize },
     Rejected {
         reason: String,
-        /// The most specific sub-expression responsible for the
-        /// rejection, rendered via `format_prop_inline`, when the kernel
-        /// can identify one (see [`crate::EvalError`] and the
-        /// `find_failing_subexpr` drill-down rules). `None` for `Exists`,
-        /// `Not`, `Or`, and leaf expressions. Carries only the rendered
-        /// expression, never prose - distinct from `reason`.
+        /// The most specific sub-expression that failed, rendered, when
+        /// the kernel can find one. `None` for `Exists`, `Not`, `Or` and
+        /// leaf expressions. Only the expression, never prose.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failing_sub_expression: Option<String>,
-        /// The positive claim conjuncts directly responsible for the
-        /// rejection, structurally (see
-        /// [`crate::eval::RenderedClaim`] and
-        /// `unsatisfied_positive_claims`). Empty unless the gate is a
-        /// top-level claim or an `And` whose chain-killing conjunct is a
-        /// positive claim - so present blockers and comparator failures
-        /// carry nothing here. Feeds the explanation engine's
-        /// directly-missing-claims list.
+        /// The positive claims whose absence failed the gate. Empty unless
+        /// the gate is a claim, or an `And` that failed on a positive
+        /// claim; a present blocker or a comparison leaves it empty. Feeds
+        /// `explain`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         directly_missing_claims: Vec<RenderedClaim>,
     },
@@ -282,26 +241,17 @@ pub enum RequireOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum BindOneOutcome {
-    /// The bind_one's expression matched exactly one binding set.
-    /// `bindings` records the **full** new binding context the matcher
-    /// returned (sorted by variable name for stable serialisation):
-    /// `BindOne` replaces the current context with the returned set, so
-    /// the trace records the full set, not a delta.
+    /// The expression matched exactly once.
     Bound {
-        /// The binding set the lookup produced, sorted by variable. Shaped
-        /// like a refusal's witness because it is the same idea - a
-        /// variable and the value it took - and one vocabulary beats two.
+        /// The whole new binding context, sorted by variable. `BindOne`
+        /// replaces the context, so this is the full set, not a delta.
         bindings: Vec<WitnessBinding>,
     },
     NoMatch {
-        /// The most specific sub-expression responsible for the
-        /// failed match, when the kernel can identify one. Same
-        /// semantics as `RequireOutcome::Rejected.failing_sub_expression`.
+        /// As for `RequireOutcome::Rejected.failing_sub_expression`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failing_sub_expression: Option<String>,
-        /// The positive claim conjuncts directly responsible for the
-        /// failed match. Same semantics as
-        /// `RequireOutcome::Rejected.directly_missing_claims`.
+        /// As for `RequireOutcome::Rejected.directly_missing_claims`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         directly_missing_claims: Vec<RenderedClaim>,
     },
@@ -310,10 +260,8 @@ pub enum BindOneOutcome {
     },
 }
 
-/// Internal sink used by the shared execution path. `Off` is a
-/// no-op; `On(&mut Vec<TraceEntry>)` appends. Keeps the trace path
-/// and the non-trace path on one executor without duplicating logic
-/// or introducing a separate "traced evaluator" that would drift.
+/// Where trace entries go: `Off` drops them, `On` appends. Lets traced
+/// and untraced proposals share one executor.
 pub(crate) enum TraceSink<'a> {
     Off,
     On(&'a mut Vec<TraceEntry>),
@@ -333,14 +281,11 @@ impl<'a> TraceSink<'a> {
     }
 }
 
-/// Propose a transformation against a pre-state. Stages
-/// asserts/retracts/intents, builds the candidate state, evaluates every
-/// invariant against it, and returns Accepted iff all invariants hold.
-/// No PostgreSQL, audit, or outbox: this is the pure semantic loop.
+/// Propose a transformation against a pre-state. Runs the body, builds
+/// the candidate state, and returns Accepted iff every invariant holds
+/// over the cases the change could affect. No database, audit or outbox.
 ///
-/// The proposal is a [`Transition`] bundling the transformation name
-/// (verified against `transformation.name`), the arguments, and the
-/// proposing actor.
+/// `transition.transformation_name` must match `transformation.name`.
 pub fn propose(
     transformation: &Transformation,
     transition: &Transition,
@@ -348,10 +293,6 @@ pub fn propose(
     invariants: &[Invariant],
     definitions: &[Definition],
 ) -> Result<Outcome, EvalError> {
-    // Input validation (transformation-name / arg-count matching) lives
-    // in `propose_inner` so both `propose` and `propose_with_trace` share
-    // a single source of truth and can't drift if one gate is updated.
-    // The actor is a `Subject` by type; no runtime kind check is needed.
     propose_inner(
         transformation,
         transition,
@@ -362,13 +303,8 @@ pub fn propose(
     )
 }
 
-/// `propose` with structured per-statement and per-invariant trace
-/// recording. Returns a [`TracedProposal`] carrying the trace on both
-/// success and error paths.
-///
-/// Both functions share one execution path; the only difference is the
-/// `TraceSink` passed to the executor, so the non-trace path pays
-/// nothing (the sink is an `Off` no-op).
+/// `propose` with a per-statement and per-invariant trace, returned on
+/// both the success and the error path.
 pub fn propose_with_trace(
     transformation: &Transformation,
     transition: &Transition,
@@ -400,9 +336,7 @@ pub fn propose_with_trace(
     }
 }
 
-/// Shared executor for `propose` and `propose_with_trace`. The
-/// `trace` sink is `Off` for the former and `On(&mut Vec)` for the
-/// latter; every other line of execution is identical.
+/// The executor behind `propose` and `propose_with_trace`.
 pub(crate) fn propose_inner(
     transformation: &Transformation,
     transition: &Transition,
@@ -420,8 +354,8 @@ pub(crate) fn propose_inner(
     )
 }
 
-/// [`propose`] under rules whose impact plans were built once: what a
-/// programme object lends, so the commit path plans nothing per call.
+/// [`propose`] with impact plans built ahead of time (see
+/// [`crate::CompiledProgram::admission`]), so nothing is planned per call.
 pub fn propose_with(
     transformation: &Transformation,
     transition: &Transition,
@@ -439,12 +373,10 @@ pub fn propose_with(
     finish_staged_inner(staged, pre_state, admission, &mut trace)
 }
 
-/// A transformation body's outcome before any invariant has been
-/// consulted: either a statement-level rejection (a failed `require`, a
-/// `bind` with no match), or the staged delta - the claims the body
-/// would assert and retract and the intents it would emit. This is the
-/// seam an adapter needs to execute a body exactly once and then choose
-/// how the invariants over the resulting candidate are evaluated.
+/// A transformation body's result before any invariant is checked: a
+/// gate rejection, or the claims it would admit and retract and the
+/// intents it would emit. Lets an adapter run a body once and then check
+/// the invariants its own way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StagedDelta {
     Rejected {
@@ -457,10 +389,8 @@ pub enum StagedDelta {
     },
 }
 
-/// Execute only the transformation body against the pre-state - the
-/// same preflight checks and statement loop [`propose`] runs, stopped
-/// before invariant evaluation. [`finish_staged_delta`] is the other
-/// half; `propose` is exactly their composition.
+/// Run only the transformation body, stopping before the invariants.
+/// `propose` is exactly this followed by [`finish_staged_delta`].
 pub fn propose_stage_delta(
     transformation: &Transformation,
     transition: &Transition,
@@ -524,10 +454,9 @@ pub(crate) fn stage_delta_inner(
             transition.args.len(),
         )));
     }
-    // Calendar spans are expression-only. No parameter can be declared
-    // to carry one, so a span among the supplied arguments is always a
-    // caller error - refused here so it cannot smuggle into a claim
-    // through an `Any`-kinded position or a collection element.
+    // No parameter can be declared as a calendar span, so one here is a
+    // caller error. Refuse it before it reaches a claim through an `Any`
+    // position or a collection element.
     if transition
         .args
         .iter()
@@ -599,9 +528,7 @@ pub(crate) fn finish_staged_inner(
     let effective = effective_delta(pre_state, &asserted, &retracted);
 
     for (inv, plan) in admission.invariants.iter().zip(admission.plans()) {
-        // Case-local revalidation: only the obligation the delta raises
-        // is evaluated. Invariants that contain `Prop::Pre` flip into
-        // pre-state lookup for the wrapped subtree.
+        // Check only the cases the change could affect.
         let cases = match plan.classify(&effective.asserted, &effective.retracted) {
             Impact::Untouched => continue,
             Impact::Unbounded => None,
@@ -625,9 +552,8 @@ pub(crate) fn finish_staged_inner(
             });
         }
         if !held {
-            // Diagnosed only now, and only within the obligation: the
-            // accepting path never pays for it, and a bounded refusal
-            // never blames a case the transition did not reach.
+            // Found only on refusal, and only among the checked cases, so
+            // it never blames a case the transition did not touch.
             let witness = match &cases {
                 None => {
                     crate::derive::invariant_witness(inv, &candidate, Some(pre_state), definitions)?
@@ -672,15 +598,11 @@ pub(crate) fn execute_stmt(
 ) -> Result<StmtOutcome, EvalError> {
     match stmt {
         Stmt::Require { prop: expr, name } => {
-            // Transformation bodies read pre-state as the only state in
-            // scope. Passing `None` for pre_state is what makes
-            // `Prop::Pre` inside a `require` surface as
-            // `EvalError::PreStateUnavailable`.
+            // A body reads only the pre-state, so `pre(...)` here is
+            // `PreStateUnavailable`.
             let ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
             let matches = find_matches(expr, &ctx)?;
             if matches.is_empty() {
-                // Render once; reused for both the reason and the
-                // trace entry.
                 let rendered = format::format_prop_inline(expr);
                 if trace.is_on() {
                     let failing = find_failing_subexpr(expr, &ctx);
@@ -717,11 +639,8 @@ pub(crate) fn execute_stmt(
             }
         }
         Stmt::BindOne { prop: expr, name } => {
-            // Deterministic unique lookup (see the `bind_one` rustdoc for
-            // the multi-outcome contract). On a unique match we *replace*
-            // the binding context with the returned match, not extend.
-            // The expression is rendered once per branch and reused for
-            // both the reason/error string and the trace entry.
+            // A unique match *replaces* the binding context rather than
+            // extending it.
             let ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
             let mut matches = find_matches(expr, &ctx)?;
             match matches.len() {
@@ -815,9 +734,6 @@ pub(crate) fn execute_stmt(
             Ok(StmtOutcome::Continue)
         }
         Stmt::Retract { predicate, args } => {
-            // The matched claims are the same set the trace entry needs,
-            // so compute them once (indexed by ground args, shared with
-            // the read path) and only the trace push is conditional.
             let ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
             let matched = matching_claims(predicate, args, &ctx)?;
             if trace.is_on() {
@@ -839,11 +755,9 @@ pub(crate) fn execute_stmt(
             let EvalValue::Collection(items) = coll_val else {
                 return Err(EvalError::TypeMismatch("For expects a collection".into()));
             };
-            // Iteration scope: snapshot outer bindings, reset per
-            // iteration, restore on exit. Branched on `trace.is_on()` so
-            // the non-trace path skips the per-iteration allocations,
-            // the `item.clone()`, and the `iterations` Vec that the
-            // trace path needs for diagnostic completeness.
+            // Each iteration starts from the outer bindings, restored on
+            // exit. Split on tracing so the untraced path allocates
+            // nothing per iteration.
             let outer = bindings.clone();
             if trace.is_on() {
                 let mut iterations: Vec<ForIterationTrace> = vec![];
@@ -852,9 +766,8 @@ pub(crate) fn execute_stmt(
                     let item_for_trace = item.clone();
                     bindings.insert(binding.clone(), item);
                     let mut iter_entries: Vec<TraceEntry> = vec![];
-                    // Labeled block scopes the iter_sink so its borrow
-                    // on iter_entries ends before we move iter_entries
-                    // into ForIterationTrace.
+                    // The block ends iter_sink's borrow before
+                    // iter_entries moves.
                     let iter_result: Result<Option<RejectionReason>, EvalError> = 'inner: {
                         let mut iter_sink = TraceSink::On(&mut iter_entries);
                         for inner in body {

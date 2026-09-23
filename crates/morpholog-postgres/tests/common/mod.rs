@@ -1,21 +1,36 @@
 //! Shared test helpers for the morpholog-postgres integration tests.
 //!
-//! Sync helpers (constructors, default actor, in-memory propose
-//! wrappers) come from `morpholog-test-support` via the re-export
-//! below. This file owns the **async** PG-specific wrappers
-//! (`propose_pg_*`) because they depend on `morpholog-postgres`
-//! itself - putting them in test-support would create a dep cycle
-//! and would also force tokio/sqlx into every consumer of the
-//! support crate.
+//! Sync helpers come from `morpholog-test-support`, re-exported below.
+//! The async PostgreSQL wrappers live here: in test-support they would
+//! create a dependency cycle and pull tokio and sqlx into every user.
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{CompiledProgram, EvalValue, Program, Subject, Transformation, Transition};
+use morpholog_core::{
+    ClaimInstance, CompiledProgram, EvalValue, Program, Subject, Transformation, Transition,
+};
 use morpholog_postgres::{
     PgError, PgPool, PgProgram, PgProposalOutcome, PgTracedOutcome, Proposal, propose_against_pg,
     propose_against_pg_with_trace,
 };
 use uuid::Uuid;
+
+/// Insert claims straight into the table, as a pre-state for a test.
+/// They carry the nil transition id, which marks them as fixture rows.
+pub async fn seed_claims(pool: &PgPool, claims: &[ClaimInstance]) {
+    for claim in claims {
+        sqlx::query(
+            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+             VALUES ($1, $2, $3)",
+        )
+        .bind(claim.predicate.as_str())
+        .bind(serde_json::to_value(&claim.args).unwrap())
+        .bind(Uuid::nil())
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+}
 
 /// Connect to the integration-test database named by `DATABASE_URL`.
 /// These suites share one schema and TRUNCATE it on entry, so point
@@ -34,13 +49,10 @@ pub async fn test_pool() -> PgPool {
 /// Truncate the governed `morpholog.*` tables - the default reset every
 /// integration test runs on entry.
 ///
-/// First waits for other open transactions on the database to drain: a
-/// previous test's pool closes its connections asynchronously, and a
-/// straggler still inside a transaction lowers the audit watermark, so
-/// a checkpoint taken by THIS test can otherwise cover none of its own
-/// rows (withhold-never-lose working as designed, against a transaction
-/// the test cannot see). Bounded, then proceeds - a wait this long means
-/// something is genuinely stuck and the test should fail visibly.
+/// First waits for other open transactions to end. A previous test's
+/// pool closes asynchronously, and a transaction still open lowers the
+/// audit watermark, so this test's checkpoints could cover none of its
+/// own rows.
 pub async fn reset_db(pool: &PgPool) {
     drain_open_transactions(pool).await;
     sqlx::query(morpholog_postgres::testing::RESET_SQL)
@@ -74,23 +86,15 @@ pub fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
     }
 }
 
-// Re-export the test-support surface so per-test files can `use
-// common::{subj, dec, ...};` rather than depending on
-// morpholog-test-support directly. The `allow(unused_imports)` is
-// necessary because each per-test file pulls a different subset:
-// without it, every binary that doesn't use the full set generates
-// noise pointing at the re-export rather than the file that's
-// actually missing the import.
+// Each test file uses a different subset, so unused imports are allowed.
 #[allow(unused_imports)]
 pub use morpholog_test_support::{
     bool_, claim_instance, coll, date, dec, dec_str, has_claim, intent_instance, role, subj,
     test_actor, test_transition,
 };
 
-/// Compile a test programme (validates + indexes) into the adapter's
-/// programme object, on whatever route the programme is eligible for;
-/// tests build one from an example's `program()` and reuse it across
-/// that test's proposals.
+/// Compile a test programme into the adapter's programme object, on
+/// whatever route it is eligible for.
 pub fn compiled(program: Program) -> PgProgram {
     PgProgram::new(CompiledProgram::new(program).expect("test programme is valid"))
 }
@@ -101,9 +105,7 @@ pub fn attested(transition: &Transition) -> Proposal {
     Proposal::gateway(transition)
 }
 
-/// Convenience for tests: build the `Transition` with `test_actor()` and
-/// propose through the `CompiledProgram` facade. `transformation` names
-/// the transition; the programme's rule slices come from `compiled`.
+/// Propose `transformation` with `args` as `test_actor()`.
 pub async fn propose_pg_with_test_actor(
     pool: &PgPool,
     compiled: &PgProgram,
@@ -114,10 +116,8 @@ pub async fn propose_pg_with_test_actor(
     propose_against_pg(pool, compiled, &attested(&transition)).await
 }
 
-/// Admit an `AuditSigningKey(key_id, purpose, public_key)` claim through a
-/// minimal key-governance programme - the keys-as-claims authorisation a
-/// signed checkpoint is verified against. Lets the signing tests assert
-/// `Intact` on a checkpoint whose key the ledger actually authorised.
+/// Admit an `AuditSigningKey(key_id, purpose, public_key)` claim, so a
+/// checkpoint signed with that key verifies as authorised.
 pub async fn authorize_signing_key(pool: &PgPool, key_id: &str, purpose: &str, public_key: &str) {
     use morpholog_core::ir_builder::{assert_, params, predicate, program, transformation, var};
     let t = transformation(
@@ -149,8 +149,7 @@ pub async fn authorize_signing_key(pool: &PgPool, key_id: &str, purpose: &str, p
     expect_committed(outcome);
 }
 
-/// Retract an `AuditSigningKey(...)` claim - the revocation half of the
-/// keys-as-claims lifecycle, for tests that pin authority as-of a prefix.
+/// Retract an `AuditSigningKey(...)` claim, revoking the key.
 pub async fn retract_signing_key(pool: &PgPool, key_id: &str, purpose: &str, public_key: &str) {
     use morpholog_core::ir_builder::{params, predicate, program, retract, transformation, var};
     let t = transformation(
@@ -182,8 +181,7 @@ pub async fn retract_signing_key(pool: &PgPool, key_id: &str, purpose: &str, pub
     expect_committed(outcome);
 }
 
-/// `propose_pg_with_test_actor` plus structured trace. Uses the shared
-/// `test_actor()` for tests that don't model authority.
+/// `propose_pg_with_test_actor` plus structured trace.
 pub async fn propose_pg_with_trace_using_test_actor(
     pool: &PgPool,
     compiled: &PgProgram,
@@ -194,9 +192,7 @@ pub async fn propose_pg_with_trace_using_test_actor(
     propose_against_pg_with_trace(pool, compiled, &attested(&transition)).await
 }
 
-/// Variant that lets the caller supply an explicit actor. Used by
-/// authority tests that need to assert on which actor proposed which
-/// transition.
+/// Propose as an explicit actor.
 pub async fn propose_pg_as(
     pool: &PgPool,
     compiled: &PgProgram,
@@ -213,8 +209,7 @@ pub async fn propose_pg_as(
 }
 
 /// Commit one balanced double-entry-ledger posting and return its
-/// transition id - the fixture opener the tamper-evidence and
-/// evaluate suites share.
+/// transition id.
 pub async fn commit_entry(pool: &PgPool, id: &str) -> Uuid {
     let compiled = compiled(morpholog_examples::double_entry_ledger::program());
     let t = morpholog_examples::double_entry_ledger::post_simple_entry();
@@ -236,17 +231,12 @@ pub async fn commit_entry(pool: &PgPool, id: &str) -> Uuid {
     expect_committed(outcome)
 }
 
-/// Wait (bounded) for other sessions' open transactions to end: a
-/// straggler from a prior test's pool lowers the audit watermark, so
-/// a checkpoint or tail taken now can otherwise cover none of this
-/// test's own rows - withhold-never-lose working as designed, against
-/// a transaction the test cannot see.
+/// Wait (bounded) for other sessions' open transactions to end. A
+/// leftover from a prior test lowers the audit watermark, so a checkpoint
+/// or tail taken now could cover none of this test's rows.
 ///
-/// On expiry this PANICS with a census of the offending sessions.
-/// Proceeding silently instead is how the watermark flake reached CI
-/// as "signing key is not authorised ... as of tree_size 0" - a
-/// misleading downstream symptom; the straggler's pid and query are
-/// the actual diagnosis.
+/// On timeout this panics, listing the offending sessions. Carrying on
+/// would fail later with a misleading symptom instead.
 pub async fn drain_open_transactions(pool: &PgPool) {
     for _ in 0..300 {
         let open: i64 = sqlx::query_scalar(
@@ -284,11 +274,8 @@ pub async fn drain_open_transactions(pool: &PgPool) {
     );
 }
 
-/// A checkpoint over every audit row committed so far. The count is
-/// read first and demanded of the checkpoint, so a row the resume
-/// watermark withheld - correctly, for a transaction still winding
-/// down elsewhere - is waited for rather than silently left out of an
-/// anchor a test then reasons about.
+/// A checkpoint over every audit row committed so far. Rows the
+/// watermark withholds are waited for, not silently left out.
 pub async fn make_checkpoint(pool: &PgPool) -> morpholog_postgres::Checkpoint {
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM morpholog.audit")
         .fetch_one(pool)
@@ -298,15 +285,13 @@ pub async fn make_checkpoint(pool: &PgPool) -> morpholog_postgres::Checkpoint {
     make_checkpoint_at(pool, rows).await
 }
 
-/// A checkpoint covering exactly `tree_size` rows. A checkpoint is
-/// bounded by the resume watermark, so a transaction still winding down
-/// elsewhere - a previous test's pool closing under a slow instrumented
-/// build - can leave the newest rows withheld, correctly, and a test
-/// asserting the size then fails for a reason that is not its own. So
-/// other transactions are drained before every attempt. A short
-/// checkpoint that was created is final: it is persisted, and a retry
-/// would only chain onto it, so that case fails at once, naming who held
-/// the watermark back. Only an attempt that created nothing is retried.
+/// A checkpoint covering exactly `tree_size` rows.
+///
+/// A transaction still open elsewhere can hold the watermark back, so
+/// each attempt drains them first. Only an attempt that created nothing
+/// is retried. A short checkpoint that was created is persisted, and a
+/// retry would chain onto it, so that fails at once, naming who held
+/// the watermark back.
 pub async fn make_checkpoint_at(pool: &PgPool, tree_size: i64) -> morpholog_postgres::Checkpoint {
     use morpholog_postgres::CheckpointOutcome::{Created, NoNewRows};
     for attempt in 0..3 {
@@ -375,9 +360,9 @@ pub async fn session_user(pool: &PgPool) -> String {
     name
 }
 
-/// Hand-write one attested audit row inside an open transaction - the
-/// in-flight writer the watermark race tests need. committed_at takes
-/// the schema default: the writer's transaction start.
+/// Hand-write one attested audit row inside an open transaction, to act
+/// as an in-flight writer. `committed_at` defaults to the transaction's
+/// start.
 pub async fn insert_in_flight_audit_row(conn: &mut sqlx::PgConnection, transition_id: Uuid) {
     sqlx::query(
         "INSERT INTO morpholog.audit (
@@ -397,9 +382,8 @@ pub async fn insert_in_flight_audit_row(conn: &mut sqlx::PgConnection, transitio
     .unwrap();
 }
 
-/// Whether the connecting role is a superuser. Two suites gate on it:
-/// the tests that need a role identity of their own can only get one
-/// by assuming it, and only a superuser may.
+/// Whether the connecting role is a superuser. Tests that need to act
+/// as another role need this.
 pub async fn session_is_superuser(pool: &PgPool) -> bool {
     let (rolsuper,): (bool,) =
         sqlx::query_as("SELECT rolsuper FROM pg_roles WHERE rolname = session_user")
@@ -412,11 +396,9 @@ pub async fn session_is_superuser(pool: &PgPool) -> bool {
 /// Drop, then recreate, the named roles with the caller's own setup
 /// statements.
 ///
-/// Roles are cluster-global: they outlive `reset_db`, outlive the test
-/// binary, and are visible to every other suite. One left behind that
-/// can write `morpholog.audit` joins the writer-role census and fails
-/// an assertion somewhere else entirely, so every test names roles of
-/// its own and drops them on the way out.
+/// Roles are cluster-wide and outlive `reset_db` and the test binary. A
+/// leftover role that can write `morpholog.audit` breaks the writer-role
+/// census in other suites, so each test uses its own roles and drops them.
 pub async fn recreate_roles(pool: &PgPool, roles: &[&str], setup: &[&str]) {
     drop_roles_if_present(pool, roles).await;
     for statement in setup {
@@ -433,11 +415,7 @@ pub async fn recreate_roles(pool: &PgPool, roles: &[&str], setup: &[&str]) {
 /// may run after a test failed partway.
 pub async fn drop_roles_if_present(pool: &PgPool, roles: &[&str]) {
     for role in roles {
-        // A role name reaches DDL, which takes no bind parameters, so
-        // it is checked here rather than trusted and quoted when it
-        // gets there. Callers pass literals today; the first one to
-        // build a name from data should meet this assertion rather
-        // than a syntax error, or worse.
+        // DDL takes no bind parameters, so the name is checked here.
         assert!(
             !role.is_empty()
                 && role

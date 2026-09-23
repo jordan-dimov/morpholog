@@ -1,13 +1,8 @@
-//! Integration tests for `process_available_outbox_rows`.
-//!
-//! The drain is the inner action the polling worker invokes on
-//! each tick. These tests pin its contract independently
-//! of any scheduling concern:
-//! - empty outbox returns an empty Vec;
-//! - multi-row outbox is drained in one pass;
-//! - rows whose `next_attempt_at` is in the future are not picked
-//!   up (the claim helper's filter handles this);
-//! - non-blocking outcomes like `LeaseLost` do not stop the drain.
+//! Integration tests for `process_available_outbox_rows`, apart from any scheduling:
+//! - an empty outbox returns an empty Vec;
+//! - all due rows drain in one pass;
+//! - rows not yet due are not picked up;
+//! - outcomes like `LeaseLost` do not stop the drain.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -29,10 +24,6 @@ use morpholog_postgres::{
 
 const INTENT_TYPE: &str = "JournalEntryPosted";
 const LEASE: Duration = Duration::from_secs(30);
-
-// AlwaysDelivers / AlwaysTransient live in `morpholog_postgres::testing`
-// (imported above). Test-file-local shapes that need processor-state
-// access (SubsecondTransient, ExpireFirstThenDeliver) stay below.
 
 // ============================================================
 // Tests
@@ -85,11 +76,7 @@ async fn drain_does_not_redeliver_transient_row_in_same_pass() {
     reset_db(&pool).await;
     let _ = commit_simple_entry(&pool, "entry_001", "p_drain").await;
     let _ = commit_simple_entry(&pool, "entry_002", "p_drain").await;
-    // Transient deliverer pushes next_attempt_at into the future,
-    // so after both rows are processed once they should both be
-    // back in `pending` but not due. The drain must terminate
-    // after two TransientRetry outcomes; it must NOT re-claim the
-    // same rows endlessly.
+    // Each retry is scheduled an hour out, so the drain must stop after one attempt per row.
     let later = Timestamp::now() + SignedDuration::from_hours(1);
 
     let outcomes = process_available_outbox_rows(
@@ -119,16 +106,8 @@ async fn drain_does_not_redeliver_transient_row_in_same_pass() {
 
 #[tokio::test]
 async fn drain_pass_boundary_blocks_subsecond_retries_until_next_pass() {
-    // Each deliver() call returns a retry instant only 1ms in the
-    // future. By the time the drain loops back and calls the SQL
-    // claim again, the live database `now()` has moved past that
-    // 1ms (a real round-trip takes longer than 1ms). Without the
-    // pass-boundary fix in claim_pending_outbox_row, the
-    // same row would be re-claimed indefinitely, producing many
-    // TransientRetry outcomes per row and never reaching
-    // NoRowAvailable - the loop pathology Copilot flagged. With
-    // the fix, each row is deferred exactly once per pass because
-    // the new next_attempt_at is > pass_start.
+    // Each retry is due 1ms later, which has passed by the next claim. Only the pass-start
+    // cutoff stops the drain from re-claiming the same rows forever.
     let pool = test_pool().await;
     reset_db(&pool).await;
     let _ = commit_simple_entry(&pool, "entry_001", "p_drain").await;
@@ -175,10 +154,8 @@ async fn drain_continues_through_lease_lost_outcomes() {
     let _ = commit_simple_entry(&pool, "entry_ok", "p_drain").await;
     let pool_for_deliverer = pool.clone();
 
-    /// First call expires its own lease before returning Delivered;
-    /// second call onwards delivers normally. The drain must not
-    /// stop after the LeaseLost - it must continue and process the
-    /// second row.
+    /// The first call expires its own lease before returning Delivered; later calls deliver
+    /// normally.
     struct ExpireFirstThenDeliver {
         pool: PgPool,
         call_count: std::sync::atomic::AtomicU32,
@@ -216,12 +193,8 @@ async fn drain_continues_through_lease_lost_outcomes() {
     )
     .await
     .unwrap();
-    // Three outcomes expected:
-    //   1) LeaseLost (first claim, lease expired during deliver)
-    //   2) Delivered (the next claim reclaims the expired-lease
-    //      row and delivers it cleanly; the deliverer's call
-    //      counter is now > 0 so no further sabotage)
-    //   3) Delivered (second pending row, delivered normally)
+    // LeaseLost for the sabotaged claim, then Delivered for that row reclaimed, then Delivered
+    // for the other row.
     assert_eq!(
         outcomes.len(),
         3,

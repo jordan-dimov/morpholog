@@ -1,12 +1,10 @@
 //! Integration tests for the carbon-credit provenance example
 //! (`examples/09_carbon_credit_provenance/`).
 //!
-//! The point of this example is that a green claim cannot become official
-//! unless its provenance chain is admissible - and when it fails, the
-//! explanation engine names the missing link and the transformation that
-//! could supply it. These tests pin that payoff against the real program,
-//! plus the double-counting invariant and the terminal-retirement
-//! present-blockers.
+//! A green claim cannot become official unless its provenance chain is
+//! admissible; when it fails, explain names the missing link and the
+//! transformation that could supply it. Also covered: double counting and
+//! terminal retirement.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

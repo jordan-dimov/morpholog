@@ -1,6 +1,6 @@
-//! Scoring a candidate programme against committed history. Commits real
-//! ledger transitions, then replays them under candidate invariants that
-//! were never deployed - the evaluator pointed backward.
+//! Scoring a candidate programme against committed history: commit real
+//! ledger transitions, then replay them under invariants that were never
+//! deployed.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -67,9 +67,8 @@ async fn a_candidate_history_violates_reports_the_introducing_commit() {
 
     let scored = &report.invariants[0];
     assert_eq!(scored.invariant, "NoEntries");
-    // Each entry is its own forbidden case, so admission under the
-    // candidate would have refused both commits: an inherited violation
-    // never hides a fresh one - this is the semantics, not an over-count.
+    // Each entry is its own forbidden case, so the candidate would have
+    // refused both commits. An earlier violation never hides a new one.
     assert_eq!(scored.would_refuse, 2);
     assert_eq!(scored.refused_transitions.len(), 2);
 }
@@ -215,9 +214,8 @@ async fn refuses_to_score_against_a_mismatched_anchor() {
     assert!(matches!(err, PgError::InvalidState(msg) if msg.contains("does not verify")));
 }
 
-/// Build one independent single-case pack: a fresh ledger holding exactly
-/// one firm-year, checkpointed and exported. The file-name label mirrors
-/// what the CLI would use.
+/// A fresh ledger holding one firm-year, checkpointed and exported, with
+/// the file-name label the CLI would use.
 async fn build_case_pack(pool: &PgPool, id: &str) -> (String, EvidencePack) {
     reset_db(pool).await;
     common::commit_entry(pool, id).await;
@@ -237,8 +235,8 @@ async fn batch_over_packs_equals_individual_scores() {
     assert_eq!(batch.cases.len(), 3);
     assert_eq!(batch.semantics, "case_bound_admission_v2");
 
-    // Each batch case equals the individual single-pack score on the
-    // substantive fields (the batch hoists candidate identity).
+    // Each batch case matches its single-pack score (the batch reports
+    // the candidate's identity once).
     for (i, (name, pack)) in cases.iter().enumerate() {
         let single = score_candidate_against_pack(&candidate, pack, None, None).unwrap();
         let case = &batch.cases[i];
@@ -321,9 +319,8 @@ async fn a_split_attributes_violations_to_their_introducing_slice() {
     let e0 = common::commit_entry(&pool, "e0").await;
     common::commit_entry(&pool, "e1").await;
 
-    // NoEntries is violated afresh by e0 - the boundary transition
-    // itself, in train - and again by e1, in test. NoE1 names e1 alone,
-    // so e0 never touches it and only the test slice charges it.
+    // NoEntries is violated by e0 (the boundary, in train) and again by
+    // e1 (in test). NoE1 names e1 alone, so only the test slice counts it.
     let boundary = Some(morpholog_postgres::SplitBoundary::Transition(e0));
     let train_hit = score_candidate(&pool, &no_entries(), boundary)
         .await

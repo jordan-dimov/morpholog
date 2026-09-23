@@ -1,9 +1,8 @@
-//! `morpholog evaluate` - score a candidate programme against history. The
-//! evaluator pointed backward: replay the audit log under a candidate's
-//! invariants (which are NOT deployed) and report which already-admitted
-//! commits each would have refused. The history is either a live database
-//! or, with `--pack`, a portable evidence pack scored entirely offline.
-//! Output is JSON - the fitness contract a discovery loop consumes.
+//! `morpholog evaluate` - score a candidate programme against history.
+//! Replays the audit log under the candidate's invariants (never deployed)
+//! and reports which past commits each would have refused. History is a
+//! live database or, with `--pack`, an evidence pack read offline. Output
+//! is JSON, for a discovery loop to consume.
 
 use std::path::Path;
 
@@ -24,9 +23,8 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
     validate_or_report(&parsed)?;
 
-    // Fail fast in every mode, before any database or pack work: v1 scores
-    // state invariants only, so a transition-relational candidate is
-    // rejected here rather than after the work.
+    // Only state invariants can be scored, so refuse `pre(...)` before
+    // any database or pack work.
     let pre = invariants_using_pre(&parsed.program);
     if !pre.is_empty() {
         eprintln!(
@@ -87,18 +85,16 @@ fn parse_boundary(raw: &str) -> anyhow::Result<SplitBoundary> {
     Ok(SplitBoundary::AtOrBefore(at))
 }
 
-/// Score the candidate against every `*.json` evidence pack in `dir`, in one
-/// process, offline. Packs are taken in file-name order (deterministic). A
-/// file that cannot be read or parsed aborts the batch - the packs directory
-/// is controlled input - whereas a genuine pack that does not verify is a
-/// per-case failure inside the report.
+/// Score the candidate against every `*.json` evidence pack in `dir`,
+/// offline, in file-name order. An unreadable or unparseable file aborts
+/// the batch, since the directory is controlled input. A pack that parses
+/// but does not verify is a per-case failure in the report.
 fn score_against_packs(program: &Program, dir: &Path) -> anyhow::Result<BatchScore> {
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
     for entry in std::fs::read_dir(dir)
         .with_context(|| format!("reading packs directory {}", dir.display()))?
     {
-        // An entry error (permissions, a vanished file) is a setup problem
-        // and aborts, like an unparseable pack - the dir is controlled input.
+        // A directory entry error is a setup problem: abort.
         let path = entry
             .with_context(|| format!("reading an entry in {}", dir.display()))?
             .path();

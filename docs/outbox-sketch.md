@@ -12,7 +12,7 @@ The architectural answer - phrased crisply by a recent strategic review - is **M
 
 - Morpholog stays a strict local transactional gatekeeper. The IR does not learn about networks, retries, or distributed consensus. If it did, the language would stop being decidable and start being a worse-than-Camunda workflow engine.
 - An outside coordinator (the outbox worker) owns the asynchronous conversation with the real world. It tries to deliver, retries on transient failure, gives up on systemic failure.
-- When delivery fails terminally, the coordinator reconciles by invoking a Morpholog *compensating transformation* - a normal Morpholog transformation that goes through every invariant check and writes its own audit row.
+- When delivery fails terminally, the coordinator reconciles by invoking a Morpholog *compensating transformation* - a normal Morpholog transformation that goes through the same invariant checks and writes its own audit row.
 
 The mental model worth being precise about: **the original transition was a locally legitimate admission**. The runtime knew what it knew at the time, an invariant gate cleared, a claim was admitted. Then the external world contradicted the intended side effect. Morpholog does not pretend the original transition never happened - claims are admitted assertions, not freestanding truth; that distinction is load-bearing throughout the runtime. Instead, the runtime records the later contradiction (status flips to `failed`; the reason is preserved) and the compensation (a new transition through the same invariant-governed path) as further admitted claims. An auditor reading the audit log sees the full sequence: legitimate admission, evidence of external failure, governed correction.
 

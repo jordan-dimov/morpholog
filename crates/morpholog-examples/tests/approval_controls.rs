@@ -1,22 +1,19 @@
 //! Integration tests for the approval controls example
 //! (`examples/04_approval_controls/`).
 //!
-//! Two-section coverage matching the example's two authority shapes:
+//! One section per authority shape:
 //!
-//! - **Unconditional authority** (`MayApprove`, `approve_document`):
-//!   actor consultation via `Term::Actor`, rejection without grant,
-//!   asserted `Approval` carries the proposing actor, one actor
-//!   cannot impersonate another, revocation preserves history.
+//! - **Unconditional** (`MayApprove`, `approve_document`): the actor is
+//!   consulted via `Term::Actor`, no grant means rejection, the `Approval`
+//!   records the proposing actor, one actor cannot act as another, and
+//!   revocation keeps history.
 //!
-//! - **Quantitative authority** (`ApprovalLimit`, `approve_within_limit`):
-//!   the same shape with a decimal `Prop::Compare` on amount-against-limit, boundary
-//!   equality, stacked grants, per-doc-type scoping, and the
-//!   ill-typed-limit doctrine.
+//! - **Quantitative** (`ApprovalLimit`, `approve_within_limit`): the same, plus
+//!   amount-against-limit, the boundary, stacked grants, per-doc-type scope,
+//!   and an ill-typed limit.
 //!
-//! Plus kernel-level guards that make the require-vs-invariant
-//! doctrine catchable: `Term::Actor` in an invariant body raises
-//! `UnboundActor`, and the same error is position-independent in
-//! `find_claim_matches`.
+//! Plus kernel checks: `Term::Actor` in an invariant raises `UnboundActor`,
+//! whatever its argument position.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -276,12 +273,9 @@ fn revoking_a_limit_blocks_future_but_preserves_past() {
 
 #[test]
 fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
-    // Doctrine: ill-typed admitted claims are structural corruption,
-    // not business rejection. An `ApprovalLimit($actor, doc_type, X)`
-    // where `X` is not a decimal causes the decimal `Prop::Compare`
-    // (amount <= limit) to raise `EvalError::TypeMismatch`. Until typed
-    // predicates land,
-    // this example's callers are trusted to admit decimal limits.
+    // An ill-typed claim in state is corruption, not a business rejection:
+    // a non-decimal limit makes `amount <= limit` raise
+    // `EvalError::TypeMismatch`.
     let pre = State::from_claims(vec![claim_instance(
         "ApprovalLimit",
         &[
@@ -335,10 +329,8 @@ fn term_actor_in_invariant_body_surfaces_as_unbound_actor() {
 
 #[test]
 fn term_actor_unbound_error_is_position_independent() {
-    // Regression: an earlier ground arg with a missing bucket must
-    // NOT short-circuit before Term::Actor is checked. The
-    // pre-pass in find_claim_matches makes the doctrine
-    // position-independent.
+    // An earlier literal argument that matches nothing must not
+    // short-circuit before Term::Actor is checked.
     let inv = invariant(
         "actor_masked_by_earlier_missing_literal",
         Prop::Claim {
@@ -379,8 +371,7 @@ fn transformations_asserting_is_empty_for_an_unasserted_predicate() {
     use morpholog_core::transformations_asserting;
     let program = approval_controls::program();
 
-    // No transformation asserts a predicate the vocabulary never admits,
-    // so there is no candidate supplier to name. An empty list is the
-    // honest answer, not an error.
+    // Nothing asserts an unknown predicate, so the answer is an empty list,
+    // not an error.
     assert!(transformations_asserting(&program, "NoSuchPredicate").is_empty());
 }

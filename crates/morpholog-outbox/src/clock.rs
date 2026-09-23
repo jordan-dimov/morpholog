@@ -1,27 +1,16 @@
-//! Clock abstraction so the polling worker's timing behavior is
-//! testable without relying on wall-clock sleeps.
+//! Clock abstraction, so the worker's timing is testable without real sleeps.
 //!
-//! Production uses [`RealClock`] which delegates to
-//! `jiff::Timestamp::now` and `tokio::time::sleep`. Tests can use
-//! [`crate::testing::MockClock`],
-//! which records each `sleep_for` call into an inspectable buffer
-//! and never actually sleeps. With this split, tests can assert
-//! "the worker tried to sleep for the jittered interval" with
-//! zero wall-clock time elapsed, and they remain deterministic
-//! under CI load.
+//! Production uses [`RealClock`]. Tests use [`crate::testing::MockClock`], which records each
+//! `sleep_for` call and never sleeps, so timing assertions stay fast and deterministic.
 
 use jiff::Timestamp;
 use std::future::Future;
 use std::time::Duration;
 
-/// Minimal clock trait the [`crate::OutboxWorker`] depends on.
+/// The clock [`crate::OutboxWorker`] depends on.
 ///
-/// Two methods: `now` returns the current wall-clock instant (used
-/// to compute "is `next_attempt_at` in the past?" decisions in
-/// the smart-sleep path), and `sleep_for` returns a future that
-/// resolves after the given duration. Implementors decide whether
-/// `sleep_for` blocks real time (production) or returns ready
-/// immediately (tests).
+/// `now` is the current instant, used to decide how soon the next scheduled retry is due.
+/// `sleep_for` resolves after the given duration, in real time or (in tests) immediately.
 pub trait Clock: Send + Sync + 'static {
     fn now(&self) -> Timestamp;
     fn sleep_for(&self, duration: Duration) -> impl Future<Output = ()> + Send;
@@ -44,10 +33,8 @@ impl Clock for RealClock {
 mod tests {
     use super::*;
 
-    /// The production clock's `now` is the wall clock and `sleep_for`
-    /// actually elapses. Pinned because every other test injects
-    /// `MockClock`, so nothing else ever constructs `RealClock` - the
-    /// production impl must not be a coverage blind spot.
+    /// The production clock's `now` is the wall clock and `sleep_for` really elapses. Every
+    /// other test injects `MockClock`, so nothing else exercises `RealClock`.
     #[tokio::test]
     async fn real_clock_tracks_wall_time_and_sleeps() {
         let clock = RealClock;

@@ -1,15 +1,12 @@
 //! `--where field=value`: argument-level selection for the read surfaces.
 //!
-//! A field name only means something under a declaration, so both users
-//! resolve names the same way - through the programme's `predicate`
-//! declaration, which a derived claim has as much as an admitted one.
-//! That keeps the programme-as-authority contract `--named` already
-//! carries: an undeclared field is a hard error naming what does exist,
-//! never an empty result that reads like "no matching rows".
+//! Field names resolve through the programme's `predicate` declaration,
+//! which derived and admitted claims both have. An undeclared field is an
+//! error naming the fields that exist, never an empty result that looks
+//! like "no matching rows".
 //!
-//! Equality only, and repeats are conjunctive. Ranges and disjunction are
-//! absent because no read has needed them; the shape that arrived was a
-//! single field equal to a single value.
+//! Equality only; repeated filters must all hold. No read has needed
+//! ranges or `or` yet.
 
 use anyhow::{Context, anyhow, bail};
 use morpholog_core::{EvalValue, PredicateArgKind, PredicateDecl, Program};
@@ -24,9 +21,8 @@ pub(crate) struct FieldFilter {
 
 impl FieldFilter {
     /// Whether this value must compare as a number rather than as stored
-    /// JSON. Decimals are stored as strings to stay exact, so `13.5` and
-    /// `13.50` are the same number and different text - a filter that
-    /// compared the text would report no such row for a row that exists.
+    /// JSON. Decimals are stored as exact strings, so `13.5` and `13.50`
+    /// differ as text but are the same number.
     pub(crate) fn is_numeric(&self) -> bool {
         matches!(self.value, EvalValue::Decimal(_))
     }
@@ -34,10 +30,9 @@ impl FieldFilter {
 
 /// Split `field=value` pairs and resolve each against `decl`.
 ///
-/// The value decodes through the same named codec `--args-named` uses, so
-/// `--where volume_kwh=431.7` is the declared decimal rather than the
-/// string "431.7" - comparing a tagged value to a raw string would match
-/// nothing and look like an empty book.
+/// Values decode through the `--args-named` codec, so
+/// `--where volume_kwh=431.7` is the declared decimal, not the string
+/// "431.7" (which would match nothing).
 pub(crate) fn resolve(
     decl: &PredicateDecl,
     raw_filters: &[String],
@@ -61,10 +56,8 @@ pub(crate) fn resolve(
                     )
                 })?;
             let kind = &decl.args[position].kind;
-            // A quantity's amount compares as a number in memory and as
-            // text in the database, so allowing it would make the same
-            // filter answer differently depending on which read served
-            // it. Refused until one comparison covers both.
+            // A quantity compares as a number in memory but as text in the
+            // database, so the same filter could answer two ways. Refused.
             if matches!(
                 kind,
                 PredicateArgKind::Quantity(_) | PredicateArgKind::Collection
@@ -86,13 +79,11 @@ pub(crate) fn resolve(
         .collect()
 }
 
-/// The one reading of a `where` clause, for every surface that offers
-/// it: a programme to read declarations from, exactly one predicate,
-/// declared, then the field resolution. Refused before any database
-/// work, so the message is about the request and not about an empty
-/// result. Returns the filters and the declared arity from the same
-/// declaration, so a query is never handed an arity from a different
-/// one. No pairs, no filters.
+/// Resolve a `where` clause for any surface that offers one. Needs a
+/// programme and exactly one declared predicate; refuses before any
+/// database work, so the error is about the request, not an empty result.
+/// Returns the filters and the arity from the same declaration. No pairs,
+/// no filters.
 pub(crate) fn resolve_where(
     program: Option<&Program>,
     predicates: &[String],
@@ -135,14 +126,8 @@ mod tests {
     use morpholog_core::ir_builder::predicate;
 
     /// Every scalar kind the contract says is filterable, decoded from
-    /// the bare text a command line can carry.
-    ///
-    /// The Boolean row is why this table exists: `--where settled=true`
-    /// failed with "received string; expected `true` or `false`" - an
-    /// error naming exactly what the caller had written - because the
-    /// shared codec takes JSON booleans and a command line has only
-    /// text. Nothing refused Bool, so the contract implied support the
-    /// code did not have, and no test asked.
+    /// the bare text a command line can carry. Booleans matter most: the
+    /// shared codec wants JSON booleans, and a command line has only text.
     #[test]
     fn every_supported_kind_resolves_from_bare_text() {
         let decl = predicate("Every")

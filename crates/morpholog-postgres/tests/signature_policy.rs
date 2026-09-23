@@ -1,12 +1,11 @@
 //! The verifier's signature policy, layered over the intrinsic verdict.
 //!
 //! Attacker capability modelled: a credential able to propose brings an
-//! ungated programme that admits its own `AuditSigningKey`, so the
-//! keys-as-claims fold authorises a key the operator never chose. The
-//! log is then intact and genuinely signed, and only the verifier's own
-//! pin can say "not by the key I trust". The pin is an intersection with
-//! the fold, never a substitute: a pinned key the log never authorised
-//! stays an intrinsic refusal, not a policy one.
+//! ungated programme that admits its own `AuditSigningKey`, authorising a
+//! key the operator never chose. The log is then intact and genuinely
+//! signed; only the verifier's pinned key can say "not the key I trust".
+//! The pin only narrows the authorised keys: a pinned key the log never
+//! authorised is still refused intrinsically, not by policy.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

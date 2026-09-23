@@ -22,11 +22,12 @@
 -- it stores *claims* it has agreed to admit because they obey the rules.
 -- Two kinds of rule do the work below, and the split is the usual lesson:
 --
---   * an `invariant` is a rule that must hold for all admitted state,
---     forever. The runtime refuses to commit any change that would break
---     one - the total drawn can never exceed the advance rate times the
---     eligible collateral. A drawdown that would breach the limit is
---     rejected outright, with nothing recorded.
+--   * an `invariant` is a standing rule: it says what lawful records
+--     look like, and every change that touches what it governs is
+--     checked against it. The runtime refuses to commit any change that
+--     would break one - the total drawn can never exceed the advance
+--     rate times the eligible collateral. A drawdown that would breach
+--     the limit is rejected outright, with nothing recorded.
 --   * a `require` is a gate on a single action, checked the moment you
 --     act. Here the gates are the plain operational preconditions - the
 --     facility exists, this drawdown id is new - while the proportional
@@ -69,9 +70,9 @@ intent CollateralPledged(facility: Subject, asset: Subject)
 intent DrawdownRequested(facility: Subject, draw_id: Subject, amount: Decimal)
 
 
--- The rules that must always hold. Any change that would leave the world
--- violating one of these is rejected outright. Read `implies` as
--- "whenever the left is true, the right must be too".
+-- The standing rules. Any change that would break one of these is
+-- rejected outright. Read `implies` as "whenever the left is true, the
+-- right must be too".
 
 
 -- The values have to make business sense, and keeping them sane is what
@@ -100,8 +101,8 @@ invariant outstanding_within_advance_limit:
 
 
 -- The only ways state may change. A transformation proposes a set of
--- changes; the runtime applies them only if every invariant still holds
--- once they are in place.
+-- changes; the runtime applies them only if everything they touch still
+-- obeys every invariant.
 
 -- Open a facility, fixing its advance rate. The gate refuses a second
 -- facility under the same id.

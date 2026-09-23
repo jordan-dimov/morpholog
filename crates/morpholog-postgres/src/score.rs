@@ -1,11 +1,9 @@
 //! Driving the candidate scorer over committed history.
 //!
-//! Replays the audit log forward under a candidate programme and reports
-//! which already-admitted commits each candidate invariant would have
-//! refused. The kernel logic lives in `morpholog_core::CandidateScorer`;
-//! this is the replay driver - a sibling of `coverage_replay` over the
-//! same `replayed state`. Two sources feed the same fold: the live database,
-//! and a portable evidence pack (offline, no connection).
+//! Replays the audit log under a candidate programme and reports which
+//! committed transitions each candidate invariant would have refused. The
+//! scoring lives in `morpholog_core::CandidateScorer`; this drives the
+//! replay from the live database or from an offline evidence pack.
 
 use crate::as_of::resolve_transition_at_or_before;
 use crate::audit::{AuditRow, audit_cursor_for};
@@ -22,11 +20,10 @@ use morpholog_core::{
 use sqlx::PgPool;
 use uuid::Uuid;
 
-/// A train/test boundary for a split replay: everything at or before
-/// it is the training slice, everything after is the held-out test
-/// slice. Resolved to the canonical `(committed_at, transition_id)`
-/// cursor before folding, so both forms split at exactly one point in
-/// the total replay order.
+/// A train/test boundary for a split replay: everything at or before it
+/// trains, everything after is held out. Both forms resolve to one
+/// `(committed_at, transition_id)` cursor, so each splits at exactly one
+/// point in replay order.
 #[derive(Debug, Clone, Copy)]
 pub enum SplitBoundary {
     /// Split immediately after this transition.
@@ -64,9 +61,8 @@ fn pending_split(boundary: SplitBoundary, cursor: (Timestamp, Uuid)) -> PendingS
     }
 }
 
-/// Construct the scorer, mapping its refusal of an unscorable candidate
-/// onto the adapter's error - a `pre(...)` candidate is rejected before
-/// any further work, kernel faults pass through.
+/// Construct the scorer. A `pre(...)` candidate is refused as
+/// `InvalidState`; kernel faults pass through.
 fn build_scorer(program: &Program) -> Result<CandidateScorer<'_>, PgError> {
     match CandidateScorer::new(program) {
         Ok(scorer) => Ok(scorer),
@@ -75,11 +71,9 @@ fn build_scorer(program: &Program) -> Result<CandidateScorer<'_>, PgError> {
     }
 }
 
-/// Fold a run of audit rows (in canonical order) into the scorer: each
-/// row's retractions then assertions update the `replayed state`, the post-state
-/// advances the one replayed state, and the scorer observes it.
-/// One fold for both the database and pack drivers, so the live and offline
-/// scores cannot diverge.
+/// Fold audit rows, in canonical order, into the scorer: apply each row to
+/// the replayed state and let the scorer observe the result. The live and
+/// offline drivers share this fold, so their scores cannot diverge.
 fn fold_rows<'a>(
     replay: &mut State,
     scorer: &mut CandidateScorer,
@@ -93,8 +87,8 @@ fn fold_rows<'a>(
         if let Some(pending) = split.take_if(|p| (row.committed_at, row.transition_id) > p.cursor) {
             scorer.mark_split(pending.report);
         }
-        // The effective delta is read off the pre-state before the
-        // replay advances in place: no snapshot per row.
+        // Read the effective delta before the state advances in place,
+        // so no per-row snapshot is needed.
         let effective = effective_delta(replay, &row.asserted_claims, &row.retracted_claims);
         replay.apply(&row.asserted_claims, &row.retracted_claims);
         scorer.observe_transition(replay, &effective, &row.transition_id.to_string())?;
@@ -102,10 +96,8 @@ fn fold_rows<'a>(
     Ok(())
 }
 
-/// Score a candidate programme against the full committed audit log. Reads
-/// under `SERIALIZABLE READ ONLY DEFERRABLE`, folds each transition's
-/// claims into a `replayed state`, and asks the scorer whether the candidate's
-/// invariants would have refused that commit. Commits nothing.
+/// Score a candidate programme against the full committed audit log, read
+/// under `SERIALIZABLE READ ONLY DEFERRABLE`. Writes nothing.
 pub async fn score_candidate(
     pool: &PgPool,
     program: &Program,
@@ -149,12 +141,10 @@ pub async fn score_candidate(
     Ok(scorer.into_report())
 }
 
-/// Score a candidate against a portable evidence pack - offline, no
-/// database. The pack is verified first and scoring is refused unless it
-/// is `Intact`: scoring a pack that does not verify would be
-/// meaningless. With `anchor` supplied the check also
-/// catches a coordinated rewrite. The report is identical to the database
-/// path, so a genuine pack reproduces the live score exactly.
+/// Score a candidate against an evidence pack, offline. Scoring is refused
+/// unless the pack verifies as `Intact`; with `anchor` supplied, that also
+/// catches a coordinated rewrite. A genuine pack reproduces the live score
+/// exactly.
 pub fn score_candidate_against_pack(
     program: &Program,
     pack: &EvidencePack,
@@ -177,14 +167,13 @@ pub fn score_candidate_against_pack(
         }
     }
 
-    // The pack's serialization order is not load-bearing; replay in
-    // canonical order, exactly as the verifier recomputes the root.
+    // Replay in canonical order, as the verifier does, whatever order the
+    // pack stores rows in.
     let mut rows: Vec<&AuditRow> = pack.rows.iter().collect();
     rows.sort_by_key(|r| (r.committed_at, r.transition_id));
 
-    // The boundary resolves against the pack's own rows, so the same
-    // boundary splits the offline replay exactly where it splits the
-    // live one over the covered prefix.
+    // Resolved against the pack's own rows, so it splits where the live
+    // replay would over the covered prefix.
     let mut pending = match split {
         Some(b @ SplitBoundary::Transition(id)) => Some(pending_split(
             b,
@@ -213,22 +202,15 @@ pub fn score_candidate_against_pack(
     Ok(scorer.into_report())
 }
 
-/// Score one candidate against many packs in a single call - the discovery
-/// search is candidates x cases, so this collapses the per-case process
-/// spawn and parses the candidate once. Each pack is verified and scored
-/// exactly as [`score_candidate_against_pack`] does (a fresh `CandidateScorer`
-/// per pack, since it is stateful); a pack that fails (does not verify,
-/// kernel error) becomes a `Failed` case and the batch continues. The
-/// candidate is validated once up front so a `pre(...)` or otherwise
-/// unscorable candidate fails the whole call with one error rather than N
-/// identical case failures. Offline; no pool. The win is amortising the
-/// process spawn, not the per-pack `CandidateScorer::new`.
+/// Score one candidate against many packs in one call, saving a process
+/// spawn per pack. Each pack is scored as [`score_candidate_against_pack`]
+/// does; a pack that fails becomes a `Failed` case and the batch goes on.
+/// An unscorable candidate fails the whole call once, up front. Offline.
 pub fn score_candidate_against_packs(
     program: &Program,
     named_packs: &[(String, EvidencePack)],
 ) -> Result<BatchScore, PgError> {
-    // Whole-batch candidate rejection (pre(...) / invalid scorer seed); each
-    // pack then builds its own fresh scorer inside score_candidate_against_pack.
+    // Refuse an unscorable candidate once; each pack builds its own scorer.
     let _ = build_scorer(program)?;
 
     let cases = named_packs

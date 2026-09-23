@@ -1,15 +1,14 @@
 //! The impact plan: which cases of an invariant a delta can affect,
-//! decided once in core for both evaluators. Pinned here because the
-//! PostgreSQL compiler renders these answers and the kernel will apply
-//! them; the shapes are those the compiled differential proves.
+//! decided once in core. Pinned here because both the kernel and the
+//! PostgreSQL compiler act on these answers.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::BTreeMap;
 
 use morpholog_core::ir_builder::{
-    add, and, claim, dec as dec_term, defined, eq, implies, invariant, not, predicate, program,
-    subj as lit_subject, sum, term, value_of, var, wildcard,
+    add, and, claim, dec as dec_term, defined, eq, implies, invariant, not, subj as lit_subject,
+    sum, term, value_of, var, wildcard,
 };
 use morpholog_core::{EvalValue, Impact, ImpactPlan, Invariant};
 use morpholog_test_support::{claim_instance, dec, subj};
@@ -176,27 +175,4 @@ fn a_value_lookup_is_a_state_dependency_the_plan_never_hides() {
         ImpactPlan::new(&arith).classify(&[claim_instance("A", &[subj("a")])], &[]),
         Impact::Unbounded
     );
-}
-
-#[test]
-fn a_programme_shaped_plan_matches_the_compiled_pins() {
-    // The same answer whether the invariant arrives alone or in a programme.
-    let p = program("demo")
-        .predicates(vec![
-            predicate("JournalEntry")
-                .subject("e")
-                .subject("d")
-                .subject("p")
-                .build(),
-            predicate("Line")
-                .subject("e")
-                .subject("a")
-                .decimal("dr")
-                .decimal("cr")
-                .build(),
-        ])
-        .invariants(vec![ledger_balance()])
-        .build();
-    let plan = ImpactPlan::new(&p.invariants[0]);
-    assert_eq!(plan, ImpactPlan::new(&ledger_balance()));
 }

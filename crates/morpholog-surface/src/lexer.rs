@@ -1,38 +1,12 @@
-//! Lexer for the v0 surface fragment.
+//! Lexer: source text to `(Token, Span)` pairs, with whitespace and `--` comments stripped. The
+//! span is a byte range ([`crate::diagnostics::Span`]).
 //!
-//! Recognised tokens:
+//! Every reserved word gets its own `Token` variant. An unknown word in a kind position lexes as
+//! `Token::Ident` and the parser reports it.
 //!
-//! - Declaration keywords: `program`, `predicate`, `intent`,
-//!   `invariant`, `transformation`, `derived`.
-//! - Kind keywords: `Subject`, `Decimal`, `Date`, `Timestamp`,
-//!   `Duration`, `Bool`, `Collection`, `Any`.
-//! - Boolean keywords: `not`, `and`, `or`, `implies`, `pre`.
-//! - Identifiers: `[a-zA-Z][a-zA-Z0-9_]*` and `_<rest>` for
-//!   `_-prefixed` names. The bare `_` is the wildcard token, not
-//!   an identifier.
-//! - Decimal literals: `<digits>` or `<digits>.<digits>`,
-//!   string-valued because the runtime parses to
-//!   `rust_decimal::Decimal`, never to a float.
-//! - Punctuation: `(`, `)`, `[`, `]`, `:`, `,`.
-//! - Comparators: `=`, `!=`, `<=`, `<`, `>=`, `>`.
-//! - Arithmetic: `+`, `-`, `*`, `/` (infix); `min` / `max` / `abs` (functions).
-//! - Wildcard: `_`.
-//!
-//! Each reserved word maps to a specific `Token::*` variant so the
-//! parser can match it directly; an identifier in kind-position that
-//! matches no reserved kind falls through as `Token::Ident` and
-//! produces a parse-time diagnostic.
-//!
-//! `true` and `false` are reserved at the lexer (as
-//! `Token::ReservedBoolLit`) but not parseable: the IR has no
-//! `Value::Bool`, so a bool literal has nowhere to lower to. Reserving
-//! them lets the parser reject `require true` with an "unexpected
-//! token" diagnostic, where treating them as identifiers would lower
-//! to `Term::Var("true")` and explode at runtime as `UnboundVariable`.
-//!
-//! Whitespace and `--` line comments are stripped at lex. Output is a
-//! vector of `(Token, Span)` pairs; the span is a byte-offset range
-//! compatible with [`crate::diagnostics::Span`] and `ariadne`.
+//! `true` and `false` are reserved but not parseable, because the IR has no boolean value to
+//! lower them to. Reserving them makes `require true` a parse error; as identifiers they would
+//! become an unbound variable at runtime.
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
@@ -41,12 +15,9 @@ use std::fmt;
 
 use crate::diagnostics::Span;
 
-/// The keyword vocabulary in one list. A keyword's spelling feeds both
-/// the reserved-word map and the diagnostic rendering, so a word cannot
-/// be reserved in one place and forgotten in the other; every other
-/// token states how a diagnostic names it. The kind names and the
-/// reserved bool literals lex to constructed tokens and stay in the
-/// map beside it.
+/// Declares every token once. A keyword's spelling feeds both the reserved-word lookup and
+/// diagnostics, so the two cannot drift apart. Kind names and bool literals are matched in
+/// `lexer` instead, because they lex to tokens carrying a value.
 macro_rules! tokens {
     (
         keywords { $( $(#[$kd:meta])* $kw:ident = $kt:literal, )* }
@@ -105,9 +76,8 @@ tokens! {
         /// Unique-claim lookup that extends the binding context.
         KwBind = "bind",
         KwLet = "let",
-        /// Only meaningful in `let x = new Subject()`; reserved everywhere
-        /// so a variable named `new` is rejected at the parser rather than
-        /// silently shadowing the keyword.
+        /// Only meaningful in `let x = new Subject()`, but reserved everywhere so no variable
+        /// can be named `new`.
         KwNew = "new",
         KwAdmit = "admit",
         KwRetract = "retract",
@@ -115,13 +85,10 @@ tokens! {
         KwFor = "for",
 
         // ---- Civil-date comparison ----
-        /// Infix civil-date `<=`. Lowers to `Prop::Compare` with the
-        /// `Date` domain. A distinct keyword from decimal `<=` because
-        /// the comparison's domain is carried explicitly in the IR,
-        /// type-checking each operand kind separately rather than
-        /// overloading one operator by operand type. `before` and
-        /// `after` complete the set but are matched contextually by the
-        /// parser (not reserved), so they stay usable as variable names.
+        /// Infix civil-date `<=`, lowering to `Prop::Compare` over `Date`. Its own word because
+        /// the IR names the comparison's domain rather than inferring it from the operands.
+        /// `before` and `after` are not reserved: the parser matches them by position, so they
+        /// stay usable as variable names.
         KwOnOrBefore = "on_or_before",
         /// Infix civil-date `>=`; lowers to `Prop::Compare` (`Ge`, `Date`).
         KwOnOrAfter = "on_or_after",
@@ -129,16 +96,12 @@ tokens! {
         // ---- Boolean composition ----
         KwNot = "not",
         KwAnd = "and",
-        /// Lowers to `Prop::Or`. Sits at lower precedence than `and`,
-        /// higher than `implies`.
+        /// Lowers to `Prop::Or`. Binds looser than `xor` and tighter than `implies`.
         KwOr = "or",
-        /// Lowers to `Prop::Xor` (exactly-one). Sits between `and` and
-        /// `or` in precedence: tighter than `or`, looser than `and`.
+        /// Lowers to `Prop::Xor` (exactly one). Binds looser than `and`, tighter than `or`.
         KwXor = "xor",
         KwImplies = "implies",
-        /// Function-call-shape primary lowering to `Prop::Pre`. The parens
-        /// are mandatory. Reserved everywhere so a variable named `pre`
-        /// cannot shadow the keyword.
+        /// `pre(...)`, lowering to `Prop::Pre`. The parentheses are required.
         KwPre = "pre",
 
         // ---- Bounded forms, functions, and membership ----
@@ -156,26 +119,20 @@ tokens! {
         /// Claim lookup; derived-claim bodies reuse it for their
         /// `value <name> = <expr>` clauses, disambiguated by position.
         KwValue = "value",
-        /// Only meaningful after `value Pred(args)`; reserved everywhere
-        /// so users can't accidentally name a variable `default`.
+        /// Only meaningful after `value Pred(args)`, but reserved everywhere.
         KwDefault = "default",
-        /// Dual-purpose: structural binder in `forall x in source: body`,
-        /// and membership comparator in `x in xs`. Positional
-        /// disambiguation by the parser.
+        /// Part of `forall x in source: body`, and membership in `x in xs`. The parser tells
+        /// them apart by position.
         KwIn = "in",
     }
     symbols {
-        /// Set-builder separator in aggregators: `sum(target | body)`.
-        /// Distinct from boolean composition; the pipe never separates
-        /// quantifier bindings (which use `:`).
+        /// The separator in `sum(target | body)`. Quantifiers use `:`, never `|`.
         Pipe = "|",
-        /// Bare `_`. Distinct from identifiers because it means "match
-        /// anything at this position", not "a name".
+        /// Bare `_`: "match anything here", not a name.
         Wildcard = "_",
         LParen = "(",
         RParen = ")",
-        /// The unit brackets of a `Decimal[USD]` kind annotation. No
-        /// other production uses them in v0.
+        /// The unit brackets of a `Decimal[USD]` kind annotation, and nothing else.
         LBracket = "[",
         RBracket = "]",
         Colon = ":",
@@ -185,10 +142,8 @@ tokens! {
         DotDot = "..",
         Eq = "=",
         Neq = "!=",
-        /// Decimal-domain comparators (bare decimals or same-unit
-        /// quantities), lowering to `Prop::Compare` with the `Decimal`
-        /// domain; `on_or_before` and `on_or_after` are the civil-date
-        /// surface for the same operators.
+        /// Decimal comparators (bare decimals or same-unit quantities), lowering to
+        /// `Prop::Compare` over `Decimal`. Dates use `on_or_before` / `on_or_after`.
         Le = "<=",
         Lt = "<",
         Ge = ">=",
@@ -202,57 +157,34 @@ tokens! {
     others {
         /// Kind keyword in a predicate-arg position.
         Kind(PredicateArgKind),
-        /// `true` or `false`: reserved but not parseable. See the
-        /// module-level note on why these are tokens rather than
-        /// identifiers.
+        /// `true` or `false`: reserved but not parseable (see the module doc).
         ReservedBoolLit(bool),
 
-        // ---- Layout virtual tokens ----
+        // ---- Layout tokens, inserted by `layout.rs` rather than lexed ----
         //
-        // Not produced by the character-level recogniser; the layout pass
-        // in `layout.rs` inserts them at block boundaries and the parser
-        // matches them to recognise block structure.
+        // No `Newline` token is needed: every statement and declaration starts with a keyword.
         //
-        // There is no virtual `Newline` token: each statement and top-level
-        // declaration starts with its own keyword, which anchors the
-        // boundary, so no separator is needed. This also lets parenthesised
-        // expressions span lines freely with no layout interaction.
-        //
-        /// Block-start marker. Inserted by the layout pass when a non-blank
-        /// line begins at a greater indentation than the previous one.
+        /// Block start: a non-blank line indented deeper than the previous one.
         Indent,
-        /// Block-end marker. Inserted by the layout pass when a non-blank
-        /// line begins at a smaller indentation than the previous one; one
-        /// `Dedent` per indentation level closed.
+        /// Block end: a non-blank line indented less than the previous one. One per level closed.
         Dedent,
 
         // ---- Atoms ----
-        /// Identifier: any reserved-keyword-free word matching
-        /// `[a-zA-Z_][a-zA-Z0-9_]*`. The parser decides by position
-        /// whether it's a variable, predicate name, argument name, or
-        /// transformation name.
+        /// A non-reserved word matching `[a-zA-Z_][a-zA-Z0-9_]*`. Its position decides whether
+        /// it names a variable, predicate, field, or transformation.
         Ident(String),
-        /// Decimal literal carried as a string to preserve exactness; the
-        /// runtime parses to `rust_decimal::Decimal`, never a float.
+        /// Decimal literal, kept as a string so it is never rounded through a float.
         DecimalLit(String),
-        /// Date literal: `@YYYY-MM-DD`. The `@` sigil avoids ambiguity with
-        /// bare arithmetic on integer-looking tokens (`2026 - 05 - 22`).
-        /// String form is the inner ISO-8601 date without the `@`; the
-        /// runtime parses it via `jiff::civil::Date`. Lex validates digit
-        /// and dash shape only; real-calendar validation is at runtime.
+        /// Date literal `@YYYY-MM-DD`, stored without the `@`. The sigil keeps it apart from
+        /// arithmetic like `2026 - 05 - 22`. Only the shape is checked here; whether the date
+        /// exists is checked at runtime.
         DateLit(String),
-        /// Timestamp literal: `@YYYY-MM-DDTHH:MM:SS[.frac](Z|+HH:MM|-HH:MM)`.
-        /// The same `@` sigil as dates, extended to a full RFC 3339 instant;
-        /// the presence of the `T` time part is what distinguishes the two.
-        /// Lex validates both the shape and, via `jiff::Timestamp`, that
-        /// the instant is real - a `@2026-13-40T...` is a spanned lex
-        /// diagnostic, not a runtime evaluation error. (Dates keep their
-        /// validate-at-runtime precedent.) Captured without the `@`.
+        /// Timestamp literal `@YYYY-MM-DDTHH:MM:SS[.frac](Z|+HH:MM|-HH:MM)`, stored without the
+        /// `@`. The `T` part is what makes it a timestamp rather than a date. Unlike dates, an
+        /// impossible instant such as `@2026-13-40T...` is a lex error.
         TimestampLit(String),
-        /// Subject literal: `#NAME`. The `#` sigil makes opaque symbolic
-        /// subjects visibly distinct from variables; the inner string is
-        /// the subject identifier (without the `#`). Maps to
-        /// `Value::Subject(name)`.
+        /// Subject literal `#NAME`, stored without the `#`. The sigil sets named subjects apart
+        /// from variables.
         SubjectLit(String),
     }
     display |f| {
@@ -271,12 +203,8 @@ tokens! {
 /// Span-flavoured token alias used in the parser's input stream.
 pub type SpannedToken = (Token, Span);
 
-/// Lex a Morpholog source string into a token stream. Returns
-/// either the full token stream (whitespace and comments stripped)
-/// or a `Rich` error describing what could not be lexed.
-///
-/// Whitespace is the standard Unicode `is_whitespace` set;
-/// comments are `--` to end-of-line.
+/// Lex a Morpholog source string into tokens, dropping whitespace and `--` line comments, or
+/// return `Rich` errors for what could not be lexed.
 pub fn lex(source: &str) -> Result<Vec<SpannedToken>, Vec<Rich<'_, char>>> {
     lexer().parse(source).into_result().map(|tokens| {
         tokens
@@ -289,8 +217,7 @@ pub fn lex(source: &str) -> Result<Vec<SpannedToken>, Vec<Rich<'_, char>>> {
 fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<Rich<'a, char>>> {
     // ---- Identifiers and reserved words ----
     //
-    // The bare `_` is matched here as Token::Wildcard; `_-prefixed`
-    // identifiers (e.g. `_foo`) remain identifiers.
+    // A bare `_` is the wildcard; `_foo` is an identifier.
     let ident_or_keyword = text::ascii::ident().map(|s: &str| {
         if let Some(keyword) = Token::keyword(s) {
             return keyword;
@@ -314,9 +241,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
 
     // ---- Decimal literals ----
     //
-    // `<digits>` or `<digits>.<digits>`, carried as a string so the
-    // runtime parses to `rust_decimal::Decimal` without routing through
-    // f64. No underscore separators.
+    // `<digits>` or `<digits>.<digits>`. No underscore separators.
     let decimal_lit = text::digits(10)
         .then(just('.').then(text::digits(10)).or_not())
         .to_slice()
@@ -324,20 +249,14 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
 
     // ---- Date literal: @YYYY-MM-DD ----
     //
-    // `@` then exactly 4-2-2 digits separated by dashes, so `@2026-5-22`
-    // (wrong digit count) fails at lex rather than runtime. Real-calendar
-    // validation (e.g. rejecting `@2026-13-40`) happens at runtime via
-    // `jiff::civil::Date`. Captured without the leading `@`.
+    // Exactly 4-2-2 digits, so `@2026-5-22` fails here rather than at runtime.
     let digit_run = |n: usize| {
         any()
             .filter(|c: &char| c.is_ascii_digit())
             .repeated()
             .exactly(n)
     };
-    // The optional RFC 3339 time part that turns a date literal into a
-    // timestamp literal: `T` HH:MM:SS, optional fractional seconds,
-    // then `Z` or a numeric offset. Shape-validated here; calendar and
-    // range validation is `jiff::Timestamp` at parse time.
+    // The optional time part that turns a date literal into a timestamp.
     let frac = just('.').then(
         any()
             .filter(|c: &char| c.is_ascii_digit())
@@ -373,12 +292,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         )
         .validate(|s: &str, e, emitter| {
             if s.contains('T') {
-                // Shape is already enforced structurally; jiff confirms
-                // the instant is real (no month 13, no 61st second), so
-                // a bad literal is a spanned lex diagnostic rather than
-                // an evaluation-time surprise - the same treatment
-                // `duration(...)` gets in the parser. Dates keep their
-                // validate-at-runtime precedent.
+                // Reject impossible instants here, with a span, rather than at evaluation.
                 if s.parse::<jiff::Timestamp>().is_err() {
                     emitter.emit(Rich::custom(
                         e.span(),
@@ -394,22 +308,15 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         });
 
     // ---- Subject literal: #IDENT ----
-    //
-    // `#` then an ASCII identifier, captured without the `#`. Maps to
-    // `Value::Subject(name)`.
     let subject_lit = just('#')
         .ignore_then(text::ascii::ident())
         .map(|s: &str| Token::SubjectLit(s.to_string()));
 
     // ---- Operators ----
     //
-    // Multi-char forms come first so `!=` matches as one token (Neq),
-    // not `!` then `=`. Single `!` and single `<` are not legal; the
-    // next token-attempt fails and the lex error surfaces with its span.
+    // Multi-char forms come before their one-char prefixes. A lone `!` is a lex error.
     let operator = choice((
         just("!=").to(Token::Neq),
-        // Multi-char forms before their single-char prefixes: `<=`
-        // before `<`, `>=` before `>`.
         just("<=").to(Token::Le),
         just('<').to(Token::Lt),
         just(">=").to(Token::Ge),
@@ -430,16 +337,11 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         just(']').to(Token::RBracket),
         just(':').to(Token::Colon),
         just(',').to(Token::Comma),
-        // `..` before nothing it could prefix: a lone `.` stays a lex
-        // error, and a decimal's own fraction dot is consumed inside
-        // `decimal_lit`, which never reaches a second consecutive dot.
+        // A lone `.` stays a lex error; a decimal's own dot is consumed by `decimal_lit`.
         just("..").to(Token::DotDot),
     ));
 
-    // Order matters: try the more-specific patterns (multi-char
-    // operators, sigil-led literals, decimals) before the catch-all
-    // ident. Sigil literals precede `operator` by convention to keep
-    // the priority order obvious, though `@` and `#` are not operators.
+    // More specific patterns first; identifiers are the catch-all.
     let token = choice((
         date_lit,
         subject_lit,
@@ -450,9 +352,7 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
     ))
     .map_with(|t, e| (t, e.span()));
 
-    // Line comments: `--` to newline or EOF (SQL/Haskell flavour). No
-    // inner padding, so the outer `padding` parser is the single source
-    // of truth for whitespace consumption.
+    // Line comments: `--` to end of line. Whitespace is left to `padding`.
     let line_comment = just("--")
         .then(any().and_is(just('\n').not()).repeated())
         .ignored();
@@ -465,9 +365,8 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
         .then_ignore(end())
 }
 
-/// Wraps a slice of `SpannedToken`s into a chumsky value-input stream.
-/// The end-span is the byte position immediately after the last token
-/// (or 0 for an empty stream).
+/// Wraps tokens as a chumsky input stream. The end-of-input span sits just after the last token,
+/// or at 0 when there are none.
 pub fn token_stream(
     tokens: &[SpannedToken],
 ) -> impl ValueInput<'_, Token = Token, Span = SimpleSpan> {

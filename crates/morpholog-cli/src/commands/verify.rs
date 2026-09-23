@@ -11,19 +11,17 @@ use morpholog_postgres::{
 use crate::VerifyArgs;
 use crate::commands::{AlreadyReported, connect, print_json, read_anchor};
 
-/// Run `audit verify`: replay (claims vs audit), then the tamper-evidence
-/// check (recompute the audit Merkle root against each checkpoint, and
-/// against an external anchor if given). One JSON object on stdout
-/// carrying both verdicts; exit one if either fails - the same
-/// data-on-stdout, exit-code-as-verdict shape as `propose`.
+/// Run `audit verify`: replay the audit log against the claims table, then
+/// recompute the audit Merkle root against each checkpoint and any given
+/// anchor. Prints both verdicts as one JSON object; exits 1 if either fails.
 pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
     let pool = connect(&args.db.database_url).await?;
 
     let replay = verify_replay(&pool).await.context("verify_replay failed")?;
 
     let anchor = read_anchor(args.anchor_file.as_deref())?;
-    // The verifier's signature policy rides inside the same snapshot the
-    // intrinsic verdict is computed from, over the chain it just proved.
+    // The signature policy is checked in the same snapshot, over the chain
+    // just proved.
     let policy = signature_policy(
         args.require_signatures,
         args.require_signatures_from,
@@ -32,14 +30,13 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
     let (tree, chain) = verify_audit_tree_with_chain(&pool, anchor, policy.as_ref())
         .await
         .context("verify_audit_tree failed")?;
-    // The witness axis reads the same chain the tree verdict saw, and is
-    // independent of it: a witness vouches for a head's existence at a
-    // time whether or not the log still recomputes to it.
+    // Witnesses are judged on the same chain but apart from the tree
+    // verdict: a witness dates a head whether or not the log still matches
+    // it.
     let anchors = witness_anchors(args.trusted_tsa_file.as_deref())?;
     let witnesses = witnesses_report(&chain, anchors.as_ref());
 
-    // The views leg is opt-in: only a deployment that generated a view
-    // surface has one to verify.
+    // Opt-in: only a deployment that generated views has any to verify.
     let views = match &args.views_schema {
         Some(schema) => Some(
             verify_views(&pool, schema)
@@ -62,8 +59,8 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
     // NotSealed is visible in the JSON but not a failure: an unsealed
     // surface has nothing to contradict.
     let surface_tampered = matches!(report.views, Some(ViewsVerification::Tampered { .. }));
-    // Of the witness standings only `invalid` is a judgement; the rest
-    // describe what the verifier could and could not establish.
+    // Only an `invalid` witness fails; the other standings say what could
+    // and could not be established.
     let witness_invalid = report
         .witnesses
         .as_ref()
@@ -90,12 +87,11 @@ pub(crate) fn witness_anchors(
     }
 }
 
-/// The signature policy the flags spell, or none. Each flag alone
-/// requires signatures: `--require-signatures` from zero,
-/// `--require-signatures-from N` from N, and a pinned key from zero
-/// unless a threshold is given too. The key file is parsed and
-/// re-rendered so the pin is the canonical `ed25519-pub:<hex>` form,
-/// whatever whitespace the file carries.
+/// The signature policy the flags spell, or none. Each flag alone requires
+/// signatures: `--require-signatures` from zero, `--require-signatures-from
+/// N` from N, and a pinned key from zero unless a threshold is also given.
+/// The key file is re-rendered to canonical `ed25519-pub:<hex>`, so stray
+/// whitespace does not matter.
 pub(crate) fn signature_policy(
     require: bool,
     from: Option<i64>,

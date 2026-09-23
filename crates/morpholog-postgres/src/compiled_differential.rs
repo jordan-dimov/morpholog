@@ -1,36 +1,28 @@
-//! The same-candidate differential: the kernel and the compiled SQL
-//! checker judge the exact same staged delta, inside one SERIALIZABLE
-//! transaction, and must agree - the permanent gate on the compiled
-//! path's correctness claim. `DATABASE_URL`-gated like every PG suite.
+//! Proves the compiled SQL checks agree with the kernel. Both judge the
+//! exact same staged delta inside one SERIALIZABLE transaction.
+//! `DATABASE_URL`-gated.
 //!
-//! Stronger than the spike's differential in two ways. The body is
-//! staged ONCE: the kernel's verdict comes from `finish_staged_delta`
-//! over the same `StagedDelta` whose claims are written into the
-//! transaction, so a body minting `new Subject()` can no longer make
-//! the two evaluators see different candidates. And every probe is
-//! observationally inert: BEGIN through today's authorised seam, write
-//! the delta, interrogate, ROLLBACK - no audit, no outbox, no commit -
-//! so a frontier state is built once per chain and probed many times.
+//! The body is staged ONCE and the kernel judges that same `StagedDelta`,
+//! so a body minting `new Subject()` cannot give the two sides different
+//! candidates. Every probe rolls back (no audit, outbox or commit), so a
+//! state is built once and probed many times.
 //!
-//! Two contracts, named:
+//! Two contracts:
 //!
 //! - **Governed history** (states reached only through accepted
-//!   current-programme proposals): kernel, full (stage-1) SQL, and
-//!   case-bound (stage-2) SQL agree on the verdict; on rejection, the
-//!   first failing rule's name, version, and witness VARIABLE SET are
-//!   strict; witness values are observational (a symmetric self-join
-//!   names the violating pair in a different order).
-//! - **Dirty history** (rows the kernel never admitted): admission is
-//!   case-local everywhere, so the kernel and the case-bound check
-//!   still agree; the full check is the whole-state question
-//!   `evaluate` asks of the rule and may refuse where they admit.
+//!   proposals): the kernel, the full SQL check and the case-bound SQL
+//!   check agree on the verdict. On rejection, the first failing rule's
+//!   name, version and witness variable set must match; witness values
+//!   may differ (a symmetric self-join can name a pair in either order).
+//! - **Dirty history** (rows the kernel never admitted): the kernel and
+//!   the case-bound check still agree. The full check asks the
+//!   whole-state question, as `evaluate` does, and may refuse where they
+//!   admit.
 //!
-//! Kernel errors are verdicts too. An error while the kernel checks
-//! the invariants (a sum whose exact total no decimal can hold) must
-//! come back from both compiled stages as the same typed error, and the
-//! hostile sweep refuses to pass without reaching one. Only an error in
-//! the body itself, on a range-extreme argument, is skipped: no
-//! compiled check runs for a body the kernel could not stage.
+//! A kernel error while checking invariants (a sum too large for any
+//! decimal) must come back from both compiled checks as the same typed
+//! error, and the hostile sweep must reach one. Only a body error is
+//! skipped: no compiled check runs for a body that could not stage.
 
 use std::fmt::Write as _;
 
@@ -51,17 +43,14 @@ use crate::{PgPool, PgProposalOutcome, propose_against_pg};
 use morpholog_test_support::differential::{boundary_argument_cases, is_permitted_range_error};
 use morpholog_test_support::{dec, subj, test_actor};
 
-/// One accepted step from empty, then every transformation again: the
-/// depth that reaches first-commission invariant evaluation. The
-/// rollback-only probe structure keeps the full declared frontier
-/// cheap enough to always be the gate - no reduced CI depth.
+/// One accepted step from empty, then every transformation again: deep
+/// enough that invariants first get evaluated. Rollback-only probes keep
+/// this cheap enough to run in full everywhere.
 const REACHABILITY_DEPTH: usize = 2;
 
-async fn test_pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set for the compiled differential \
-         (e.g. postgres:///morpholog_dev)",
-    );
+pub(crate) async fn test_pool() -> PgPool {
+    let url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set for this test (e.g. postgres:///morpholog_dev)");
     let url = crate::with_default_user(&url);
     PgPool::connect(&url)
         .await
@@ -75,9 +64,8 @@ async fn reset_db(pool: &PgPool) {
         .expect("failed to truncate test DB");
 }
 
-/// What one probe observed from all three evaluators over the same
-/// staged candidate. `kernel` is `None` when the body itself rejected
-/// (only one evaluator runs the body, so there is nothing to compare).
+/// What the three evaluators said about one staged candidate. `kernel` is
+/// `None` when the body itself rejected: only the kernel runs the body.
 struct ProbeObservation {
     kernel: Option<Outcome>,
     stage1: Option<SqlViolation>,
@@ -92,8 +80,8 @@ enum Probe {
     KernelErrorAgreed,
 }
 
-/// Stage once, judge three times, roll back. The comparator core both
-/// contracts share; the contract itself is applied by the caller.
+/// Stage once, judge three times, roll back. The caller applies the
+/// contract.
 async fn probe_raw(
     pool: &PgPool,
     compiled: &CompiledProgram,
@@ -244,8 +232,7 @@ fn governed_contract(obs: &ProbeObservation) -> Result<bool, String> {
                         &format!("{} v{}", s.name, s.version),
                     ));
                 }
-                // Witness VARS must agree; values are observational -
-                // the adopted witness contract.
+                // Witness variables must agree; values may differ.
                 let s_vars: Vec<_> = s.witness.iter().map(|w| &w.var).collect();
                 let k_vars: Vec<_> = witness.iter().map(|w| &w.var).collect();
                 if s_vars != k_vars {
@@ -283,12 +270,10 @@ fn summarise(v: &Option<SqlViolation>) -> Option<String> {
     v.as_ref().map(|s| format!("{} v{}", s.name, s.version))
 }
 
-/// Sweep one whole-in-fragment programme: reset and replay each
-/// accepted baseline chain once through the REAL production propose
-/// path, then run every transformation's boundary argument cases as
-/// rollback-only probes against that frontier state.
-/// Returns how many probes the kernel refused with an evaluation error
-/// that both compiled stages reproduced.
+/// Sweep one fully compilable programme: build each baseline chain through
+/// the real propose path, then probe every transformation's boundary
+/// arguments against that state, rolling back each probe. Returns how many
+/// probes hit a kernel error that both compiled checks reproduced.
 async fn sweep(program: Program) -> usize {
     let validated = program.validated().expect("gallery programme validates");
     let sql_set = compile_invariants(validated).expect("whole-in-fragment programme");
@@ -388,22 +373,16 @@ async fn sweep(program: Program) -> usize {
     agreed_errors
 }
 
-/// Hostile fragments: the gallery supplies breadth, these supply
-/// spite. The break-check that forced them: flipping the compiled
-/// `<=` to `<` survived the whole gallery sweep, because NO gallery
-/// programme in the fragment carries an ordered comparison in an
-/// invariant. Each operator gets its own predicate and its own
-/// invariant with its bound at ZERO - a generated boundary witness,
-/// and (negative literals not being surface-spellable) the one place
-/// every operator pair meets its equality case. First-failure
-/// discriminator no other invariant can mask; the sum comparison
-/// rides a two-step chain to its exact boundary; and every kind the
-/// compiler accepts a jsonb equality representation for (Bool, Date,
-/// Timestamp, Duration) carries its own join fragment, probed on both
-/// the matching and mismatching side. The rule the incident taught:
-/// probe count is not semantic coverage - every Ok(Repr) arm in
-/// `repr_for`, like every operator, needs a forcing discriminator
-/// here, not merely a unit test asserting emitted text.
+/// Hostile fragments for what the gallery misses: no gallery programme
+/// has an ordered comparison in a compilable invariant, so flipping `<=`
+/// to `<` would pass the gallery sweep. Each operator gets its own
+/// predicate and invariant, bound at ZERO, where every operator pair meets
+/// its equality case, and no other invariant can mask its failure. The sum
+/// comparison reaches its exact boundary over a two-step chain. Every kind
+/// with a jsonb equality representation (Bool, Date, Timestamp, Duration)
+/// has its own join fragment, probed on matching and mismatching sides.
+/// Probe count is not coverage: every `Ok(Repr)` arm in `repr_for` and
+/// every operator needs a fragment here that would catch it.
 const HOSTILE: &[&str] = &[
     // Two lines of one figure under a cap and over a floor: on the
     // range-extreme argument the exact total leaves the decimal range,
@@ -530,11 +509,9 @@ async fn every_hostile_fragment_agrees_with_the_kernel() {
     );
 }
 
-/// The named minimum corpus: gallery programmes that must stay
-/// whole-in-fragment, so the sweep can never silently go vacuous.
-/// Additional qualifiers join the sweep automatically via
-/// `every_whole_in_fragment_programme_is_swept`; this list only stops
-/// the floor from eroding.
+/// Gallery programmes that must stay fully compilable, so the sweep never
+/// silently goes empty. Others join automatically via
+/// `every_whole_in_fragment_programme_is_swept`.
 const MINIMUM_CORPUS: &[&str] = &[
     "settlement_netting",
     "verified_revenue",
@@ -578,9 +555,6 @@ async fn every_whole_in_fragment_programme_agrees_with_the_kernel() {
 // Dirty history: the one-directional contract
 // ============================================================
 
-/// Attacker capability modelled: none - the dirty row stands in for
-/// history admitted under an older programme or a since-superseded
-/// rule version, which commit-time checking must tolerate.
 /// The overflow that compares as holding: under a floor of zero, two
 /// lines of the largest decimal total past the range while `>= 0` is
 /// true of the oversized number. The kernel errors; only the range
@@ -626,6 +600,9 @@ async fn an_overflow_that_compares_as_holding_is_the_kernels_error_on_both_stage
     }
 }
 
+/// Attacker capability modelled: none. The dirty row stands in for history
+/// admitted under an older programme or rule version, which commit-time
+/// checking must tolerate.
 #[tokio::test]
 async fn dirty_history_blocks_only_the_writes_that_touch_it() {
     let program = morpholog_examples::double_entry_ledger::program();
@@ -678,10 +655,9 @@ async fn dirty_history_blocks_only_the_writes_that_touch_it() {
         ),
     };
 
-    // Admission is case-local everywhere: the kernel and the case-bound
-    // check both admit the non-worsening write beside inherited dirt.
-    // The whole-state check, which is what `evaluate` asks of the rule,
-    // refuses it, and that is the one place the three lawfully differ.
+    // The kernel and the case-bound check both admit a write that leaves
+    // the inherited bad row alone. The whole-state check refuses it: the
+    // one place the three may lawfully differ.
     assert!(
         matches!(obs.kernel, Some(Outcome::Accepted { .. })),
         "the kernel admits the non-worsening write; got {:?}",
@@ -720,7 +696,7 @@ async fn dirty_history_blocks_only_the_writes_that_touch_it() {
     governed_contract(&obs).expect("the worsening write refuses everywhere, with one identity");
 }
 
-/// On any history, stage 1 keeps the kernel's full rejection identity:
+/// On any history, the full check keeps the kernel's rejection identity:
 /// rule name, version, and witness variable set. Returns the rule name
 /// for the caller's own pin.
 fn assert_stage1_keeps_kernel_identity(obs: &ProbeObservation) -> String {
@@ -753,10 +729,8 @@ fn assert_stage1_keeps_kernel_identity(obs: &ProbeObservation) -> String {
     name.to_string()
 }
 
-/// The compile-coverage census: reported, never pinned to a count
-/// (counts change as the gallery grows); what is pinned is that every
-/// refusal names a real invariant of its programme - attribution, not
-/// arithmetic.
+/// Reports how much of the gallery compiles, without pinning a count. What
+/// is pinned: every refusal names a real invariant of its programme.
 #[test]
 fn compile_coverage_census_attributes_every_refusal() {
     let mut compiled_count = 0usize;

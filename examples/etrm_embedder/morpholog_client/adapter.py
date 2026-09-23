@@ -256,7 +256,7 @@ class Morpholog:
         explain_on_reject: bool = False,
     ) -> envelopes.Committed | envelopes.Rejected:
         """Propose a change by transformation name: it commits only if
-        every rule holds; a refusal is a lawful outcome, returned as
+        everything it touches still obeys every rule; a refusal is a lawful outcome, returned as
         ``Rejected``. A database failure before anything was recorded is
         an operational ``MorphologError`` (nothing changed); a commit
         whose outcome the runtime could not prove, or a client timeout

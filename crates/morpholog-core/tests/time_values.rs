@@ -1,11 +1,9 @@
-//! Functional tests for the time value kinds (`Timestamp`,
-//! `Duration`): the arithmetic matrix, the ordered-comparison
-//! domains, duration aggregation, and the authoring-time rule
-//! checks. Expressed as a miniature of the laytime model that
-//! forced the kinds - a notice instant, a commencement computed by
-//! shifting it, counting intervals summed against an allowance -
-//! so every assertion is a business behaviour, not an operator
-//! probe.
+//! Functional tests for `Timestamp` and `Duration`: the arithmetic
+//! matrix, the ordered comparisons, duration sums, and the
+//! authoring-time checks. The fixture is a small laytime model - a
+//! notice instant, a commencement computed by shifting it, counting
+//! intervals summed against an allowance - so every assertion is a
+//! business behaviour.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -38,12 +36,11 @@ fn must_reject(
     );
 }
 
-/// The miniature: NOR is tendered at an instant; commencement is NOR
-/// shifted by a six-hour turn time; counting intervals accumulate
-/// against an allowed laytime, seeded at zero when the allowance is
-/// set - the pre-`lower_sum_seeds` ritual, kept deliberately
-/// UN-lowered here so the evaluation-tier landmine that pass exists
-/// for stays reachable (see
+/// NOR is tendered at an instant; commencement is NOR plus a six-hour
+/// turn time; counting intervals accumulate against an allowed laytime.
+/// Setting the allowance admits a zero-length interval as a hand-made
+/// seed. The programme is left un-lowered on purpose so the empty-sum
+/// error stays reachable (see
 /// `unseeded_duration_aggregate_errors_at_evaluation`).
 fn mini_laytime() -> Program {
     program("mini_laytime")
@@ -148,10 +145,9 @@ fn mini_laytime() -> Program {
 
 #[test]
 fn unlowered_duration_sums_are_refused_and_lowering_restores_validity() {
-    // Un-lowered, the counted-laytime aggregate carries the decimal
-    // default seed while the checker reads a duration - the empty
-    // book would be a kernel type error, so validation refuses the
-    // disagreement by name instead of letting it wait for runtime.
+    // Un-lowered, the laytime sum keeps a decimal zero seed while the
+    // checker expects a duration. An empty book would be a runtime type
+    // error, so validation refuses it by name.
     let p = mini_laytime();
     let errors = p.validate().expect_err("un-lowered duration sums refuse");
     assert!(
@@ -291,12 +287,10 @@ fn the_gap_between_two_instants_is_a_duration() {
 
 #[test]
 fn unseeded_duration_aggregate_errors_at_evaluation() {
-    // The empty sum is decimal zero - the only choice that keeps every
-    // pre-existing decimal aggregate working - so a duration aggregate
-    // whose body matches nothing compares decimal-to-duration and the
-    // kernel refuses with a type error rather than guessing. This is
-    // why `set_allowance` seeds a zero-length interval; the test pins
-    // the landmine the seed defuses.
+    // Un-lowered, an empty sum is decimal zero, so a duration sum that
+    // matches nothing compares decimal to duration and the kernel
+    // refuses with a type error rather than guessing. This is why
+    // `set_allowance` seeds a zero-length interval.
     let p = mini_laytime();
     let unseeded = transformation(
         "set_allowance_unseeded",
@@ -348,11 +342,9 @@ fn adding_two_timestamps_is_refused_at_authoring_time() {
 
 #[test]
 fn a_parameter_used_only_in_time_arithmetic_infers_its_forced_kind() {
-    // `turn_time` appears in no claim position - only as the right
-    // operand of `tendered_at + turn_time`. The matrix has exactly one
-    // rule for Timestamp + _, so the parameter resolves to Duration
-    // and its schema is honest (review feedback on the time-arc PR:
-    // stage 2 will externalise exactly this kind of parameter).
+    // `turn_time` appears in no claim position, only as the right
+    // operand of `tendered_at + turn_time`. The only rule for
+    // Timestamp + _ takes a Duration, so the parameter resolves to one.
     use morpholog_core::transformation_param_kinds;
     use morpholog_core::{ParamKind, PredicateArgKind};
 
@@ -489,10 +481,8 @@ fn the_remaining_matrix_arms_evaluate() {
 
 #[test]
 fn a_reversed_instant_difference_is_a_negative_span() {
-    // Timestamp subtraction is signed: earlier - later is negative,
-    // and the duration max floor is what models clamp with (the
-    // laytime excess does exactly that). Pinned so the sign semantics
-    // are a documented contract, not an accident.
+    // Timestamp subtraction is signed: earlier - later is negative, and
+    // models clamp it with a duration max (as the laytime excess does).
     let p = program("signed")
         .predicates(vec![predicate("Gap").subject("v").duration("d").build()])
         .transformations(vec![transformation(
@@ -523,11 +513,10 @@ fn a_reversed_instant_difference_is_a_negative_span() {
 }
 
 // ============================================================
-// The enforced-twice contract's authoring half (#306): eval refuses
-// the decimal comparators over non-decimal operands, so check must
-// refuse them first - including operands whose kind arrives through a
-// bare variable, the path that let `asked_on <= opens_on` over dates
-// reach evaluation.
+// Evaluation refuses the decimal comparators over non-decimal
+// operands, so check must refuse them first - including operands
+// whose kind arrives through a bare variable, like `asked_on <=
+// opens_on` over dates.
 // ============================================================
 
 #[test]
@@ -632,12 +621,10 @@ fn agreeing_non_decimal_pairs_under_decimal_comparators_are_refused_at_authoring
 
 #[test]
 fn a_refused_comparison_contributes_no_inference_to_its_other_operand() {
-    // What this pins: within the require's own walk, the pair stop
-    // keeps the degraded date operand from being re-refined toward the
-    // decimal default (a second, spurious diagnostic for one misuse).
-    // The cross-STATEMENT half cannot leak here regardless - require
-    // walks a scoped clone - so the live-scope property is pinned by
-    // the invariant-conjunction tests below.
+    // Within the require, the refused date operand must not be pushed
+    // toward decimal, which would add a second, spurious diagnostic.
+    // Across statements nothing can leak, since require walks a scoped
+    // copy; the invariant-conjunction tests below cover the shared scope.
     let t = transformation(
         "act",
         params(&["x"]),
@@ -707,9 +694,9 @@ fn a_chain_through_a_date_variable_reports_each_link_without_conflict() {
 
 #[test]
 fn a_known_date_variable_under_round_keeps_its_existing_diagnostic_path() {
-    // The comparator fix is comparator-specific: generic operand
-    // checking (round, for, arithmetic) still funnels a known-kind
-    // mismatch through the variable-kind conflict it always used.
+    // Only comparators get the dedicated refusal: round, for and
+    // arithmetic still report a known-kind mismatch as a variable-kind
+    // conflict.
     let p = program("round_path")
         .predicates(vec![predicate("DateBox").date("d").build()])
         .invariants(vec![invariant(
@@ -755,10 +742,8 @@ fn decimal_comparators_still_accept_their_lawful_operands() {
 
 #[test]
 fn a_date_comparator_still_refines_a_free_parameter_to_date() {
-    // The named codec's Date resolution rides this refinement: a free
-    // parameter used ONLY under `on_or_before` - it flows into no Date
-    // claim slot, so the comparator observation is the sole source of
-    // its kind - must infer Date.
+    // A parameter used only under `on_or_before`, in no Date claim slot,
+    // must still infer Date: the named codec depends on it.
     let t = transformation(
         "act",
         params(&["asked_on"]),
@@ -790,11 +775,9 @@ fn a_date_comparator_still_refines_a_free_parameter_to_date() {
 
 #[test]
 fn a_refused_temporal_comparison_contributes_no_inference_in_a_live_conjunction() {
-    // Invariant conjuncts share one live scope, so this is the path a
-    // refused temporal comparison could leak inference through: `d`
-    // (Decimal) under `on_or_before` is refused, and `x` must NOT be
-    // refined to Date by the same broken comparison - its later
-    // Decimal use would otherwise conflict spuriously.
+    // Invariant conjuncts share one scope. `d` (Decimal) under
+    // `on_or_before` is refused, and `x` must not become Date from that
+    // same comparison, or its later Decimal use would conflict.
     let p = program("temporal_no_cascade")
         .predicates(vec![
             predicate("AnyBox").any("x").build(),
@@ -837,10 +820,9 @@ fn a_refused_temporal_comparison_contributes_no_inference_in_a_live_conjunction(
 
 #[test]
 fn a_refused_decimal_comparison_does_not_re_refine_its_degraded_operand() {
-    // The decimal pair stop, pinned in a live conjunction: `d` (Date)
-    // under `<=` is refused and degrades; without the stop, the
-    // healthy Decimal side would refine the degraded operand back
-    // toward Decimal and conflict with its true Date kind.
+    // In a shared-scope conjunction, `d` (Date) under `<=` is refused.
+    // The Decimal side must not then push `d` toward Decimal, which
+    // would conflict with its true Date kind.
     let p = program("decimal_no_cascade")
         .predicates(vec![
             predicate("Amount").decimal("y").build(),

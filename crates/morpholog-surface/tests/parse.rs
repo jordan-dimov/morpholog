@@ -1,10 +1,5 @@
-//! Integration tests for the v0 surface parser.
-//!
-//! Tests use hand-crafted `.morph` text and assert on the parsed
-//! [`morpholog_core::Program`]. No `format_program` round-trip is
-//! attempted here - that test would force the parser to recognise
-//! invariants / transformations / derived claims, which are out of
-//! scope for the predicate-declaration grammar.
+//! The programme parser: hand-written `.morph` text, checked against the parsed
+//! [`morpholog_core::Program`] or the diagnostics it produces.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -99,10 +94,8 @@ predicate Rate(voyage: Subject, daily: Decimal[USD])
 
 #[test]
 fn quantity_literals_parse_in_statement_and_expression_position() {
-    // A numeric literal followed by an identifier in term position is
-    // a quantity literal: whole, fractional, and the zero a unitful
-    // aggregate seeds with. The invariant exercises expression
-    // position; the admits exercise statement-arg position.
+    // A number followed by an identifier is a quantity literal: whole, fractional, and zero. The
+    // invariant covers expression position; the admits cover statement arguments.
     let source = r#"program cargo
 
 predicate Parcel(parcel: Subject, qty: Decimal[t])
@@ -259,10 +252,8 @@ fn render_produces_ariadne_output() {
     assert!(rendered.contains("test.morph"));
 }
 
-/// Whitespace-only and empty files both report "expected `program`
-/// header" via the parser's custom diagnostic, not a confusing lex
-/// error about expected punctuation. Regression test for the
-/// lexer's trailing-padding handling.
+/// Empty and whitespace-only files both report "expected `program` header", not a confusing lex
+/// error.
 #[test]
 fn empty_and_whitespace_only_sources_produce_friendly_error() {
     for source in ["", "   ", "\n\n\n", "-- just a comment\n"] {
@@ -424,18 +415,13 @@ invariant cap: Bar(y)
     assert_ne!(dup.primary, dup.secondary[0].0);
 }
 
-// The parser deliberately does not have version syntax. `(v1)` after
-// the invariant name fails with an unexpected-token error on the `(`.
-// When versioning gains real meaning, both formatter and parser grow
-// the clause together.
+// There is no version syntax, so `(v1)` after an invariant name is a parse error.
 parse_err!(
     version_syntax_is_rejected,
     "program demo\ninvariant cap(v1): Foo(x)\n"
 );
 
-// `program`, `predicate`, `invariant`, and the others are
-// lexer-reserved. Using one as a declaration name fails because the
-// lexer never produces an Ident for it.
+// Reserved words such as `program` or `predicate` cannot be declaration names.
 parse_err!(
     invariant_cannot_use_reserved_keyword_as_name,
     "program demo\ninvariant invariant: Foo(x)\n"
@@ -596,14 +582,10 @@ parse_err!(
 );
 
 // ============================================================
-// Review tightenings: bind is parser-restricted to a claim pattern
+// bind takes only a claim pattern
 // ============================================================
 
-// `bind` accepts only a claim pattern. Arbitrary propositions
-// (booleans, comparisons, etc.) are rejected at the surface even
-// though `Stmt::BindOne` can technically hold any `Prop` in the
-// kernel. See `parser/stmt.rs` module-level doc for the doctrine
-// rationale.
+// `Stmt::BindOne` could hold any `Prop`, but the surface accepts only a claim pattern.
 parse_err!(
     bind_rejects_boolean_expression,
     "program demo\n\
@@ -627,8 +609,6 @@ parse_err!(
 
 #[test]
 fn bind_accepts_claim_pattern() {
-    // The valid surface form is a claim pattern: predicate name
-    // followed by parenthesised term list.
     let source = "program demo\n\
                   transformation t(x):\n\
                   \x20\x20\x20\x20bind Foo(x, y, _)\n";
@@ -647,12 +627,7 @@ fn bind_accepts_claim_pattern() {
     assert_eq!(args.len(), 3);
 }
 
-// Top-level indentation (a top-level decl line that is not at
-// column 0) currently surfaces as a parse error because the
-// resulting `Indent` token isn't a valid top-level construct.
-// The diagnostic is generic but the behaviour is pinned so any
-// future improvement (e.g. a dedicated "unexpected top-level
-// indentation" diagnostic) lands as a deliberate change.
+// An indented top-level declaration is a parse error (a generic one, from the stray `Indent`).
 parse_err!(
     unexpected_top_level_indentation_is_rejected,
     "program demo\n\
@@ -780,9 +755,7 @@ fn for_inside_mixed_transformation_body() {
     assert!(matches!(body[2], Stmt::Assert(_)));
 }
 
-// A `for ... :` with no body content (immediately followed by
-// outer-level statements) fails to parse because the body production
-// requires at least one statement.
+// A `for` body needs at least one statement.
 parse_err!(
     empty_for_body_is_rejected,
     "program demo\n\
@@ -802,9 +775,7 @@ parse_err!(
      \x20\x20\x20\x20admit Foo(x)\n"
 );
 
-// Admit/emit reject wildcards at parse time because the kernel
-// rejects them at runtime; the parser refuses to produce IR the
-// kernel will refuse to evaluate.
+// Admit and emit refuse wildcards at parse time, since the kernel would refuse them anyway.
 
 #[test]
 fn admit_rejects_wildcard_arg() {
@@ -834,8 +805,7 @@ fn emit_rejects_wildcard_arg() {
 
 #[test]
 fn retract_still_accepts_wildcard_arg() {
-    // Wildcards are MEANINGFUL in retract (pattern-based
-    // retraction). The surface preserves that.
+    // Wildcards are allowed in retract: they widen the pattern.
     let source = "program demo\n\
                   transformation t(x):\n\
                   \x20\x20\x20\x20retract Foo(x, _)\n";
@@ -849,8 +819,7 @@ fn retract_still_accepts_wildcard_arg() {
 
 #[test]
 fn bind_still_accepts_wildcard_arg() {
-    // Wildcards are meaningful in bind (matching any value at
-    // that position while extracting other positions). Preserved.
+    // Wildcards are allowed in bind: they match any value at that position.
     let source = "program demo\n\
                   transformation t(x):\n\
                   \x20\x20\x20\x20bind Foo(x, _, y)\n";
@@ -1073,10 +1042,8 @@ transformation t(v):
     assert!(program.validate().is_ok());
 }
 
-// The `duration(...)` payload lexes as a single identifier, so a
-// leading sign cannot appear. Negative spans arise from arithmetic
-// (`a - b`), never from literals; if a model ever genuinely needs a
-// negative literal, that example reopens this.
+// The `duration(...)` payload is one identifier, so it cannot be negative. Negative spans come
+// from arithmetic (`a - b`).
 parse_err!(
     negative_duration_literals_are_deliberately_unsupported_in_surface,
     "program neg
@@ -1088,10 +1055,7 @@ transformation t(v):
 
 #[test]
 fn every_time_comparator_form_parses_and_round_trips() {
-    // The Le forms are exercised by the laytime programme; this pins
-    // the remaining six (and re-pins the two) so no comparator token
-    // is dark: each parses to its (op, domain) pair and survives the
-    // formatter round-trip.
+    // Every time comparator parses to its (op, domain) pair and survives the formatter.
     let source = "program comparators
 predicate E(v: Subject, a: Timestamp, b: Timestamp, x: Duration, y: Duration)
 
@@ -1111,9 +1075,7 @@ invariant dur_forms:
 
 #[test]
 fn conditionals_parse_nest_and_round_trip() {
-    // The forcing shape: a compound condition (a claim with commas,
-    // `and`, `=`), nested conditionals in BOTH branch positions, and
-    // arithmetic precedence around the self-delimiting form.
+    // A compound condition, conditionals nested in both branches, and arithmetic around it.
     let source = "program conds
 predicate TariffCharge(charge: Subject, source: Subject)
 predicate MeterReading(meter: Subject, qty: Decimal)
@@ -1133,9 +1095,7 @@ transformation record(line, charge, meter, proposed):
     let reparsed = parse_program(&formatted)
         .unwrap_or_else(|e| panic!("formatted source should reparse; got {e:?}\n{formatted}"));
     assert_eq!(reparsed, program, "round-trip must be lossless");
-    // Precedence: the `* 4` binds to the conditional, the `1 +` sits
-    // outside - the canonical rendering parenthesises the infix
-    // grouping, and the conditional itself needs none.
+    // `* 4` binds to the conditional and `1 +` sits outside. The conditional needs no parens.
     assert!(formatted.contains("1 + (if("), "{formatted}");
 }
 
@@ -1163,9 +1123,7 @@ transformation open_run(r, starts_on, ends_on):
 
 #[test]
 fn period_index_is_lawful_inside_a_const_initialiser() {
-    // Pure over literals, so the consts walk recurses through it: a
-    // const-held index substitutes to exactly the IR the hand-inlined
-    // expression parses to.
+    // A const index inside the call gives the same IR as writing the number in.
     let via_const = "program epoch
 const year = (period_index(@2000-04-01, span(P1Y), @2026-07-01))
 predicate Run(r: Subject, year: Decimal)
@@ -1352,10 +1310,8 @@ transformation t(span):
 
 #[test]
 fn a_span_cannot_escape_through_an_any_slot_at_check_time() {
-    // The runtime refuses this too, but an authoring mistake known
-    // from the programme must not survive `check` and become an
-    // operational proposal error. `Any` is kind-compatible with
-    // everything, so without the dedicated refusal this validated.
+    // The runtime would refuse this too, but a mistake visible in the programme belongs at
+    // check time. `Any` accepts every kind, so this needs its own refusal.
     let source = "program leak
 predicate Holds(payload: Any)
 transformation leak(l):
@@ -1403,12 +1359,9 @@ derived Out(p):
 
 #[test]
 fn a_parameter_inferred_as_a_span_has_no_lawful_call_and_is_refused() {
-    // `sp` is only ever used as a span operand, so inference lands it
-    // on CalendarSpan - but no transition argument may carry one, so
-    // every invocation would be refused. That contradiction is the
-    // author's to fix, at check time. (The known side arrives via
-    // `bind`: a `require` walks a cloned scope, so kinds observed
-    // there do not export - matching the runtime's no-export rule.)
+    // `sp` is only used as a span, so it infers as CalendarSpan, which no argument may carry.
+    // Every call would be refused, so check refuses the transformation. (`d`'s kind comes from
+    // `bind`, because kinds seen inside a `require` do not carry out of it.)
     let source = "program impossible
 predicate SomeDate(d: Date)
 transformation shift(d, sp):
@@ -1460,9 +1413,7 @@ transformation t(d):
 
 #[test]
 fn the_refused_span_grammar_forms_each_get_a_diagnostic() {
-    // Lowercase units, signs, fractions, combined weeks, empty P: the
-    // kernel's own grammar refuses each with a named reason; the parse
-    // diagnostic carries it.
+    // The kernel's grammar refuses each with a reason, which the diagnostic carries.
     for bad in ["P3m", "P1W2D", "P1M1M", "P3M1Y", "P0DT0S"] {
         let source = format!(
             "program bad_span
@@ -1485,8 +1436,7 @@ transformation t(d):
 
 #[test]
 fn an_impossible_calendar_timestamp_is_a_lex_diagnostic() {
-    // Shape-valid but not a real instant: month 13. Caught at lex via
-    // jiff, the same early-diagnostic treatment `duration(...)` gets.
+    // Well-shaped but month 13: a lex error.
     let source = "program bad_instant
 predicate E(at: Timestamp)
 transformation t(v):
@@ -1552,11 +1502,8 @@ invariant literal_target_carries_its_unit:
 #[test]
 fn sum_seeds_come_from_the_summed_variable_not_the_first_kinded_position() {
     use morpholog_core::{Prop, SumSeed, ValueExpr};
-    // Every position of Mixed carries a different kind, and the
-    // duration sits first: a seed resolver that matched by kind alone
-    // (any variable at a duration/quantity position) would answer
-    // Duration for all four sums. Each seed must come from the
-    // position that binds the SUMMED variable.
+    // Each position of Mixed has a different kind, duration first. Each seed must come from the
+    // position binding the summed variable, not the first one of a matching kind.
     let src = "\
 program seeds_by_variable
 predicate Mixed(dur: Duration, weight: Decimal[t], amount: Decimal, cash: Decimal[USD])
@@ -1596,11 +1543,8 @@ invariant cash_seed:
 #[test]
 fn the_first_position_binding_the_variable_decides_the_seed() {
     use morpholog_core::{Prop, SumSeed, ValueExpr};
-    // The same variable at two positions of different kinds: the
-    // documented rule is first-found-decides, so the decimal position
-    // wins over the quantity position behind it. (Lowering semantics
-    // only - the kernel's kind checks judge such a programme
-    // separately.)
+    // One variable at two positions of different kinds: the first found decides, so decimal
+    // wins. The kernel's kind checks judge such a programme separately.
     let src = "\
 program first_position_decides
 predicate Twice(a: Decimal, b: Decimal[t])
@@ -1622,12 +1566,8 @@ invariant twice_capped:
 
 #[test]
 fn a_sum_reached_through_many_definitions_keeps_its_unit() {
-    // The user-visible half of the seed fix, through the real path:
-    // source -> parse -> validate -> evaluate. A chain longer than the
-    // old 16-deep cap used to leave the empty sum a bare decimal, so
-    // comparing it against `0 t` failed on kinds. The chain here is
-    // acyclic and well inside what validation permits, so it must
-    // resolve to the typed zero.
+    // Parse, validate, and evaluate: an empty sum reached through a long chain of definitions
+    // must still be `0 t`, not a bare decimal that fails against `0 t` on kinds.
     const LAYERS: usize = 24;
     let mut source = String::from(
         "program deep_chain\n\
@@ -1669,11 +1609,8 @@ fn a_sum_reached_through_many_definitions_keeps_its_unit() {
     );
 }
 
-/// Every builtin renders back to the source that produced it, and
-/// nesting a call inside arithmetic keeps the parenthesisation the
-/// author wrote. The example hashes prove the shipped programmes are
-/// unaffected; these prove the RENDERING rule itself, including forms
-/// no example happens to contain.
+/// Every builtin renders back to the source that produced it, and a call nested in arithmetic
+/// keeps the author's parentheses, including forms no worked example contains.
 #[test]
 fn every_builtin_round_trips_through_the_formatter() {
     let cases = [
@@ -1711,12 +1648,8 @@ fn every_builtin_round_trips_through_the_formatter() {
     }
 }
 
-/// `min`/`max` are defined over the kinds the language ORDERS, which
-/// is a wider domain than the arithmetic matrix gave them. Taking the
-/// smaller of two values asks the comparator's question and keeps the
-/// answer instead of the verdict, so wherever `on_or_before` is lawful
-/// so is `min` - dates and instants included. What stays out is what
-/// has no ordering to take a minimum over.
+/// `min`/`max` work on every kind that can be ordered, dates and instants included: wherever
+/// `on_or_before` works, so does `min`. Kinds with no ordering are refused.
 #[test]
 fn min_and_max_are_defined_over_the_ordered_kinds() {
     // Dates order, so the earlier of two is a question with an answer.

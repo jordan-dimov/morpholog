@@ -17,16 +17,13 @@ use uuid::Uuid;
 
 /// The result of proposing a transformation against PostgreSQL.
 ///
-/// On `Committed`, the database transaction has already been committed:
-/// claims have been mutated, one audit row written, and one outbox row
-/// per emitted intent. On `Rejected`, the transaction has been rolled
-/// back and no governed state has changed - and one row has been
-/// recorded in the operational rejection log (`morpholog.rejections`)
-/// after the rollback; a failed log insert surfaces as `Err(PgError)`,
-/// never as a `Rejected` outcome.
+/// On `Committed`, the transaction has committed: claims changed, one
+/// audit row, and one outbox row per emitted intent. On `Rejected`, it
+/// rolled back and no governed state changed; one row was then recorded
+/// in the rejection log (`morpholog.rejections`). A failed log insert is
+/// `Err(PgError)`, never `Rejected`.
 ///
-/// `Serialize` uses serde's internally-tagged representation so the
-/// CLI can emit outcomes directly as JSON with a `status` discriminant.
+/// Serialises with a `status` tag.
 #[must_use = "a proposal outcome must be inspected; a dropped `Rejected` silently treats a refused change as if it had committed"]
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
@@ -41,16 +38,13 @@ pub enum PgProposalOutcome {
     },
     Rejected {
         reason: String,
-        /// The refused rule's stable identifier: an invariant's name, or a
-        /// named gate's. Absent when the gate has no name - never the
-        /// rendered expression, so a caller reading this field never gets a
-        /// value that rewording can change.
+        /// The refused rule's stable name: an invariant's, or a named
+        /// gate's. Absent for an unnamed gate, never the rendered
+        /// expression, so rewording cannot change it.
         #[serde(skip_serializing_if = "Option::is_none")]
         rule: Option<String>,
-        /// The values the refused rule was reading where it failed. Absent
-        /// rather than empty when the kernel could not single out an
-        /// iteration, so an envelope without a witness is byte-identical
-        /// to one from before witnesses existed.
+        /// The values the refused rule was reading where it failed. Omitted
+        /// when the kernel could not single out an iteration.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         witness: Vec<WitnessBinding>,
     },
@@ -58,27 +52,23 @@ pub enum PgProposalOutcome {
 
 /// Propose a transformation against the live `morpholog.*` tables.
 ///
-/// Opens one PostgreSQL transaction at SERIALIZABLE isolation, loads
-/// the claims the proposal needs into an in-memory [`State`] and runs
-/// the body through the synchronous kernel. When the programme's
-/// invariants compile to SQL ([`PgProgram::plan`]), only the body's
-/// reads are loaded, the staged delta is written into the transaction,
-/// and every invariant is checked in programme order against the
-/// claims table; otherwise the invariants' reads are loaded too and
-/// the interpreter checks them over that state. Either
-/// way the changes commit (claims, audit, outbox rows) or roll back
-/// atomically, and a rejection additionally records one row in the
-/// operational rejection log after the rollback (see
+/// Opens one SERIALIZABLE transaction, loads the claims the proposal
+/// needs into an in-memory [`State`], and runs the body through the
+/// kernel. When the invariants compile to SQL ([`PgProgram::plan`]), only
+/// the body's reads are loaded, the delta is written into the
+/// transaction, and each invariant is checked in programme order against
+/// the claims table. Otherwise the invariants' reads are loaded too and
+/// the interpreter checks them. Either way, claims, audit and outbox rows
+/// commit or roll back together; a rejection is then logged (see
 /// [`PgProposalOutcome`]).
 ///
-/// External side effects do not run inside this transaction. Outbox rows
-/// are enqueued for post-commit delivery by workers running outside.
+/// External side effects never run inside this transaction: outbox rows
+/// are delivered after commit by workers outside it.
 ///
-/// The [`Proposal`] bundles the transformation name (verified against
-/// `transformation.name`), the arguments, and the [`ActorAttestation`](crate::ActorAttestation)
-/// establishing the actor under whose authority the change is proposed.
-/// On `Committed`, the actor is persisted to the `morpholog.audit.actor`
-/// column and the attestation lineage to `morpholog.audit.attestation`.
+/// The [`Proposal`] carries the transformation name, the arguments, and
+/// the [`ActorAttestation`](crate::ActorAttestation) establishing the
+/// actor. On `Committed`, the actor goes to `morpholog.audit.actor` and
+/// the attestation to `morpholog.audit.attestation`.
 pub async fn propose_against_pg(
     pool: &PgPool,
     program: &PgProgram,
@@ -99,13 +89,9 @@ pub async fn propose_against_pg(
     Ok(run.outcome)
 }
 
-/// Resolve the pieces the kernel needs from a compiled programme and the
-/// name of the proposed transformation: the transformation itself (by
-/// name, O(1)) plus the programme's invariants and definitions. An
-/// unknown name is the one new error path the facade introduces; because
-/// the lookup is by the proposal's own name, the kernel's
-/// `transformation.name == transition.transformation_name` check is then
-/// a tautology.
+/// Look up the named transformation and the programme's invariants and
+/// definitions. Refuses misshapen actor-policy declarations; an unknown
+/// name is [`PgError::UnknownTransformation`].
 pub(crate) fn resolve<'a>(
     compiled: &'a CompiledProgram,
     name: &TransformationName,
@@ -136,9 +122,8 @@ pub(crate) fn resolve_admission<'a>(
     Ok((transformation, compiled.admission()))
 }
 
-/// The interpreted propose primitive for the compensation path, which
-/// proposes from a [`CompensationSpec`]'s own transformation,
-/// invariants and definitions rather than a programme object.
+/// The interpreted propose primitive for compensation, which carries its
+/// own transformation, invariants and definitions rather than a programme.
 pub(crate) async fn propose_against_pg_inner(
     pool: &PgPool,
     transformation: &Transformation,
@@ -158,9 +143,8 @@ pub(crate) async fn propose_against_pg_inner(
     Ok(run.outcome)
 }
 
-/// [`propose_against_pg`] with where the wall time went, for the bench's
-/// phase breakdown: the same path and the same outcome, with four clock
-/// readings the ordinary facade never takes.
+/// [`propose_against_pg`] with a breakdown of where the wall time went.
+/// Same path, same outcome; the ordinary facade reads no clock.
 pub async fn propose_against_pg_timed(
     pool: &PgPool,
     program: &PgProgram,
@@ -187,24 +171,19 @@ pub async fn propose_against_pg_timed(
     })
 }
 
-/// What [`propose_against_pg_with_rejection_state`] returns: the
-/// commit-or-reject outcome, and the pre-state the kernel evaluated -
-/// present only on rejection, since that is the snapshot a same-snapshot
-/// explanation needs (`None` on commit).
+/// What [`propose_against_pg_with_rejection_state`] returns: the outcome,
+/// and on rejection only, the pre-state the kernel evaluated.
 ///
-/// `#[must_use]` on the struct, not just on `PgProposalOutcome`: the
-/// attribute has to be on the type the caller actually receives, or a
-/// dropped result (the dangerous case - a refusal treated as a commit)
-/// slips through. A bare tuple would not carry the inner attribute.
+/// `#[must_use]` sits on this type because the caller receives it; the
+/// inner outcome's attribute would not fire on a dropped wrapper.
 #[must_use = "the proposal outcome must be inspected; a dropped `Rejected` silently treats a refused change as if it had committed"]
 pub struct RejectionStateOutcome {
     pub outcome: PgProposalOutcome,
     pub rejection_state: Option<State>,
 }
 
-/// Everything one run of the primitive yields; the public entry points
-/// each hand out the part they promise. Phases are read only when the
-/// caller asked for them, so the ordinary path touches no clock.
+/// Everything one run yields; each public entry point hands out its part.
+/// Phases are recorded only when asked for.
 pub(crate) struct ProposalRun {
     outcome: PgProposalOutcome,
     rejection_state: Option<State>,
@@ -219,14 +198,14 @@ pub struct TimedProposalOutcome {
     pub phases: ProposalPhases,
 }
 
-/// Where one proposal's wall time went: opening the transaction,
-/// loading the scoped state, deciding, and persisting the outcome.
-/// Read from the production path itself, on the timed facade only.
-/// The phases are relative to the route: interpreted, `kernel` is the
-/// body and the invariants in memory and `finalise` writes the delta
-/// and the record; compiled, `kernel` is the body, the delta write and
-/// the SQL checks, and `finalise` the record alone. A comparison across
-/// routes reads the whole proposal's time, never a phase ratio.
+/// Where one proposal's wall time went: opening the transaction, loading
+/// state, deciding, and persisting.
+///
+/// Phases depend on the route. Interpreted: `kernel` is the body and the
+/// in-memory invariants, and `finalise` writes the delta and the record.
+/// Compiled: `kernel` is the body, the delta write and the SQL checks, and
+/// `finalise` the record alone. Compare routes by total time, never by
+/// phase.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProposalPhases {
     pub begin: std::time::Duration,
@@ -235,17 +214,14 @@ pub struct ProposalPhases {
     pub finalise: std::time::Duration,
 }
 
-/// [`propose_against_pg`], additionally returning the scoped
-/// pre-state the kernel evaluated - but only when the outcome is a
-/// rejection, because that state is exactly what a same-snapshot
-/// explanation must describe. A run-then-explain pair reads two
-/// snapshots, and the second can differ from the one that refused;
-/// handing back the rejecting state closes that gap without a second
-/// read. `None` on commit: an admitted change needs no admissibility
-/// diagnosis, and the happy path stays free of the hand-off.
+/// [`propose_against_pg`], also returning the pre-state the kernel
+/// evaluated when the outcome is a rejection (`None` on commit).
 ///
-/// A diagnostic, so always the interpreted route: the explanation
-/// needs the invariants' state, which the compiled route never loads.
+/// An explanation must describe the snapshot that refused; a separate
+/// explain call would read a second snapshot that may differ.
+///
+/// Always the interpreted route: the explanation needs the invariants'
+/// state, which the compiled route never loads.
 pub async fn propose_against_pg_with_rejection_state(
     pool: &PgPool,
     program: &PgProgram,
@@ -308,8 +284,7 @@ pub(crate) async fn propose_against_pg_run(
                     emitted,
                 } => {
                     let transition_id = Uuid::now_v7();
-                    // The database says what the delta changed; the
-                    // obligation is bounded to exactly that.
+                    // Check only what the database says the delta changed.
                     let effective =
                         write_claim_delta(&mut tx, transition_id, &asserted, &retracted).await?;
                     disable_jit(&mut tx).await?;
@@ -322,14 +297,10 @@ pub(crate) async fn propose_against_pg_run(
                         )
                         .await?;
                     match violation {
-                        Some(v) => {
-                            let reason = RejectionReason::Invariant {
-                                name: v.name,
-                                version: v.version,
-                                witness: v.witness,
-                            };
-                            (Decided::Kernel(Outcome::Rejected { reason }), None)
-                        }
+                        Some(v) => (
+                            Decided::Kernel(Outcome::Rejected { reason: v.into() }),
+                            None,
+                        ),
                         None => (
                             Decided::Checked {
                                 transition_id,
@@ -400,10 +371,9 @@ pub(crate) async fn propose_against_pg_run(
     })
 }
 
-/// What the deciding phase settled: a kernel outcome still to be
-/// persisted or refused through the shared path, or a delta the
-/// compiled checks already admitted into the transaction, which only
-/// the acceptance record and the commit still owe.
+/// What the deciding phase settled: a kernel outcome still to persist, or
+/// a delta the compiled checks already admitted, owing only the record
+/// and the commit.
 enum Decided {
     Kernel(Outcome),
     Checked {
@@ -414,51 +384,34 @@ enum Decided {
     },
 }
 
-/// Three-way outcome returned by [`propose_against_pg_with_trace`].
-/// Distinguishes kernel-side outcomes (success, lawful rejection,
-/// kernel error) from PG-layer errors that flow through
-/// `Result::Err` (`Database`, `SerializationFailure`, `Encoding`,
-/// `InvalidState`).
+/// What [`propose_against_pg_with_trace`] returns for kernel-side results;
+/// PG-layer errors arrive as `Err`.
 ///
-/// The `KernelErrored` variant exists so the trace produced by the
-/// kernel before the error is raised is **not** discarded: a kernel
-/// error mid-transformation is exactly the case where the trace is
-/// most valuable for debugging.
+/// `KernelErrored` keeps the trace up to the error, where it matters most
+/// for debugging.
 #[must_use = "a traced proposal outcome carries the commit/reject result (a dropped `Rejected` silently treats a refused change as committed) and the diagnostic trace"]
 #[derive(Debug, Clone)]
 pub enum PgTracedOutcome {
-    /// Kernel ran to a normal outcome (Committed or Rejected) and
-    /// the post-kernel persistence step succeeded. `trace` is the
-    /// kernel's per-statement diagnostic record.
+    /// The kernel committed or rejected, and persistence succeeded.
     Outcome {
         outcome: PgProposalOutcome,
         trace: Vec<TraceEntry>,
     },
-    /// Kernel raised an [`EvalError`]. The SERIALIZABLE transaction
-    /// has been rolled back; `trace` carries every statement that
-    /// ran before the error.
+    /// The kernel raised an [`EvalError`]. The transaction was rolled
+    /// back; `trace` holds every statement that ran before the error.
     KernelErrored {
         error: EvalError,
         trace: Vec<TraceEntry>,
     },
 }
 
-/// `propose_against_pg` plus structured per-statement diagnostic
-/// trace. Returns a [`PgTracedOutcome`] that carries the trace on
-/// **both** kernel success/rejection and kernel error paths.
+/// [`propose_against_pg`] plus a per-statement diagnostic trace.
 ///
-/// Trace preservation contract:
-///
-/// - **Committed** / **Rejected** kernel outcomes -
-///   `Ok(PgTracedOutcome::Outcome { outcome, trace })`. A rejection
-///   records its rejection-log row exactly as the untraced path does.
-/// - **Kernel error** (`EvalError` raised mid-transformation) -
-///   `Ok(PgTracedOutcome::KernelErrored { error, trace })`. The
-///   open SERIALIZABLE transaction is rolled back before returning.
-/// - **PG-layer error** (`Database`, `SerializationFailure`,
-///   `Encoding`, `InvalidState`) - `Err(PgError)`. These errors
-///   happen outside the kernel call and have no kernel trace to
-///   preserve.
+/// - **Committed** / **Rejected**: `Ok(PgTracedOutcome::Outcome { .. })`.
+///   A rejection is logged as on the untraced path.
+/// - **Kernel error**: `Ok(PgTracedOutcome::KernelErrored { .. })`, after
+///   rolling back.
+/// - **PG-layer error**: `Err(PgError)`, with no trace.
 pub async fn propose_against_pg_with_trace(
     pool: &PgPool,
     program: &PgProgram,
@@ -480,8 +433,7 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
 ) -> Result<PgTracedOutcome, PgError> {
     let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &transition.actor).await?;
 
-    // A diagnostic: the interpreter runs whatever the programme is
-    // eligible for, so the trace shows the specification's own steps.
+    // Always interpreted, so the trace shows the specification's own steps.
     let scope = compute_load_scope(
         transformation,
         invariants,
@@ -505,29 +457,51 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
             Ok(PgTracedOutcome::Outcome { outcome, trace })
         }
         TracedProposal::Errored { error, trace } => {
-            // Explicit rollback (rather than relying on drop) frees
-            // the connection sooner and surfaces any rollback-time DB
-            // failure as a distinct `PgError::Database`.
+            // Explicit, so a rollback failure surfaces as an error.
             tx.rollback().await.map_err(classify)?;
             Ok(PgTracedOutcome::KernelErrored { error, trace })
         }
     }
 }
 
-/// Shared post-kernel persistence path used by both
-/// `propose_against_pg` and `propose_against_pg_with_trace`. Takes
-/// the kernel's [`Outcome`], commits or rolls back, and returns
-/// the [`PgProposalOutcome`] the public API exposes.
+/// A refusal as a caller reports it.
+pub(crate) struct Refusal {
+    pub(crate) reason: String,
+    pub(crate) rule: Option<String>,
+    pub(crate) witness: Vec<WitnessBinding>,
+}
+
+/// Roll back, then record the refusal in `morpholog.rejections`. Every
+/// refusing path records here, once.
 ///
-/// A rejection is recorded in `morpholog.rejections` AFTER the
-/// rollback, in a separate autocommit insert on `pool` - it cannot
-/// live inside the transaction that refused, because that
-/// transaction rolls back. At-most-once: a crash between rollback
-/// and insert loses the record. Operational evidence only; the
-/// audit table remains the legitimacy-grade record. An insert
-/// failure surfaces as `Err(PgError)` rather than a rejected
-/// envelope - the database is broken, and pretending the refusal
-/// was cleanly recorded would not be honest.
+/// The record is a separate autocommit insert on `pool`, because the
+/// refusing transaction rolls back. A crash in between loses it: the log
+/// is operational evidence, and audit stays the record that counts. A
+/// failed insert is an error, never a rejected envelope.
+pub(crate) async fn record_refusal(
+    pool: &PgPool,
+    tx: Transaction<'_, Postgres>,
+    transformation: &Transformation,
+    transition: &Transition,
+    reason: &RejectionReason,
+) -> Result<Refusal, PgError> {
+    tx.rollback().await.map_err(classify)?;
+    write_rejection(pool, transformation, transition, reason)
+        .await
+        .map_err(|e| PgError::RejectionLogFailure(Box::new(e)))?;
+    let witness = match reason {
+        RejectionReason::Invariant { witness, .. } => witness.clone(),
+        RejectionReason::Require { .. } | RejectionReason::BindNone { .. } => Vec::new(),
+    };
+    Ok(Refusal {
+        reason: reason.to_string(),
+        rule: rule_identity(reason),
+        witness,
+    })
+}
+
+/// Persist a kernel [`Outcome`]: commit it, or roll back and log the
+/// refusal.
 pub(crate) async fn finalise_outcome(
     pool: &PgPool,
     mut tx: Transaction<'_, Postgres>,
@@ -539,17 +513,14 @@ pub(crate) async fn finalise_outcome(
 ) -> Result<PgProposalOutcome, PgError> {
     match outcome {
         Outcome::Rejected { reason } => {
-            tx.rollback().await.map_err(classify)?;
-            write_rejection(pool, transformation, transition, &reason)
-                .await
-                .map_err(|e| PgError::RejectionLogFailure(Box::new(e)))?;
-            let witness = match &reason {
-                RejectionReason::Invariant { witness, .. } => witness.clone(),
-                RejectionReason::Require { .. } | RejectionReason::BindNone { .. } => Vec::new(),
-            };
+            let Refusal {
+                reason,
+                rule,
+                witness,
+            } = record_refusal(pool, tx, transformation, transition, &reason).await?;
             Ok(PgProposalOutcome::Rejected {
-                reason: reason.to_string(),
-                rule: rule_identity(&reason),
+                reason,
+                rule,
                 witness,
             })
         }
@@ -584,19 +555,9 @@ pub(crate) async fn finalise_outcome(
     }
 }
 
-/// Load the pre-state for a `propose_against_pg` call, scoped to a
-/// specific set of predicate names.
-///
-/// `scope` is the list of predicate names the transformation body and
-/// the active invariants will consult (see [`compute_load_scope`]).
-/// Claims of any other predicate are not loaded - they cannot affect
-/// the kernel's evaluation of this transformation, and skipping them
-/// avoids fetching and decoding every row in `morpholog.claims`.
-///
-/// Empty scope returns an empty state without issuing a query
-/// (mirrors [`list_claims_for_predicates`]). A transformation that
-/// reads no state and has no invariants correctly sees an empty
-/// `State`.
+/// Load the pre-state for a proposal, only for the predicates in `scope`
+/// (see [`compute_load_scope`]); other claims cannot affect it. An empty
+/// scope returns an empty state without a query.
 pub(crate) async fn load_state(
     tx: &mut Transaction<'_, Postgres>,
     scope: &[PredicateName],
@@ -605,20 +566,13 @@ pub(crate) async fn load_state(
         return Ok(State::default());
     }
 
-    // PredicateName is opaque to sqlx; bind the names as `text[]` for the
-    // `predicate_name` text column's `ANY(...)` filter (the macro infers
-    // `&[String]` for the array parameter).
+    // Bound as `text[]`: sqlx does not know `PredicateName`.
     let scope: Vec<String> = scope.iter().map(|p| p.as_str().to_owned()).collect();
-    // Ordered because a refusal's witness is drawn from the first
-    // violating match, so an unordered scan would let the same database
-    // and the same claims explain a refusal differently between runs.
-    //
-    // By the PRIMARY KEY, not by `asserted_at`: any total order gives
-    // determinism, and this one the index already provides. Ordering by
-    // `asserted_at` forces a sort and measured ~1.8x on propose latency
-    // at 20k claims (840ms against 480ms) - a cost every accepted
-    // proposal would pay so that refusals reproduce. The key order is
-    // also the better guarantee: canonical rather than history-dependent.
+    // Ordered because a refusal's witness is the first violating match;
+    // an unordered scan could explain the same refusal differently between
+    // runs. By the primary key, which the index already provides: ordering
+    // by `asserted_at` forces a sort (measured ~1.8x propose latency at 20k
+    // claims) and depends on history.
     let rows = sqlx::query!(
         "SELECT predicate_name, arguments
          FROM morpholog.claims
@@ -641,40 +595,27 @@ pub(crate) async fn load_state(
     Ok(State::from_claims(claims))
 }
 
-/// What a loaded state must serve: the transformation body alone,
-/// when the compiled checks read the candidate from the claims table
-/// and the table itself reports the effective delta, or the body, the
-/// interpreter's invariant evaluation, and the effective delta the
-/// interpreter computes from the state it holds.
+/// What a loaded state must serve. `Body`: the compiled route, where the
+/// claims table serves the checks and reports the effective delta.
+/// `BodyAndInvariants`: the interpreter, which evaluates invariants and
+/// computes the effective delta from the state it holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Reads {
     Body,
     BodyAndInvariants,
 }
 
-/// Compute the predicate scope that `load_state` must fetch to
-/// evaluate this transformation correctly. The union of:
+/// The predicates `load_state` must fetch for this transformation:
 ///
-/// - Every predicate read by every statement in the transformation
-///   body (via `morpholog_core::predicates_read_by_stmt`).
-/// - With [`Reads::BodyAndInvariants`], every predicate referenced by
-///   every invariant body (via
-///   `morpholog_core::predicates_referenced_by_prop`), since the
-///   interpreter evaluates invariants against the candidate state, and
-///   every predicate the body admits, since the interpreter decides
-///   from the state it holds whether an admit changed anything.
+/// - every predicate the body reads;
+/// - with [`Reads::BodyAndInvariants`], also every predicate the
+///   invariants reference, and every predicate the body admits (the
+///   interpreter decides from its state whether an admit changed
+///   anything).
 ///
-/// `Stmt::Assert`'s output predicate is deliberately NOT in the read
-/// set: the assert stages a new claim rather than reading existing
-/// ones. An invariant that also references it is picked up via the
-/// invariant walker.
-///
-/// Deliberately `pub(crate)`: the semantic promise is the
-/// EQUIVALENCE (a proposal against a state projected to this scope is
-/// observationally equivalent to one against full state - pinned by
-/// the in-crate scope differential, for both answers), not the
-/// particular set. Keeping the set private lets the loading mechanism
-/// change without a public API having promised it.
+/// The promise is equivalence: proposing against this projection behaves
+/// as against full state, pinned by the scope differential. The set
+/// itself stays private so the loading can change.
 pub(crate) fn compute_load_scope(
     transformation: &Transformation,
     invariants: &[Invariant],
@@ -696,26 +637,21 @@ pub(crate) fn compute_load_scope(
     scope.into_iter().collect()
 }
 
-/// One entry in an audit row's `invariants_checked` JSONB array: an
-/// active invariant the transition was admitted under, by `name` and
-/// the `version` active at admission time. Discharged because the
-/// effective delta could not affect it, because every affected case
-/// satisfied it, or because the whole invariant was evaluated and
-/// held; the row lists every active invariant either way.
+/// One entry in an audit row's `invariants_checked`: an active invariant
+/// the transition was admitted under, with its `version` at the time.
 ///
-/// Named `AuditedInvariantCheck`, not `InvariantCheck`, to disambiguate
-/// from the kernel's `TraceEntry::InvariantCheck`: this is the durable
-/// audit record persisted alongside a committed transition, whereas the
-/// kernel variant is a transient per-call diagnostic entry.
+/// Every active invariant is listed, whether it was discharged because the
+/// delta could not affect it, because every affected case held, or by a
+/// whole evaluation. Distinct from the kernel's transient
+/// `TraceEntry::InvariantCheck`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditedInvariantCheck {
     pub name: InvariantName,
     pub version: u32,
 }
 
-/// The `kind` column's vocabulary, shared by the writer below and the
-/// readers (`coverage_replay`'s invariant attribution) so they cannot
-/// drift; the schema's CHECK constraint pins the same three values.
+/// The `kind` column's values, shared by writer and readers so they cannot
+/// drift; the schema's CHECK constraint pins the same set.
 pub(crate) const REJECTION_KIND_INVARIANT: &str = "invariant";
 
 pub(crate) const REJECTION_KIND_REQUIRE: &str = "require";
@@ -723,8 +659,7 @@ pub(crate) const REJECTION_KIND_REQUIRE: &str = "require";
 pub(crate) const REJECTION_KIND_BIND: &str = "bind";
 
 /// The refused rule's stable identifier, or `None` when it has none.
-/// Matched off the variant, never parsed out of the Display text - the
-/// reason string is prose for a human, and this is the value a caller holds.
+/// Taken from the variant, never parsed from the display text.
 pub(crate) fn rule_identity(reason: &RejectionReason) -> Option<String> {
     match reason {
         RejectionReason::Invariant { name, .. } => Some(name.to_string()),
@@ -734,12 +669,10 @@ pub(crate) fn rule_identity(reason: &RejectionReason) -> Option<String> {
     }
 }
 
-/// Record a refused proposal in `morpholog.rejections`. Runs on the
-/// pool (implicit autocommit transaction) because the refusing
-/// transaction has already rolled back - see `finalise_outcome` for
-/// the at-most-once doctrine. The kind/rule/version columns come
-/// from matching the [`RejectionReason`] variant, never from parsing
-/// the display string.
+/// Record a refused proposal in `morpholog.rejections`, autocommit on the
+/// pool, since the refusing transaction has rolled back (see
+/// [`record_refusal`]). The kind, rule and version columns come from the
+/// [`RejectionReason`] variant, never from parsing its display text.
 pub(crate) async fn write_rejection(
     pool: &PgPool,
     transformation: &Transformation,
@@ -752,10 +685,9 @@ pub(crate) async fn write_rejection(
             name.as_str(),
             Some(i64::from(*version)),
         ),
-        // A named gate stores its name, so this column means the same
-        // thing for every kind and refusals group by cause. Unnamed keeps
-        // the rendered expression: this log is an operational floor, and
-        // fuller beats emptier here even when the text is not stable.
+        // A named gate stores its name, so refusals group by cause. An
+        // unnamed one stores the rendered expression: unstable, but better
+        // than nothing in an operational log.
         RejectionReason::Require { name, rendered } => (
             REJECTION_KIND_REQUIRE,
             name.as_ref().map_or(rendered.as_str(), RuleName::as_str),
@@ -767,8 +699,7 @@ pub(crate) async fn write_rejection(
             None,
         ),
     };
-    // NULL rather than `[]` when there is nothing to record, so a row with
-    // no witness reads as "none captured" and not as "captured, empty".
+    // NULL, not `[]`: "none captured", not "captured, empty".
     let witness_json: Option<serde_json::Value> = match reason {
         RejectionReason::Invariant { witness, .. } if !witness.is_empty() => {
             Some(serde_json::to_value(witness).map_err(PgError::Encoding)?)
@@ -801,13 +732,13 @@ pub(crate) async fn write_rejection(
     Ok(())
 }
 
-/// Apply an accepted delta to the claims table: retraction DELETEs,
-/// then assertion INSERTs. The claims half of [`write_accepted`],
-/// separated so a caller inside an open transaction can make the
-/// claims table the candidate state before deciding anything else.
-/// Returns the effective delta under core's one rule, the table
-/// answering membership: a retraction that deleted a row found the
-/// claim present, an insertion that changed nothing found it present.
+/// Apply a delta to the claims table: deletes, then inserts. Split from
+/// [`write_accepted`] so the compiled route can make the table the
+/// candidate state before checking.
+///
+/// Returns the effective delta, with the table answering membership: a
+/// delete that removed a row, or an insert that changed nothing, found
+/// the claim present.
 pub(crate) async fn write_claim_delta(
     tx: &mut Transaction<'_, Postgres>,
     transition_id: Uuid,
@@ -815,13 +746,10 @@ pub(crate) async fn write_claim_delta(
     retracted_claims: &[ClaimInstance],
 ) -> Result<EffectiveDelta, PgError> {
     let mut present: HashSet<ClaimInstance> = HashSet::new();
-    // Retractions: dedupe, then delete each distinct claim. Exactly
-    // one row per distinct retraction is expected; zero rows means a
-    // persistent-state mismatch (concurrent interference, which SSI
-    // catches later, or a pre-state snapshot that disagrees with the
-    // live table). The digest finds the row through the key; the
-    // equality on the array is what makes a digest collision retract
-    // nothing rather than the wrong claim.
+    // Each distinct retraction must delete exactly one row; zero means
+    // the table disagrees with the pre-state (SSI catches concurrent
+    // interference later). The digest finds the row; the equality on the
+    // array makes a digest collision retract nothing, not the wrong claim.
     let mut seen: HashSet<(PredicateName, String)> = HashSet::new();
     for claim in retracted_claims {
         let args_repr = serde_json::to_string(&claim.args)?;
@@ -851,9 +779,7 @@ pub(crate) async fn write_claim_delta(
         present.insert(claim.clone());
     }
 
-    // Assertions: ON CONFLICT DO NOTHING preserves the set-valued
-    // semantics of claims (asserting an already-present claim is an
-    // idempotent no-op).
+    // Claims are a set: asserting a present claim is a no-op.
     for claim in asserted_claims {
         let args_json: serde_json::Value = serde_json::to_value(&claim.args)?;
         let result = sqlx::query!(
@@ -867,9 +793,8 @@ pub(crate) async fn write_claim_delta(
         .execute(&mut **tx)
         .await
         .map_err(classify_checked_query)?;
-        // A claim this delta retracted was re-inserted just now, so a
-        // changed row says nothing about the pre-state; only a claim
-        // the delta did not retract reports its presence here.
+        // A claim retracted by this delta was just re-inserted, so only
+        // an unretracted claim reports pre-state presence here.
         if result.rows_affected() == 0 && !present.contains(claim) {
             present.insert(claim.clone());
         }
@@ -910,12 +835,10 @@ pub(crate) async fn write_accepted(
     .await
 }
 
-/// The record of an admitted transition: the audit row and one outbox
-/// row per emitted intent. Written after every invariant's obligation
-/// has been discharged,
-/// whichever evaluator checked them; `invariants_checked` lists the
-/// whole programme's invariants either way, so the audit leaf does not
-/// depend on the route.
+/// The record of an admitted transition: the audit row and one outbox row
+/// per emitted intent, written after every invariant is discharged.
+/// `invariants_checked` lists all of the programme's invariants on either
+/// route, so the audit leaf does not depend on the route.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_acceptance_record(
     tx: &mut Transaction<'_, Postgres>,
@@ -928,7 +851,6 @@ pub(crate) async fn write_acceptance_record(
     emitted_intents: &[IntentInstance],
     login_role: &str,
 ) -> Result<(), PgError> {
-    // Audit row.
     let checked: Vec<AuditedInvariantCheck> = invariants
         .iter()
         .map(|inv| AuditedInvariantCheck {
@@ -936,19 +858,14 @@ pub(crate) async fn write_acceptance_record(
             version: inv.version,
         })
         .collect();
-    // The attestation lineage: which PostgreSQL-authenticated login
-    // role asserted the actor. It arrives from the seam that opened
-    // this transaction, which read `session_user` from the connection
-    // itself and settled the actor-assertion policy against it. One
-    // read, so the identity that was CHECKED and the identity that is
-    // RECORDED cannot differ.
+    // The login role that asserted the actor, read once when this
+    // transaction opened and checked against the actor policy, so the
+    // identity CHECKED and the identity RECORDED cannot differ.
     let attestation = AuditAttestation::Gateway {
         authenticated_by: login_role.to_string(),
     };
-    // Serialise the actor via the tagged `EvalValue::Subject` so the
-    // `actor` column keeps its v0 shape (`#[serde(with = "actor_repr")]`
-    // does not apply when the field is serialised directly, only through
-    // `Transition`).
+    // The actor is stored as a tagged `EvalValue::Subject`; `actor_repr`
+    // only applies when serialising through `Transition`.
     sqlx::query!(
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor,
@@ -978,7 +895,6 @@ pub(crate) async fn write_acceptance_record(
     .await
     .map_err(classify_checked_query)?;
 
-    // Outbox rows, one per emitted intent.
     for intent in emitted_intents {
         let intent_id = Uuid::now_v7();
         let idempotency_key = compute_idempotency_key(transition_id, intent)?;
@@ -1007,19 +923,16 @@ pub(crate) async fn write_acceptance_record(
 /// hex(sha256(transition_id_bytes ‖ 0x00 ‖ name_bytes ‖ 0x00 ‖ canonical_json(args)))
 /// ```
 ///
-/// `canonical_json` is `serde_json` output; the shape is stable for
-/// the current structs because field order is fixed by derived
-/// `Serialize` and there are no map-like runtime values.
+/// `canonical_json` is `serde_json` output, stable because derived
+/// `Serialize` fixes field order and there are no map-like values.
 ///
-/// The key is unique per `(transition_id, intent.name, intent.args)`. It
-/// prevents duplicate outbox rows under retry/redelivery mechanics - not
-/// duplicate business events, which would require an idempotency key
-/// derived from the inbound request.
+/// Unique per `(transition_id, intent.name, intent.args)`. It prevents
+/// duplicate outbox rows under retry, not duplicate business events,
+/// which need a key from the inbound request.
 ///
-/// Within one transformation, two identical intents share a key and the
-/// second `INSERT` violates the `outbox.idempotency_key` constraint,
-/// surfacing as [`PgError::DuplicateIntent`] and rolling back the whole
-/// transformation - identical duplicate intents are almost always a bug.
+/// Two identical intents in one transformation share a key; the second
+/// insert fails as [`PgError::DuplicateIntent`] and rolls the whole
+/// transformation back, since such duplicates are almost always a bug.
 pub fn compute_idempotency_key(
     transition_id: Uuid,
     intent: &IntentInstance,
@@ -1033,13 +946,3 @@ pub fn compute_idempotency_key(
     hasher.update(&args_bytes);
     Ok(hex::encode(hasher.finalize()))
 }
-
-// ===========================================================================
-// Read API - current-state inspection
-// ===========================================================================
-//
-// These helpers expose the durable substrate for inspection without
-// requiring callers to write raw SQL. They return *current* state.
-// Historical state ("what did the books look like at transition T?")
-// is reachable through the as-of helpers further down in this file:
-// `reconstruct_state_at`, `list_claims_at`, `list_derived_at`.

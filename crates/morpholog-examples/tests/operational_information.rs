@@ -1,14 +1,12 @@
 //! Integration tests for the operational-information example
 //! (`examples/20_operational_information/`).
 //!
-//! The expression-valued sum forcing example: an untrusted harness
-//! files exact expected-loss certificates and the record recomputes
-//! every figure as `sum(probability * loss | ...)`. These tests walk
-//! the binary parity (XOR) experiment end to end and pin the refusal
-//! surface: a wrong contribution, a beaten action, a premature or
-//! wrong total, a wrong decision value, an incomplete seal, a sighted
-//! baseline, and a nominated joint that invents or forgets member
-//! information.
+//! An untrusted harness files exact expected-loss certificates, and the
+//! record recomputes every figure as `sum(probability * loss | ...)`. These
+//! tests walk the parity (XOR) experiment end to end and pin each refusal:
+//! a wrong contribution, a beaten action, a premature or wrong total, a
+//! wrong decision value, an incomplete seal, a sighted baseline, and a
+//! joint that invents or forgets member information.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -191,9 +189,8 @@ fn the_xor_experiment_certifies_end_to_end() {
         &[subj("exp"), subj("joint_ab"), dec_str("0.5")]
     ));
 
-    // The headline read: each source alone is worth nothing, the pair
-    // is worth the whole half - so the additive excess IS the joint
-    // value.
+    // Each source alone is worth nothing and the pair is worth the whole
+    // half, so the excess IS the joint value.
     let rows = enumerate_derived(&op::pair_synergy(), &state, &[]).expect("synergy enumerates");
     assert_eq!(rows.len(), 1);
     assert_eq!(

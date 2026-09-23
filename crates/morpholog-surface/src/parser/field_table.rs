@@ -1,25 +1,13 @@
 //! The declared-field table a named claim pattern resolves against.
 //!
-//! Named patterns (`Pred(field: x, ..)`) need each declaration's field
-//! order before the parser has built any declaration - and declarations
-//! may follow their uses - so a tolerant scan over the RAW token stream
-//! runs first and the parser builders capture its result. The scan is
-//! lexical, never a second grammar: it records only what a named
-//! pattern needs (names and field lists), fails CLOSED on anything
-//! malformed (the real parser owns the syntax error), and refuses to
-//! guess between duplicate declarations (the real parser owns that
-//! diagnostic too). A conformance test holds the scan to the parsed
-//! declarations over the whole example gallery, so it cannot silently
-//! drift from the real grammar.
+//! A named pattern (`Pred(field: x, ..)`) needs the declaration's field order, but the
+//! declaration may come later in the file. So a quick scan of the raw tokens collects field lists
+//! before parsing. It is not a second grammar: anything it cannot follow, or any name declared
+//! twice, is left out, and the real parser reports the error. A test checks the scan against the
+//! parser over every worked example.
 //!
-//! Predicates and intents are separate vocabularies (one name may be
-//! both, with different fields), so the table keeps them apart and the
-//! enclosing site picks: `emit` resolves against intents, every
-//! claim-shaped site against predicates. Authored `define` names are
-//! recorded so a named pattern on one gets the truthful refusal
-//! (definitions have parameters, not declared fields); generated
-//! definitions do not exist at token time and fall into the generic
-//! undeclared-head refusal.
+//! Predicates and intents are kept apart, since one name can be both with different fields.
+//! `define` names are recorded only so a named pattern on one gets an accurate error.
 
 use std::collections::{HashMap, HashSet};
 
@@ -29,8 +17,7 @@ use crate::lexer::Token;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum DeclFields {
     Usable(Vec<String>),
-    /// Declared more than once in its vocabulary - resolution against
-    /// it would be source-order-dependent, so it refuses instead.
+    /// Declared more than once, so which fields apply would depend on source order.
     Ambiguous,
 }
 
@@ -42,17 +29,14 @@ pub(super) struct FieldTable {
 }
 
 impl FieldTable {
-    /// The table for entry points with no programme in hand
-    /// (`parse_expression` / `parse_value_expr`): every named pattern
-    /// refuses with the undeclared-head message.
+    /// The table for parsing a lone expression: every named pattern is refused as undeclared.
     pub(super) fn empty() -> Self {
         Self::default()
     }
 }
 
-/// Scan the raw (pre-layout) token stream for `predicate` / `intent` /
-/// `define` declarations. Tolerant and fail-closed: a declaration whose
-/// shape the scan cannot follow is simply absent from the table.
+/// Scan the raw token stream for `predicate`, `intent` and `define` declarations. A declaration
+/// the scan cannot follow is left out.
 pub(super) fn scan<S>(tokens: &[(Token, S)]) -> FieldTable {
     let mut table = FieldTable::default();
     let mut i = 0;
@@ -86,11 +70,9 @@ pub(super) fn scan<S>(tokens: &[(Token, S)]) -> FieldTable {
     table
 }
 
-/// Follow one declaration head: `Ident ( ... )` where, at paren depth
-/// 1, every `Ident` immediately followed by `:` is a field name and
-/// everything from the `:` to the next depth-1 `,` (the kind, however
-/// its grammar grows) is skipped. Returns `(name, fields, index past
-/// the closing paren)`, or `None` when the shape does not hold.
+/// Follow one declaration head `Ident ( ... )`. At paren depth 1, each `Ident :` is a field name
+/// and its kind is skipped up to the next `,`. Returns `(name, fields, index past the closing
+/// paren)`, or `None` when the shape does not hold.
 fn scan_decl<S>(tokens: &[(Token, S)], start: usize) -> Option<(String, Vec<String>, usize)> {
     let Token::Ident(name) = &tokens.get(start)?.0 else {
         return None;
@@ -124,36 +106,25 @@ fn scan_decl<S>(tokens: &[(Token, S)], start: usize) -> Option<(String, Vec<Stri
         i += 1;
     }
     if saw_content && fields.is_empty() {
-        // The parens held something, yet no `name:` fields scanned - a
-        // declaration shape the scan cannot follow. Fail closed; the
-        // real parser owns the syntax error.
+        // Something in the parens, but no `name:` fields: leave it to the real parser.
         return None;
     }
     Some((name.clone(), fields, i))
 }
 
-/// Which declaration vocabulary a named pattern resolves against - the
-/// enclosing site decides. One name may be a predicate AND an intent,
-/// with different fields; the claim-shaped/predicate-only split exists
-/// because the repair text differs: a definition call is lawful in a
-/// proposition or `bind` (positionally), but `admit`/`retract` take
-/// predicates only, so "use the positional form" would be a false
-/// repair there.
+/// Which declarations a named pattern resolves against, chosen by where it appears. The two
+/// predicate variants differ only in whether the error may suggest a positional definition call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Vocabulary {
-    /// Proposition positions and `bind`: predicates, where a positional
-    /// DEFINITION call is also lawful.
+    /// Propositions and `bind`, where a positional definition call is also allowed.
     ClaimShaped,
     /// `admit`/`retract`: predicates only.
     PredicateOnly,
     Intent,
 }
 
-/// Resolve a named pattern's entries to the positional argument vector:
-/// declared fields in declaration order, mentioned entries in place,
-/// wildcards for the rest. Refusals come back as spanned messages for
-/// the call site's emitter; the entries' terms (written order) are the
-/// error-path filler so the parse can continue to its diagnostics.
+/// Resolve a named pattern to positional arguments in declared field order, with wildcards for
+/// unmentioned fields. Errors come back as spanned messages.
 pub(super) fn resolve_named(
     head: &str,
     entries: &[(chumsky::span::SimpleSpan, String, morpholog_core::Term)],
@@ -183,8 +154,7 @@ pub(super) fn resolve_named(
                     "`{head}` is a definition; definitions have parameters, not declared \
                      fields - use the positional form"
                 ),
-                // A positional definition call is not lawful here
-                // either, so offering it would be a false repair.
+                // A definition call is not allowed here at all, so do not suggest one.
                 (Vocabulary::PredicateOnly, true) => {
                     format!("`{head}` is a definition, not a predicate")
                 }
@@ -248,12 +218,9 @@ type NamedEntry = (chumsky::span::SimpleSpan, String, morpholog_core::Term);
 /// Spanned refusal messages for the call site's emitter.
 type Refusals = Vec<(chumsky::span::SimpleSpan, String)>;
 
-/// Resolve a named `value` lookup to `(args, extract)` in one pass over
-/// one field-order authority. The entry written `field: _` is the
-/// extraction hole - exactly one is lawful - and its declared position
-/// becomes `extract`; fields elided by `..` are unconstrained wildcards,
-/// never holes. Built on [`resolve_named`], so the argument vector and
-/// the index come from the same declared field order.
+/// Resolve a named `value` lookup to `(args, extract)`. Exactly one entry must be `field: _`, and
+/// its declared position becomes `extract`; fields skipped by `..` are wildcards, not the read
+/// field. Built on [`resolve_named`], so both come from the same field order.
 pub(super) fn resolve_named_value(
     head: &str,
     entries: &[NamedEntry],
@@ -276,8 +243,6 @@ pub(super) fn resolve_named_value(
         .collect();
     match holes.as_slice() {
         [(_, hole_field, _)] => {
-            // resolve_named validated every entry against the declared
-            // fields, so the hole's position is its field's position.
             let Some(DeclFields::Usable(fields)) = table.predicates.get(head) else {
                 unreachable!("resolve_named succeeded against this head")
             };
@@ -315,10 +280,8 @@ mod tests {
     use super::{DeclFields, scan};
     use crate::lexer::lex;
 
-    /// The anti-drift gate: over every gallery programme, the tolerant
-    /// token scan must agree exactly with the real parser's declared
-    /// field lists. If the declaration grammar grows a shape the scan
-    /// cannot follow, this names it before a named pattern misresolves.
+    /// Over every worked example, the token scan must agree exactly with the parser's field
+    /// lists, so a new declaration shape cannot silently break named patterns.
     #[test]
     fn the_scan_agrees_with_the_parsed_declarations_over_the_gallery() {
         let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
@@ -337,9 +300,7 @@ mod tests {
                 let tokens = lex(&src).expect("gallery sources lex");
                 let table = scan(&tokens);
                 let program = crate::parser::parse_program(&src).expect("gallery sources parse");
-                // Whole-structure equality, both directions: every
-                // parsed declaration is scanned correctly AND the scan
-                // invented nothing the parser does not know.
+                // Both directions: nothing missed, nothing invented.
                 let expected_predicates: std::collections::HashMap<String, DeclFields> = program
                     .predicates
                     .iter()

@@ -1,32 +1,23 @@
-//! The scoped-loading differential: a proposal evaluated against a
-//! state projected to `compute_load_scope`'s answer must be
-//! observationally equivalent to the same proposal against full
-//! state. This is the end-to-end law behind predicate-scoped
-//! loading: if a walker ever omits a predicate an evaluation path
-//! can read (a `value` default, one arm of `if`, an expression-valued
-//! sum target, a defined-call chain, a `pre`-only read), this test
-//! reddens without knowing which walker, or which AST node, was at
-//! fault.
+//! Proves predicate-scoped loading drops nothing: a proposal against state
+//! cut down to `compute_load_scope`'s answer must behave exactly as against
+//! full state. If any walker misses a predicate an evaluation can read (a
+//! `value` default, one arm of `if`, a sum target, a defined-call chain, a
+//! `pre`-only read), this fails without needing to know which walker.
 //!
-//! Pure kernel; no database. Cases are the whole worked-example
-//! gallery plus hostile fragments whose predicates hide in exactly
-//! the awkward positions, each against deterministic generated
-//! states and arguments (over-loading is invisible here - the law
-//! proves nothing was DROPPED, not that the scope is tight).
+//! Pure kernel, no database. The corpus is every worked example plus
+//! hostile fragments that hide predicates in awkward places, over
+//! generated states and arguments. It proves nothing was dropped, not that
+//! the scope is tight.
 //!
-//! Two laws, one per answer the scope authority gives. The interpreted
-//! answer (body reads and invariant reads) must leave the whole
-//! proposal's outcome unchanged. The compiled route loads the body's
-//! reads alone and judges invariants in SQL, so its law is about the
-//! body: staging over the projection must equal staging over full
-//! state. The first law cannot stand in for the second - a body walker
-//! that drops a predicate is masked whenever an invariant happens to
-//! read the same predicate.
+//! Two checks, one per route. The interpreted scope (body and invariant
+//! reads) must leave the whole outcome unchanged. The compiled route loads
+//! only the body's reads, so staging over that projection must match
+//! staging over full state. The first check cannot replace the second: a
+//! dropped body read is hidden whenever an invariant reads the same
+//! predicate.
 //!
-//! In-crate rather than an integration test on purpose: the public
-//! promise is the EQUIVALENCE, not the scope set itself -
-//! `compute_load_scope` stays `pub(crate)` so the loading mechanism
-//! can change without a public API having promised today's answer.
+//! In-crate so `compute_load_scope` can stay `pub(crate)`: the promise is
+//! the equivalence, not the scope set itself.
 
 use morpholog_core::{Program, StagedDelta, State, propose_stage_delta};
 use morpholog_test_support::differential::{observable, sample_args, sample_state};
@@ -34,9 +25,8 @@ use morpholog_test_support::propose_with_test_actor;
 
 use crate::propose::{Reads, compute_load_scope};
 
-/// Hostile fragments: each hides a predicate somewhere a lazy or
-/// forgetful walker would lose it. Kept small and self-describing;
-/// the gallery supplies breadth, these supply spite.
+/// Hostile fragments: each hides a predicate where a careless walker
+/// would lose it.
 const HOSTILE: &[(&str, &str)] = &[
     (
         "value_default_only",
@@ -86,12 +76,9 @@ transformation note(x):
     admit Out(x)
 ",
     ),
-    // `Ledger` is reachable ONLY through the invariant's `pre(...)`:
-    // the transformation never touches it, so no statement walker can
-    // smuggle it into the scope. (An earlier version of this fixture
-    // also retracted `Ledger`, which put it in the read set through
-    // `Stmt::Retract` and proved nothing about descending `pre` - the
-    // review caught the fixture testing less than its name claimed.)
+    // `Ledger` is reachable ONLY through the invariant's `pre(...)`. The
+    // transformation must not touch it, or a statement walker would put it
+    // in scope and the fragment would prove nothing about `pre`.
     (
         "pre_only_read",
         "program pre_only_read

@@ -1,22 +1,13 @@
 //! `examples/README.md` is the capability index, and it has to stay true.
 //!
-//! Why it exists: an embedder spent a week designing around a limitation that
-//! did not exist, because the gallery is indexed by domain and the example
-//! demonstrating what they wanted was named after a different business. Three
-//! of their first four capability requests were features they could not find.
+//! The gallery is organised by business domain, so a reader looking for a
+//! capability can miss the example that shows it. The index maps
+//! capabilities to examples, and nothing about writing a `.morph` reminds
+//! anyone to update it.
 //!
-//! Why it is tested: an index is a promise that a reader can get from a
-//! question to an example, and that promise decays silently. Nothing about
-//! writing a `.morph` reminds anyone to touch a table in a different file.
-//!
-//! **What the gate checks, and why the first version was not enough.** It
-//! began by checking only that every example is linked and every link
-//! resolves. That leaves the thing the index is actually for unverified:
-//! repointing the `abs(...)` row at `01_settlement_netting` kept every test
-//! green, because the directory exists and the other rows still linked
-//! `10_trade_lifecycle`. So each row's construct now has to appear in the
-//! example it points at - the row's own evidence, encoded instead of
-//! discarded.
+//! A resolving link is not enough: a row pointing at the wrong example still
+//! resolves. So each row's construct must also appear in the example it
+//! points at.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -149,9 +140,7 @@ fn example_text(dir: &str) -> String {
 ///
 /// The leading identifier, plus `(` when the spelling is function-shaped:
 /// `min(a, b)` searches as `min(`, `require some_name: ...` as `require`,
-/// `Decimal[t]` as `Decimal`. Splitting on whitespace instead produced
-/// `min(a,` and `sum(...`, which are in no example - the gate reported the
-/// index as wrong when the tokenizer was.
+/// `Decimal[t]` as `Decimal`.
 fn searchable_head(construct: &str) -> String {
     let ident: String = construct
         .chars()
@@ -174,8 +163,8 @@ fn is_conceptual(capability: &str) -> Option<&'static str> {
 
 /// Each row's construct appears in the example the row points at.
 ///
-/// This is the check the index exists for: not that the link resolves, but
-/// that a reader following it finds the thing they came for.
+/// Not just that the link resolves: a reader following it finds what they
+/// came for.
 #[test]
 fn every_row_demonstrates_its_construct_in_the_example_it_names() {
     let rows = parse_rows(&index_text());
@@ -261,12 +250,8 @@ fn every_example_appears_in_the_capability_index() {
 }
 
 /// Every construct the index names exists in the canonical surface-to-IR
-/// table - derived from the index's own third column, not a shadow list.
-///
-/// The first version kept a hand-maintained array of spellings to check, and
-/// silently ignored anything absent from it: a misspelt construct could be
-/// added to the index and the test stayed green. It also searched the whole
-/// semantics document, so unrelated prose could satisfy it.
+/// table. The list comes from the index's own third column, so a misspelt
+/// construct cannot slip past.
 #[test]
 fn every_construct_the_index_names_is_in_the_canonical_table() {
     let semantics = std::fs::read_to_string(repo_root().join("docs/runtime-semantics.md"))
@@ -281,11 +266,9 @@ fn every_construct_the_index_names_is_in_the_canonical_table() {
         table.len()
     );
 
-    // Types, command names, and predicate names the RUNTIME reserves
-    // are not surface constructs and have no row. The reserved names
-    // are ordinary predicates an operator declares and governs; only
-    // their recognition is built in, so the surface grammar has
-    // nothing to say about them.
+    // Types, command names, and runtime-reserved predicate names are not
+    // surface constructs and have no row in the table. Reserved names are
+    // ordinary declared predicates; only their recognition is built in.
     const NOT_IN_THE_TABLE: &[&str] = &[
         "Timestamp",
         "Duration",
@@ -323,10 +306,8 @@ fn every_construct_the_index_names_is_in_the_canonical_table() {
     );
 }
 
-/// The two indexes agree on which examples exist.
-///
-/// The index page says the main README lists the same examples; it did not -
-/// the domain list stopped short of two of them, so the sentence was false.
+/// The two indexes agree on which examples exist: the index page says the
+/// main README lists the same ones.
 #[test]
 fn the_domain_index_and_the_capability_index_cover_the_same_examples() {
     let readme = std::fs::read_to_string(repo_root().join("README.md")).expect("README.md");

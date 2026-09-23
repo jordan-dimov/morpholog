@@ -1,10 +1,8 @@
-//! `if(when, then, otherwise)` semantics, pinned as the floor the
-//! implementation stands on: the exists-style test selects a branch,
-//! the witnesses' bindings are discarded (require's non-export rule),
-//! ONLY the selected branch evaluates (an error in the untaken branch
-//! cannot surface - and a condition error propagates, never silently
-//! selecting `otherwise`), and branch kinds unify with no ordering
-//! requirement, so subject tags and booleans are lawful branch kinds.
+//! `if(when, then, otherwise)` semantics. The condition is an exists-test
+//! whose bindings are discarded, like `require`. Only the selected branch
+//! evaluates, so an error in the other branch never surfaces, while an
+//! error in the condition propagates rather than picking `otherwise`.
+//! Branch kinds need not be ordered, so subject tags and booleans work.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -173,8 +171,7 @@ fn outer_bindings_are_visible_inside_the_condition() {
 
 #[test]
 fn subject_branches_are_lawful() {
-    // Selection is not ordering: a conditional over subject tags is
-    // the whole point (the five-bodies collapse).
+    // Selection is not ordering: a conditional over subject tags is lawful.
     holds_against(
         eq(
             cond(when_flag(), term(subj("meter")), term(subj("book"))),
@@ -233,13 +230,10 @@ fn mismatched_branch_kinds_are_refused_by_name() {
 
 #[test]
 fn the_parameter_kind_walk_sees_evidence_inside_the_condition() {
-    // A parameter whose ONLY kind evidence is a claim slot inside
-    // `when` must still land on that kind: the flat parameter walk
-    // descends into the condition. (Cross-BRANCH refinement, by
-    // contrast, deliberately stays out of the flat walk - the same
-    // conservative posture Eq operands take - so a parameter whose
-    // only evidence is the other branch stays Unconstrained there;
-    // the checker still refines it for validation.)
+    // A parameter whose only kind evidence is a claim slot inside `when`
+    // still gets that kind: the parameter walk descends into the
+    // condition. Evidence from the other branch is deliberately ignored
+    // there, as with Eq operands; the checker still uses it.
     let p = program("evidence")
         .predicates(vec![
             predicate("Member").subject("who").build(),
@@ -326,13 +320,10 @@ fn the_conditional_round_trips_through_the_formatter() {
 
 #[test]
 fn condition_kind_evidence_survives_into_branch_unification() {
-    // The adversarial composition of the two walks: `Member(who)`
-    // pins `who: Subject` INSIDE the condition, and the `otherwise`
-    // branch is a decimal. If the condition's kind evidence died with
-    // the cloned scope, branch unification would refine `who` to
-    // Decimal and the mismatch would only surface at runtime, when
-    // the condition happens to hold. It must be refused at check
-    // time instead.
+    // `Member(who)` makes `who` a Subject inside the condition, and the
+    // `otherwise` branch is a decimal. If that evidence were lost, `who`
+    // would become Decimal and the mismatch would only show at runtime.
+    // It must be refused at check time.
     let p = program("kind_hole")
         .predicates(vec![
             predicate("Member").subject("who").build(),

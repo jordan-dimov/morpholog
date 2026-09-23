@@ -219,10 +219,9 @@ fn duration_term(s: &str) -> Term {
     morpholog_core::ir_builder::duration(s)
 }
 
-/// The residue the seed pass cannot reach - a target whose only kind
-/// evidence is a binding OUTSIDE the sum - is refused at authoring
-/// time, never handed a bare-decimal zero the first empty book would
-/// detonate on.
+/// A target whose only kind evidence is a binding outside the sum is
+/// beyond the seed pass, so it is refused at authoring time rather than
+/// given a decimal zero that fails on the first empty book.
 #[test]
 fn an_outer_bound_quantity_target_is_refused_not_mistyped() {
     let mut p = program("outer_target")
@@ -251,10 +250,9 @@ fn an_outer_bound_quantity_target_is_refused_not_mistyped() {
     );
 }
 
-/// A wildcard is a claim-pattern mark, not a value: reaching one as an
+/// A wildcard is a claim-pattern mark, not a value: one used as an
 /// arithmetic operand or a conditional branch is refused at authoring
-/// time, where the old behaviour was a kernel `TypeMismatch` on the
-/// first witness.
+/// time.
 #[test]
 fn a_wildcard_inside_a_sum_target_is_refused_at_authoring_time() {
     let arith_target = capped_program_with_target(mul(term(wildcard()), term(dec("2"))));

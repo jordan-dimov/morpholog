@@ -2,16 +2,8 @@
 //! (`begin_compensation`, `complete_compensation`,
 //! `mark_compensation_failed`).
 //!
-//! These helpers close the compensation-idempotency gap the bare
-//! delivery-state helpers leave open: the lease pattern
-//! ensures at most one worker holds the right to invoke a
-//! compensating transformation for a given failed outbox row.
-//!
-//! Delivery-state mutators (`mark_outbox_delivered`,
-//! `mark_outbox_transient_attempt`, `mark_outbox_failed`,
-//! `record_compensation`) live in `outbox_helpers.rs`; claim/release
-//! lease helpers for the delivery path live in `outbox_lease.rs`.
-//! Each file stays focused on one helper family.
+//! The lease ensures at most one worker may run the compensating
+//! transformation for a failed outbox row.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -64,10 +56,8 @@ async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
     intent_id
 }
 
-/// Drive a row through the path that precedes a compensation claim:
-/// commit, force the in_progress lease, mark failed. Returns the
-/// intent_id. After this the row is in `status='failed'` with no
-/// lease held and `compensation_transition_id IS NULL`.
+/// Commit, take the delivery lease, mark failed. Returns the intent_id
+/// of a row in `status='failed'` with no lease and no compensation.
 async fn enqueue_then_fail(pool: &PgPool, entry_id: &str) -> Uuid {
     let intent_id = enqueue_pending(pool, entry_id).await;
     // Take the delivery lease directly (simulating claim_pending_outbox_row).
@@ -88,10 +78,9 @@ async fn enqueue_then_fail(pool: &PgPool, entry_id: &str) -> Uuid {
     intent_id
 }
 
-/// Commit a real compensating transformation against the dev DB so
-/// that `compensation_transition_id` references a row that actually
-/// exists in `morpholog.audit`. The FK constraint would reject a
-/// synthesized UUID.
+/// Commit a real compensating transformation, so that
+/// `compensation_transition_id` can reference a real audit row (the
+/// foreign key refuses a made-up id).
 async fn commit_compensation_transformation(pool: &PgPool, suffix: &str) -> Uuid {
     let outcome = common::propose_pg_with_test_actor(
         pool,
@@ -205,9 +194,8 @@ async fn begin_compensation_returns_none_when_compensation_already_recorded() {
         .await
         .unwrap();
 
-    // Second worker tries to claim - row is back to `failed` but
-    // now carries a compensation_transition_id, so the WHERE filter
-    // excludes it.
+    // Second worker tries to claim: the row is `failed` again but now
+    // carries a compensation_transition_id, so it is excluded.
     let claimed = begin_compensation(&pool, intent_id, "comp_worker_b", LEASE)
         .await
         .unwrap();
@@ -228,10 +216,9 @@ async fn begin_compensation_returns_none_when_already_in_compensation_in_progres
         .unwrap()
         .expect("first claim succeeds");
 
-    // Second worker tries to claim while worker_a still holds the
-    // lease. The WHERE filter excludes anything not in `failed`,
-    // and the row is now `compensation_in_progress`. Even if the
-    // SKIP LOCKED didn't fire, the status filter alone rejects it.
+    // Second worker tries to claim while worker_a holds the lease. The
+    // row is `compensation_in_progress`, not `failed`, so the status
+    // filter alone rejects it.
     let claimed = begin_compensation(&pool, intent_id, "comp_worker_b", LEASE)
         .await
         .unwrap();
@@ -252,14 +239,10 @@ async fn begin_compensation_does_not_reclaim_expired_compensation_lease() {
         .unwrap()
         .expect("first claim succeeds");
 
-    // Force the lease to expired (simulating a crashed worker
-    // mid-compensation). Unlike claim_pending_outbox_row, which
-    // transparently reclaims expired in_progress leases,
-    // begin_compensation must NOT transparently reclaim an expired
-    // compensation_in_progress lease - doing so would risk duplicate
-    // compensation if the previous worker had already committed
-    // the compensating transformation. The row should stay stuck
-    // and require operator intervention.
+    // Expire the lease, as if the worker crashed mid-compensation.
+    // Unlike delivery leases, an expired compensation lease is NOT
+    // reclaimed: the crashed worker may already have committed the
+    // compensation. The row stays stuck for an operator.
     sqlx::query(
         "UPDATE morpholog.outbox SET lock_expires_at = now() - interval '1 second'
          WHERE intent_id=$1",
@@ -348,8 +331,8 @@ async fn complete_compensation_returns_lease_lost_when_worker_does_not_hold_leas
 async fn complete_compensation_returns_lease_lost_when_status_is_not_compensation_in_progress() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    // Row is in `failed` (no compensation claim yet). complete_compensation
-    // should error out because the status precondition is not met.
+    // Row is `failed` with no compensation claim, so complete_compensation
+    // errors.
     let intent_id = enqueue_then_fail(&pool, "entry_001").await;
     let comp_tid = commit_compensation_transformation(&pool, "a").await;
 

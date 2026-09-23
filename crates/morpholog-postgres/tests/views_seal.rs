@@ -84,9 +84,8 @@ async fn a_catalogue_redefined_with_different_columns_is_still_named() {
     let pool = test_pool().await;
     apply_views(&pool).await;
 
-    // The tamperer did not even keep the column set: the inventory is
-    // unreadable, but the verdict must still be structured tampering
-    // (via the seal's own inventory and the hash comparison), never an
+    // The tamperer changed the columns too, so the inventory is
+    // unreadable. The verdict must still be tampering, not an
     // operational error.
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "DROP VIEW {SCHEMA}._morpholog_catalog; \

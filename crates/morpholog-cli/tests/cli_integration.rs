@@ -1,16 +1,10 @@
 //! End-to-end integration tests for the `morpholog` binary.
 //!
-//! Unlike the binary's own tests in `src/cli_tests.rs` (argument parsing
-//! and the exit path), these tests spawn the built binary against a real
-//! PostgreSQL database and assert on stdout JSON, stderr error chains,
-//! and process exit codes. They cover the dispatch handlers - the
-//! `match cli.command` arms in `main`, the `propose` function, the
-//! `inspect_derived` function - which are the bulk of the CLI's
-//! behaviour and were entirely untested before.
+//! These spawn the built binary against a real PostgreSQL database and
+//! assert on stdout JSON, stderr and exit codes. Argument parsing is
+//! tested in `src/cli_tests.rs`.
 //!
-//! The tests share one connection string from `DATABASE_URL` (same
-//! convention as `morpholog-postgres` integration tests). Each test
-//! truncates the schema before running so they can be executed
+//! The tests use `DATABASE_URL` and truncate the schema first, so they run
 //! serially without crosstalk.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -38,9 +32,8 @@ fn run_cli(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     )
 }
 
-/// Run `morpholog` with exactly the given args and NO `--database-url`,
-/// for the offline subcommands whose contract is that they take no
-/// connection (`audit verify-pack`).
+/// Run `morpholog` with exactly the given args and no `--database-url`,
+/// for offline subcommands such as `audit verify-pack`.
 fn run_cli_no_db(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     let output = Command::new(common::bin())
         .args(args)
@@ -53,10 +46,8 @@ fn run_cli_no_db(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     )
 }
 
-/// Absolute path to the shipped double-entry-ledger example source, so
-/// the CLI's file-path subcommands (`run`, `inspect derived`) can parse
-/// it directly. Resolved from the crate manifest dir so it is robust to
-/// the test process's working directory.
+/// Absolute path to the double-entry-ledger example, resolved from the
+/// crate manifest dir so the working directory does not matter.
 fn ledger_morph() -> String {
     format!(
         "{}/../../examples/03_double_entry_ledger/ledger.morph",
@@ -79,9 +70,8 @@ fn ledger_args_json(entry_id: &str, date: &str, period: &str, amount: &str) -> S
     )
 }
 
-/// Issue a balanced journal entry via the CLI's `run` subcommand against
-/// the shipped ledger example. Returns the `transition_id` from the
-/// receipt so subsequent tests can use it as an as-of coordinate.
+/// Post a balanced journal entry with `propose` against the ledger example.
+/// Returns the receipt's `transition_id`, for use as an as-of coordinate.
 fn post_balanced_entry(entry_id: &str, amount: i64) -> uuid::Uuid {
     let args_json = ledger_args_json(entry_id, "2026-04-15", "q1_2026", &amount.to_string());
     let (status, stdout, stderr) = run_cli(&[
@@ -106,10 +96,9 @@ fn post_balanced_entry(entry_id: &str, amount: i64) -> uuid::Uuid {
 }
 
 // ============================================================
-// `run` against the shipped ledger example (commit/reject/malformed
-// args). Parse failure, unknown transformation, and invariant rejection
-// against a user-supplied temp `.morph` are covered in the `run` section
-// further down.
+// `propose` against the ledger example: commit, reject, malformed args.
+// The `propose` section further down covers parse failures, unknown
+// transformations and invariant rejections with a temp `.morph`.
 // ============================================================
 
 #[tokio::test(flavor = "current_thread")]
@@ -254,9 +243,7 @@ async fn inspect_claims_predicate_filter_returns_only_matching_claims() {
         "repeated filter must still exclude other predicates: {stdout}"
     );
 
-    // Naming the same predicate twice does not duplicate rows: the
-    // filter is a membership test, not a per-flag scan. Pins the
-    // public contract, not just today's SQL.
+    // Naming the same predicate twice does not duplicate rows.
     let (status, stdout, _stderr) = run_cli(&[
         "inspect",
         "claims",
@@ -316,10 +303,8 @@ async fn inspect_claims_unknown_predicate_returns_empty_array() {
     reset_db().await;
     post_balanced_entry("entry_001", 100);
 
-    // The claims table is the authority, not a programme's vocabulary:
-    // a predicate with no admitted claims is an empty result, not an
-    // error. (A typo'd name is indistinguishable from a true zero, by
-    // design - `inspect claims` takes no `.morph` file to check against.)
+    // Without a programme, the claims table is the authority: a predicate
+    // with no claims is an empty result, not an error, even if misspelt.
     let (status, stdout, stderr) =
         run_cli(&["inspect", "claims", "--predicate", "NoSuchPredicate"]);
     assert!(
@@ -334,9 +319,8 @@ async fn inspect_claims_unknown_predicate_returns_empty_array() {
     );
 }
 
-/// `explain` without `--json` renders claim-shaped prose - the default
-/// surface a human reads, previously untested. Pins both verdict
-/// headers; the structured content is pinned by the `--json` test.
+/// `explain` without `--json` prints prose. Pins both verdict headers; the
+/// `--json` test pins the content.
 #[tokio::test(flavor = "current_thread")]
 async fn explain_without_json_renders_prose_for_both_verdicts() {
     reset_db().await;
@@ -433,11 +417,9 @@ async fn verify_stays_consistent_under_concurrent_commits() {
     reset_db().await;
     post_balanced_entry("entry_000", 10);
 
-    // A writer hammering commits while verify runs repeatedly. Before
-    // verify read everything from one REPEATABLE READ snapshot, a
-    // commit landing between its reads could manufacture a false
-    // divergence on a perfectly healthy database - under that bug,
-    // this test flakes; under the snapshot contract, it cannot fail.
+    // A writer commits while verify runs repeatedly. Verify reads from one
+    // snapshot, so a commit between its reads must not look like a
+    // divergence.
     let writer = std::thread::spawn(|| {
         for i in 0..12 {
             post_balanced_entry(&format!("entry_w{i:03}"), 100 + i);
@@ -502,7 +484,7 @@ async fn checkpoint_then_verify_against_the_anchor() {
     post_balanced_entry("c1", 100);
     post_balanced_entry("c2", 200);
 
-    // `checkpoint` prints the checkpoint as JSON - the external anchor.
+    // `checkpoint` prints the checkpoint as JSON: the external anchor.
     let (status, cp_stdout, stderr) = run_cli(&["audit", "checkpoint"]);
     assert!(status.success(), "checkpoint should succeed; {stderr}");
     let cp: Value = serde_json::from_str(&cp_stdout).expect("checkpoint output is JSON");
@@ -513,8 +495,7 @@ async fn checkpoint_then_verify_against_the_anchor() {
         "root is a self-describing hash: {cp_stdout}"
     );
 
-    // Save it and verify the tree against it.
-    // A unique temp file, auto-cleaned, so concurrent runs cannot collide.
+    // Save it to a unique temp file and verify the tree against it.
     let mut anchor = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut anchor, cp_stdout.as_bytes()).unwrap();
     let (status, stdout, stderr) = run_cli(&[
@@ -592,8 +573,8 @@ async fn signature_policy_flags_compose_and_the_pin_is_refused_on_a_sparse_pack(
     assert_eq!(tree["status"], "signature_required", "{stdout}");
     assert_eq!(tree["tree_size"], 2, "{stdout}");
 
-    // A pin implies requiring: on an unsigned chain the missing signature
-    // is what it reports, before any key question.
+    // A pin implies requiring signatures: on an unsigned chain it reports
+    // the missing signature before any key question.
     let mut keyfile = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(
         &mut keyfile,
@@ -610,7 +591,7 @@ async fn signature_policy_flags_compose_and_the_pin_is_refused_on_a_sparse_pack(
     );
 
     // A window pack cannot establish key authority, so the pin is refused
-    // outright rather than weakened to a cryptographic match.
+    // rather than weakened to a plain signature check.
     let (status, pack_stdout, stderr) = run_cli(&["audit", "export", "--from-tree-size", "1"]);
     assert!(status.success(), "{stderr}");
     let mut packfile = tempfile::NamedTempFile::new().unwrap();
@@ -688,9 +669,8 @@ fn authorised_key(dir: &std::path::Path, key_id: &str) -> (String, String) {
     )
 }
 
-/// Checkpoint the current head signed by `key_id`; returns the head's
-/// tree size (the key authorisations are audit rows too, so sizes are
-/// read back, never assumed).
+/// Checkpoint the current head signed by `key_id` and return its tree
+/// size, read back since key authorisations add audit rows too.
 fn checkpoint_signed_by(pem: &str, key_id: &str) -> i64 {
     let (status, stdout, stderr) = run_cli(&[
         "audit",
@@ -716,10 +696,10 @@ fn export_to_file(extra: &[&str]) -> tempfile::NamedTempFile {
     file
 }
 
-/// The exact surface #307 asked for, end to end: a credential brings its
-/// own authorised key, the log is intact and genuinely signed, and only
-/// the verifier's pin on a complete-prefix pack says "not by the key I
-/// trust" - until the honest key co-signs the same head.
+/// Attacker: a signer whose own key is genuinely authorised in the log.
+/// The log is intact and validly signed; only the verifier's key pin on a
+/// complete-prefix pack says "not by the key I trust", until the honest key
+/// co-signs the same head.
 #[tokio::test(flavor = "current_thread")]
 async fn a_full_prefix_pack_is_pinned_offline_against_a_rogue_authorised_signer() {
     reset_db().await;
@@ -770,7 +750,7 @@ async fn a_full_prefix_pack_is_pinned_offline_against_a_rogue_authorised_signer(
 }
 
 /// A broken sparse pack reports as broken whatever the policy: the pin's
-/// refusal comes after the intrinsic verdict, never in front of it.
+/// refusal never hides the pack's own verdict.
 #[tokio::test(flavor = "current_thread")]
 async fn the_pin_never_masks_a_sparse_packs_intrinsic_verdict() {
     reset_db().await;
@@ -928,9 +908,8 @@ async fn evidence_selective_export_then_verify_offline() {
     assert_eq!(pack["manifest"]["pack_kind"], "selective", "{pack_stdout}");
     assert_eq!(pack["rows"].as_array().unwrap().len(), 2);
 
-    // The reveal-nothing property over the real wire bytes: nothing of the
-    // undisclosed transition survives - not its entry subject, accounts,
-    // claims, or intent payloads.
+    // Nothing of the undisclosed transition appears in the bytes: not its
+    // entry subject, accounts, claims or intent payloads.
     assert!(pack_stdout.contains("sd1"));
     assert!(
         !pack_stdout.contains("sd_hidden"),
@@ -1011,9 +990,8 @@ async fn evidence_verify_names_an_unknown_future_pack_version() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn evidence_verify_on_a_readable_but_invalid_pack_is_a_malformed_verdict() {
-    // A file that reads but is not a valid pack is a decided verdict on
-    // stdout (`malformed_pack`, exit one), not an operational failure on
-    // stderr - the offline verifier still answers. No database needed.
+    // A file that is not a valid pack gets a verdict on stdout
+    // (`malformed_pack`, exit 1), not an operational error on stderr.
     let mut packfile = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut packfile, br#"{"not": "a pack"}"#).unwrap();
     let (status, stdout, stderr) =
@@ -1033,11 +1011,9 @@ async fn evidence_verify_on_a_readable_but_invalid_pack_is_a_malformed_verdict()
 
 #[tokio::test(flavor = "current_thread")]
 async fn evidence_verify_refuses_a_pack_whose_hash_is_not_a_digest() {
-    // A hash that is not `sha256:<64 lowercase hex>` is refused where
-    // the pack is read, as a decided `malformed_pack` verdict that names
-    // the offending value - never parsed leniently and compared later.
-    // Uppercase hex is the case worth pinning: it decodes to the same
-    // bytes but is not the record's spelling.
+    // A hash that is not `sha256:<64 lowercase hex>` is refused on read as
+    // `malformed_pack`, naming the value. Uppercase hex decodes to the
+    // same bytes but is not the record's spelling.
     let mut packfile = tempfile::NamedTempFile::new().unwrap();
     let uppercase = format!("sha256:{}", "AB".repeat(32));
     std::io::Write::write_all(
@@ -1088,9 +1064,8 @@ async fn evaluate_scores_a_candidate_against_history() {
     );
     let inv = &report["invariants"][0];
     assert_eq!(inv["invariant"], "no_entries");
-    // Each posting introduces its own forbidden entry, so admission
-    // would have refused both; an inherited violation elsewhere does
-    // not hide the fresh one.
+    // Each posting adds its own forbidden entry, so both would have been
+    // refused; an older violation does not hide a new one.
     assert_eq!(inv["would_refuse"], 2, "got: {stdout}");
 }
 
@@ -1151,16 +1126,15 @@ async fn evaluate_train_until_conflicts_with_packs() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn evaluate_rejects_a_pre_candidate_before_connecting() {
-    // A transition-relational candidate (uses pre(...)): v1 cannot score it.
+    // A candidate using pre(...) cannot be scored.
     let candidate = "program candidate\n\n\
          predicate Flag(x: Subject)\n\n\
          invariant uses_pre:\n    Flag(a) implies pre(Flag(a))\n";
     let mut f = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut f, candidate.as_bytes()).unwrap();
 
-    // A deliberately unreachable database: if the CLI connected before
-    // checking, the failure would be a connection error, not the pre
-    // rejection. The rejection must come first.
+    // An unreachable database: the pre(...) refusal must come before any
+    // connection attempt.
     let output = Command::new(common::bin())
         .args([
             "evaluate",
@@ -1198,7 +1172,7 @@ async fn evaluate_against_a_pack_needs_no_database() {
     let mut candfile = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(&mut candfile, candidate.as_bytes()).unwrap();
 
-    // Score against the pack with NO --database-url - the offline promise.
+    // Score against the pack with no --database-url.
     let (status, stdout, stderr) = run_cli_no_db(&[
         "evaluate",
         candfile.path().to_str().unwrap(),
@@ -1299,8 +1273,7 @@ async fn evaluate_packs_aborts_on_an_unparseable_file() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn evaluate_packs_with_anchor_file_is_a_usage_error() {
-    // --anchor-file requires --pack (single), so pairing it with --packs is
-    // a clap error, before any work.
+    // --anchor-file needs --pack, so with --packs it is a clap error.
     let (status, _stdout, stderr) = run_cli_no_db(&[
         "evaluate",
         "/nonexistent/candidate.morph",
@@ -1326,9 +1299,8 @@ async fn inspect_claims_as_of_timestamp_resolves_to_the_prior_state() {
     post_balanced_entry("entry_001", 100);
     post_balanced_entry("entry_002", 200);
 
-    // The first commit's exact timestamp, from the audit log. Using it
-    // verbatim also pins that the boundary is inclusive: at the very
-    // instant of a commit, that commit's state is what you get.
+    // The first commit's exact timestamp. The boundary is inclusive: at
+    // that instant, the commit's state is what you get.
     let (_s, stdout, _e) = run_cli(&["inspect", "audit"]);
     let rows = ndjson(&stdout);
     let first_committed_at = rows[0]["committed_at"]
@@ -1395,9 +1367,8 @@ async fn inspect_audit_streams_one_ndjson_line_per_committed_transition() {
         2,
         "two committed transitions, two lines: {stdout}"
     );
-    // Every line is a full audit row: the tagged arrays and the
-    // scalar fields ride together, and the row names its own
-    // parameters, one per argument, as the programme declares them.
+    // Every line is a full audit row, naming its own parameters, one per
+    // argument, as the programme declares them.
     for row in &rows {
         assert!(row["transition_id"].is_string());
         assert!(row["asserted_claims"].is_array());
@@ -1423,7 +1394,7 @@ async fn inspect_audit_streams_one_ndjson_line_per_committed_transition() {
 }
 
 /// The act that wrote a row is retired; the row still names its
-/// signature, read bare with no programme at all.
+/// parameters, read bare with no programme at all.
 #[tokio::test(flavor = "current_thread")]
 async fn a_retired_acts_rows_still_name_their_parameters() {
     reset_db().await;
@@ -1446,7 +1417,7 @@ async fn a_retired_acts_rows_still_name_their_parameters() {
     ]);
     assert!(status.success(), "{stderr}");
 
-    // Bare: no transformation metadata consulted, the names are the row's.
+    // Bare: the names come from the row, not the programme.
     let (status, stdout, _) = run_cli(&["inspect", "audit"]);
     assert!(status.success());
     let rows = ndjson(&stdout);
@@ -1460,8 +1431,8 @@ async fn a_retired_acts_rows_still_name_their_parameters() {
     );
     assert_eq!(rows[0]["arguments"][0]["value"], "C-17");
 
-    // Named under the later programme, which has retired the act but
-    // still declares the claim: the claims decode, the names stay.
+    // Under the later programme, which dropped the act but still declares
+    // the claim: the claims decode and the names stay.
     let (status, stdout, stderr) =
         run_cli(&["inspect", "audit", "--named", after.path.to_str().unwrap()]);
     assert!(status.success(), "{stderr}");
@@ -1484,22 +1455,22 @@ async fn inspect_audit_after_resumes_strictly_after_the_cursor() {
     post_balanced_entry("entry_002", 200);
     post_balanced_entry("entry_003", 300);
 
-    // Resuming from the first transition yields exactly the later
-    // two, in order; the cursor row itself is excluded.
+    // Resuming from the first transition yields the later two, in order,
+    // without the cursor row.
     let (status, stdout, _stderr) = run_cli(&["inspect", "audit", "--after", &t1.to_string()]);
     assert!(status.success());
     let rows = ndjson(&stdout);
     assert_eq!(rows.len(), 2, "strictly after the cursor: {stdout}");
 
-    // Resuming from the last line's id is an empty tail, exit 0 -
-    // the poll loop's steady state.
+    // Resuming from the last id is an empty tail, exit 0: a poll loop's
+    // steady state.
     let last_id = rows[1]["transition_id"].as_str().unwrap().to_string();
     let (status, stdout, _stderr) = run_cli(&["inspect", "audit", "--after", &last_id]);
     assert!(status.success(), "an empty tail is not an error");
     assert!(stdout.trim().is_empty(), "empty tail, empty stdout");
 
-    // An unknown cursor is an error naming the id - never a silent
-    // restart from zero.
+    // An unknown cursor is an error naming the id, never a restart from
+    // zero.
     let unknown = uuid::Uuid::now_v7().to_string();
     let (status, _stdout, stderr) = run_cli(&["inspect", "audit", "--after", &unknown]);
     assert!(!status.success());
@@ -1526,8 +1497,7 @@ async fn inspect_audit_named_decodes_claims_and_leaves_arguments_tagged() {
         asserted.iter().all(|c| c["args"].is_object()),
         "named claims carry field-keyed args: {row}"
     );
-    // ...while transformation arguments stay tagged - a different
-    // vocabulary, deliberately not half-decoded.
+    // ...while transformation arguments stay tagged.
     let arguments = row["arguments"].as_array().unwrap();
     assert!(
         arguments.iter().all(|a| a["type"].is_string()),
@@ -1540,8 +1510,8 @@ async fn inspect_audit_named_skew_is_a_hard_error_naming_both_sides() {
     reset_db().await;
     post_balanced_entry("entry_001", 100);
 
-    // A programme that does not declare the ledger vocabulary: the
-    // named decode must refuse with the skew error, not skip rows.
+    // A programme without the ledger's predicates: the named decode must
+    // refuse, not skip rows.
     let other = std::env::temp_dir().join("audit_named_skew.morph");
     std::fs::write(
         &other,
@@ -1563,11 +1533,9 @@ predicate Solo(only_id: Subject)
     );
 }
 
-// The managed-Postgres opt-in reaches both watermark consumers. The
-// local/CI test role is a superuser, so the catalog census is
-// trivially satisfiable here; the census's own teeth are tested in
-// morpholog-postgres, and the genuinely-hidden-session path only
-// exists on a managed host.
+// `--writer-role` reaches both commands that use the watermark. The test
+// role is a superuser, so the role check passes trivially here; it is
+// tested properly in morpholog-postgres.
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_audit_writer_role_assertion_streams_the_tail() {
     reset_db().await;
@@ -1617,15 +1585,14 @@ async fn checkpoint_accepts_the_writer_assertion() {
 async fn inspect_rejections_lists_refusals_and_an_empty_log_is_empty() {
     reset_db().await;
 
-    // An empty rejection log lists empty and exits zero - listing is
-    // answering, not enforcing.
+    // An empty rejection log lists empty and exits zero.
     let (status, stdout, _stderr) = run_cli(&["inspect", "rejections"]);
     assert!(status.success());
     let rows: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 0, "empty log: {stdout}");
 
-    // Close the period, then post into it: the require gate refuses
-    // and the refusal is on the record.
+    // Close the period, then post into it: the gate refuses and the
+    // refusal is logged.
     let (status, ..) = run_cli(&[
         "propose",
         &ledger_morph(),
@@ -1757,8 +1724,8 @@ async fn inspect_derived_named_decodes_rows_and_default_stays_tagged() {
         "args are keyed by declared field name: {row}"
     );
 
-    // The acceptance side: adding --named must not move the default,
-    // which stays the tagged array `inspect claims` also prints.
+    // --named must not change the default, the tagged array
+    // `inspect claims` also prints.
     let (status, stdout, _stderr) = run_cli(&["inspect", "derived", &ledger, "TrialBalanceRow"]);
     assert!(status.success());
     let rows: Value = serde_json::from_str(&stdout).unwrap();
@@ -1815,9 +1782,8 @@ async fn refresh_derived_emits_the_typed_report() {
     let (status, stdout, stderr) = run_cli(&["refresh", "derived", &ledger]);
     assert!(status.success(), "refresh derived should succeed; {stderr}");
     let report: Value = serde_json::from_str(&stdout).expect("stdout is the typed report");
-    // The ledger fixture declares exactly one derived predicate, which
-    // is what licenses comparing the report's total row count against
-    // one `inspect derived` read below.
+    // The ledger declares exactly one derived predicate, so the report's
+    // total can be compared with one `inspect derived` read.
     assert_eq!(report["derived_predicate_count"], 1, "{report}");
     assert!(
         report["model_hash"]
@@ -1866,18 +1832,12 @@ async fn refresh_derived_report_without_transitions_omits_snapshot_pair() {
 }
 
 // ============================================================
-// `morpholog propose` subcommand
-//
-// Parses a user-supplied `.morph` file by path, validates it, and
-// proposes a transformation from it - the CLI's commit path.
+// `morpholog propose` with a temp `.morph` file
 // ============================================================
 
-/// Write a minimal balanced-ledger programme to a temp .morph file
-/// and return the path. The programme is deliberately a subset of
-/// the built-in double-entry ledger - one transformation, one
-/// invariant - so the run subcommand has something simple to admit
-/// against and the test does not depend on the full example's
-/// invariant suite.
+/// Write a minimal balanced-ledger programme to a temp .morph file and
+/// return the path. One transformation, one invariant: independent of the
+/// full ledger example.
 fn write_temp_ledger_morph() -> std::path::PathBuf {
     let body = r#"
 program temp_ledger
@@ -1925,13 +1885,9 @@ async fn run_commits_a_balanced_entry_from_user_supplied_morph_file() {
     assert_eq!(receipt["status"], "committed");
 }
 
-/// `run --args-named` happy path against the temp ledger. Same
-/// transformation as the tagged-form test above, but with the
-/// embedder-facing codec: bare values keyed by parameter name. The
-/// CLI consults `transformation_param_kinds` to coerce each value
-/// against its declared kind. All Subject values are UUIDs because
-/// the schema commits to `format: "uuid"` and the codec enforces
-/// it.
+/// `propose --args-named` happy path against the temp ledger: the same
+/// transformation as the tagged test above, with bare values keyed by
+/// parameter name and decoded by declared kind.
 #[tokio::test(flavor = "current_thread")]
 async fn run_args_named_commits_with_the_friendly_codec() {
     reset_db().await;
@@ -1961,10 +1917,9 @@ async fn run_args_named_commits_with_the_friendly_codec() {
     assert_eq!(receipt["status"], "committed");
 }
 
-/// Propose `post_simple_entry` from an already-written programme with
-/// the named codec and require a hard error whose stderr carries
-/// every needle. The shared scaffold of the `--args-named` error
-/// family; takes the path so a multi-case test resets and writes once.
+/// Propose `post_simple_entry` with the named codec and expect an error
+/// whose stderr contains every needle. Takes the path so a multi-case test
+/// resets and writes once.
 fn propose_named_expect_stderr_at(path: &std::path::Path, args_named: &str, needles: &[&str]) {
     let (status, _stdout, stderr) = run_cli(&[
         "propose",
@@ -1992,10 +1947,8 @@ async fn propose_named_expect_stderr(args_named: &str, needles: &[&str]) {
     propose_named_expect_stderr_at(&path, args_named, needles);
 }
 
-/// Missing a declared parameter in the `--args-named` object is a
-/// hard error before any database work. The error names the missing
-/// parameter and points at `morpholog schema` for the accepted
-/// shape.
+/// A missing parameter in `--args-named` is an error before any database
+/// work, naming it and pointing at `morpholog schema`.
 #[tokio::test(flavor = "current_thread")]
 async fn run_args_named_missing_required_errors_with_schema_hint() {
     propose_named_expect_stderr(
@@ -2011,10 +1964,8 @@ async fn run_args_named_missing_required_errors_with_schema_hint() {
     .await;
 }
 
-/// An unknown key in `--args-named` is a hard error. The error lists
-/// the parameters that ARE accepted (here `amount` and `entry_id`),
-/// so a typo surfaces clearly rather than as "missing required"
-/// (which would point at the wrong target).
+/// An unknown key in `--args-named` is an error listing the accepted
+/// parameters, so a typo is not reported as "missing required".
 #[tokio::test(flavor = "current_thread")]
 async fn run_args_named_unknown_key_errors_with_expected_names() {
     propose_named_expect_stderr(
@@ -2032,13 +1983,8 @@ async fn run_args_named_unknown_key_errors_with_expected_names() {
     .await;
 }
 
-/// `explain --args-named --json` parses the embedder-facing codec
-/// the same way `run` does and produces an `Explanation` envelope.
-/// Both verbs share the decode path through `commands::args` and
-/// the in-crate Clap tests pin the surface, but a binary-level
-/// smoke test catches the wiring (explain's pre-state load + the
-/// in-memory explain call) under the named codec, not just the
-/// tagged one.
+/// `explain --args-named --json` decodes as `propose` does and prints an
+/// `Explanation`, checking explain's wiring under the named codec.
 #[tokio::test(flavor = "current_thread")]
 async fn explain_args_named_returns_explanation_envelope() {
     reset_db().await;
@@ -2061,9 +2007,7 @@ async fn explain_args_named_returns_explanation_envelope() {
         args_named,
         "--json",
     ]);
-    // Explain is read-only and always exits zero on a parsed-and-
-    // validated programme; the verdict (admissible or rejected)
-    // lives inside the JSON envelope.
+    // Explain exits zero for a valid programme; the verdict is in the JSON.
     assert!(
         status.success(),
         "explain should always exit zero on a valid programme; stderr: {stderr}"
@@ -2076,16 +2020,9 @@ async fn explain_args_named_returns_explanation_envelope() {
     );
 }
 
-/// `Subject` is Morpholog's only primitive noun: it carries both
-/// minted entity identifiers (UUIDv7 by runtime convention) and
-/// domain symbols (commodity codes, period names, account
-/// codes, direction enums). The `--args-named` codec accepts
-/// any string for Subject parameters, mirroring the kernel's
-/// opaque-subject model. This test pins that natural-symbol
-/// Subjects work end-to-end - exactly the shape the embedder
-/// integration doc's `commodity:"oil"` / `direction:"buy"`
-/// examples rely on, and the shape that an earlier UUID-only
-/// validation broke.
+/// `--args-named` accepts any string as a Subject: minted ids and domain
+/// symbols (period names, account codes) alike, as the embedder docs'
+/// `commodity:"oil"` examples rely on.
 #[tokio::test(flavor = "current_thread")]
 async fn run_args_named_accepts_symbolic_subject_values() {
     reset_db().await;
@@ -2116,12 +2053,8 @@ async fn run_args_named_accepts_symbolic_subject_values() {
     assert_eq!(receipt["status"], "committed");
 }
 
-/// Decimal strings that fail the schema's pattern must also fail
-/// the `--args-named` codec, or the embedder validates request
-/// bodies against a stricter contract than the CLI actually
-/// enforces. The schema pattern is `^-?(0|[1-9]\d*)(\.\d+)?$`;
-/// `Decimal::from_str` alone is more lenient. This test pins the
-/// alignment.
+/// Decimal strings that fail the schema's `^-?(0|[1-9]\d*)(\.\d+)?$` must
+/// also fail `--args-named`, so the CLI enforces what the schema says.
 #[tokio::test(flavor = "current_thread")]
 async fn run_args_named_decimal_outside_schema_pattern_errors() {
     reset_db().await;
@@ -2141,9 +2074,7 @@ async fn run_args_named_decimal_outside_schema_pattern_errors() {
     }
 }
 
-/// Wrong JSON type errors with the expected kind label so the
-/// embedder can see WHICH parameter went wrong and WHAT kind it
-/// should be.
+/// A wrong JSON type names the parameter and the kind it should be.
 #[tokio::test(flavor = "current_thread")]
 async fn run_args_named_wrong_type_errors_with_kind_label() {
     propose_named_expect_stderr(
@@ -2188,11 +2119,8 @@ async fn run_errors_with_available_list_on_unknown_transformation() {
     );
 }
 
-/// Write a temp .morph whose programme intentionally exposes a
-/// `post_unbalanced_entry` transformation that can produce an
-/// invariant-violating candidate state. Lets us prove that `run`
-/// preserves the same committed-vs-rejected semantics as `propose`
-/// when a kernel invariant rejects the candidate.
+/// Write a temp .morph with a `post_unbalanced_entry` transformation that
+/// can break an invariant, to test rejection by an invariant.
 fn write_temp_ledger_morph_with_unbalanced_path() -> std::path::PathBuf {
     let body = r#"
 program temp_ledger_unbalanced
@@ -2243,8 +2171,7 @@ async fn run_rejects_unbalanced_entry_via_invariant() {
         "--args",
         args_json,
     ]);
-    // Same exit-code semantics as `propose`: rejected business
-    // outcome is exit 1 with the receipt on stdout, not stderr.
+    // A rejection exits 1 with the receipt on stdout, not stderr.
     assert!(
         !status.success(),
         "unbalanced entry must be rejected; stderr: {stderr}"
@@ -2259,10 +2186,8 @@ async fn run_rejects_unbalanced_entry_via_invariant() {
         "rejection reason should name the failing invariant; got: {}",
         receipt["reason"]
     );
-    // The courtesy location line: stderr points at the violated
-    // rule's declaration in the source (the invariant sits at 9:1 in
-    // the temp programme). Stderr only - the stdout envelope above
-    // already parsed as the same pinned receipt shape.
+    // Stderr points at the violated invariant's declaration (9:1 in the
+    // temp programme). Stdout is unchanged.
     assert!(
         stderr.contains("rule at") && stderr.contains(":9:1 (balanced_posted_entry)"),
         "stderr should locate the violated rule; got: {stderr}"
@@ -2272,7 +2197,6 @@ async fn run_rejects_unbalanced_entry_via_invariant() {
 #[tokio::test(flavor = "current_thread")]
 async fn run_rejects_parse_failure_in_user_morph() {
     reset_db().await;
-    // Write a deliberately malformed .morph.
     let dir = std::env::temp_dir().join(format!("morpholog_run_bad_{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let path = dir.join("bad.morph");
@@ -2325,9 +2249,7 @@ async fn run_with_trace_emits_structured_trace_alongside_outcome() {
 // ============================================================
 // `morpholog outbox` subcommands (claim / complete / release)
 //
-// These exercise the lease protocol end-to-end against a real
-// outbox row created by `propose post_simple_entry`. Each test
-// resets the database and admits one journal entry so that a
+// The lease protocol end to end. Each test admits one journal entry, so a
 // JournalEntryPosted intent lands in the outbox.
 // ============================================================
 
@@ -2547,13 +2469,10 @@ async fn outbox_release_puts_a_claimed_row_back_to_pending() {
 // ============================================================
 // `inspect outbox` filters
 //
-// `--status pending` is the default (matches the operational
-// "what is waiting" question); the new filters expose the rest.
+// `--status pending` is the default: "what is waiting?".
 // ============================================================
 
-/// Helper for the filter tests: seed the outbox with two pending
-/// rows so the filter assertions can distinguish "all" from
-/// "delivered" / "failed".
+/// Seed the outbox with two pending rows.
 fn seed_two_pending_outbox_rows() {
     let _ = post_balanced_entry("filter_seed_a", 100);
     let _ = post_balanced_entry("filter_seed_b", 200);
@@ -2581,9 +2500,8 @@ fn seed_one_pending_and_one_delivered_row() {
     assert!(s.success());
 }
 
-/// No `--status` defaults to pending; `all` and `delivered` expose
-/// the rest. One pending + one delivered row; each filter's view is
-/// pinned as the exact (sorted) status list it must return.
+/// No `--status` means pending; `all` and `delivered` show the rest. Each
+/// filter's exact (sorted) status list is pinned.
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_outbox_status_filters_partition_the_rows() {
     reset_db().await;
@@ -2635,19 +2553,15 @@ async fn inspect_outbox_intent_type_filter_narrows_results() {
 // ============================================================
 // End-to-end compute loop
 //
-// The product test: prove that a non-Rust consumer can drive the
-// whole input/commit/outbox loop using only the `morpholog` binary.
-// This pins the contract the docs describe as "round-trip compute".
+// A non-Rust consumer can drive the whole propose, commit and outbox loop
+// with only the `morpholog` binary.
 // ============================================================
 
 #[tokio::test(flavor = "current_thread")]
 async fn compute_loop_end_to_end_via_cli_binary_only() {
     reset_db().await;
 
-    // 1. INPUT BOUNDARY: a Python-shaped consumer writes its own
-    //    `.morph` file and invokes `morpholog propose` to admit a
-    //    transformation against PostgreSQL - no Rust, no baked-in
-    //    programmes, just a file path.
+    // 1. The consumer writes its own `.morph` and runs `morpholog propose`.
     let path = write_temp_ledger_morph();
     let args_json = &ledger_args_json("e2e_entry", "2026-05-01", "q2_2026", "500");
     let (status, stdout, stderr) = run_cli(&[
@@ -2663,8 +2577,7 @@ async fn compute_loop_end_to_end_via_cli_binary_only() {
     let receipt: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(receipt["status"], "committed");
 
-    // 2. OUTPUT BOUNDARY: the consumer claims the resulting outbox
-    //    row. The intent type matches what the transformation emits.
+    // 2. It claims the resulting outbox row.
     let (status, stdout, _stderr) =
         run_cli(&["outbox", "claim", "--intent-type", "JournalEntryPosted"]);
     assert!(status.success());
@@ -2676,12 +2589,9 @@ async fn compute_loop_end_to_end_via_cli_binary_only() {
     assert_eq!(row["intent_type"], "JournalEntryPosted");
     assert_eq!(row["status"], "in_progress");
 
-    // 3. COMPUTE PHASE: the consumer does whatever external work
-    //    the intent represents (here a no-op stand-in - the test's
-    //    point is that the kernel does not care what happens
-    //    between claim and complete).
+    // 3. It does the external work (a no-op here).
 
-    // 4. CONSUMER MARKS DELIVERED.
+    // 4. It marks the row delivered.
     let (status, stdout, stderr) = run_cli(&[
         "outbox",
         "complete",
@@ -2698,8 +2608,7 @@ async fn compute_loop_end_to_end_via_cli_binary_only() {
     let upd: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(upd, serde_json::json!({"status": "applied"}));
 
-    // 5. INSPECT: the same consumer (or an auditor) verifies the row
-    //    is in the delivered slice.
+    // 5. The row shows as delivered.
     let (status, stdout, _stderr) = run_cli(&["inspect", "outbox", "--status", "delivered"]);
     assert!(status.success());
     let delivered: Value = serde_json::from_str(&stdout).unwrap();
@@ -2707,7 +2616,7 @@ async fn compute_loop_end_to_end_via_cli_binary_only() {
     assert_eq!(arr.len(), 1, "exactly one delivered row");
     assert_eq!(arr[0]["intent_id"], intent_id);
 
-    // 6. AND IT IS NO LONGER PENDING.
+    // 6. And no longer as pending.
     let (status, stdout, _stderr) = run_cli(&["inspect", "outbox"]);
     assert!(status.success());
     let pending: Value = serde_json::from_str(&stdout).unwrap();
@@ -2722,10 +2631,8 @@ async fn compute_loop_end_to_end_via_cli_binary_only() {
 // File-path subcommands validate before acting
 // ============================================================
 
-/// Write a temp `.morph` that parses but fails `Program::validate()`:
-/// the invariant references an undeclared predicate `Bar`. Now that the
-/// CLI parses arbitrary files, the file-path subcommands must hold them
-/// to the vocabulary contract.
+/// Write a temp `.morph` that parses but fails `Program::validate()`: the
+/// invariant uses an undeclared predicate `Bar`.
 fn write_temp_invalid_morph() -> std::path::PathBuf {
     let body = r#"
 program temp_invalid
@@ -2744,9 +2651,8 @@ invariant references_undeclared:
 
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_derived_validates_before_touching_the_database() {
-    // A parseable-but-invalid programme (undeclared predicate) is refused
-    // with validation diagnostics before the derived lookup or any
-    // database connection - the same gate `run` applies.
+    // An invalid programme is refused with diagnostics before the derived
+    // lookup or any database connection, as `propose` does.
     let path = write_temp_invalid_morph();
     let (status, _stdout, stderr) =
         run_cli(&["inspect", "derived", path.to_str().unwrap(), "AnyDerived"]);
@@ -2766,10 +2672,9 @@ async fn inspect_derived_validates_before_touching_the_database() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn init_provisions_then_refuses_then_skips() {
-    // This test owns the whole schema lifecycle: drop it, provision it
-    // through the binary, prove the provisioned schema actually works,
-    // then pin both already-initialised behaviours. Safe in this
-    // serial suite - every other test only TRUNCATEs.
+    // Drop the schema, provision it through the binary, prove it works,
+    // then pin both already-initialised behaviours. Safe here because the
+    // suite is serial and other tests only truncate.
     let pool = PgPool::connect(&database_url()).await.unwrap();
     sqlx::raw_sql("DROP SCHEMA IF EXISTS morpholog CASCADE")
         .execute(&pool)
@@ -2798,9 +2703,8 @@ async fn init_provisions_then_refuses_then_skips() {
     let v: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(v["status"], "already-initialised");
 
-    // --reset is destructive, so the acknowledgement is the contract:
-    // refused without it, and refused the other way round too, so a
-    // stray ack in a script cannot lie in wait for a later --reset.
+    // --reset needs the acknowledgement, and the acknowledgement needs
+    // --reset, so a stray one in a script cannot wait for a later reset.
     let (status, _stdout, stderr) = run_cli(&["init", "--reset"]);
     assert!(
         !status.success(),
@@ -2815,8 +2719,7 @@ async fn init_provisions_then_refuses_then_skips() {
     assert!(!status.success(), "the acknowledgement alone must refuse");
     assert!(stderr.contains("only meaningful with --reset"), "{stderr}");
 
-    // Data first, so the reset is proven to have really dropped it
-    // rather than to have quietly no-oped on an empty schema.
+    // Add data first, so the reset visibly drops something.
     post_balanced_entry("entry_before_reset", 250);
     let (status, stdout, stderr) = run_cli(&["init", "--reset", "--i-know-this-deletes-data"]);
     assert!(
@@ -2846,8 +2749,7 @@ async fn init_provisions_then_refuses_then_skips() {
         "only the post-reset entry survives - the reset really dropped the data"
     );
 
-    // On a database with no schema, the same command reports honestly
-    // rather than implying it removed something.
+    // With no schema, it says there was nothing to drop.
     sqlx::raw_sql("DROP SCHEMA IF EXISTS morpholog CASCADE")
         .execute(&pool)
         .await
@@ -2861,15 +2763,14 @@ async fn init_provisions_then_refuses_then_skips() {
 }
 
 // ============================================================
-// `run --explain-on-reject` - same-snapshot diagnosis
+// `propose --explain-on-reject` - same-snapshot diagnosis
 // ============================================================
 
 #[tokio::test(flavor = "current_thread")]
 async fn run_explain_on_reject_attaches_the_same_snapshot_explanation() {
     reset_db().await;
-    // Close the period, then propose into it with the flag: the
-    // rejection envelope carries the explanation computed against the
-    // exact pre-state the gate evaluated.
+    // Close the period, then propose into it: the rejection carries an
+    // explanation computed against the exact state the gate saw.
     let (status, _o, _e) = run_cli(&[
         "propose",
         &ledger_morph(),
@@ -2958,10 +2859,9 @@ async fn inspect_claims_named_decodes_args_by_declared_field_name() {
     );
 }
 
-/// A `--where` clause is refused before any database work when there
-/// is nothing to resolve its field names against: no named read, or
-/// more than one predicate. The one-shot and the session read the
-/// clause through one resolver, so the session test mirrors this one.
+/// A `--where` clause is refused before any database work when there is
+/// nothing to resolve its fields against: no named read, or more than one
+/// predicate. The session test mirrors this one.
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_claims_where_is_refused_without_a_declaration_to_read_it_against() {
     reset_db().await;
@@ -3001,8 +2901,8 @@ async fn inspect_claims_named_hard_errors_on_programme_database_skew() {
     reset_db().await;
     post_balanced_entry("entry_001", 100);
 
-    // A programme whose vocabulary does not declare the claims in the
-    // database: the named read refuses by name, never silently skips.
+    // A programme that does not declare the stored claims: the named read
+    // refuses by name, never skips.
     let mut other = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(
         &mut other,
@@ -3064,11 +2964,9 @@ async fn quantity_params_flow_bare_through_the_named_codec_end_to_end() {
     .unwrap();
     let path = model.path().to_str().unwrap();
 
-    // The schema carries the unit as the machine-readable extension
-    // AND in the human-readable description (form generators ignore
-    // custom extensions), while the wire shape stays the bare decimal
-    // pattern - the declaration is the single source of truth.
-    // `schema` is static (no database flag), so it bypasses run_cli.
+    // The schema carries the unit in an extension and in the description
+    // (form generators ignore extensions); the wire value stays a bare
+    // decimal. `schema` takes no database flag, so skip run_cli.
     let output = Command::new(common::bin())
         .args(["schema", path, "settle"])
         .output()
@@ -3113,7 +3011,7 @@ async fn quantity_params_flow_bare_through_the_named_codec_end_to_end() {
     let rows: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(rows[0]["args"]["amount"], "137500.00", "{stdout}");
 
-    // Tagged codec in: self-describing, the unit rides the value.
+    // Tagged codec in: the unit travels with the value.
     let (status, _stdout, stderr) = run_cli(&[
         "propose",
         path,
@@ -3131,16 +3029,14 @@ async fn inspect_claims_named_errors_on_undeclared_requested_predicate() {
     reset_db().await;
     post_balanced_entry("entry_001", 100);
 
-    // The bare read keeps claims-table-as-authority: an unknown
-    // requested predicate matches nothing and yields an empty result.
+    // Without --named, an unknown predicate just matches nothing.
     let (status, stdout, stderr) = run_cli(&["inspect", "claims", "--predicate", "JornalLine"]);
     assert!(status.success(), "bare read tolerates the typo; {stderr}");
     let rows: Value = serde_json::from_str(&stdout).expect("stdout is JSON");
     assert_eq!(rows.as_array().unwrap().len(), 0, "typo matches nothing");
 
-    // With `--named`, the programme is the authority for the request
-    // too: the same typo is a hard error naming the declared
-    // vocabulary, raised before any database read.
+    // With `--named`, the same typo is an error naming the declared
+    // predicates, before any database read.
     let ledger = ledger_morph();
     let (status, _stdout, stderr) = run_cli(&[
         "inspect",
@@ -3165,11 +3061,11 @@ async fn inspect_claims_named_errors_on_undeclared_requested_predicate() {
 }
 
 // ============================================================
-// run --batch: rows in, a receipt per row, each its own commit.
+// propose --batch: rows in, a receipt per row, each its own commit.
 // ============================================================
 
-/// `run --batch` with NDJSON rows on a temp file. Returns
-/// (status, receipts-parsed-from-stdout, stderr).
+/// `propose --batch` with NDJSON rows in a temp file. Returns
+/// (status, parsed receipts, stderr).
 fn run_batch(rows: &str, extra: &[&str]) -> (std::process::ExitStatus, Vec<Value>, String) {
     let f = tempfile::NamedTempFile::new().expect("temp batch file");
     std::fs::write(f.path(), rows).expect("write batch rows");
@@ -3194,10 +3090,9 @@ fn ledger_row(transformation: &str, actor: &str, named: Value) -> String {
     .to_string()
 }
 
-// The batch contract in one run: commits, a blank line skipped, a
-// malformed row turned into an error receipt, a lawful rejection, and
-// a row AFTER the failures still committing - with exit 0, because
-// every row produced a receipt.
+// The batch contract in one run: commits, a skipped blank line, an error
+// receipt for a malformed row, a rejection, and a later row still
+// committing. Exit 0, because every row got a receipt.
 #[tokio::test]
 async fn batch_rows_are_independent_and_every_row_gets_a_receipt() {
     reset_db().await;
@@ -3213,7 +3108,7 @@ async fn batch_rows_are_independent_and_every_row_gets_a_receipt() {
         String::new(),
         ledger_row("close_period", "maria", serde_json::json!({"period": "p1"})),
         "this is not json".to_string(),
-        // Posting into the closed period: a lawful rejection.
+        // Posting into the closed period: a rejection.
         ledger_row(
             "post_simple_entry",
             "jordan",
@@ -3261,23 +3156,21 @@ async fn batch_rows_are_independent_and_every_row_gets_a_receipt() {
         .map(|r| r["row"].as_u64().expect("row"))
         .collect();
     assert_eq!(rows_field, vec![1, 3, 4, 5, 6]);
-    // Per-row actors land in the receipts (and so in the audit rows).
+    // Per-row actors land in the receipts and the audit rows.
     assert_eq!(receipts[1]["actor"]["value"], "maria");
     assert_eq!(receipts[4]["actor"]["value"], "nina");
     assert!(
         stderr.contains("5 rows - 3 committed, 1 rejected, 1 errors"),
         "summary on stderr: {stderr}"
     );
-    // The single-run rule-location courtesy line stays out of batch
-    // mode: receipts are the machine contract, and stderr carries
-    // only the summary.
+    // No rule-location line in batch mode: stderr carries only the
+    // summary.
     assert!(
         !stderr.contains("rule at"),
         "no rule-location lines in batch mode; got: {stderr}"
     );
 
-    // The batch's one lawful rejection landed in the rejection log -
-    // batch rows record through the same single site as single runs.
+    // The batch's rejection is in the rejection log, as for single runs.
     let (status, stdout, _stderr) = run_cli(&["inspect", "rejections"]);
     assert!(status.success());
     let logged: Value = serde_json::from_str(&stdout).unwrap();
@@ -3318,8 +3211,8 @@ async fn batch_rejected_rows_carry_explanations_when_asked() {
     );
 }
 
-// Operational failure - an unreadable batch path - is the non-zero
-// case, distinct from per-row outcomes.
+// An operational failure, such as an unreadable batch file, exits
+// non-zero.
 #[tokio::test]
 async fn batch_with_unreadable_input_exits_nonzero() {
     let (status, _stdout, stderr) = run_cli(&[
@@ -3344,8 +3237,8 @@ async fn batch_conflicts_with_trace() {
     );
 }
 
-// Batch rows carry their own args; a top-level args flag would be
-// silently ignored, so clap refuses both codecs' flags with --batch.
+// Batch rows carry their own args, so clap refuses top-level args flags
+// with --batch rather than ignore them.
 #[tokio::test]
 async fn batch_conflicts_with_both_args_flags() {
     for flag in [["--args", "[]"], ["--args-named", "{}"]] {
@@ -3364,10 +3257,9 @@ async fn batch_conflicts_with_both_args_flags() {
 // `inspect coverage` - which rules have ever actually done work.
 // ============================================================
 
-// Prose mode names the verdicts and carries the legend that says what
-// committed history structurally cannot show; the exit code is zero
-// regardless of findings (coverage answers a question - the `explain`
-// stance), and never-fired rules are the point, not a failure.
+// Prose names the verdicts, with a legend saying what committed history
+// cannot show. Exit is zero whatever it finds: never-fired rules are the
+// answer, not a failure.
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_coverage_prose_reports_fired_and_never_fired() {
     reset_db().await;
@@ -3439,14 +3331,10 @@ async fn inspect_coverage_json_carries_the_pinned_field_set() {
     );
 }
 
-/// `migrate --check` fails a database AHEAD of this binary, not just one
-/// behind it.
-///
-/// Tested at the CLI because that is where a deploy gate reads the answer,
-/// and where this went wrong: the library reported the database as not
-/// current, the client's `is_current` agreed, and the command still exited
-/// zero because it asked `pending` rather than the report. Nothing is
-/// pending for an ahead database - that is the whole trap.
+/// `migrate --check` fails a database ahead of this binary, not just one
+/// behind it. Nothing is pending for an ahead database, so a check of
+/// `pending` alone would pass it. Tested at the CLI, where a deploy gate
+/// reads the answer.
 #[tokio::test]
 async fn migrate_check_fails_a_database_ahead_of_the_binary() {
     let pool = PgPool::connect(&database_url())
@@ -3470,8 +3358,8 @@ async fn migrate_check_fails_a_database_ahead_of_the_binary() {
     let (status, stdout, _) = run_cli(&["migrate", "--check"]);
     let (apply_status, _, _) = run_cli(&["migrate"]);
 
-    // Remove it before asserting: a failure here must not leave the shared
-    // database claiming to be from the future for every later test.
+    // Clean up before asserting, so a failure cannot leave the shared
+    // database looking migrated by a newer binary.
     sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
         .bind(future)
         .execute(&pool)
@@ -3494,10 +3382,9 @@ async fn migrate_check_fails_a_database_ahead_of_the_binary() {
     );
 }
 
-/// The batch surface for an unauthorised assertion: a coded receipt
-/// for that row, and the run carries on. The grant is a claim matched
-/// against `session_user` as text, so granting a different login name
-/// is enough to make this connection unauthorised - no role switching.
+/// In a batch, an unauthorised assertion gets a coded receipt and the run
+/// carries on. The grant is a claim compared with `session_user` as text,
+/// so naming another login makes this connection unauthorised.
 const POLICY_BATCH_MORPH: &str = "program policy_batch
 
 predicate ActorAssertionRestricted(actor: Subject)
@@ -3547,9 +3434,8 @@ async fn batch_gives_an_unauthorised_row_a_coded_receipt_and_keeps_going() {
     assert_eq!(receipts[0]["status"], "committed", "{stdout}");
     assert_eq!(receipts[1]["status"], "error", "{stdout}");
     assert_eq!(receipts[1]["row"], 2, "{stdout}");
-    // The refusal is a per-row receipt rather than an abort, matchable
-    // by the same stable code the session answers with, and its prose
-    // names the two parties.
+    // A per-row receipt, not an abort, with the session's code; the prose
+    // names both parties.
     assert_eq!(
         receipts[1]["code"], "actor_assertion_unauthorised",
         "{stdout}"
@@ -3570,13 +3456,11 @@ async fn batch_gives_an_unauthorised_row_a_coded_receipt_and_keeps_going() {
 }
 
 // ============================================================
-// What `main` prints, now that it owns the rendering.
+// What `main` prints on failure.
 // ============================================================
 
-/// An ordinary failure keeps the shape `Result`'s own `Termination`
-/// used to print, because `main` took that job over when it started
-/// returning `ExitCode`. Nothing pinned it before, so the claim of
-/// byte-identical output rested on having read the std source once.
+/// An ordinary failure prints as `Result`'s own `Termination` would:
+/// `Error: ` then the context chain.
 #[tokio::test(flavor = "current_thread")]
 async fn an_ordinary_error_keeps_the_termination_rendering() {
     let (status, stdout, stderr) =
@@ -3597,10 +3481,8 @@ async fn an_ordinary_error_keeps_the_termination_rendering() {
     );
 }
 
-/// The other half of that contract: a failure the command already
-/// rendered gets NO second line from `main`. Saying it twice, once in
-/// the command's voice and once in std's, is what the sentinel exists
-/// to prevent.
+/// A failure the command already rendered gets no second message from
+/// `main`.
 #[tokio::test(flavor = "current_thread")]
 async fn an_already_reported_failure_gets_no_second_message() {
     let fixture = common::write_fixture(
@@ -3704,7 +3586,7 @@ async fn verify_pack_reports_witnesses_only_when_asked() {
     std::io::Write::write_all(&mut packfile, pack.to_string().as_bytes()).unwrap();
     let path = packfile.path().to_str().unwrap();
 
-    // Not asked: the bare verdict, byte-for-byte the shape it always had.
+    // Not asked: the bare verdict, unchanged.
     let (status, stdout, _) = run_cli_no_db(&["audit", "verify-pack", path]);
     assert!(status.success(), "{stdout}");
     let bare: Value = serde_json::from_str(&stdout).unwrap();
@@ -3733,10 +3615,9 @@ async fn verify_pack_reports_witnesses_only_when_asked() {
     assert!(stderr.contains("trusted TSA file"), "{stderr}");
 }
 
-/// A one-shot timestamp authority on localhost that answers every request
-/// with the same canned bytes, and hands back the request head it saw.
-/// Enough to drive the whole submission path except the authority's
-/// signature, which no offline double can produce.
+/// A one-shot timestamp authority on localhost that answers with canned
+/// bytes and hands back the request it saw. It drives the whole submission
+/// path except a real signature.
 fn canned_tsa(reply: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -3932,8 +3813,8 @@ async fn a_refused_delta_write_is_a_known_non_commit_on_every_surface() {
     .await
     .unwrap();
 
-    // Everything runs first and the constraint comes off before any
-    // assertion can bail out: the suite shares this database.
+    // Run everything and remove the constraint before any assertion can
+    // fail, since the suite shares this database.
     let one_shot = run_cli(&[
         "propose",
         &ledger_morph(),

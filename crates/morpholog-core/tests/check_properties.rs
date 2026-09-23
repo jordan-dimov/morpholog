@@ -1,27 +1,16 @@
 //! Property-based robustness tests for `Program::validate`.
 //!
-//! Companion to the example-driven unit tests in `src/check.rs` (which
-//! pin specific diagnostics against known inputs) and to the worked-
-//! example suite (which proves no false positives on real programmes).
-//! These tests fuzz the *shape* space: arbitrary and adversarially deep
-//! IR must always make `validate` return a verdict - never panic, never
-//! index out of bounds, never recurse off the stack. That is the
-//! durable proof behind the contract that untrusted IR can be validated
-//! before it is proposed.
+//! Arbitrary and adversarially deep IR must always get a verdict from
+//! `validate`: never a panic, an out-of-bounds index, or a blown stack.
+//! That is what lets untrusted IR be validated before it is proposed.
 //!
-//! Generation stays deliberately bounded (short names, shallow nesting,
-//! small vectors) so generation is cheap and shrinking reports are
-//! small. The depth guard, which only triggers far below any bound the
-//! random generator reaches, is exercised separately by explicitly deep
-//! inputs that walk every recursive arm.
+//! Generation stays small so it is cheap and shrinks well. The depth
+//! guard sits far beyond what the random generator reaches, so explicit
+//! deep inputs exercise it separately.
 //!
-//! The IR's two sorts ([`Prop`] and [`ValueExpr`]) mean the generator
-//! also splits in two: `arb_prop` builds propositions, `arb_value_expr`
-//! builds value expressions. They are mutually recursive (a comparator
-//! relates two values, a `sum` ranges over a proposition), so the value
-//! generator nests a bounded proposition generator for `sum` bodies, and
-//! the proposition generator nests the value generator for comparator
-//! operands.
+//! `arb_prop` builds propositions and `arb_value_expr` builds values.
+//! They recurse into each other (comparators hold values, `sum` holds a
+//! proposition), each through a bounded copy of the other.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -97,10 +86,8 @@ fn arb_arith_op() -> impl Strategy<Value = ArithOp> {
     ]
 }
 
-/// A bounded value expression. `Sum` ranges over a (leaf-only)
-/// proposition, so the value generator can recurse without forming an
-/// unbounded mutual cycle with `arb_prop`; the property under test only
-/// needs each recursive arm reached, not maximal mutual nesting.
+/// A bounded value expression. `Sum` ranges over a leaf-only
+/// proposition so the recursion with `arb_prop` stays bounded.
 fn arb_value_expr() -> impl Strategy<Value = ValueExpr> {
     let leaf = prop_oneof![
         arb_term().prop_map(ValueExpr::Term),
@@ -349,36 +336,27 @@ fn arb_program() -> impl Strategy<Value = Program> {
 }
 
 proptest! {
-    /// `validate` must return a verdict on any IR we can build, well-
-    /// formed or not - never panic, never index out of bounds, never
-    /// recurse off the stack. Most generated programmes are malformed
-    /// and validate to `Err`; the property is only that the call
-    /// *returns*. proptest fails the case on any panic, with a shrunk
-    /// counterexample.
+    /// `validate` returns a verdict on any IR we can build. Most generated
+    /// programmes are malformed and give `Err`; the property is only that
+    /// the call returns.
     #[test]
     fn validate_returns_on_arbitrary_programmes(p in arb_program()) {
         let _ = p.validate();
     }
 
-    /// `validate` is deterministic: the same programme produces the
-    /// same verdict, including the same error order, on repeated calls.
-    /// Guards against HashMap-iteration order or other nondeterminism
-    /// leaking into the result that a migration would see as a churning
-    /// work list.
+    /// `validate` is deterministic: the same programme gives the same
+    /// verdict, errors in the same order, every time (no HashMap order
+    /// leaking through).
     #[test]
     fn validate_is_deterministic(p in arb_program()) {
         prop_assert_eq!(p.validate(), p.validate());
     }
 }
 
-/// Wrap `leaf` in `depth` copies of one recursive proposition node,
-/// selected by `node`. Exercises every recursive match arm of the depth
-/// measure that lives on the `Prop` sort - the single-child arm
-/// (`Not`/`Pre`/`Exists`), the collection arm (`And`/`Or`), the
-/// two-child arm (`Implies`), the comparator (whose deepening operand is
-/// a value expression), and the quantifier `Forall` (recurses through
-/// both source and body). Filler operands are wildcards; the depth guard
-/// short-circuits before any semantic check looks at them.
+/// Wrap `leaf` in `depth` copies of the proposition node chosen by `node`,
+/// to reach every recursive arm of the depth measure on `Prop`: `Not`,
+/// `Pre`, `Exists`, `And`, `Or`, `Implies`, `Xor` and `Forall`. The depth
+/// guard runs before anything looks at the filler operands.
 fn nest_prop(node: usize, depth: usize, leaf: Prop) -> Prop {
     let mut e = leaf;
     for _ in 0..depth {
@@ -418,13 +396,9 @@ fn nest_prop(node: usize, depth: usize, leaf: Prop) -> Prop {
     e
 }
 
-/// Wrap a leaf value expression in `depth` copies of one recursive value
-/// node, then a comparator that puts the deep value on one side. This
-/// reaches the value-sort depth arms - the two-child arithmetic arm
-/// (`Add`/`Sub`) and `ValueOf` (recurses only through its `default`) -
-/// and feeds the result through a `Prop::Compare` so the validator sees a
-/// proposition. (`Sum` deepens through a `Prop` body, covered by the
-/// proposition deep-nest test's reachability into the value sort.)
+/// Wrap a leaf value in `depth` copies of one value node (`Add`, `Sub`,
+/// or `ValueOf` through its `default`), inside a comparator so the
+/// validator sees a proposition.
 fn nest_value(node: usize, depth: usize) -> Prop {
     let filler = || Box::new(ValueExpr::Term(Term::Wildcard));
     let mut e = ValueExpr::Term(Term::Wildcard);
@@ -458,10 +432,9 @@ fn nest_value(node: usize, depth: usize) -> Prop {
 
 #[test]
 fn deeply_nested_propositions_are_rejected_not_overflowed() {
-    // Each recursive proposition arm, nested far past any plausible
-    // limit, must come back as a depth rejection - a returned verdict,
-    // not a blown stack. The depth guard runs first and short-circuits,
-    // so a pure deep-nest yields NestingTooDeep and nothing downstream.
+    // Each recursive proposition arm, nested far past any limit, comes
+    // back as NestingTooDeep, not a blown stack. The depth guard runs
+    // first, so nothing else is reported.
     const DEPTH: usize = 1024;
     for node in 0..8 {
         let body = nest_prop(
@@ -486,9 +459,7 @@ fn deeply_nested_propositions_are_rejected_not_overflowed() {
 
 #[test]
 fn deeply_nested_value_expressions_are_rejected_not_overflowed() {
-    // The value-sort recursion arms, nested far past any limit and
-    // wrapped in a comparator so the validator sees a proposition, must
-    // also come back as a depth rejection rather than a blown stack.
+    // The value arms, nested the same way, also come back as a depth refusal.
     const DEPTH: usize = 1024;
     for node in 0..3 {
         let body = nest_value(node, DEPTH);

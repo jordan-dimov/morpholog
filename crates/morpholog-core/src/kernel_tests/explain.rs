@@ -181,10 +181,9 @@ fn failure_walk_forall_drills_into_body() {
     );
 }
 
-/// `Not(inner)` failure: walker returns None. Not's failure means
-/// inner held; pointing at inner would say "this is what held"
-/// rather than "this is what failed", conflating two diagnostic
-/// models. Returning None is the safe choice in v0.
+/// `Not(inner)` failure: walker returns None. The `not` failed
+/// because inner held, so pointing at inner would show what held,
+/// not what failed.
 #[test]
 fn failure_walk_not_returns_none() {
     use ir_builder::*;
@@ -225,11 +224,8 @@ fn failure_walk_not_returns_none() {
     );
 }
 
-/// Leaf-shaped expression (a single Claim) that rejects: the
-/// walker returns None because the expression is already as
-/// specific as the kernel can be. The outer `expression` field
-/// of the trace entry already renders the leaf; duplicating it
-/// in `failing_sub_expression` adds no information.
+/// A single Claim that rejects: the walker returns None. The
+/// trace entry's `expression` already renders the leaf.
 #[test]
 fn failure_walk_leaf_claim_returns_none() {
     use ir_builder::*;
@@ -266,10 +262,8 @@ fn failure_walk_leaf_claim_returns_none() {
     );
 }
 
-/// BindOne zero-match: the walker also applies to bind_one's
-/// failure path. With a leaf-shaped Claim expression the result
-/// is None (same as require); the test pins that bind_one wires
-/// up the field at all.
+/// BindOne zero-match: bind_one's failure path carries the field
+/// too. A leaf Claim gives None, as with require.
 #[test]
 fn failure_walk_bind_one_no_match_carries_field() {
     use ir_builder::*;
@@ -296,8 +290,7 @@ fn failure_walk_bind_one_no_match_carries_field() {
     else {
         panic!("expected BindOne NoMatch, got {:?}", trace[0]);
     };
-    // Leaf-shaped: walker returns None. Field is present (the
-    // value matters less than the structural presence).
+    // Leaf-shaped: the walker returns None.
     assert_eq!(failing_sub_expression.as_deref(), None);
 }
 
@@ -305,11 +298,9 @@ fn failure_walk_bind_one_no_match_carries_field() {
 // Additional failure-walk coverage
 // ============================================================
 
-/// Regression for the And binding-flow bug. The walker must
-/// thread bindings through conjuncts the same way the evaluator
-/// does. Without that, this case returns `None` because A(x) and
-/// B(x) each succeed against the original (empty) binding
-/// context - even though no x value satisfies both.
+/// The walker must thread bindings through conjuncts as the
+/// evaluator does. Otherwise A(x) and B(x) each succeed against the
+/// empty bindings and it returns `None`, though no x satisfies both.
 #[test]
 fn failure_walk_and_threads_bindings_through_conjuncts() {
     use ir_builder::*;
@@ -340,10 +331,8 @@ fn failure_walk_and_threads_bindings_through_conjuncts() {
         panic!("expected Completed");
     };
     let failing = extract_require_failure(&trace);
-    // Under the bug, this would be None (each conjunct evaluated
-    // against the original empty bindings has matches). Under
-    // the fix, after A binds x = a1, B(x = a1) fails - so B is
-    // the failing conjunct.
+    // After A binds x = a1, B(x = a1) fails, so B is the failing
+    // conjunct.
     let failing = failing.expect(
         "binding-flow bug: walker should drill to the failing conjunct under threaded bindings",
     );
@@ -353,18 +342,14 @@ fn failure_walk_and_threads_bindings_through_conjuncts() {
     );
 }
 
-/// `Implies(left, right)` where `left` itself fails: the implies
-/// is vacuously true at that branch, so a top-level rejection
-/// can't be attributed to either side meaningfully. Walker
-/// returns None.
+/// `Implies(left, right)` where `left` fails: the implies is
+/// vacuously true there, so the walker does not pick it.
 #[test]
 fn failure_walk_implies_with_failing_left_returns_none() {
     use ir_builder::*;
-    // Trigger does not hold for x. Implies is vacuously true at
-    // every iteration. But we need the implies to actually fail
-    // overall to trigger the walker - so wrap it in an And with
-    // a separately-failing conjunct, then assert that the walker
-    // points at the failing And conjunct, not at the implies.
+    // Trigger does not hold for x, so the implies is vacuously true.
+    // A separately failing conjunct makes the And fail; the walker
+    // must point at it, not at the implies.
     let state = State::default();
     let t = transformation(
         "needs_failing_conjunct",
@@ -500,9 +485,8 @@ fn failure_walk_forall_recurses_into_compound_body() {
     );
 }
 
-/// `Exists` failure: structurally no single binding satisfied
-/// the body; pointing at the body would describe "what we
-/// looked for" rather than "what failed". Returns None.
+/// `Exists` failure: no binding satisfied the body, so pointing at
+/// the body would show what was sought, not what failed. Returns None.
 #[test]
 fn failure_walk_exists_returns_none() {
     use ir_builder::*;
@@ -536,9 +520,8 @@ fn failure_walk_exists_returns_none() {
     );
 }
 
-/// `BindOne` with a compound expression: walker drills into the
-/// expression the same way it does for Require. Pin that the
-/// path is wired up symmetrically.
+/// `BindOne` with a compound expression: the walker drills in as
+/// it does for Require.
 #[test]
 fn failure_walk_bind_one_drills_into_compound_expression() {
     use ir_builder::*;

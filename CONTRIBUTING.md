@@ -75,7 +75,7 @@ The PG-backed test suites share one schema and truncate it between tests; they m
 
 ### Public Rust API
 
-The public surface of every library crate is committed as text under [`api/`](api/), one file per crate, rendered by `cargo public-api`. `./scripts/public_api.sh` regenerates each snapshot and fails on any difference, in precommit and in CI. When you change a public item on purpose (a signature, a field, a variant, a new `pub`), run `./scripts/public_api.sh --update` and commit the snapshot with the change: the diff of `api/` is how the PR says it changed the API, and a reviewer reads it. The crate list in the script is explicit, so an internal crate never joins the contract by accident.
+The supported public surface of each library crate an embedder can depend on (what rustdoc shows; `#[doc(hidden)]` items are not supported and not listed) is committed as text under [`api/`](api/), one file per crate, rendered by `cargo public-api`. `./scripts/public_api.sh` regenerates each snapshot and fails on any difference, in precommit and in CI. When you change a public item on purpose (a signature, a field, a variant, a new `pub`), run `./scripts/public_api.sh --update` and commit the snapshot with the change: the diff of `api/` is how the PR says it changed the API, and a reviewer reads it. The crate list in the script is explicit, so an internal crate never joins the contract by accident.
 
 ### Compile-time-checked SQL
 
@@ -101,6 +101,7 @@ crates/
   morpholog-examples/      # worked examples parsed from .morph + typed test fixtures (depends on core)
   morpholog-postgres/      # async PostgreSQL persistence adapter
   morpholog-outbox/        # polling outbox worker
+  morpholog-witness/       # external timestamp witnesses for audit checkpoints (RFC 3161)
   morpholog-surface/       # .morph parser arc: lexer, layout pass, parser
   morpholog-test-support/  # shared sync test helpers (dev-deps only)
   morpholog-bench/         # scale-pressure benchmark (destructive)

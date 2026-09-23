@@ -1,11 +1,6 @@
-//! End-to-end test of `morpholog check --ir` (the IR debugging view)
-//! against real `.morph` fixture files. Spawns the built binary, asserts
-//! on stdout/stderr/exit code.
-//!
-//! Distinct from the in-crate argument-parsing tests (which only
-//! verify clap accepts the right shape): this test catches
-//! regressions in the CLI wiring itself - file reading, JSON
-//! emission, diagnostic rendering, exit codes.
+//! End-to-end test of `morpholog check --ir` (the IR debugging view) on
+//! real `.morph` files, through the built binary: file reading, JSON
+//! output, diagnostics, exit codes.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -40,10 +35,8 @@ fn check_ir_happy_path_emits_json_and_exits_zero() {
 
 #[test]
 fn check_ir_projects_invariants_transformations_and_derived_claims() {
-    // The happy-path test above exercises only the predicate
-    // projection; the bulk of the parse command is the three rendered
-    // projections (invariant bodies, transformation bodies, derived
-    // claims), which need a programme that actually has them.
+    // The test above covers only predicates; this one needs invariants,
+    // transformations and derived claims to render.
     let path = common::write_fixture(
         "rich",
         "program rich\n\
@@ -113,8 +106,7 @@ fn check_ir_parse_error_emits_diagnostic_on_stderr_and_exits_nonzero() {
     assert!(!out.status.success(), "expected non-zero exit");
     assert_eq!(out.status.code(), Some(1), "expected exit code 1");
     let stderr = String::from_utf8(out.stderr).expect("utf8 stderr");
-    // stderr should contain SOME diagnostic; the exact rendering is
-    // ariadne's, but the source-file name should appear.
+    // The exact rendering is ariadne's, but the file name should appear.
     assert!(
         stderr.contains(path.file_name().unwrap().to_str().unwrap()),
         "stderr should reference the source file: {stderr}"
@@ -142,10 +134,9 @@ fn check_ir_missing_file_errors_via_anyhow() {
 
 #[test]
 fn check_ir_renders_a_non_first_hole_lookup_in_its_named_form() {
-    // The carrier example's asset register reads a figure past an
-    // elided coordinate. Positional text would reparse with the wrong
-    // hole, so the IR view must emit the named spelling - the same
-    // faithfulness rule the formatter and the canonical hash follow.
+    // This example reads a figure past an elided field. Positional text
+    // would reparse with the gap in the wrong place, so the IR view must
+    // use the named spelling, as the formatter and hash do.
     let path = common::repo_root().join("examples/11_borrowing_base/borrowing_base.morph");
     let out = Command::new(bin())
         .args(["check", path.to_str().unwrap(), "--ir"])

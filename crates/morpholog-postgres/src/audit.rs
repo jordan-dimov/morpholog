@@ -10,9 +10,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 /// One row of `morpholog.audit` decoded into typed runtime values.
 ///
-/// Each row corresponds to exactly one committed transformation. The
-/// JSONB columns are decoded through the same codec that wrote them,
-/// so the round-trip is exact for any value the kernel can represent.
+/// One row per committed transformation. JSONB columns decode through the
+/// codec that wrote them, so the round-trip is exact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditRow {
     pub transition_id: Uuid,
@@ -32,23 +31,20 @@ pub struct AuditRow {
     /// leaf encoding, so the field's presence selects the leaf version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attestation: Option<AuditAttestation>,
-    /// The transformation's parameter names in declaration order, one
-    /// per argument, stamped at commit: the row names its own signature
-    /// after the act that wrote it is retired. Absent on rows written
-    /// before names existed; presence selects the self-describing leaf
-    /// encoding.
+    /// The transformation's parameter names in declaration order, one per
+    /// argument, stamped at commit so the row stays readable after the
+    /// transformation is retired. Absent on older rows; presence selects
+    /// the self-describing leaf encoding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameters: Option<Vec<String>>,
 }
 
 impl AuditRow {
-    /// The shapes a row can lawfully have, by what it carries: nothing
-    /// (the original encoding), an attestation (the attested one), or
-    /// an attestation and names, one per argument (the self-describing
-    /// one). Names without an attestation, or names that do not match
-    /// the arguments' count, describe no row the runtime ever wrote.
-    /// Checked at the database boundary and before any row is hashed,
-    /// because packs carry rows as hostile input.
+    /// Check the row is a shape the runtime writes: nothing extra, an
+    /// attestation, or an attestation plus one name per argument.
+    ///
+    /// Checked at the database boundary and before hashing, because packs
+    /// carry rows as hostile input.
     pub fn validate_shape(&self) -> Result<(), String> {
         match (&self.attestation, &self.parameters) {
             (_, None) => Ok(()),
@@ -66,13 +62,11 @@ impl AuditRow {
         }
     }
 }
-/// Page size for every keyset read over the replay order - the audit
-/// tail, coverage's two passes, and the chunked replays. One chunk in
-/// memory at a time; hardcoded until a real history forces tuning.
+/// Page size for every keyset read over the replay order. One chunk sits
+/// in memory at a time.
 pub(crate) const REPLAY_CHUNK: i64 = 1024;
-/// One raw `morpholog.audit` row as `query_as!` decodes it (DB shape
-/// only); turned into a typed [`AuditRow`] by [`decode_audit_row`].
-/// Field order matches the SELECT column order in the listing queries.
+/// One raw `morpholog.audit` row as `query_as!` decodes it; turned into
+/// an [`AuditRow`] by [`decode_audit_row`].
 pub(crate) struct AuditRowRaw {
     transition_id: Uuid,
     transformation_name: String,
@@ -84,19 +78,15 @@ pub(crate) struct AuditRowRaw {
     retracted_claims: serde_json::Value,
     emitted_intents: serde_json::Value,
     committed_at: Timestamp,
-    // Nullable by column attribute even though the named constraint
-    // refuses new NULLs: a database upgraded from before attestation
-    // lawfully holds NULL on its historical rows, and fresh and
-    // upgraded databases must describe the column identically for the
-    // compile-time query checks.
+    // Nullable even though a constraint refuses new NULLs: upgraded
+    // databases hold NULL on historical rows, and fresh and upgraded
+    // databases must describe the column alike for the query checks.
     attestation: Option<serde_json::Value>,
     // Nullable for the same reason: historical rows carry no names.
     parameters: Option<serde_json::Value>,
 }
-// The audit columns, in the order `AuditRowRaw`'s fields and the listing
-// queries' SELECTs share. Inlined as a literal in each `query_as!`
-// (macros cannot interpolate a runtime column list); this note is the
-// one place that records the canonical order:
+// The canonical column order, shared by `AuditRowRaw` and every listing
+// SELECT (each `query_as!` must spell it out literally):
 //   transition_id, transformation_name, arguments, actor,
 //   invariant_epoch, invariants_checked,
 //   asserted_claims, retracted_claims, emitted_intents, committed_at,
@@ -106,9 +96,6 @@ pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
         transition_id: row.transition_id,
         transformation_name: TransformationName::from(row.transformation_name),
         arguments: serde_json::from_value(row.arguments)?,
-        // Decode the tagged actor JSON and extract the subject,
-        // erroring at this boundary if the column somehow holds a
-        // non-subject value.
         actor: match serde_json::from_value::<EvalValue>(row.actor)? {
             EvalValue::Subject(s) => s,
             other => {
@@ -137,32 +124,25 @@ pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
     decoded.validate_shape().map_err(PgError::InvalidState)?;
     Ok(decoded)
 }
-/// Return every committed audit row from `morpholog.audit`, ordered by
-/// `(committed_at, transition_id)`: causal commit order with the
-/// time-ordered UUIDv7 PRIMARY KEY as the stable tie-break.
+/// Return every committed audit row, ordered by `(committed_at,
+/// transition_id)`: commit order, with the UUIDv7 key as tie-break.
 ///
-/// JSONB columns are decoded through the codec into typed values. A
-/// decoding error surfaces as [`PgError::Encoding`]; against a database
-/// the runtime itself wrote, that indicates corruption or tampering.
+/// A decoding error is [`PgError::Encoding`], which on a database the
+/// runtime wrote means corruption or tampering.
 ///
-/// A whole-table fetch, intended for tests, demos, and small-history
-/// inspection. The blessed tailing surface is
-/// [`list_audit_rows_page`] under [`audit_resume_watermark`], which
-/// is what `inspect audit` streams.
+/// A whole-table fetch for tests and small histories. To tail, use
+/// [`list_audit_rows_page`] under [`audit_resume_watermark`].
 pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
     let mut conn = pool.acquire().await.map_err(classify)?;
     list_audit_rows_page(&mut conn, None, None, i64::MAX).await
 }
 /// One keyset page of audit rows in `(committed_at, transition_id)`
-/// order: strictly after `cursor` (when given) and strictly below
-/// `horizon` (when given). Takes a connection rather than a pool so a
-/// caller can hold one snapshot across pages - `inspect audit` opens
-/// a `REPEATABLE READ READ ONLY` transaction and loops this until a
-/// short page.
+/// order: strictly after `cursor` and strictly below `horizon`, each when
+/// given. Takes a connection so the caller can hold one snapshot across
+/// pages.
 ///
-/// `horizon` is the frontier-completeness clamp from
-/// [`audit_resume_watermark`]; passing `None` reads to the snapshot's
-/// end and forfeits the lossless-resume guarantee.
+/// `horizon` comes from [`audit_resume_watermark`]; `None` reads to the
+/// snapshot's end and loses the lossless-resume guarantee.
 // These query texts are mirrored in tests/plan_shapes.rs, which pins their
 // plans; a change here belongs there too.
 pub async fn list_audit_rows_page(
@@ -248,22 +228,20 @@ pub async fn list_audit_rows_page(
 }
 use crate::audit_pages::AuditPages;
 
-/// A streaming audit tail: the lossless-resume recipe with its
-/// load-bearing order baked in, so a caller cannot get it wrong.
-/// [`begin_audit_tail`] resolves the resume cursor, computes the
-/// horizon BEFORE the snapshot, then opens one `REPEATABLE READ READ
-/// ONLY` transaction; [`AuditTail::next_page`] pages to the horizon
-/// inside that snapshot. Rows whose writers were in flight when the
-/// horizon was computed are withheld for the next tail, never
-/// skipped - see [`audit_resume_watermark`] for the proof.
+/// A streaming audit tail with the lossless-resume order built in.
+///
+/// [`begin_audit_tail`] resolves the cursor, computes the horizon BEFORE
+/// the snapshot, then opens one `REPEATABLE READ READ ONLY` transaction;
+/// [`AuditTail::next_page`] pages to the horizon inside it. Rows from
+/// writers in flight at the horizon are withheld for the next tail, never
+/// skipped (see [`audit_resume_watermark`]).
 pub struct AuditTail<'p> {
     tx: Transaction<'p, Postgres>,
     pages: AuditPages,
 }
-/// Open an audit tail, optionally resuming strictly after a
-/// previously seen transition (unknown ids are
-/// [`PgError::TransitionNotFound`], never a silent restart from
-/// zero).
+/// Open an audit tail, optionally resuming strictly after a seen
+/// transition. An unknown id is [`PgError::TransitionNotFound`], never a
+/// silent restart from zero.
 pub async fn begin_audit_tail<'p>(
     pool: &'p PgPool,
     after: Option<Uuid>,
@@ -286,18 +264,15 @@ pub async fn begin_audit_tail<'p>(
     })
 }
 impl AuditTail<'_> {
-    /// The next page of transitions, in `(committed_at,
-    /// transition_id)` order; empty when the tail has reached the
-    /// horizon. One page sits in memory at a time.
+    /// The next page of transitions in `(committed_at, transition_id)`
+    /// order; empty once the tail reaches the horizon.
     pub async fn next_page(&mut self) -> Result<Vec<AuditRow>, PgError> {
         self.pages.next(&mut self.tx).await
     }
 }
 /// Resolve a transition id to the `(committed_at, transition_id)`
-/// keyset cursor every audit read orders by. Unknown ids surface as
-/// [`PgError::TransitionNotFound`] - a tail resuming from a cursor it
-/// was handed must learn about a typo, never silently restart from
-/// zero.
+/// keyset cursor every audit read orders by. An unknown id is
+/// [`PgError::TransitionNotFound`], so a typo never restarts a tail.
 pub async fn audit_cursor_for(
     conn: &mut sqlx::PgConnection,
     transition_id: Uuid,
@@ -318,82 +293,64 @@ pub async fn audit_cursor_for(
 /// `committed_at` strictly below the returned instant is already
 /// visible to a snapshot taken AFTER this call returns.
 ///
-/// Why this works: `committed_at` is server-evaluated `now()` - the
-/// WRITER's transaction start time - while row visibility follows
-/// commit order, so a snapshot alone can miss an in-flight writer
-/// whose row will sort below rows already emitted; a cursor that
-/// advanced past that slot would skip the row forever. The horizon
-/// closes the race from the other side: it is the minimum
-/// `xact_start` over every other open transaction in this database
-/// except autovacuum's (see below), or `now()` when there is none,
-/// computed BEFORE the read snapshot.
-/// Any row invisible to the snapshot belongs to a writer that either
-/// was in flight here (so its `committed_at` = its `xact_start` >=
-/// the minimum, excluded by the `< horizon` clamp) or started later
-/// (excluded likewise). Rows at or above the horizon are withheld,
-/// never lost - the next invocation's fresh horizon surfaces them.
+/// Why: `committed_at` is the WRITER's transaction start (`now()`), but
+/// visibility follows commit order. A snapshot alone can miss an
+/// in-flight writer whose row will sort below rows already emitted, and
+/// a cursor past that slot would skip it forever. The horizon is the
+/// minimum `xact_start` over every other open transaction in this
+/// database except autovacuum's, or `now()` if none, computed BEFORE the
+/// read snapshot. Any row the snapshot cannot see belongs to a writer
+/// that started at or after the horizon, so the `< horizon` clamp
+/// excludes it. Such rows are withheld, never lost: the next call's
+/// horizon surfaces them.
 ///
-/// Preconditions, checked or documented:
-/// - The caller takes its read snapshot AFTER this call returns (the
-///   ordering is load-bearing; `inspect audit` does this).
-/// - This session can SEE other sessions in `pg_stat_activity` (same
-///   role as the writers, `pg_read_all_stats`, or superuser). A
-///   session it cannot see would silently fall out of the minimum,
-///   so insufficient visibility is DETECTED and surfaced as
-///   [`PgError::StatVisibility`] rather than an unsound horizon.
-/// - No prepared transactions (2PC) write audit; PostgreSQL ships
-///   with `max_prepared_transactions = 0` and the adapter never
-///   prepares.
+/// Preconditions:
+/// - The caller takes its read snapshot AFTER this call returns.
+/// - This session can see other sessions in `pg_stat_activity` (same
+///   role as the writers, `pg_read_all_stats`, or superuser). An unseen
+///   session would silently drop out of the minimum, so it is detected
+///   and returned as [`PgError::StatVisibility`].
+/// - No prepared (2PC) transaction writes audit. PostgreSQL defaults to
+///   `max_prepared_transactions = 0` and the adapter never prepares.
 ///
-/// Autovacuum workers are left out: they hold transactions for as long
-/// as a vacuum runs and never write audit. The test is `IS DISTINCT
-/// FROM`, not `<>`, because a session this role cannot see has a null
-/// `backend_type`, and `<>` would drop it from the minimum and from the
-/// hidden count alike.
+/// Autovacuum workers are excluded: they hold long transactions and never
+/// write audit. The filter uses `IS DISTINCT FROM`, not `<>`, because an
+/// unseen session has a null `backend_type` and `<>` would drop it from
+/// both the minimum and the hidden count.
 ///
-/// Liveness: the horizon trails the oldest other open transaction in
-/// the database, whatever it is doing - a stuck session stalls the
-/// tail; it never loses rows.
+/// Liveness: a stuck session anywhere in the database stalls the tail;
+/// it never loses rows.
 ///
 /// # The writer assertion (`writers: Some(..)`)
 ///
-/// On managed PostgreSQL the platform's own sessions are permanently
-/// hidden and `pg_read_all_stats` cannot be granted, so the
-/// all-sessions horizon is structurally unavailable even when the
-/// deployment satisfies the property it establishes. The assertion is
-/// the explicit, verified opt-in: the operator names the SESSION
-/// (login) roles that write audit, and the horizon is computed over
-/// those roles' sessions only.
+/// Managed PostgreSQL hides the platform's sessions and will not grant
+/// `pg_read_all_stats`, so the all-sessions horizon is unavailable. The
+/// operator can instead name the login roles that write audit, and the
+/// horizon covers only their sessions.
 ///
-/// Verified, not trusted: in the SAME statement that computes the
-/// horizon (one snapshot, so the census and the minimum cannot be
-/// split by a concurrent grant), the catalog census enumerates every
-/// non-superuser role that (a) can hold a session - login-capable, or
-/// currently connected, which catches a role made NOLOGIN after its
-/// session opened - and (b) can write `morpholog.audit` directly, by
-/// inherited membership (`has_table_privilege` follows inheritance),
-/// or by `SET ROLE` into a granted role (`pg_has_role(..., 'SET')` -
-/// deliberately not `'MEMBER'`, which would also demand roles whose
-/// membership confers no usable path, `INHERIT FALSE, SET FALSE`). An
-/// asserted name that does not exist is
-/// [`PgError::WriterRoleUnknown`]; a census role missing from the
-/// assertion is [`PgError::WriterAssertionIncomplete`]; a hidden
-/// session OF an asserted role is [`PgError::WriterSessionsHidden`]
-/// (the assertion cannot compensate there). Sessions are matched by
-/// role OID, not name, so a rename between census and filter cannot
-/// misclassify one.
+/// The assertion is verified, not trusted. In the SAME statement as the
+/// horizon (one snapshot, so a concurrent grant cannot split them), a
+/// catalog census lists every non-superuser role that (a) can hold a
+/// session - login-capable or currently connected, which catches a role
+/// made NOLOGIN after connecting - and (b) can insert into
+/// `morpholog.audit` directly, through inherited membership, or by
+/// `SET ROLE` (`pg_has_role(..., 'SET')`; `'MEMBER'` would also demand
+/// roles with no usable path). Errors:
+/// - an asserted name that does not exist: [`PgError::WriterRoleUnknown`];
+/// - a census role missing from the assertion:
+///   [`PgError::WriterAssertionIncomplete`];
+/// - a hidden session of an asserted role: [`PgError::WriterSessionsHidden`].
 ///
-/// What the assertion accepts, in the operator's own words:
-/// - SUPERUSER writes are outside the proof - superusers bypass ACLs,
-///   every managed host runs platform superusers, and they do not
-///   write embedder schemas. That residue is exactly what the flag
-///   acknowledges.
-/// - Role configuration (grants, memberships, login ability) must stay
-///   stable from this statement until the caller's read snapshot is
-///   established. The single statement closes the census-vs-horizon
-///   gap; a grant landing in the remaining statement-to-snapshot
-///   window, to a role with an already-open transaction, is the
-///   documented residue of the opt-in.
+/// Sessions match by role OID, not name, so a rename cannot misclassify
+/// one.
+///
+/// What the assertion accepts:
+/// - SUPERUSER writes are outside the proof. Superusers bypass ACLs and
+///   every managed host runs them; they do not write embedder schemas.
+/// - Role configuration (grants, memberships, login) must stay stable
+///   from this statement until the caller's snapshot. A grant in that
+///   window, to a role with an already-open transaction, is the accepted
+///   residue.
 pub async fn audit_resume_watermark(
     pool: &PgPool,
     writers: Option<&[String]>,
@@ -401,17 +358,12 @@ pub async fn audit_resume_watermark(
     if let Some(asserted) = writers {
         return audit_resume_watermark_asserted(pool, asserted).await;
     }
-    // One statement, deliberately: the `now()` fallback must be
-    // evaluated at the same instant as the minimum, because a writer
-    // starting between two separate queries would carry a
-    // `committed_at` below a later-computed fallback - reopening the
-    // exact window the horizon exists to close. The hidden-session
-    // count rides along: a session this role cannot see renders its
-    // query text as the literal '<insufficient privilege>' and hides
-    // `xact_start`, which would silently corrupt the minimum.
-    // `horizon!`: coalesce(_, now()) can never be null. `hidden!`:
-    // count(*) can never be null. The `!` overrides tell sqlx what the
-    // aggregate expressions guarantee but cannot prove.
+    // One statement: the `now()` fallback must be taken at the same
+    // instant as the minimum, or a writer starting in between would sort
+    // below it. An unseen session shows its query as
+    // '<insufficient privilege>' and hides `xact_start`, so it is counted.
+    // `horizon!` / `hidden!`: coalesce(_, now()) and count(*) are never
+    // null.
     let row = sqlx::query!(
         r#"SELECT coalesce(min(xact_start), now()) AS "horizon!",
                   count(*) FILTER (WHERE query = '<insufficient privilege>') AS "hidden!"
@@ -430,8 +382,7 @@ pub async fn audit_resume_watermark(
 }
 
 /// The assertion-mode horizon: census, filter, and minimum in one
-/// statement (one snapshot). See `audit_resume_watermark`'s doc for
-/// the semantics and the accepted residue.
+/// statement. See `audit_resume_watermark`.
 async fn audit_resume_watermark_asserted(
     pool: &PgPool,
     asserted: &[String],
@@ -442,10 +393,9 @@ async fn audit_resume_watermark_asserted(
     let mut names: Vec<String> = asserted.to_vec();
     names.sort();
     names.dedup();
-    // `horizon!` / `hidden!`: aggregates over a one-row aggregate query
-    // can never be null (coalesce / count). `unknown` and `missing`
-    // stay nullable: array_agg over an empty set IS null, and empty
-    // means "nothing wrong".
+    // `horizon!` / `hidden!`: coalesce and count are never null.
+    // `unknown` and `missing` stay nullable: array_agg over nothing is
+    // null, which means "nothing wrong".
     let row = sqlx::query!(
         r#"WITH asserted AS (
                SELECT a.name, r.oid AS role_oid

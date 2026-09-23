@@ -1,11 +1,9 @@
 //! Serde glue for a transition actor.
 //!
-//! An actor is always a [`Subject`], but it persists and renders as a tagged
-//! [`EvalValue::Subject`] so the audit `actor` column and the CLI's transition
-//! JSON keep their v0 shape (`{"type":"subject","value":"..."}`), consistent
-//! with how subjects appear in the `arguments` array. Deserialisation validates
-//! the tag at the IO boundary - the one place a non-subject actor could enter -
-//! so the kernel itself needs no runtime "actor must be a subject" check.
+//! An actor is always a [`Subject`], but it is stored and rendered as a tagged
+//! [`EvalValue::Subject`] (`{"type":"subject","value":"..."}`), the same shape
+//! subjects have in the `arguments` array. Deserialising checks the tag, so a
+//! non-subject actor cannot get into the kernel.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

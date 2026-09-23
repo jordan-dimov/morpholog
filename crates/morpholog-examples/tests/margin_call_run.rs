@@ -1,12 +1,9 @@
-//! Integration tests for the margin call run example
-//! (`examples/14_margin_call_run/`).
+//! The margin call run example (`examples/14_margin_call_run/`).
 //!
-//! The gallery's first *set-valued proposal*: the risk engine hands the
-//! runtime the whole batch of called accounts as one all-or-nothing
-//! decision (a collection argument). These tests pin the example's
-//! teaching point - completeness, not merely correctness: a *missing*
-//! call is refused, not just a wrong one - alongside the exclusion control
-//! (no adequately-margined account may be called) and the exact top-up.
+//! The risk engine hands over the whole batch of called accounts as one
+//! collection argument, admitted all or nothing. The point is completeness:
+//! a *missing* call is refused, not just a wrong one. Also covered: no
+//! adequately-margined account may be called, and each call is the exact top-up.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -111,11 +108,9 @@ fn a_complete_and_exact_run_is_admitted() {
 
 #[test]
 fn a_run_that_omits_an_undermargined_account_is_refused() {
-    // The headline. Forgetting acct_short_b leaves it under-collateralised -
-    // the dangerous mistake a margin process exists to prevent. The
-    // completeness gate refuses the WHOLE run, so nothing is recorded until
-    // every short account is included. A missing call is not a smaller
-    // error than a wrong one; it is the one that matters.
+    // Forgetting acct_short_b leaves it under-collateralised, the mistake a
+    // margin process exists to prevent. The completeness gate refuses the
+    // WHOLE run until every short account is included.
     assert!(is_rejected(&run(vec!["acct_short_a"], &book())));
 }
 
@@ -132,9 +127,9 @@ fn calling_an_adequately_margined_account_is_refused() {
 
 #[test]
 fn an_empty_book_admits_an_empty_run() {
-    // Vacuous completeness: with nothing below its floor, a run that calls
-    // no one is complete and is admitted. Totality refuses what is missing,
-    // never demands calls that are not owed.
+    // With nothing below its floor, a run that calls no one is complete and
+    // is admitted. Completeness refuses what is missing, never demands calls
+    // that are not owed.
     let calm = State::from_claims(vec![
         claim_instance("RequiredMargin", &[subj("acct_ok"), qty("100000", "USD")]),
         claim_instance("MaintenanceMargin", &[subj("acct_ok"), qty("70000", "USD")]),

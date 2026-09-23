@@ -1,9 +1,4 @@
 //! Concrete [`Deliverer`] implementations.
-//!
-//! `StdoutDeliverer` is the canonical first impl: it prints each
-//! intent as a JSON line to stdout and reports `Delivered`. Useful
-//! for local development, smoke tests, and any deployment whose
-//! "downstream" is a structured-log pipeline that ingests stdout.
 
 use std::io::{self, Write};
 
@@ -11,11 +6,9 @@ use morpholog_postgres::{Deliverer, DeliveryOutcome, OutboxRow};
 use serde_json::json;
 
 /// Prints each outbox intent as a single JSON line to stdout.
-/// Returns `Delivered` on a successful write-and-flush,
-/// `NonRetryable` if the stdout sink is broken (e.g., the
-/// downstream pipe was closed).
 ///
-/// The serialized shape is:
+/// Returns `Delivered` once the line is written and flushed, and `NonRetryable` if stdout is
+/// broken (for example, the downstream pipe was closed). Each line has this shape:
 ///
 /// ```json
 /// {
@@ -28,21 +21,11 @@ use serde_json::json;
 /// }
 /// ```
 ///
-/// Newline-terminated so log-line-oriented consumers can parse
-/// each delivery as a discrete record. The `idempotency_key` is
-/// included so downstream consumers can deduplicate redelivered
-/// intents (the outbox is at-least-once). Use this for
-/// development, smoke tests, or as a baseline reference when
-/// implementing a real downstream-aware deliverer.
+/// The outbox is at-least-once, so consumers use `idempotency_key` to drop redeliveries.
 ///
-/// **NOT a production delivery path.** Stdout has no
-/// backpressure, no acknowledgement, no idempotency guarantee
-/// beyond what the consumer pipeline provides. The deliverer
-/// flushes stdout before reporting `Delivered` (so bytes have
-/// left this process's buffer), but downstream behavior past that
-/// is whatever the pipeline does. Suitable for demos and smoke
-/// tests; a real downstream enters as its own concrete
-/// [`Deliverer`] impl.
+/// **Not a production delivery path.** Stdout has no backpressure and no acknowledgement; once
+/// the bytes leave this process, what happens is up to the pipeline. Use it for development
+/// and smoke tests. A real downstream gets its own [`Deliverer`] impl.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StdoutDeliverer;
 
@@ -62,11 +45,8 @@ impl Deliverer for StdoutDeliverer {
                 reason: format!("StdoutDeliverer: writeln to stdout failed: {e}"),
             };
         }
-        // Flush before reporting Delivered: writeln! may leave
-        // bytes in stdout's buffer (especially when piped to a
-        // log collector). If the process crashes between
-        // returning Delivered and the buffer flush, the intent
-        // is lost; we promised at-least-once.
+        // Flush before reporting Delivered: a crash with bytes still buffered would lose the
+        // intent after it was marked delivered.
         if let Err(e) = stdout.flush() {
             return DeliveryOutcome::NonRetryable {
                 reason: format!("StdoutDeliverer: flush failed: {e}"),

@@ -1,43 +1,17 @@
-//! Shared test helpers for the Morpholog workspace.
+//! Shared sync test helpers for the Morpholog workspace, so test crates stop re-defining the
+//! same constructors and drifting apart.
 //!
-//! Every test crate (`morpholog-core`, `morpholog-examples`,
-//! `morpholog-postgres`, `morpholog-outbox`, `morpholog-cli`) ends up
-//! re-defining the same handful of constructors and convenience
-//! wrappers: build an [`EvalValue::Subject`] from a `&str`, build an
-//! [`EvalValue::Decimal`] from an `i64`, run a sync [`propose`] with a
-//! default actor. Without this crate each per-test-file `mod common;`
-//! would re-define them inline - same shapes, same names, drifting
-//! independently. This
-//! crate collapses them to one source of truth.
+//! - `subj`, `dec`, `date`, `bool_`, `coll`, ...: build an [`EvalValue`] from a plain Rust value.
+//!   `role` is `subj` for a subject that names a delegated role.
+//! - `test_actor`, `test_transition`: a default actor for tests that do not model authority.
+//! - `propose_with_test_actor`, `propose_as`, `must_accept[_as]`, `must_reject[_as]`: wrappers
+//!   over the kernel's [`propose`].
 //!
-//! Scope: **sync helpers only**. Async wrappers around
-//! `propose_against_pg` live in `crates/morpholog-postgres/tests/common/`
-//! because they depend on `morpholog-postgres` (which depends on
-//! this crate would be illegal as a cycle, and would also pull
-//! sqlx/tokio into every consumer). Keeping the sync surface in a
-//! tiny no-async-deps crate keeps the dep graph clean.
+//! Async helpers live in `crates/morpholog-postgres/tests/common/`: `morpholog-postgres`
+//! depends on this crate, and keeping sqlx and tokio out keeps it small.
 //!
-//! Naming convention:
-//! - `subj`, `dec`, `date`, `bool_`, `coll`: construct an
-//!   [`EvalValue`] from a Rust-friendly input.
-//! - `role`: semantic alias for `subj` when the subject names a
-//!   delegated role (e.g. `role(ROLE_RANDOMISE_PARTICIPANT)`); same
-//!   runtime, documents reader intent. Mirrors the `ir_builder::role` term
-//!   alias on the IR side.
-//! - `test_actor`, `test_transition`: a shared default actor for
-//!   tests that do not model authority. Authority-focused tests
-//!   build their own [`Transition`] with a specific actor.
-//! - `propose_with_test_actor`, `must_accept`, `must_accept_as`,
-//!   `must_reject`, `must_reject_as`, `propose_as`: ergonomic
-//!   wrappers over the kernel's [`propose`] surface.
-//!
-//! Helpers are `#[allow(dead_code)]` because not every test crate
-//! uses every helper. `expect_used` and `unwrap_used` are allowed at
-//! the crate level: this is test-fixture code where a malformed
-//! fixture (a bad decimal string, a missing field, an unexpected
-//! `Rejected`) is a test-author bug that should panic with a clear
-//! message, not propagate a recoverable error up through the
-//! call chain.
+//! A bad fixture is a test-author bug, so helpers panic with a clear message rather than
+//! return errors.
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
@@ -59,43 +33,33 @@ pub fn subj(s: &str) -> EvalValue {
     EvalValue::Subject(Subject::from(s))
 }
 
-/// Semantic alias for [`subj`]. Identical runtime; documents reader
-/// intent when the subject names a delegated role.
+/// [`subj`], for a subject that names a delegated role.
 pub fn role(s: &str) -> EvalValue {
     subj(s)
 }
 
-/// Build an [`EvalValue::Decimal`] from an integer mantissa with scale
-/// zero. The common case for hand-written test fixtures. For exact
-/// decimals with a fractional part, use [`dec_str`].
+/// Build an integer [`EvalValue::Decimal`]. For a fractional part, use [`dec_str`].
 pub fn dec(n: i64) -> EvalValue {
     EvalValue::Decimal(Decimal::new(n, 0))
 }
 
-/// Build an [`EvalValue::Decimal`] by parsing a source string.
-/// Panics on a malformed decimal - this is a test helper, not
-/// production code, and a bad fixture is a test-author bug.
+/// Build an [`EvalValue::Decimal`] by parsing a string. Panics if it is malformed.
 pub fn dec_str(s: &str) -> EvalValue {
     EvalValue::Decimal(s.parse::<Decimal>().expect("valid decimal string"))
 }
 
-/// Build an [`EvalValue::Timestamp`] by parsing an RFC 3339 instant
-/// string. Panics on a malformed instant - same rationale as
-/// [`dec_str`].
+/// Build an [`EvalValue::Timestamp`] from an RFC 3339 string. Panics if it is malformed.
 pub fn ts(s: &str) -> EvalValue {
     EvalValue::Timestamp(s.parse().expect("test timestamp literal must parse"))
 }
 
-/// Build an [`EvalValue::Duration`] by parsing an ISO-8601 duration
-/// string. Panics on bad input - same rationale as [`dec_str`].
+/// Build an [`EvalValue::Duration`] from an ISO-8601 string. Panics if it is malformed.
 pub fn dur(s: &str) -> EvalValue {
     EvalValue::Duration(s.parse().expect("test duration literal must parse"))
 }
 
-/// Build an [`EvalValue::CalendarSpan`] through the kernel's own
-/// grammar. Panics on bad input - same rationale as [`dec_str`].
-/// Only refusal tests want one: a span is expression-only and every
-/// storage and wire boundary rejects it.
+/// Build an [`EvalValue::CalendarSpan`] with the kernel's own grammar. Panics if it is
+/// malformed. Mostly for refusal tests: every storage and wire boundary rejects a span.
 pub fn cal_span(s: &str) -> EvalValue {
     EvalValue::CalendarSpan(
         morpholog_core::calendar::parse_calendar_span(s)
@@ -103,9 +67,8 @@ pub fn cal_span(s: &str) -> EvalValue {
     )
 }
 
-/// Build an [`EvalValue::Quantity`] from an exact decimal amount
-/// string and a unit symbol. Panics on a malformed amount - same
-/// rationale as [`dec_str`].
+/// Build an [`EvalValue::Quantity`] from a decimal string and a unit. Panics if the amount is
+/// malformed.
 pub fn qty(amount: &str, unit: &str) -> EvalValue {
     EvalValue::Quantity {
         amount: amount.parse().expect("test quantity amount must parse"),
@@ -113,15 +76,12 @@ pub fn qty(amount: &str, unit: &str) -> EvalValue {
     }
 }
 
-/// Build an [`EvalValue::Date`] by parsing an ISO-8601 civil-date
-/// string. Panics on a malformed date - same rationale as [`dec_str`].
+/// Build an [`EvalValue::Date`] from an ISO-8601 date string. Panics if it is malformed.
 pub fn date(s: &str) -> EvalValue {
     EvalValue::Date(s.parse::<Date>().expect("valid ISO civil date"))
 }
 
-/// Build an [`EvalValue::Bool`]. Named with a trailing underscore
-/// because `bool` is a Rust type and an unsuffixed `bool(...)` reads
-/// like a cast.
+/// Build an [`EvalValue::Bool`]. The underscore avoids `bool(...)` reading like a cast.
 pub fn bool_(b: bool) -> EvalValue {
     EvalValue::Bool(b)
 }
@@ -136,8 +96,6 @@ pub fn coll(items: Vec<EvalValue>) -> EvalValue {
 // ============================================================
 
 /// Build a [`ClaimInstance`] from a predicate name and an arg slice.
-/// Convenience over `ClaimInstance { predicate: predicate.into(),
-/// args: args.to_vec() }` at the call site.
 pub fn claim_instance(predicate: &str, args: &[EvalValue]) -> ClaimInstance {
     ClaimInstance {
         predicate: predicate.into(),
@@ -146,7 +104,6 @@ pub fn claim_instance(predicate: &str, args: &[EvalValue]) -> ClaimInstance {
 }
 
 /// Build an [`IntentInstance`] from an intent name and an arg slice.
-/// The emit-vocabulary mirror of [`claim_instance`].
 pub fn intent_instance(name: &str, args: &[EvalValue]) -> IntentInstance {
     IntentInstance {
         name: name.into(),
@@ -158,15 +115,12 @@ pub fn intent_instance(name: &str, args: &[EvalValue]) -> IntentInstance {
 // Default actor and transition
 // ============================================================
 
-/// Default actor for tests that do not model authority. Authority-
-/// focused tests build their own [`Transition`] with a specific actor.
+/// Default actor for tests that do not model authority.
 pub fn test_actor() -> Subject {
     Subject::from("test_actor")
 }
 
-/// Build a [`Transition`] with the shared [`test_actor`]. Used by
-/// tests that need to pass a `&Transition` directly to functions
-/// other than [`propose`].
+/// Build a [`Transition`] with the shared [`test_actor`].
 pub fn test_transition(t: &Transformation, args: Vec<EvalValue>) -> Transition {
     Transition {
         transformation_name: t.name.clone(),
@@ -179,8 +133,7 @@ pub fn test_transition(t: &Transformation, args: Vec<EvalValue>) -> Transition {
 // Sync propose helpers
 // ============================================================
 
-/// [`propose`] with the shared [`test_actor`]. Returns the raw
-/// [`Outcome`] so callers can inspect both `Accepted` and `Rejected`.
+/// [`propose`] with the shared [`test_actor`], returning the raw [`Outcome`].
 pub fn propose_with_test_actor(
     t: &Transformation,
     args: Vec<EvalValue>,
@@ -192,8 +145,7 @@ pub fn propose_with_test_actor(
     propose(t, &transition, pre, invariants, definitions)
 }
 
-/// [`propose`] with a caller-supplied actor. Used by authority tests
-/// that need to assert which actor proposed which transition.
+/// [`propose`] with a caller-supplied actor.
 pub fn propose_as(
     t: &Transformation,
     args: Vec<EvalValue>,
@@ -210,10 +162,8 @@ pub fn propose_as(
     propose(t, &transition, pre, invariants, definitions)
 }
 
-/// Propose with [`test_actor`] and require the outcome to be
-/// [`Outcome::Accepted`]. Returns the resulting candidate state for
-/// chained setup steps. Panics on rejection or kernel error - this
-/// is for fixture-building paths where any failure is a fixture bug.
+/// Propose with [`test_actor`] and return the accepted candidate state, for chained setup.
+/// Panics on rejection or kernel error.
 pub fn must_accept(
     t: &Transformation,
     args: Vec<EvalValue>,
@@ -236,8 +186,7 @@ pub fn must_accept(
     }
 }
 
-/// [`must_accept`] with a caller-supplied actor. Used by tests that
-/// need to assert on which actor was recorded.
+/// [`must_accept`] with a caller-supplied actor.
 pub fn must_accept_as(
     t: &Transformation,
     args: Vec<EvalValue>,
@@ -265,10 +214,8 @@ pub fn must_accept_as(
     }
 }
 
-/// Propose with [`test_actor`] and require the outcome to be
-/// [`Outcome::Rejected`]. Returns the [`RejectionReason`] so callers
-/// can assert on which rule refused. Panics on acceptance or kernel
-/// error - the mirror of [`must_accept`].
+/// Propose with [`test_actor`] and return the [`RejectionReason`].
+/// Panics on acceptance or kernel error.
 pub fn must_reject(
     t: &Transformation,
     args: Vec<EvalValue>,
@@ -285,8 +232,7 @@ pub fn must_reject(
     }
 }
 
-/// [`must_reject`] with a caller-supplied actor. Used by authority
-/// tests that need to assert which actor was refused.
+/// [`must_reject`] with a caller-supplied actor.
 pub fn must_reject_as(
     t: &Transformation,
     args: Vec<EvalValue>,
@@ -312,11 +258,8 @@ pub fn must_reject_as(
 // Example fixture
 // ============================================================
 
-/// A programme's rules bound once, so propose-family calls carry only
-/// what varies per call. `Example::new(&trade_lifecycle::program())`
-/// replaces threading `&invariants(), &definitions()` through every
-/// call in a test file. The free helpers stay for tests that drive a
-/// deliberate rule subset or an ad-hoc programme.
+/// A programme's rules bound once, so each propose call passes only what varies. Use the free
+/// helpers to run against a subset of the rules.
 pub struct Example {
     invariants: Vec<Invariant>,
     definitions: Vec<Definition>,

@@ -1,7 +1,5 @@
-//! The durable half of the view-surface contract, against real
-//! PostgreSQL. The renderer's unit tests pin the SQL *text*; these pin
-//! what that text *does* in the database - the properties that only a
-//! live engine can confirm:
+//! The generated SQL views against real PostgreSQL. The renderer's unit
+//! tests check the SQL text; these check what it does:
 //!   - the views are non-updatable (INSERT/UPDATE/DELETE through them
 //!     fail and never reach `morpholog.claims`);
 //!   - the script applies atomically (a mid-script failure rolls the
@@ -13,8 +11,6 @@
 //!   - `Any` reads back the whole tagged object;
 //!   - the temporal precision boundary holds (typed columns are
 //!     microsecond; `_morpholog_arguments` keeps the exact source).
-//!
-//! Skipped unless `DATABASE_URL` is set, like the other PG suites.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -30,10 +26,8 @@ use rust_decimal::Decimal;
 const SENTINEL_HASH: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
-/// This suite's reset is unique - beyond the governed tables and the
-/// derived cache it must drop the generated `morpholog_views` (and the
-/// `analytics` schema a test renames into), so it keeps its own local
-/// reset rather than sharing `common::reset_db_and_read_cache`.
+/// Like `common::reset_db_and_read_cache`, but also drops the generated
+/// `morpholog_views` and the `analytics` schema a test renames into.
 async fn reset(pool: &PgPool) {
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "{}; TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
@@ -95,8 +89,6 @@ async fn seed_fixture(
 }
 
 fn render(p: &Program, schema: &str) -> String {
-    // `render_views` only borrows `p` for the call, so the caller's
-    // reference is enough - no clone, no leak.
     render_views(p.validated().unwrap(), schema, SENTINEL_HASH)
         .expect("renders")
         .sql
@@ -152,9 +144,8 @@ async fn the_script_applies_atomically() {
     let pool = test_pool().await;
     reset(&pool).await;
     let p = fixture_program();
-    // Pre-create a plain TABLE occupying the view's name, so the script's
-    // CREATE OR REPLACE VIEW for `fixture` fails ("not a view"). The
-    // BEGIN/COMMIT wrapper must then leave the catalogue uncreated too.
+    // A plain table in the view's place makes CREATE OR REPLACE VIEW fail
+    // ("not a view"). The catalogue must then not be created either.
     sqlx::raw_sql("CREATE SCHEMA morpholog_views; CREATE TABLE morpholog_views.fixture (x int);")
         .execute(&pool)
         .await
@@ -165,8 +156,8 @@ async fn the_script_applies_atomically() {
         .await;
     assert!(result.is_err(), "the colliding name must abort the script");
 
-    // The catalogue (rendered after the views) must not exist: the whole
-    // transaction rolled back rather than leaving a half-built surface.
+    // The catalogue, rendered after the views, must not exist: the whole
+    // script rolled back.
     let catalog_exists = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM pg_views \
          WHERE schemaname = 'morpholog_views' AND viewname = '_morpholog_catalog')",
@@ -193,8 +184,8 @@ async fn appending_a_field_is_a_compatible_replace() {
         .await
         .expect("v1 applies");
 
-    // Append a trailing field: metadata-first column order means the new
-    // column lands at the end of the view, which CREATE OR REPLACE allows.
+    // A new trailing field lands at the end of the view, which CREATE OR
+    // REPLACE allows.
     let v2 = parse_program(
         "program eden\n\
          predicate Rec(id: Subject, amount: Decimal, memo: Subject)\n\
@@ -233,8 +224,8 @@ async fn renaming_a_field_is_rejected_atomically() {
         .await
         .expect("v1 applies");
 
-    // Renaming a field renames an existing view column, which
-    // CREATE OR REPLACE forbids - the documented manual-migration case.
+    // Renaming a field renames a view column, which CREATE OR REPLACE
+    // forbids; this needs a manual migration.
     let renamed = parse_program(
         "program eden\n\
          predicate Rec(id: Subject, total: Decimal)\n\
@@ -397,10 +388,9 @@ async fn temporal_precision_boundary_holds() {
 
 // ---- derived views over the morpholog_read cache ----
 //
-// A derived view projects the kernel-computed read cache, not
-// `morpholog.claims`. It reads the active generation whose model hash
-// matches the generated surface, so it is empty until `refresh derived`
-// has run for the same programme. The kernel stays the sole evaluator.
+// A derived view reads the kernel-computed cache, not `morpholog.claims`,
+// and only the active generation for its own model hash. It is empty
+// until `refresh derived` has run for the same programme.
 
 const DERIVED_FIXTURE: &str = "program dv\n\
     predicate Entry(account: Subject, amount: Decimal)\n\
@@ -481,9 +471,8 @@ async fn derived_view_is_empty_for_a_mismatched_model_hash() {
     reset(&pool).await;
     let p = derived_fixture();
     seed_entry(&pool, &p, "a1", 10).await;
-    // The active generation is from a DIFFERENT model than the views are
-    // generated for: the view filters on its own model hash and shows
-    // nothing, rather than projecting another model's rows.
+    // The active generation is from a different model, so the view shows
+    // nothing rather than another model's rows.
     refresh_derived(&pool, p.validated().unwrap(), "sha256:another-model")
         .await
         .unwrap();

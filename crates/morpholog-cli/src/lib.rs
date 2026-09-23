@@ -1,11 +1,8 @@
-//! Envelope structs shared between the `morpholog` binary and its
-//! contract tests. The binary serializes these directly; the contract
-//! suite constructs the same types and pins the bytes against the
-//! goldens, so a field change is a compile error on both sides rather
-//! than silent producer/golden drift.
+//! Envelope structs shared by the `morpholog` binary and its contract
+//! tests. Both sides use the same types, so a field change breaks the build
+//! instead of drifting silently from the goldens.
 //!
-//! This lib target exists only for that pinning; it is not a stable
-//! public API. Embedders consume the pinned JSON envelopes
+//! Not a stable public API. Embedders consume the pinned JSON envelopes
 //! (`schema --result`, the generated client), never these types.
 
 pub mod envelopes;
