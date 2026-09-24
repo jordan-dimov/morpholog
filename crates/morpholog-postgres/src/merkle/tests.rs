@@ -238,6 +238,25 @@ fn matches_rfc6962_recurrence() {
     }
 }
 
+/// The frontier gives `merkle_root`'s answer at every size, across
+/// empty, single-leaf, power-of-two and ragged trees.
+#[test]
+fn the_frontier_root_is_the_merkle_root_at_every_size() {
+    let leaves: Vec<Hash> = (0u16..300).map(|i| leaf_hash(&i.to_le_bytes())).collect();
+    let mut frontier = Frontier::default();
+    for n in 0..=leaves.len() {
+        assert_eq!(frontier.len(), n);
+        assert_eq!(
+            frontier.root(),
+            merkle_root(&leaves[..n]),
+            "the frontier disagrees with merkle_root at n={n}"
+        );
+        if let Some(leaf) = leaves.get(n) {
+            frontier.push(*leaf);
+        }
+    }
+}
+
 /// The two-leaf root is exactly `node(leaf(a), leaf(b))`.
 #[test]
 fn two_leaf_root_is_one_node() {

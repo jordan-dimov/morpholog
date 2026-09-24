@@ -1,0 +1,8 @@
+{
+  "pack_format_version": 4,
+  "pack_kind": "prefix",
+  "tree_size": 2,
+  "root_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "checkpoint_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "checkpoint_count": 1
+}

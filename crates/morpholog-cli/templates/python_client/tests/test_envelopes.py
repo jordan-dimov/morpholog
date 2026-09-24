@@ -649,12 +649,11 @@ class TamperEvidence(unittest.TestCase):
         ]:
             self.assertIsInstance(envelopes.parse_tree_verification(golden(name)), cls)
 
-    def test_evidence_pack_with_embedded_rows_and_checkpoints(self):
-        pack = envelopes.EvidencePack.from_json(golden("evidence_pack.json"))
-        self.assertEqual(pack.manifest.pack_format_version, 1)
-        self.assertIsInstance(pack.checkpoints[0], envelopes.Checkpoint)
-        self.assertIsInstance(pack.rows[0], envelopes.AuditRow)
-        self.assertEqual(pack.rows[0].transformation_name, "open_account")
+    def test_prefix_pack_manifest(self):
+        manifest = envelopes.PrefixPackManifest.from_json(golden("prefix_pack_manifest.json"))
+        self.assertEqual(manifest.pack_format_version, 4)
+        self.assertEqual(manifest.pack_kind, "prefix")
+        self.assertEqual(manifest.checkpoint_count, 1)
 
     def test_every_window_verdict_parses(self):
         for name, cls in [

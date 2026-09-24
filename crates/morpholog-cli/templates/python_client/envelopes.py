@@ -2087,43 +2087,39 @@ def parse_checkpoint_outcome(payload: object) -> CheckpointCreated | CheckpointN
 
 
 @dataclass(frozen=True)
-class PackManifest:
+class PrefixPackManifest:
+    """Line 1 of a complete-prefix evidence pack. The next
+    ``checkpoint_count`` lines are checkpoints, then exactly ``tree_size``
+    audit rows in log order."""
+
     pack_format_version: int
+    pack_kind: str
     tree_size: int
     root_hash: str
     checkpoint_hash: str
+    checkpoint_count: int
 
     @classmethod
-    def from_json(cls, payload: object) -> PackManifest:
+    def from_json(cls, payload: object) -> PrefixPackManifest:
         data = _strict(
-            "pack manifest",
+            "prefix pack manifest",
             payload,
-            {"pack_format_version", "tree_size", "root_hash", "checkpoint_hash"},
+            {
+                "pack_format_version",
+                "pack_kind",
+                "tree_size",
+                "root_hash",
+                "checkpoint_hash",
+                "checkpoint_count",
+            },
         )
         return cls(
             pack_format_version=data["pack_format_version"],
+            pack_kind=data["pack_kind"],
             tree_size=data["tree_size"],
             root_hash=data["root_hash"],
             checkpoint_hash=data["checkpoint_hash"],
-        )
-
-
-@dataclass(frozen=True)
-class EvidencePack:
-    """A portable, offline-verifiable export of a checkpointed prefix of
-    the audit log: the covering checkpoint chain and the covered rows."""
-
-    manifest: PackManifest
-    checkpoints: list[Checkpoint]
-    rows: list[AuditRow]
-
-    @classmethod
-    def from_json(cls, payload: object) -> EvidencePack:
-        data = _strict("evidence pack", payload, {"manifest", "checkpoints", "rows"})
-        return cls(
-            manifest=PackManifest.from_json(data["manifest"]),
-            checkpoints=[Checkpoint.from_json(c) for c in data["checkpoints"]],
-            rows=[AuditRow.from_json(r) for r in data["rows"]],
+            checkpoint_count=data["checkpoint_count"],
         )
 
 

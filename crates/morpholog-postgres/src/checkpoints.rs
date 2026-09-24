@@ -36,7 +36,8 @@ use uuid::Uuid;
 use crate::audit::AuditRow;
 use crate::audit_pages::AuditPages;
 use crate::error::{PgError, classify, classify_checked_query};
-use crate::merkle::{Digest, Hash, audit_leaf_hash, merkle_root};
+use crate::merkle::{Digest, audit_leaf_hash, merkle_root};
+use crate::prefix_verify::PrefixVerifier;
 use crate::role_rebindings::{RebindingFold, RebindingScope, RoleRebindings};
 use crate::signing;
 use crate::txn::{TxIsolation, begin_isolated_tx};
@@ -321,30 +322,22 @@ fn stored_digest(text: &str) -> Result<Digest, PgError> {
         .map_err(|e| PgError::InvalidState(format!("a stored checkpoint hash is malformed: {e}")))
 }
 
-/// Page the audit log in canonical order, hashing each row to its leaf
-/// and handing it to `observe`. `horizon` bounds by `committed_at`; `max`
-/// stops after that many rows, so no row past it is hashed or observed.
-/// Returns the leaves and the last row's coordinates.
+/// Page the audit log up to `horizon` in canonical order, hashing each
+/// row to its leaf. Returns the leaves and the last row's coordinates.
 async fn collect_leaves(
     conn: &mut sqlx::PgConnection,
-    horizon: Option<Timestamp>,
-    max: Option<i64>,
-    observe: &mut dyn FnMut(&AuditRow),
+    horizon: Timestamp,
 ) -> Result<(Vec<[u8; 32]>, Option<(Uuid, Timestamp)>), PgError> {
     let mut leaves = Vec::new();
     let mut last = None;
-    let mut pages = AuditPages::new(horizon);
+    let mut pages = AuditPages::new(Some(horizon));
     loop {
         let page = pages.next(conn).await?;
         if page.is_empty() {
             break;
         }
         for row in &page {
-            if max.is_some_and(|m| leaves.len() as i64 >= m) {
-                return Ok((leaves, last));
-            }
             leaves.push(audit_leaf_hash(row)?);
-            observe(row);
             last = Some((row.transition_id, row.committed_at));
         }
     }
@@ -427,7 +420,7 @@ pub async fn create_checkpoint(
     let horizon = crate::audit::audit_resume_watermark(pool, writers).await?;
 
     let mut read_tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
-    let (leaves, last) = collect_leaves(&mut read_tx, Some(horizon), None, &mut |_| {}).await?;
+    let (leaves, last) = collect_leaves(&mut read_tx, horizon).await?;
     let tree_size = leaves.len() as i64;
     // When signing, judge authority over the same prefix in the same
     // snapshot, so the check and the leaves agree; on failure the withheld
@@ -812,26 +805,27 @@ async fn verify_audit_tree_walk(
 
     let checkpoints = load_checkpoint_chain(&mut tx).await?;
 
-    let max_size = checkpoints.last().map(|c| c.tree_size).unwrap_or(0);
-    let mut rebindings = RebindingFold::default();
-    let (leaves, _) = collect_leaves(&mut tx, None, Some(max_size), &mut |row| {
-        rebindings.observe(row)
-    })
-    .await?;
-
-    let verdict = verify_tree(&leaves, &checkpoints, anchor.as_ref());
-    // An intact tree must still show each signing key, the anchor's
-    // included, was authorised as of its prefix. Rows are loaded only when
-    // there are signatures to judge.
-    let signed = |c: &Checkpoint| !c.signatures.is_empty();
-    if matches!(verdict, TreeVerification::Intact { .. })
-        && (checkpoints.iter().any(signed) || anchor.as_ref().is_some_and(signed))
-    {
-        let rows = load_audit_rows(&mut tx, max_size).await?;
-        if let Some(violation) = authority_violation(&checkpoints, anchor.as_ref(), &rows) {
-            return Ok((violation, checkpoints, rebindings));
+    // Rows past the latest checkpoint are not yet committed to by any
+    // root, so they are not fed.
+    let max_size = checkpoints.last().map_or(0, |c| c.tree_size);
+    let mut verifier = PrefixVerifier::new(&checkpoints, anchor.as_ref());
+    let mut fed = 0;
+    let mut pages = AuditPages::new(None);
+    'pages: loop {
+        let page = pages.next(&mut tx).await?;
+        if page.is_empty() {
+            break;
+        }
+        for row in &page {
+            if fed >= max_size {
+                break 'pages;
+            }
+            verifier.push(row)?;
+            fed += 1;
         }
     }
+    let (verdict, rebindings) = verifier.finish();
+
     if let Some(policy) = policy
         && matches!(verdict, TreeVerification::Intact { .. })
         && let Some(violation) =
@@ -852,15 +846,16 @@ pub(crate) fn same_tree_head(a: &Checkpoint, b: &Checkpoint) -> bool {
         && a.checkpoint_hash == b.checkpoint_hash
 }
 
-/// The pure tamper-evidence check shared by [`verify_audit_tree`] and the
-/// offline pack verifier, so the two cannot drift.
+/// The whole-slice tamper-evidence check the streaming verifier replaced,
+/// kept as the oracle it is tested against.
 ///
 /// Given the leaf hashes in canonical order and the checkpoint chain,
 /// confirms every checkpoint's root recomputes from the leaves, the chain
 /// is consistent, and the anchor (if any) matches the stored checkpoint
 /// at its size.
+#[cfg(test)]
 pub(crate) fn verify_tree(
-    leaves: &[Hash],
+    leaves: &[crate::merkle::Hash],
     checkpoints: &[Checkpoint],
     anchor: Option<&Checkpoint>,
 ) -> TreeVerification {
@@ -971,34 +966,39 @@ pub(crate) fn signature_crypto_violation(cp: &Checkpoint) -> Option<TreeVerifica
 /// For each signed checkpoint and the `anchor`, every signature's
 /// `(key_id, purpose, public_key)` must match an `AuditSigningKey` claim
 /// in force as of that checkpoint's prefix of `rows` (canonical order).
-/// Returns the first violation.
+/// Returns the first violation. The streaming verifier's test oracle.
+#[cfg(test)]
 pub(crate) fn authority_violation(
     checkpoints: &[Checkpoint],
     anchor: Option<&Checkpoint>,
     rows: &[AuditRow],
 ) -> Option<TreeVerification> {
-    for cp in checkpoints.iter().chain(anchor) {
+    checkpoints.iter().chain(anchor).find_map(|cp| {
         if cp.signatures.is_empty() {
-            continue;
+            return None;
         }
-        let authorized = crate::keys::authorized_keys_as_of(rows, cp.tree_size);
-        for sig in &cp.signatures {
-            let triple = (
-                sig.key_id.clone(),
-                sig.purpose.clone(),
-                sig.public_key.clone(),
-            );
-            if !authorized.contains(&triple) {
-                return Some(TreeVerification::UnauthorizedKey {
-                    tree_size: cp.tree_size,
-                    key_id: sig.key_id.clone(),
-                    purpose: sig.purpose.clone(),
-                    public_key: sig.public_key.clone(),
-                });
-            }
-        }
-    }
-    None
+        unauthorized_signature(cp, &crate::keys::authorized_keys_as_of(rows, cp.tree_size))
+    })
+}
+
+/// The first of `cp`'s signatures whose key is not in `authorized`.
+pub(crate) fn unauthorized_signature(
+    cp: &Checkpoint,
+    authorized: &std::collections::HashSet<crate::keys::KeyTriple>,
+) -> Option<TreeVerification> {
+    cp.signatures.iter().find_map(|sig| {
+        let triple = (
+            sig.key_id.clone(),
+            sig.purpose.clone(),
+            sig.public_key.clone(),
+        );
+        (!authorized.contains(&triple)).then(|| TreeVerification::UnauthorizedKey {
+            tree_size: cp.tree_size,
+            key_id: sig.key_id.clone(),
+            purpose: sig.purpose.clone(),
+            public_key: sig.public_key.clone(),
+        })
+    })
 }
 
 /// Read the first `max` audit rows in canonical order.

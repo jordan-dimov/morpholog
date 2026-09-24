@@ -1384,25 +1384,18 @@
         "role_rebindings": { "$ref": "#/$defs/role_rebindings" }
       }
     },
-    "pack_manifest": {
+    "prefix_pack_manifest": {
+      "description": "Line 1 of a complete-prefix pack written by `audit export`. The next `checkpoint_count` lines are `checkpoint`s; then exactly `tree_size` lines, each an `audit_row`, in log order.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["pack_format_version", "tree_size", "root_hash", "checkpoint_hash"],
+      "required": ["pack_format_version", "pack_kind", "tree_size", "root_hash", "checkpoint_hash", "checkpoint_count"],
       "properties": {
         "pack_format_version": { "type": "integer" },
+        "pack_kind": { "type": "string" },
         "tree_size": { "type": "integer" },
         "root_hash": { "type": "string" },
-        "checkpoint_hash": { "type": "string" }
-      }
-    },
-    "evidence_pack": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["manifest", "checkpoints", "rows"],
-      "properties": {
-        "manifest": { "$ref": "#/$defs/pack_manifest" },
-        "checkpoints": { "type": "array", "items": { "$ref": "#/$defs/checkpoint" } },
-        "rows": { "type": "array", "items": { "$ref": "#/$defs/audit_row" } }
+        "checkpoint_hash": { "type": "string" },
+        "checkpoint_count": { "type": "integer", "minimum": 0 }
       }
     },
     "row_inclusion_proof": {

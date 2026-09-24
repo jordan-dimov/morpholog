@@ -231,6 +231,43 @@ class AdapterDiscrimination(unittest.TestCase):
         self.assertEqual(caught.exception.not_attempted, [])
         self.assertIn("timed out", str(caught.exception))
 
+    def _export_stdout(self, stdout, exit_code):
+        self._mode("stdout_then_exit")
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        self.addCleanup(os.environ.pop, "STUB_EXIT", None)
+        os.environ["STUB_STDOUT"] = stdout
+        os.environ["STUB_EXIT"] = str(exit_code)
+
+    def test_an_export_lands_whole_and_returns_its_manifest(self):
+        manifest = json.dumps(json.loads((GOLDEN_DIR / "prefix_pack_manifest.json").read_text()))
+        pack = manifest + "\n{}\n"
+        self._export_stdout(pack, 0)
+        with tempfile.TemporaryDirectory() as out:
+            path = os.path.join(out, "pack.ndjson")
+            got = self.client.audit_export(path)
+            self.assertEqual(got.pack_kind, "prefix")
+            self.assertEqual(Path(path).read_text(), pack)
+            self.assertEqual(os.listdir(out), ["pack.ndjson"])
+
+    def test_a_failed_export_leaves_no_partial_pack(self):
+        # Output the binary began before failing never reaches the path,
+        # and a pack already there is left as it was.
+        self._export_stdout('{"pack_format_version": 4}\n{"tree_size":', 1)
+        with tempfile.TemporaryDirectory() as out:
+            path = os.path.join(out, "pack.ndjson")
+            Path(path).write_text("an earlier pack")
+            with self.assertRaises(MorphologError):
+                self.client.audit_export(path)
+            self.assertEqual(Path(path).read_text(), "an earlier pack")
+            self.assertEqual(os.listdir(out), ["pack.ndjson"])
+
+    def test_a_timed_out_export_leaves_no_partial_pack(self):
+        self._mode("hang")
+        with tempfile.TemporaryDirectory() as out:
+            with self.assertRaises(MorphologTimeout):
+                self.client.audit_export(os.path.join(out, "pack.ndjson"), timeout=0.2)
+            self.assertEqual(os.listdir(out), [])
+
     def test_a_batch_refused_before_its_first_row_ran_nothing(self):
         self._mode("stdout_then_exit")
         self.addCleanup(os.environ.pop, "STUB_STDOUT", None)

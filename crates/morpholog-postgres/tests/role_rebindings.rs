@@ -126,7 +126,7 @@ async fn a_recreated_role_is_reported_and_the_tree_stays_intact() {
     let pack = export_pack(&pool, None).await.unwrap();
     let verdict = PackVerdict::Prefix(verify_pack(&pack, None).unwrap());
     assert!(verdict.is_intact(), "{verdict:?}");
-    let from_pack = pack_role_rebindings(&serde_json::to_vec(&pack).unwrap(), &verdict);
+    let from_pack = pack_role_rebindings(&pack.rows, &verdict);
     assert!(
         matches!(&from_pack, RoleRebindings::Evaluated { changes, .. } if changes.len() == 1),
         "{from_pack:?}"
@@ -138,7 +138,7 @@ async fn a_recreated_role_is_reported_and_the_tree_stays_intact() {
     let verdict = PackVerdict::Prefix(verify_pack(&shuffled, None).unwrap());
     assert!(verdict.is_intact(), "{verdict:?}");
     assert_eq!(
-        pack_role_rebindings(&serde_json::to_vec(&shuffled).unwrap(), &verdict),
+        pack_role_rebindings(&shuffled.rows, &verdict),
         from_pack,
         "a shuffled pack reports the same change, in the same direction"
     );
@@ -148,7 +148,7 @@ async fn a_recreated_role_is_reported_and_the_tree_stays_intact() {
         .unwrap();
     let verdict = PackVerdict::Selective(verify_selective(&selective, None).unwrap());
     assert!(verdict.is_intact(), "{verdict:?}");
-    let from_selective = pack_role_rebindings(&serde_json::to_vec(&selective).unwrap(), &verdict);
+    let from_selective = pack_role_rebindings(&selective.rows, &verdict);
     assert!(
         matches!(&from_selective, RoleRebindings::Evaluated {
             scope: RebindingScope::Selective, changes, ..
@@ -188,7 +188,7 @@ async fn a_tampered_oid_breaks_the_tree_and_reports_nothing() {
     let verdict = PackVerdict::Prefix(verify_pack(&pack, None).unwrap());
     assert!(!verdict.is_intact(), "{verdict:?}");
     assert_eq!(
-        pack_role_rebindings(&serde_json::to_vec(&pack).unwrap(), &verdict),
+        pack_role_rebindings(&pack.rows, &verdict),
         RoleRebindings::NotEvaluated,
         "a pack that failed verification supports no finding"
     );

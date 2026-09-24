@@ -30,8 +30,8 @@ use morpholog_core::{
 };
 use morpholog_postgres::{
     AtomicAct, AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, CheckpointWitnesses,
-    EvidencePack, OutboxRow, PackManifest, PackVerdict, PackVerificationReport, PgAtomicOutcome,
-    PgProposalOutcome, RebindingScope, RoleRebinding, RoleRebindings, RowInclusionProof,
+    OutboxRow, PackVerdict, PackVerificationReport, PgAtomicOutcome, PgProposalOutcome,
+    PrefixPackManifest, RebindingScope, RoleRebinding, RoleRebindings, RowInclusionProof,
     SelectiveEvidencePack, SelectivePackManifest, SelectiveVerification, TreeHeadSignature,
     TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification, WindowEvidencePack,
     WindowPackManifest, WindowVerification, WitnessScheme, WitnessStanding, WitnessVerdict,
@@ -1416,19 +1416,18 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         }),
     );
 
-    // `audit export`: the portable pack.
-    assert_golden(
-        "evidence_pack.json",
-        &to_value(&EvidencePack {
-            manifest: PackManifest {
-                pack_format_version: 1,
-                tree_size: 2,
-                root_hash: format!("sha256:{}", "a".repeat(64)).parse().unwrap(),
-                checkpoint_hash: format!("sha256:{}", "b".repeat(64)).parse().unwrap(),
-            },
-            checkpoints: vec![sample_checkpoint()],
-            rows: vec![sample_audit_row()],
-        }),
+    // `audit export`: line 1 of a complete-prefix pack. Its checkpoint and
+    // row lines are the `checkpoint` and `audit_row` shapes pinned above.
+    assert_golden_bytes(
+        "prefix_pack_manifest.json",
+        &PrefixPackManifest {
+            pack_format_version: 4,
+            pack_kind: "prefix".into(),
+            tree_size: 2,
+            root_hash: format!("sha256:{}", "a".repeat(64)).parse().unwrap(),
+            checkpoint_hash: format!("sha256:{}", "b".repeat(64)).parse().unwrap(),
+            checkpoint_count: 1,
+        },
     );
 
     // `audit verify-pack`: the remaining tree verdicts (intact and tampered
@@ -2008,7 +2007,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("witness_verdict_invalid.json", "witness_verdict"),
         ("witness_verdict_unverified.json", "witness_verdict"),
         ("witness_verdict_unsupported.json", "witness_verdict"),
-        ("evidence_pack.json", "evidence_pack"),
+        ("prefix_pack_manifest.json", "prefix_pack_manifest"),
         ("tree_verification_chain_broken.json", "tree_verification"),
         (
             "tree_verification_anchor_mismatch.json",
