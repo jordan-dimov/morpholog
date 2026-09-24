@@ -461,6 +461,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     )
     .await
     .expect("simulate a database from before self-describing rows");
+    ddl(
+        &pool,
+        "DROP FUNCTION morpholog.timestamp_nanos(jsonb)".to_string(),
+    )
+    .await
+    .expect("simulate a database from before the timestamp coordinate");
     // A row that deployment wrote: attested, no names. The migration must
     // carry it forward untouched.
     sqlx::query(
@@ -532,6 +538,30 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
         return Err(format!(
             "re-running applied {} migrations",
             again.applied.len()
+        ));
+    }
+
+    // Migration 016: the coordinate function is back, marked as ours.
+    let epoch: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+        "SELECT morpholog.timestamp_nanos('{\"type\":\"timestamp\",\"value\":\"1970-01-01T00:00:00Z\"}'::jsonb)",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("timestamp_nanos must exist after migrating: {e}"))?;
+    if epoch != Some(rust_decimal::Decimal::ZERO) {
+        return Err(format!(
+            "timestamp_nanos must give 0 at the epoch, got {epoch:?}"
+        ));
+    }
+    let marker: Option<String> = sqlx::query_scalar(
+        "SELECT obj_description('morpholog.timestamp_nanos(jsonb)'::regprocedure, 'pg_proc')",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("marker lookup failed: {e}"))?;
+    if marker.as_deref() != Some("morpholog timestamp coordinate v1") {
+        return Err(format!(
+            "timestamp_nanos must carry its marker, got {marker:?}"
         ));
     }
 

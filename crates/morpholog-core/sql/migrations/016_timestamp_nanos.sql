@@ -53,6 +53,20 @@ BEGIN
     y := m[1]::numeric;
     mo := m[2]::numeric;
     d := m[3]::numeric;
+    -- The codec writes only instants jiff holds: years -9999 to 9999,
+    -- four digits inside 0000-9999 and signed six outside, real calendar
+    -- days, and a clock below 24:00:00.
+    IF y < -9999 OR y > 9999
+       OR m[1] !~ '^([0-9]{4}|-[0-9]{6})$' OR (m[1] ~ '^-' AND y = 0)
+       OR mo < 1 OR mo > 12 OR d < 1
+       OR d > (CASE mo
+                 WHEN 2 THEN (CASE WHEN y % 4 = 0 AND (y % 100 <> 0 OR y % 400 = 0) THEN 29 ELSE 28 END)
+                 WHEN 4 THEN 30 WHEN 6 THEN 30 WHEN 9 THEN 30 WHEN 11 THEN 30
+                 ELSE 31 END)
+       OR m[4]::numeric > 23 OR m[5]::numeric > 59 OR m[6]::numeric > 59
+    THEN
+        RAISE EXCEPTION 'not a stored timestamp: %', v ->> 'value';
+    END IF;
     IF mo <= 2 THEN
         y := y - 1;
     END IF;

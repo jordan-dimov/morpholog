@@ -36,6 +36,9 @@ const VECTORS: &[&str] = &[
     "1900-03-01T00:00:00Z",
     "2100-02-28T12:00:00Z",
     "2024-02-29T23:59:59.999999999Z",
+    "1600-02-29T00:00:00Z",
+    "2400-02-29T00:00:00Z",
+    "-000004-02-29T00:00:00Z",
     "2026-01-01T12:00:00.5Z",
     "2026-01-01T12:00:00.123Z",
     "2026-01-01T12:00:00.123456Z",
@@ -97,6 +100,18 @@ async fn another_tag_is_null_and_a_malformed_timestamp_is_an_error() {
         json!({"type": "timestamp", "value": "2026-01-01 00:00:00Z"}),
         json!({"type": "timestamp", "value": "2026-01-01T00:00:00.1234567890Z"}),
         json!({"type": "timestamp", "value": 5}),
+        // Shaped like the codec's text, but no such instant exists, or
+        // the codec would never spell it so.
+        json!({"type": "timestamp", "value": "2026-02-30T00:00:00Z"}),
+        json!({"type": "timestamp", "value": "2025-02-29T00:00:00Z"}),
+        json!({"type": "timestamp", "value": "2026-13-01T00:00:00Z"}),
+        json!({"type": "timestamp", "value": "2026-01-01T25:00:00Z"}),
+        json!({"type": "timestamp", "value": "2026-01-01T00:60:00Z"}),
+        json!({"type": "timestamp", "value": "2026-01-01T00:00:60Z"}),
+        json!({"type": "timestamp", "value": "002026-01-01T00:00:00Z"}),
+        json!({"type": "timestamp", "value": "-0001-01-01T00:00:00Z"}),
+        json!({"type": "timestamp", "value": "-010000-01-01T00:00:00Z"}),
+        json!({"type": "timestamp", "value": "-000000-01-01T00:00:00Z"}),
     ] {
         let err = nanos(&pool, bad.clone())
             .await
