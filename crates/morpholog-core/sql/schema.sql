@@ -50,6 +50,53 @@ CREATE FUNCTION claim_digest(args jsonb) RETURNS bytea
     LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
     RETURN sha256(convert_to(args::text, 'UTF8'));
 
+-- Nanoseconds since the Unix epoch of a stored timestamp argument, the
+-- coordinate the compiled checks order instants by. The stored text is
+-- jiff's (four-digit years, or signed six-digit ones outside 0000-9999;
+-- a fraction only when non-zero, trailing zeros trimmed), which neither
+-- sorts as text nor survives `timestamptz` (microseconds, 4713 BC floor),
+-- so the civil fields are converted by hand, in numeric. Takes the whole
+-- tagged value: another tag is NULL, so the check reports the kernel's
+-- kind error; a timestamp whose text is not the codec's is an error.
+CREATE FUNCTION timestamp_nanos(v jsonb) RETURNS numeric
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+DECLARE
+    m text[];
+    y numeric;
+    mo numeric;
+    d numeric;
+    era numeric;
+    yoe numeric;
+    doy numeric;
+    doe numeric;
+    days numeric;
+BEGIN
+    IF v ->> 'type' IS DISTINCT FROM 'timestamp' THEN
+        RETURN NULL;
+    END IF;
+    m := regexp_match(v ->> 'value', '^(-?[0-9]{4,6})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?Z$');
+    IF m IS NULL THEN
+        RAISE EXCEPTION 'not a stored timestamp: %', v ->> 'value';
+    END IF;
+    y := m[1]::numeric;
+    mo := m[2]::numeric;
+    d := m[3]::numeric;
+    IF mo <= 2 THEN
+        y := y - 1;
+    END IF;
+    era := floor(y / 400);
+    yoe := y - era * 400;
+    doy := floor((153 * (mo + CASE WHEN mo > 2 THEN -3 ELSE 9 END) + 2) / 5) + d - 1;
+    doe := yoe * 365 + floor(yoe / 4) - floor(yoe / 100) + doy;
+    days := era * 146097 + doe - 719468;
+    RETURN (days * 86400 + m[4]::numeric * 3600 + m[5]::numeric * 60 + m[6]::numeric) * 1000000000
+        + rpad(coalesce(m[7], ''), 9, '0')::numeric;
+END
+$$;
+
+COMMENT ON FUNCTION timestamp_nanos(jsonb) IS 'morpholog timestamp coordinate v1';
+
 -- Admitted state. Each row is one admitted claim.
 -- The primary key enforces set semantics: assert C where C is
 -- already present is a no-op; retract C where C is missing fails.
