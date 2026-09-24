@@ -111,6 +111,39 @@ $$;
 
 COMMENT ON FUNCTION timestamp_nanos(jsonb) IS 'morpholog timestamp coordinate v1';
 
+-- The compiled checks read a claim position by the kind the programme
+-- declares for it: a decimal as numeric, a quantity as amount and unit, a
+-- date as its tagged value. History admitted under an older declaration,
+-- or an untyped caller, can leave a value of another kind there, which
+-- that reading would compare wrongly or not at all. So every such read is
+-- guarded: the stored value must carry the declared kind, or the check
+-- fails closed with SQLSTATE MP001 and the position named, never a silent
+-- verdict. `predicate` is the row's own, so a row of another predicate
+-- passes whatever the planner's evaluation order; and the cost is the
+-- lowest there is, so the planner runs the guard before any cast of the
+-- same row, which would otherwise raise its own, unnamed error first.
+CREATE FUNCTION declared_kind(predicate text, declared_predicate text, v jsonb, kind text, pos integer) RETURNS boolean
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE COST 1
+AS $$
+DECLARE
+    stored text;
+BEGIN
+    IF predicate <> declared_predicate THEN
+        RETURN true;
+    END IF;
+    stored := coalesce(v ->> 'type', jsonb_typeof(v));
+    IF stored = kind THEN
+        RETURN true;
+    END IF;
+    RAISE EXCEPTION USING
+        ERRCODE = 'MP001',
+        MESSAGE = format('%s[%s] holds a %s where the programme declares %s', declared_predicate, pos, stored, kind),
+        DETAIL = json_build_object('predicate', declared_predicate, 'position', pos, 'declared', kind, 'stored', stored)::text;
+END
+$$;
+
+COMMENT ON FUNCTION declared_kind(text, text, jsonb, text, integer) IS 'morpholog declared kind guard v1';
+
 -- Admitted state. Each row is one admitted claim.
 -- The primary key enforces set semantics: assert C where C is
 -- already present is a no-op; retract C where C is missing fails.

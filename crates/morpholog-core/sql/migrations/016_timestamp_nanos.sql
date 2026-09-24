@@ -1,4 +1,6 @@
--- Migration 016: the timestamp coordinate the compiled checks order by.
+-- Migration 016: two functions the compiled checks rely on - the timestamp
+-- coordinate they order instants by, and the guard that fails a check
+-- closed when a stored value is not of its declared kind.
 --
 -- `morpholog.timestamp_nanos` turns a stored timestamp argument into
 -- nanoseconds since the Unix epoch, so SQL orders instants exactly as the
@@ -81,3 +83,42 @@ END
 $$;
 
 COMMENT ON FUNCTION morpholog.timestamp_nanos(jsonb) IS 'morpholog timestamp coordinate v1';
+
+-- See schema.sql: a compiled read of a position by its declared kind must
+-- find that kind, or the check fails closed with SQLSTATE MP001.
+DO $$
+DECLARE
+    marker text;
+BEGIN
+    IF to_regprocedure('morpholog.declared_kind(text, text, jsonb, text, integer)') IS NULL THEN
+        RETURN;
+    END IF;
+    SELECT obj_description(oid, 'pg_proc') INTO marker
+      FROM pg_proc
+     WHERE oid = 'morpholog.declared_kind(text, text, jsonb, text, integer)'::regprocedure;
+    IF marker IS DISTINCT FROM 'morpholog declared kind guard v1' THEN
+        RAISE EXCEPTION 'morpholog.declared_kind exists and is not the one migration 016 defines; refusing to replace it';
+    END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION morpholog.declared_kind(predicate text, declared_predicate text, v jsonb, kind text, pos integer) RETURNS boolean
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE COST 1
+AS $$
+DECLARE
+    stored text;
+BEGIN
+    IF predicate <> declared_predicate THEN
+        RETURN true;
+    END IF;
+    stored := coalesce(v ->> 'type', jsonb_typeof(v));
+    IF stored = kind THEN
+        RETURN true;
+    END IF;
+    RAISE EXCEPTION USING
+        ERRCODE = 'MP001',
+        MESSAGE = format('%s[%s] holds a %s where the programme declares %s', declared_predicate, pos, stored, kind),
+        DETAIL = json_build_object('predicate', declared_predicate, 'position', pos, 'declared', kind, 'stored', stored)::text;
+END
+$$;
+
+COMMENT ON FUNCTION morpholog.declared_kind(text, text, jsonb, text, integer) IS 'morpholog declared kind guard v1';

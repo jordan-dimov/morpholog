@@ -41,6 +41,24 @@ pub enum PgError {
     /// matched zero rows when exactly one was expected).
     #[error("invalid persistent state: {0}")]
     InvalidState(String),
+    /// A compiled check read a claim position by the kind the programme
+    /// declares for it and found a stored value of another kind: history
+    /// admitted under an older declaration, or an untyped caller. The
+    /// compiled reading would compare it wrongly or not at all, so the
+    /// check fails closed with the position named. The interpreter
+    /// evaluates such a value as it is; nothing was committed.
+    #[error(
+        "{predicate}[{position}] holds a {stored} where the programme declares {declared}: \
+         the compiled checks read that position by its declared kind, so the proposal was \
+         not decided. The interpreter evaluates such a value as it is; the compiled checks \
+         need the declared kind at every position they read."
+    )]
+    KindDrift {
+        predicate: String,
+        position: usize,
+        declared: String,
+        stored: String,
+    },
 
     /// The database schema is older than this binary: a query named a
     /// column the table does not have.
@@ -225,6 +243,26 @@ pub enum PgError {
 pub(crate) fn is_serialization_failure_code(code: Option<&str>) -> bool {
     code == Some("40001")
 }
+/// The SQLSTATE `morpholog.declared_kind` raises: a stored value of
+/// another kind at a position a compiled check reads by its declared kind.
+pub(crate) const KIND_DRIFT_SQLSTATE: &str = "MP001";
+
+/// The drift the guard named, from the error's DETAIL, which carries the
+/// same fields as JSON. `None` when the detail is not the guard's.
+fn kind_drift(db: &(dyn sqlx::error::DatabaseError + 'static)) -> Option<PgError> {
+    let detail = db
+        .try_downcast_ref::<sqlx::postgres::PgDatabaseError>()?
+        .detail()?;
+    let fields: serde_json::Value = serde_json::from_str(detail).ok()?;
+    let text = |name: &str| fields.get(name)?.as_str().map(str::to_owned);
+    Some(PgError::KindDrift {
+        predicate: text("predicate")?,
+        position: usize::try_from(fields.get("position")?.as_u64()?).ok()?,
+        declared: text("declared")?,
+        stored: text("stored")?,
+    })
+}
+
 /// Is this SQLSTATE the PostgreSQL `unique_violation` code (`23505`)?
 pub(crate) fn is_unique_violation_code(code: Option<&str>) -> bool {
     code == Some("23505")
@@ -242,6 +280,11 @@ pub(crate) fn classify(err: sqlx::Error) -> PgError {
     let code = db.and_then(sqlx::error::DatabaseError::code);
     if is_serialization_failure_code(code.as_deref()) {
         return PgError::SerializationFailure;
+    }
+    if code.as_deref() == Some(KIND_DRIFT_SQLSTATE)
+        && let Some(drift) = db.and_then(kind_drift)
+    {
+        return drift;
     }
     if is_unique_violation_code(code.as_deref())
         && db
