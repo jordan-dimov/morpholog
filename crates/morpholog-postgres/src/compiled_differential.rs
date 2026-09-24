@@ -33,7 +33,9 @@ use morpholog_core::{
 use uuid::Uuid;
 
 use crate::attestation::Proposal;
-use crate::compiled::{CompiledInvariantSet, SqlViolation, Stage, compile_invariants, disable_jit};
+use crate::compiled::{
+    CompiledInvariantSet, DeltaStep, SqlViolation, Stage, compile_invariants, disable_jit,
+};
 use crate::error::{PgError, classify};
 use crate::program::PgProgram;
 use crate::propose::{Reads, compute_load_scope, load_state, write_claim_delta};
@@ -140,8 +142,12 @@ async fn probe_raw(
         .map_err(ProbeFailure::Pg)?;
 
     disable_jit(&mut tx).await.map_err(ProbeFailure::Pg)?;
+    let steps = [DeltaStep {
+        transition_id,
+        asserted: asserted.clone(),
+    }];
     let stage1 = sql_set
-        .first_violation(&mut tx, Stage::Full, &asserted, &retracted)
+        .first_violation(&mut tx, Stage::Full, &asserted, &retracted, &steps)
         .await;
     let stage2 = sql_set
         .first_violation(
@@ -149,6 +155,7 @@ async fn probe_raw(
             Stage::CaseBound,
             &effective.asserted,
             &effective.retracted,
+            &steps,
         )
         .await;
 
@@ -381,8 +388,12 @@ async fn sweep(program: Program) -> usize {
 /// comparison reaches its exact boundary over a two-step chain. Every kind
 /// with a jsonb equality representation (Bool, Date, Timestamp, Duration)
 /// has its own join fragment, probed on matching and mismatching sides.
-/// Probe count is not coverage: every `Ok(Repr)` arm in `repr_for` and
-/// every operator needs a fragment here that would catch it.
+/// Quantities join and order (each operator at its unit's zero, and two
+/// positions against each other), and timestamps order by every operator
+/// at equality, where the boundary arguments supply nanosecond
+/// neighbours and the calendar's ends. Probe count is not coverage: every
+/// `Equality` arm, every operand flavour and every operator needs a
+/// fragment here that would catch it.
 const HOSTILE: &[&str] = &[
     // Two lines of one figure under a cap and over a floor: on the
     // range-extreme argument the exact total leaves the decimal range,
@@ -491,6 +502,75 @@ transformation set_right_span(x, v):
 transformation set_left_span(x, v):
     admit LeftSpan(x, v)
 ",
+    "program quantity_join
+predicate Held(x: Subject, q: Decimal[MW])
+predicate Booked(x: Subject, q: Decimal[MW])
+predicate Standard(x: Subject)
+invariant booked_as_held:
+    Booked(x, q) implies Held(x, q)
+invariant standard_holds_five:
+    Standard(x) implies Held(x, 5 MW)
+transformation hold(x, q):
+    admit Held(x, q)
+transformation book(x, q):
+    admit Booked(x, q)
+transformation standardise(x):
+    admit Standard(x)
+",
+    "program quantity_edges
+predicate LeQ(x: Subject, q: Decimal[MW])
+predicate LtQ(x: Subject, q: Decimal[MW])
+predicate GeQ(x: Subject, q: Decimal[MW])
+predicate GtQ(x: Subject, q: Decimal[MW])
+predicate Band(x: Subject, lo: Decimal[MW], hi: Decimal[MW])
+invariant le_holds_at_zero:
+    LeQ(x, q) implies 0 MW <= q
+invariant lt_excludes_zero:
+    LtQ(x, q) implies 0 MW < q
+invariant ge_holds_at_zero:
+    GeQ(x, q) implies q >= 0 MW
+invariant gt_excludes_zero:
+    GtQ(x, q) implies q > 0 MW
+invariant band_is_ordered:
+    Band(x, lo, hi) implies lo <= hi
+transformation hold_le(x, q):
+    admit LeQ(x, q)
+transformation hold_lt(x, q):
+    admit LtQ(x, q)
+transformation hold_ge(x, q):
+    admit GeQ(x, q)
+transformation hold_gt(x, q):
+    admit GtQ(x, q)
+transformation band(x, lo, hi):
+    admit Band(x, lo, hi)
+",
+    "program timestamp_edges
+predicate AtOrBefore(x: Subject, s: Timestamp, e: Timestamp)
+predicate StrictlyBefore(x: Subject, s: Timestamp, e: Timestamp)
+predicate AtOrAfter(x: Subject, s: Timestamp, e: Timestamp)
+predicate StrictlyAfter(x: Subject, s: Timestamp, e: Timestamp)
+predicate Deadline(x: Subject, t: Timestamp)
+invariant at_or_before_holds_at_equality:
+    AtOrBefore(x, s, e) implies s at_or_before e
+invariant strictly_before_excludes_equality:
+    StrictlyBefore(x, s, e) implies s strictly_before e
+invariant at_or_after_holds_at_equality:
+    AtOrAfter(x, s, e) implies s at_or_after e
+invariant strictly_after_excludes_equality:
+    StrictlyAfter(x, s, e) implies s strictly_after e
+invariant deadline_is_after_noon:
+    Deadline(x, t) implies t strictly_after @2026-07-01T12:00:00Z
+transformation hold_at_or_before(x, s, e):
+    admit AtOrBefore(x, s, e)
+transformation hold_strictly_before(x, s, e):
+    admit StrictlyBefore(x, s, e)
+transformation hold_at_or_after(x, s, e):
+    admit AtOrAfter(x, s, e)
+transformation hold_strictly_after(x, s, e):
+    admit StrictlyAfter(x, s, e)
+transformation set_deadline(x, t):
+    admit Deadline(x, t)
+",
 ];
 
 #[tokio::test]
@@ -588,6 +668,108 @@ async fn an_overflow_that_compares_as_holding_is_the_kernels_error_on_both_stage
         &sql_set,
         "add_two",
         vec![subj("x"), largest],
+    )
+    .await;
+    match probe {
+        Ok(Probe::KernelErrorAgreed) => {}
+        Ok(Probe::BodyRejected) => panic!("the body admits"),
+        Ok(Probe::Observed(obs)) => panic!("the kernel must error, got {:?}", obs.kernel),
+        Err(ProbeFailure::Disagreement(d)) => panic!("{d}"),
+        Err(ProbeFailure::Kernel(e)) => panic!("body error {e:?}"),
+        Err(ProbeFailure::Pg(e)) => panic!("pg error {e:?}"),
+    }
+}
+
+/// Two units the declaration never named, from an older declaration or an
+/// untyped caller, and a third arriving in the delta. The wildcard
+/// antecedent makes every admission check the whole rule, so the kernel
+/// meets all three rows and raises on the first in its order: the loaded
+/// rows, then the delta. The compiled check must name the same pair, which
+/// only its ordering keys can guarantee.
+#[tokio::test]
+async fn a_foreign_unit_is_the_kernels_error_naming_the_kernels_first_pair() {
+    let program = morpholog_surface::parse_program(
+        "program foreign_units
+predicate Enabled(flag: Subject)
+predicate Terms(x: Subject, q: Decimal[MW])
+invariant quantity_is_positive:
+    Enabled(_) and Terms(_, q) implies q > 0 MW
+transformation enable_and_hold(flag, x, q):
+    admit Enabled(flag)
+    admit Terms(x, q)
+",
+    )
+    .expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+    let compiled = CompiledProgram::new(program).expect("compiles");
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    for (x, unit) in [("a", "EUR"), ("b", "GBP")] {
+        sqlx::query(
+            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in) VALUES ('Terms', $1, $2)",
+        )
+        .bind(serde_json::json!([
+            {"type":"subject","value":x},
+            {"type":"quantity","value":{"amount":"5","unit":unit}}
+        ]))
+        .bind(Uuid::nil())
+        .execute(&pool)
+        .await
+        .expect("foreign-unit fixture insert");
+    }
+    let probe = probe_raw(
+        &pool,
+        &compiled,
+        &sql_set,
+        "enable_and_hold",
+        vec![
+            subj("f"),
+            subj("c"),
+            morpholog_test_support::qty("9", "USD"),
+        ],
+    )
+    .await;
+    match probe {
+        Ok(Probe::KernelErrorAgreed) => {}
+        Ok(Probe::BodyRejected) => panic!("the body admits"),
+        Ok(Probe::Observed(obs)) => panic!("the kernel must error, got {:?}", obs.kernel),
+        Err(ProbeFailure::Disagreement(d)) => panic!("{d}"),
+        Err(ProbeFailure::Kernel(e)) => panic!("body error {e:?}"),
+        Err(ProbeFailure::Pg(e)) => panic!("pg error {e:?}"),
+    }
+}
+
+/// A subject whose text would parse as a timestamp, at a timestamp
+/// position: the kernel refuses to order it, and the compiled check must
+/// say the same rather than read the text.
+#[tokio::test]
+async fn a_subject_that_reads_as_a_timestamp_is_still_the_kernels_kind_error() {
+    let program = morpholog_surface::parse_program(
+        "program window
+predicate Window(x: Subject, s: Timestamp, e: Timestamp)
+invariant window_is_ordered:
+    Window(x, s, e) implies s strictly_before e
+transformation open(x, s, e):
+    admit Window(x, s, e)
+",
+    )
+    .expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+    let compiled = CompiledProgram::new(program).expect("compiles");
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let probe = probe_raw(
+        &pool,
+        &compiled,
+        &sql_set,
+        "open",
+        vec![
+            subj("w"),
+            subj("2026-01-01T00:00:00Z"),
+            morpholog_test_support::ts("2026-01-02T00:00:00Z"),
+        ],
     )
     .await;
     match probe {

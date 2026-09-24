@@ -136,6 +136,7 @@ async fn every_required_index_is_eligible_for_every_whole_in_fragment_programme(
                 crate::compiled::Representation::Text => "'probe'",
                 crate::compiled::Representation::Numeric => "0",
                 crate::compiled::Representation::Jsonb => "'{}'::jsonb",
+                crate::compiled::Representation::QuantityAmount => "0",
             };
             let probe = format!(
                 "SELECT 1 FROM morpholog.claims t0 WHERE t0.{} AND ({}) = {literal}",
@@ -179,6 +180,9 @@ async fn populate_for_probes(pool: &PgPool, specs: &[crate::compiled::IndexSpec]
                     }
                     Some(Representation::Jsonb) => {
                         "jsonb_build_object('type','bool','value',(i % 2 = 0))".to_string()
+                    }
+                    Some(Representation::QuantityAmount) => {
+                        "jsonb_build_object('type','quantity','value',jsonb_build_object('amount',i::text,'unit','MW'))".to_string()
                     }
                     _ => format!("jsonb_build_object('type','subject','value','p{pos}_' || i)"),
                 },

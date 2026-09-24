@@ -40,8 +40,7 @@ fn balanced_posted_entry_sql_is_pinned() {
     assert_eq!(
         sql,
         r#"/* morpholog compiled invariant balanced_posted_entry v1 stage1 */
-SELECT (t0.arguments -> 0)::text AS "w_entry",
-       (NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)) AS "range_error"
+SELECT (t0.arguments -> 0)::text AS "w_entry"
 FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((t1.arguments -> 2 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value')) l2, LATERAL (SELECT COALESCE(sum((t3.arguments -> 3 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t3.arguments -> 0 ->> 'value')) l4
 WHERE t0.predicate_name = 'JournalEntry'
   AND ((NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)) OR NOT (l2.s) = (l4.s))
@@ -51,20 +50,27 @@ LIMIT 1"#
     // Asked only once the query above returned a violation: any entry
     // in scope whose total no decimal can hold.
     assert_eq!(
-        set.invariants[1].range_sql(None).as_deref(),
+        set.invariants[1].error_sql(None, &[]).unwrap().as_deref(),
         Some(
-            r#"SELECT 1
+            r#"SELECT CASE WHEN NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) THEN 'range' WHEN NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric) THEN 'range' END AS "kind",
+       NULL::text AS "domain",
+       NULL::text AS "left",
+       NULL::text AS "right"
 FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((t1.arguments -> 2 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value')) l2, LATERAL (SELECT COALESCE(sum((t3.arguments -> 3 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t3.arguments -> 0 ->> 'value')) l4
-WHERE (t0.predicate_name = 'JournalEntry' AND ((NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric))))
+WHERE (t0.predicate_name = 'JournalEntry' AND (NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)))
+ORDER BY t0.arguments_hash
 LIMIT 1"#
         )
     );
-    assert_eq!(set.invariants[0].range_sql(None), None);
+    assert_eq!(set.invariants[0].error_sql(None, &[]).unwrap(), None);
     // Bounded to the obligation, like the violation query.
     let bounded = set.invariants[1]
-        .range_sql(Some("((t0.arguments -> 0 ->> 'value') = 'e42')"))
+        .error_sql(Some("((t0.arguments -> 0 ->> 'value') = 'e42')"), &[])
+        .unwrap()
         .unwrap();
-    assert!(bounded.ends_with("\n  AND (((t0.arguments -> 0 ->> 'value') = 'e42'))\nLIMIT 1"));
+    assert!(bounded.ends_with(
+        "\n  AND (((t0.arguments -> 0 ->> 'value') = 'e42'))\nORDER BY t0.arguments_hash\nLIMIT 1"
+    ));
 }
 
 #[test]
@@ -77,8 +83,7 @@ fn supersedes_uniqueness_sql_is_pinned() {
         r#"/* morpholog compiled invariant supersedes_unique_by_prior_entry_id v1 stage1 */
 SELECT (t0.arguments -> 0)::text AS "w_new_entry_id_a",
        (t1.arguments -> 0)::text AS "w_new_entry_id_b",
-       (t0.arguments -> 1)::text AS "w_prior_entry_id",
-       false AS "range_error"
+       (t0.arguments -> 1)::text AS "w_prior_entry_id"
 FROM morpholog.claims t0, morpholog.claims t1
 WHERE t0.predicate_name = 'Supersedes'
   AND t1.predicate_name = 'Supersedes'
@@ -97,8 +102,7 @@ fn journal_entry_has_lines_sql_is_pinned() {
     assert_eq!(
         sql,
         r#"/* morpholog compiled invariant journal_entry_has_lines v1 stage1 */
-SELECT (t0.arguments -> 0)::text AS "w_entry",
-       false AS "range_error"
+SELECT (t0.arguments -> 0)::text AS "w_entry"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'JournalEntry'
   AND NOT EXISTS (SELECT 1 FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value'))
@@ -265,10 +269,24 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
             },
         ),
         (
-            "quantity kind",
-            "invariant r:\n    Qty(x, q) implies Qty2(x, q)\n",
-            CompileReason::ArgumentKind {
-                kind: PredicateArgKind::Quantity(morpholog_core::Unit::from("t".to_string())),
+            "duration comparison",
+            "invariant r:\n    Lasting(x, d) implies d shorter_than duration(PT1H)\n",
+            CompileReason::ComparisonDomain {
+                domain: OrderedDomain::Duration,
+            },
+        ),
+        (
+            "quantity ordering not last",
+            "invariant r:\n    Qty(x, q) and q > 0 t and A(x) implies B(x)\n",
+            CompileReason::ComparisonShape {
+                detail: "a quantity or timestamp ordering must be the last conjunct of its scope",
+            },
+        ),
+        (
+            "timestamp ordering under a nested scope",
+            "invariant r:\n    A(x) implies (exists s: exists e: Timed(x, s, e) and s strictly_before e)\n",
+            CompileReason::ComparisonShape {
+                detail: "a quantity or timestamp ordering under a nested scope",
             },
         ),
         (
@@ -300,7 +318,8 @@ predicate Amount(x: Subject, n: Decimal)
 predicate Cap(cap: Decimal)
 predicate Dated(x: Subject, opened: Date, closed: Date)
 predicate Qty(x: Subject, q: Decimal[t])
-predicate Qty2(x: Subject, q: Decimal[t])
+predicate Timed(x: Subject, s: Timestamp, e: Timestamp)
+predicate Lasting(x: Subject, d: Duration)
 predicate Cx(x: Subject, c: Collection)
 predicate Cx2(x: Subject, c: Collection)
 
@@ -317,6 +336,114 @@ predicate Cx2(x: Subject, c: Collection)
         );
         assert_eq!(refused[0].reason, expected, "family: {family}");
     }
+}
+
+/// The two orderings a power-trading ledger forced: a quantity against a
+/// literal of its unit, and one timestamp before another. Each can raise
+/// in the kernel, so each closes its scope and carries the raise as data
+/// the error query reports.
+fn orderings_program() -> morpholog_core::Program {
+    morpholog_surface::parse_program(
+        "\
+program orderings
+
+predicate Terms(trade: Subject, quantity: Decimal[MW], delivery_start: Timestamp, delivery_end: Timestamp)
+
+invariant quantity_is_positive:
+    Terms(quantity: qty, ..) implies qty > 0 MW
+
+invariant delivery_period_is_ordered:
+    Terms(delivery_start: s, delivery_end: e, ..) implies s strictly_before e
+",
+    )
+    .expect("parses")
+}
+
+#[test]
+fn a_quantity_ordering_against_a_literal_is_pinned() {
+    let set = compiled(&orderings_program());
+    let inv = &set.invariants[0];
+    assert_eq!(inv.name.as_str(), "quantity_is_positive");
+    assert_eq!(
+        inv.violation_sql(None),
+        r#"/* morpholog compiled invariant quantity_is_positive v1 stage1 */
+SELECT (t0.arguments -> 1)::text AS "w_qty"
+FROM morpholog.claims t0
+WHERE t0.predicate_name = 'Terms'
+  AND (NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) OR NOT ((t0.arguments -> 1 -> 'value' ->> 'amount')::numeric) > ('0'::numeric))
+ORDER BY (t0.arguments -> 1 ->> 'value')::text
+LIMIT 1"#
+    );
+    // Reports the stored operand whole, so the runner hands the kernel
+    // what it would have compared.
+    assert_eq!(
+        inv.error_sql(None, &[]).unwrap().as_deref(),
+        Some(
+            r#"SELECT CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'compare' END AS "kind",
+       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'decimal' END AS "domain",
+       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN (t0.arguments -> 1)::text END AS "left",
+       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN ('{"type":"quantity","value":{"amount":"0","unit":"MW"}}'::jsonb)::text END AS "right"
+FROM morpholog.claims t0
+WHERE (t0.predicate_name = 'Terms' AND NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')))
+ORDER BY t0.arguments_hash
+LIMIT 1"#
+        )
+    );
+    // No ordering seeks an index; the antecedent binds without filtering.
+    assert!(inv.required_indexes.is_empty());
+}
+
+#[test]
+fn a_timestamp_ordering_is_pinned() {
+    let set = compiled(&orderings_program());
+    let inv = &set.invariants[1];
+    assert_eq!(inv.name.as_str(), "delivery_period_is_ordered");
+    assert_eq!(
+        inv.violation_sql(None),
+        r#"/* morpholog compiled invariant delivery_period_is_ordered v1 stage1 */
+SELECT (t0.arguments -> 3)::text AS "w_e",
+       (t0.arguments -> 2)::text AS "w_s"
+FROM morpholog.claims t0
+WHERE t0.predicate_name = 'Terms'
+  AND (NOT (COALESCE((t0.arguments -> 2 ->> 'type') = 'timestamp', false) AND COALESCE((t0.arguments -> 3 ->> 'type') = 'timestamp', false)) OR NOT (morpholog.timestamp_nanos(t0.arguments -> 2)) < (morpholog.timestamp_nanos(t0.arguments -> 3)))
+ORDER BY (t0.arguments -> 3 ->> 'value')::text, (t0.arguments -> 2 ->> 'value')::text
+LIMIT 1"#
+    );
+}
+
+/// The error query orders rows as the kernel's candidate state holds
+/// them: everything loaded first, in the load order, then each step's
+/// admissions in statement order.
+#[test]
+fn the_error_query_follows_the_kernels_order() {
+    let set = compiled(&orderings_program());
+    let inv = &set.invariants[0];
+    let first = uuid::Uuid::parse_str("0192b3a4-0000-7000-8000-000000000001").unwrap();
+    let second = uuid::Uuid::parse_str("0192b3a4-0000-7000-8000-000000000002").unwrap();
+    let steps = [
+        DeltaStep {
+            transition_id: first,
+            asserted: vec![claim_instance(
+                "Terms",
+                &[
+                    subj("t1"),
+                    morpholog_test_support::qty("5", "MW"),
+                    morpholog_test_support::ts("2026-01-01T00:00:00Z"),
+                    morpholog_test_support::ts("2026-01-02T00:00:00Z"),
+                ],
+            )],
+        },
+        DeltaStep {
+            transition_id: second,
+            asserted: Vec::new(),
+        },
+    ];
+    let sql = inv.error_sql(None, &steps).unwrap().unwrap();
+    assert!(sql.ends_with(
+        r#"
+ORDER BY CASE t0.asserted_in WHEN '0192b3a4-0000-7000-8000-000000000001' THEN 1 WHEN '0192b3a4-0000-7000-8000-000000000002' THEN 2 ELSE 0 END, CASE t0.asserted_in WHEN '0192b3a4-0000-7000-8000-000000000001' THEN COALESCE(array_position(ARRAY['[{"type":"subject","value":"t1"},{"type":"quantity","value":{"amount":"5","unit":"MW"}},{"type":"timestamp","value":"2026-01-01T00:00:00Z"},{"type":"timestamp","value":"2026-01-02T00:00:00Z"}]'::jsonb], t0.arguments), 0) ELSE 0 END, t0.arguments_hash
+LIMIT 1"#
+    ), "{sql}");
 }
 
 #[test]
