@@ -64,7 +64,7 @@ pub use coverage::{
 pub use definitions::resolve_defined_calls;
 pub use derive::{enumerate_derived, eval_invariant, invariant_witness};
 pub use disciplines::{in_force_define_name, lower_discipline_definitions, lower_disciplines};
-pub use eval::{EvalError, RenderedClaim};
+pub use eval::{EvalError, RenderedClaim, literal_value, ordered_compare_error};
 pub use explain::{
     ErrorRejection, Explanation, GateKind, GateRejection, InvariantRejection, MissingClaim,
     Rejection, TransitionRef, Verdict, explain,

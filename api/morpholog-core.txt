@@ -2853,9 +2853,11 @@ pub fn morpholog_core::intent_arg_schema(&morpholog_core::ValidatedProgram<'_>, 
 pub fn morpholog_core::invariant_witness(&morpholog_core::Invariant, &morpholog_core::State, core::option::Option<&morpholog_core::State>, &[morpholog_core::Definition]) -> core::result::Result<alloc::vec::Vec<morpholog_core::WitnessBinding>, morpholog_core::EvalError>
 pub fn morpholog_core::invariants_using_pre(&morpholog_core::Program) -> alloc::vec::Vec<alloc::string::String>
 pub fn morpholog_core::lints(&morpholog_core::CompiledProgram) -> alloc::vec::Vec<morpholog_core::Lint>
+pub fn morpholog_core::literal_value(&morpholog_core::Value) -> core::result::Result<morpholog_core::EvalValue, morpholog_core::EvalError>
 pub fn morpholog_core::lower_discipline_definitions(&mut morpholog_core::Program)
 pub fn morpholog_core::lower_disciplines(&mut morpholog_core::Program)
 pub fn morpholog_core::lower_sum_seeds(&mut morpholog_core::Program)
+pub fn morpholog_core::ordered_compare_error(morpholog_core::OrderedDomain, &morpholog_core::EvalValue, &morpholog_core::EvalValue) -> core::option::Option<morpholog_core::EvalError>
 pub fn morpholog_core::predicates_asserted_by_stmt(&morpholog_core::Stmt, &mut alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>)
 pub fn morpholog_core::predicates_read_by_stmt(&morpholog_core::Stmt, &[morpholog_core::Definition], &mut alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>)
 pub fn morpholog_core::predicates_referenced_by_derived(&morpholog_core::DerivedClaim, &[morpholog_core::Definition]) -> alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>

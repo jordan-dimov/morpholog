@@ -192,6 +192,49 @@ impl<'a> EvalContext<'a> {
     }
 }
 
+/// Why two runtime values cannot be ordered under `domain`, or `None`
+/// when they can. One authority for the interpreter and the compiled
+/// checks, so both report the same error for the same operands.
+pub fn ordered_compare_error(
+    domain: OrderedDomain,
+    left: &EvalValue,
+    right: &EvalValue,
+) -> Option<EvalError> {
+    match (domain, left, right) {
+        (OrderedDomain::Decimal, EvalValue::Decimal(_), EvalValue::Decimal(_))
+        | (OrderedDomain::Date, EvalValue::Date(_), EvalValue::Date(_))
+        | (OrderedDomain::Timestamp, EvalValue::Timestamp(_), EvalValue::Timestamp(_))
+        | (OrderedDomain::Duration, EvalValue::Duration(_), EvalValue::Duration(_)) => None,
+        // A `Decimal[U]` is an exact decimal with a unit label; two
+        // quantities compare only under the same unit.
+        (
+            OrderedDomain::Decimal,
+            EvalValue::Quantity { unit: u, .. },
+            EvalValue::Quantity { unit: v, .. },
+        ) => (u != v).then(|| {
+            EvalError::TypeMismatch(format!(
+                "cannot compare Decimal[{u}] with Decimal[{v}]: \
+                 comparison requires the same unit"
+            ))
+        }),
+        (OrderedDomain::Decimal, l, r) => Some(EvalError::TypeMismatch(format!(
+            "comparison expects two decimal-domain operands of one flavour \
+             (bare decimals, or quantities of the same unit); got {} vs {}",
+            runtime_kind_label(l),
+            runtime_kind_label(r),
+        ))),
+        (OrderedDomain::Date, _, _) => Some(EvalError::TypeMismatch(
+            "comparison expects civil-date operands".to_string(),
+        )),
+        (OrderedDomain::Timestamp, _, _) => Some(EvalError::TypeMismatch(
+            "comparison expects timestamp operands".to_string(),
+        )),
+        (OrderedDomain::Duration, _, _) => Some(EvalError::TypeMismatch(
+            "comparison expects duration operands".to_string(),
+        )),
+    }
+}
+
 /// Evaluate an ordered comparison. Both operands must resolve to the
 /// `domain`'s runtime kind. Returns the unchanged bindings when it
 /// holds, empty otherwise.
@@ -202,54 +245,25 @@ fn ordered_comparison(
     domain: OrderedDomain,
     ctx: &EvalContext<'_>,
 ) -> Result<Vec<Bindings>, EvalError> {
-    let holds = match (domain, eval_value(left, ctx)?, eval_value(right, ctx)?) {
-        (OrderedDomain::Decimal, EvalValue::Decimal(a), EvalValue::Decimal(b)) => {
+    let l = eval_value(left, ctx)?;
+    let r = eval_value(right, ctx)?;
+    if let Some(e) = ordered_compare_error(domain, &l, &r) {
+        return Err(e);
+    }
+    let holds = match (l, r) {
+        (EvalValue::Decimal(a), EvalValue::Decimal(b)) => apply_cmp(op, a, b),
+        (EvalValue::Quantity { amount: a, .. }, EvalValue::Quantity { amount: b, .. }) => {
             apply_cmp(op, a, b)
         }
-        // A `Decimal[U]` is an exact decimal with a unit label; two
-        // quantities compare only under the same unit.
-        (
-            OrderedDomain::Decimal,
-            EvalValue::Quantity { amount: a, unit: u },
-            EvalValue::Quantity { amount: b, unit: v },
-        ) => {
-            if u != v {
-                return Err(EvalError::TypeMismatch(format!(
-                    "cannot compare Decimal[{u}] with Decimal[{v}]: \
-                     comparison requires the same unit"
-                )));
-            }
-            apply_cmp(op, a, b)
-        }
-        (OrderedDomain::Date, EvalValue::Date(a), EvalValue::Date(b)) => apply_cmp(op, a, b),
-        (OrderedDomain::Timestamp, EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => {
-            apply_cmp(op, a, b)
-        }
-        (OrderedDomain::Duration, EvalValue::Duration(a), EvalValue::Duration(b)) => {
-            apply_cmp(op, a, b)
-        }
-        (OrderedDomain::Decimal, l, r) => {
+        (EvalValue::Date(a), EvalValue::Date(b)) => apply_cmp(op, a, b),
+        (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => apply_cmp(op, a, b),
+        (EvalValue::Duration(a), EvalValue::Duration(b)) => apply_cmp(op, a, b),
+        (l, r) => {
             return Err(EvalError::TypeMismatch(format!(
-                "comparison expects two decimal-domain operands of one flavour \
-                 (bare decimals, or quantities of the same unit); got {} vs {}",
+                "ordered_compare_error admitted {} vs {} under {domain:?}",
                 runtime_kind_label(&l),
-                runtime_kind_label(&r),
+                runtime_kind_label(&r)
             )));
-        }
-        (OrderedDomain::Date, _, _) => {
-            return Err(EvalError::TypeMismatch(
-                "comparison expects civil-date operands".to_string(),
-            ));
-        }
-        (OrderedDomain::Timestamp, _, _) => {
-            return Err(EvalError::TypeMismatch(
-                "comparison expects timestamp operands".to_string(),
-            ));
-        }
-        (OrderedDomain::Duration, _, _) => {
-            return Err(EvalError::TypeMismatch(
-                "comparison expects duration operands".to_string(),
-            ));
         }
     };
     Ok(verdict(ctx.bindings, holds))
@@ -1572,6 +1586,11 @@ fn round_decimal(v: Decimal, q: Decimal) -> Result<Decimal, EvalError> {
         toward_zero
     };
     Ok(result.normalize())
+}
+
+/// The runtime value of a literal, parsed as the evaluator parses it.
+pub fn literal_value(value: &Value) -> Result<EvalValue, EvalError> {
+    resolve_term(&Term::Literal(value.clone()), &Bindings::new(), None)
 }
 
 pub(crate) fn resolve_term(
