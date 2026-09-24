@@ -1895,7 +1895,7 @@ pub async fn morpholog_postgres::mark_outbox_failed(&sqlx_postgres::PgPool, uuid
 pub async fn morpholog_postgres::mark_outbox_transient_attempt(&sqlx_postgres::PgPool, uuid::Uuid, &str, jiff::timestamp::Timestamp) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::migration_status(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub fn morpholog_postgres::pack_format_version(&[u8]) -> core::option::Option<u64>
-pub fn morpholog_postgres::pack_role_rebindings(&[u8], &morpholog_postgres::PackVerdict) -> morpholog_postgres::RoleRebindings
+pub fn morpholog_postgres::pack_role_rebindings(&[morpholog_postgres::AuditRow], &morpholog_postgres::PackVerdict) -> morpholog_postgres::RoleRebindings
 pub fn morpholog_postgres::parse_public_key(&str) -> core::result::Result<ed25519_dalek::verifying::VerifyingKey, morpholog_postgres::SigningError>
 pub fn morpholog_postgres::parse_signature(&str) -> core::result::Result<ed25519::Signature, morpholog_postgres::SigningError>
 pub async fn morpholog_postgres::plan_indexes(&sqlx_postgres::PgPool, &morpholog_postgres::PgProgram) -> core::result::Result<morpholog_postgres::ProvisionReport, morpholog_postgres::PgError>
@@ -1919,7 +1919,8 @@ pub fn morpholog_postgres::render_views(morpholog_core::validate::ValidatedProgr
 pub async fn morpholog_postgres::resolve_transition_at_or_before<'e, E>(E, jiff::timestamp::Timestamp) -> core::result::Result<uuid::Uuid, morpholog_postgres::PgError> where E: sqlx_core::executor::Executor<'e, Database = sqlx_postgres::database::Postgres>
 pub async fn morpholog_postgres::score_candidate(&sqlx_postgres::PgPool, &morpholog_core::ir::Program, core::option::Option<morpholog_postgres::SplitBoundary>) -> core::result::Result<morpholog_core::score::CandidateScore, morpholog_postgres::PgError>
 pub fn morpholog_postgres::score_candidate_against_pack(&morpholog_core::ir::Program, &morpholog_postgres::EvidencePack, core::option::Option<&morpholog_postgres::Checkpoint>, core::option::Option<morpholog_postgres::SplitBoundary>) -> core::result::Result<morpholog_core::score::CandidateScore, morpholog_postgres::PgError>
-pub fn morpholog_postgres::score_candidate_against_packs<E: core::convert::From<morpholog_postgres::PgError>>(&morpholog_core::ir::Program, impl core::iter::traits::collect::IntoIterator<Item = core::result::Result<(alloc::string::String, morpholog_postgres::EvidencePack), E>>) -> core::result::Result<morpholog_core::score::BatchScore, E>
+pub fn morpholog_postgres::score_candidate_against_packs(&morpholog_core::ir::Program, &[(alloc::string::String, morpholog_postgres::EvidencePack)]) -> core::result::Result<morpholog_core::score::BatchScore, morpholog_postgres::PgError>
+pub fn morpholog_postgres::score_candidate_against_packs_lazily<E, P>(&morpholog_core::ir::Program, impl core::iter::traits::collect::IntoIterator<Item = core::result::Result<(alloc::string::String, P), E>>) -> core::result::Result<morpholog_core::score::BatchScore, E> where E: core::convert::From<morpholog_postgres::PgError>, P: core::borrow::Borrow<morpholog_postgres::EvidencePack>
 pub fn morpholog_postgres::sign_tree_head(&ed25519_dalek::signing::SigningKey, &str, &str, &morpholog_postgres::TreeHead<'_>) -> ed25519::Signature
 pub fn morpholog_postgres::signing_key_from_pem(&str) -> core::result::Result<ed25519_dalek::signing::SigningKey, morpholog_postgres::SigningError>
 pub fn morpholog_postgres::signing_key_to_pem(&ed25519_dalek::signing::SigningKey) -> core::result::Result<alloc::string::String, morpholog_postgres::SigningError>

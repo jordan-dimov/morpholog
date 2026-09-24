@@ -309,17 +309,6 @@ fn cases() -> Vec<Case> {
         None,
         "tampered",
     );
-    case(
-        "sizes that go back down",
-        rows.clone(),
-        {
-            let mut c = chain(&rows, &[0, 5, 2]);
-            rehash_from(&mut c, 0);
-            c
-        },
-        None,
-        "chain_broken",
-    );
 
     case(
         "a signature that does not verify",
@@ -498,5 +487,30 @@ fn the_chain_key_is_named_before_the_anchor_key() {
     match streamed(&case.rows, &case.chain, case.anchor.as_ref()) {
         TreeVerification::UnauthorizedKey { key_id, .. } => assert_eq!(key_id, "k1"),
         other => panic!("expected the chain's key, got {other:?}"),
+    }
+}
+
+/// The one deliberate difference from the old verifier: a chain whose sizes
+/// go back down, every checkpoint otherwise genuine. The old verifier found
+/// each root in its own prefix and called the tree intact; the streaming one
+/// has already passed the smaller prefix and calls the chain broken. Neither
+/// the database (sizes are unique and read in order) nor a pack (validated
+/// strictly increasing) can hand either verifier such a chain.
+#[test]
+fn a_chain_whose_sizes_go_back_down_is_broken_where_it_was_intact() {
+    let k1 = crate::signing::generate_signing_key();
+    let k2 = crate::signing::generate_signing_key();
+    let rows = history(&k1, &k2);
+    let down = chain(&rows, &[0, 5, 2]);
+    assert!(matches!(
+        old_verdict(&rows, &down, None),
+        TreeVerification::Intact { .. }
+    ));
+    match streamed(&rows, &down, None) {
+        TreeVerification::ChainBroken { detail } => assert!(
+            detail.contains("tree_size 2 follows one at tree_size 5"),
+            "{detail}"
+        ),
+        other => panic!("expected ChainBroken, got {other:?}"),
     }
 }

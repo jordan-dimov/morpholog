@@ -10,7 +10,7 @@ use anyhow::Context;
 use morpholog_core::{BatchScore, CandidateScore, Program, invariants_using_pre};
 use morpholog_postgres::{
     EvidencePack, SplitBoundary, read_prefix_stream, score_candidate, score_candidate_against_pack,
-    score_candidate_against_packs,
+    score_candidate_against_packs_lazily,
 };
 
 use crate::EvaluateArgs;
@@ -120,7 +120,7 @@ fn score_against_packs(program: &Program, dir: &Path) -> anyhow::Result<BatchSco
             .unwrap_or_default();
         Ok::<_, anyhow::Error>((name, read_complete_prefix(path)?))
     });
-    score_candidate_against_packs(program, named).context("scoring against the packs failed")
+    score_candidate_against_packs_lazily(program, named).context("scoring against the packs failed")
 }
 
 /// A complete-prefix pack in either form, whole in memory, since scoring

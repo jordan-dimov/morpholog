@@ -114,6 +114,7 @@ pub use rejections::{RejectionRow, list_rejection_rows};
 pub use role_rebindings::{RebindingScope, RoleRebinding, RoleRebindings};
 pub use score::{
     SplitBoundary, score_candidate, score_candidate_against_pack, score_candidate_against_packs,
+    score_candidate_against_packs_lazily,
 };
 pub use signing::{
     SigningError, TreeHead, generate_signing_key, parse_public_key, parse_signature,

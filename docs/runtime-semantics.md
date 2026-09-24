@@ -598,6 +598,24 @@ An invariant says what lawful state means, and `evaluate`, `explain` and the ver
 
 The same rule runs on both evaluators: one impact plan per invariant, built once beside the programme, tells the interpreter which bindings to evaluate and the compiled checker which cases to bound its SQL to. A refusal's witness is drawn from the touched cases, never from a case the transition did not reach; the trace records only the obligations actually evaluated; an evaluation error anywhere in an evaluated obligation dominates a violation in it, and an untouched case can raise none. The audit row's `invariants_checked` names every active invariant the transition was admitted under, each discharged because the delta could not affect it, because every affected case satisfied it, or because the whole invariant was evaluated and held.
 
+## Concurrency: when two proposals conflict
+
+Every proposal runs in its own `SERIALIZABLE` transaction. When two concurrent proposals could not have run one after the other, PostgreSQL aborts one of them with SQLSTATE 40001. Morpholog reports it as `serialization_failure`: nothing was recorded, and the same proposal is safe to submit again. The runtime never retries on its own; how often and for how long is the caller's policy.
+
+Whether two proposals conflict depends on what they read, not on what they mean. Today a proposal reads:
+
+- every claim of every predicate its transformation body reads;
+- on the interpreted route, also every claim of every predicate its invariants mention and its body admits;
+- on the compiled route, the invariants' cases through queries bounded to the cases the change touches, which become index lookups once `provision indexes` has run.
+
+All predicates live in one `claims` table. PostgreSQL remembers reads row by row, then page by page, and past a threshold as the whole table; a sequential scan, which it chooses for a tiny or empty table or for a predicate that is most of the table, remembers the whole table at once. So, today:
+
+- Two proposals that touch disjoint cases of the same predicates - two desks, two tenants, two periods - conflict whenever either reads a whole predicate the other writes. Splitting writers across values of one predicate does not reduce retries.
+- Proposals whose reads and writes fall in different predicates conflict less often: in the bench's synthetic workload, giving each of sixteen writers its own predicate cut retries from about 6 to about 2.5 per commit.
+- On a new, nearly empty ledger most proposals conflict, because the table is read whole.
+
+Reading only the cases a proposal touches, so that disjoint cases stop conflicting, is open work (#396). The measured numbers are in the embedder guide.
+
 ## Tracing proposals
 
 `propose_with_trace` is `propose`'s diagnostic twin. It returns a `TracedProposal` that carries a structured `Vec<TraceEntry>` on **both** the success path (`Completed { outcome, trace }`) and the kernel-error path (`Errored { error, trace }`). The error path matters most: a multi-match `bind_one`, a type-mismatch `DateLe`, an unbound `Term::Actor` - each surfaces as an `EvalError`, and `propose`'s `Result<Outcome, EvalError>` shape would discard the run-up that led to the failure. `propose_with_trace` does not.

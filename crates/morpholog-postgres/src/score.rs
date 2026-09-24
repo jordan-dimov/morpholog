@@ -205,20 +205,37 @@ pub fn score_candidate_against_pack(
 /// Score one candidate against many packs in one call, saving a process
 /// spawn per pack. Each pack is scored as [`score_candidate_against_pack`]
 /// does; a pack that fails becomes a `Failed` case and the batch goes on.
-/// Packs are taken one at a time, so only one is held at once; an error
-/// loading one ends the call. An unscorable candidate fails the whole call
-/// once, up front. Offline.
-pub fn score_candidate_against_packs<E: From<PgError>>(
+/// An unscorable candidate fails the whole call once, up front. Offline.
+pub fn score_candidate_against_packs(
     program: &Program,
-    named_packs: impl IntoIterator<Item = Result<(String, EvidencePack), E>>,
-) -> Result<BatchScore, E> {
+    named_packs: &[(String, EvidencePack)],
+) -> Result<BatchScore, PgError> {
+    score_candidate_against_packs_lazily(
+        program,
+        named_packs
+            .iter()
+            .map(|(name, pack)| Ok::<_, PgError>((name.clone(), pack))),
+    )
+}
+
+/// As [`score_candidate_against_packs`], taking the packs one at a time as
+/// they are loaded, so only one is held at once. An error loading one ends
+/// the call.
+pub fn score_candidate_against_packs_lazily<E, P>(
+    program: &Program,
+    named_packs: impl IntoIterator<Item = Result<(String, P), E>>,
+) -> Result<BatchScore, E>
+where
+    E: From<PgError>,
+    P: std::borrow::Borrow<EvidencePack>,
+{
     // Refuse an unscorable candidate once; each pack builds its own scorer.
     let _ = build_scorer(program)?;
 
     let mut cases = Vec::new();
     for named in named_packs {
         let (pack, evidence) = named?;
-        let outcome = match score_candidate_against_pack(program, &evidence, None, None) {
+        let outcome = match score_candidate_against_pack(program, evidence.borrow(), None, None) {
             Ok(score) => CaseOutcome::Scored {
                 transitions_replayed: score.transitions_replayed,
                 invariants: score.invariants,

@@ -877,7 +877,6 @@ pub(crate) fn verify_tree(
         }
     }
 
-    let mut frontier = crate::merkle::Frontier::default();
     let mut prev_hash: Option<&Digest> = None;
     for cp in checkpoints {
         let expected = checkpoint_hash(
@@ -911,19 +910,7 @@ pub(crate) fn verify_tree(
                 recomputed_root: format!("only {} rows present", leaves.len()),
             };
         }
-        if size < frontier.len() {
-            return TreeVerification::ChainBroken {
-                detail: format!(
-                    "checkpoint at tree_size {} follows one at tree_size {}",
-                    cp.tree_size,
-                    frontier.len()
-                ),
-            };
-        }
-        for leaf in &leaves[frontier.len()..size] {
-            frontier.push(*leaf);
-        }
-        let recomputed = Digest::from_bytes(frontier.root());
+        let recomputed = Digest::from_bytes(merkle_root(&leaves[..size]));
         if recomputed != cp.root_hash {
             return TreeVerification::Tampered {
                 tree_size: cp.tree_size,

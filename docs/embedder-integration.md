@@ -554,6 +554,37 @@ longer than it takes, or partition the footprint (the `contend`
 lesson: value sharding does not relieve it, predicate partitioning
 does), and give the retry budget the interval between writes.
 
+## Concurrent proposals and retries
+
+A serialization conflict is a known non-commit: the binary reports it with the code `serialization_failure`, on one-shot `propose` and `transact`, in a batch receipt and in a session receipt, and the generated client raises `MorphologRequestError` with `retriable` true. It is the one error that is safe to submit again as it is. Morpholog does not retry for you, because how many attempts, how long to wait and when to give up depend on the caller: an interactive request and a nightly import want different answers. With the generated client:
+
+```python
+import random
+import time
+
+from morpholog_client import MorphologRequestError
+
+def submit_with_retries(client, request, actor, attempts=8):
+    for attempt in range(attempts):
+        try:
+            return client.submit(request, actor)
+        except MorphologRequestError as err:
+            if not err.retriable or attempt == attempts - 1:
+                raise
+            time.sleep(random.uniform(0, 0.02 * 2**attempt))
+```
+
+Anything else propagates: `MorphologOutcomeUnknown` in particular means the proposal may have committed, so read the record before submitting again.
+
+How often you retry depends on what your proposals read; `runtime-semantics.md` ("Concurrency: when two proposals conflict") states when two proposals conflict. The bench's reading on the development machine, sixteen writers posting to one ledger (`crates/morpholog-bench/README.md` has the method):
+
+| Route | Retries per commit | Commits per second |
+|---|---|---|
+| interpreted | 11.03 | 22 |
+| compiled, indexes provisioned | 0.72 | 1,882 |
+
+On the interpreted route, giving each writer its own period in the same predicates left retries flat at about 10 per commit; in a lighter synthetic workload, giving each writer its own predicate cut them from about 6 to about 2.5. If your programme stays interpreted (`check -v` says why), expect the first row, and expect disjoint cases in shared predicates to conflict until #396 lands.
+
 ## The resident session (`morpholog session`)
 
 ```bash

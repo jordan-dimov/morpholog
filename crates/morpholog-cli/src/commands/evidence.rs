@@ -115,27 +115,19 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     // format version. An unknown future version is named as such, not read
     // as a malformed v1. A file that is not a pack is still a verdict, not
     // an operational error.
-    let (verdict, chain, role_rebindings) = match open_pack(&args.pack_file)? {
-        PackInput::Stream(input) => {
-            let (verdict, checkpoints, role_rebindings) =
-                verify_streamed(input, anchor.as_ref(), policy.as_ref())?;
-            (verdict, Chain::Held(checkpoints), role_rebindings)
-        }
+    let (verdict, checkpoints, role_rebindings) = match open_pack(&args.pack_file)? {
+        PackInput::Stream(input) => verify_streamed(input, anchor.as_ref(), policy.as_ref())?,
         PackInput::Newer(n) => (
             newer_than_this_binary(n),
-            Chain::Held(Vec::new()),
+            Vec::new(),
             RoleRebindings::NotEvaluated,
         ),
         PackInput::Unreadable(detail) => (
             PackVerdict::Prefix(TreeVerification::MalformedPack { detail }),
-            Chain::Held(Vec::new()),
+            Vec::new(),
             RoleRebindings::NotEvaluated,
         ),
-        PackInput::Document(bytes) => {
-            let verdict = verify_document(&bytes, anchor.as_ref(), policy.as_ref())?;
-            let role_rebindings = pack_role_rebindings(&bytes, &verdict);
-            (verdict, Chain::InDocument(bytes), role_rebindings)
-        }
+        PackInput::Document(bytes) => verify_document(bytes, anchor.as_ref(), policy.as_ref())?,
     };
     let intact = verdict.is_intact();
 
@@ -145,7 +137,7 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     let mut witness_invalid = false;
     let witnesses = if args.witnesses || args.trusted_tsa_file.is_some() {
         let anchors = witness_anchors(args.trusted_tsa_file.as_deref())?;
-        let witnesses = witnesses_report(&chain.checkpoints(), anchors.as_ref());
+        let witnesses = witnesses_report(&checkpoints, anchors.as_ref());
         witness_invalid = witnesses.as_ref().is_some_and(WitnessesReport::any_invalid);
         witnesses
     } else {
@@ -222,22 +214,6 @@ fn undecodable(e: std::io::Error) -> anyhow::Result<PackInput> {
     }
 }
 
-/// Where the checkpoints are, for the witness report: already held, or
-/// still inside a single-document pack, read only if asked for.
-enum Chain {
-    Held(Vec<Checkpoint>),
-    InDocument(Vec<u8>),
-}
-
-impl Chain {
-    fn checkpoints(self) -> Vec<Checkpoint> {
-        match self {
-            Chain::Held(checkpoints) => checkpoints,
-            Chain::InDocument(bytes) => pack_checkpoints(&bytes),
-        }
-    }
-}
-
 fn newer_than_this_binary(n: impl std::fmt::Display) -> PackVerdict {
     PackVerdict::Prefix(TreeVerification::MalformedPack {
         detail: format!(
@@ -286,41 +262,69 @@ fn verify_streamed(
     ))
 }
 
-/// A single-document pack: v1 complete prefix, v2 window or v3 selective.
+/// A single-document pack (v1 complete prefix, v2 window or v3 selective),
+/// parsed once: its verdict, its checkpoints for the witness report, and
+/// the role rebindings among its rows. The bytes are dropped once parsed.
 fn verify_document(
-    bytes: &[u8],
+    bytes: Vec<u8>,
     anchor: Option<&Checkpoint>,
     policy: Option<&SignaturePolicy>,
-) -> anyhow::Result<PackVerdict> {
-    Ok(match pack_format_version(bytes) {
-        Some(2) => match verify_window_pack(bytes, anchor, policy) {
-            Offline::Verdict(verdict) => PackVerdict::Window(verdict),
-            Offline::PinNeedsFullPrefix => return Err(pin_needs_full_prefix()),
-        },
-        Some(3) => match verify_selective_pack(bytes, anchor, policy) {
-            Offline::Verdict(verdict) => PackVerdict::Selective(verdict),
-            Offline::PinNeedsFullPrefix => return Err(pin_needs_full_prefix()),
-        },
-        Some(n) if n > 4 => newer_than_this_binary(n),
-        _ => PackVerdict::Prefix(verify_prefix_pack(bytes, anchor, policy)),
-    })
-}
-
-/// Every checkpoint a pack carries, whatever its kind; none for bytes
-/// that are not a pack this binary understands (the verdict already says
-/// so).
-fn pack_checkpoints(bytes: &[u8]) -> Vec<Checkpoint> {
-    match pack_format_version(bytes) {
-        Some(2) => serde_json::from_slice::<WindowEvidencePack>(bytes)
-            .map(|p| vec![p.from_checkpoint, p.to_checkpoint])
-            .unwrap_or_default(),
-        Some(3) => serde_json::from_slice::<SelectiveEvidencePack>(bytes)
-            .map(|p| vec![p.checkpoint])
-            .unwrap_or_default(),
-        Some(n) if n > 3 => Vec::new(),
-        _ => serde_json::from_slice::<EvidencePack>(bytes)
-            .map(|p| p.checkpoints)
-            .unwrap_or_default(),
+) -> anyhow::Result<(PackVerdict, Vec<Checkpoint>, RoleRebindings)> {
+    let unread = |verdict| Ok((verdict, Vec::new(), RoleRebindings::NotEvaluated));
+    match pack_format_version(&bytes) {
+        Some(2) => {
+            let pack: WindowEvidencePack = match serde_json::from_slice(&bytes) {
+                Ok(pack) => pack,
+                Err(e) => {
+                    return unread(PackVerdict::Window(WindowVerification::Malformed {
+                        detail: e.to_string(),
+                    }));
+                }
+            };
+            drop(bytes);
+            let verdict = match verify_window_pack(&pack, anchor, policy) {
+                Offline::Verdict(verdict) => PackVerdict::Window(verdict),
+                Offline::PinNeedsFullPrefix => return Err(pin_needs_full_prefix()),
+            };
+            let role_rebindings = pack_role_rebindings(&pack.rows, &verdict);
+            Ok((
+                verdict,
+                vec![pack.from_checkpoint, pack.to_checkpoint],
+                role_rebindings,
+            ))
+        }
+        Some(3) => {
+            let pack: SelectiveEvidencePack = match serde_json::from_slice(&bytes) {
+                Ok(pack) => pack,
+                Err(e) => {
+                    return unread(PackVerdict::Selective(SelectiveVerification::Malformed {
+                        detail: e.to_string(),
+                    }));
+                }
+            };
+            drop(bytes);
+            let verdict = match verify_selective_pack(&pack, anchor, policy) {
+                Offline::Verdict(verdict) => PackVerdict::Selective(verdict),
+                Offline::PinNeedsFullPrefix => return Err(pin_needs_full_prefix()),
+            };
+            let role_rebindings = pack_role_rebindings(&pack.rows, &verdict);
+            Ok((verdict, vec![pack.checkpoint], role_rebindings))
+        }
+        Some(n) if n > 4 => unread(newer_than_this_binary(n)),
+        _ => {
+            let pack: EvidencePack = match serde_json::from_slice(&bytes) {
+                Ok(pack) => pack,
+                Err(e) => {
+                    return unread(PackVerdict::Prefix(TreeVerification::MalformedPack {
+                        detail: e.to_string(),
+                    }));
+                }
+            };
+            drop(bytes);
+            let verdict = PackVerdict::Prefix(verify_prefix_pack(&pack, anchor, policy));
+            let role_rebindings = pack_role_rebindings(&pack.rows, &verdict);
+            Ok((verdict, pack.checkpoints, role_rebindings))
+        }
     }
 }
 
@@ -344,19 +348,11 @@ fn pin_needs_full_prefix() -> anyhow::Error {
 }
 
 fn verify_prefix_pack(
-    bytes: &[u8],
+    pack: &EvidencePack,
     anchor: Option<&Checkpoint>,
     policy: Option<&SignaturePolicy>,
 ) -> TreeVerification {
-    let pack: EvidencePack = match serde_json::from_slice(bytes) {
-        Ok(pack) => pack,
-        Err(e) => {
-            return TreeVerification::MalformedPack {
-                detail: e.to_string(),
-            };
-        }
-    };
-    let verdict = verify_pack(&pack, anchor).unwrap_or_else(|e| TreeVerification::MalformedPack {
+    let verdict = verify_pack(pack, anchor).unwrap_or_else(|e| TreeVerification::MalformedPack {
         detail: e.to_string(),
     });
     // Policy runs over the pack's own checkpoints, and only on an intact
@@ -372,20 +368,12 @@ fn verify_prefix_pack(
 }
 
 fn verify_selective_pack(
-    bytes: &[u8],
+    pack: &SelectiveEvidencePack,
     anchor: Option<&Checkpoint>,
     policy: Option<&SignaturePolicy>,
 ) -> Offline<SelectiveVerification> {
-    let pack: SelectiveEvidencePack = match serde_json::from_slice(bytes) {
-        Ok(pack) => pack,
-        Err(e) => {
-            return Offline::Verdict(SelectiveVerification::Malformed {
-                detail: e.to_string(),
-            });
-        }
-    };
     let verdict =
-        verify_selective(&pack, anchor).unwrap_or_else(|e| SelectiveVerification::Malformed {
+        verify_selective(pack, anchor).unwrap_or_else(|e| SelectiveVerification::Malformed {
             detail: e.to_string(),
         });
     if !matches!(verdict, SelectiveVerification::Intact { .. }) {
@@ -406,19 +394,11 @@ fn verify_selective_pack(
 }
 
 fn verify_window_pack(
-    bytes: &[u8],
+    pack: &WindowEvidencePack,
     anchor: Option<&Checkpoint>,
     policy: Option<&SignaturePolicy>,
 ) -> Offline<WindowVerification> {
-    let pack: WindowEvidencePack = match serde_json::from_slice(bytes) {
-        Ok(pack) => pack,
-        Err(e) => {
-            return Offline::Verdict(WindowVerification::Malformed {
-                detail: e.to_string(),
-            });
-        }
-    };
-    let verdict = verify_window(&pack, anchor).unwrap_or_else(|e| WindowVerification::Malformed {
+    let verdict = verify_window(pack, anchor).unwrap_or_else(|e| WindowVerification::Malformed {
         detail: e.to_string(),
     });
     if !matches!(verdict, WindowVerification::Intact { .. }) {
