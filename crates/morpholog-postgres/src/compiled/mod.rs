@@ -266,8 +266,15 @@ pub(crate) struct DeltaStep {
 }
 
 /// The ordering keys for one claim alias: which step admitted the row
-/// (loaded rows first), its place in that step, then the loaded order.
-fn order_keys(alias: &str, steps: &[DeltaStep]) -> Result<String, PgError> {
+/// (loaded rows first), its place among that step's admissions of the
+/// alias's predicate, then the loaded order. The place is looked up by
+/// arguments alone, so only the same predicate's admissions are listed:
+/// another predicate can admit the same arguments in the same step.
+fn order_keys(
+    alias: &str,
+    predicate: &PredicateName,
+    steps: &[DeltaStep],
+) -> Result<String, PgError> {
     if steps.is_empty() {
         return Ok(format!("{alias}.arguments_hash"));
     }
@@ -276,28 +283,32 @@ fn order_keys(alias: &str, steps: &[DeltaStep]) -> Result<String, PgError> {
     for (i, step) in steps.iter().enumerate() {
         let id = quote_literal(&step.transition_id.to_string());
         let _ = write!(step_arms, " WHEN {id} THEN {}", i + 1);
-        if step.asserted.is_empty() {
-            continue;
-        }
         let admitted = step
             .asserted
             .iter()
+            .filter(|c| c.predicate == *predicate)
             .map(|c| {
                 Ok(format!(
                     "{}::jsonb",
                     quote_literal(&serde_json::to_string(&c.args)?)
                 ))
             })
-            .collect::<Result<Vec<_>, PgError>>()?
-            .join(", ");
+            .collect::<Result<Vec<_>, PgError>>()?;
+        if admitted.is_empty() {
+            continue;
+        }
         let _ = write!(
             place_arms,
-            " WHEN {id} THEN COALESCE(array_position(ARRAY[{admitted}], {alias}.arguments), 0)"
+            " WHEN {id} THEN COALESCE(array_position(ARRAY[{}], {alias}.arguments), 0)",
+            admitted.join(", ")
         );
     }
-    Ok(format!(
-        "CASE {alias}.asserted_in{step_arms} ELSE 0 END, CASE {alias}.asserted_in{place_arms} ELSE 0 END, {alias}.arguments_hash"
-    ))
+    let mut keys = vec![format!("CASE {alias}.asserted_in{step_arms} ELSE 0 END")];
+    if !place_arms.is_empty() {
+        keys.push(format!("CASE {alias}.asserted_in{place_arms} ELSE 0 END"));
+    }
+    keys.push(format!("{alias}.arguments_hash"));
+    Ok(keys.join(", "))
 }
 
 /// Decode a violation row's witness columns. Each is the `::text` of the
@@ -491,8 +502,9 @@ pub(crate) struct CompiledInvariant {
 #[derive(Debug)]
 struct ErrorQuery {
     select_from_where: String,
-    /// The claim aliases of the scope, in the kernel's nesting order.
-    aliases: Vec<String>,
+    /// The claim aliases of the scope with their predicates, in the
+    /// kernel's nesting order.
+    aliases: Vec<(String, PredicateName)>,
 }
 
 impl CompiledInvariant {
@@ -533,7 +545,7 @@ impl CompiledInvariant {
         let keys = query
             .aliases
             .iter()
-            .map(|alias| order_keys(alias, steps))
+            .map(|(alias, predicate)| order_keys(alias, predicate, steps))
             .collect::<Result<Vec<_>, _>>()?
             .join(", ");
         let _ = write!(sql, "\nORDER BY {keys}\nLIMIT 1");
@@ -666,7 +678,7 @@ enum ErrorReport {
 /// of the comparison's own result.
 #[derive(Default)]
 struct Rendered {
-    from: Vec<(String, String)>, // (alias, from item)
+    from: Vec<(String, PredicateName, String)>, // (alias, predicate, from item)
     laterals: Vec<String>,
     where_: Vec<String>,
     tail: Option<String>,
@@ -972,7 +984,11 @@ fn error_query(scope: &Rendered) -> Option<ErrorQuery> {
             from_list(scope),
             and_all(&[scope.prefix(), scope.error_any()])
         ),
-        aliases: scope.from.iter().map(|(alias, _)| alias.clone()).collect(),
+        aliases: scope
+            .from
+            .iter()
+            .map(|(alias, predicate, _)| (alias.clone(), predicate.clone()))
+            .collect(),
     })
 }
 
@@ -1045,7 +1061,7 @@ fn generic_denial_implies(
 fn from_list(r: &Rendered) -> String {
     r.from
         .iter()
-        .map(|(_, f)| f.as_str())
+        .map(|(_, _, f)| f.as_str())
         .chain(r.laterals.iter().map(String::as_str))
         .collect::<Vec<_>>()
         .join(", ")
@@ -1078,7 +1094,7 @@ fn witness_select_order(r: &Rendered) -> (String, String) {
     let order = if r.env.is_empty() {
         r.from
             .iter()
-            .map(|(alias, _)| format!("{alias}.arguments"))
+            .map(|(alias, _, _)| format!("{alias}.arguments"))
             .collect::<Vec<_>>()
             .join(", ")
     } else {
@@ -1492,7 +1508,11 @@ fn render_claim(
         }
     }
     Ok(Rendered {
-        from: vec![(alias.clone(), format!("morpholog.claims {alias}"))],
+        from: vec![(
+            alias.clone(),
+            predicate.clone(),
+            format!("morpholog.claims {alias}"),
+        )],
         where_,
         env,
         ..Rendered::default()

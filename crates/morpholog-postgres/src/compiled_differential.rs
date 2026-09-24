@@ -740,6 +740,106 @@ transformation enable_and_hold(flag, x, q):
     }
 }
 
+/// One act admits another predicate's row with the same arguments as
+/// its own last admission. The error query places a row among its own
+/// predicate's admissions, so the first of the two foreign units the
+/// kernel meets, in statement order, is the one it names.
+#[tokio::test]
+async fn error_order_does_not_confuse_equal_arguments_from_different_predicates() {
+    let program = morpholog_surface::parse_program(
+        "program predicate_collision
+predicate Enabled(flag: Subject)
+predicate Noise(x: Subject, q: Decimal[MW])
+predicate Terms(x: Subject, q: Decimal[MW])
+invariant quantity_is_positive:
+    Enabled(_) and Terms(_, q) implies q > 0 MW
+transformation enable_and_hold(flag, x1, q1, x2, q2):
+    admit Enabled(flag)
+    admit Noise(x2, q2)
+    admit Terms(x1, q1)
+    admit Terms(x2, q2)
+",
+    )
+    .expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+    let compiled = CompiledProgram::new(program).expect("compiles");
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let probe = probe_raw(
+        &pool,
+        &compiled,
+        &sql_set,
+        "enable_and_hold",
+        vec![
+            subj("f"),
+            subj("b"),
+            morpholog_test_support::qty("7", "GBP"),
+            subj("a"),
+            morpholog_test_support::qty("5", "EUR"),
+        ],
+    )
+    .await;
+    match probe {
+        Ok(Probe::KernelErrorAgreed) => {}
+        Ok(Probe::BodyRejected) => panic!("the body admits"),
+        Ok(Probe::Observed(obs)) => panic!("the kernel must error, got {:?}", obs.kernel),
+        Err(ProbeFailure::Disagreement(d)) => panic!("{d}"),
+        Err(ProbeFailure::Kernel(e)) => panic!("body error {e:?}"),
+        Err(ProbeFailure::Pg(e)) => panic!("pg error {e:?}"),
+    }
+}
+
+/// A subject admitted under an older shape of `Old`, at a position now
+/// declared a quantity. The kernel binds and compares the value it finds,
+/// so the mirrored row satisfies the rule; the compiled join must say the
+/// same. Attacker capability modelled: none; the row is history.
+#[tokio::test]
+#[ignore = "red by design until the old-shape equality rule is decided (PR #397 review)"]
+async fn a_join_over_an_old_shape_value_is_still_kernel_equality() {
+    let program = morpholog_surface::parse_program(
+        "program old_shape
+predicate Old(q: Decimal[MW])
+predicate Mirror(q: Decimal[MW])
+invariant mirrored:
+    Old(q) implies Mirror(q)
+transformation copy():
+    bind Old(q)
+    admit Mirror(q)
+",
+    )
+    .expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+    let compiled = CompiledProgram::new(program).expect("compiles");
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    sqlx::query(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in) VALUES ('Old', $1, $2)",
+    )
+    .bind(serde_json::json!([{"type":"subject","value":"legacy"}]))
+    .bind(Uuid::nil())
+    .execute(&pool)
+    .await
+    .expect("old-shape fixture insert");
+    match probe_raw(&pool, &compiled, &sql_set, "copy", vec![]).await {
+        Ok(Probe::Observed(obs)) => {
+            assert!(
+                matches!(obs.kernel, Some(Outcome::Accepted { .. })),
+                "the kernel admits the mirror, got {:?}",
+                obs.kernel
+            );
+            assert_eq!(summarise(&obs.stage1), None, "whole-state check");
+            assert_eq!(summarise(&obs.stage2), None, "case-bound check");
+        }
+        Ok(Probe::BodyRejected) => panic!("the body admits"),
+        Ok(Probe::KernelErrorAgreed) => panic!("nothing raises here"),
+        Err(ProbeFailure::Disagreement(d)) => panic!("{d}"),
+        Err(ProbeFailure::Kernel(e)) => panic!("body error {e:?}"),
+        Err(ProbeFailure::Pg(e)) => panic!("pg error {e:?}"),
+    }
+}
+
 /// A subject whose text would parse as a timestamp, at a timestamp
 /// position: the kernel refuses to order it, and the compiled check must
 /// say the same rather than read the text.
