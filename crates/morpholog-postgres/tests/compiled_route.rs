@@ -575,3 +575,67 @@ async fn a_retract_and_readmit_touches_nothing_in_a_batch_on_both_routes() {
         );
     }
 }
+
+/// Two foreign units already in history and a third admitted by the
+/// batch's first act; the second act's admission makes the rule check
+/// every row. Both routes raise, and both must name the pair the kernel
+/// meets first: history in its loaded order, then the batch's acts in
+/// order. Attacker capability modelled: none; the fixture rows stand in
+/// for history admitted under an older declaration.
+#[tokio::test]
+async fn a_compiled_batch_names_the_kernels_first_pair_across_acts() {
+    let program = morpholog_surface::parse_program(
+        "program foreign_units
+predicate Enabled(flag: Subject)
+predicate Terms(x: Subject, q: Decimal[MW])
+invariant quantity_is_positive:
+    Enabled(_) and Terms(_, q) implies q > 0 MW
+transformation enable(flag):
+    admit Enabled(flag)
+transformation hold(x, q):
+    admit Terms(x, q)
+",
+    )
+    .unwrap();
+    let interpreted = PgProgram::interpreted(CompiledProgram::new(program.clone()).unwrap());
+    let compiled = PgProgram::new(CompiledProgram::new(program).unwrap());
+    assert!(matches!(compiled.plan(), InvariantPlan::Compiled { .. }));
+    let history = [
+        ClaimInstance {
+            predicate: "Terms".into(),
+            args: vec![subj("a"), morpholog_test_support::qty("5", "EUR")],
+        },
+        ClaimInstance {
+            predicate: "Terms".into(),
+            args: vec![subj("b"), morpholog_test_support::qty("7", "GBP")],
+        },
+    ];
+    let acts = [
+        Proposal::gateway(&Transition {
+            transformation_name: "hold".into(),
+            args: vec![subj("c"), morpholog_test_support::qty("9", "USD")],
+            actor: Subject::from("route_test"),
+        }),
+        Proposal::gateway(&Transition {
+            transformation_name: "enable".into(),
+            args: vec![subj("f")],
+            actor: Subject::from("route_test"),
+        }),
+    ];
+    let pool = test_pool().await;
+    let mut errors = Vec::new();
+    for route in [&interpreted, &compiled] {
+        reset_db(&pool).await;
+        seed_claims(&pool, &history).await;
+        match propose_all_against_pg(&pool, route, &acts).await {
+            Err(PgError::Kernel(e)) => errors.push(e),
+            other => panic!("the batch must raise on both routes, got {other:?}"),
+        }
+    }
+    assert_eq!(errors[0], errors[1], "interpreted vs compiled");
+    let named = errors[0].to_string();
+    assert!(
+        !named.contains("USD"),
+        "the batch's own row is met last, never named first: {named}"
+    );
+}
