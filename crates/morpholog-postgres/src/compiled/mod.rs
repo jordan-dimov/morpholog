@@ -224,6 +224,7 @@ impl CompiledInvariantSet {
                     CaseFilter::Untouched => continue,
                     CaseFilter::Bounded(filter) => Some(filter),
                     CaseFilter::Unbounded => None,
+                    CaseFilter::Drift(drift) => return Err(drift),
                 },
             };
             let sql = inv.violation_sql(case_filter.as_deref());
@@ -454,7 +455,7 @@ impl IndexSpec {
 }
 
 /// How much of a compiled invariant a transition's delta touches.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum CaseFilter {
     /// Delta disjoint from the invariant's occurrences: skip it entirely.
     Untouched,
@@ -463,6 +464,9 @@ pub(crate) enum CaseFilter {
     Bounded(String),
     /// Touched, but not boundable to antecedent columns: run the full check.
     Unbounded,
+    /// A touched case's value is not of the kind its position declares,
+    /// so no compiled reading of that position is sound.
+    Drift(PgError),
 }
 
 #[derive(Debug, Clone)]
@@ -573,8 +577,9 @@ impl CompiledInvariant {
                     return CaseFilter::Unbounded;
                 };
                 match const_eq(col, ev) {
-                    Some(sql) => parts.push(sql),
-                    None => return CaseFilter::Unbounded,
+                    ConstEq::Sql(sql) => parts.push(sql),
+                    ConstEq::Widen => return CaseFilter::Unbounded,
+                    ConstEq::Drift(drift) => return CaseFilter::Drift(drift),
                 }
             }
             disjuncts.insert(parts.join(" AND "));
@@ -1218,14 +1223,54 @@ fn unit_sql(col: &ColRef) -> String {
     )
 }
 
-/// Whether the stored value at a position carries `tag`, never NULL.
-fn tagged_as_sql(col: &ColRef, tag: &str) -> String {
-    format!(
-        "COALESCE(({}.arguments -> {} ->> 'type') = {}, false)",
+/// The codec's tag for a declared kind, or `None` for a kind the
+/// compiler never reads.
+fn declared_tag(kind: &PredicateArgKind) -> Option<&'static str> {
+    Some(match kind {
+        PredicateArgKind::Decimal => "decimal",
+        PredicateArgKind::Subject => "subject",
+        PredicateArgKind::Bool => "bool",
+        PredicateArgKind::Date => "date",
+        PredicateArgKind::Timestamp => "timestamp",
+        PredicateArgKind::Duration => "duration",
+        PredicateArgKind::Quantity(_) => "quantity",
+        PredicateArgKind::Collection | PredicateArgKind::Any | PredicateArgKind::CalendarSpan => {
+            return None;
+        }
+    })
+}
+
+/// The codec's tag of a runtime value.
+fn stored_tag(ev: &EvalValue) -> &'static str {
+    match ev {
+        EvalValue::Decimal(_) => "decimal",
+        EvalValue::Subject(_) => "subject",
+        EvalValue::Bool(_) => "bool",
+        EvalValue::Date(_) => "date",
+        EvalValue::Timestamp(_) => "timestamp",
+        EvalValue::Duration(_) => "duration",
+        EvalValue::Quantity { .. } => "quantity",
+        EvalValue::Collection(_) => "collection",
+        EvalValue::CalendarSpan(_) => "calendarspan",
+    }
+}
+
+/// The guard on a position the SQL reads by its declared kind: true for
+/// a stored value of that kind, an error naming the position otherwise.
+/// Reads of other predicates' rows pass, so the planner may evaluate it
+/// in any order.
+fn kind_guard(col: &ColRef) -> Result<String, CompileReason> {
+    let tag = declared_tag(&col.kind).ok_or_else(|| CompileReason::ArgumentKind {
+        kind: col.kind.clone(),
+    })?;
+    Ok(format!(
+        "morpholog.declared_kind({}.predicate_name, {}, {}, {}, {})",
         col.alias,
-        col.position,
-        quote_literal(tag)
-    )
+        quote_literal(col.predicate.as_str()),
+        tagged_sql(col),
+        quote_literal(tag),
+        col.position
+    ))
 }
 
 /// The whole tagged value at a position, jsonb.
@@ -1303,42 +1348,69 @@ fn tagged_json(ev: &EvalValue) -> Result<String, CompileReason> {
     })
 }
 
-/// Case-bound constant equality on an antecedent column, or None when the
-/// value kind cannot be rendered (widens to Unbounded). Tagged kinds
-/// compare as jsonb against the value's own serialisation, the same serde
-/// every stored claim passed through.
-fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
-    match ev {
-        EvalValue::Subject(s) => Some(format!(
+/// A case value rendered onto an antecedent column.
+enum ConstEq {
+    /// The stored row is guarded to the declared kind, then compared.
+    Sql(String),
+    /// A kind the compiler does not compare: widen to the whole invariant.
+    Widen,
+    /// The value itself is not of the declared kind: no compiled reading
+    /// of the position is sound.
+    Drift(PgError),
+}
+
+/// Case-bound constant equality on an antecedent column. The value must be
+/// of the kind the position declares, as the stored rows must (their guard
+/// sits on the scan that bound the column); tagged kinds compare as jsonb
+/// against the value's own serialisation, the same serde every stored
+/// claim passed through.
+fn const_eq(col: &ColRef, ev: &EvalValue) -> ConstEq {
+    let Some(declared) = declared_tag(&col.kind) else {
+        return ConstEq::Widen;
+    };
+    let stored = stored_tag(ev);
+    if stored != declared {
+        return ConstEq::Drift(PgError::KindDrift {
+            predicate: col.predicate.to_string(),
+            position: col.position,
+            declared: declared.to_string(),
+            stored: stored.to_string(),
+        });
+    }
+    let compared = match ev {
+        EvalValue::Subject(s) => format!(
             "({}) = {}",
             col_sql(col, Representation::Text),
             quote_literal(s.as_str())
-        )),
-        EvalValue::Decimal(d) => Some(format!(
+        ),
+        EvalValue::Decimal(d) => format!(
             "({}) = {}::numeric",
             col_sql(col, Representation::Numeric),
             quote_literal(&d.to_string())
-        )),
-        EvalValue::Quantity { amount, unit } => Some(format!(
+        ),
+        EvalValue::Quantity { amount, unit } => format!(
             "({}) = {}::numeric AND ({}) = {}",
             col_sql(col, Representation::QuantityAmount),
             quote_literal(&amount.to_string()),
             unit_sql(col),
             quote_literal(unit.as_str())
-        )),
+        ),
         EvalValue::Bool(_)
         | EvalValue::Date(_)
         | EvalValue::Timestamp(_)
         | EvalValue::Duration(_) => {
-            let json = serde_json::to_string(ev).ok()?;
-            Some(format!(
+            let Ok(json) = serde_json::to_string(ev) else {
+                return ConstEq::Widen;
+            };
+            format!(
                 "({}) = {}::jsonb",
                 col_sql(col, Representation::Jsonb),
                 quote_literal(&json)
-            ))
+            )
         }
-        EvalValue::Collection(_) | EvalValue::CalendarSpan(_) => None,
-    }
+        EvalValue::Collection(_) | EvalValue::CalendarSpan(_) => return ConstEq::Widen,
+    };
+    ConstEq::Sql(compared)
 }
 
 fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, CompileReason> {
@@ -1488,9 +1560,14 @@ fn render_claim(
                 return Err(CompileReason::Construct { construct: "actor" });
             }
             Term::Literal(v) => {
+                where_.push(kind_guard(&col)?);
                 where_.push(literal_filter(&col, v, ctx)?);
             }
             Term::Var(v) => {
+                // Guarded where the row is scanned, so the guard runs
+                // before any later read of the position, wherever the
+                // planner puts that read.
+                where_.push(kind_guard(&col)?);
                 if let Some(bound) = env.get(v) {
                     let eq = Equality::for_kind(&col.kind)?;
                     where_.push(eq.col_eq(bound, &col));
@@ -1534,6 +1611,7 @@ fn nested_scope(r: Rendered) -> Result<Rendered, CompileReason> {
 }
 
 /// A value in comparison position, by the flavour the SQL must handle.
+/// A column was guarded to its declared kind by the scan that bound it.
 enum Operand {
     /// A bare decimal, a decimal literal, or a sum's total: `numeric`.
     Numeric(String),
@@ -1543,14 +1621,13 @@ enum Operand {
     Quantity {
         amount: String,
         unit: String,
-        /// SQL boolean: the value is a quantity. `true` for a literal.
-        well_typed: String,
         /// The whole tagged value, jsonb.
         tagged: String,
+        /// Whether the unit is a literal, so two literals never raise.
+        literal: bool,
     },
     Timestamp {
         nanos: String,
-        well_typed: String,
         tagged: String,
     },
 }
@@ -1581,7 +1658,7 @@ fn equality_sql(
                 unit: yu,
                 ..
             },
-        ) => format!("COALESCE(({xa}) = ({ya}) AND ({xu}) = ({yu}), false)"),
+        ) => format!("(({xa}) = ({ya}) AND ({xu}) = ({yu}))"),
         (Operand::Timestamp { tagged: x, .. }, Operand::Timestamp { tagged: y, .. }) => {
             format!("({x}) = ({y})")
         }
@@ -1592,16 +1669,15 @@ fn equality_sql(
         }
     };
     let clause = if negated {
-        format!("NOT ({clause})")
+        format!("NOT {clause}")
     } else {
         clause
     };
     Ok(close_comparison(clause, None, env, ctx))
 }
 
-/// An ordered comparison. Decimals and sums never raise; quantities raise
-/// on two units, timestamps on a stored value of another kind, both
-/// carried as data.
+/// An ordered comparison. Decimals, timestamps and sums never raise once
+/// the guards hold; two quantities raise on two units, carried as data.
 fn ordered_sql(
     op: CompareOp,
     domain: OrderedDomain,
@@ -1627,40 +1703,32 @@ fn ordered_sql(
             Operand::Quantity {
                 amount: xa,
                 unit: xu,
-                well_typed: xw,
                 tagged: xt,
+                literal: xl,
             },
             Operand::Quantity {
                 amount: ya,
                 unit: yu,
-                well_typed: yw,
                 tagged: yt,
+                literal: yl,
             },
         ) => (
             format!("({xa}) {op} ({ya})"),
-            raising(
-                and_all(&[xw.clone(), yw.clone(), format!("({xu}) = ({yu})")]),
-                domain,
-                xt,
-                yt,
-            ),
+            // Two literals of one unit are checked at authoring time.
+            (!(*xl && *yl)).then(|| RenderedError {
+                condition: format!("NOT (({xu}) = ({yu}))"),
+                report: ErrorReport::Compare {
+                    domain,
+                    left: xt.clone(),
+                    right: yt.clone(),
+                },
+            }),
         ),
         (
             OrderedDomain::Timestamp,
-            Operand::Timestamp {
-                nanos: xn,
-                well_typed: xw,
-                tagged: xt,
-            },
-            Operand::Timestamp {
-                nanos: yn,
-                well_typed: yw,
-                tagged: yt,
-            },
-        ) => (
-            format!("({xn}) {op} ({yn})"),
-            raising(and_all(&[xw.clone(), yw.clone()]), domain, xt, yt),
-        ),
+            Operand::Timestamp { nanos: xn, .. },
+            Operand::Timestamp { nanos: yn, .. },
+        ) => (format!("({xn}) {op} ({yn})"), None),
         _ => {
             return Err(CompileReason::UnvalidatedShape {
                 detail: format!("ordered comparison across value flavours under {domain:?}"),
@@ -1668,27 +1736,6 @@ fn ordered_sql(
         }
     };
     Ok(close_comparison(clause, raises, env, ctx))
-}
-
-/// The comparison's own way of raising: its operands are not what the
-/// kernel can order, unless `well_typed` proves they are.
-fn raising(
-    well_typed: String,
-    domain: OrderedDomain,
-    left: &str,
-    right: &str,
-) -> Option<RenderedError> {
-    if well_typed == "true" {
-        return None;
-    }
-    Some(RenderedError {
-        condition: format!("NOT {well_typed}"),
-        report: ErrorReport::Compare {
-            domain,
-            left: left.to_string(),
-            right: right.to_string(),
-        },
-    })
 }
 
 /// A comparison's rendering: a plain conjunct when nothing can raise,
@@ -1736,15 +1783,14 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                 Equality::Text => Operand::Keyed(col_sql(col, Representation::Text)),
                 Equality::Jsonb if col.kind == PredicateArgKind::Timestamp => Operand::Timestamp {
                     nanos: format!("morpholog.timestamp_nanos({})", tagged_sql(col)),
-                    well_typed: tagged_as_sql(col, "timestamp"),
                     tagged: tagged_sql(col),
                 },
                 Equality::Jsonb => Operand::Keyed(col_sql(col, Representation::Jsonb)),
                 Equality::Quantity => Operand::Quantity {
                     amount: col_sql(col, Representation::QuantityAmount),
                     unit: unit_sql(col),
-                    well_typed: tagged_as_sql(col, "quantity"),
                     tagged: tagged_sql(col),
+                    literal: false,
                 },
             })
         }
@@ -1834,38 +1880,39 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
 /// A literal in value position: a SQL constant of the kernel's value. A
 /// timestamp's coordinate is computed here, not by the database.
 fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
-    match value {
-        Value::Subject(s) => Ok(Operand::Keyed(quote_literal(s.as_str()))),
-        Value::Decimal(d) => Ok(Operand::Numeric(format!("{}::numeric", quote_literal(d)))),
+    Ok(match value {
+        Value::Subject(s) => Operand::Keyed(quote_literal(s.as_str())),
+        Value::Decimal(d) => Operand::Numeric(format!("{}::numeric", quote_literal(d))),
         Value::Quantity { .. } => {
             let ev = literal_eval(value)?;
             let EvalValue::Quantity { amount, unit } = &ev else {
                 unreachable!("a quantity literal evaluates to a quantity")
             };
-            Ok(Operand::Quantity {
+            Operand::Quantity {
                 amount: format!("{}::numeric", quote_literal(&amount.to_string())),
                 unit: quote_literal(unit.as_str()),
-                well_typed: "true".to_string(),
                 tagged: format!("{}::jsonb", quote_literal(&tagged_json(&ev)?)),
-            })
+                literal: true,
+            }
         }
         Value::Timestamp(_) => {
             let ev = literal_eval(value)?;
             let EvalValue::Timestamp(t) = &ev else {
                 unreachable!("a timestamp literal evaluates to a timestamp")
             };
-            Ok(Operand::Timestamp {
+            Operand::Timestamp {
                 nanos: format!("{}::numeric", t.as_nanosecond()),
-                well_typed: "true".to_string(),
                 tagged: format!("{}::jsonb", quote_literal(&tagged_json(&ev)?)),
-            })
+            }
         }
-        Value::Date(_) => Err(CompileReason::Literal { kind: "date" }),
-        Value::Duration(_) => Err(CompileReason::Literal { kind: "duration" }),
-        Value::CalendarSpan(_) => Err(CompileReason::Literal {
-            kind: "calendar span",
-        }),
-    }
+        Value::Date(_) => return Err(CompileReason::Literal { kind: "date" }),
+        Value::Duration(_) => return Err(CompileReason::Literal { kind: "duration" }),
+        Value::CalendarSpan(_) => {
+            return Err(CompileReason::Literal {
+                kind: "calendar span",
+            });
+        }
+    })
 }
 
 #[cfg(test)]

@@ -41,8 +41,9 @@ fn balanced_posted_entry_sql_is_pinned() {
         sql,
         r#"/* morpholog compiled invariant balanced_posted_entry v1 stage1 */
 SELECT (t0.arguments -> 0)::text AS "w_entry"
-FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((t1.arguments -> 2 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value')) l2, LATERAL (SELECT COALESCE(sum((t3.arguments -> 3 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t3.arguments -> 0 ->> 'value')) l4
+FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((t1.arguments -> 2 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND morpholog.declared_kind(t1.predicate_name, 'JournalLine', t1.arguments -> 0, 'subject', 0) AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value') AND morpholog.declared_kind(t1.predicate_name, 'JournalLine', t1.arguments -> 2, 'decimal', 2)) l2, LATERAL (SELECT COALESCE(sum((t3.arguments -> 3 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND morpholog.declared_kind(t3.predicate_name, 'JournalLine', t3.arguments -> 0, 'subject', 0) AND (t0.arguments -> 0 ->> 'value') = (t3.arguments -> 0 ->> 'value') AND morpholog.declared_kind(t3.predicate_name, 'JournalLine', t3.arguments -> 3, 'decimal', 3)) l4
 WHERE t0.predicate_name = 'JournalEntry'
+  AND morpholog.declared_kind(t0.predicate_name, 'JournalEntry', t0.arguments -> 0, 'subject', 0)
   AND ((NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)) OR NOT (l2.s) = (l4.s))
 ORDER BY (t0.arguments -> 0 ->> 'value')::text
 LIMIT 1"#
@@ -56,8 +57,8 @@ LIMIT 1"#
        NULL::text AS "domain",
        NULL::text AS "left",
        NULL::text AS "right"
-FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((t1.arguments -> 2 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value')) l2, LATERAL (SELECT COALESCE(sum((t3.arguments -> 3 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t3.arguments -> 0 ->> 'value')) l4
-WHERE (t0.predicate_name = 'JournalEntry' AND (NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)))
+FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((t1.arguments -> 2 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND morpholog.declared_kind(t1.predicate_name, 'JournalLine', t1.arguments -> 0, 'subject', 0) AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value') AND morpholog.declared_kind(t1.predicate_name, 'JournalLine', t1.arguments -> 2, 'decimal', 2)) l2, LATERAL (SELECT COALESCE(sum((t3.arguments -> 3 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND morpholog.declared_kind(t3.predicate_name, 'JournalLine', t3.arguments -> 0, 'subject', 0) AND (t0.arguments -> 0 ->> 'value') = (t3.arguments -> 0 ->> 'value') AND morpholog.declared_kind(t3.predicate_name, 'JournalLine', t3.arguments -> 3, 'decimal', 3)) l4
+WHERE (t0.predicate_name = 'JournalEntry' AND morpholog.declared_kind(t0.predicate_name, 'JournalEntry', t0.arguments -> 0, 'subject', 0) AND (NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)))
 ORDER BY t0.arguments_hash
 LIMIT 1"#
         )
@@ -86,7 +87,11 @@ SELECT (t0.arguments -> 0)::text AS "w_new_entry_id_a",
        (t0.arguments -> 1)::text AS "w_prior_entry_id"
 FROM morpholog.claims t0, morpholog.claims t1
 WHERE t0.predicate_name = 'Supersedes'
+  AND morpholog.declared_kind(t0.predicate_name, 'Supersedes', t0.arguments -> 0, 'subject', 0)
+  AND morpholog.declared_kind(t0.predicate_name, 'Supersedes', t0.arguments -> 1, 'subject', 1)
   AND t1.predicate_name = 'Supersedes'
+  AND morpholog.declared_kind(t1.predicate_name, 'Supersedes', t1.arguments -> 0, 'subject', 0)
+  AND morpholog.declared_kind(t1.predicate_name, 'Supersedes', t1.arguments -> 1, 'subject', 1)
   AND (t0.arguments -> 1 ->> 'value') = (t1.arguments -> 1 ->> 'value')
   AND NOT ((t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value'))
 ORDER BY (t0.arguments -> 0 ->> 'value')::text, (t1.arguments -> 0 ->> 'value')::text, (t0.arguments -> 1 ->> 'value')::text
@@ -105,7 +110,8 @@ fn journal_entry_has_lines_sql_is_pinned() {
 SELECT (t0.arguments -> 0)::text AS "w_entry"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'JournalEntry'
-  AND NOT EXISTS (SELECT 1 FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value'))
+  AND morpholog.declared_kind(t0.predicate_name, 'JournalEntry', t0.arguments -> 0, 'subject', 0)
+  AND NOT EXISTS (SELECT 1 FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND morpholog.declared_kind(t1.predicate_name, 'JournalLine', t1.arguments -> 0, 'subject', 0) AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value'))
 ORDER BY (t0.arguments -> 0 ->> 'value')::text
 LIMIT 1"#
     );
@@ -125,14 +131,22 @@ fn post_simple_entry_delta_bounds_every_ledger_invariant_to_the_entry() {
     ];
     let balanced = &set.invariants[1];
     assert_eq!(
-        balanced.case_filter(&asserted, &[]),
-        CaseFilter::Bounded("((t0.arguments -> 0 ->> 'value') = 'e42')".to_string())
+        bounded(balanced.case_filter(&asserted, &[])),
+        "((t0.arguments -> 0 ->> 'value') = 'e42')"
     );
     // Supersedes is untouched by this delta entirely.
-    assert_eq!(
+    assert!(matches!(
         set.invariants[0].case_filter(&asserted, &[]),
         CaseFilter::Untouched
-    );
+    ));
+}
+
+/// The bound a case filter rendered, or a panic naming what it did instead.
+fn bounded(filter: CaseFilter) -> String {
+    match filter {
+        CaseFilter::Bounded(sql) => sql,
+        other => panic!("expected a bounded filter, got {other:?}"),
+    }
 }
 
 #[test]
@@ -141,9 +155,8 @@ fn close_period_delta_touches_no_ledger_invariant() {
     let set = compiled(&program);
     let asserted = vec![claim_instance("PeriodClosed", &[subj("p1")])];
     for inv in &set.invariants {
-        assert_eq!(
-            inv.case_filter(&asserted, &[]),
-            CaseFilter::Untouched,
+        assert!(
+            matches!(inv.case_filter(&asserted, &[]), CaseFilter::Untouched),
             "{} should be skipped for close_period",
             inv.name
         );
@@ -159,8 +172,8 @@ fn retraction_also_touches_cases() {
         &[subj("e7"), subj("cash"), dec(5), dec(0)],
     )];
     assert_eq!(
-        set.invariants[1].case_filter(&[], &retracted),
-        CaseFilter::Bounded("((t0.arguments -> 0 ->> 'value') = 'e7')".to_string())
+        bounded(set.invariants[1].case_filter(&[], &retracted)),
+        "((t0.arguments -> 0 ->> 'value') = 'e7')"
     );
 }
 
@@ -283,8 +296,8 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
             },
         ),
         (
-            "timestamp ordering under a nested scope",
-            "invariant r:\n    A(x) implies (exists s: exists e: Timed(x, s, e) and s strictly_before e)\n",
+            "quantity ordering under a nested scope",
+            "invariant r:\n    A(x) implies (exists q: Qty(x, q) and q > 0 t)\n",
             CompileReason::ComparisonShape {
                 detail: "a quantity or timestamp ordering under a nested scope",
             },
@@ -370,7 +383,8 @@ fn a_quantity_ordering_against_a_literal_is_pinned() {
 SELECT (t0.arguments -> 1)::text AS "w_qty"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Terms'
-  AND (NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) OR NOT ((t0.arguments -> 1 -> 'value' ->> 'amount')::numeric) > ('0'::numeric))
+  AND morpholog.declared_kind(t0.predicate_name, 'Terms', t0.arguments -> 1, 'quantity', 1)
+  AND (NOT ((t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) OR NOT ((t0.arguments -> 1 -> 'value' ->> 'amount')::numeric) > ('0'::numeric))
 ORDER BY (t0.arguments -> 1 ->> 'value')::text
 LIMIT 1"#
     );
@@ -379,12 +393,12 @@ LIMIT 1"#
     assert_eq!(
         inv.error_sql(None, &[]).unwrap().as_deref(),
         Some(
-            r#"SELECT CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'compare' END AS "kind",
-       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'decimal' END AS "domain",
-       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN (t0.arguments -> 1)::text END AS "left",
-       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN ('{"type":"quantity","value":{"amount":"0","unit":"MW"}}'::jsonb)::text END AS "right"
+            r#"SELECT CASE WHEN NOT ((t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'compare' END AS "kind",
+       CASE WHEN NOT ((t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'decimal' END AS "domain",
+       CASE WHEN NOT ((t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN (t0.arguments -> 1)::text END AS "left",
+       CASE WHEN NOT ((t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN ('{"type":"quantity","value":{"amount":"0","unit":"MW"}}'::jsonb)::text END AS "right"
 FROM morpholog.claims t0
-WHERE (t0.predicate_name = 'Terms' AND NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')))
+WHERE (t0.predicate_name = 'Terms' AND morpholog.declared_kind(t0.predicate_name, 'Terms', t0.arguments -> 1, 'quantity', 1) AND NOT ((t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')))
 ORDER BY t0.arguments_hash
 LIMIT 1"#
         )
@@ -405,10 +419,33 @@ SELECT (t0.arguments -> 3)::text AS "w_e",
        (t0.arguments -> 2)::text AS "w_s"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Terms'
-  AND (NOT (COALESCE((t0.arguments -> 2 ->> 'type') = 'timestamp', false) AND COALESCE((t0.arguments -> 3 ->> 'type') = 'timestamp', false)) OR NOT (morpholog.timestamp_nanos(t0.arguments -> 2)) < (morpholog.timestamp_nanos(t0.arguments -> 3)))
+  AND morpholog.declared_kind(t0.predicate_name, 'Terms', t0.arguments -> 2, 'timestamp', 2)
+  AND morpholog.declared_kind(t0.predicate_name, 'Terms', t0.arguments -> 3, 'timestamp', 3)
+  AND NOT ((morpholog.timestamp_nanos(t0.arguments -> 2)) < (morpholog.timestamp_nanos(t0.arguments -> 3)))
 ORDER BY (t0.arguments -> 3 ->> 'value')::text, (t0.arguments -> 2 ->> 'value')::text
 LIMIT 1"#
     );
+}
+
+/// A timestamp ordering cannot raise once its positions are guarded, so
+/// it is an ordinary conjunct: lawful under a nested scope, unlike a
+/// quantity ordering.
+#[test]
+fn a_timestamp_ordering_is_lawful_under_a_nested_scope() {
+    let program = morpholog_surface::parse_program(
+        "\
+program nested_timestamps
+
+predicate A(x: Subject)
+predicate Timed(x: Subject, s: Timestamp, e: Timestamp)
+
+invariant r:
+    A(x) implies (exists s: exists e: Timed(x, s, e) and s strictly_before e)
+",
+    )
+    .expect("parses");
+    let set = compiled(&program);
+    assert_eq!(set.invariants.len(), 1);
 }
 
 /// The error query orders rows as the kernel's candidate state holds
