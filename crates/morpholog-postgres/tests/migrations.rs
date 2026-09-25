@@ -1315,6 +1315,14 @@ async fn key_function_probe(url: &str) -> Result<(), String> {
     )
     .await
     .unwrap();
+    // With an index already built over it: entries computed by the other
+    // body would outlive a replacement, which is why none happens.
+    ddl(
+        &pool,
+        "CREATE INDEX key_probe_foreign ON morpholog.claims ((morpholog.claim_digest(morpholog.value_key_v1(arguments -> 0))))".to_string(),
+    )
+    .await
+    .unwrap();
     match rerun_017(&pool).await {
         Err(e) if e.to_string().contains("not the one migration 017 defines") => {}
         other => {
@@ -1323,7 +1331,11 @@ async fn key_function_probe(url: &str) -> Result<(), String> {
             ));
         }
     }
-    // The real body put back: accepted.
+    // The real body put back, the foreign index dropped: accepted, and
+    // the function left as it is.
+    ddl(&pool, "DROP INDEX morpholog.key_probe_foreign".to_string())
+        .await
+        .unwrap();
     ddl(
         &pool,
         format!(

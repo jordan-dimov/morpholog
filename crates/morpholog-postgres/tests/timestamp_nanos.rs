@@ -127,11 +127,14 @@ async fn another_tag_is_null_and_a_malformed_timestamp_is_an_error() {
 /// bodies must be the same text, and each carries its marker.
 #[test]
 fn the_schema_and_the_migrations_define_the_same_functions() {
+    // The body between the dollar quotes; a migration that creates only
+    // when absent wraps its CREATE in an EXECUTE, so the closing quote
+    // is not followed by a semicolon there.
     fn body<'a>(sql: &'a str, head: &str) -> &'a str {
         let from = sql.find(head).unwrap_or_else(|| panic!("{head} missing"));
         let sql = &sql[from..];
         let start = sql.find("AS $$\n").expect("function body start") + "AS $$\n".len();
-        let end = sql[start..].find("\n$$;").expect("function body end") + start;
+        let end = sql[start..].find("\n$$").expect("function body end") + start;
         &sql[start..end]
     }
     let schema = include_str!("../../morpholog-core/sql/schema.sql");
@@ -149,10 +152,7 @@ fn the_schema_and_the_migrations_define_the_same_functions() {
     ] {
         assert_eq!(
             body(schema, &format!("CREATE FUNCTION {name}(")),
-            body(
-                migration,
-                &format!("CREATE OR REPLACE FUNCTION morpholog.{name}(")
-            ),
+            body(migration, &format!("FUNCTION morpholog.{name}(")),
             "{name}"
         );
         assert!(

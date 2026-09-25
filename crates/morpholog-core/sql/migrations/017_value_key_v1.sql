@@ -9,29 +9,19 @@
 -- marker says Morpholog wrote it, never over an operator's function of
 -- the same name.
 
-DO $$
+DO $migration$
 DECLARE
     marker text;
     body_digest text;
 BEGIN
+    -- Catalogue renderings qualify names not on the search path, so pin
+    -- it: the comparisons below are then exact, whatever the session's.
+    PERFORM set_config('search_path', 'pg_catalog', true);
     IF to_regprocedure('morpholog.value_key_v1(jsonb)') IS NULL THEN
-        RETURN;
-    END IF;
-    SELECT obj_description(oid, 'pg_proc'), encode(sha256(convert_to(prosrc, 'UTF8')), 'hex') INTO marker, body_digest
-      FROM pg_proc
-     WHERE oid = 'morpholog.value_key_v1(jsonb)'::regprocedure;
-    -- An index is built over this function's digest and is never rebuilt
-    -- for a changed body, so a body that differs is refused whatever the
-    -- marker says: a key with other semantics is a new function.
-    IF marker IS DISTINCT FROM 'morpholog value key v1'
-       OR body_digest IS DISTINCT FROM '2a7ea81bdf669b11b299795eb88278d3c1dd207416b1a971376e2ffd9668ffd7' THEN
-        RAISE EXCEPTION 'morpholog.value_key_v1 exists and is not the one migration 017 defines (marker %, body %); refusing to replace it', coalesce(marker, 'none'), body_digest;
-    END IF;
-END $$;
-
-CREATE OR REPLACE FUNCTION morpholog.value_key_v1(v jsonb) RETURNS jsonb
-    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
-AS $$
+        EXECUTE $create$
+            CREATE FUNCTION morpholog.value_key_v1(v jsonb) RETURNS jsonb
+                LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+            AS $$
 DECLARE
     tag text;
     elements jsonb;
@@ -57,9 +47,24 @@ BEGIN
             RETURN jsonb_build_array(tag, v -> 'value');
     END CASE;
 END
-$$;
-
-COMMENT ON FUNCTION morpholog.value_key_v1(jsonb) IS 'morpholog value key v1';
+$$
+        $create$;
+        COMMENT ON FUNCTION morpholog.value_key_v1(jsonb) IS 'morpholog value key v1';
+        RETURN;
+    END IF;
+    -- Present: it must be exactly this function, marker and body, and is
+    -- then left alone. An index is built over it and is never rebuilt
+    -- for a changed body, so a body that differs is refused whatever the
+    -- marker says: a key with other semantics is a new function.
+    SELECT obj_description(oid, 'pg_proc'), encode(sha256(convert_to(prosrc, 'UTF8')), 'hex')
+      INTO marker, body_digest
+      FROM pg_proc
+     WHERE oid = 'morpholog.value_key_v1(jsonb)'::regprocedure;
+    IF marker IS DISTINCT FROM 'morpholog value key v1'
+       OR body_digest IS DISTINCT FROM '2a7ea81bdf669b11b299795eb88278d3c1dd207416b1a971376e2ffd9668ffd7' THEN
+        RAISE EXCEPTION 'morpholog.value_key_v1 exists and is not the one migration 017 defines (marker %, body %); refusing to replace it', coalesce(marker, 'none'), body_digest;
+    END IF;
+END $migration$;
 
 -- The guard is dropped only where migration 016 wrote it; an operator's
 -- function of the same name is refused, never removed.
