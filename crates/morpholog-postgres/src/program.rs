@@ -103,16 +103,16 @@ impl PgProgram {
     }
 
     /// The indexes this programme's executions seek on: every position a
-    /// transformation's reads key, on either route, plus the compiled
-    /// checks' own when the programme compiles. What `provision indexes`
-    /// reconciles; an interpreted programme has the same physical contract
-    /// as a compiled one for its loads.
+    /// transformation's reads key and one per keyed admit, on either
+    /// route, plus the compiled checks' own when the programme compiles.
+    /// What `provision indexes` reconciles; an interpreted programme has
+    /// the same physical contract as a compiled one for its loads.
     pub(crate) fn required_indexes(&self) -> Vec<IndexSpec> {
         let program = self.core.program();
         let mut specs: Vec<IndexSpec> = program
             .transformations
             .iter()
-            .flat_map(|t| ReadPlan::of(t, &program.definitions).read_positions())
+            .flat_map(|t| ReadPlan::of(t, &program.definitions).seek_positions())
             .map(|(predicate, position)| IndexSpec::new(predicate, position))
             .collect();
         if let InvariantBackend::Compiled(set) = &self.backend {

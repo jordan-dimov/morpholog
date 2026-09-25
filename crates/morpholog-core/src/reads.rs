@@ -145,15 +145,31 @@ impl ReadPlan {
         plan
     }
 
-    /// Every keyed (predicate, position) among the reads: what an index
-    /// serves. An admit's membership seeks through whichever of its
-    /// coordinates the reads already index; one is enough to find a row.
-    pub fn read_positions(&self) -> BTreeSet<(PredicateName, usize)> {
+    /// The (predicate, position) pairs an index must serve: every keyed
+    /// coordinate of the reads, and for each keyed admit pattern one
+    /// coordinate, since a membership check finds its row through any
+    /// one of them: a coordinate a read already indexes when there is one,
+    /// the pattern's first otherwise. Every admit coordinate would index
+    /// every amount a body writes.
+    pub fn seek_positions(&self) -> BTreeSet<(PredicateName, usize)> {
         let mut out = BTreeSet::new();
         for (predicate, filter) in &self.reads {
             if let ReadFilter::Keyed(patterns) = filter {
                 for pattern in patterns {
                     for (position, _) in &pattern.coordinates {
+                        out.insert((predicate.clone(), *position));
+                    }
+                }
+            }
+        }
+        for (predicate, filter) in &self.admits {
+            if let ReadFilter::Keyed(patterns) = filter {
+                for pattern in patterns {
+                    let served = pattern
+                        .coordinates
+                        .iter()
+                        .any(|(position, _)| out.contains(&(predicate.clone(), *position)));
+                    if !served && let Some((position, _)) = pattern.coordinates.first() {
                         out.insert((predicate.clone(), *position));
                     }
                 }

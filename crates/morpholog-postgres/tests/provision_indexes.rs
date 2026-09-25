@@ -437,5 +437,47 @@ async fn an_interpreted_programme_requires_the_indexes_its_loads_seek_on() {
             "{spec:?} beyond the compiled programme's"
         );
     }
-    assert!(compiled_creates.len() > creates.len());
+}
+
+/// A programme whose transformation only admits a predicate: on the
+/// interpreted route its load seeks that predicate for the admitted
+/// claim's membership, so one coordinate of the admit is provisioned
+/// although no read keys it. The invariant's `or` keeps the programme
+/// interpreted without asking.
+#[tokio::test]
+async fn an_admit_no_read_keys_still_provisions_one_coordinate() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    let program = morpholog_surface::parse_program(
+        "program admit_only
+predicate P(k: Subject, v: Decimal)
+predicate Flag(k: Subject)
+invariant flagged_or_not:
+    P(k, _) implies (Flag(k) or not Flag(k))
+transformation put(k, v):
+    admit P(k, v)
+",
+    )
+    .unwrap();
+    let pg = compiled(program);
+    assert!(
+        matches!(
+            pg.plan(),
+            morpholog_postgres::InvariantPlan::Interpreted { .. }
+        ),
+        "the `or` keeps it interpreted"
+    );
+    let report = plan_indexes(&pool, &pg).await.unwrap();
+    let creates: Vec<(String, usize)> = report
+        .entries
+        .iter()
+        .filter(|e| e.action == IndexAction::Create)
+        .map(|e| (e.predicate.clone(), e.position))
+        .collect();
+    assert_eq!(
+        creates,
+        vec![("P".to_string(), 0)],
+        "one coordinate of the admit, the first, and not the amount"
+    );
 }

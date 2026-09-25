@@ -2417,7 +2417,7 @@ pub morpholog_core::ReadPlan::admits: alloc::collections::btree::map::BTreeMap<m
 pub morpholog_core::ReadPlan::reads: alloc::collections::btree::map::BTreeMap<morpholog_core::PredicateName, morpholog_core::ReadFilter>
 impl morpholog_core::ReadPlan
 pub fn morpholog_core::ReadPlan::of(&morpholog_core::Transformation, &[morpholog_core::Definition]) -> Self
-pub fn morpholog_core::ReadPlan::read_positions(&self) -> alloc::collections::btree::set::BTreeSet<(morpholog_core::PredicateName, usize)>
+pub fn morpholog_core::ReadPlan::seek_positions(&self) -> alloc::collections::btree::set::BTreeSet<(morpholog_core::PredicateName, usize)>
 impl core::clone::Clone for morpholog_core::ReadPlan
 pub fn morpholog_core::ReadPlan::clone(&self) -> morpholog_core::ReadPlan
 impl core::cmp::Eq for morpholog_core::ReadPlan
