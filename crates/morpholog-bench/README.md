@@ -286,6 +286,19 @@ The positive half: **predicate-disjoint partitioning does.** `--disjoint` switch
 
 The residual ~2.4 retries/commit at full disjointness is *consistent with* PostgreSQL SSI predicate-lock granularity rather than logical Morpholog overlap: the short, adjacent `Bench_*` keys likely share index pages, so logically-disjoint predicates still false-share. Confirming the mechanism - and driving the residual toward zero - would need a follow-up physical-layout control (spread predicate names, larger seeded key ranges, or partitioned storage), which is also the reason a partitioned substrate would matter at scale. This pair of sweeps also supplies the measured 40001 rate the roadmap requires before any substrate change (e.g. TimescaleDB) can be reasoned about.
 
+### Keyed body reads (2026-09-25, `contend --disjoint --prepopulate 5000`, PostgreSQL 18.6)
+
+The law above was measured when a proposal read every predicate its body consulted whole. A body's reads are now keyed by what its arguments fix before it runs, and the synthetic workload's gate (`require not Bench_p(item)` before `admit Bench_p(item)`) is the capture shape that contends. With five thousand items already in each predicate, sixteen writers, twenty operations each, four runs a side in balanced order, baseline `main` against this change:
+
+| implementation | periods | before: retries/commit, commits/s | after: retries/commit, commits/s |
+|---|--:|---|---|
+| compiled, indexes provisioned | 1 (all share `Bench_0`) | 8.4-8.7, 59-60 | 0.07-0.08, 5,470-5,600 |
+| compiled, indexes provisioned | 16 (disjoint) | 8.2-8.4, 54 | 0.00, 4,830-5,050 |
+| interpreted (no indexes, by this bench's definition) | 1 | 7.9-8.2, 62-63 | 8.9-9.2, 45-46 |
+| interpreted (no indexes) | 16 | 8.1-8.2, 55 | 8.7-9.6, 40-42 |
+
+Two readings. With its index, a keyed read remembers only the index range it searched, so the shared-predicate case that anti-scaled runs at the disjoint case's speed: the unit of concurrency became the rows a body can observe, not the predicate. Without the index, a keyed read scans the predicate computing a key per row, slower than the old whole read and holding the same relation lock, so the interpreted ruler here measures keyed reads unindexed, not the interpreter; the ledger fixture moved nothing on either route, since its posting's only gate reads an empty predicate.
+
 ### Embedder / CLI latency (`scripts/embedder_latency.sh`)
 
 Everything above runs in-process. A non-Rust embedder (the reference ETRM) drives Morpholog as `morpholog propose ...`, paying process spawn + parse + validate + a fresh connection + propose + commit + JSON on every call - none of which the in-process bench sees. The harness times the CLI end-to-end (N=50, starting from an empty ledger - state grows over the run - local PostgreSQL):
