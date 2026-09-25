@@ -467,6 +467,25 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     )
     .await
     .expect("simulate a database from before the timestamp coordinate");
+    ddl(
+        &pool,
+        "DROP FUNCTION morpholog.value_key_v1(jsonb)".to_string(),
+    )
+    .await
+    .expect("simulate a database from before the equality key");
+    // The guard migration 017 drops, as a database that ran 016 has it.
+    ddl(
+        &pool,
+        "CREATE FUNCTION morpholog.declared_kind(predicate text, declared_predicate text, v jsonb, kind text, pos integer) RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT true'".to_string(),
+    )
+    .await
+    .expect("simulate a database that ran migration 016");
+    ddl(
+        &pool,
+        "COMMENT ON FUNCTION morpholog.declared_kind(text, text, jsonb, text, integer) IS 'morpholog declared kind guard v1'".to_string(),
+    )
+    .await
+    .expect("with the marker 016 wrote");
     // A row that deployment wrote: attested, no names. The migration must
     // carry it forward untouched.
     sqlx::query(
@@ -563,6 +582,41 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
         return Err(format!(
             "timestamp_nanos must carry its marker, got {marker:?}"
         ));
+    }
+
+    // Migration 017: the key function is back with its marker, keys the
+    // pinned corpus as a fresh database does, and the guard is gone.
+    let marker: Option<String> = sqlx::query_scalar(
+        "SELECT obj_description('morpholog.value_key_v1(jsonb)'::regprocedure, 'pg_proc')",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("value_key_v1 must exist after migrating: {e}"))?;
+    if marker.as_deref() != Some("morpholog value key v1") {
+        return Err(format!(
+            "value_key_v1 must carry its marker, got {marker:?}"
+        ));
+    }
+    for (value, expected) in common::pinned_value_keys() {
+        let got: serde_json::Value = sqlx::query_scalar("SELECT morpholog.value_key_v1($1)")
+            .bind(value.clone())
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| format!("keying {value}: {e}"))?;
+        if got != expected {
+            return Err(format!(
+                "{value} keys as {got}, a fresh database keys it as {expected}"
+            ));
+        }
+    }
+    let guard: Option<String> = sqlx::query_scalar(
+        "SELECT to_regprocedure('morpholog.declared_kind(text, text, jsonb, text, integer)')::text",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("guard lookup failed: {e}"))?;
+    if guard.is_some() {
+        return Err("migration 017 must drop morpholog.declared_kind".to_string());
     }
 
     // Migration 014, checked on the migrated table: the old row survives
@@ -1180,6 +1234,165 @@ async fn witness_shape_probe(url: &str) -> Result<(), String> {
     .unwrap();
     if shape.as_deref() != Some("jsonb") {
         return Err(format!("the real column must be jsonb, got {shape:?}"));
+    }
+    Ok(())
+}
+
+/// Migration 017 replaces the key function only where it finds its own,
+/// marker and body alike, since an index is built over the function and
+/// never rebuilt for a changed body; and it drops the guard from 016 only
+/// where 016 wrote it. Attacker capability modelled: none; the foreign
+/// definitions stand for an operator's own functions of the same names.
+///
+/// On its own database, because it rewrites the shared functions.
+#[tokio::test]
+async fn a_key_function_of_another_body_and_a_foreign_guard_are_refused() {
+    let Ok(base) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let name = format!("morpholog_key_probe_{}", std::process::id());
+    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
+    let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
+    ddl(
+        &admin_pool,
+        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    )
+    .await
+    .unwrap();
+    ddl(&admin_pool, format!("CREATE DATABASE {name}"))
+        .await
+        .unwrap();
+
+    let probe_url = morpholog_postgres::with_default_user(&with_database(&base, &name));
+    let outcome = key_function_probe(&probe_url).await;
+
+    ddl(
+        &admin_pool,
+        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    )
+    .await
+    .unwrap();
+    outcome.expect("foreign functions must be refused by name, and the honest states accepted");
+}
+
+/// Forget migration 017 and ask for it again.
+async fn rerun_017(
+    pool: &sqlx::PgPool,
+) -> Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError> {
+    ddl(
+        pool,
+        "DELETE FROM morpholog.schema_migrations WHERE version = 17".to_string(),
+    )
+    .await
+    .unwrap();
+    morpholog_postgres::apply_migrations(pool).await
+}
+
+async fn key_function_probe(url: &str) -> Result<(), String> {
+    let pool = sqlx::PgPool::connect(url).await.expect("probe");
+    morpholog_postgres::initialise_schema(&pool)
+        .await
+        .expect("provision");
+
+    // The key function under its marker, with another body.
+    let real_body: String = sqlx::query_scalar(
+        "SELECT prosrc FROM pg_proc WHERE oid = 'morpholog.value_key_v1(jsonb)'::regprocedure",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    ddl(
+        &pool,
+        "CREATE OR REPLACE FUNCTION morpholog.value_key_v1(v jsonb) RETURNS jsonb \
+         LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$ BEGIN RETURN v; END $$"
+            .to_string(),
+    )
+    .await
+    .unwrap();
+    ddl(
+        &pool,
+        "COMMENT ON FUNCTION morpholog.value_key_v1(jsonb) IS 'morpholog value key v1'".to_string(),
+    )
+    .await
+    .unwrap();
+    // With an index already built over it: entries computed by the other
+    // body would outlive a replacement, which is why none happens.
+    ddl(
+        &pool,
+        "CREATE INDEX key_probe_foreign ON morpholog.claims ((morpholog.claim_digest(morpholog.value_key_v1(arguments -> 0))))".to_string(),
+    )
+    .await
+    .unwrap();
+    match rerun_017(&pool).await {
+        Err(e) if e.to_string().contains("not the one migration 017 defines") => {}
+        other => {
+            return Err(format!(
+                "a key function of another body must be refused by name, got {other:?}"
+            ));
+        }
+    }
+    // The real body put back, the foreign index dropped: accepted, and
+    // the function left as it is.
+    ddl(&pool, "DROP INDEX morpholog.key_probe_foreign".to_string())
+        .await
+        .unwrap();
+    ddl(
+        &pool,
+        format!(
+            "CREATE OR REPLACE FUNCTION morpholog.value_key_v1(v jsonb) RETURNS jsonb \
+             LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $body${real_body}$body$"
+        ),
+    )
+    .await
+    .unwrap();
+    rerun_017(&pool)
+        .await
+        .map_err(|e| format!("the real body must be accepted: {e}"))?;
+
+    // A guard of the same name that 016 did not write: refused, and left.
+    ddl(
+        &pool,
+        "CREATE FUNCTION morpholog.declared_kind(predicate text, declared_predicate text, v jsonb, kind text, pos integer) \
+         RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT true'"
+            .to_string(),
+    )
+    .await
+    .unwrap();
+    match rerun_017(&pool).await {
+        Err(e) if e.to_string().contains("refusing to drop it") => {}
+        other => {
+            return Err(format!(
+                "a foreign guard must be refused by name, got {other:?}"
+            ));
+        }
+    }
+    let still_there: Option<String> = sqlx::query_scalar(
+        "SELECT to_regprocedure('morpholog.declared_kind(text, text, jsonb, text, integer)')::text",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    if still_there.is_none() {
+        return Err("a refused guard must not be dropped".to_string());
+    }
+    // Marked as 016's: dropped.
+    ddl(
+        &pool,
+        "COMMENT ON FUNCTION morpholog.declared_kind(text, text, jsonb, text, integer) IS 'morpholog declared kind guard v1'".to_string(),
+    )
+    .await
+    .unwrap();
+    rerun_017(&pool)
+        .await
+        .map_err(|e| format!("the marked guard must be dropped and the migration accepted: {e}"))?;
+    let gone: Option<String> = sqlx::query_scalar(
+        "SELECT to_regprocedure('morpholog.declared_kind(text, text, jsonb, text, integer)')::text",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    if gone.is_some() {
+        return Err("the marked guard must be dropped".to_string());
     }
     Ok(())
 }

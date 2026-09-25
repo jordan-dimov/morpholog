@@ -314,7 +314,7 @@ async fn reconcile_locked(
             index_name: spec.index_name(),
             predicate: spec.predicate.to_string(),
             position: spec.position,
-            representation: spec.representation.as_str(),
+            representation: crate::compiled::SEEK_REPRESENTATION,
             expression_sql: spec.expression_sql.clone(),
             partial_predicate_sql: spec.partial_predicate_sql.clone(),
             detail,
@@ -373,7 +373,7 @@ async fn reconcile_locked(
                 spec.index_name(),
                 spec.predicate.as_str(),
                 spec.position as i32,
-                spec.representation.as_str(),
+                crate::compiled::SEEK_REPRESENTATION,
                 spec.expression_sql,
                 spec.partial_predicate_sql,
             )
@@ -427,6 +427,7 @@ async fn reconcile_locked(
     let mut pruned = Vec::new();
     for row in stale {
         let representation = match row.representation.as_str() {
+            crate::compiled::SEEK_REPRESENTATION => crate::compiled::SEEK_REPRESENTATION,
             "numeric" => "numeric",
             "jsonb" => "jsonb",
             "quantity_amount" => "quantity_amount",

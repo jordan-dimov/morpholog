@@ -388,11 +388,6 @@ pub morpholog_postgres::PgError::DuplicateIntent
 pub morpholog_postgres::PgError::Encoding(serde_json::error::Error)
 pub morpholog_postgres::PgError::InvalidState(alloc::string::String)
 pub morpholog_postgres::PgError::Kernel(morpholog_core::eval::EvalError)
-pub morpholog_postgres::PgError::KindDrift
-pub morpholog_postgres::PgError::KindDrift::declared: alloc::string::String
-pub morpholog_postgres::PgError::KindDrift::position: usize
-pub morpholog_postgres::PgError::KindDrift::predicate: alloc::string::String
-pub morpholog_postgres::PgError::KindDrift::stored: alloc::string::String
 pub morpholog_postgres::PgError::NoCheckpoint
 pub morpholog_postgres::PgError::NoTransitionAtOrBefore(jiff::timestamp::Timestamp)
 pub morpholog_postgres::PgError::RejectionLogFailure(alloc::boxed::Box<morpholog_postgres::PgError>)

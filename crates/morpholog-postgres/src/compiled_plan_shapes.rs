@@ -27,10 +27,11 @@
 use std::collections::BTreeSet;
 
 use morpholog_core::{CompiledProgram, Program};
+use morpholog_test_support::{claim_instance, dec, subj};
 use sqlx::Row as _;
 
 use crate::PgPool;
-use crate::compiled::{CompiledInvariantSet, compile_invariants};
+use crate::compiled::{CaseFilter, CompiledInvariantSet, compile_invariants};
 use crate::compiled_differential::{test_pool, whole_in_fragment};
 use crate::indexes::provision_indexes;
 use crate::program::PgProgram;
@@ -57,7 +58,9 @@ async fn reset(pool: &PgPool) {
     }
 }
 
-/// The index names used anywhere in a plan.
+/// The indexes a plan seeks through: those named with an index
+/// condition. A partial index also serves as a cheap scan of its
+/// predicate, which would count as "used" without the condition.
 async fn indexes_in_plan(pool: &PgPool, sql: &str, planner_left_alone: bool) -> BTreeSet<String> {
     let mut tx = pool.begin().await.unwrap();
     if !planner_left_alone {
@@ -77,7 +80,9 @@ async fn indexes_in_plan(pool: &PgPool, sql: &str, planner_left_alone: bool) -> 
     fn walk(node: &serde_json::Value, out: &mut BTreeSet<String>) {
         match node {
             serde_json::Value::Object(map) => {
-                if let Some(name) = map.get("Index Name").and_then(|v| v.as_str()) {
+                if let Some(name) = map.get("Index Name").and_then(|v| v.as_str())
+                    && map.contains_key("Index Cond")
+                {
                     out.insert(name.to_string());
                 }
                 for v in map.values() {
@@ -98,21 +103,43 @@ fn compiled_set(program: &Program) -> CompiledInvariantSet {
 }
 
 /// Every index the compiler required for an invariant is used in the
-/// invariant's plan.
+/// plan of the check production runs: the one bounded to the cases a
+/// posting touches. The whole-state check may lawfully merge or hash
+/// its joins instead, since it reads every row anyway.
 async fn assert_required_indexes_used(pool: &PgPool, program: &Program, planner_left_alone: bool) {
     let set = compiled_set(program);
+    let asserted = vec![
+        claim_instance("JournalEntry", &[subj("e_probe"), subj("d1"), subj("p1")]),
+        claim_instance(
+            "JournalLine",
+            &[subj("e_probe"), subj("cash"), dec(100), dec(0)],
+        ),
+        claim_instance("Supersedes", &[subj("e_probe"), subj("e_prior")]),
+    ];
     for inv in &set.invariants {
-        let used = indexes_in_plan(pool, &inv.violation_sql(None), planner_left_alone).await;
+        let filter = match inv.case_filter(&asserted, &[]) {
+            CaseFilter::Bounded(filter) => Some(filter),
+            CaseFilter::Unbounded => None,
+            CaseFilter::Untouched => {
+                panic!("{}: the probe delta touches every ledger rule", inv.name)
+            }
+        };
+        let used = indexes_in_plan(
+            pool,
+            &inv.violation_sql(filter.as_deref()),
+            planner_left_alone,
+        )
+        .await;
         for spec in &inv.required_indexes {
             let name = spec.index_name();
             assert!(
                 used.contains(&name),
-                "{}::{}: the plan does not use {name} ({}[{}] {}); it uses {used:?}",
+                "{}::{}: the case-bound plan does not use {name} ({}[{}] {}); it uses {used:?}",
                 program.name,
                 inv.name,
                 spec.predicate,
                 spec.position,
-                spec.representation.as_str()
+                crate::compiled::SEEK_REPRESENTATION
             );
         }
     }
@@ -129,19 +156,13 @@ async fn every_required_index_is_eligible_for_every_whole_in_fragment_programme(
         populate_for_probes(&pool, &pg.required_indexes()).await;
         provision_indexes(&pool, &pg, false).await.unwrap();
         for spec in pg.required_indexes() {
-            // A seek spelled as the compiled SQL spells it, with a literal
-            // of the representation's type. A specification one position
+            // A seek spelled as the compiled SQL spells it, against the
+            // digest of a literal's key. A specification one position
             // off would build an index this seek cannot use.
-            let literal = match spec.representation {
-                crate::compiled::Representation::Text => "'probe'",
-                crate::compiled::Representation::Numeric => "0",
-                crate::compiled::Representation::Jsonb => "'{}'::jsonb",
-                crate::compiled::Representation::QuantityAmount => "0",
-            };
             let probe = format!(
-                "SELECT 1 FROM morpholog.claims t0 WHERE t0.{} AND ({}) = {literal}",
+                "SELECT 1 FROM morpholog.claims t0 WHERE t0.{} AND ({}) = morpholog.claim_digest(morpholog.value_key_v1('{{\"type\":\"subject\",\"value\":\"probe\"}}'::jsonb))",
                 spec.partial_predicate_sql,
-                spec.representation.extractor("t0.", spec.position)
+                spec.seek_expression("t0.")
             );
             let used = indexes_in_plan(&pool, &probe, false).await;
             let name = spec.index_name();
@@ -151,42 +172,25 @@ async fn every_required_index_is_eligible_for_every_whole_in_fragment_programme(
                 program.name,
                 spec.predicate,
                 spec.position,
-                spec.representation.as_str()
+                crate::compiled::SEEK_REPRESENTATION
             );
         }
     }
 }
 
-/// Two hundred distinct rows per indexed predicate, each position holding
-/// a value of the kind its representation reads (a subject elsewhere), so
-/// a seek is genuinely cheaper rather than a tie on an empty table.
+/// Two hundred distinct rows per indexed predicate, subjects at every
+/// position, so a seek is genuinely cheaper rather than a tie on an empty
+/// table.
 async fn populate_for_probes(pool: &PgPool, specs: &[crate::compiled::IndexSpec]) {
-    use crate::compiled::Representation;
-    let mut by_predicate: std::collections::BTreeMap<String, Vec<(usize, Representation)>> =
+    let mut by_predicate: std::collections::BTreeMap<String, usize> =
         std::collections::BTreeMap::new();
     for spec in specs {
-        by_predicate
-            .entry(spec.predicate.to_string())
-            .or_default()
-            .push((spec.position, spec.representation));
+        let arity = by_predicate.entry(spec.predicate.to_string()).or_default();
+        *arity = (*arity).max(spec.position + 1);
     }
-    for (predicate, positions) in by_predicate {
-        let arity = positions.iter().map(|(p, _)| p + 1).max().unwrap_or(1);
+    for (predicate, arity) in by_predicate {
         let elements: Vec<String> = (0..arity)
-            .map(
-                |pos| match positions.iter().find(|(p, _)| *p == pos).map(|(_, r)| *r) {
-                    Some(Representation::Numeric) => {
-                        "jsonb_build_object('type','decimal','value',i::text)".to_string()
-                    }
-                    Some(Representation::Jsonb) => {
-                        "jsonb_build_object('type','bool','value',(i % 2 = 0))".to_string()
-                    }
-                    Some(Representation::QuantityAmount) => {
-                        "jsonb_build_object('type','quantity','value',jsonb_build_object('amount',i::text,'unit','MW'))".to_string()
-                    }
-                    _ => format!("jsonb_build_object('type','subject','value','p{pos}_' || i)"),
-                },
-            )
+            .map(|pos| format!("jsonb_build_object('type','subject','value','p{pos}_' || i)"))
             .collect();
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)

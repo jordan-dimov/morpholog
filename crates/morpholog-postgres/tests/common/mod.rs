@@ -442,3 +442,45 @@ pub async fn drop_roles_if_present(pool: &PgPool, roles: &[&str]) {
         }
     }
 }
+
+/// The keys `morpholog.value_key_v1` gives a fixed corpus, pinned: a
+/// fresh database and one migrated to 017 must both produce these, and a
+/// key that changes is a new function, never this one.
+pub fn pinned_value_keys() -> Vec<(serde_json::Value, serde_json::Value)> {
+    use serde_json::json;
+    vec![
+        (
+            json!({"type":"decimal","value":"1.00"}),
+            json!(["decimal", "1"]),
+        ),
+        (
+            json!({"type":"decimal","value":"-0.0"}),
+            json!(["decimal", "0"]),
+        ),
+        (
+            json!({"type":"quantity","value":{"amount":"25000.0","unit":"USD"}}),
+            json!(["quantity", "USD", "25000"]),
+        ),
+        (
+            json!({"type":"subject","value":"s"}),
+            json!(["subject", "s"]),
+        ),
+        (json!({"type":"bool","value":true}), json!(["bool", true])),
+        (
+            json!({"type":"date","value":"2026-01-01"}),
+            json!(["date", "2026-01-01"]),
+        ),
+        (
+            json!({"type":"timestamp","value":"2026-01-01T00:00:00.5Z"}),
+            json!(["timestamp", "2026-01-01T00:00:00.5Z"]),
+        ),
+        (
+            json!({"type":"duration","value":"PT1H"}),
+            json!(["duration", "PT1H"]),
+        ),
+        (
+            json!({"type":"collection","value":[{"type":"decimal","value":"2.50"},{"type":"subject","value":"s"}]}),
+            json!(["collection", [["decimal", "2.5"], ["subject", "s"]]]),
+        ),
+    ]
+}

@@ -3587,7 +3587,7 @@ mod smoke {
         let pool = connect(&url).await.expect("connect");
         sqlx::raw_sql(
             "CREATE INDEX bench_smoke_external ON morpholog.claims \
-             USING btree (((arguments -> 0 ->> 'value')::text)) \
+             USING btree ((morpholog.claim_digest(morpholog.value_key_v1(arguments -> 0)))) \
              WHERE predicate_name = 'JournalEntry'",
         )
         .execute(&pool)
