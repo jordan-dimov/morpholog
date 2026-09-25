@@ -339,11 +339,13 @@ struct ContendArgs {
     #[arg(long, default_value_t = 50)]
     ops_per_worker: usize,
 
-    /// Number of pre-existing journal entries to populate before the
-    /// concurrent phase, so `load_state` has non-trivial work on each
-    /// proposal. `0` (default) measures contention against an almost-
-    /// empty table. Distributed across two accounts, same fixture
-    /// shape as the `write`/`read` scenarios.
+    /// Number of pre-existing rows to populate before the concurrent
+    /// phase, so `load_state` has non-trivial work on each proposal. `0`
+    /// (default) measures contention against an almost-empty table. In
+    /// the ledger workload: journal entries across two accounts, the
+    /// `write`/`read` fixture shape. With `--disjoint`: items in each
+    /// synthetic predicate, so the predicate a gate reads and writes is
+    /// the size that decides how PostgreSQL holds the read.
     #[arg(long, default_value_t = 0)]
     prepopulate: usize,
 
@@ -1758,7 +1760,11 @@ async fn measure_contend(
         // The index condition is established outside the sample.
         establish(pool, implementation, &cores).await?;
         let t = Instant::now();
-        insert_n_entries(pool, prepopulate, 2).await?;
+        if disjoint {
+            insert_n_synthetic(pool, prepopulate, periods).await?;
+        } else {
+            insert_n_entries(pool, prepopulate, 2).await?;
+        }
         fixture.push(reset_took + t.elapsed());
         analyze_claims(pool).await?;
 
@@ -2010,6 +2016,30 @@ fn synthetic_bump(predicate: &str) -> Transformation {
             b::assert_(predicate, vec![b::var("item")]),
         ],
     )
+}
+
+/// `n` items in each of the `periods` synthetic predicates, as
+/// [`synthetic_bump`] would have admitted them.
+async fn insert_n_synthetic(pool: &PgPool, n: usize, periods: usize) -> Result<()> {
+    let n_i: i64 = n
+        .try_into()
+        .map_err(|_| anyhow!("n={n} too large for i64"))?;
+    for p in 0..periods {
+        sqlx::query(
+            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+             SELECT $1,
+                    jsonb_build_array(jsonb_build_object('type','subject','value','item_pre_' || i)),
+                    $2
+             FROM generate_series(1, $3) AS i",
+        )
+        .bind(format!("Bench_{p}"))
+        .bind(Uuid::nil())
+        .bind(n_i)
+        .execute(pool)
+        .await
+        .context("prepopulate synthetic predicate")?;
+    }
+    Ok(())
 }
 
 /// The smallest valid programme around [`synthetic_bump`].
