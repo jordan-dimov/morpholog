@@ -2,10 +2,10 @@
 //! how its invariants are checked. Either every invariant compiles to SQL,
 //! or the interpreter runs them all. That is decided once, here, at load.
 
-use morpholog_core::{CompiledProgram, PredicateName, Transformation};
+use morpholog_core::{CompiledProgram, ReadPlan, Transformation, Transition};
 
 use crate::compiled::{CompileRefusal, CompiledInvariantSet, IndexSpec, compile_invariants};
-use crate::propose::{Reads, compute_load_scope};
+use crate::propose::{LoadScope, Reads, compute_load_scope};
 
 pub struct PgProgram {
     core: CompiledProgram,
@@ -84,29 +84,43 @@ impl PgProgram {
         }
     }
 
-    /// The predicates one execution of `transformation` must load on
-    /// `route`, for both evaluators.
+    /// What one execution of `transformation` must load on `route`, for
+    /// both evaluators, keyed by the transition's values.
     pub(crate) fn load_scope(
         &self,
         transformation: &Transformation,
+        transition: &Transition,
         route: Route<'_>,
-    ) -> Vec<PredicateName> {
+    ) -> LoadScope {
         let program = self.core.program();
         compute_load_scope(
             transformation,
+            Some(transition),
             &program.invariants,
             &program.definitions,
             route.reads(),
         )
     }
 
-    /// The indexes the compiled SQL can seek on; none when the
-    /// programme is interpreted. What `provision indexes` reconciles.
+    /// The indexes this programme's executions seek on: every position a
+    /// transformation's reads key, on either route, plus the compiled
+    /// checks' own when the programme compiles. What `provision indexes`
+    /// reconciles; an interpreted programme has the same physical contract
+    /// as a compiled one for its loads.
     pub(crate) fn required_indexes(&self) -> Vec<IndexSpec> {
-        match &self.backend {
-            InvariantBackend::Compiled(set) => set.required_indexes(),
-            InvariantBackend::Interpreted(_) => Vec::new(),
+        let program = self.core.program();
+        let mut specs: Vec<IndexSpec> = program
+            .transformations
+            .iter()
+            .flat_map(|t| ReadPlan::of(t, &program.definitions).read_positions())
+            .map(|(predicate, position)| IndexSpec::new(predicate, position))
+            .collect();
+        if let InvariantBackend::Compiled(set) = &self.backend {
+            specs.extend(set.required_indexes());
         }
+        specs.sort();
+        specs.dedup();
+        specs
     }
 
     pub fn plan(&self) -> InvariantPlan<'_> {
@@ -137,8 +151,24 @@ mod tests {
             .transformation(&"post_simple_entry".into())
             .expect("declared")
             .clone();
-        let compiled = program.load_scope(&post, program.route());
-        let interpreted = program.load_scope(&post, Route::Interpreted);
+        let transition = morpholog_core::Transition {
+            transformation_name: post.name.clone(),
+            args: vec![
+                morpholog_test_support::subj("e1"),
+                morpholog_test_support::subj("d1"),
+                morpholog_test_support::subj("p1"),
+                morpholog_test_support::subj("cash"),
+                morpholog_test_support::subj("rev"),
+                morpholog_test_support::dec(1),
+            ],
+            actor: morpholog_test_support::test_actor(),
+        };
+        let compiled = program
+            .load_scope(&post, &transition, program.route())
+            .predicates();
+        let interpreted = program
+            .load_scope(&post, &transition, Route::Interpreted)
+            .predicates();
         assert!(compiled.iter().all(|p| interpreted.contains(p)));
         assert!(
             interpreted.contains(&"JournalLine".into())

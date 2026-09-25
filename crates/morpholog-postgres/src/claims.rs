@@ -164,10 +164,12 @@ pub async fn load_scoped_state(
     // invariants' predicates are loaded whatever the programme's plan.
     let scope: Vec<String> = compute_load_scope(
         transformation,
+        None,
         &program.invariants,
         &program.definitions,
         Reads::BodyAndInvariants,
     )
+    .predicates()
     .into_iter()
     .map(|p| p.to_string())
     .collect();

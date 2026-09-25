@@ -394,7 +394,7 @@ pub(crate) struct IndexSpec {
 pub(crate) const SEEK_REPRESENTATION: &str = "value_key_v1_digest";
 
 impl IndexSpec {
-    fn new(predicate: PredicateName, position: usize) -> Self {
+    pub(crate) fn new(predicate: PredicateName, position: usize) -> Self {
         let expression_sql = seek_expression("", position);
         let partial_predicate_sql =
             format!("predicate_name = {}", quote_literal(predicate.as_str()));
@@ -470,8 +470,8 @@ fn key_expression(qualifier: &str, position: usize) -> String {
 }
 
 /// The digest of a position's key: what an index is built over and a
-/// seek compares.
-fn seek_expression(qualifier: &str, position: usize) -> String {
+/// seek compares. The loader seeks by it too.
+pub(crate) fn seek_expression(qualifier: &str, position: usize) -> String {
     format!(
         "morpholog.claim_digest({})",
         key_expression(qualifier, position)

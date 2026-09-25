@@ -1,10 +1,12 @@
-//! `provision indexes`: reconcile the indexes a programme's compiled SQL
-//! can seek on against the database.
+//! `provision indexes`: reconcile the indexes a programme's executions
+//! seek on against the database.
 //!
-//! The compiler emits the index specifications its SQL needs; this module
-//! reconciles them. The catalogue says what exists; the registry says what
-//! Morpholog manages and which programmes require it. Neither affects
-//! correctness: the compiled checks are right with no index, only slower.
+//! The programme names the index specifications its loads and its
+//! compiled checks need; this module reconciles them. The catalogue says
+//! what exists; the registry says what Morpholog manages and which
+//! programmes require it. Neither affects correctness: the loads and the
+//! checks are right with no index, only slower and wider in what they
+//! lock.
 //!
 //! Each specification lands in one state; a dry run prints the same plan
 //! the executor applies:
