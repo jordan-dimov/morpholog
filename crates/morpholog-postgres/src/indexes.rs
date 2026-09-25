@@ -95,9 +95,6 @@ pub struct ProvisionReport {
     pub applied: bool,
     /// Stale indexes physically dropped, by name.
     pub pruned: Vec<String>,
-    /// Whether the claims table was analyzed, which happens after any
-    /// index was built.
-    pub analyzed: bool,
 }
 
 impl ProvisionReport {
@@ -331,10 +328,6 @@ async fn reconcile_locked(
     // programme's requirement, and a later prune could then drop the
     // operator's index as stale. Nothing is applied; the report says why.
     let applied = apply && !entries.iter().any(|e| e.action == IndexAction::Conflict);
-    let built = applied
-        && entries
-            .iter()
-            .any(|e| matches!(e.action, IndexAction::Create | IndexAction::RepairInvalid));
     if applied {
         for (spec, entry) in specs.iter().zip(&entries) {
             match entry.action {
@@ -359,13 +352,13 @@ async fn reconcile_locked(
         }
         // Statistics over an expression index exist only from the first
         // ANALYZE after it is built. Without them the planner cannot tell
-        // a selective key from one every row shares.
-        if built {
-            sqlx::raw_sql("ANALYZE morpholog.claims")
-                .execute(&mut *conn)
-                .await
-                .map_err(classify)?;
-        }
+        // a selective key from one every row shares. Every applied run
+        // analyzes, so an index adopted or kept from an earlier run that
+        // stopped short has them too.
+        sqlx::raw_sql("ANALYZE morpholog.claims")
+            .execute(&mut *conn)
+            .await
+            .map_err(classify)?;
         // Record every managed specification, then replace this programme's
         // requirement set whole. It includes specifications an operator's
         // index satisfies, so a requirement outlives the index serving it.
@@ -482,7 +475,6 @@ async fn reconcile_locked(
         program_identity: program_identity.to_string(),
         program_hash: program_hash.to_string(),
         entries,
-        analyzed: built,
         applied,
         pruned,
     })

@@ -54,7 +54,7 @@ pub struct ImpactPlan {
 
 impl ImpactPlan {
     pub fn new(inv: &Invariant) -> Self {
-        let case_vars = case_variables(&inv.body);
+        let case_vars = candidate_case_variables(&inv.body);
         let mut occurrences = Vec::new();
         let mut conservative = false;
         walk_prop(&inv.body, &mut |n| match n {
@@ -110,10 +110,10 @@ impl ImpactPlan {
         }
     }
 
-    /// The variables a case can be bound by: those a claim pattern in the
-    /// body carries at some position. A check bounded to a case seeks on
-    /// their columns.
-    pub fn bound_variables(&self) -> BTreeSet<Var> {
+    /// The variables a bounded case can carry: those a claim pattern in
+    /// the body holds at some position. A check bounded to a case seeks
+    /// on their columns.
+    pub fn case_variables(&self) -> BTreeSet<Var> {
         self.occurrences
             .iter()
             .flat_map(|occ| occ.var_map.iter().map(|(_, var)| var.clone()))
@@ -177,7 +177,7 @@ impl ImpactPlan {
 /// The case variables: those the top-level antecedent's claim patterns
 /// bind, reached through conjunction only. A negated top-level body
 /// binds through its inner conjunction; any other shape has none.
-fn case_variables(body: &Prop) -> BTreeSet<Var> {
+fn candidate_case_variables(body: &Prop) -> BTreeSet<Var> {
     fn through_and(p: &Prop, out: &mut BTreeSet<Var>) {
         match p {
             Prop::Claim { args, .. } => {

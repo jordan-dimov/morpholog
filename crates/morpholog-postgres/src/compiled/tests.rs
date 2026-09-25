@@ -400,14 +400,15 @@ ORDER BY t0.arguments_hash
 LIMIT 1"#
         )
     );
-    // No ordering seeks an index, but the case does: a delta bounds the
-    // check to its quantity, so that column is indexed.
-    let required: Vec<(String, usize)> = inv
-        .required_indexes
+    // No ordering seeks an index; the antecedent binds without filtering.
+    // The case does: a delta bounds the check to its quantity.
+    assert!(inv.required_indexes.is_empty());
+    let case: Vec<(String, usize)> = inv
+        .case_indexes
         .iter()
         .map(|s| (s.predicate.to_string(), s.position))
         .collect();
-    assert_eq!(required, vec![("Terms".to_string(), 1)]);
+    assert_eq!(case, vec![("Terms".to_string(), 1)]);
 }
 
 #[test]

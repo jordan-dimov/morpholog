@@ -484,11 +484,14 @@ transformation put(k, v):
 }
 
 /// Statistics over an expression index exist only once the table is
-/// analyzed after the build, so provisioning analyzes when it builds and
-/// says so; a run that builds nothing leaves the statistics alone.
+/// analyzed after the build. Every applied run analyzes, so an index the
+/// run merely adopts has statistics too; a dry run leaves them alone.
 #[tokio::test]
-async fn provisioning_analyzes_the_claims_table_after_building() {
+async fn every_applied_run_analyzes_the_claims_table_and_a_dry_run_does_not() {
     let pool = test_pool().await;
+    if !session_is_superuser(&pool).await {
+        return;
+    }
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
     sqlx::raw_sql(
@@ -503,17 +506,45 @@ async fn provisioning_analyzes_the_claims_table_after_building() {
     .execute(&pool)
     .await
     .unwrap();
-    let first = provision_indexes(&pool, &ledger(), false).await.unwrap();
-    assert!(first.analyzed, "{first:?}");
+    let stats_for = |name: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM pg_stats WHERE schemaname = 'morpholog' AND tablename = $1",
+            )
+            .bind(name)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    provision_indexes(&pool, &ledger(), false).await.unwrap();
     let (name, _) = catalogue_names(&pool).await.into_iter().next().unwrap();
-    let stats: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM pg_stats WHERE schemaname = 'morpholog' AND tablename = $1",
-    )
-    .bind(&name)
-    .fetch_one(&pool)
+    assert!(
+        stats_for(name.clone()).await > 0,
+        "{name} has statistics after the build"
+    );
+
+    // An earlier run built the index and stopped before analyzing.
+    // The name comes from the catalogue, not from input.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DELETE FROM morpholog.index_requirement; DELETE FROM morpholog.managed_index;
+         DELETE FROM pg_statistic WHERE starelid = 'morpholog.{name}'::regclass"
+    )))
+    .execute(&pool)
     .await
     .unwrap();
-    assert!(stats > 0, "{name} has statistics after provisioning");
-    let again = provision_indexes(&pool, &ledger(), false).await.unwrap();
-    assert!(!again.analyzed, "{again:?}");
+    assert_eq!(stats_for(name.clone()).await, 0);
+    plan_indexes(&pool, &ledger()).await.unwrap();
+    assert_eq!(
+        stats_for(name.clone()).await,
+        0,
+        "a dry run analyzes nothing"
+    );
+    let adopting = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    assert_eq!(actions(&adopting), vec![IndexAction::Keep; LEDGER_INDEXES]);
+    assert!(
+        stats_for(name.clone()).await > 0,
+        "{name} has statistics after adoption"
+    );
 }

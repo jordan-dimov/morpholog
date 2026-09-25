@@ -1428,7 +1428,6 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::ProposalPhases
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ProposalPhases
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ProposalPhases
 pub struct morpholog_postgres::ProvisionReport
-pub morpholog_postgres::ProvisionReport::analyzed: bool
 pub morpholog_postgres::ProvisionReport::applied: bool
 pub morpholog_postgres::ProvisionReport::entries: alloc::vec::Vec<morpholog_postgres::IndexPlanEntry>
 pub morpholog_postgres::ProvisionReport::program_hash: alloc::string::String

@@ -9,8 +9,11 @@
 //!   scan uses one index and a lookup filtered on two positions may use
 //!   either. This catches an extractor drifting from its index expression.
 //! - **Planner regression.** On a populated, ANALYZEd ledger with the
-//!   planner left alone, every index required for an invariant appears in
-//!   that invariant's plan. The JIT cost and the ORDER BY choice are
+//!   planner left alone, every index an invariant's SQL seeks on at a
+//!   join or a literal appears in that invariant's case-bound plan, and
+//!   each predicate its case is keyed by is reached through one of the
+//!   case's own indexes, since the filter constrains every one and the
+//!   planner picks. The JIT cost and the ORDER BY choice are
 //!   guarded where they bite (`jit = off` in the check transaction, ORDER
 //!   BY over the extractor expressions) and would show here as a missing
 //!   index.
@@ -140,23 +143,33 @@ async fn assert_required_indexes_used(pool: &PgPool, program: &Program, planner_
             planner_left_alone,
         )
         .await;
-        // A case keyed by several columns of one predicate is served by
-        // whichever of their indexes the optimiser judges enough, as a
-        // keyed load is; every predicate must be reached through one.
         for spec in &inv.required_indexes {
             let name = spec.index_name();
-            let sibling_used = inv
-                .required_indexes
-                .iter()
-                .any(|s| s.predicate == spec.predicate && used.contains(&s.index_name()));
             assert!(
-                sibling_used,
+                used.contains(&name),
                 "{}::{}: the case-bound plan does not use {name} ({}[{}] {}); it uses {used:?}",
                 program.name,
                 inv.name,
                 spec.predicate,
                 spec.position,
                 crate::compiled::SEEK_REPRESENTATION
+            );
+        }
+        // A case keyed by several columns of one predicate is served by
+        // whichever of their indexes the optimiser judges enough, as a
+        // keyed load is; the predicate must be reached through one of
+        // them.
+        let case_predicates: BTreeSet<_> = inv.case_indexes.iter().map(|s| &s.predicate).collect();
+        for predicate in case_predicates {
+            let reached = inv
+                .case_indexes
+                .iter()
+                .filter(|s| &s.predicate == predicate)
+                .any(|s| used.contains(&s.index_name()));
+            assert!(
+                reached,
+                "{}::{}: the case-bound plan reaches {predicate} through none of its case indexes; it uses {used:?}",
+                program.name, inv.name
             );
         }
     }
