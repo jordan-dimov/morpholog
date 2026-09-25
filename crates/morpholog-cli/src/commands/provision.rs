@@ -43,6 +43,7 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
     println!(
         "{}",
         match (report.applied, args.dry_run, report.has_conflict()) {
+            (true, _, _) if report.analyzed => "applied; morpholog.claims analyzed",
             (true, _, _) => "applied",
             (false, true, _) => "dry run: nothing changed",
             (false, false, true) => "not applied: a conflict needs an operator first",

@@ -140,10 +140,17 @@ async fn assert_required_indexes_used(pool: &PgPool, program: &Program, planner_
             planner_left_alone,
         )
         .await;
+        // A case keyed by several columns of one predicate is served by
+        // whichever of their indexes the optimiser judges enough, as a
+        // keyed load is; every predicate must be reached through one.
         for spec in &inv.required_indexes {
             let name = spec.index_name();
+            let sibling_used = inv
+                .required_indexes
+                .iter()
+                .any(|s| s.predicate == spec.predicate && used.contains(&s.index_name()));
             assert!(
-                used.contains(&name),
+                sibling_used,
                 "{}::{}: the case-bound plan does not use {name} ({}[{}] {}); it uses {used:?}",
                 program.name,
                 inv.name,
@@ -360,4 +367,82 @@ async fn the_loader_seeks_through_the_provisioned_indexes() {
             }
         }
     }
+}
+
+/// A rule whose case is keyed by a column no read or join touches: the
+/// shape Glasshouse's `delivery_period_is_ordered` has. The case-bound
+/// check must seek on that column and leave no relation-level SIRead
+/// lock behind, or the bound protects nothing under SERIALIZABLE.
+#[tokio::test]
+async fn a_case_column_off_the_read_positions_seeks_and_leaves_no_relation_lock() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let program = morpholog_surface::parse_program(
+        "program bounded
+predicate Bounded(item: Subject, amount: Decimal)
+invariant non_negative:
+    Bounded(item, amount) implies 0 <= amount
+transformation record(item, amount):
+    admit Bounded(item, amount)
+",
+    )
+    .expect("parses");
+    let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
+    let required: BTreeSet<(String, usize)> = pg
+        .required_indexes()
+        .iter()
+        .map(|s| (s.predicate.to_string(), s.position))
+        .collect();
+    assert!(
+        required.contains(&("Bounded".to_string(), 1)),
+        "the case column is a required index: {required:?}"
+    );
+    provision_indexes(&pool, &pg, false).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'Bounded',
+                jsonb_build_array(jsonb_build_object('type', 'subject', 'value', 'item_' || i),
+                                  jsonb_build_object('type', 'decimal', 'value', i::text)),
+                gen_random_uuid()
+         FROM generate_series(1, 5000) i;
+         ANALYZE morpholog.claims;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let set = compiled_set(&program);
+    let inv = &set.invariants[0];
+    let CaseFilter::Bounded(filter) =
+        inv.case_filter(&[claim_instance("Bounded", &[subj("item_7"), dec(7)])], &[])
+    else {
+        panic!("the delta bounds the rule to its case");
+    };
+    let sql = inv.violation_sql(Some(&filter));
+    let used = indexes_in_plan(&pool, &sql, true).await;
+    assert!(
+        used.iter().any(|n| n.starts_with("morpholog_ci_bounded_")),
+        "the case-bound plan seeks through a managed index; it uses {used:?}"
+    );
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::raw_sql("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(sql))
+        .fetch_optional(&mut *tx)
+        .await
+        .unwrap();
+    let relation_locks: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_locks
+          WHERE pid = pg_backend_pid() AND mode = 'SIReadLock' AND locktype = 'relation'
+            AND relation = 'morpholog.claims'::regclass",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(
+        relation_locks, 0,
+        "the case-bound check took a relation lock"
+    );
 }

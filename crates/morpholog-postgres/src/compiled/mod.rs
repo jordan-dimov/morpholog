@@ -1004,6 +1004,14 @@ fn compile_invariant(
         _ => case_cols.keys().cloned().collect(),
     };
     let plan = ImpactPlan::new(inv);
+    // The case-bound check seeks on the case's columns. Without their
+    // indexes it walks the predicate and takes the very lock the bound
+    // exists to avoid.
+    for var in plan.bound_variables() {
+        if let Some(col) = case_cols.get(&var) {
+            ctx.required.insert((col.predicate.clone(), col.position));
+        }
+    }
     Ok(CompiledInvariant {
         name: inv.name.clone(),
         version: inv.version,

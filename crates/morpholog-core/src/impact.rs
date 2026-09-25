@@ -110,6 +110,16 @@ impl ImpactPlan {
         }
     }
 
+    /// The variables a case can be bound by: those a claim pattern in the
+    /// body carries at some position. A check bounded to a case seeks on
+    /// their columns.
+    pub fn bound_variables(&self) -> BTreeSet<Var> {
+        self.occurrences
+            .iter()
+            .flat_map(|occ| occ.var_map.iter().map(|(_, var)| var.clone()))
+            .collect()
+    }
+
     /// The cases the delta can affect.
     pub fn classify(&self, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) -> Impact {
         // Nothing changed, so nothing is affected, whatever the body holds.

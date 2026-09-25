@@ -2016,6 +2016,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Guarantee
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Guarantee
 pub struct morpholog_core::ImpactPlan
 impl morpholog_core::ImpactPlan
+pub fn morpholog_core::ImpactPlan::bound_variables(&self) -> alloc::collections::btree::set::BTreeSet<morpholog_core::Var>
 pub fn morpholog_core::ImpactPlan::classify(&self, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance]) -> morpholog_core::Impact
 pub fn morpholog_core::ImpactPlan::new(&morpholog_core::Invariant) -> Self
 impl core::clone::Clone for morpholog_core::ImpactPlan

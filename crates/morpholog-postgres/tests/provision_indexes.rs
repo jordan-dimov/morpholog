@@ -13,9 +13,10 @@ use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{IndexAction, PgPool, PgProgram, plan_indexes, provision_indexes};
 use sqlx::Row as _;
 
-/// The ledger's requirement: its compiled checks' three seeks and the two
-/// positions its transformations' gates key on.
-const LEDGER_INDEXES: usize = 5;
+/// The ledger's requirement: its compiled checks' seeks, the case column
+/// of its lineage check, and the two positions its transformations' gates
+/// key on.
+const LEDGER_INDEXES: usize = 6;
 
 fn ledger() -> PgProgram {
     compiled(double_entry_ledger::program())
@@ -480,4 +481,39 @@ transformation put(k, v):
         vec![("P".to_string(), 0)],
         "one coordinate of the admit, the first, and not the amount"
     );
+}
+
+/// Statistics over an expression index exist only once the table is
+/// analyzed after the build, so provisioning analyzes when it builds and
+/// says so; a run that builds nothing leaves the statistics alone.
+#[tokio::test]
+async fn provisioning_analyzes_the_claims_table_after_building() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    sqlx::raw_sql(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'JournalEntry',
+                jsonb_build_array(jsonb_build_object('type', 'subject', 'value', 'e_' || i),
+                                  jsonb_build_object('type', 'subject', 'value', 'd_' || i),
+                                  jsonb_build_object('type', 'subject', 'value', 'p_' || (i % 7))),
+                gen_random_uuid()
+         FROM generate_series(1, 300) i",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let first = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    assert!(first.analyzed, "{first:?}");
+    let (name, _) = catalogue_names(&pool).await.into_iter().next().unwrap();
+    let stats: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_stats WHERE schemaname = 'morpholog' AND tablename = $1",
+    )
+    .bind(&name)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(stats > 0, "{name} has statistics after provisioning");
+    let again = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    assert!(!again.analyzed, "{again:?}");
 }

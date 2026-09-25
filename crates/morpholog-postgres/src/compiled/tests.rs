@@ -400,8 +400,14 @@ ORDER BY t0.arguments_hash
 LIMIT 1"#
         )
     );
-    // No ordering seeks an index; the antecedent binds without filtering.
-    assert!(inv.required_indexes.is_empty());
+    // No ordering seeks an index, but the case does: a delta bounds the
+    // check to its quantity, so that column is indexed.
+    let required: Vec<(String, usize)> = inv
+        .required_indexes
+        .iter()
+        .map(|s| (s.predicate.to_string(), s.position))
+        .collect();
+    assert_eq!(required, vec![("Terms".to_string(), 1)]);
 }
 
 #[test]
@@ -565,6 +571,7 @@ fn ledger_required_indexes_are_pinned() {
         [
             ("JournalEntry".to_string(), 0),
             ("JournalLine".to_string(), 0),
+            ("Supersedes".to_string(), 0),
             ("Supersedes".to_string(), 1),
         ]
     );
@@ -626,4 +633,35 @@ async fn the_range_test_matches_the_decimal_domain_at_its_edges() {
             .expect("evaluates");
         assert_eq!(got, *out_of_range, "{value}");
     }
+}
+
+/// A check bounded to a case seeks on the case's columns, so they are
+/// required indexes even where no join or literal touches them.
+#[test]
+fn a_case_column_is_a_required_index() {
+    let program = b::program("bounded")
+        .predicates(vec![
+            b::predicate("Bounded")
+                .subject("item")
+                .decimal("amount")
+                .build(),
+        ])
+        .invariants(vec![b::invariant(
+            "non_negative",
+            b::implies(
+                b::claim("Bounded", vec![b::var("item"), b::var("amount")]),
+                b::le(b::term(b::dec("0")), b::term(b::var("amount"))),
+            ),
+        )])
+        .build();
+    let set = compiled(&program);
+    let required: Vec<(String, usize)> = set
+        .required_indexes()
+        .iter()
+        .map(|s| (s.predicate.to_string(), s.position))
+        .collect();
+    assert_eq!(
+        required,
+        vec![("Bounded".to_string(), 0), ("Bounded".to_string(), 1)]
+    );
 }
