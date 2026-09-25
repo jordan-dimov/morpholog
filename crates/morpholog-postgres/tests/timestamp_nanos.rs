@@ -168,4 +168,19 @@ fn the_schema_and_the_migrations_define_the_same_functions() {
         !schema.contains("declared_kind"),
         "the guard is gone from the schema"
     );
+    // Migration 017 refuses a key function whose body is not this one,
+    // by a digest of the body PostgreSQL stores: the text between the
+    // dollar quotes, newlines included.
+    let start = schema.find("CREATE FUNCTION value_key_v1(").unwrap();
+    let body_start = schema[start..].find("AS $$").unwrap() + start + "AS $$".len();
+    let body_end = schema[body_start..].find("$$;").unwrap() + body_start;
+    let digest = {
+        use sha2::{Digest as _, Sha256};
+        hex::encode(Sha256::digest(&schema.as_bytes()[body_start..body_end]))
+    };
+    let migration = include_str!("../../morpholog-core/sql/migrations/017_value_key_v1.sql");
+    assert!(
+        migration.contains(&format!("body_digest IS DISTINCT FROM '{digest}'")),
+        "migration 017 must carry the schema body's digest {digest}"
+    );
 }

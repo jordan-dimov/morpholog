@@ -645,7 +645,7 @@ fn error_report(errors: &[RenderedError], order: &OrderRenderer<'_>) -> Result<S
     let kind = case(&|e| {
         Ok(Some(match e.report {
             ErrorReport::SumRange => "'range'".to_string(),
-            ErrorReport::SumKind { .. } => "'sum_kind'".to_string(),
+            ErrorReport::SumKind(_) => "'sum_kind'".to_string(),
             ErrorReport::Compare { .. } => "'compare'".to_string(),
         }))
     })?;
@@ -656,7 +656,7 @@ fn error_report(errors: &[RenderedError], order: &OrderRenderer<'_>) -> Result<S
                 OrderedDomain::Timestamp => "'timestamp'".to_string(),
                 OrderedDomain::Date | OrderedDomain::Duration => unreachable!("never rendered"),
             }),
-            ErrorReport::SumRange | ErrorReport::SumKind { .. } => None,
+            ErrorReport::SumRange | ErrorReport::SumKind(_) => None,
         })
     })?;
     let left = case(&|e| {
@@ -677,7 +677,7 @@ fn error_report(errors: &[RenderedError], order: &OrderRenderer<'_>) -> Result<S
     let right = case(&|e| {
         Ok(match &e.report {
             ErrorReport::Compare { right, .. } => Some(format!("({right})::text")),
-            ErrorReport::SumRange | ErrorReport::SumKind { .. } => None,
+            ErrorReport::SumRange | ErrorReport::SumKind(_) => None,
         })
     })?;
     // Whether the value a sum could not take was its first: the kernel
@@ -765,7 +765,9 @@ struct RenderedSum {
     lateral: String,
     range_error: String,
     kind_error: String,
-    kind_report: SumScope,
+    /// Where to look for the value the sum could not take; none for a
+    /// literal target, which cannot meet one.
+    kind_report: Option<SumScope>,
 }
 
 /// Where a sum's values come from, so the error query can find the first
@@ -1728,10 +1730,12 @@ fn close_comparison(
     let sums = std::mem::take(&mut ctx.pending_sums);
     let mut errors: Vec<RenderedError> = Vec::new();
     for s in &sums {
-        errors.push(RenderedError {
-            condition: s.kind_error.clone(),
-            report: ErrorReport::SumKind(s.kind_report.clone()),
-        });
+        if let Some(scope) = &s.kind_report {
+            errors.push(RenderedError {
+                condition: s.kind_error.clone(),
+                report: ErrorReport::SumKind(scope.clone()),
+            });
+        }
         errors.push(RenderedError {
             condition: s.range_error.clone(),
             report: ErrorReport::SumRange,
@@ -1811,49 +1815,44 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
             }
             // The sum target must be a bound decimal variable or a decimal
             // literal; a computed target refuses.
-            let (val, kind_test, kind_report) = match value.as_ref() {
-                ValueExpr::Term(Term::Var(v)) => {
-                    let col = r
-                        .env
-                        .get(v)
-                        .ok_or_else(|| CompileReason::UnvalidatedShape {
-                            detail: format!("sum target unbound: {v}"),
-                        })?;
-                    if col.kind != PredicateArgKind::Decimal {
+            let (val, kind_test, kind_report): (String, String, Option<SumScope>) =
+                match value.as_ref() {
+                    ValueExpr::Term(Term::Var(v)) => {
+                        let col = r
+                            .env
+                            .get(v)
+                            .ok_or_else(|| CompileReason::UnvalidatedShape {
+                                detail: format!("sum target unbound: {v}"),
+                            })?;
+                        if col.kind != PredicateArgKind::Decimal {
+                            return Err(CompileReason::SumShape {
+                                detail: "target is not a decimal position",
+                            });
+                        }
+                        let scope = SumScope {
+                            from: from_list(&r),
+                            where_: r.conjunction(),
+                            alias: col.alias.clone(),
+                            position: col.position,
+                            aliases: r.aliases(),
+                        };
+                        (
+                            decimal_sql(col),
+                            format!("bool_or({})", scope.foreign()),
+                            Some(scope),
+                        )
+                    }
+                    ValueExpr::Term(Term::Literal(Value::Decimal(d))) => (
+                        format!("{}::numeric", quote_literal(d)),
+                        "false".to_string(),
+                        None,
+                    ),
+                    _ => {
                         return Err(CompileReason::SumShape {
-                            detail: "target is not a decimal position",
+                            detail: "computed target",
                         });
                     }
-                    let scope = SumScope {
-                        from: from_list(&r),
-                        where_: r.conjunction(),
-                        alias: col.alias.clone(),
-                        position: col.position,
-                        aliases: r.aliases(),
-                    };
-                    (
-                        decimal_sql(col),
-                        format!("bool_or({})", scope.foreign()),
-                        scope,
-                    )
-                }
-                ValueExpr::Term(Term::Literal(Value::Decimal(d))) => (
-                    format!("{}::numeric", quote_literal(d)),
-                    "false".to_string(),
-                    SumScope {
-                        from: from_list(&r),
-                        where_: r.conjunction(),
-                        alias: String::new(),
-                        position: 0,
-                        aliases: r.aliases(),
-                    },
-                ),
-                _ => {
-                    return Err(CompileReason::SumShape {
-                        detail: "computed target",
-                    });
-                }
-            };
+                };
             // Computed once per row of the enclosing scope, so the
             // comparison, the representability test and the kind test
             // read one pass.

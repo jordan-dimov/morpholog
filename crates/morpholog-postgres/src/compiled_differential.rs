@@ -504,6 +504,18 @@ transformation set_right_span(x, v):
 transformation set_left_span(x, v):
     admit LeftSpan(x, v)
 ",
+    // A count under a cap: the target is a literal, so the sum cannot
+    // meet a value it refuses, and its error query must still render.
+    "program counted
+predicate Cap(b: Subject, n: Decimal)
+predicate Item(b: Subject, i: Subject)
+invariant count_within_cap:
+    Cap(b, n) implies sum(1 | Item(b, _)) <= n
+transformation set_cap(b, n):
+    admit Cap(b, n)
+transformation add_item(b, i):
+    admit Item(b, i)
+",
     "program quantity_join
 predicate Held(x: Subject, q: Decimal[MW])
 predicate Booked(x: Subject, q: Decimal[MW])
