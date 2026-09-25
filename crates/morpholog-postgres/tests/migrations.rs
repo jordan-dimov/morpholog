@@ -467,6 +467,25 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     )
     .await
     .expect("simulate a database from before the timestamp coordinate");
+    ddl(
+        &pool,
+        "DROP FUNCTION morpholog.value_key_v1(jsonb)".to_string(),
+    )
+    .await
+    .expect("simulate a database from before the equality key");
+    // The guard migration 017 drops, as a database that ran 016 has it.
+    ddl(
+        &pool,
+        "CREATE FUNCTION morpholog.declared_kind(predicate text, declared_predicate text, v jsonb, kind text, pos integer) RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT true'".to_string(),
+    )
+    .await
+    .expect("simulate a database that ran migration 016");
+    ddl(
+        &pool,
+        "COMMENT ON FUNCTION morpholog.declared_kind(text, text, jsonb, text, integer) IS 'morpholog declared kind guard v1'".to_string(),
+    )
+    .await
+    .expect("with the marker 016 wrote");
     // A row that deployment wrote: attested, no names. The migration must
     // carry it forward untouched.
     sqlx::query(
@@ -563,6 +582,41 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
         return Err(format!(
             "timestamp_nanos must carry its marker, got {marker:?}"
         ));
+    }
+
+    // Migration 017: the key function is back with its marker, keys the
+    // pinned corpus as a fresh database does, and the guard is gone.
+    let marker: Option<String> = sqlx::query_scalar(
+        "SELECT obj_description('morpholog.value_key_v1(jsonb)'::regprocedure, 'pg_proc')",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("value_key_v1 must exist after migrating: {e}"))?;
+    if marker.as_deref() != Some("morpholog value key v1") {
+        return Err(format!(
+            "value_key_v1 must carry its marker, got {marker:?}"
+        ));
+    }
+    for (value, expected) in common::pinned_value_keys() {
+        let got: serde_json::Value = sqlx::query_scalar("SELECT morpholog.value_key_v1($1)")
+            .bind(value.clone())
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| format!("keying {value}: {e}"))?;
+        if got != expected {
+            return Err(format!(
+                "{value} keys as {got}, a fresh database keys it as {expected}"
+            ));
+        }
+    }
+    let guard: Option<String> = sqlx::query_scalar(
+        "SELECT to_regprocedure('morpholog.declared_kind(text, text, jsonb, text, integer)')::text",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("guard lookup failed: {e}"))?;
+    if guard.is_some() {
+        return Err("migration 017 must drop morpholog.declared_kind".to_string());
     }
 
     // Migration 014, checked on the migrated table: the old row survives

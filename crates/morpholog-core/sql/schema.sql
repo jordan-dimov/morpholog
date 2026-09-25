@@ -111,38 +111,47 @@ $$;
 
 COMMENT ON FUNCTION timestamp_nanos(jsonb) IS 'morpholog timestamp coordinate v1';
 
--- The compiled checks read a claim position by the kind the programme
--- declares for it: a decimal as numeric, a quantity as amount and unit, a
--- date as its tagged value. History admitted under an older declaration,
--- or an untyped caller, can leave a value of another kind there, which
--- that reading would compare wrongly or not at all. So every such read is
--- guarded: the stored value must carry the declared kind, or the check
--- fails closed with SQLSTATE MP001 and the position named, never a silent
--- verdict. `predicate` is the row's own, so a row of another predicate
--- passes whatever the planner's evaluation order; and the cost is the
--- lowest there is, so the planner runs the guard before any cast of the
--- same row, which would otherwise raise its own, unnamed error first.
-CREATE FUNCTION declared_kind(predicate text, declared_predicate text, v jsonb, kind text, pos integer) RETURNS boolean
-    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE COST 1
+-- The one equality the compiled checks compare stored values by: a key
+-- that is equal exactly when the kernel says two values are equal, for
+-- every value the codec writes. Decimals and quantity amounts lose their
+-- scale (1.0 and 1.00 are one value); a quantity's unit rides beside its
+-- amount; subjects, bools, dates, timestamps and durations keep their
+-- text, which the codec writes canonically; a collection's key is its
+-- elements' keys; a value of a kind this version does not know keeps its
+-- payload whole. Versioned in its name because an expression index is
+-- built over its digest: a key with other semantics is a new function,
+-- so the index expression changes with it and provisioning rebuilds.
+CREATE FUNCTION value_key_v1(v jsonb) RETURNS jsonb
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
 DECLARE
-    stored text;
+    tag text;
+    elements jsonb;
 BEGIN
-    IF predicate <> declared_predicate THEN
-        RETURN true;
+    IF jsonb_typeof(v) <> 'object' THEN
+        RETURN jsonb_build_array('raw', v);
     END IF;
-    stored := coalesce(v ->> 'type', jsonb_typeof(v));
-    IF stored = kind THEN
-        RETURN true;
+    tag := v ->> 'type';
+    IF tag IS NULL THEN
+        RETURN jsonb_build_array('raw', v);
     END IF;
-    RAISE EXCEPTION USING
-        ERRCODE = 'MP001',
-        MESSAGE = format('%s[%s] holds a %s where the programme declares %s', declared_predicate, pos, stored, kind),
-        DETAIL = json_build_object('predicate', declared_predicate, 'position', pos, 'declared', kind, 'stored', stored)::text;
+    CASE tag
+        WHEN 'decimal' THEN
+            RETURN jsonb_build_array(tag, trim_scale((v ->> 'value')::numeric)::text);
+        WHEN 'quantity' THEN
+            RETURN jsonb_build_array(tag, v -> 'value' ->> 'unit', trim_scale((v -> 'value' ->> 'amount')::numeric)::text);
+        WHEN 'collection' THEN
+            SELECT coalesce(jsonb_agg(morpholog.value_key_v1(element) ORDER BY ordinal), '[]'::jsonb)
+              INTO elements
+              FROM jsonb_array_elements(v -> 'value') WITH ORDINALITY AS items(element, ordinal);
+            RETURN jsonb_build_array(tag, elements);
+        ELSE
+            RETURN jsonb_build_array(tag, v -> 'value');
+    END CASE;
 END
 $$;
 
-COMMENT ON FUNCTION declared_kind(text, text, jsonb, text, integer) IS 'morpholog declared kind guard v1';
+COMMENT ON FUNCTION value_key_v1(jsonb) IS 'morpholog value key v1';
 
 -- Admitted state. Each row is one admitted claim.
 -- The primary key enforces set semantics: assert C where C is

@@ -123,10 +123,10 @@ async fn another_tag_is_null_and_a_malformed_timestamp_is_an_error() {
     }
 }
 
-/// The embedded schema and migration 016 define each function once; the
+/// The embedded schema and the migrations define each function once; the
 /// bodies must be the same text, and each carries its marker.
 #[test]
-fn the_schema_and_the_migration_define_the_same_functions() {
+fn the_schema_and_the_migrations_define_the_same_functions() {
     fn body<'a>(sql: &'a str, head: &str) -> &'a str {
         let from = sql.find(head).unwrap_or_else(|| panic!("{head} missing"));
         let sql = &sql[from..];
@@ -135,10 +135,17 @@ fn the_schema_and_the_migration_define_the_same_functions() {
         &sql[start..end]
     }
     let schema = include_str!("../../morpholog-core/sql/schema.sql");
-    let migration = include_str!("../../morpholog-core/sql/migrations/016_timestamp_nanos.sql");
-    for (name, marker) in [
-        ("timestamp_nanos", "morpholog timestamp coordinate v1"),
-        ("declared_kind", "morpholog declared kind guard v1"),
+    for (name, marker, migration) in [
+        (
+            "timestamp_nanos",
+            "morpholog timestamp coordinate v1",
+            include_str!("../../morpholog-core/sql/migrations/016_timestamp_nanos.sql"),
+        ),
+        (
+            "value_key_v1",
+            "morpholog value key v1",
+            include_str!("../../morpholog-core/sql/migrations/017_value_key_v1.sql"),
+        ),
     ] {
         assert_eq!(
             body(schema, &format!("CREATE FUNCTION {name}(")),
@@ -157,39 +164,8 @@ fn the_schema_and_the_migration_define_the_same_functions() {
             "{name} marker in the migration"
         );
     }
-}
-
-/// A row of another kind at a guarded position is refused with the
-/// position named; a row of another predicate passes, whatever the
-/// planner evaluated first.
-#[tokio::test]
-async fn the_guard_names_the_drift_and_ignores_other_predicates() {
-    let pool = test_pool().await;
-    let ok: bool =
-        sqlx::query_scalar("SELECT morpholog.declared_kind('Terms', 'Terms', $1, 'quantity', 1)")
-            .bind(json!({"type":"quantity","value":{"amount":"1","unit":"MW"}}))
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert!(ok);
-    let other: bool =
-        sqlx::query_scalar("SELECT morpholog.declared_kind('Noise', 'Terms', $1, 'quantity', 1)")
-            .bind(json!({"type":"subject","value":"legacy"}))
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert!(other);
-    let err = sqlx::query_scalar::<_, bool>(
-        "SELECT morpholog.declared_kind('Terms', 'Terms', $1, 'quantity', 1)",
-    )
-    .bind(json!({"type":"subject","value":"legacy"}))
-    .fetch_one(&pool)
-    .await
-    .expect_err("drift is refused");
-    let db = err.as_database_error().expect("a database error");
-    assert_eq!(db.code().as_deref(), Some("MP001"));
-    assert_eq!(
-        db.message(),
-        "Terms[1] holds a subject where the programme declares quantity"
+    assert!(
+        !schema.contains("declared_kind"),
+        "the guard is gone from the schema"
     );
 }
