@@ -15,7 +15,7 @@ A minimal-size compatibility smoke test (`cargo test -p morpholog-bench`, gated 
 | `write` | N journal entries inserted via direct SQL across K accounts | one `propose_against_pg(post_simple_entry, ...)` call | scoped `load_state` + invariant evaluation over the candidate state + commit |
 | `read`  | same fixture | inline `list_claims` + `State::from_claims` + `enumerate_derived`, each phase timed separately | each layer of the read path, so the dominant cost is visible directly |
 | `as-of` | N fabricated audit rows (direct SQL, bypassing the kernel) | one `reconstruct_state_at` and one `list_derived_at` against a target transition | audit-log replay as a function of N, `--at <fraction>` (how far through the log the target sits), and `--retract-fraction K` |
-| `contend` | optional `--prepopulate N`, then W workers post concurrently | `--workers` x `--ops-per-worker` concurrent `propose_against_pg` calls, spread across `--periods P`, optionally `--disjoint` | throughput and the SERIALIZABLE 40001 retry rate under concurrency; whether value-level vs predicate-level partitioning relieves it |
+| `contend` | optional `--prepopulate N` (ledger entries, or with `--disjoint` items per synthetic predicate), then W workers post concurrently | `--workers` x `--ops-per-worker` concurrent `propose_against_pg` calls, spread across `--periods P`, optionally `--disjoint` | throughput and the SERIALIZABLE 40001 retry rate under concurrency; whether value-level vs predicate-level partitioning relieves it |
 | `kernel` | an in-memory ledger of N entries; no database, no `--reset` | one `propose` with the ledger's invariants, the same with none, and `--acts` sequential proposals each against the candidate the act before it produced | the kernel alone: what invariant evaluation against the book costs (the difference between the two proposals), and the interpreted core of `transact` |
 | `replay` | the `as-of` fixture | `coverage_replay` and `score_candidate` of the ledger against itself | the audit-analysis arc: what a replay that observes every audit row costs as the log grows |
 
@@ -285,6 +285,19 @@ The positive half: **predicate-disjoint partitioning does.** `--disjoint` switch
 > The unit of concurrency is the read footprint the runtime loads, not the business value. Value-disjoint writes inside one predicate do not scale; predicate-disjoint footprints do.
 
 The residual ~2.4 retries/commit at full disjointness is *consistent with* PostgreSQL SSI predicate-lock granularity rather than logical Morpholog overlap: the short, adjacent `Bench_*` keys likely share index pages, so logically-disjoint predicates still false-share. Confirming the mechanism - and driving the residual toward zero - would need a follow-up physical-layout control (spread predicate names, larger seeded key ranges, or partitioned storage), which is also the reason a partitioned substrate would matter at scale. This pair of sweeps also supplies the measured 40001 rate the roadmap requires before any substrate change (e.g. TimescaleDB) can be reasoned about.
+
+### Keyed body reads (2026-09-25, `contend --disjoint --prepopulate 5000`, PostgreSQL 18.6)
+
+The law above was measured when a proposal read every predicate its body consulted whole. A body's reads are now keyed by what its arguments fix before it runs, and the synthetic workload's gate (`require not Bench_p(item)` before `admit Bench_p(item)`) is the capture shape that contends. With five thousand items already in each predicate, sixteen writers, twenty operations each, four runs a side in balanced order, baseline `main` against this change:
+
+| implementation | periods | before: retries/commit, commits/s | after: retries/commit, commits/s |
+|---|--:|---|---|
+| compiled, indexes provisioned | 1 (all share `Bench_0`) | 8.4-8.7, 59-60 | 0.07-0.08, 5,470-5,600 |
+| compiled, indexes provisioned | 16 (disjoint) | 8.2-8.4, 54 | 0.00, 4,830-5,050 |
+| interpreted (no indexes, by this bench's definition) | 1 | 7.9-8.2, 62-63 | 8.9-9.2, 45-46 |
+| interpreted (no indexes) | 16 | 8.1-8.2, 55 | 8.7-9.6, 40-42 |
+
+Two readings. With its index, a keyed read remembers only the index range it searched, so the shared-predicate case that anti-scaled runs at the disjoint case's speed: the unit of concurrency became the rows a body can observe, not the predicate. Without the index, a keyed read scans the predicate computing a key per row, slower than the old whole read and holding the same relation lock, so the interpreted ruler here measures keyed reads unindexed, not the interpreter; the ledger fixture moved nothing on either route, since its posting's only gate reads an empty predicate.
 
 ### Embedder / CLI latency (`scripts/embedder_latency.sh`)
 

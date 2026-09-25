@@ -96,14 +96,13 @@ pub async fn propose_all_against_pg(
         disable_jit(&mut tx).await?;
     }
 
-    // One load over everything any act reads: later acts see the earlier
-    // acts' effects through the kernel's candidate state, never a reread.
-    let scope: Vec<_> = acts
-        .iter()
-        .flat_map(|(t, _)| program.load_scope(t, route))
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
+    // One load over everything any act reads, each act keyed by its own
+    // arguments: later acts see the earlier acts' effects through the
+    // kernel's candidate state, never a reread.
+    let mut scope = crate::propose::LoadScope::default();
+    for (t, transition) in &acts {
+        scope.union(program.load_scope(t, transition, route));
+    }
     let mut state = load_state(&mut tx, &scope).await?;
 
     let mut receipts = Vec::with_capacity(acts.len());

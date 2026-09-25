@@ -204,7 +204,7 @@ enum Command {
     /// Prepare a database for a programme, beyond the schema.
     ///
     /// `indexes` reconciles the partial expression indexes a programme's
-    /// compiled invariants can seek on: creates what is missing, repairs
+    /// loads and compiled invariants seek on: creates what is missing, repairs
     /// an interrupted build, reports a conflict for an operator, and
     /// leaves an equivalent index someone else made alone. Correctness
     /// never depends on it - the checks are right without any index,
@@ -563,8 +563,8 @@ pub(crate) struct EvaluateArgs {
 /// neither.
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum ProvisionCmd {
-    /// Reconcile the indexes a programme's compiled invariants can seek
-    /// on. Prints one line per index with its action - KEEP, CREATE,
+    /// Reconcile the indexes a programme's loads and compiled invariants
+    /// seek on. Prints one line per index with its action - KEEP, CREATE,
     /// REPAIR INVALID, SATISFIED EXTERNALLY, STALE, CONFLICT - and exits
     /// non-zero on a conflict, which needs an operator. Builds run
     /// concurrently, so the claims table stays writable throughout.

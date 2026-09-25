@@ -108,6 +108,7 @@ async fn probe_raw(
     // The kernel judges this probe too, so its invariants' reads load.
     let scope = compute_load_scope(
         transformation,
+        Some(&transition),
         invariants,
         definitions,
         Reads::BodyAndInvariants,

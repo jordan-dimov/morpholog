@@ -40,6 +40,7 @@ mod impact;
 mod ir;
 mod lint;
 mod propose;
+mod reads;
 pub mod schema;
 mod score;
 mod state;
@@ -84,6 +85,7 @@ pub use propose::{
     TraceEntry, TracedProposal, Transition, WitnessBinding, finish_staged_delta_with, propose,
     propose_stage_delta, propose_with, propose_with_trace,
 };
+pub use reads::{KeyedPattern, KnownTerm, ReadFilter, ReadPlan};
 pub use schema::{intent_arg_schema, transformation_arg_schema};
 pub use score::{
     BatchScore, CandidateScore, CandidateScorer, CaseOutcome, CaseResult, InvariantScore,

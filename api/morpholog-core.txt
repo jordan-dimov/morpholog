@@ -581,6 +581,26 @@ impl core::marker::Unpin for morpholog_core::InvariantOrigin
 impl core::marker::UnsafeUnpin for morpholog_core::InvariantOrigin
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::InvariantOrigin
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::InvariantOrigin
+pub enum morpholog_core::KnownTerm
+pub morpholog_core::KnownTerm::Actor
+pub morpholog_core::KnownTerm::Literal(morpholog_core::Value)
+pub morpholog_core::KnownTerm::Parameter(morpholog_core::Var)
+impl core::clone::Clone for morpholog_core::KnownTerm
+pub fn morpholog_core::KnownTerm::clone(&self) -> morpholog_core::KnownTerm
+impl core::cmp::Eq for morpholog_core::KnownTerm
+pub fn morpholog_core::KnownTerm::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::KnownTerm
+pub fn morpholog_core::KnownTerm::eq(&self, &morpholog_core::KnownTerm) -> bool
+impl core::fmt::Debug for morpholog_core::KnownTerm
+pub fn morpholog_core::KnownTerm::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_core::KnownTerm
+impl core::marker::Freeze for morpholog_core::KnownTerm
+impl core::marker::Send for morpholog_core::KnownTerm
+impl core::marker::Sync for morpholog_core::KnownTerm
+impl core::marker::Unpin for morpholog_core::KnownTerm
+impl core::marker::UnsafeUnpin for morpholog_core::KnownTerm
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::KnownTerm
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::KnownTerm
 pub enum morpholog_core::Lint
 pub morpholog_core::Lint::EffectiveWithoutDeclaredTotality
 pub morpholog_core::Lint::EffectiveWithoutDeclaredTotality::predicate: alloc::string::String
@@ -774,6 +794,28 @@ impl core::marker::Unpin for morpholog_core::Prop
 impl core::marker::UnsafeUnpin for morpholog_core::Prop
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Prop
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Prop
+pub enum morpholog_core::ReadFilter
+pub morpholog_core::ReadFilter::Keyed(alloc::vec::Vec<morpholog_core::KeyedPattern>)
+pub morpholog_core::ReadFilter::Whole
+impl morpholog_core::ReadFilter
+pub fn morpholog_core::ReadFilter::resolve(&self, &morpholog_core::Transformation, &morpholog_core::Transition) -> core::option::Option<alloc::vec::Vec<alloc::vec::Vec<(usize, morpholog_core::EvalValue)>>>
+pub fn morpholog_core::ReadFilter::union(&mut self, &morpholog_core::ReadFilter)
+impl core::clone::Clone for morpholog_core::ReadFilter
+pub fn morpholog_core::ReadFilter::clone(&self) -> morpholog_core::ReadFilter
+impl core::cmp::Eq for morpholog_core::ReadFilter
+pub fn morpholog_core::ReadFilter::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::ReadFilter
+pub fn morpholog_core::ReadFilter::eq(&self, &morpholog_core::ReadFilter) -> bool
+impl core::fmt::Debug for morpholog_core::ReadFilter
+pub fn morpholog_core::ReadFilter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_core::ReadFilter
+impl core::marker::Freeze for morpholog_core::ReadFilter
+impl core::marker::Send for morpholog_core::ReadFilter
+impl core::marker::Sync for morpholog_core::ReadFilter
+impl core::marker::Unpin for morpholog_core::ReadFilter
+impl core::marker::UnsafeUnpin for morpholog_core::ReadFilter
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::ReadFilter
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::ReadFilter
 pub enum morpholog_core::Rejection
 pub morpholog_core::Rejection::Error(morpholog_core::ErrorRejection)
 pub morpholog_core::Rejection::Gate(morpholog_core::GateRejection)
@@ -2227,6 +2269,24 @@ impl core::marker::Unpin for morpholog_core::InvariantScore
 impl core::marker::UnsafeUnpin for morpholog_core::InvariantScore
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::InvariantScore
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::InvariantScore
+pub struct morpholog_core::KeyedPattern
+pub morpholog_core::KeyedPattern::coordinates: alloc::vec::Vec<(usize, morpholog_core::KnownTerm)>
+impl core::clone::Clone for morpholog_core::KeyedPattern
+pub fn morpholog_core::KeyedPattern::clone(&self) -> morpholog_core::KeyedPattern
+impl core::cmp::Eq for morpholog_core::KeyedPattern
+pub fn morpholog_core::KeyedPattern::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::KeyedPattern
+pub fn morpholog_core::KeyedPattern::eq(&self, &morpholog_core::KeyedPattern) -> bool
+impl core::fmt::Debug for morpholog_core::KeyedPattern
+pub fn morpholog_core::KeyedPattern::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_core::KeyedPattern
+impl core::marker::Freeze for morpholog_core::KeyedPattern
+impl core::marker::Send for morpholog_core::KeyedPattern
+impl core::marker::Sync for morpholog_core::KeyedPattern
+impl core::marker::Unpin for morpholog_core::KeyedPattern
+impl core::marker::UnsafeUnpin for morpholog_core::KeyedPattern
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::KeyedPattern
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::KeyedPattern
 pub struct morpholog_core::MissingClaim
 pub morpholog_core::MissingClaim::candidate_supplier_transformations: alloc::vec::Vec<alloc::string::String>
 pub morpholog_core::MissingClaim::predicate: alloc::string::String
@@ -2352,6 +2412,30 @@ impl core::marker::Unpin for morpholog_core::Program
 impl core::marker::UnsafeUnpin for morpholog_core::Program
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Program
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Program
+pub struct morpholog_core::ReadPlan
+pub morpholog_core::ReadPlan::admits: alloc::collections::btree::map::BTreeMap<morpholog_core::PredicateName, morpholog_core::ReadFilter>
+pub morpholog_core::ReadPlan::reads: alloc::collections::btree::map::BTreeMap<morpholog_core::PredicateName, morpholog_core::ReadFilter>
+impl morpholog_core::ReadPlan
+pub fn morpholog_core::ReadPlan::of(&morpholog_core::Transformation, &[morpholog_core::Definition]) -> Self
+pub fn morpholog_core::ReadPlan::seek_positions(&self) -> alloc::collections::btree::set::BTreeSet<(morpholog_core::PredicateName, usize)>
+impl core::clone::Clone for morpholog_core::ReadPlan
+pub fn morpholog_core::ReadPlan::clone(&self) -> morpholog_core::ReadPlan
+impl core::cmp::Eq for morpholog_core::ReadPlan
+pub fn morpholog_core::ReadPlan::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::ReadPlan
+pub fn morpholog_core::ReadPlan::eq(&self, &morpholog_core::ReadPlan) -> bool
+impl core::default::Default for morpholog_core::ReadPlan
+pub fn morpholog_core::ReadPlan::default() -> morpholog_core::ReadPlan
+impl core::fmt::Debug for morpholog_core::ReadPlan
+pub fn morpholog_core::ReadPlan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_core::ReadPlan
+impl core::marker::Freeze for morpholog_core::ReadPlan
+impl core::marker::Send for morpholog_core::ReadPlan
+impl core::marker::Sync for morpholog_core::ReadPlan
+impl core::marker::Unpin for morpholog_core::ReadPlan
+impl core::marker::UnsafeUnpin for morpholog_core::ReadPlan
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::ReadPlan
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::ReadPlan
 pub struct morpholog_core::RenderedClaim
 pub morpholog_core::RenderedClaim::predicate: alloc::string::String
 pub morpholog_core::RenderedClaim::rendered: alloc::string::String

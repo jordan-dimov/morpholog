@@ -62,6 +62,17 @@ async fn reset(pool: &PgPool) {
 /// condition. A partial index also serves as a cheap scan of its
 /// predicate, which would count as "used" without the condition.
 async fn indexes_in_plan(pool: &PgPool, sql: &str, planner_left_alone: bool) -> BTreeSet<String> {
+    indexes_in_plan_with(pool, sql, &[], planner_left_alone).await
+}
+
+/// As [`indexes_in_plan`], for a statement with bound values: the plan
+/// is the one PostgreSQL makes for those values.
+async fn indexes_in_plan_with(
+    pool: &PgPool,
+    sql: &str,
+    binds: &[serde_json::Value],
+    planner_left_alone: bool,
+) -> BTreeSet<String> {
     let mut tx = pool.begin().await.unwrap();
     if !planner_left_alone {
         sqlx::raw_sql("SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off")
@@ -69,12 +80,11 @@ async fn indexes_in_plan(pool: &PgPool, sql: &str, planner_left_alone: bool) -> 
             .await
             .unwrap();
     }
-    let plan: serde_json::Value =
-        sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN (FORMAT JSON) {sql}")))
-            .fetch_one(&mut *tx)
-            .await
-            .unwrap()
-            .get(0);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN (FORMAT JSON) {sql}")));
+    for value in binds {
+        query = query.bind(value.clone());
+    }
+    let plan: serde_json::Value = query.fetch_one(&mut *tx).await.unwrap().get(0);
     tx.rollback().await.unwrap();
     let mut out = BTreeSet::new();
     fn walk(node: &serde_json::Value, out: &mut BTreeSet<String>) {
@@ -210,7 +220,7 @@ async fn populate_for_probes(pool: &PgPool, specs: &[crate::compiled::IndexSpec]
 }
 
 /// Ledger entries laid out as the bench lays them out, plus restatements.
-async fn populate_ledger(pool: &PgPool, entries: i64) {
+pub(crate) async fn populate_ledger(pool: &PgPool, entries: i64) {
     let nil = uuid::Uuid::nil();
     sqlx::query(
         "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
@@ -282,4 +292,72 @@ async fn the_planner_chooses_the_provisioned_indexes_on_a_populated_ledger() {
     provision_indexes(&pool, &pg, false).await.unwrap();
     populate_ledger(&pool, 5_000).await;
     assert_required_indexes_used(&pool, &program, true).await;
+}
+
+/// The loader seeks through the provisioned indexes: on the populated
+/// ledger, a posting's keyed load uses at least one managed index per
+/// keyed predicate, with an index condition, and spells each predicate as
+/// a literal so the partial index's predicate is provable. The optimiser
+/// may judge one position's index enough for a pattern with several.
+#[tokio::test]
+async fn the_loader_seeks_through_the_provisioned_indexes() {
+    use crate::propose::{LoadFilter, Reads, compute_load_scope, load_sql};
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let program = morpholog_examples::double_entry_ledger::program();
+    let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
+    provision_indexes(&pool, &pg, false).await.unwrap();
+    populate_ledger(&pool, 5_000).await;
+    let post = program.transformation("post_simple_entry").unwrap();
+    let transition = morpholog_core::Transition {
+        transformation_name: post.name.clone(),
+        args: vec![
+            subj("e_probe"),
+            subj("d_2026_05_17"),
+            subj("p_2026_05"),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(1),
+        ],
+        actor: morpholog_test_support::test_actor(),
+    };
+    for reads in [Reads::Body, Reads::BodyAndInvariants] {
+        let scope = compute_load_scope(
+            post,
+            Some(&transition),
+            &program.invariants,
+            &program.definitions,
+            reads,
+        );
+        let (sql, binds) = load_sql(&scope).unwrap();
+        let used = indexes_in_plan_with(&pool, &sql, &binds, true).await;
+        let required: Vec<crate::compiled::IndexSpec> = pg.required_indexes();
+        for (predicate, filter) in &scope.filters {
+            assert!(
+                sql.contains(&format!("predicate_name = '{predicate}'")),
+                "{reads:?}: {predicate} is spelled as a literal"
+            );
+            if let LoadFilter::Keyed(patterns) = filter {
+                let candidates: Vec<String> = required
+                    .iter()
+                    .filter(|spec| {
+                        &spec.predicate == predicate
+                            && patterns
+                                .iter()
+                                .flatten()
+                                .any(|(position, _)| *position == spec.position)
+                    })
+                    .map(crate::compiled::IndexSpec::index_name)
+                    .collect();
+                assert!(
+                    !candidates.is_empty(),
+                    "{reads:?}: {predicate} is keyed but no index is required for its positions"
+                );
+                assert!(
+                    candidates.iter().any(|name| used.contains(name)),
+                    "{reads:?}: the load of {predicate} seeks no managed index; candidates {candidates:?}, used {used:?}"
+                );
+            }
+        }
+    }
 }

@@ -2,17 +2,19 @@ use crate::attestation::{AuditAttestation, Proposal};
 use crate::compiled::{DeltaStep, Stage, disable_jit};
 use crate::error::{PgError, classify, classify_checked_query, classify_commit};
 use crate::program::{PgProgram, Route};
+use crate::sql_quote::quote_literal;
 use crate::txn::{LoginRole, begin_authorised_proposal_tx};
 use morpholog_core::{
     Admission, ClaimInstance, CompiledProgram, Definition, EffectiveDelta, EvalError, EvalValue,
-    IntentInstance, Invariant, InvariantName, Outcome, PredicateName, RejectionReason, RuleName,
-    StagedDelta, State, Subject, TraceEntry, TracedProposal, Transformation, TransformationName,
-    Transition, WitnessBinding, propose_stage_delta, propose_with, propose_with_trace,
+    IntentInstance, Invariant, InvariantName, Outcome, PredicateName, ReadFilter, ReadPlan,
+    RejectionReason, RuleName, StagedDelta, State, Subject, TraceEntry, TracedProposal,
+    Transformation, TransformationName, Transition, WitnessBinding, propose_stage_delta,
+    propose_with, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use sqlx::{PgPool, Postgres, Transaction};
-use std::collections::HashSet;
+use sqlx::{PgPool, Postgres, Row as _, Transaction};
+use std::collections::{BTreeMap, HashSet};
 use uuid::Uuid;
 
 /// The result of proposing a transformation against PostgreSQL.
@@ -262,7 +264,13 @@ pub(crate) async fn propose_against_pg_run(
     let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &transition.actor).await?;
     let begin = elapsed(clock);
 
-    let scope = compute_load_scope(transformation, invariants, definitions, route.reads());
+    let scope = compute_load_scope(
+        transformation,
+        Some(transition),
+        invariants,
+        definitions,
+        route.reads(),
+    );
     let state = load_state(&mut tx, &scope).await?;
     let load = elapsed(clock) - begin;
 
@@ -441,6 +449,7 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
     // Always interpreted, so the trace shows the specification's own steps.
     let scope = compute_load_scope(
         transformation,
+        Some(transition),
         invariants,
         definitions,
         Reads::BodyAndInvariants,
@@ -560,44 +569,93 @@ pub(crate) async fn finalise_outcome(
     }
 }
 
-/// Load the pre-state for a proposal, only for the predicates in `scope`
-/// (see [`compute_load_scope`]); other claims cannot affect it. An empty
+/// Load the pre-state for a proposal: every row of every predicate in
+/// `scope`, or for a keyed predicate only the rows matching one of its
+/// patterns' coordinates. Nothing else can affect the proposal. An empty
 /// scope returns an empty state without a query.
+///
+/// One statement, each predicate its own branch with the predicate
+/// spelled as a literal, so the partial indexes' predicates are provable;
+/// a coordinate seeks by the digest of its key, what those indexes hold,
+/// against the bound value's key through the same function. A seek that
+/// finds nothing still locks the index range it searched, which is how
+/// SERIALIZABLE protects the absence.
 pub(crate) async fn load_state(
     tx: &mut Transaction<'_, Postgres>,
-    scope: &[PredicateName],
+    scope: &LoadScope,
 ) -> Result<State, PgError> {
-    if scope.is_empty() {
+    if scope.filters.is_empty() {
         return Ok(State::default());
     }
+    let (sql, binds) = load_sql(scope)?;
+    // Safe: the structure is rendered from the programme with the
+    // predicate names quoted; every proposed value is a bound parameter.
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+    for value in binds {
+        query = query.bind(value);
+    }
+    let rows = query.fetch_all(&mut **tx).await.map_err(classify)?;
 
-    // Bound as `text[]`: sqlx does not know `PredicateName`.
-    let scope: Vec<String> = scope.iter().map(|p| p.as_str().to_owned()).collect();
+    let mut claims = Vec::with_capacity(rows.len());
+    for row in rows {
+        let predicate: String = row.try_get("predicate_name").map_err(classify)?;
+        let arguments: serde_json::Value = row.try_get("arguments").map_err(classify)?;
+        let args: Vec<EvalValue> = serde_json::from_value(arguments)?;
+        claims.push(ClaimInstance {
+            predicate: PredicateName::from(predicate),
+            args,
+        });
+    }
+    Ok(State::from_claims(claims))
+}
+
+/// The loader's statement and its bound values, apart so a plan gate can
+/// explain what production runs.
+pub(crate) fn load_sql(scope: &LoadScope) -> Result<(String, Vec<serde_json::Value>), PgError> {
+    // One select per predicate, joined by UNION ALL, so the planner plans
+    // each predicate's scan on its own: a keyed predicate seeks its
+    // indexes whatever a whole one beside it costs, and each read's lock
+    // footprint is its own.
+    let mut selects = Vec::with_capacity(scope.filters.len());
+    let mut binds: Vec<serde_json::Value> = Vec::new();
+    for (predicate, filter) in &scope.filters {
+        let literal = quote_literal(predicate.as_str());
+        let condition = match filter {
+            LoadFilter::Whole => format!("predicate_name = {literal}"),
+            LoadFilter::Keyed(patterns) => {
+                let mut disjuncts = Vec::with_capacity(patterns.len());
+                for pattern in patterns {
+                    let mut conjuncts = Vec::with_capacity(pattern.len());
+                    for (position, value) in pattern {
+                        binds.push(serde_json::to_value(value)?);
+                        conjuncts.push(format!(
+                            "{} = morpholog.claim_digest(morpholog.value_key_v1(${}::jsonb))",
+                            crate::compiled::seek_expression("", *position),
+                            binds.len()
+                        ));
+                    }
+                    disjuncts.push(format!("({})", conjuncts.join(" AND ")));
+                }
+                format!(
+                    "predicate_name = {literal} AND ({})",
+                    disjuncts.join(" OR ")
+                )
+            }
+        };
+        selects.push(format!(
+            "SELECT predicate_name, arguments, arguments_hash FROM morpholog.claims WHERE {condition}"
+        ));
+    }
     // Ordered because a refusal's witness is the first violating match;
     // an unordered scan could explain the same refusal differently between
     // runs. By the primary key, which the index already provides: ordering
     // by `asserted_at` forces a sort (measured ~1.8x propose latency at 20k
     // claims) and depends on history.
-    let rows = sqlx::query!(
-        "SELECT predicate_name, arguments
-         FROM morpholog.claims
-         WHERE predicate_name = ANY($1)
-         ORDER BY predicate_name, arguments_hash",
-        &scope[..],
-    )
-    .fetch_all(&mut **tx)
-    .await
-    .map_err(classify_checked_query)?;
-
-    let mut claims = Vec::with_capacity(rows.len());
-    for row in rows {
-        let args: Vec<EvalValue> = serde_json::from_value(row.arguments)?;
-        claims.push(ClaimInstance {
-            predicate: PredicateName::from(row.predicate_name),
-            args,
-        });
-    }
-    Ok(State::from_claims(claims))
+    let sql = format!(
+        "SELECT predicate_name, arguments FROM (\n{}\n) AS scope\n ORDER BY predicate_name, arguments_hash",
+        selects.join("\nUNION ALL\n")
+    );
+    Ok((sql, binds))
 }
 
 /// What a loaded state must serve. `Body`: the compiled route, where the
@@ -610,36 +668,118 @@ pub(crate) enum Reads {
     BodyAndInvariants,
 }
 
-/// The predicates `load_state` must fetch for this transformation:
+/// How much of one predicate a load fetches: every row, or the rows
+/// matching any pattern's coordinates, each pattern a conjunction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LoadFilter {
+    Whole,
+    Keyed(Vec<Vec<(usize, EvalValue)>>),
+}
+
+impl LoadFilter {
+    fn union(&mut self, other: LoadFilter) {
+        match (&mut *self, other) {
+            (LoadFilter::Whole, _) => {}
+            (_, LoadFilter::Whole) => *self = LoadFilter::Whole,
+            (LoadFilter::Keyed(mine), LoadFilter::Keyed(theirs)) => {
+                for pattern in theirs {
+                    if !mine.contains(&pattern) {
+                        mine.push(pattern);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// What `load_state` fetches for one execution, by predicate.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct LoadScope {
+    pub(crate) filters: BTreeMap<PredicateName, LoadFilter>,
+}
+
+impl LoadScope {
+    fn add(&mut self, predicate: PredicateName, filter: LoadFilter) {
+        match self.filters.entry(predicate) {
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(filter);
+            }
+            std::collections::btree_map::Entry::Occupied(mut o) => o.get_mut().union(filter),
+        }
+    }
+
+    /// Both scopes' rows: what a batch loads once for all its acts.
+    pub(crate) fn union(&mut self, other: LoadScope) {
+        for (predicate, filter) in other.filters {
+            self.add(predicate, filter);
+        }
+    }
+
+    /// The predicates in scope, whatever their filters.
+    pub(crate) fn predicates(&self) -> Vec<PredicateName> {
+        self.filters.keys().cloned().collect()
+    }
+
+    /// Whether a claim would be loaded: the same test in the kernel's
+    /// terms, for holding the loader to the plan.
+    #[cfg(test)]
+    pub(crate) fn admits(&self, claim: &ClaimInstance) -> bool {
+        match self.filters.get(&claim.predicate) {
+            None => false,
+            Some(LoadFilter::Whole) => true,
+            Some(LoadFilter::Keyed(patterns)) => patterns.iter().any(|pattern| {
+                pattern
+                    .iter()
+                    .all(|(position, value)| claim.args.get(*position) == Some(value))
+            }),
+        }
+    }
+}
+
+/// What `load_state` must fetch for this transformation:
 ///
-/// - every predicate the body reads;
+/// - every predicate the body reads, keyed by the coordinates its
+///   patterns fix before the body runs (see [`morpholog_core::ReadPlan`]),
+///   or whole when a pattern fixes none;
 /// - with [`Reads::BodyAndInvariants`], also every predicate the
-///   invariants reference, and every predicate the body admits (the
-///   interpreter decides from its state whether an admit changed
-///   anything).
+///   invariants reference, whole, and every predicate the body admits,
+///   keyed the same way (the interpreter decides from its state whether
+///   an admit changed anything).
 ///
-/// The promise is equivalence: proposing against this projection behaves
-/// as against full state, pinned by the scope differential. The set
-/// itself stays private so the loading can change.
+/// Without a transition the coordinates cannot be resolved, so every
+/// predicate is whole: the diagnostic reads. The promise is equivalence:
+/// proposing against this projection behaves as against full state,
+/// pinned by the scope differential.
 pub(crate) fn compute_load_scope(
     transformation: &Transformation,
+    transition: Option<&Transition>,
     invariants: &[Invariant],
     definitions: &[Definition],
     reads: Reads,
-) -> Vec<PredicateName> {
-    let mut scope = std::collections::BTreeSet::new();
-    for stmt in &transformation.body {
-        morpholog_core::predicates_read_by_stmt(stmt, definitions, &mut scope);
+) -> LoadScope {
+    let plan = ReadPlan::of(transformation, definitions);
+    let resolve =
+        |filter: &ReadFilter| match transition.and_then(|t| filter.resolve(transformation, t)) {
+            Some(patterns) => LoadFilter::Keyed(patterns),
+            None => LoadFilter::Whole,
+        };
+    let mut scope = LoadScope::default();
+    for (predicate, filter) in &plan.reads {
+        scope.add(predicate.clone(), resolve(filter));
     }
     if reads == Reads::BodyAndInvariants {
-        for inv in invariants {
-            morpholog_core::predicates_referenced_by_prop(&inv.body, definitions, &mut scope);
+        for (predicate, filter) in &plan.admits {
+            scope.add(predicate.clone(), resolve(filter));
         }
-        for stmt in &transformation.body {
-            morpholog_core::predicates_asserted_by_stmt(stmt, &mut scope);
+        let mut referenced = std::collections::BTreeSet::new();
+        for inv in invariants {
+            morpholog_core::predicates_referenced_by_prop(&inv.body, definitions, &mut referenced);
+        }
+        for predicate in referenced {
+            scope.add(predicate, LoadFilter::Whole);
         }
     }
-    scope.into_iter().collect()
+    scope
 }
 
 /// One entry in an audit row's `invariants_checked`: an active invariant

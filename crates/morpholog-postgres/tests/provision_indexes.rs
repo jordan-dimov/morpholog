@@ -13,6 +13,10 @@ use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{IndexAction, PgPool, PgProgram, plan_indexes, provision_indexes};
 use sqlx::Row as _;
 
+/// The ledger's requirement: its compiled checks' three seeks and the two
+/// positions its transformations' gates key on.
+const LEDGER_INDEXES: usize = 5;
+
 fn ledger() -> PgProgram {
     compiled(double_entry_ledger::program())
 }
@@ -68,7 +72,11 @@ async fn a_dry_run_names_every_index_to_create_and_creates_none() {
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
     let report = plan_indexes(&pool, &ledger()).await.unwrap();
-    assert_eq!(actions(&report), vec![IndexAction::Create; 3], "{report:?}");
+    assert_eq!(
+        actions(&report),
+        vec![IndexAction::Create; LEDGER_INDEXES],
+        "{report:?}"
+    );
     assert!(!report.applied);
     assert!(catalogue_names(&pool).await.is_empty());
     assert_eq!(registry_counts(&pool).await, (0, 0));
@@ -80,15 +88,29 @@ async fn provisioning_creates_registers_and_then_keeps() {
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
     let first = provision_indexes(&pool, &ledger(), false).await.unwrap();
-    assert_eq!(actions(&first), vec![IndexAction::Create; 3], "{first:?}");
+    assert_eq!(
+        actions(&first),
+        vec![IndexAction::Create; LEDGER_INDEXES],
+        "{first:?}"
+    );
     let built = catalogue_names(&pool).await;
-    assert_eq!(built.len(), 3, "{built:?}");
+    assert_eq!(built.len(), LEDGER_INDEXES, "{built:?}");
     assert!(built.iter().all(|(_, valid)| *valid));
-    assert_eq!(registry_counts(&pool).await, (3, 3));
+    assert_eq!(
+        registry_counts(&pool).await,
+        (LEDGER_INDEXES as i64, LEDGER_INDEXES as i64)
+    );
 
     let again = provision_indexes(&pool, &ledger(), false).await.unwrap();
-    assert_eq!(actions(&again), vec![IndexAction::Keep; 3], "{again:?}");
-    assert_eq!(registry_counts(&pool).await, (3, 3));
+    assert_eq!(
+        actions(&again),
+        vec![IndexAction::Keep; LEDGER_INDEXES],
+        "{again:?}"
+    );
+    assert_eq!(
+        registry_counts(&pool).await,
+        (LEDGER_INDEXES as i64, LEDGER_INDEXES as i64)
+    );
 }
 
 /// A crash between the build and the registry write leaves a correct
@@ -104,8 +126,15 @@ async fn an_unrecorded_matching_index_is_adopted() {
         .await
         .unwrap();
     let report = provision_indexes(&pool, &ledger(), false).await.unwrap();
-    assert_eq!(actions(&report), vec![IndexAction::Keep; 3], "{report:?}");
-    assert_eq!(registry_counts(&pool).await, (3, 3));
+    assert_eq!(
+        actions(&report),
+        vec![IndexAction::Keep; LEDGER_INDEXES],
+        "{report:?}"
+    );
+    assert_eq!(
+        registry_counts(&pool).await,
+        (LEDGER_INDEXES as i64, LEDGER_INDEXES as i64)
+    );
 }
 
 /// The first specification the ledger requires, as the public report
@@ -141,23 +170,21 @@ async fn an_equivalent_index_under_another_name_satisfies_and_is_never_pruned() 
     let report = provision_indexes(&pool, &ledger(), true).await.unwrap();
     assert_eq!(
         actions(&report),
-        vec![
-            IndexAction::SatisfiedExternally,
-            IndexAction::Create,
-            IndexAction::Create
-        ],
+        std::iter::once(IndexAction::SatisfiedExternally)
+            .chain(std::iter::repeat_n(IndexAction::Create, LEDGER_INDEXES - 1))
+            .collect::<Vec<_>>(),
         "{report:?}"
     );
     assert!(report.entries[0].detail.contains("operator_made_this"));
     assert_eq!(
         catalogue_names(&pool).await.len(),
-        2,
-        "ours are only the two it created"
+        LEDGER_INDEXES - 1,
+        "ours are only the ones it created"
     );
     assert_eq!(
         registry_counts(&pool).await,
-        (2, 3),
-        "two managed, but three required: a requirement outlives the index that serves it"
+        (LEDGER_INDEXES as i64 - 1, LEDGER_INDEXES as i64),
+        "one fewer managed than required: a requirement outlives the index that serves it"
     );
     let still_there: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'operator_made_this')",
@@ -250,13 +277,13 @@ async fn a_requirement_once_satisfied_externally_still_protects_the_index() {
         .await
         .unwrap();
     assert_eq!(built.entries[0].action, IndexAction::Create, "{built:?}");
-    // B stops needing anything and prunes: A still requires all three.
+    // B stops needing anything and prunes: A still requires all of them.
     let nobody = compiled(program("another_book").build());
     let pruned = provision_indexes(&pool, &nobody, true).await.unwrap();
     assert!(pruned.pruned.is_empty(), "{pruned:?}");
     assert_eq!(
         catalogue_names(&pool).await.len(),
-        3,
+        LEDGER_INDEXES,
         "A's requirements protect every index"
     );
 }
@@ -274,15 +301,15 @@ async fn stale_indexes_are_reported_and_pruned_only_on_request() {
     let reported = provision_indexes(&pool, &successor, false).await.unwrap();
     assert_eq!(
         actions(&reported),
-        vec![IndexAction::Stale; 3],
+        vec![IndexAction::Stale; LEDGER_INDEXES],
         "{reported:?}"
     );
     assert_eq!(
         catalogue_names(&pool).await.len(),
-        3,
+        LEDGER_INDEXES,
         "still physically there"
     );
-    assert_eq!(registry_counts(&pool).await, (3, 0));
+    assert_eq!(registry_counts(&pool).await, (LEDGER_INDEXES as i64, 0));
 
     // Another programme that still requires them protects them.
     let other = compiled({
@@ -293,14 +320,18 @@ async fn stale_indexes_are_reported_and_pruned_only_on_request() {
     provision_indexes(&pool, &other, false).await.unwrap();
     let protected = provision_indexes(&pool, &successor, true).await.unwrap();
     assert!(actions(&protected).is_empty(), "{protected:?}");
-    assert_eq!(catalogue_names(&pool).await.len(), 3);
+    assert_eq!(catalogue_names(&pool).await.len(), LEDGER_INDEXES);
 
     // Once nobody does, prune drops them.
     let nobody = compiled(program("another_book").build());
     provision_indexes(&pool, &nobody, false).await.unwrap();
     let pruned = provision_indexes(&pool, &successor, true).await.unwrap();
-    assert_eq!(actions(&pruned), vec![IndexAction::Stale; 3], "{pruned:?}");
-    assert_eq!(pruned.pruned.len(), 3);
+    assert_eq!(
+        actions(&pruned),
+        vec![IndexAction::Stale; LEDGER_INDEXES],
+        "{pruned:?}"
+    );
+    assert_eq!(pruned.pruned.len(), LEDGER_INDEXES);
     assert!(catalogue_names(&pool).await.is_empty());
     assert_eq!(registry_counts(&pool).await, (0, 0));
 }
@@ -322,11 +353,14 @@ async fn two_provisioners_serialise() {
     all.extend(actions(&b));
     assert_eq!(
         all.iter().filter(|x| **x == IndexAction::Create).count(),
-        3,
+        LEDGER_INDEXES,
         "one of them created each index, the other kept it: {a:?} {b:?}"
     );
-    assert_eq!(catalogue_names(&pool).await.len(), 3);
-    assert_eq!(registry_counts(&pool).await, (3, 3));
+    assert_eq!(catalogue_names(&pool).await.len(), LEDGER_INDEXES);
+    assert_eq!(
+        registry_counts(&pool).await,
+        (LEDGER_INDEXES as i64, LEDGER_INDEXES as i64)
+    );
 }
 
 /// An interrupted concurrent build leaves an invalid index; the next run
@@ -358,5 +392,92 @@ async fn an_invalid_index_is_repaired_idempotently() {
     );
     assert!(catalogue_names(&pool).await.iter().all(|(_, valid)| *valid));
     let again = provision_indexes(&pool, &ledger(), false).await.unwrap();
-    assert_eq!(actions(&again), vec![IndexAction::Keep; 3], "{again:?}");
+    assert_eq!(
+        actions(&again),
+        vec![IndexAction::Keep; LEDGER_INDEXES],
+        "{again:?}"
+    );
+}
+
+/// An interpreted programme requires the indexes its loads seek on: the
+/// same physical contract as a compiled one, so `provision indexes` builds
+/// them whatever `check -v` says about the invariants.
+#[tokio::test]
+async fn an_interpreted_programme_requires_the_indexes_its_loads_seek_on() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    let interpreted = PgProgram::interpreted(
+        morpholog_core::CompiledProgram::new(double_entry_ledger::program()).unwrap(),
+    );
+    let report = plan_indexes(&pool, &interpreted).await.unwrap();
+    let creates: Vec<(String, usize)> = report
+        .entries
+        .iter()
+        .filter(|e| e.action == IndexAction::Create)
+        .map(|e| (e.predicate.clone(), e.position))
+        .collect();
+    // A posting keys its period gate on the period: PeriodClosed[0].
+    assert!(
+        creates.contains(&("PeriodClosed".to_string(), 0)),
+        "the posting's keyed read needs PeriodClosed[0], got {creates:?}"
+    );
+    // The compiled programme requires the same loads' indexes plus its
+    // checks' own.
+    let compiled_report = plan_indexes(&pool, &ledger()).await.unwrap();
+    let compiled_creates: Vec<(String, usize)> = compiled_report
+        .entries
+        .iter()
+        .filter(|e| e.action == IndexAction::Create)
+        .map(|e| (e.predicate.clone(), e.position))
+        .collect();
+    for spec in &creates {
+        assert!(
+            compiled_creates.contains(spec),
+            "{spec:?} beyond the compiled programme's"
+        );
+    }
+}
+
+/// A programme whose transformation only admits a predicate: on the
+/// interpreted route its load seeks that predicate for the admitted
+/// claim's membership, so one coordinate of the admit is provisioned
+/// although no read keys it. The invariant's `or` keeps the programme
+/// interpreted without asking.
+#[tokio::test]
+async fn an_admit_no_read_keys_still_provisions_one_coordinate() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    let program = morpholog_surface::parse_program(
+        "program admit_only
+predicate P(k: Subject, v: Decimal)
+predicate Flag(k: Subject)
+invariant flagged_or_not:
+    P(k, _) implies (Flag(k) or not Flag(k))
+transformation put(k, v):
+    admit P(k, v)
+",
+    )
+    .unwrap();
+    let pg = compiled(program);
+    assert!(
+        matches!(
+            pg.plan(),
+            morpholog_postgres::InvariantPlan::Interpreted { .. }
+        ),
+        "the `or` keeps it interpreted"
+    );
+    let report = plan_indexes(&pool, &pg).await.unwrap();
+    let creates: Vec<(String, usize)> = report
+        .entries
+        .iter()
+        .filter(|e| e.action == IndexAction::Create)
+        .map(|e| (e.predicate.clone(), e.position))
+        .collect();
+    assert_eq!(
+        creates,
+        vec![("P".to_string(), 0)],
+        "one coordinate of the admit, the first, and not the amount"
+    );
 }

@@ -31,6 +31,8 @@ mod derived;
 mod error;
 mod indexes;
 mod keys;
+#[cfg(test)]
+mod load_differential;
 mod merkle;
 mod migrations;
 mod outbox;

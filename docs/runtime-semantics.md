@@ -602,19 +602,21 @@ The same rule runs on both evaluators: one impact plan per invariant, built once
 
 Every proposal runs in its own `SERIALIZABLE` transaction. When two concurrent proposals could not have run one after the other, PostgreSQL aborts one of them with SQLSTATE 40001. Morpholog reports it as `serialization_failure`: nothing was recorded, and the same proposal is safe to submit again. The runtime never retries on its own; how often and for how long is the caller's policy.
 
-Whether two proposals conflict depends on what they read, not on what they mean. Today a proposal reads:
+Whether two proposals conflict depends on what they read, not on what they mean. A proposal reads:
 
-- every claim of every predicate its transformation body reads;
-- on the interpreted route, also every claim of every predicate its invariants mention and its body admits;
-- on the compiled route, the invariants' cases through queries bounded to the cases the change touches, which become index lookups once `provision indexes` has run.
+- of every predicate its transformation body consults, the rows its patterns can match with what is known before the body runs: a literal, `actor`, or a parameter no statement rebinds fixes a position, and a pattern with such positions reads only the rows equal there, all of them at once; a pattern that fixes nothing, or a key the body binds as it runs (a `bind`, a `let`, a `for`), reads the predicate whole;
+- on the interpreted route, also every claim of every predicate its invariants mention, and of the predicates its body admits the rows equal to the admitted claims;
+- on the compiled route, the invariants' cases through queries bounded to the cases the change touches.
 
-All predicates live in one `claims` table. PostgreSQL remembers reads row by row, then page by page, and past a threshold as the whole table; a sequential scan, which it chooses for a tiny or empty table or for a predicate that is most of the table, remembers the whole table at once. So, today:
+Both the keyed reads and the compiled checks seek through the indexes `provision indexes` builds, whichever route a programme runs on. Without them a keyed read falls back to scanning its predicate.
 
-- Two proposals that touch disjoint cases of the same predicates - two desks, two tenants, two periods - conflict whenever either reads a whole predicate the other writes. Splitting writers across values of one predicate does not reduce retries.
-- Proposals whose reads and writes fall in different predicates conflict less often: in the bench's synthetic workload, giving each of sixteen writers its own predicate cut retries from about 6 to about 2.5 per commit.
-- On a new, nearly empty ledger most proposals conflict, because the table is read whole.
+All predicates live in one `claims` table. PostgreSQL remembers reads row by row, then page by page, and past a threshold as the whole table; a sequential scan, which it chooses for a tiny or empty table or for a predicate that is most of the table, remembers the whole table at once. So:
 
-Reading only the cases a proposal touches, so that disjoint cases stop conflicting, is open work (#396). The measured numbers are in the embedder guide.
+- Two proposals that touch disjoint cases of the same predicates - two desks, two tenants, two periods - no longer conflict on what their bodies read, when those reads are keyed and the indexes are provisioned: a keyed read remembers only the index range it searched, which is also how the absence of a row is protected. They still conflict wherever either reads a predicate whole: an unkeyed pattern, a key the body binds as it runs, or, on the interpreted route, a predicate an invariant mentions.
+- Proposals whose reads and writes fall in different predicates conflict less often still.
+- On a new, nearly empty ledger most proposals conflict, because a tiny table is read whole however it is asked.
+
+Reading an invariant's predicates only for the cases the change touches on the interpreted route, and the tiny-table scan, are the open remainder of #396. The measured numbers are in the embedder guide and the bench's notes.
 
 ## Tracing proposals
 

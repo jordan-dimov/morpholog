@@ -13,9 +13,21 @@ use crate::{Deliverer, DeliveryOutcome, OutboxRow};
 /// The one reset for a disposable test database: every governed table, in
 /// one statement. The test suites and the bench's `--reset` all use it, so
 /// a governed table added to the schema must be added here.
-pub const RESET_SQL: &str = "TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit, \
-     morpholog.audit_checkpoints, morpholog.rejections, morpholog.index_requirement, \
-     morpholog.managed_index CASCADE";
+pub const RESET_SQL: &str = "DO $$
+DECLARE
+    ix text;
+BEGIN
+    TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit,
+        morpholog.audit_checkpoints, morpholog.rejections, morpholog.index_requirement,
+        morpholog.managed_index CASCADE;
+    -- The managed indexes go with their registry, so a test starts from the
+    -- indexes it provisions and none another test left behind.
+    FOR ix IN SELECT indexname FROM pg_indexes
+               WHERE schemaname = 'morpholog' AND indexname LIKE 'morpholog\\_ci\\_%'
+    LOOP
+        EXECUTE format('DROP INDEX morpholog.%I', ix);
+    END LOOP;
+END $$";
 
 /// Always returns [`DeliveryOutcome::Delivered`].
 #[derive(Debug, Default, Clone, Copy)]
