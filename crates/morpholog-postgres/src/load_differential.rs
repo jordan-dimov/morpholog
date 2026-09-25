@@ -14,7 +14,6 @@
 //! lock table is inspected while both are parked: a keyed read leaves no
 //! relation-level SIRead lock on the claims table.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use morpholog_core::{ClaimInstance, EvalValue, Transition};
@@ -51,8 +50,11 @@ async fn seed(pool: &PgPool, claims: &[ClaimInstance]) {
     }
 }
 
-fn sorted(claims: &[ClaimInstance]) -> BTreeSet<String> {
-    claims.iter().map(|c| format!("{c:?}")).collect()
+/// As a multiset, so a row fetched twice is a disagreement.
+fn sorted(claims: &[ClaimInstance]) -> Vec<String> {
+    let mut rows: Vec<String> = claims.iter().map(|c| format!("{c:?}")).collect();
+    rows.sort();
+    rows
 }
 
 #[tokio::test]
@@ -70,7 +72,12 @@ async fn the_loader_fetches_exactly_the_rows_the_plan_admits() {
                     args,
                     actor: test_actor(),
                 };
-                let full: Vec<ClaimInstance> = sample_state(&program, 2, salt).claims().to_vec();
+                // A generated state can repeat a claim; the table holds one
+                // row per claim, so the expectation must too.
+                let mut full: Vec<ClaimInstance> =
+                    sample_state(&program, 2, salt).claims().to_vec();
+                full.sort_by_key(|c| format!("{c:?}"));
+                full.dedup();
                 reset_db(&pool).await;
                 seed(&pool, &full).await;
                 for reads in [Reads::Body, Reads::BodyAndInvariants] {

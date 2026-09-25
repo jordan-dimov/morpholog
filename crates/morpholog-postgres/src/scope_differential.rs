@@ -98,6 +98,21 @@ transformation clear(k):
     admit Out(k)
 ",
     ),
+    // A parameter the bind does not mention stays bound after it: a
+    // match extends the bindings in force, so the read after the bind
+    // keys on the parameter still.
+    (
+        "parameter_survives_bind",
+        "program parameter_survives_bind
+predicate Owner(who: Subject)
+predicate Cleared(k: Subject)
+predicate Out(k: Subject)
+transformation clear(k):
+    bind Owner(who)
+    require Cleared(k)
+    admit Out(k)
+",
+    ),
     // One pattern fixes nothing, beside one that keys: the predicate is
     // whole.
     (
@@ -407,6 +422,10 @@ fn the_read_plan_keys_what_the_body_fixes_and_nothing_else() {
     assert_eq!(p.reads[&"Owner".into()], keyed(&[&[(0, param("k"))]]));
     assert_eq!(p.reads[&"Cleared".into()], ReadFilter::Whole);
     assert_eq!(p.admits[&"Out".into()], keyed(&[&[(0, param("k"))]]));
+
+    let p = plan("parameter_survives_bind", "clear");
+    assert_eq!(p.reads[&"Owner".into()], ReadFilter::Whole);
+    assert_eq!(p.reads[&"Cleared".into()], keyed(&[&[(0, param("k"))]]));
 
     let p = plan("keyed_beside_unkeyed", "take");
     assert_eq!(p.reads[&"Seat".into()], ReadFilter::Whole);
