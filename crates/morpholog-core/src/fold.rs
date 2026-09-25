@@ -9,7 +9,12 @@
 //! evaluation) keep their own match.
 //!
 //! The matches have no wildcard arm, so a new IR variant is one edit here
-//! and the consumers cannot drift apart.
+//! and the consumers cannot drift apart. A consumer that judges nodes
+//! still names every variant of the sort it judges, so the same variant
+//! asks it a semantic question too.
+//!
+//! Each node is visited before its children. Beyond that, the order in
+//! which nodes arrive is not part of the contract.
 
 use crate::ir::{Prop, Stmt, Term, ValueExpr, Var};
 
@@ -32,12 +37,12 @@ pub fn walk_stmt<'a>(stmt: &'a Stmt, visit: &mut dyn FnMut(Node<'a>)) {
     stmt_scoped(stmt, &mut |n, _| visit(n), &mut Vec::new());
 }
 
-/// Visit the proposition, then everything under it, in pre-order.
+/// Visit the proposition, then everything under it.
 pub fn walk_prop<'a>(prop: &'a Prop, visit: &mut dyn FnMut(Node<'a>)) {
     prop_scoped(prop, &mut |n, _| visit(n), &mut Vec::new());
 }
 
-/// Visit the value expression, then everything under it, in pre-order.
+/// Visit the value expression, then everything under it.
 pub fn walk_value<'a>(expr: &'a ValueExpr, visit: &mut dyn FnMut(Node<'a>)) {
     value_scoped(expr, &mut |n, _| visit(n), &mut Vec::new());
 }

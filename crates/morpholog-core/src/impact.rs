@@ -81,10 +81,28 @@ impl ImpactPlan {
                 | Prop::Xor(_, _)
                 | Prop::In(_, _),
             ) => conservative = true,
-            // A sum's target is visited next and judged as its own node.
-            Node::Value(ValueExpr::Term(_) | ValueExpr::Sum { .. }) => {}
-            Node::Value(_) => conservative = true,
-            Node::Prop(_) | Node::Stmt(_) | Node::Slot(_) | Node::Binder(_) => {}
+            Node::Prop(
+                Prop::And(_)
+                | Prop::Not(_)
+                | Prop::Implies { .. }
+                | Prop::Exists { .. }
+                | Prop::Forall { .. }
+                | Prop::Eq(_, _)
+                | Prop::Neq(_, _)
+                | Prop::Compare { .. },
+            ) => {}
+            Node::Value(ValueExpr::Term(_)) => {}
+            Node::Value(ValueExpr::Sum { value, .. }) => {
+                conservative |= !matches!(**value, ValueExpr::Term(_));
+            }
+            Node::Value(
+                ValueExpr::Arith { .. }
+                | ValueExpr::ValueOf { .. }
+                | ValueExpr::Extremum { .. }
+                | ValueExpr::Cond { .. }
+                | ValueExpr::Call { .. },
+            ) => conservative = true,
+            Node::Stmt(_) | Node::Slot(_) | Node::Binder(_) => {}
         });
         Self {
             occurrences,

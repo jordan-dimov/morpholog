@@ -50,6 +50,9 @@ pub(crate) fn prop_refs(
 /// against claims never loaded. A retraction reads its pattern's
 /// predicate: the pattern is matched against pre-state. An admission
 /// only writes.
+///
+/// Every variant is named, so a new one does not compile until it says
+/// whether it reads: a missed read would load too few claims.
 fn collect_refs(
     node: Node<'_>,
     definitions: DefinitionTable<'_>,
@@ -57,19 +60,54 @@ fn collect_refs(
     out: &mut BTreeSet<PredicateName>,
 ) {
     match node {
-        Node::Prop(Prop::Claim { predicate, .. })
-        | Node::Value(ValueExpr::ValueOf { predicate, .. })
-        | Node::Stmt(Stmt::Retract { predicate, .. }) => {
-            out.insert(predicate.clone());
-        }
-        Node::Prop(Prop::Defined { name, .. }) => {
-            if seen.insert(name.clone())
-                && let Some(def) = definitions.get(name)
-            {
-                prop_refs(&def.body, definitions, seen, out);
+        Node::Prop(prop) => match prop {
+            Prop::Claim { predicate, .. } => {
+                out.insert(predicate.clone());
             }
-        }
-        Node::Stmt(_) | Node::Prop(_) | Node::Value(_) | Node::Slot(_) | Node::Binder(_) => {}
+            Prop::Defined { name, .. } => {
+                if seen.insert(name.clone())
+                    && let Some(def) = definitions.get(name)
+                {
+                    prop_refs(&def.body, definitions, seen, out);
+                }
+            }
+            Prop::In(_, _)
+            | Prop::And(_)
+            | Prop::Or(_)
+            | Prop::Implies { .. }
+            | Prop::Xor(_, _)
+            | Prop::Not(_)
+            | Prop::Pre(_)
+            | Prop::Exists { .. }
+            | Prop::Forall { .. }
+            | Prop::Eq(_, _)
+            | Prop::Neq(_, _)
+            | Prop::Compare { .. } => {}
+        },
+        Node::Value(value) => match value {
+            ValueExpr::ValueOf { predicate, .. } => {
+                out.insert(predicate.clone());
+            }
+            ValueExpr::Term(_)
+            | ValueExpr::Arith { .. }
+            | ValueExpr::Sum { .. }
+            | ValueExpr::Extremum { .. }
+            | ValueExpr::Cond { .. }
+            | ValueExpr::Call { .. } => {}
+        },
+        Node::Stmt(stmt) => match stmt {
+            Stmt::Retract { predicate, .. } => {
+                out.insert(predicate.clone());
+            }
+            Stmt::Require { .. }
+            | Stmt::BindOne { .. }
+            | Stmt::Let { .. }
+            | Stmt::LetNewSubject { .. }
+            | Stmt::Assert(_)
+            | Stmt::For { .. }
+            | Stmt::Emit(_) => {}
+        },
+        Node::Slot(_) | Node::Binder(_) => {}
     }
 }
 
@@ -119,10 +157,23 @@ pub fn predicates_read_by_stmt(
 /// pre-state must include them for the effective delta to be exact: admitting
 /// a claim already present changes nothing, and only loaded state can tell.
 pub fn predicates_asserted_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
-    walk_stmt(stmt, &mut |n| {
-        if let Node::Stmt(Stmt::Assert(claim)) = n {
+    walk_stmt(stmt, &mut |n| match n {
+        Node::Stmt(Stmt::Assert(claim)) => {
             out.insert(claim.predicate.clone());
         }
+        Node::Stmt(
+            Stmt::Require { .. }
+            | Stmt::BindOne { .. }
+            | Stmt::Let { .. }
+            | Stmt::LetNewSubject { .. }
+            | Stmt::Retract { .. }
+            | Stmt::For { .. }
+            | Stmt::Emit(_),
+        )
+        | Node::Prop(_)
+        | Node::Value(_)
+        | Node::Slot(_)
+        | Node::Binder(_) => {}
     });
 }
 
@@ -173,7 +224,18 @@ pub fn predicates_written_by(
             Node::Stmt(Stmt::Retract { predicate, .. }) => {
                 out.insert(predicate.clone());
             }
-            Node::Stmt(_) | Node::Prop(_) | Node::Value(_) | Node::Slot(_) | Node::Binder(_) => {}
+            Node::Stmt(
+                Stmt::Require { .. }
+                | Stmt::BindOne { .. }
+                | Stmt::Let { .. }
+                | Stmt::LetNewSubject { .. }
+                | Stmt::For { .. }
+                | Stmt::Emit(_),
+            )
+            | Node::Prop(_)
+            | Node::Value(_)
+            | Node::Slot(_)
+            | Node::Binder(_) => {}
         });
     }
     out

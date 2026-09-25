@@ -1747,10 +1747,22 @@ fn value_mentions_actor(expr: &ValueExpr) -> bool {
 
 /// Every rule name a statement carries, including inside `for` bodies.
 fn collect_rule_names<'s>(stmt: &'s Stmt, out: &mut Vec<&'s RuleName>) {
-    fold::walk_stmt(stmt, &mut |n| {
-        if let fold::Node::Stmt(Stmt::Require { name, .. } | Stmt::BindOne { name, .. }) = n {
+    fold::walk_stmt(stmt, &mut |n| match n {
+        fold::Node::Stmt(Stmt::Require { name, .. } | Stmt::BindOne { name, .. }) => {
             out.extend(name.as_ref());
         }
+        fold::Node::Stmt(
+            Stmt::Let { .. }
+            | Stmt::LetNewSubject { .. }
+            | Stmt::Assert(_)
+            | Stmt::Retract { .. }
+            | Stmt::For { .. }
+            | Stmt::Emit(_),
+        )
+        | fold::Node::Prop(_)
+        | fold::Node::Value(_)
+        | fold::Node::Slot(_)
+        | fold::Node::Binder(_) => {}
     });
 }
 
