@@ -7,17 +7,26 @@
 //! candidates. Every probe rolls back (no audit, outbox or commit), so a
 //! state is built once and probed many times.
 //!
-//! Two contracts:
+//! Three contracts:
 //!
 //! - **Governed history** (states reached only through accepted
 //!   proposals): the kernel, the full SQL check and the case-bound SQL
 //!   check agree on the verdict. On rejection, the first failing rule's
 //!   name, version and witness variable set must match; witness values
 //!   may differ (a symmetric self-join can name a pair in either order).
-//! - **Dirty history** (rows the kernel never admitted): the kernel and
-//!   the case-bound check still agree. The full check asks the
+//! - **Dirty history of the declared kinds** (rows the kernel never
+//!   admitted, each value of the kind its position declares): the kernel
+//!   and the case-bound check still agree. The full check asks the
 //!   whole-state question, as `evaluate` does, and may refuse where they
 //!   admit.
+//! - **Kind drift** (a value of another kind at a position a compiled
+//!   check reads by its declared kind, from an older declaration or an
+//!   untyped caller): the kernel evaluates the value as it is; both
+//!   compiled checks fail closed with [`PgError::KindDrift`] naming the
+//!   position, never a silent verdict. Compiled equality is the declared
+//!   kind's, so it cannot reproduce the kernel's structural equality over
+//!   such values; a canonical equality key would, and is the planned
+//!   successor to this clause.
 //!
 //! A kernel error while checking invariants (a sum too large for any
 //! decimal) must come back from both compiled checks as the same typed
@@ -33,7 +42,9 @@ use morpholog_core::{
 use uuid::Uuid;
 
 use crate::attestation::Proposal;
-use crate::compiled::{CompiledInvariantSet, SqlViolation, Stage, compile_invariants, disable_jit};
+use crate::compiled::{
+    CompiledInvariantSet, DeltaStep, SqlViolation, Stage, compile_invariants, disable_jit,
+};
 use crate::error::{PgError, classify};
 use crate::program::PgProgram;
 use crate::propose::{Reads, compute_load_scope, load_state, write_claim_delta};
@@ -78,6 +89,14 @@ enum Probe {
     /// The kernel's invariant check errored and both stages reported
     /// the same typed error.
     KernelErrorAgreed,
+    /// Both stages refused to read a position whose stored value is not
+    /// of its declared kind; the kernel's verdict is whatever it was.
+    /// When several positions drift, which one each stage names depends
+    /// on what it read first.
+    FailedClosed {
+        full: PgError,
+        case_bound: PgError,
+    },
 }
 
 /// Stage once, judge three times, roll back. The caller applies the
@@ -140,8 +159,12 @@ async fn probe_raw(
         .map_err(ProbeFailure::Pg)?;
 
     disable_jit(&mut tx).await.map_err(ProbeFailure::Pg)?;
+    let steps = [DeltaStep {
+        transition_id,
+        asserted: asserted.clone(),
+    }];
     let stage1 = sql_set
-        .first_violation(&mut tx, Stage::Full, &asserted, &retracted)
+        .first_violation(&mut tx, Stage::Full, &asserted, &retracted, &steps)
         .await;
     let stage2 = sql_set
         .first_violation(
@@ -149,6 +172,7 @@ async fn probe_raw(
             Stage::CaseBound,
             &effective.asserted,
             &effective.retracted,
+            &steps,
         )
         .await;
 
@@ -156,6 +180,27 @@ async fn probe_raw(
     tx.rollback()
         .await
         .map_err(|e| ProbeFailure::Pg(classify(e)))?;
+
+    // Kind drift fails both stages closed, whatever the kernel said.
+    let drifted = |stage: &Result<Option<SqlViolation>, PgError>| {
+        matches!(stage, Err(PgError::KindDrift { .. }))
+    };
+    match (drifted(&stage1), drifted(&stage2)) {
+        (true, true) => {
+            let (Err(full), Err(case_bound)) = (stage1, stage2) else {
+                unreachable!("drift is an error")
+            };
+            return Ok(Probe::FailedClosed { full, case_bound });
+        }
+        (false, false) => {}
+        (full, case_bound) => {
+            return Err(ProbeFailure::Disagreement(disagreement(
+                "kind drift",
+                &format!("both stages fail closed or neither; full {full}"),
+                &format!("case-bound {case_bound}"),
+            )));
+        }
+    }
 
     let kernel = match kernel {
         Ok(outcome) => outcome,
@@ -338,6 +383,11 @@ async fn sweep(program: Program) -> usize {
                             }
                         }
                         Ok(Probe::KernelErrorAgreed) => agreed_errors += 1,
+                        Ok(Probe::FailedClosed { case_bound, .. }) => panic!(
+                            "{}::{name} with {:?}: fail-closed on declared-kind inputs: {case_bound}",
+                            compiled.program().name,
+                            case.args
+                        ),
                         Err(ProbeFailure::Kernel(e))
                             if case.permits_range_refusal && is_permitted_range_error(&e) =>
                         {
@@ -381,8 +431,12 @@ async fn sweep(program: Program) -> usize {
 /// comparison reaches its exact boundary over a two-step chain. Every kind
 /// with a jsonb equality representation (Bool, Date, Timestamp, Duration)
 /// has its own join fragment, probed on matching and mismatching sides.
-/// Probe count is not coverage: every `Ok(Repr)` arm in `repr_for` and
-/// every operator needs a fragment here that would catch it.
+/// Quantities join and order (each operator at its unit's zero, and two
+/// positions against each other), and timestamps order by every operator
+/// at equality, where the boundary arguments supply nanosecond
+/// neighbours and the calendar's ends. Probe count is not coverage: every
+/// `Equality` arm, every operand flavour and every operator needs a
+/// fragment here that would catch it.
 const HOSTILE: &[&str] = &[
     // Two lines of one figure under a cap and over a floor: on the
     // range-extreme argument the exact total leaves the decimal range,
@@ -491,6 +545,75 @@ transformation set_right_span(x, v):
 transformation set_left_span(x, v):
     admit LeftSpan(x, v)
 ",
+    "program quantity_join
+predicate Held(x: Subject, q: Decimal[MW])
+predicate Booked(x: Subject, q: Decimal[MW])
+predicate Standard(x: Subject)
+invariant booked_as_held:
+    Booked(x, q) implies Held(x, q)
+invariant standard_holds_five:
+    Standard(x) implies Held(x, 5 MW)
+transformation hold(x, q):
+    admit Held(x, q)
+transformation book(x, q):
+    admit Booked(x, q)
+transformation standardise(x):
+    admit Standard(x)
+",
+    "program quantity_edges
+predicate LeQ(x: Subject, q: Decimal[MW])
+predicate LtQ(x: Subject, q: Decimal[MW])
+predicate GeQ(x: Subject, q: Decimal[MW])
+predicate GtQ(x: Subject, q: Decimal[MW])
+predicate Band(x: Subject, lo: Decimal[MW], hi: Decimal[MW])
+invariant le_holds_at_zero:
+    LeQ(x, q) implies 0 MW <= q
+invariant lt_excludes_zero:
+    LtQ(x, q) implies 0 MW < q
+invariant ge_holds_at_zero:
+    GeQ(x, q) implies q >= 0 MW
+invariant gt_excludes_zero:
+    GtQ(x, q) implies q > 0 MW
+invariant band_is_ordered:
+    Band(x, lo, hi) implies lo <= hi
+transformation hold_le(x, q):
+    admit LeQ(x, q)
+transformation hold_lt(x, q):
+    admit LtQ(x, q)
+transformation hold_ge(x, q):
+    admit GeQ(x, q)
+transformation hold_gt(x, q):
+    admit GtQ(x, q)
+transformation band(x, lo, hi):
+    admit Band(x, lo, hi)
+",
+    "program timestamp_edges
+predicate AtOrBefore(x: Subject, s: Timestamp, e: Timestamp)
+predicate StrictlyBefore(x: Subject, s: Timestamp, e: Timestamp)
+predicate AtOrAfter(x: Subject, s: Timestamp, e: Timestamp)
+predicate StrictlyAfter(x: Subject, s: Timestamp, e: Timestamp)
+predicate Deadline(x: Subject, t: Timestamp)
+invariant at_or_before_holds_at_equality:
+    AtOrBefore(x, s, e) implies s at_or_before e
+invariant strictly_before_excludes_equality:
+    StrictlyBefore(x, s, e) implies s strictly_before e
+invariant at_or_after_holds_at_equality:
+    AtOrAfter(x, s, e) implies s at_or_after e
+invariant strictly_after_excludes_equality:
+    StrictlyAfter(x, s, e) implies s strictly_after e
+invariant deadline_is_after_noon:
+    Deadline(x, t) implies t strictly_after @2026-07-01T12:00:00Z
+transformation hold_at_or_before(x, s, e):
+    admit AtOrBefore(x, s, e)
+transformation hold_strictly_before(x, s, e):
+    admit StrictlyBefore(x, s, e)
+transformation hold_at_or_after(x, s, e):
+    admit AtOrAfter(x, s, e)
+transformation hold_strictly_after(x, s, e):
+    admit StrictlyAfter(x, s, e)
+transformation set_deadline(x, t):
+    admit Deadline(x, t)
+",
 ];
 
 #[tokio::test]
@@ -592,11 +715,289 @@ async fn an_overflow_that_compares_as_holding_is_the_kernels_error_on_both_stage
     .await;
     match probe {
         Ok(Probe::KernelErrorAgreed) => {}
+        Ok(Probe::FailedClosed { case_bound, .. }) => {
+            panic!("nothing drifts here, got {case_bound}")
+        }
         Ok(Probe::BodyRejected) => panic!("the body admits"),
         Ok(Probe::Observed(obs)) => panic!("the kernel must error, got {:?}", obs.kernel),
         Err(ProbeFailure::Disagreement(d)) => panic!("{d}"),
         Err(ProbeFailure::Kernel(e)) => panic!("body error {e:?}"),
         Err(ProbeFailure::Pg(e)) => panic!("pg error {e:?}"),
+    }
+}
+
+/// Two units the declaration never named, from an older declaration or an
+/// untyped caller, and a third arriving in the delta. The wildcard
+/// antecedent makes every admission check the whole rule, so the kernel
+/// meets all three rows and raises on the first in its order: the loaded
+/// rows, then the delta. The compiled check must name the same pair, which
+/// only its ordering keys can guarantee.
+#[tokio::test]
+async fn a_foreign_unit_is_the_kernels_error_naming_the_kernels_first_pair() {
+    let program = morpholog_surface::parse_program(
+        "program foreign_units
+predicate Enabled(flag: Subject)
+predicate Terms(x: Subject, q: Decimal[MW])
+invariant quantity_is_positive:
+    Enabled(_) and Terms(_, q) implies q > 0 MW
+transformation enable_and_hold(flag, x, q):
+    admit Enabled(flag)
+    admit Terms(x, q)
+",
+    )
+    .expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+    let compiled = CompiledProgram::new(program).expect("compiles");
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    for (x, unit) in [("a", "EUR"), ("b", "GBP")] {
+        sqlx::query(
+            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in) VALUES ('Terms', $1, $2)",
+        )
+        .bind(serde_json::json!([
+            {"type":"subject","value":x},
+            {"type":"quantity","value":{"amount":"5","unit":unit}}
+        ]))
+        .bind(Uuid::nil())
+        .execute(&pool)
+        .await
+        .expect("foreign-unit fixture insert");
+    }
+    let probe = probe_raw(
+        &pool,
+        &compiled,
+        &sql_set,
+        "enable_and_hold",
+        vec![
+            subj("f"),
+            subj("c"),
+            morpholog_test_support::qty("9", "USD"),
+        ],
+    )
+    .await;
+    match probe {
+        Ok(Probe::KernelErrorAgreed) => {}
+        Ok(Probe::FailedClosed { case_bound, .. }) => {
+            panic!("nothing drifts here, got {case_bound}")
+        }
+        Ok(Probe::BodyRejected) => panic!("the body admits"),
+        Ok(Probe::Observed(obs)) => panic!("the kernel must error, got {:?}", obs.kernel),
+        Err(ProbeFailure::Disagreement(d)) => panic!("{d}"),
+        Err(ProbeFailure::Kernel(e)) => panic!("body error {e:?}"),
+        Err(ProbeFailure::Pg(e)) => panic!("pg error {e:?}"),
+    }
+}
+
+/// One act admits another predicate's row with the same arguments as
+/// its own last admission. The error query places a row among its own
+/// predicate's admissions, so the first of the two foreign units the
+/// kernel meets, in statement order, is the one it names.
+#[tokio::test]
+async fn error_order_does_not_confuse_equal_arguments_from_different_predicates() {
+    let program = morpholog_surface::parse_program(
+        "program predicate_collision
+predicate Enabled(flag: Subject)
+predicate Noise(x: Subject, q: Decimal[MW])
+predicate Terms(x: Subject, q: Decimal[MW])
+invariant quantity_is_positive:
+    Enabled(_) and Terms(_, q) implies q > 0 MW
+transformation enable_and_hold(flag, x1, q1, x2, q2):
+    admit Enabled(flag)
+    admit Noise(x2, q2)
+    admit Terms(x1, q1)
+    admit Terms(x2, q2)
+",
+    )
+    .expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+    let compiled = CompiledProgram::new(program).expect("compiles");
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let probe = probe_raw(
+        &pool,
+        &compiled,
+        &sql_set,
+        "enable_and_hold",
+        vec![
+            subj("f"),
+            subj("b"),
+            morpholog_test_support::qty("7", "GBP"),
+            subj("a"),
+            morpholog_test_support::qty("5", "EUR"),
+        ],
+    )
+    .await;
+    match probe {
+        Ok(Probe::KernelErrorAgreed) => {}
+        Ok(Probe::FailedClosed { case_bound, .. }) => {
+            panic!("nothing drifts here, got {case_bound}")
+        }
+        Ok(Probe::BodyRejected) => panic!("the body admits"),
+        Ok(Probe::Observed(obs)) => panic!("the kernel must error, got {:?}", obs.kernel),
+        Err(ProbeFailure::Disagreement(d)) => panic!("{d}"),
+        Err(ProbeFailure::Kernel(e)) => panic!("body error {e:?}"),
+        Err(ProbeFailure::Pg(e)) => panic!("pg error {e:?}"),
+    }
+}
+
+/// A value admitted under an older shape, at a position now declared
+/// another kind. The kernel binds and compares the value it finds, so the
+/// mirrored row satisfies the rule; a compiled join reads the position by
+/// its declared kind and cannot, so both stages fail closed naming the
+/// position, for every kind the compiler reads. Attacker capability
+/// modelled: none; the row is history.
+#[tokio::test]
+async fn a_join_over_an_old_shape_value_fails_closed_naming_the_position() {
+    for (declared, declared_tag, stored, stored_tag) in [
+        (
+            "Decimal[MW]",
+            "quantity",
+            serde_json::json!({"type":"subject","value":"legacy"}),
+            "subject",
+        ),
+        (
+            "Decimal",
+            "decimal",
+            serde_json::json!({"type":"subject","value":"legacy"}),
+            "subject",
+        ),
+        (
+            "Subject",
+            "subject",
+            serde_json::json!({"type":"decimal","value":"1.0"}),
+            "decimal",
+        ),
+        (
+            "Date",
+            "date",
+            serde_json::json!({"type":"decimal","value":"1.0"}),
+            "decimal",
+        ),
+    ] {
+        let program = morpholog_surface::parse_program(&format!(
+            "program old_shape
+predicate Old(q: {declared})
+predicate Mirror(q: {declared})
+invariant mirrored:
+    Old(q) implies Mirror(q)
+transformation copy():
+    bind Old(q)
+    admit Mirror(q)
+"
+        ))
+        .expect("parses");
+        let validated = program.validated().expect("validates");
+        let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+        let compiled = CompiledProgram::new(program).expect("compiles");
+        let pool = test_pool().await;
+        reset_db(&pool).await;
+        sqlx::query(
+            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in) VALUES ('Old', $1, $2)",
+        )
+        .bind(serde_json::json!([stored]))
+        .bind(Uuid::nil())
+        .execute(&pool)
+        .await
+        .expect("old-shape fixture insert");
+        // The mirror row copies the drifted value, so the whole-state
+        // check may name either row; the case-bound check, the one
+        // production runs, refuses at the case value bound from `Old`.
+        match probe_raw(&pool, &compiled, &sql_set, "copy", vec![]).await {
+            Ok(Probe::FailedClosed {
+                full: PgError::KindDrift { .. },
+                case_bound:
+                    PgError::KindDrift {
+                        predicate,
+                        position,
+                        declared: d,
+                        stored: s,
+                    },
+            }) => {
+                assert_eq!(
+                    (predicate.as_str(), position, d.as_str(), s.as_str()),
+                    ("Old", 0, declared_tag, stored_tag),
+                    "{declared}"
+                );
+            }
+            other => panic!(
+                "{declared}: both stages fail closed, got {}",
+                describe(other)
+            ),
+        }
+    }
+}
+
+/// A subject whose text would parse as a timestamp, at a timestamp
+/// position, arriving in the proposal itself. The kernel refuses to order
+/// it; the compiled checks refuse to read it at all, on both stages: the
+/// whole-state check by the guard, the case-bound check before any query.
+#[tokio::test]
+async fn a_subject_that_reads_as_a_timestamp_fails_closed() {
+    let program = morpholog_surface::parse_program(
+        "program window
+predicate Window(x: Subject, s: Timestamp, e: Timestamp)
+invariant window_is_ordered:
+    Window(x, s, e) implies s strictly_before e
+transformation open(x, s, e):
+    admit Window(x, s, e)
+",
+    )
+    .expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+    let compiled = CompiledProgram::new(program).expect("compiles");
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let probe = probe_raw(
+        &pool,
+        &compiled,
+        &sql_set,
+        "open",
+        vec![
+            subj("w"),
+            subj("2026-01-01T00:00:00Z"),
+            morpholog_test_support::ts("2026-01-02T00:00:00Z"),
+        ],
+    )
+    .await;
+    match probe {
+        Ok(Probe::FailedClosed {
+            full: PgError::KindDrift { .. },
+            case_bound:
+                PgError::KindDrift {
+                    predicate,
+                    position,
+                    declared,
+                    stored,
+                },
+        }) => {
+            assert_eq!(
+                (
+                    predicate.as_str(),
+                    position,
+                    declared.as_str(),
+                    stored.as_str()
+                ),
+                ("Window", 1, "timestamp", "subject")
+            );
+        }
+        other => panic!("both stages fail closed, got {}", describe(other)),
+    }
+}
+
+fn describe(probe: Result<Probe, ProbeFailure>) -> String {
+    match probe {
+        Ok(Probe::BodyRejected) => "a body rejection".to_string(),
+        Ok(Probe::KernelErrorAgreed) => "an agreed kernel error".to_string(),
+        Ok(Probe::FailedClosed { full, case_bound }) => {
+            format!("fail-closed full {full:?}, case-bound {case_bound:?}")
+        }
+        Ok(Probe::Observed(obs)) => format!("an observed verdict {:?}", obs.kernel),
+        Err(ProbeFailure::Kernel(e)) => format!("kernel error {e:?}"),
+        Err(ProbeFailure::Pg(e)) => format!("pg error {e:?}"),
+        Err(ProbeFailure::Disagreement(d)) => d,
     }
 }
 
@@ -647,6 +1048,7 @@ async fn dirty_history_blocks_only_the_writes_that_touch_it() {
             match other {
                 Ok(Probe::BodyRejected) => "body rejection".to_string(),
                 Ok(Probe::KernelErrorAgreed) => "an agreed kernel error".to_string(),
+                Ok(Probe::FailedClosed { case_bound, .. }) => format!("fail-closed {case_bound:?}"),
                 Err(ProbeFailure::Kernel(e)) => format!("kernel error {e:?}"),
                 Err(ProbeFailure::Pg(e)) => format!("pg error {e:?}"),
                 Err(ProbeFailure::Disagreement(d)) => d,

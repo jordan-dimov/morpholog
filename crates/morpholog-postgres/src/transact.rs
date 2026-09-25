@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::PgPool;
 use crate::attestation::Proposal;
-use crate::compiled::{Stage, disable_jit};
+use crate::compiled::{DeltaStep, Stage, disable_jit};
 use crate::error::{PgError, classify_commit};
 use crate::program::{PgProgram, Route};
 use crate::propose::{
@@ -107,6 +107,9 @@ pub async fn propose_all_against_pg(
     let mut state = load_state(&mut tx, &scope).await?;
 
     let mut receipts = Vec::with_capacity(acts.len());
+    // Every act's admissions so far, so an error query orders the batch's
+    // rows as the kernel's candidate state holds them.
+    let mut steps: Vec<DeltaStep> = Vec::new();
     for (index, (transformation, transition)) in acts.iter().enumerate() {
         let row = index as u64 + 1;
         if index > 0 {
@@ -156,12 +159,17 @@ pub async fn propose_all_against_pg(
                         let effective =
                             write_claim_delta(&mut tx, transition_id, &asserted, &retracted)
                                 .await?;
+                        steps.push(DeltaStep {
+                            transition_id,
+                            asserted: asserted.clone(),
+                        });
                         if let Some(v) = set
                             .first_violation(
                                 &mut tx,
                                 Stage::CaseBound,
                                 &effective.asserted,
                                 &effective.retracted,
+                                &steps,
                             )
                             .await?
                         {

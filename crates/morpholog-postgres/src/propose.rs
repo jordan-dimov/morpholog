@@ -1,5 +1,5 @@
 use crate::attestation::{AuditAttestation, Proposal};
-use crate::compiled::{Stage, disable_jit};
+use crate::compiled::{DeltaStep, Stage, disable_jit};
 use crate::error::{PgError, classify, classify_checked_query, classify_commit};
 use crate::program::{PgProgram, Route};
 use crate::txn::{LoginRole, begin_authorised_proposal_tx};
@@ -288,12 +288,17 @@ pub(crate) async fn propose_against_pg_run(
                     let effective =
                         write_claim_delta(&mut tx, transition_id, &asserted, &retracted).await?;
                     disable_jit(&mut tx).await?;
+                    let steps = [DeltaStep {
+                        transition_id,
+                        asserted: asserted.clone(),
+                    }];
                     let violation = set
                         .first_violation(
                             &mut tx,
                             Stage::CaseBound,
                             &effective.asserted,
                             &effective.retracted,
+                            &steps,
                         )
                         .await?;
                     match violation {

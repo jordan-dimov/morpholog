@@ -50,6 +50,100 @@ CREATE FUNCTION claim_digest(args jsonb) RETURNS bytea
     LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
     RETURN sha256(convert_to(args::text, 'UTF8'));
 
+-- Nanoseconds since the Unix epoch of a stored timestamp argument, the
+-- coordinate the compiled checks order instants by. The stored text is
+-- jiff's (four-digit years, or signed six-digit ones outside 0000-9999;
+-- a fraction only when non-zero, trailing zeros trimmed), which neither
+-- sorts as text nor survives `timestamptz` (microseconds, 4713 BC floor),
+-- so the civil fields are converted by hand, in numeric. Takes the whole
+-- tagged value: another tag is NULL, so the check reports the kernel's
+-- kind error; a timestamp whose text is not the codec's is an error.
+CREATE FUNCTION timestamp_nanos(v jsonb) RETURNS numeric
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+DECLARE
+    m text[];
+    y numeric;
+    mo numeric;
+    d numeric;
+    era numeric;
+    yoe numeric;
+    doy numeric;
+    doe numeric;
+    days numeric;
+BEGIN
+    IF v ->> 'type' IS DISTINCT FROM 'timestamp' THEN
+        RETURN NULL;
+    END IF;
+    m := regexp_match(v ->> 'value', '^(-?[0-9]{4,6})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?Z$');
+    IF m IS NULL THEN
+        RAISE EXCEPTION 'not a stored timestamp: %', v ->> 'value';
+    END IF;
+    y := m[1]::numeric;
+    mo := m[2]::numeric;
+    d := m[3]::numeric;
+    -- The codec writes only instants jiff holds: years -9999 to 9999,
+    -- four digits inside 0000-9999 and signed six outside, real calendar
+    -- days, and a clock below 24:00:00.
+    IF y < -9999 OR y > 9999
+       OR m[1] !~ '^([0-9]{4}|-[0-9]{6})$' OR (m[1] ~ '^-' AND y = 0)
+       OR mo < 1 OR mo > 12 OR d < 1
+       OR d > (CASE mo
+                 WHEN 2 THEN (CASE WHEN y % 4 = 0 AND (y % 100 <> 0 OR y % 400 = 0) THEN 29 ELSE 28 END)
+                 WHEN 4 THEN 30 WHEN 6 THEN 30 WHEN 9 THEN 30 WHEN 11 THEN 30
+                 ELSE 31 END)
+       OR m[4]::numeric > 23 OR m[5]::numeric > 59 OR m[6]::numeric > 59
+    THEN
+        RAISE EXCEPTION 'not a stored timestamp: %', v ->> 'value';
+    END IF;
+    IF mo <= 2 THEN
+        y := y - 1;
+    END IF;
+    era := floor(y / 400);
+    yoe := y - era * 400;
+    doy := floor((153 * (mo + CASE WHEN mo > 2 THEN -3 ELSE 9 END) + 2) / 5) + d - 1;
+    doe := yoe * 365 + floor(yoe / 4) - floor(yoe / 100) + doy;
+    days := era * 146097 + doe - 719468;
+    RETURN (days * 86400 + m[4]::numeric * 3600 + m[5]::numeric * 60 + m[6]::numeric) * 1000000000
+        + rpad(coalesce(m[7], ''), 9, '0')::numeric;
+END
+$$;
+
+COMMENT ON FUNCTION timestamp_nanos(jsonb) IS 'morpholog timestamp coordinate v1';
+
+-- The compiled checks read a claim position by the kind the programme
+-- declares for it: a decimal as numeric, a quantity as amount and unit, a
+-- date as its tagged value. History admitted under an older declaration,
+-- or an untyped caller, can leave a value of another kind there, which
+-- that reading would compare wrongly or not at all. So every such read is
+-- guarded: the stored value must carry the declared kind, or the check
+-- fails closed with SQLSTATE MP001 and the position named, never a silent
+-- verdict. `predicate` is the row's own, so a row of another predicate
+-- passes whatever the planner's evaluation order; and the cost is the
+-- lowest there is, so the planner runs the guard before any cast of the
+-- same row, which would otherwise raise its own, unnamed error first.
+CREATE FUNCTION declared_kind(predicate text, declared_predicate text, v jsonb, kind text, pos integer) RETURNS boolean
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE COST 1
+AS $$
+DECLARE
+    stored text;
+BEGIN
+    IF predicate <> declared_predicate THEN
+        RETURN true;
+    END IF;
+    stored := coalesce(v ->> 'type', jsonb_typeof(v));
+    IF stored = kind THEN
+        RETURN true;
+    END IF;
+    RAISE EXCEPTION USING
+        ERRCODE = 'MP001',
+        MESSAGE = format('%s[%s] holds a %s where the programme declares %s', declared_predicate, pos, stored, kind),
+        DETAIL = json_build_object('predicate', declared_predicate, 'position', pos, 'declared', kind, 'stored', stored)::text;
+END
+$$;
+
+COMMENT ON FUNCTION declared_kind(text, text, jsonb, text, integer) IS 'morpholog declared kind guard v1';
+
 -- Admitted state. Each row is one admitted claim.
 -- The primary key enforces set semantics: assert C where C is
 -- already present is a no-op; retract C where C is missing fails.

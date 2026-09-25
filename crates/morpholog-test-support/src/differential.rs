@@ -292,6 +292,8 @@ fn boundary_concrete(kind: &PredicateArgKind, _name: &str) -> Vec<Witness> {
             vec![
                 ordinary(crate::qty("0", unit.as_str())),
                 ordinary(crate::qty("-1", unit.as_str())),
+                // The baseline at another scale: equal in the kernel.
+                ordinary(crate::qty("1.0", unit.as_str())),
                 Witness {
                     value: crate::qty(DECIMAL_MAX, unit.as_str()),
                     extreme: true,
@@ -311,9 +313,23 @@ fn boundary_concrete(kind: &PredicateArgKind, _name: &str) -> Vec<Witness> {
                 extreme: true,
             },
         ],
-        // No natural boundary here, but a second value lets two parameters of this kind
-        // disagree, so equality joins see the non-matching side too.
-        PredicateArgKind::Timestamp => vec![ordinary(crate::ts("2026-07-02T09:30:00Z"))],
+        // A second value lets two parameters of this kind disagree; the baseline's
+        // nanosecond neighbours order only at the kernel's precision; the calendar's
+        // ends and year zero probe the text forms the codec trims and signs.
+        PredicateArgKind::Timestamp => vec![
+            ordinary(crate::ts("2026-07-02T09:30:00Z")),
+            ordinary(crate::ts("2026-07-01T12:00:00.000000001Z")),
+            ordinary(crate::ts("2026-07-01T11:59:59.999999999Z")),
+            ordinary(crate::ts("0000-01-01T00:00:00Z")),
+            Witness {
+                value: crate::ts("-009999-01-02T01:59:59Z"),
+                extreme: true,
+            },
+            Witness {
+                value: crate::ts("9999-12-30T22:00:00.999999999Z"),
+                extreme: true,
+            },
+        ],
         PredicateArgKind::Duration => vec![ordinary(crate::dur("PT2H30M"))],
         // No parameter can have this kind.
         PredicateArgKind::CalendarSpan => vec![],

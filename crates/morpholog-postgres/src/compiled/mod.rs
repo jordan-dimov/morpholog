@@ -12,7 +12,9 @@
 //! always means a valid invariant outside the fragment, never a validation
 //! error.
 //!
-//! Each declared kind has one equality representation, with its reason:
+//! Each declared kind has one equality representation ([`Equality`]),
+//! with its reason, and each equality has one seekable expression
+//! ([`Representation`]) an index can be built over:
 //!
 //! - `Decimal`: `(arguments -> N ->> 'value')::numeric`. The kernel compares
 //!   decimals scale-insensitively while the stored string preserves scale
@@ -25,12 +27,26 @@
 //!   `SignedDuration`) whose serde output is canonical - two kernel-equal
 //!   values re-serialise to the same tagged JSON - and every stored claim
 //!   passed through that serialisation.
-//! - `Quantity` (decimal-string amount), `Collection` (may hold decimals),
-//!   `Any` (may hold anything): no equality representation is proved, so a
-//!   variable join or filter on such a position refuses by kind.
+//! - `Quantity`: the amount as `numeric` (scale-insensitive, like a
+//!   decimal) and the unit as text; both must agree. The seek is the
+//!   amount alone, since a record has no btree ordering, and the unit
+//!   stays a residual condition.
+//! - `Collection` (may hold decimals), `Any` (may hold anything): no
+//!   equality representation is proved, so a variable join or filter on
+//!   such a position refuses by kind.
 //!
-//! The kernel stays the executable spec; `compiled_differential` proves
-//! the compiled checks agree with it.
+//! Ordered comparisons run over numbers: a decimal or a quantity's amount
+//! as `numeric`, a timestamp as `morpholog.timestamp_nanos` (nanoseconds
+//! since the epoch, the kernel's own precision). Where the kernel can
+//! raise while comparing - two quantities of different units, or a stored
+//! value that is not of the declared kind, which history admitted under an
+//! older declaration can hold - the SQL carries that as data, the way a
+//! sum's range test does: the violation query returns such a row, and a
+//! second query then names the first erroring binding in the kernel's own
+//! order (state as loaded, the transition's admissions at the tail) with
+//! its operands, so the runner reports the kernel's exact error. An
+//! error-bearing comparison must therefore close its scope, as a sum
+//! comparison must.
 //!
 //! Witness contract: rule name, version and the witness VARIABLE SET must
 //! match the kernel. Witness values may differ: a symmetric self-join can
@@ -40,11 +56,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use morpholog_core::{
-    ClaimInstance, EvalError, EvalValue, Impact, ImpactPlan, Invariant, InvariantName,
+    ClaimInstance, CompareOp, EvalError, EvalValue, Impact, ImpactPlan, Invariant, InvariantName,
     OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Prop, RejectionReason, SumSeed,
-    Term, ValidatedProgram, Value, ValueExpr, Var, WitnessBinding,
+    Term, ValidatedProgram, Value, ValueExpr, Var, WitnessBinding, literal_value,
+    ordered_compare_error,
 };
 use sqlx::{Postgres, Row, Transaction};
+use uuid::Uuid;
 
 use crate::error::{PgError, classify};
 use crate::sql_quote::{quote_ident, quote_literal};
@@ -67,6 +85,9 @@ pub enum CompileReason {
     /// A `sum` outside the compiled shape (target must be a bound decimal
     /// variable or a decimal literal, body must bind claims, seed decimal).
     SumShape { detail: &'static str },
+    /// A quantity or timestamp ordering outside the compiled shape: it can
+    /// raise, so it must close its scope, like a sum comparison.
+    ComparisonShape { detail: &'static str },
     /// A shape a validated programme cannot exhibit (defensive: reachable
     /// only through IR that skipped `Program::validated`).
     UnvalidatedShape { detail: String },
@@ -93,6 +114,9 @@ impl std::fmt::Display for CompileReason {
             }
             CompileReason::SumShape { detail } => {
                 write!(f, "sum outside the compiled fragment: {detail}")
+            }
+            CompileReason::ComparisonShape { detail } => {
+                write!(f, "comparison outside the compiled fragment: {detail}")
             }
             CompileReason::UnvalidatedShape { detail } => {
                 write!(f, "shape a validated programme cannot exhibit: {detail}")
@@ -179,18 +203,19 @@ impl CompiledInvariantSet {
     /// commit path and the differential both use it, so the differential
     /// tests the code that admits transitions.
     ///
-    /// Two range checks, both needed. The `range_error` column covers
-    /// acceptance: an oversized total that compares as holding yields no
-    /// violation row, so only the flag can report it without a second
-    /// query on every acceptance. The separate range query covers refusal:
-    /// the violation query stops at its first row, and a range error must
-    /// win over a violation that merely sorts earlier.
+    /// Where the kernel could raise instead of deciding (a sum past the
+    /// decimal range, quantities of two units), the violation query returns
+    /// the row and a second query names the first erroring binding in the
+    /// kernel's order: state as loaded, then each transition's admissions
+    /// in statement order, which `steps` supplies. That error wins over any
+    /// violation, as it does in the kernel.
     pub(crate) async fn first_violation(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         stage: Stage,
         asserted: &[ClaimInstance],
         retracted: &[ClaimInstance],
+        steps: &[DeltaStep],
     ) -> Result<Option<SqlViolation>, PgError> {
         for inv in &self.invariants {
             let case_filter = match stage {
@@ -199,6 +224,7 @@ impl CompiledInvariantSet {
                     CaseFilter::Untouched => continue,
                     CaseFilter::Bounded(filter) => Some(filter),
                     CaseFilter::Unbounded => None,
+                    CaseFilter::Drift(drift) => return Err(drift),
                 },
             };
             let sql = inv.violation_sql(case_filter.as_deref());
@@ -209,31 +235,81 @@ impl CompiledInvariantSet {
                 .fetch_optional(&mut **tx)
                 .await
                 .map_err(classify)?;
-            if let Some(row) = row {
-                let range_error: bool = row.try_get("range_error").map_err(|e| {
-                    PgError::InvalidState(format!("range_error column missing: {e}"))
-                })?;
-                if range_error {
-                    return Err(PgError::Kernel(EvalError::sum_out_of_decimal_range()));
+            let Some(row) = row else {
+                continue;
+            };
+            if let Some(error_sql) = inv.error_sql(case_filter.as_deref(), steps)? {
+                let erroring = sqlx::query(sqlx::AssertSqlSafe(error_sql))
+                    .fetch_optional(&mut **tx)
+                    .await
+                    .map_err(classify)?;
+                if let Some(erroring) = erroring {
+                    return Err(PgError::Kernel(decode_error(&erroring)?));
                 }
-                if let Some(range_sql) = inv.range_sql(case_filter.as_deref()) {
-                    let any = sqlx::query(sqlx::AssertSqlSafe(range_sql))
-                        .fetch_optional(&mut **tx)
-                        .await
-                        .map_err(classify)?;
-                    if any.is_some() {
-                        return Err(PgError::Kernel(EvalError::sum_out_of_decimal_range()));
-                    }
-                }
-                return Ok(Some(SqlViolation {
-                    name: inv.name.clone(),
-                    version: inv.version,
-                    witness: decode_witness(inv, &row)?,
-                }));
             }
+            return Ok(Some(SqlViolation {
+                name: inv.name.clone(),
+                version: inv.version,
+                witness: decode_witness(inv, &row)?,
+            }));
         }
         Ok(None)
     }
+}
+
+/// One transition's admissions, in statement order. The error query
+/// orders a transition's rows by it, after every row loaded before the
+/// transition, as the kernel's candidate state does.
+#[derive(Debug, Clone)]
+pub(crate) struct DeltaStep {
+    pub(crate) transition_id: Uuid,
+    pub(crate) asserted: Vec<ClaimInstance>,
+}
+
+/// The ordering keys for one claim alias: which step admitted the row
+/// (loaded rows first), its place among that step's admissions of the
+/// alias's predicate, then the loaded order. The place is looked up by
+/// arguments alone, so only the same predicate's admissions are listed:
+/// another predicate can admit the same arguments in the same step.
+fn order_keys(
+    alias: &str,
+    predicate: &PredicateName,
+    steps: &[DeltaStep],
+) -> Result<String, PgError> {
+    if steps.is_empty() {
+        return Ok(format!("{alias}.arguments_hash"));
+    }
+    let mut step_arms = String::new();
+    let mut place_arms = String::new();
+    for (i, step) in steps.iter().enumerate() {
+        let id = quote_literal(&step.transition_id.to_string());
+        let _ = write!(step_arms, " WHEN {id} THEN {}", i + 1);
+        let admitted = step
+            .asserted
+            .iter()
+            .filter(|c| c.predicate == *predicate)
+            .map(|c| {
+                Ok(format!(
+                    "{}::jsonb",
+                    quote_literal(&serde_json::to_string(&c.args)?)
+                ))
+            })
+            .collect::<Result<Vec<_>, PgError>>()?;
+        if admitted.is_empty() {
+            continue;
+        }
+        let _ = write!(
+            place_arms,
+            " WHEN {id} THEN COALESCE(array_position(ARRAY[{}], {alias}.arguments), 0)",
+            admitted.join(", ")
+        );
+    }
+    let mut keys = vec![format!("CASE {alias}.asserted_in{step_arms} ELSE 0 END")];
+    if !place_arms.is_empty() {
+        keys.push(format!("CASE {alias}.asserted_in{place_arms} ELSE 0 END"));
+    }
+    keys.push(format!("{alias}.arguments_hash"));
+    Ok(keys.join(", "))
 }
 
 /// Decode a violation row's witness columns. Each is the `::text` of the
@@ -257,6 +333,44 @@ fn decode_witness(
         });
     }
     Ok(witness)
+}
+
+/// The kernel's error for the first erroring binding: a sum's range, or
+/// the kernel's own verdict on the two operands it could not order.
+fn decode_error(row: &sqlx::postgres::PgRow) -> Result<EvalError, PgError> {
+    let column = |name: &str| -> Result<String, PgError> {
+        row.try_get::<Option<String>, _>(name)
+            .map_err(|e| PgError::InvalidState(format!("error column {name} missing: {e}")))?
+            .ok_or_else(|| PgError::InvalidState(format!("error column {name} is null")))
+    };
+    match column("kind")?.as_str() {
+        "range" => Ok(EvalError::sum_out_of_decimal_range()),
+        "compare" => {
+            let domain = match column("domain")?.as_str() {
+                "decimal" => OrderedDomain::Decimal,
+                "timestamp" => OrderedDomain::Timestamp,
+                other => {
+                    return Err(PgError::InvalidState(format!(
+                        "error domain {other} is not one the compiler renders"
+                    )));
+                }
+            };
+            let operand = |name: &str| -> Result<EvalValue, PgError> {
+                serde_json::from_str(&column(name)?).map_err(|e| {
+                    PgError::InvalidState(format!("error operand {name} undecodable: {e}"))
+                })
+            };
+            let (left, right) = (operand("left")?, operand("right")?);
+            ordered_compare_error(domain, &left, &right).ok_or_else(|| {
+                PgError::InvalidState(format!(
+                    "the compiled check reported an error the kernel does not raise for {left:?} vs {right:?}"
+                ))
+            })
+        }
+        other => Err(PgError::InvalidState(format!(
+            "error kind {other} is not one the compiler renders"
+        ))),
+    }
 }
 
 /// One index the compiled SQL can seek on: a partial expression index over
@@ -341,7 +455,7 @@ impl IndexSpec {
 }
 
 /// How much of a compiled invariant a transition's delta touches.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum CaseFilter {
     /// Delta disjoint from the invariant's occurrences: skip it entirely.
     Untouched,
@@ -350,6 +464,9 @@ pub(crate) enum CaseFilter {
     Bounded(String),
     /// Touched, but not boundable to antecedent columns: run the full check.
     Unbounded,
+    /// A touched case's value is not of the kind its position declares,
+    /// so no compiled reading of that position is sound.
+    Drift(PgError),
 }
 
 #[derive(Debug, Clone)]
@@ -373,16 +490,25 @@ pub(crate) struct CompiledInvariant {
     case_cols: BTreeMap<Var, ColRef>,
     sql_select_from_where: String,
     sql_order_limit: String,
-    /// Whether any row in scope has an unrepresentable sum. Asked only
-    /// after a violation was found, since the violation query stops at its
-    /// first row and a range error must win over a violation that sorts
+    /// The first binding in scope the kernel would raise on, asked only
+    /// after a violation row was found: the violation query stops at its
+    /// first row, and an error must win over a violation that sorts
     /// earlier. Has no `LIMIT`, so a case filter can bound it like the
-    /// violation query. `None` when there is no sum, or the violation query
-    /// already covers the whole scope.
-    sql_range: Option<String>,
+    /// violation query. `None` when nothing in the body can raise.
+    error: Option<ErrorQuery>,
     /// The indexes this invariant's SQL can seek on, in specification
     /// order.
     pub(crate) required_indexes: Vec<IndexSpec>,
+}
+
+/// The error query without its order: the order depends on the
+/// transitions in flight, so the runner renders it.
+#[derive(Debug)]
+struct ErrorQuery {
+    select_from_where: String,
+    /// The claim aliases of the scope with their predicates, in the
+    /// kernel's nesting order.
+    aliases: Vec<(String, PredicateName)>,
 }
 
 impl CompiledInvariant {
@@ -404,16 +530,30 @@ impl CompiledInvariant {
         sql
     }
 
-    /// The range query over the same obligation as the violation query:
-    /// the whole scope, or the touched cases.
-    pub(crate) fn range_sql(&self, case_filter: Option<&str>) -> Option<String> {
-        let base = self.sql_range.as_ref()?;
-        let mut sql = base.clone();
+    /// The error query over the same obligation as the violation query,
+    /// ordered as the kernel evaluates: rows loaded before the
+    /// transitions, then each step's admissions in statement order, alias
+    /// by alias in the scope's nesting order.
+    pub(crate) fn error_sql(
+        &self,
+        case_filter: Option<&str>,
+        steps: &[DeltaStep],
+    ) -> Result<Option<String>, PgError> {
+        let Some(query) = &self.error else {
+            return Ok(None);
+        };
+        let mut sql = query.select_from_where.clone();
         if let Some(filter) = case_filter {
             let _ = write!(sql, "\n  AND ({filter})");
         }
-        sql.push_str("\nLIMIT 1");
-        Some(sql)
+        let keys = query
+            .aliases
+            .iter()
+            .map(|(alias, predicate)| order_keys(alias, predicate, steps))
+            .collect::<Result<Vec<_>, _>>()?
+            .join(", ");
+        let _ = write!(sql, "\nORDER BY {keys}\nLIMIT 1");
+        Ok(Some(sql))
     }
 
     /// Bound the check to the cases a delta could have changed: core
@@ -437,8 +577,9 @@ impl CompiledInvariant {
                     return CaseFilter::Unbounded;
                 };
                 match const_eq(col, ev) {
-                    Some(sql) => parts.push(sql),
-                    None => return CaseFilter::Unbounded,
+                    ConstEq::Sql(sql) => parts.push(sql),
+                    ConstEq::Widen => return CaseFilter::Unbounded,
+                    ConstEq::Drift(drift) => return CaseFilter::Drift(drift),
                 }
             }
             disjuncts.insert(parts.join(" AND "));
@@ -513,24 +654,46 @@ struct RenderedSum {
     range_error: String,
 }
 
-/// A scope's rendering. `where_` holds the conjuncts before any sum
-/// comparison; `tail` is that comparison (the scope's last conjunct), with
-/// its sums in `laterals` and their range tests in `range_errors`. The tail
-/// is kept apart so a range error counts only where the kernel would
-/// evaluate the sum: past the prefix, and then ahead of the comparison.
+/// A place the kernel could raise, as data: the condition on a row of the
+/// scope, and what to report when it is the first such row.
+#[derive(Debug, Clone)]
+struct RenderedError {
+    condition: String,
+    report: ErrorReport,
+}
+
+#[derive(Debug, Clone)]
+enum ErrorReport {
+    /// A sum's total no decimal can hold.
+    SumRange,
+    /// Two operands the kernel cannot order: the tagged values, as jsonb
+    /// expressions, for the kernel to judge.
+    Compare {
+        domain: OrderedDomain,
+        left: String,
+        right: String,
+    },
+}
+
+/// A scope's rendering. `where_` holds the conjuncts before any
+/// error-bearing comparison; `tail` is that comparison (the scope's last
+/// conjunct), with its sums in `laterals` and its ways of raising in
+/// `errors`. The tail is kept apart so an error counts only where the
+/// kernel would evaluate the comparison: past the prefix, and then ahead
+/// of the comparison's own result.
 #[derive(Default)]
 struct Rendered {
-    from: Vec<(String, String)>, // (alias, from item)
+    from: Vec<(String, PredicateName, String)>, // (alias, predicate, from item)
     laterals: Vec<String>,
     where_: Vec<String>,
     tail: Option<String>,
-    range_errors: Vec<String>,
+    errors: Vec<RenderedError>,
     env: Env,
 }
 
 impl Rendered {
-    fn has_sum(&self) -> bool {
-        !self.range_errors.is_empty()
+    fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
     }
 
     /// The prefix conjuncts, or `true` when there are none.
@@ -542,13 +705,15 @@ impl Rendered {
         }
     }
 
-    /// Any of this scope's sums unrepresentable, or `false`.
-    fn range_error(&self) -> String {
-        if self.range_errors.is_empty() {
-            "false".to_string()
-        } else {
-            format!("({})", self.range_errors.join(" OR "))
-        }
+    /// Any of this scope's ways of raising, or `false`.
+    fn error_any(&self) -> String {
+        or_all(
+            &self
+                .errors
+                .iter()
+                .map(|e| e.condition.clone())
+                .collect::<Vec<_>>(),
+        )
     }
 
     fn conjunction(&self) -> String {
@@ -561,7 +726,8 @@ impl Rendered {
     }
 
     /// `EXISTS`-shaped rendering of this match, usable inside a WHERE.
-    /// Never reached with a sum in scope: those shapes are refused first.
+    /// Never reached with an error-bearing tail in scope: those shapes
+    /// are refused first.
     fn exists_sql(&self) -> String {
         if self.from.is_empty() && self.laterals.is_empty() {
             format!("({})", self.conjunction())
@@ -572,6 +738,19 @@ impl Rendered {
                 self.conjunction()
             )
         }
+    }
+}
+
+/// The typed refusal for an error-bearing tail where the fragment has no
+/// place for one: a sum's, unless a comparison itself can raise.
+fn shape_refusal(r: &Rendered, sum: &'static str, comparison: &'static str) -> CompileReason {
+    if r.errors
+        .iter()
+        .any(|e| matches!(e.report, ErrorReport::Compare { .. }))
+    {
+        CompileReason::ComparisonShape { detail: comparison }
+    } else {
+        CompileReason::SumShape { detail: sum }
     }
 }
 
@@ -632,7 +811,7 @@ fn compile_invariant(
         pending_sums: Vec::new(),
     };
 
-    let (select_from_where, order_limit, sql_range, case_cols) = match &inv.body {
+    let (select_from_where, order_limit, error, case_cols) = match &inv.body {
         Prop::Implies { left, right } => compile_denial(left, right, &mut ctx)?,
         Prop::Forall {
             binding: _,
@@ -647,11 +826,11 @@ fn compile_invariant(
             if r.from.is_empty() {
                 generic_denial(&inv.body, &mut ctx)?
             } else {
-                // Violated iff the inner matches: past the prefix, a
-                // range error or a holding tail.
+                // Violated iff the inner matches: past the prefix, an
+                // error or a holding tail.
                 let (select, order) = witness_select_order(&r);
                 let violated = or_all(&[
-                    r.range_error(),
+                    r.error_any(),
                     r.tail.clone().unwrap_or_else(|| "true".to_string()),
                 ]);
                 let mut where_ = r.where_.clone();
@@ -660,13 +839,12 @@ fn compile_invariant(
                 }
                 (
                     format!(
-                        "SELECT {select},\n       {} AS \"range_error\"\nFROM {}\nWHERE {}",
-                        r.range_error(),
+                        "SELECT {select}\nFROM {}\nWHERE {}",
                         from_list(&r),
                         where_.join("\n  AND ")
                     ),
                     format!("\nORDER BY {order}\nLIMIT 1"),
-                    range_query(&r),
+                    error_query(&r),
                     r.env,
                 )
             }
@@ -687,7 +865,7 @@ fn compile_invariant(
         case_cols,
         sql_select_from_where: select_from_where,
         sql_order_limit: order_limit,
-        sql_range,
+        error,
         required_indexes: ctx
             .required
             .iter()
@@ -698,7 +876,7 @@ fn compile_invariant(
 
 /// The dominant shape: `antecedent implies consequent`. Violation = an
 /// antecedent match with no consequent match.
-type Denial = (String, String, Option<String>, Env);
+type Denial = (String, String, Option<ErrorQuery>, Env);
 
 fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReason> {
     let ant = render_prop(left, Env::new(), ctx)?;
@@ -708,22 +886,27 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
         return generic_denial_implies(left, right, ctx);
     }
     let cons = render_prop(right, ant.env.clone(), ctx)?;
-    if cons.has_sum() && !cons.from.is_empty() {
-        return Err(CompileReason::SumShape {
-            detail: "sum beside claim patterns in a consequent",
+    if cons.has_errors() && !cons.from.is_empty() {
+        return Err(shape_refusal(
+            &cons,
+            "sum beside claim patterns in a consequent",
+            "a quantity or timestamp ordering beside claim patterns in a consequent",
+        ));
+    }
+    // Past the antecedent's prefix, a violation is the antecedent's error,
+    // or its tail holding and the consequent failing. A consequent's error
+    // counts only once the antecedent's tail and the consequent's prefix
+    // hold; a failing prefix is an ordinary violation that never reaches
+    // the comparison.
+    let ant_tail = ant.tail.clone().unwrap_or_else(|| "true".to_string());
+    let mut errors = ant.errors.clone();
+    for e in &cons.errors {
+        errors.push(RenderedError {
+            condition: and_all(&[ant_tail.clone(), cons.prefix(), e.condition.clone()]),
+            report: e.report.clone(),
         });
     }
-    // Past the antecedent's prefix, a violation is the antecedent's range
-    // error, or its tail holding and the consequent failing. A consequent's
-    // range error counts only once its prefix holds; a failing prefix is an
-    // ordinary violation that never reaches the sum.
-    let ant_tail = ant.tail.clone().unwrap_or_else(|| "true".to_string());
-    let cons_range = if cons.has_sum() {
-        and_all(&[cons.prefix(), cons.range_error()])
-    } else {
-        "false".to_string()
-    };
-    let not_cons = if cons.has_sum() {
+    let not_cons = if cons.has_errors() {
         format!(
             "NOT {}",
             and_all(&[
@@ -736,65 +919,97 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
     } else {
         format!("NOT {}", cons.exists_sql())
     };
-    let range_error = or_all(&[ant.range_error(), and_all(&[ant_tail.clone(), cons_range])]);
-    let (select, order) = witness_select_order(&ant);
-    let mut where_ = ant.where_.clone();
-    where_.push(or_all(&[
-        range_error.clone(),
-        and_all(&[ant_tail, not_cons]),
-    ]));
     let mut scope = Rendered {
         from: ant.from.clone(),
         laterals: ant.laterals.clone(),
         where_: ant.where_.clone(),
-        range_errors: Vec::new(),
+        errors,
         ..Rendered::default()
     };
     scope.laterals.extend(cons.laterals.iter().cloned());
-    if range_error != "false" {
-        scope.range_errors.push(range_error.clone());
-    }
+    let (select, order) = witness_select_order(&ant);
+    let mut where_ = ant.where_.clone();
+    where_.push(or_all(&[scope.error_any(), and_all(&[ant_tail, not_cons])]));
     Ok((
         format!(
-            "SELECT {select},\n       {range_error} AS \"range_error\"\nFROM {}\nWHERE {}",
+            "SELECT {select}\nFROM {}\nWHERE {}",
             from_list(&scope),
             where_.join("\n  AND ")
         ),
         format!("\nORDER BY {order}\nLIMIT 1"),
-        range_query(&scope),
+        error_query(&scope),
         ant.env,
     ))
 }
 
-/// Whether any row of the scope has a range error, over the whole
-/// scope and in no order. `None` when nothing in scope can have one.
-fn range_query(scope: &Rendered) -> Option<String> {
-    if !scope.has_sum() {
+/// The rows of the scope the kernel would raise on, with what to report
+/// for the first: which way it raised, and for a comparison, its domain
+/// and operands. `None` when nothing in scope can raise.
+fn error_query(scope: &Rendered) -> Option<ErrorQuery> {
+    if !scope.has_errors() {
         return None;
     }
-    Some(format!(
-        "SELECT 1\nFROM {}\nWHERE {}",
-        from_list(scope),
-        and_all(&[scope.prefix(), scope.range_error()])
-    ))
+    let case = |pick: &dyn Fn(&RenderedError) -> Option<String>| {
+        let arms: Vec<String> = scope
+            .errors
+            .iter()
+            .filter_map(|e| pick(e).map(|v| format!(" WHEN {} THEN {v}", e.condition)))
+            .collect();
+        if arms.is_empty() {
+            "NULL::text".to_string()
+        } else {
+            format!("CASE{} END", arms.concat())
+        }
+    };
+    let kind = case(&|e| {
+        Some(match e.report {
+            ErrorReport::SumRange => "'range'".to_string(),
+            ErrorReport::Compare { .. } => "'compare'".to_string(),
+        })
+    });
+    let domain = case(&|e| match &e.report {
+        ErrorReport::SumRange => None,
+        ErrorReport::Compare { domain, .. } => Some(match domain {
+            OrderedDomain::Decimal => "'decimal'".to_string(),
+            OrderedDomain::Timestamp => "'timestamp'".to_string(),
+            OrderedDomain::Date | OrderedDomain::Duration => unreachable!("never rendered"),
+        }),
+    });
+    let left = case(&|e| match &e.report {
+        ErrorReport::SumRange => None,
+        ErrorReport::Compare { left, .. } => Some(format!("({left})::text")),
+    });
+    let right = case(&|e| match &e.report {
+        ErrorReport::SumRange => None,
+        ErrorReport::Compare { right, .. } => Some(format!("({right})::text")),
+    });
+    Some(ErrorQuery {
+        select_from_where: format!(
+            "SELECT {kind} AS \"kind\",\n       {domain} AS \"domain\",\n       {left} AS \"left\",\n       {right} AS \"right\"\nFROM {}\nWHERE {}",
+            from_list(scope),
+            and_all(&[scope.prefix(), scope.error_any()])
+        ),
+        aliases: scope
+            .from
+            .iter()
+            .map(|(alias, predicate, _)| (alias.clone(), predicate.clone()))
+            .collect(),
+    })
 }
 
 /// Any other top-level shape: the invariant holds iff the body matches at
 /// all, so violation is bare non-existence, with an empty witness.
 fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReason> {
     let r = render_prop(body, Env::new(), ctx)?;
-    if !r.has_sum() {
+    if !r.has_errors() {
         return Ok((
-            format!(
-                "SELECT 1 AS \"w\", false AS \"range_error\"\nWHERE NOT {}",
-                r.exists_sql()
-            ),
+            format!("SELECT 1 AS \"w\"\nWHERE NOT {}", r.exists_sql()),
             String::new(),
             None,
             Env::new(),
         ));
     }
-    // The kernel evaluates the sum for every prefix match, so a range
+    // The kernel evaluates the comparison for every prefix match, so an
     // error anywhere dominates; otherwise the body must match somewhere.
     let scope = |condition: String| {
         format!(
@@ -803,12 +1018,12 @@ fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReaso
             and_all(&[r.prefix(), condition])
         )
     };
-    let range = scope(r.range_error());
+    let raises = scope(r.error_any());
     let holds = scope(r.tail.clone().unwrap_or_else(|| "true".to_string()));
     Ok((
-        format!("SELECT 1 AS \"w\", {range} AS \"range_error\"\nWHERE {range} OR NOT {holds}"),
+        format!("SELECT 1 AS \"w\"\nWHERE {raises} OR NOT {holds}"),
         String::new(),
-        None,
+        error_query(&r),
         Env::new(),
     ))
 }
@@ -820,10 +1035,13 @@ fn generic_denial_implies(
 ) -> Result<Denial, CompileReason> {
     let l = render_prop(left, Env::new(), ctx)?;
     let r = render_prop(right, l.env.clone(), ctx)?;
-    if l.has_sum() || r.has_sum() {
-        return Err(CompileReason::SumShape {
-            detail: "sum in a filter-only implication",
-        });
+    if l.has_errors() || r.has_errors() {
+        let raising = if l.has_errors() { &l } else { &r };
+        return Err(shape_refusal(
+            raising,
+            "sum in a filter-only implication",
+            "a quantity or timestamp ordering in a filter-only implication",
+        ));
     }
     let not_r = if r.from.is_empty() {
         format!("NOT ({})", r.conjunction())
@@ -838,10 +1056,7 @@ fn generic_denial_implies(
         ..Rendered::default()
     };
     Ok((
-        format!(
-            "SELECT 1 AS \"w\", false AS \"range_error\"\nWHERE {}",
-            violated.exists_sql()
-        ),
+        format!("SELECT 1 AS \"w\"\nWHERE {}", violated.exists_sql()),
         String::new(),
         None,
         Env::new(),
@@ -851,7 +1066,7 @@ fn generic_denial_implies(
 fn from_list(r: &Rendered) -> String {
     r.from
         .iter()
-        .map(|(_, f)| f.as_str())
+        .map(|(_, _, f)| f.as_str())
         .chain(r.laterals.iter().map(String::as_str))
         .collect::<Vec<_>>()
         .join(", ")
@@ -884,7 +1099,7 @@ fn witness_select_order(r: &Rendered) -> (String, String) {
     let order = if r.env.is_empty() {
         r.from
             .iter()
-            .map(|(alias, _)| format!("{alias}.arguments"))
+            .map(|(alias, _, _)| format!("{alias}.arguments"))
             .collect::<Vec<_>>()
             .join(", ")
     } else {
@@ -897,9 +1112,10 @@ fn witness_select_order(r: &Rendered) -> (String, String) {
     (select, order)
 }
 
-/// How a claim-argument position is read in SQL so that SQL equality is
-/// kernel equality, and how an index over it is expressed, so the two
-/// always match. The module doc gives the reason per kind.
+/// One expression over a claim position that a btree index can be built
+/// over and the SQL can seek on. An [`Equality`] names the one it seeks
+/// with, so the query and the index always match. The module doc gives
+/// the reason per kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Representation {
     Text,
@@ -907,6 +1123,8 @@ pub(crate) enum Representation {
     /// The whole tagged value; sound only for kinds whose canonical
     /// serialisation makes structural equality semantic equality.
     Jsonb,
+    /// A quantity's amount as `numeric`; its unit is a residual condition.
+    QuantityAmount,
 }
 
 impl Representation {
@@ -920,6 +1138,9 @@ impl Representation {
                 format!("({qualifier}arguments -> {position} ->> 'value')::numeric")
             }
             Representation::Jsonb => format!("{qualifier}arguments -> {position}"),
+            Representation::QuantityAmount => {
+                format!("({qualifier}arguments -> {position} -> 'value' ->> 'amount')::numeric")
+            }
         }
     }
 
@@ -928,22 +1149,65 @@ impl Representation {
             Representation::Text => "text",
             Representation::Numeric => "numeric",
             Representation::Jsonb => "jsonb",
+            Representation::QuantityAmount => "quantity_amount",
         }
     }
 }
 
-fn repr_for(kind: &PredicateArgKind) -> Result<Representation, CompileReason> {
-    match kind {
-        PredicateArgKind::Decimal => Ok(Representation::Numeric),
-        PredicateArgKind::Subject => Ok(Representation::Text),
-        PredicateArgKind::Bool
-        | PredicateArgKind::Date
-        | PredicateArgKind::Timestamp
-        | PredicateArgKind::Duration => Ok(Representation::Jsonb),
-        PredicateArgKind::Quantity(_)
-        | PredicateArgKind::Collection
-        | PredicateArgKind::Any
-        | PredicateArgKind::CalendarSpan => Err(CompileReason::ArgumentKind { kind: kind.clone() }),
+/// How two claim positions of one declared kind are read so that SQL
+/// equality is kernel equality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Equality {
+    Text,
+    Numeric,
+    Jsonb,
+    /// Amount as `numeric` and unit as text, both agreeing.
+    Quantity,
+}
+
+impl Equality {
+    fn for_kind(kind: &PredicateArgKind) -> Result<Self, CompileReason> {
+        match kind {
+            PredicateArgKind::Decimal => Ok(Equality::Numeric),
+            PredicateArgKind::Subject => Ok(Equality::Text),
+            PredicateArgKind::Bool
+            | PredicateArgKind::Date
+            | PredicateArgKind::Timestamp
+            | PredicateArgKind::Duration => Ok(Equality::Jsonb),
+            PredicateArgKind::Quantity(_) => Ok(Equality::Quantity),
+            PredicateArgKind::Collection
+            | PredicateArgKind::Any
+            | PredicateArgKind::CalendarSpan => {
+                Err(CompileReason::ArgumentKind { kind: kind.clone() })
+            }
+        }
+    }
+
+    /// The expression an index serves this equality with.
+    fn seek(self) -> Representation {
+        match self {
+            Equality::Text => Representation::Text,
+            Equality::Numeric => Representation::Numeric,
+            Equality::Jsonb => Representation::Jsonb,
+            Equality::Quantity => Representation::QuantityAmount,
+        }
+    }
+
+    fn col_eq(self, a: &ColRef, b: &ColRef) -> String {
+        match self {
+            Equality::Quantity => format!(
+                "({}) = ({}) AND ({}) = ({})",
+                col_sql(a, Representation::QuantityAmount),
+                col_sql(b, Representation::QuantityAmount),
+                unit_sql(a),
+                unit_sql(b)
+            ),
+            other => format!(
+                "({}) = ({})",
+                col_sql(a, other.seek()),
+                col_sql(b, other.seek())
+            ),
+        }
     }
 }
 
@@ -951,59 +1215,202 @@ fn col_sql(col: &ColRef, repr: Representation) -> String {
     repr.extractor(&format!("{}.", col.alias), col.position)
 }
 
-fn col_eq(a: &ColRef, b: &ColRef) -> Result<String, CompileReason> {
-    let repr = repr_for(&a.kind)?;
-    Ok(format!("({}) = ({})", col_sql(a, repr), col_sql(b, repr)))
+/// A quantity position's unit, text; NULL for any other stored kind.
+fn unit_sql(col: &ColRef) -> String {
+    format!(
+        "{}.arguments -> {} -> 'value' ->> 'unit'",
+        col.alias, col.position
+    )
 }
 
-/// A literal filter on a claim position, or a refusal when the literal
-/// kind is outside the fragment.
-fn literal_sql(value: &Value) -> Result<(String, Representation), CompileReason> {
+/// The codec's tag for a declared kind, or `None` for a kind the
+/// compiler never reads.
+fn declared_tag(kind: &PredicateArgKind) -> Option<&'static str> {
+    Some(match kind {
+        PredicateArgKind::Decimal => "decimal",
+        PredicateArgKind::Subject => "subject",
+        PredicateArgKind::Bool => "bool",
+        PredicateArgKind::Date => "date",
+        PredicateArgKind::Timestamp => "timestamp",
+        PredicateArgKind::Duration => "duration",
+        PredicateArgKind::Quantity(_) => "quantity",
+        PredicateArgKind::Collection | PredicateArgKind::Any | PredicateArgKind::CalendarSpan => {
+            return None;
+        }
+    })
+}
+
+/// The codec's tag of a runtime value.
+fn stored_tag(ev: &EvalValue) -> &'static str {
+    match ev {
+        EvalValue::Decimal(_) => "decimal",
+        EvalValue::Subject(_) => "subject",
+        EvalValue::Bool(_) => "bool",
+        EvalValue::Date(_) => "date",
+        EvalValue::Timestamp(_) => "timestamp",
+        EvalValue::Duration(_) => "duration",
+        EvalValue::Quantity { .. } => "quantity",
+        EvalValue::Collection(_) => "collection",
+        EvalValue::CalendarSpan(_) => "calendarspan",
+    }
+}
+
+/// The guard on a position the SQL reads by its declared kind: true for
+/// a stored value of that kind, an error naming the position otherwise.
+/// Reads of other predicates' rows pass, so the planner may evaluate it
+/// in any order.
+fn kind_guard(col: &ColRef) -> Result<String, CompileReason> {
+    let tag = declared_tag(&col.kind).ok_or_else(|| CompileReason::ArgumentKind {
+        kind: col.kind.clone(),
+    })?;
+    Ok(format!(
+        "morpholog.declared_kind({}.predicate_name, {}, {}, {}, {})",
+        col.alias,
+        quote_literal(col.predicate.as_str()),
+        tagged_sql(col),
+        quote_literal(tag),
+        col.position
+    ))
+}
+
+/// The whole tagged value at a position, jsonb.
+fn tagged_sql(col: &ColRef) -> String {
+    format!("{}.arguments -> {}", col.alias, col.position)
+}
+
+/// A literal in a claim pattern: the position must hold exactly it.
+/// Refuses the literal kinds the fragment cannot render as constants.
+fn literal_filter(col: &ColRef, value: &Value, ctx: &mut Ctx<'_>) -> Result<String, CompileReason> {
+    let mut require = |repr: Representation| {
+        ctx.required
+            .insert((col.predicate.clone(), col.position, repr));
+    };
     match value {
-        Value::Subject(s) => Ok((quote_literal(s.as_str()), Representation::Text)),
-        Value::Decimal(d) => Ok((
-            format!("{}::numeric", quote_literal(d)),
-            Representation::Numeric,
-        )),
+        Value::Subject(s) => {
+            require(Representation::Text);
+            Ok(format!(
+                "({}) = {}",
+                col_sql(col, Representation::Text),
+                quote_literal(s.as_str())
+            ))
+        }
+        Value::Decimal(d) => {
+            require(Representation::Numeric);
+            Ok(format!(
+                "({}) = {}::numeric",
+                col_sql(col, Representation::Numeric),
+                quote_literal(d)
+            ))
+        }
+        Value::Quantity { .. } => {
+            let EvalValue::Quantity { amount, unit } = literal_eval(value)? else {
+                unreachable!("a quantity literal evaluates to a quantity")
+            };
+            require(Representation::QuantityAmount);
+            Ok(format!(
+                "({}) = {}::numeric AND ({}) = {}",
+                col_sql(col, Representation::QuantityAmount),
+                quote_literal(&amount.to_string()),
+                unit_sql(col),
+                quote_literal(unit.as_str())
+            ))
+        }
+        Value::Timestamp(_) => {
+            let ev = literal_eval(value)?;
+            require(Representation::Jsonb);
+            Ok(format!(
+                "({}) = {}::jsonb",
+                col_sql(col, Representation::Jsonb),
+                quote_literal(&tagged_json(&ev)?)
+            ))
+        }
         Value::Date(_) => Err(CompileReason::Literal { kind: "date" }),
-        Value::Timestamp(_) => Err(CompileReason::Literal { kind: "timestamp" }),
         Value::Duration(_) => Err(CompileReason::Literal { kind: "duration" }),
         Value::CalendarSpan(_) => Err(CompileReason::Literal {
             kind: "calendar span",
         }),
-        Value::Quantity { .. } => Err(CompileReason::Literal { kind: "quantity" }),
     }
 }
 
-/// Case-bound constant equality on an antecedent column, or None when the
-/// value kind cannot be rendered (widens to Unbounded). Tagged kinds
-/// compare as jsonb against the value's own serialisation, the same serde
-/// every stored claim passed through.
-fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
-    match ev {
-        EvalValue::Subject(s) => Some(format!(
+/// A literal's runtime value, as the evaluator would parse it. A literal
+/// a validated programme carries always parses.
+fn literal_eval(value: &Value) -> Result<EvalValue, CompileReason> {
+    literal_value(value).map_err(|e| CompileReason::UnvalidatedShape {
+        detail: format!("literal does not evaluate: {e}"),
+    })
+}
+
+/// The canonical tagged JSON of a runtime value: the same serde every
+/// stored claim passed through.
+fn tagged_json(ev: &EvalValue) -> Result<String, CompileReason> {
+    serde_json::to_string(ev).map_err(|e| CompileReason::UnvalidatedShape {
+        detail: format!("value does not serialise: {e}"),
+    })
+}
+
+/// A case value rendered onto an antecedent column.
+enum ConstEq {
+    /// The stored row is guarded to the declared kind, then compared.
+    Sql(String),
+    /// A kind the compiler does not compare: widen to the whole invariant.
+    Widen,
+    /// The value itself is not of the declared kind: no compiled reading
+    /// of the position is sound.
+    Drift(PgError),
+}
+
+/// Case-bound constant equality on an antecedent column. The value must be
+/// of the kind the position declares, as the stored rows must (their guard
+/// sits on the scan that bound the column); tagged kinds compare as jsonb
+/// against the value's own serialisation, the same serde every stored
+/// claim passed through.
+fn const_eq(col: &ColRef, ev: &EvalValue) -> ConstEq {
+    let Some(declared) = declared_tag(&col.kind) else {
+        return ConstEq::Widen;
+    };
+    let stored = stored_tag(ev);
+    if stored != declared {
+        return ConstEq::Drift(PgError::KindDrift {
+            predicate: col.predicate.to_string(),
+            position: col.position,
+            declared: declared.to_string(),
+            stored: stored.to_string(),
+        });
+    }
+    let compared = match ev {
+        EvalValue::Subject(s) => format!(
             "({}) = {}",
             col_sql(col, Representation::Text),
             quote_literal(s.as_str())
-        )),
-        EvalValue::Decimal(d) => Some(format!(
+        ),
+        EvalValue::Decimal(d) => format!(
             "({}) = {}::numeric",
             col_sql(col, Representation::Numeric),
             quote_literal(&d.to_string())
-        )),
+        ),
+        EvalValue::Quantity { amount, unit } => format!(
+            "({}) = {}::numeric AND ({}) = {}",
+            col_sql(col, Representation::QuantityAmount),
+            quote_literal(&amount.to_string()),
+            unit_sql(col),
+            quote_literal(unit.as_str())
+        ),
         EvalValue::Bool(_)
         | EvalValue::Date(_)
         | EvalValue::Timestamp(_)
         | EvalValue::Duration(_) => {
-            let json = serde_json::to_string(ev).ok()?;
-            Some(format!(
+            let Ok(json) = serde_json::to_string(ev) else {
+                return ConstEq::Widen;
+            };
+            format!(
                 "({}) = {}::jsonb",
                 col_sql(col, Representation::Jsonb),
                 quote_literal(&json)
-            ))
+            )
         }
-        _ => None,
-    }
+        EvalValue::Collection(_) | EvalValue::CalendarSpan(_) => return ConstEq::Widen,
+    };
+    ConstEq::Sql(compared)
 }
 
 fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, CompileReason> {
@@ -1017,18 +1424,21 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             for p in ps {
                 if acc.tail.is_some() {
                     // The kernel evaluates a later conjunct only for
-                    // bindings the sum comparison admitted; the query
-                    // computes every row's sum. Only a closing sum
-                    // comparison has one evaluation boundary.
-                    return Err(CompileReason::SumShape {
-                        detail: "a sum comparison must be the last conjunct of its scope",
-                    });
+                    // bindings the comparison admitted; the query computes
+                    // every row's sum, and reports an error wherever its
+                    // condition holds. Only a closing comparison has one
+                    // evaluation boundary.
+                    return Err(shape_refusal(
+                        &acc,
+                        "a sum comparison must be the last conjunct of its scope",
+                        "a quantity or timestamp ordering must be the last conjunct of its scope",
+                    ));
                 }
                 let r = render_prop(p, acc.env.clone(), ctx)?;
                 acc.from.extend(r.from);
                 acc.laterals.extend(r.laterals);
                 acc.where_.extend(r.where_);
-                acc.range_errors.extend(r.range_errors);
+                acc.errors.extend(r.errors);
                 acc.tail = r.tail;
                 acc.env = r.env;
             }
@@ -1088,25 +1498,21 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             env,
             ctx,
         ),
-        Prop::Eq(a, b) => compare_sql(a, b, "=", &env, ctx),
-        Prop::Neq(a, b) => compare_sql(a, b, "<>", &env, ctx),
+        Prop::Eq(a, b) => equality_sql(a, b, false, &env, ctx),
+        Prop::Neq(a, b) => equality_sql(a, b, true, &env, ctx),
         Prop::Compare {
             op,
             domain,
             left,
             right,
-        } => {
-            if *domain != OrderedDomain::Decimal {
-                return Err(CompileReason::ComparisonDomain { domain: *domain });
+        } => match domain {
+            OrderedDomain::Decimal | OrderedDomain::Timestamp => {
+                ordered_sql(*op, *domain, left, right, &env, ctx)
             }
-            let op = match op {
-                morpholog_core::CompareOp::Le => "<=",
-                morpholog_core::CompareOp::Lt => "<",
-                morpholog_core::CompareOp::Ge => ">=",
-                morpholog_core::CompareOp::Gt => ">",
-            };
-            compare_sql(left, right, op, &env, ctx)
-        }
+            OrderedDomain::Date | OrderedDomain::Duration => {
+                Err(CompileReason::ComparisonDomain { domain: *domain })
+            }
+        },
         Prop::Or(_) => Err(CompileReason::Construct { construct: "or" }),
         Prop::Xor(_, _) => Err(CompileReason::Construct { construct: "xor" }),
         Prop::Pre(_) => Err(CompileReason::Construct { construct: "pre" }),
@@ -1154,29 +1560,36 @@ fn render_claim(
                 return Err(CompileReason::Construct { construct: "actor" });
             }
             Term::Literal(v) => {
-                let (lit, repr) = literal_sql(v)?;
-                where_.push(format!("({}) = {}", col_sql(&col, repr), lit));
-                ctx.required.insert((predicate.clone(), i, repr));
+                where_.push(kind_guard(&col)?);
+                where_.push(literal_filter(&col, v, ctx)?);
             }
             Term::Var(v) => {
+                // Guarded where the row is scanned, so the guard runs
+                // before any later read of the position, wherever the
+                // planner puts that read.
+                where_.push(kind_guard(&col)?);
                 if let Some(bound) = env.get(v) {
-                    where_.push(col_eq(bound, &col)?);
-                    let repr = repr_for(&col.kind)?;
+                    let eq = Equality::for_kind(&col.kind)?;
+                    where_.push(eq.col_eq(bound, &col));
                     ctx.required
-                        .insert((bound.predicate.clone(), bound.position, repr));
-                    ctx.required.insert((predicate.clone(), i, repr));
+                        .insert((bound.predicate.clone(), bound.position, eq.seek()));
+                    ctx.required.insert((predicate.clone(), i, eq.seek()));
                 } else {
                     // Binding requires a proved equality representation
                     // now, so a later join or witness read can never fall
                     // back to an unsound comparison.
-                    repr_for(&col.kind)?;
+                    Equality::for_kind(&col.kind)?;
                     env.insert(v.clone(), col);
                 }
             }
         }
     }
     Ok(Rendered {
-        from: vec![(alias.clone(), format!("morpholog.claims {alias}"))],
+        from: vec![(
+            alias.clone(),
+            predicate.clone(),
+            format!("morpholog.claims {alias}"),
+        )],
         where_,
         env,
         ..Rendered::default()
@@ -1185,55 +1598,203 @@ fn render_claim(
 
 /// A scope checked by existence (nested negation, exists, implication)
 /// may stop at its first match, while the kernel evaluates every binding
-/// of a sum's scope, so no sum compiles under one.
+/// of a scope that can raise, so no error-bearing tail compiles under one.
 fn nested_scope(r: Rendered) -> Result<Rendered, CompileReason> {
-    if r.has_sum() {
-        return Err(CompileReason::SumShape {
-            detail: "sum under a nested scope",
-        });
+    if r.has_errors() {
+        return Err(shape_refusal(
+            &r,
+            "sum under a nested scope",
+            "a quantity or timestamp ordering under a nested scope",
+        ));
     }
     Ok(r)
 }
 
-fn compare_sql(
+/// A value in comparison position, by the flavour the SQL must handle.
+/// A column was guarded to its declared kind by the scan that bound it.
+enum Operand {
+    /// A bare decimal, a decimal literal, or a sum's total: `numeric`.
+    Numeric(String),
+    /// An equality-only reading (subject text, or a canonical tagged
+    /// value as jsonb) of a kind nothing orders here.
+    Keyed(String),
+    Quantity {
+        amount: String,
+        unit: String,
+        /// The whole tagged value, jsonb.
+        tagged: String,
+        /// Whether the unit is a literal, so two literals never raise.
+        literal: bool,
+    },
+    Timestamp {
+        nanos: String,
+        tagged: String,
+    },
+}
+
+/// `a = b`, or its negation: structural equality, which never raises. A
+/// pending sum still makes it the scope's tail.
+fn equality_sql(
     a: &ValueExpr,
     b: &ValueExpr,
-    op: &str,
+    negated: bool,
     env: &Env,
     ctx: &mut Ctx<'_>,
 ) -> Result<Rendered, CompileReason> {
-    let a_sql = value_sql(a, env, ctx)?;
-    let b_sql = value_sql(b, env, ctx)?;
-    let clause = format!("({a_sql}) {op} ({b_sql})");
+    let l = value_sql(a, env, ctx)?;
+    let r = value_sql(b, env, ctx)?;
+    let clause = match (&l, &r) {
+        (Operand::Numeric(x), Operand::Numeric(y)) | (Operand::Keyed(x), Operand::Keyed(y)) => {
+            format!("({x}) = ({y})")
+        }
+        (
+            Operand::Quantity {
+                amount: xa,
+                unit: xu,
+                ..
+            },
+            Operand::Quantity {
+                amount: ya,
+                unit: yu,
+                ..
+            },
+        ) => format!("(({xa}) = ({ya}) AND ({xu}) = ({yu}))"),
+        (Operand::Timestamp { tagged: x, .. }, Operand::Timestamp { tagged: y, .. }) => {
+            format!("({x}) = ({y})")
+        }
+        _ => {
+            return Err(CompileReason::UnvalidatedShape {
+                detail: "equality across value flavours".to_string(),
+            });
+        }
+    };
+    let clause = if negated {
+        format!("NOT {clause}")
+    } else {
+        clause
+    };
+    Ok(close_comparison(clause, None, env, ctx))
+}
+
+/// An ordered comparison. Decimals, timestamps and sums never raise once
+/// the guards hold; two quantities raise on two units, carried as data.
+fn ordered_sql(
+    op: CompareOp,
+    domain: OrderedDomain,
+    a: &ValueExpr,
+    b: &ValueExpr,
+    env: &Env,
+    ctx: &mut Ctx<'_>,
+) -> Result<Rendered, CompileReason> {
+    let l = value_sql(a, env, ctx)?;
+    let r = value_sql(b, env, ctx)?;
+    let op = match op {
+        CompareOp::Le => "<=",
+        CompareOp::Lt => "<",
+        CompareOp::Ge => ">=",
+        CompareOp::Gt => ">",
+    };
+    let (clause, raises) = match (domain, &l, &r) {
+        (OrderedDomain::Decimal, Operand::Numeric(x), Operand::Numeric(y)) => {
+            (format!("({x}) {op} ({y})"), None)
+        }
+        (
+            OrderedDomain::Decimal,
+            Operand::Quantity {
+                amount: xa,
+                unit: xu,
+                tagged: xt,
+                literal: xl,
+            },
+            Operand::Quantity {
+                amount: ya,
+                unit: yu,
+                tagged: yt,
+                literal: yl,
+            },
+        ) => (
+            format!("({xa}) {op} ({ya})"),
+            // Two literals of one unit are checked at authoring time.
+            (!(*xl && *yl)).then(|| RenderedError {
+                condition: format!("NOT (({xu}) = ({yu}))"),
+                report: ErrorReport::Compare {
+                    domain,
+                    left: xt.clone(),
+                    right: yt.clone(),
+                },
+            }),
+        ),
+        (
+            OrderedDomain::Timestamp,
+            Operand::Timestamp { nanos: xn, .. },
+            Operand::Timestamp { nanos: yn, .. },
+        ) => (format!("({xn}) {op} ({yn})"), None),
+        _ => {
+            return Err(CompileReason::UnvalidatedShape {
+                detail: format!("ordered comparison across value flavours under {domain:?}"),
+            });
+        }
+    };
+    Ok(close_comparison(clause, raises, env, ctx))
+}
+
+/// A comparison's rendering: a plain conjunct when nothing can raise,
+/// otherwise the scope's tail with its sums and errors, the sums' range
+/// errors first, as the kernel evaluates operands before comparing.
+fn close_comparison(
+    clause: String,
+    raises: Option<RenderedError>,
+    env: &Env,
+    ctx: &mut Ctx<'_>,
+) -> Rendered {
     let sums = std::mem::take(&mut ctx.pending_sums);
-    if sums.is_empty() {
-        return Ok(Rendered {
+    let mut errors: Vec<RenderedError> = sums
+        .iter()
+        .map(|s| RenderedError {
+            condition: s.range_error.clone(),
+            report: ErrorReport::SumRange,
+        })
+        .collect();
+    errors.extend(raises);
+    if errors.is_empty() {
+        return Rendered {
             where_: vec![clause],
             env: env.clone(),
             ..Rendered::default()
-        });
+        };
     }
-    Ok(Rendered {
-        laterals: sums.iter().map(|s| s.lateral.clone()).collect(),
+    Rendered {
+        laterals: sums.into_iter().map(|s| s.lateral).collect(),
         tail: Some(clause),
-        range_errors: sums.into_iter().map(|s| s.range_error).collect(),
+        errors,
         env: env.clone(),
         ..Rendered::default()
-    })
+    }
 }
 
-fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<String, CompileReason> {
+fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, CompileReason> {
     match expr {
         ValueExpr::Term(Term::Var(v)) => {
             let col = env.get(v).ok_or_else(|| CompileReason::UnvalidatedShape {
                 detail: format!("unbound variable in value position: {v}"),
             })?;
-            Ok(col_sql(col, repr_for(&col.kind)?))
+            Ok(match Equality::for_kind(&col.kind)? {
+                Equality::Numeric => Operand::Numeric(col_sql(col, Representation::Numeric)),
+                Equality::Text => Operand::Keyed(col_sql(col, Representation::Text)),
+                Equality::Jsonb if col.kind == PredicateArgKind::Timestamp => Operand::Timestamp {
+                    nanos: format!("morpholog.timestamp_nanos({})", tagged_sql(col)),
+                    tagged: tagged_sql(col),
+                },
+                Equality::Jsonb => Operand::Keyed(col_sql(col, Representation::Jsonb)),
+                Equality::Quantity => Operand::Quantity {
+                    amount: col_sql(col, Representation::QuantityAmount),
+                    unit: unit_sql(col),
+                    tagged: tagged_sql(col),
+                    literal: false,
+                },
+            })
         }
-        ValueExpr::Term(Term::Literal(v)) => {
-            let (lit, _) = literal_sql(v)?;
-            Ok(lit)
-        }
+        ValueExpr::Term(Term::Literal(v)) => literal_operand(v),
         ValueExpr::Term(Term::Wildcard) => Err(CompileReason::Construct {
             construct: "wildcard value",
         }),
@@ -1250,10 +1811,12 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<String, C
                     detail: "body binds no claims",
                 });
             }
-            if r.has_sum() {
-                return Err(CompileReason::SumShape {
-                    detail: "sum within a sum body",
-                });
+            if r.has_errors() {
+                return Err(shape_refusal(
+                    &r,
+                    "sum within a sum body",
+                    "a quantity or timestamp ordering within a sum body",
+                ));
             }
             // The sum target must be a bound decimal variable or a decimal
             // literal; a computed target refuses.
@@ -1294,7 +1857,7 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<String, C
                 ),
                 range_error: range_error_sql(&total),
             });
-            Ok(total)
+            Ok(Operand::Numeric(total))
         }
         ValueExpr::Arith { .. } => Err(CompileReason::Construct {
             construct: "arithmetic",
@@ -1312,6 +1875,44 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<String, C
             construct: "builtin call",
         }),
     }
+}
+
+/// A literal in value position: a SQL constant of the kernel's value. A
+/// timestamp's coordinate is computed here, not by the database.
+fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
+    Ok(match value {
+        Value::Subject(s) => Operand::Keyed(quote_literal(s.as_str())),
+        Value::Decimal(d) => Operand::Numeric(format!("{}::numeric", quote_literal(d))),
+        Value::Quantity { .. } => {
+            let ev = literal_eval(value)?;
+            let EvalValue::Quantity { amount, unit } = &ev else {
+                unreachable!("a quantity literal evaluates to a quantity")
+            };
+            Operand::Quantity {
+                amount: format!("{}::numeric", quote_literal(&amount.to_string())),
+                unit: quote_literal(unit.as_str()),
+                tagged: format!("{}::jsonb", quote_literal(&tagged_json(&ev)?)),
+                literal: true,
+            }
+        }
+        Value::Timestamp(_) => {
+            let ev = literal_eval(value)?;
+            let EvalValue::Timestamp(t) = &ev else {
+                unreachable!("a timestamp literal evaluates to a timestamp")
+            };
+            Operand::Timestamp {
+                nanos: format!("{}::numeric", t.as_nanosecond()),
+                tagged: format!("{}::jsonb", quote_literal(&tagged_json(&ev)?)),
+            }
+        }
+        Value::Date(_) => return Err(CompileReason::Literal { kind: "date" }),
+        Value::Duration(_) => return Err(CompileReason::Literal { kind: "duration" }),
+        Value::CalendarSpan(_) => {
+            return Err(CompileReason::Literal {
+                kind: "calendar span",
+            });
+        }
+    })
 }
 
 #[cfg(test)]

@@ -429,6 +429,7 @@ async fn reconcile_locked(
         let representation = match row.representation.as_str() {
             "numeric" => "numeric",
             "jsonb" => "jsonb",
+            "quantity_amount" => "quantity_amount",
             _ => "text",
         };
         if applied && prune {
