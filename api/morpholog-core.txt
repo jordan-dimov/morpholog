@@ -438,6 +438,7 @@ pub morpholog_core::EvalError::UnknownDefinition(alloc::string::String)
 pub morpholog_core::EvalError::ValueOfMultipleMatches(alloc::string::String)
 pub morpholog_core::EvalError::ValueOfZeroMatches(alloc::string::String)
 impl morpholog_core::EvalError
+pub fn morpholog_core::EvalError::sum_cannot_take(bool, &morpholog_core::EvalValue) -> Self
 pub fn morpholog_core::EvalError::sum_out_of_decimal_range() -> Self
 impl core::clone::Clone for morpholog_core::EvalError
 pub fn morpholog_core::EvalError::clone(&self) -> morpholog_core::EvalError

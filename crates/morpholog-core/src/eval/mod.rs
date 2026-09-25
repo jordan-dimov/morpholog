@@ -121,6 +121,23 @@ impl EvalError {
     pub fn sum_out_of_decimal_range() -> Self {
         EvalError::ArithOutOfRange("sum of decimals exceeds the exact decimal range".to_string())
     }
+
+    /// A sum met a value it cannot add: `first` when it was the sum's
+    /// first value, so nothing had fixed the kind yet. Shared for the same
+    /// reason.
+    pub fn sum_cannot_take(first: bool, value: &EvalValue) -> Self {
+        if first {
+            EvalError::TypeMismatch(format!(
+                "Sum expects decimal, duration, or quantity values, got {}",
+                runtime_kind_label(value)
+            ))
+        } else {
+            EvalError::TypeMismatch(format!(
+                "Sum cannot mix value kinds (next value is {})",
+                runtime_kind_label(value)
+            ))
+        }
+    }
 }
 
 /// Evaluator context: state(s), bindings, optional actor. Threaded
@@ -1225,17 +1242,9 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                     (
                         SumTotal::Decimal(_) | SumTotal::Duration(_) | SumTotal::Quantity(..),
                         other,
-                    ) => {
-                        return Err(EvalError::TypeMismatch(format!(
-                            "Sum cannot mix value kinds (next value is {})",
-                            runtime_kind_label(&other)
-                        )));
-                    }
+                    ) => return Err(EvalError::sum_cannot_take(false, &other)),
                     (SumTotal::Empty, other) => {
-                        return Err(EvalError::TypeMismatch(format!(
-                            "Sum expects decimal, duration, or quantity values, got {}",
-                            runtime_kind_label(&other)
-                        )));
+                        return Err(EvalError::sum_cannot_take(true, &other));
                     }
                 };
             }
