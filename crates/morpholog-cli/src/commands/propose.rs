@@ -316,7 +316,6 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
         PgError::Database(_)
         | PgError::Encoding(_)
         | PgError::InvalidState(_)
-        | PgError::KindDrift { .. }
         | PgError::SchemaBehind { .. }
         | PgError::TransitionNotFound(_)
         | PgError::TransitionNotCovered { .. }

@@ -41,24 +41,25 @@ fn balanced_posted_entry_sql_is_pinned() {
         sql,
         r#"/* morpholog compiled invariant balanced_posted_entry v1 stage1 */
 SELECT (t0.arguments -> 0)::text AS "w_entry"
-FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((t1.arguments -> 2 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND morpholog.declared_kind(t1.predicate_name, 'JournalLine', t1.arguments -> 0, 'subject', 0) AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value') AND morpholog.declared_kind(t1.predicate_name, 'JournalLine', t1.arguments -> 2, 'decimal', 2)) l2, LATERAL (SELECT COALESCE(sum((t3.arguments -> 3 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND morpholog.declared_kind(t3.predicate_name, 'JournalLine', t3.arguments -> 0, 'subject', 0) AND (t0.arguments -> 0 ->> 'value') = (t3.arguments -> 0 ->> 'value') AND morpholog.declared_kind(t3.predicate_name, 'JournalLine', t3.arguments -> 3, 'decimal', 3)) l4
+FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((CASE WHEN (t1.arguments -> 2 ->> 'type') = 'decimal' THEN (t1.arguments -> 2 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t1.arguments -> 2 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0)))) l2, LATERAL (SELECT COALESCE(sum((CASE WHEN (t3.arguments -> 3 ->> 'type') = 'decimal' THEN (t3.arguments -> 3 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t3.arguments -> 3 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0)))) l4
 WHERE t0.predicate_name = 'JournalEntry'
-  AND morpholog.declared_kind(t0.predicate_name, 'JournalEntry', t0.arguments -> 0, 'subject', 0)
-  AND ((NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)) OR NOT (l2.s) = (l4.s))
-ORDER BY (t0.arguments -> 0 ->> 'value')::text
+  AND ((l2.f OR NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR l4.f OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)) OR NOT (l2.s) = (l4.s))
+ORDER BY (morpholog.value_key_v1(t0.arguments -> 0))::text
 LIMIT 1"#
     );
-    // Asked only once the query above returned a violation: any entry
-    // in scope whose total no decimal can hold.
+    // Asked only once the query above returned a violation: the first
+    // entry in scope, in the kernel's order, whose lines hold a value a
+    // sum cannot take, or whose total no decimal can hold.
     assert_eq!(
         set.invariants[1].error_sql(None, &[]).unwrap().as_deref(),
         Some(
-            r#"SELECT CASE WHEN NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) THEN 'range' WHEN NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric) THEN 'range' END AS "kind",
+            r#"SELECT CASE WHEN l2.f THEN 'sum_kind' WHEN NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) THEN 'range' WHEN l4.f THEN 'sum_kind' WHEN NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric) THEN 'range' END AS "kind",
        NULL::text AS "domain",
-       NULL::text AS "left",
-       NULL::text AS "right"
-FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((t1.arguments -> 2 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND morpholog.declared_kind(t1.predicate_name, 'JournalLine', t1.arguments -> 0, 'subject', 0) AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value') AND morpholog.declared_kind(t1.predicate_name, 'JournalLine', t1.arguments -> 2, 'decimal', 2)) l2, LATERAL (SELECT COALESCE(sum((t3.arguments -> 3 ->> 'value')::numeric), 0::numeric) AS s FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND morpholog.declared_kind(t3.predicate_name, 'JournalLine', t3.arguments -> 0, 'subject', 0) AND (t0.arguments -> 0 ->> 'value') = (t3.arguments -> 0 ->> 'value') AND morpholog.declared_kind(t3.predicate_name, 'JournalLine', t3.arguments -> 3, 'decimal', 3)) l4
-WHERE (t0.predicate_name = 'JournalEntry' AND morpholog.declared_kind(t0.predicate_name, 'JournalEntry', t0.arguments -> 0, 'subject', 0) AND (NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)))
+       CASE WHEN l2.f THEN (SELECT (t1.arguments -> 2)::text FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0))) AND (t1.arguments -> 2 ->> 'type') IS DISTINCT FROM 'decimal' ORDER BY t1.arguments_hash LIMIT 1) WHEN l4.f THEN (SELECT (t3.arguments -> 3)::text FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0))) AND (t3.arguments -> 3 ->> 'type') IS DISTINCT FROM 'decimal' ORDER BY t3.arguments_hash LIMIT 1) END AS "left",
+       NULL::text AS "right",
+       CASE WHEN l2.f THEN (SELECT ((t1.arguments -> 2 ->> 'type') IS DISTINCT FROM 'decimal') FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0))) ORDER BY t1.arguments_hash LIMIT 1) WHEN l4.f THEN (SELECT ((t3.arguments -> 3 ->> 'type') IS DISTINCT FROM 'decimal') FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0))) ORDER BY t3.arguments_hash LIMIT 1) END AS "first"
+FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((CASE WHEN (t1.arguments -> 2 ->> 'type') = 'decimal' THEN (t1.arguments -> 2 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t1.arguments -> 2 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0)))) l2, LATERAL (SELECT COALESCE(sum((CASE WHEN (t3.arguments -> 3 ->> 'type') = 'decimal' THEN (t3.arguments -> 3 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t3.arguments -> 3 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0)))) l4
+WHERE (t0.predicate_name = 'JournalEntry' AND (l2.f OR NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR l4.f OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)))
 ORDER BY t0.arguments_hash
 LIMIT 1"#
         )
@@ -87,14 +88,10 @@ SELECT (t0.arguments -> 0)::text AS "w_new_entry_id_a",
        (t0.arguments -> 1)::text AS "w_prior_entry_id"
 FROM morpholog.claims t0, morpholog.claims t1
 WHERE t0.predicate_name = 'Supersedes'
-  AND morpholog.declared_kind(t0.predicate_name, 'Supersedes', t0.arguments -> 0, 'subject', 0)
-  AND morpholog.declared_kind(t0.predicate_name, 'Supersedes', t0.arguments -> 1, 'subject', 1)
   AND t1.predicate_name = 'Supersedes'
-  AND morpholog.declared_kind(t1.predicate_name, 'Supersedes', t1.arguments -> 0, 'subject', 0)
-  AND morpholog.declared_kind(t1.predicate_name, 'Supersedes', t1.arguments -> 1, 'subject', 1)
-  AND (t0.arguments -> 1 ->> 'value') = (t1.arguments -> 1 ->> 'value')
-  AND NOT ((t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value'))
-ORDER BY (t0.arguments -> 0 ->> 'value')::text, (t1.arguments -> 0 ->> 'value')::text, (t0.arguments -> 1 ->> 'value')::text
+  AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 1))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 1)))
+  AND NOT ((morpholog.value_key_v1(t0.arguments -> 0)) = (morpholog.value_key_v1(t1.arguments -> 0)))
+ORDER BY (morpholog.value_key_v1(t0.arguments -> 0))::text, (morpholog.value_key_v1(t1.arguments -> 0))::text, (morpholog.value_key_v1(t0.arguments -> 1))::text
 LIMIT 1"#
     );
 }
@@ -110,9 +107,8 @@ fn journal_entry_has_lines_sql_is_pinned() {
 SELECT (t0.arguments -> 0)::text AS "w_entry"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'JournalEntry'
-  AND morpholog.declared_kind(t0.predicate_name, 'JournalEntry', t0.arguments -> 0, 'subject', 0)
-  AND NOT EXISTS (SELECT 1 FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND morpholog.declared_kind(t1.predicate_name, 'JournalLine', t1.arguments -> 0, 'subject', 0) AND (t0.arguments -> 0 ->> 'value') = (t1.arguments -> 0 ->> 'value'))
-ORDER BY (t0.arguments -> 0 ->> 'value')::text
+  AND NOT EXISTS (SELECT 1 FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0))))
+ORDER BY (morpholog.value_key_v1(t0.arguments -> 0))::text
 LIMIT 1"#
     );
 }
@@ -132,7 +128,7 @@ fn post_simple_entry_delta_bounds_every_ledger_invariant_to_the_entry() {
     let balanced = &set.invariants[1];
     assert_eq!(
         bounded(balanced.case_filter(&asserted, &[])),
-        "((t0.arguments -> 0 ->> 'value') = 'e42')"
+        "((morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = morpholog.claim_digest(morpholog.value_key_v1('{\"type\":\"subject\",\"value\":\"e42\"}'::jsonb)))"
     );
     // Supersedes is untouched by this delta entirely.
     assert!(matches!(
@@ -173,7 +169,7 @@ fn retraction_also_touches_cases() {
     )];
     assert_eq!(
         bounded(set.invariants[1].case_filter(&[], &retracted)),
-        "((t0.arguments -> 0 ->> 'value') = 'e7')"
+        "((morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = morpholog.claim_digest(morpholog.value_key_v1('{\"type\":\"subject\",\"value\":\"e7\"}'::jsonb)))"
     );
 }
 
@@ -224,12 +220,24 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
             CompileReason::Construct { construct: "xor" },
         ),
         (
-            // Binding a Collection-kinded position refuses first; the
-            // `Prop::In` arm is only a backstop.
             "in",
             "invariant r:\n    Cx(x, c) implies x in c\n",
+            CompileReason::Construct { construct: "in" },
+        ),
+        (
+            // The checker admits `Any` under every comparator; the SQL
+            // cannot tell how to order it at compile time.
+            "ordering over an untyped position",
+            "invariant r:\n    Anything(x, v) and Anything(_, w) implies v <= w\n",
             CompileReason::ArgumentKind {
-                kind: PredicateArgKind::Collection,
+                kind: PredicateArgKind::Any,
+            },
+        ),
+        (
+            "timestamp ordering under a nested scope",
+            "invariant r:\n    A(x) implies (exists s: exists e: Timed(x, s, e) and s strictly_before e)\n",
+            CompileReason::ComparisonShape {
+                detail: "a quantity or timestamp ordering under a nested scope",
             },
         ),
         (
@@ -303,18 +311,6 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
             },
         ),
         (
-            "collection kind",
-            "invariant r:\n    Cx(x, c) implies Cx2(x, c)\n",
-            CompileReason::ArgumentKind {
-                kind: PredicateArgKind::Collection,
-            },
-        ),
-        (
-            "date literal",
-            "invariant r:\n    Dated(x, @2026-01-01, _) implies A(x)\n",
-            CompileReason::Literal { kind: "date" },
-        ),
-        (
             "computed sum target",
             "invariant r:\n    Cap(cap) implies sum(n * 2 | Amount(_, n)) <= cap\n",
             CompileReason::SumShape {
@@ -335,6 +331,7 @@ predicate Timed(x: Subject, s: Timestamp, e: Timestamp)
 predicate Lasting(x: Subject, d: Duration)
 predicate Cx(x: Subject, c: Collection)
 predicate Cx2(x: Subject, c: Collection)
+predicate Anything(x: Subject, v: Any)
 
 ";
     for (family, invariant_src, expected) in cases {
@@ -383,9 +380,8 @@ fn a_quantity_ordering_against_a_literal_is_pinned() {
 SELECT (t0.arguments -> 1)::text AS "w_qty"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Terms'
-  AND morpholog.declared_kind(t0.predicate_name, 'Terms', t0.arguments -> 1, 'quantity', 1)
-  AND (NOT ((t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) OR NOT ((t0.arguments -> 1 -> 'value' ->> 'amount')::numeric) > ('0'::numeric))
-ORDER BY (t0.arguments -> 1 ->> 'value')::text
+  AND (NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) OR NOT ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) > ('0'::numeric))
+ORDER BY (morpholog.value_key_v1(t0.arguments -> 1))::text
 LIMIT 1"#
     );
     // Reports the stored operand whole, so the runner hands the kernel
@@ -393,12 +389,13 @@ LIMIT 1"#
     assert_eq!(
         inv.error_sql(None, &[]).unwrap().as_deref(),
         Some(
-            r#"SELECT CASE WHEN NOT ((t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'compare' END AS "kind",
-       CASE WHEN NOT ((t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'decimal' END AS "domain",
-       CASE WHEN NOT ((t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN (t0.arguments -> 1)::text END AS "left",
-       CASE WHEN NOT ((t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN ('{"type":"quantity","value":{"amount":"0","unit":"MW"}}'::jsonb)::text END AS "right"
+            r#"SELECT CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'compare' END AS "kind",
+       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'decimal' END AS "domain",
+       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN (t0.arguments -> 1)::text END AS "left",
+       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN ('{"type":"quantity","value":{"amount":"0","unit":"MW"}}'::jsonb)::text END AS "right",
+       NULL::boolean AS "first"
 FROM morpholog.claims t0
-WHERE (t0.predicate_name = 'Terms' AND morpholog.declared_kind(t0.predicate_name, 'Terms', t0.arguments -> 1, 'quantity', 1) AND NOT ((t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')))
+WHERE (t0.predicate_name = 'Terms' AND NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')))
 ORDER BY t0.arguments_hash
 LIMIT 1"#
         )
@@ -419,33 +416,10 @@ SELECT (t0.arguments -> 3)::text AS "w_e",
        (t0.arguments -> 2)::text AS "w_s"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Terms'
-  AND morpholog.declared_kind(t0.predicate_name, 'Terms', t0.arguments -> 2, 'timestamp', 2)
-  AND morpholog.declared_kind(t0.predicate_name, 'Terms', t0.arguments -> 3, 'timestamp', 3)
-  AND NOT ((morpholog.timestamp_nanos(t0.arguments -> 2)) < (morpholog.timestamp_nanos(t0.arguments -> 3)))
-ORDER BY (t0.arguments -> 3 ->> 'value')::text, (t0.arguments -> 2 ->> 'value')::text
+  AND (NOT (COALESCE((t0.arguments -> 2 ->> 'type') = 'timestamp', false) AND COALESCE((t0.arguments -> 3 ->> 'type') = 'timestamp', false)) OR NOT (morpholog.timestamp_nanos(t0.arguments -> 2)) < (morpholog.timestamp_nanos(t0.arguments -> 3)))
+ORDER BY (morpholog.value_key_v1(t0.arguments -> 3))::text, (morpholog.value_key_v1(t0.arguments -> 2))::text
 LIMIT 1"#
     );
-}
-
-/// A timestamp ordering cannot raise once its positions are guarded, so
-/// it is an ordinary conjunct: lawful under a nested scope, unlike a
-/// quantity ordering.
-#[test]
-fn a_timestamp_ordering_is_lawful_under_a_nested_scope() {
-    let program = morpholog_surface::parse_program(
-        "\
-program nested_timestamps
-
-predicate A(x: Subject)
-predicate Timed(x: Subject, s: Timestamp, e: Timestamp)
-
-invariant r:
-    A(x) implies (exists s: exists e: Timed(x, s, e) and s strictly_before e)
-",
-    )
-    .expect("parses");
-    let set = compiled(&program);
-    assert_eq!(set.invariants.len(), 1);
 }
 
 /// The error query orders rows as the kernel's candidate state holds
@@ -501,8 +475,8 @@ invariant closed_on_the_open_date:
     let set = compiled(&program);
     let sql = set.invariants[0].violation_sql(None);
     assert!(
-        sql.contains("(t0.arguments -> 1) = (t1.arguments -> 1)"),
-        "date join compares tagged jsonb, got:\n{sql}"
+        sql.contains("(morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 1))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 1)))"),
+        "date join compares the keys' digests, got:\n{sql}"
     );
 }
 
@@ -561,8 +535,8 @@ invariant closed_on_the_open_date:
         panic!("a date-keyed delta must bound, not widen");
     };
     assert!(
-        filter.contains(r#"(t0.arguments -> 1) = '{"type":"date","value":"2026-01-31"}'::jsonb"#),
-        "the tagged constant equality, got: {filter}"
+        filter.contains(r#"(morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 1))) = morpholog.claim_digest(morpholog.value_key_v1('{"type":"date","value":"2026-01-31"}'::jsonb))"#),
+        "the digest of the constant's key, got: {filter}"
     );
 }
 
@@ -582,38 +556,35 @@ fn comment_safe_leaves_no_delimiter_standing() {
 #[test]
 fn ledger_required_indexes_are_pinned() {
     let specs = compiled(&ledger_program()).required_indexes();
-    let shape: Vec<(String, usize, &str)> = specs
+    let shape: Vec<(String, usize)> = specs
         .iter()
-        .map(|s| {
-            (
-                s.predicate.to_string(),
-                s.position,
-                s.representation.as_str(),
-            )
-        })
+        .map(|s| (s.predicate.to_string(), s.position))
         .collect();
     assert_eq!(
         shape,
         [
-            ("JournalEntry".to_string(), 0, "text"),
-            ("JournalLine".to_string(), 0, "text"),
-            ("Supersedes".to_string(), 1, "text"),
+            ("JournalEntry".to_string(), 0),
+            ("JournalLine".to_string(), 0),
+            ("Supersedes".to_string(), 1),
         ]
     );
     let first = &specs[0];
-    assert_eq!(first.expression_sql, "arguments -> 0 ->> 'value'");
+    assert_eq!(
+        first.expression_sql,
+        "morpholog.claim_digest(morpholog.value_key_v1(arguments -> 0))"
+    );
     assert_eq!(
         first.partial_predicate_sql,
         "predicate_name = 'JournalEntry'"
     );
     assert_eq!(
         first.index_name(),
-        format!("morpholog_ci_journalentry_0_text_{}", &first.digest()[..12])
+        format!("morpholog_ci_journalentry_0_vk1_{}", &first.digest()[..12])
     );
     assert_eq!(
         first.create_sql(),
         format!(
-            "CREATE INDEX CONCURRENTLY \"{}\" ON morpholog.claims USING btree ((arguments -> 0 ->> 'value')) WHERE predicate_name = 'JournalEntry'",
+            "CREATE INDEX CONCURRENTLY \"{}\" ON morpholog.claims USING btree ((morpholog.claim_digest(morpholog.value_key_v1(arguments -> 0)))) WHERE predicate_name = 'JournalEntry'",
             first.index_name()
         )
     );
