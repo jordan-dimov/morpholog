@@ -1,110 +1,210 @@
-//! Shared structural descent over `Prop` / `ValueExpr` trees.
+//! One read-only walk over the IR tree, shared by every pass that collects
+//! or searches without judging.
 //!
-//! "Does any subterm satisfy this?" walkers share this one descent, so
-//! hand copies cannot drift apart. The matches have no wildcard arm: a
-//! new IR variant forces one edit here, not one per walker.
+//! The walk knows tree topology and nothing else: which children a node
+//! has, which term slots take only terms, and which quantifier binders
+//! enclose a position. Consumers decide what a node means: whether a
+//! definition call is followed, what a binder does, how a node evaluates.
+//! Passes that rewrite or judge a tree (substitution, kind inference,
+//! evaluation) keep their own match.
+//!
+//! The matches have no wildcard arm, so a new IR variant is one edit here
+//! and the consumers cannot drift apart. A consumer that judges nodes
+//! still names every variant of the sort it judges, so the same variant
+//! asks it a semantic question too.
+//!
+//! Each node is visited before its children. Beyond that, the order in
+//! which nodes arrive is not part of the contract.
 
-use crate::ir::{Prop, Term, ValueExpr, Var};
+use crate::ir::{Prop, Stmt, Term, ValueExpr, Var};
 
-/// True when any `Prop` node in the tree satisfies `f`, descending
-/// through comparison operands, `sum` bodies, `ValueOf` defaults, and
-/// arithmetic. `Defined` is a leaf: a call's body is scanned at its
-/// own declaration.
+/// A node the walk hands to its visitor.
+#[derive(Clone, Copy)]
+pub enum Node<'a> {
+    Stmt(&'a Stmt),
+    Prop(&'a Prop),
+    /// A value expression, including a bare term in value position.
+    Value(&'a ValueExpr),
+    /// A term in a slot that takes only terms: a claim or call argument,
+    /// an `in` operand, an extremum target, a lookup key.
+    Slot(&'a Term),
+    /// A quantifier introducing this name for its body.
+    Binder(&'a Var),
+}
+
+/// Visit the statement, then everything under it, `for` bodies included.
+pub fn walk_stmt<'a>(stmt: &'a Stmt, visit: &mut dyn FnMut(Node<'a>)) {
+    stmt_scoped(stmt, &mut |n, _| visit(n), &mut Vec::new());
+}
+
+/// Visit the proposition, then everything under it.
+pub fn walk_prop<'a>(prop: &'a Prop, visit: &mut dyn FnMut(Node<'a>)) {
+    prop_scoped(prop, &mut |n, _| visit(n), &mut Vec::new());
+}
+
+/// Visit the value expression, then everything under it.
+pub fn walk_value<'a>(expr: &'a ValueExpr, visit: &mut dyn FnMut(Node<'a>)) {
+    value_scoped(expr, &mut |n, _| visit(n), &mut Vec::new());
+}
+
+/// [`walk_prop`], with the quantifier binders enclosing each node. A
+/// `forall` source is outside its own binding.
+pub(crate) fn walk_prop_scoped<'a>(prop: &'a Prop, visit: &mut dyn FnMut(Node<'a>, &[&'a Var])) {
+    prop_scoped(prop, visit, &mut Vec::new());
+}
+
+/// Value-sort companion to [`walk_prop_scoped`].
+pub(crate) fn walk_value_scoped<'a>(
+    expr: &'a ValueExpr,
+    visit: &mut dyn FnMut(Node<'a>, &[&'a Var]),
+) {
+    value_scoped(expr, visit, &mut Vec::new());
+}
+
+fn stmt_scoped<'a>(
+    stmt: &'a Stmt,
+    visit: &mut dyn FnMut(Node<'a>, &[&'a Var]),
+    scope: &mut Vec<&'a Var>,
+) {
+    visit(Node::Stmt(stmt), scope);
+    match stmt {
+        Stmt::Require { prop, .. } | Stmt::BindOne { prop, .. } => {
+            prop_scoped(prop, visit, scope);
+        }
+        Stmt::Let { value, .. } => value_scoped(value, visit, scope),
+        Stmt::LetNewSubject { .. } => {}
+        Stmt::Assert(claim) => slots(&claim.args, visit, scope),
+        Stmt::Retract { args, .. } => slots(args, visit, scope),
+        Stmt::Emit(intent) => slots(&intent.args, visit, scope),
+        Stmt::For {
+            collection, body, ..
+        } => {
+            value_scoped(collection, visit, scope);
+            for s in body {
+                stmt_scoped(s, visit, scope);
+            }
+        }
+    }
+}
+
+fn prop_scoped<'a>(
+    prop: &'a Prop,
+    visit: &mut dyn FnMut(Node<'a>, &[&'a Var]),
+    scope: &mut Vec<&'a Var>,
+) {
+    visit(Node::Prop(prop), scope);
+    match prop {
+        Prop::Claim { args, .. } | Prop::Defined { args, .. } => slots(args, visit, scope),
+        Prop::In(l, r) => {
+            visit(Node::Slot(l), scope);
+            visit(Node::Slot(r), scope);
+        }
+        Prop::And(props) | Prop::Or(props) => {
+            for p in props {
+                prop_scoped(p, visit, scope);
+            }
+        }
+        Prop::Implies { left, right } | Prop::Xor(left, right) => {
+            prop_scoped(left, visit, scope);
+            prop_scoped(right, visit, scope);
+        }
+        Prop::Not(p) | Prop::Pre(p) => prop_scoped(p, visit, scope),
+        Prop::Exists { binding, body } => {
+            visit(Node::Binder(binding), scope);
+            scope.push(binding);
+            prop_scoped(body, visit, scope);
+            scope.pop();
+        }
+        Prop::Forall {
+            binding,
+            source,
+            body,
+        } => {
+            visit(Node::Binder(binding), scope);
+            prop_scoped(source, visit, scope);
+            scope.push(binding);
+            prop_scoped(body, visit, scope);
+            scope.pop();
+        }
+        Prop::Eq(l, r) | Prop::Neq(l, r) => {
+            value_scoped(l, visit, scope);
+            value_scoped(r, visit, scope);
+        }
+        Prop::Compare { left, right, .. } => {
+            value_scoped(left, visit, scope);
+            value_scoped(right, visit, scope);
+        }
+    }
+}
+
+fn value_scoped<'a>(
+    expr: &'a ValueExpr,
+    visit: &mut dyn FnMut(Node<'a>, &[&'a Var]),
+    scope: &mut Vec<&'a Var>,
+) {
+    visit(Node::Value(expr), scope);
+    match expr {
+        ValueExpr::Term(_) => {}
+        ValueExpr::Arith { left, right, .. } => {
+            value_scoped(left, visit, scope);
+            value_scoped(right, visit, scope);
+        }
+        ValueExpr::Sum {
+            value,
+            body,
+            seed: _,
+        } => {
+            value_scoped(value, visit, scope);
+            prop_scoped(body, visit, scope);
+        }
+        ValueExpr::Extremum { value, body, .. } => {
+            visit(Node::Slot(value), scope);
+            prop_scoped(body, visit, scope);
+        }
+        ValueExpr::ValueOf { args, default, .. } => {
+            slots(args, visit, scope);
+            if let Some(d) = default {
+                value_scoped(d, visit, scope);
+            }
+        }
+        ValueExpr::Cond {
+            when,
+            then,
+            otherwise,
+        } => {
+            prop_scoped(when, visit, scope);
+            value_scoped(then, visit, scope);
+            value_scoped(otherwise, visit, scope);
+        }
+        ValueExpr::Call { args, .. } => {
+            for a in args {
+                value_scoped(a, visit, scope);
+            }
+        }
+    }
+}
+
+fn slots<'a>(
+    args: &'a [Term],
+    visit: &mut dyn FnMut(Node<'a>, &[&'a Var]),
+    scope: &mut Vec<&'a Var>,
+) {
+    for a in args {
+        visit(Node::Slot(a), scope);
+    }
+}
+
+/// True when any `Prop` node in the tree satisfies `f`, the root
+/// included. `Defined` is a leaf: a call's body is scanned at its own
+/// declaration.
 pub(crate) fn any_prop_node(prop: &Prop, f: &impl Fn(&Prop) -> bool) -> bool {
-    if f(prop) {
-        return true;
-    }
-    match prop {
-        Prop::Claim { .. } | Prop::Defined { .. } | Prop::In(_, _) => false,
-        Prop::And(items) | Prop::Or(items) => items.iter().any(|p| any_prop_node(p, f)),
-        Prop::Not(p) | Prop::Pre(p) | Prop::Exists { body: p, .. } => any_prop_node(p, f),
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            any_prop_node(left, f) || any_prop_node(right, f)
+    let mut hit = false;
+    walk_prop(prop, &mut |n| {
+        if let Node::Prop(p) = n {
+            hit |= f(p);
         }
-        Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
-            any_prop_node_in_value(left, f) || any_prop_node_in_value(right, f)
-        }
-        Prop::Forall { source, body, .. } => any_prop_node(source, f) || any_prop_node(body, f),
-    }
-}
-
-/// Value-sort companion to [`any_prop_node`]: the `Prop` nodes
-/// reachable from a value expression (a `sum` body, transitively).
-pub(crate) fn any_prop_node_in_value(expr: &ValueExpr, f: &impl Fn(&Prop) -> bool) -> bool {
-    match expr {
-        ValueExpr::Term(_) => false,
-        ValueExpr::ValueOf { default, .. } => default
-            .as_ref()
-            .is_some_and(|d| any_prop_node_in_value(d, f)),
-        ValueExpr::Sum {
-            value,
-            body,
-            seed: _,
-        } => any_prop_node_in_value(value, f) || any_prop_node(body, f),
-        ValueExpr::Extremum { body, .. } => any_prop_node(body, f),
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            any_prop_node(when, f)
-                || any_prop_node_in_value(then, f)
-                || any_prop_node_in_value(otherwise, f)
-        }
-        ValueExpr::Arith { left, right, .. } => {
-            any_prop_node_in_value(left, f) || any_prop_node_in_value(right, f)
-        }
-        ValueExpr::Call { args, .. } => args.iter().any(|a| any_prop_node_in_value(a, f)),
-    }
-}
-
-/// True when any value-expression node reachable from the proposition
-/// satisfies `f`: comparison operands, `sum` targets and the values
-/// inside their bodies, transitively.
-pub(crate) fn any_value_node(prop: &Prop, f: &impl Fn(&ValueExpr) -> bool) -> bool {
-    match prop {
-        Prop::Claim { .. } | Prop::Defined { .. } | Prop::In(_, _) => false,
-        Prop::And(items) | Prop::Or(items) => items.iter().any(|p| any_value_node(p, f)),
-        Prop::Not(p) | Prop::Pre(p) | Prop::Exists { body: p, .. } => any_value_node(p, f),
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            any_value_node(left, f) || any_value_node(right, f)
-        }
-        Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
-            any_value_node_in_value(left, f) || any_value_node_in_value(right, f)
-        }
-        Prop::Forall { source, body, .. } => any_value_node(source, f) || any_value_node(body, f),
-    }
-}
-
-fn any_value_node_in_value(expr: &ValueExpr, f: &impl Fn(&ValueExpr) -> bool) -> bool {
-    if f(expr) {
-        return true;
-    }
-    match expr {
-        ValueExpr::Term(_) => false,
-        ValueExpr::ValueOf { default, .. } => default
-            .as_ref()
-            .is_some_and(|d| any_value_node_in_value(d, f)),
-        ValueExpr::Sum {
-            value,
-            body,
-            seed: _,
-        } => any_value_node_in_value(value, f) || any_value_node(body, f),
-        ValueExpr::Extremum { body, .. } => any_value_node(body, f),
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            any_value_node(when, f)
-                || any_value_node_in_value(then, f)
-                || any_value_node_in_value(otherwise, f)
-        }
-        ValueExpr::Arith { left, right, .. } => {
-            any_value_node_in_value(left, f) || any_value_node_in_value(right, f)
-        }
-        ValueExpr::Call { args, .. } => args.iter().any(|a| any_value_node_in_value(a, f)),
-    }
+    });
+    hit
 }
 
 /// Does the proposition contain `pre(...)` anywhere, including inside
@@ -113,93 +213,30 @@ pub(crate) fn mentions_pre(prop: &Prop) -> bool {
     any_prop_node(prop, &|p| matches!(p, Prop::Pre(_)))
 }
 
-/// True when any term position in the tree satisfies `f`. The
-/// predicate also sees the quantifier binders in scope at that
-/// position, so a caller matching variables by name can honour
-/// shadowing; callers that don't care ignore the slice.
+/// True when any term in the tree satisfies `f`, in a slot or in value
+/// position. `f` also sees the quantifier binders enclosing the term, so
+/// a caller matching variables by name can honour shadowing.
 pub(crate) fn any_term_in_prop(prop: &Prop, f: &impl Fn(&Term, &[&Var]) -> bool) -> bool {
-    any_term_prop_scoped(prop, f, &mut Vec::new())
+    let mut hit = false;
+    walk_prop_scoped(prop, &mut |n, scope| {
+        hit |= term_of(n).is_some_and(|t| f(t, scope))
+    });
+    hit
 }
 
 /// Value-sort companion to [`any_term_in_prop`].
 pub(crate) fn any_term_in_value(expr: &ValueExpr, f: &impl Fn(&Term, &[&Var]) -> bool) -> bool {
-    any_term_value_scoped(expr, f, &mut Vec::new())
+    let mut hit = false;
+    walk_value_scoped(expr, &mut |n, scope| {
+        hit |= term_of(n).is_some_and(|t| f(t, scope))
+    });
+    hit
 }
 
-fn any_term_prop_scoped<'p>(
-    prop: &'p Prop,
-    f: &impl Fn(&Term, &[&Var]) -> bool,
-    scope: &mut Vec<&'p Var>,
-) -> bool {
-    match prop {
-        Prop::Claim { args, .. } | Prop::Defined { args, .. } => args.iter().any(|t| f(t, scope)),
-        Prop::In(a, b) => f(a, scope) || f(b, scope),
-        Prop::And(items) | Prop::Or(items) => {
-            items.iter().any(|p| any_term_prop_scoped(p, f, scope))
-        }
-        Prop::Not(p) | Prop::Pre(p) => any_term_prop_scoped(p, f, scope),
-        Prop::Exists { binding, body } => {
-            scope.push(binding);
-            let hit = any_term_prop_scoped(body, f, scope);
-            scope.pop();
-            hit
-        }
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            any_term_prop_scoped(left, f, scope) || any_term_prop_scoped(right, f, scope)
-        }
-        Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
-            any_term_value_scoped(left, f, scope) || any_term_value_scoped(right, f, scope)
-        }
-        Prop::Forall {
-            binding,
-            source,
-            body,
-        } => {
-            if any_term_prop_scoped(source, f, scope) {
-                return true;
-            }
-            scope.push(binding);
-            let hit = any_term_prop_scoped(body, f, scope);
-            scope.pop();
-            hit
-        }
-    }
-}
-
-fn any_term_value_scoped<'p>(
-    expr: &'p ValueExpr,
-    f: &impl Fn(&Term, &[&Var]) -> bool,
-    scope: &mut Vec<&'p Var>,
-) -> bool {
-    match expr {
-        ValueExpr::Term(t) => f(t, scope),
-        ValueExpr::ValueOf { args, default, .. } => {
-            args.iter().any(|t| f(t, scope))
-                || default
-                    .as_ref()
-                    .is_some_and(|d| any_term_value_scoped(d, f, scope))
-        }
-        ValueExpr::Sum {
-            value,
-            body,
-            seed: _,
-        } => any_term_value_scoped(value, f, scope) || any_term_prop_scoped(body, f, scope),
-        ValueExpr::Extremum { value, body, .. } => {
-            f(value, scope) || any_term_prop_scoped(body, f, scope)
-        }
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            any_term_prop_scoped(when, f, scope)
-                || any_term_value_scoped(then, f, scope)
-                || any_term_value_scoped(otherwise, f, scope)
-        }
-        ValueExpr::Arith { left, right, .. } => {
-            any_term_value_scoped(left, f, scope) || any_term_value_scoped(right, f, scope)
-        }
-        ValueExpr::Call { args, .. } => args.iter().any(|a| any_term_value_scoped(a, f, scope)),
+fn term_of<'a>(node: Node<'a>) -> Option<&'a Term> {
+    match node {
+        Node::Slot(t) | Node::Value(ValueExpr::Term(t)) => Some(t),
+        Node::Stmt(_) | Node::Prop(_) | Node::Value(_) | Node::Binder(_) => None,
     }
 }
 
@@ -225,7 +262,7 @@ mod tests {
     }
 
     /// Each descent must find a match that sits only in its first
-    /// branch, which an `||` turned into `&&` would miss.
+    /// branch, which a dropped edge would miss.
     #[test]
     fn a_match_in_the_first_branch_alone_is_found() {
         // Forall: pre only in the SOURCE, body clean.
@@ -280,5 +317,35 @@ mod tests {
             right: Box::new(ValueExpr::Term(var_term("other"))),
         };
         assert!(any_term_in_value(&arith, &is_x));
+    }
+
+    /// A `forall` binds its body, not its source: a term in the source
+    /// sees the outer scope.
+    #[test]
+    fn a_forall_source_is_outside_its_own_binding() {
+        let forall = Prop::Forall {
+            binding: Var::from("x"),
+            source: Box::new(Prop::Claim {
+                predicate: "S".into(),
+                args: vec![var_term("x")],
+            }),
+            body: Box::new(Prop::Claim {
+                predicate: "B".into(),
+                args: vec![var_term("x")],
+            }),
+        };
+        let unbound_x = |t: &Term, scope: &[&Var]| matches!(t, Term::Var(v) if v.as_str() == "x" && !scope.contains(&v));
+        assert!(any_term_in_prop(&forall, &unbound_x));
+        let bound_x = |t: &Term, scope: &[&Var]| matches!(t, Term::Var(v) if v.as_str() == "x" && scope.contains(&v));
+        assert!(any_term_in_prop(&forall, &bound_x));
+        let exists = Prop::Exists {
+            binding: Var::from("x"),
+            body: Box::new(Prop::Claim {
+                predicate: "P".into(),
+                args: vec![var_term("x")],
+            }),
+        };
+        assert!(!any_term_in_prop(&exists, &unbound_x));
+        assert!(any_term_in_prop(&exists, &bound_x));
     }
 }

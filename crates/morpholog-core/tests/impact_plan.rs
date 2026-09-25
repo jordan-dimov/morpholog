@@ -176,3 +176,26 @@ fn a_value_lookup_is_a_state_dependency_the_plan_never_hides() {
         Impact::Unbounded
     );
 }
+
+#[test]
+fn a_nested_sum_widens_to_the_whole_invariant() {
+    // A(x) implies sum(sum(d | Line(x, d)) | B(x)) = 0: the outer target is
+    // a sum, not a term, so the bounding proof does not cover it.
+    let inv = invariant(
+        "nested",
+        implies(
+            claim("A", vec![var("x")]),
+            eq(
+                sum(
+                    sum(term(var("d")), claim("Line", vec![var("x"), var("d")])),
+                    claim("B", vec![var("x")]),
+                ),
+                term(dec_term("0")),
+            ),
+        ),
+    );
+    assert_eq!(
+        ImpactPlan::new(&inv).classify(&[claim_instance("A", &[subj("a")])], &[]),
+        Impact::Unbounded
+    );
+}

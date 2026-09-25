@@ -1747,19 +1747,23 @@ fn value_mentions_actor(expr: &ValueExpr) -> bool {
 
 /// Every rule name a statement carries, including inside `for` bodies.
 fn collect_rule_names<'s>(stmt: &'s Stmt, out: &mut Vec<&'s RuleName>) {
-    match stmt {
-        Stmt::Require { name, .. } | Stmt::BindOne { name, .. } => out.extend(name.as_ref()),
-        Stmt::For { body, .. } => {
-            for inner in body {
-                collect_rule_names(inner, out);
-            }
+    fold::walk_stmt(stmt, &mut |n| match n {
+        fold::Node::Stmt(Stmt::Require { name, .. } | Stmt::BindOne { name, .. }) => {
+            out.extend(name.as_ref());
         }
-        Stmt::Let { .. }
-        | Stmt::LetNewSubject { .. }
-        | Stmt::Assert(_)
-        | Stmt::Retract { .. }
-        | Stmt::Emit(_) => {}
-    }
+        fold::Node::Stmt(
+            Stmt::Let { .. }
+            | Stmt::LetNewSubject { .. }
+            | Stmt::Assert(_)
+            | Stmt::Retract { .. }
+            | Stmt::For { .. }
+            | Stmt::Emit(_),
+        )
+        | fold::Node::Prop(_)
+        | fold::Node::Value(_)
+        | fold::Node::Slot(_)
+        | fold::Node::Binder(_) => {}
+    });
 }
 
 /// Whether `name` occurs in any term position, honouring quantifier

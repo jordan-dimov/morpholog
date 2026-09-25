@@ -34,7 +34,7 @@ mod derive;
 mod disciplines;
 mod eval;
 mod explain;
-mod fold;
+pub mod fold;
 mod guarantees;
 mod impact;
 mod ir;
