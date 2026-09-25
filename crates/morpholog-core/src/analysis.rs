@@ -2,13 +2,14 @@
 //! only the claims a derived claim or transformation needs; other callers use
 //! them to inspect a programme's predicates without running it.
 //!
-//! Every walker matches exhaustively (no `_` arm), so a new `Prop`,
-//! `ValueExpr`, or `Stmt` variant cannot slip through and leave the read path
-//! loading too few claims.
+//! Structural descent goes through [`crate::fold`]; the matches here judge
+//! nodes and match exhaustively (no `_` arm), so a new variant cannot slip
+//! through and leave the read path loading too few claims.
 
 use std::collections::{BTreeSet, HashMap};
 
 use crate::definitions::DefinitionTable;
+use crate::fold::{Node, walk_prop, walk_stmt, walk_value};
 use crate::ir::{
     ArgDecl, ArithOp, Builtin, CompareOp, Definition, DefinitionName, DerivedClaim, OrderedDomain,
     PredicateArgKind, PredicateName, Program, Prop, Stmt, Term, TransformationName, ValueExpr, Var,
@@ -19,10 +20,6 @@ use crate::validate::ValidatedProgram;
 /// its tree, including through defined calls. The PostgreSQL read path uses
 /// it to load only the claims it needs instead of the whole
 /// `morpholog.claims` table.
-///
-/// A missed variant would load too few claims and give wrong answers, so the
-/// match is exhaustive: a new `Prop` variant does not compile until handled.
-/// `In` reads only terms and contributes nothing.
 pub fn predicates_referenced_by_prop(
     prop: &Prop,
     definitions: &[Definition],
@@ -36,7 +33,7 @@ pub fn predicates_referenced_by_prop(
     );
 }
 
-/// Recursive worker for [`predicates_referenced_by_prop`]. `seen` walks each
+/// Worker for [`predicates_referenced_by_prop`]. `seen` walks each
 /// definition body once, so the walk also terminates on cyclic,
 /// unvalidated IR.
 pub(crate) fn prop_refs(
@@ -45,114 +42,47 @@ pub(crate) fn prop_refs(
     seen: &mut BTreeSet<DefinitionName>,
     out: &mut BTreeSet<PredicateName>,
 ) {
-    match prop {
-        // A call reads whatever its definition's body reads, transitively.
-        // Otherwise the body would be evaluated against claims never loaded.
-        Prop::Defined { name, .. } => {
+    walk_prop(prop, &mut |n| collect_refs(n, definitions, seen, out));
+}
+
+/// The predicates one node reads. A call reads whatever its definition's
+/// body reads, transitively: otherwise the body would be evaluated
+/// against claims never loaded. A retraction reads its pattern's
+/// predicate: the pattern is matched against pre-state. An admission
+/// only writes.
+fn collect_refs(
+    node: Node<'_>,
+    definitions: DefinitionTable<'_>,
+    seen: &mut BTreeSet<DefinitionName>,
+    out: &mut BTreeSet<PredicateName>,
+) {
+    match node {
+        Node::Prop(Prop::Claim { predicate, .. })
+        | Node::Value(ValueExpr::ValueOf { predicate, .. })
+        | Node::Stmt(Stmt::Retract { predicate, .. }) => {
+            out.insert(predicate.clone());
+        }
+        Node::Prop(Prop::Defined { name, .. }) => {
             if seen.insert(name.clone())
                 && let Some(def) = definitions.get(name)
             {
                 prop_refs(&def.body, definitions, seen, out);
             }
         }
-        Prop::Claim { predicate, .. } => {
-            out.insert(predicate.clone());
-        }
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            prop_refs(left, definitions, seen, out);
-            prop_refs(right, definitions, seen, out);
-        }
-        Prop::And(props) | Prop::Or(props) => {
-            for p in props {
-                prop_refs(p, definitions, seen, out);
-            }
-        }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => {
-            prop_refs(p, definitions, seen, out);
-        }
-        Prop::Eq(l, r)
-        | Prop::Neq(l, r)
-        | Prop::Compare {
-            left: l, right: r, ..
-        } => {
-            value_refs(l, definitions, seen, out);
-            value_refs(r, definitions, seen, out);
-        }
-        Prop::Forall { source, body, .. } => {
-            prop_refs(source, definitions, seen, out);
-            prop_refs(body, definitions, seen, out);
-        }
-        Prop::In(_, _) => {
-            // No predicate references; operates on Terms only.
-        }
+        Node::Stmt(_) | Node::Prop(_) | Node::Value(_) | Node::Slot(_) | Node::Binder(_) => {}
     }
 }
 
 /// Return the set of predicate names a value expression references anywhere
-/// in its tree. The value companion to [`predicates_referenced_by_prop`];
-/// the two recurse into each other (`Sum`'s body is a `Prop`). Exhaustive
-/// for the same reason.
+/// in its tree. The value companion to [`predicates_referenced_by_prop`].
 pub(crate) fn predicates_referenced_by_value(
     expr: &ValueExpr,
     definitions: &[Definition],
     out: &mut BTreeSet<PredicateName>,
 ) {
-    value_refs(
-        expr,
-        DefinitionTable::new(definitions),
-        &mut BTreeSet::new(),
-        out,
-    );
-}
-
-/// Recursive worker for [`predicates_referenced_by_value`].
-fn value_refs(
-    expr: &ValueExpr,
-    definitions: DefinitionTable<'_>,
-    seen: &mut BTreeSet<DefinitionName>,
-    out: &mut BTreeSet<PredicateName>,
-) {
-    match expr {
-        ValueExpr::ValueOf {
-            predicate, default, ..
-        } => {
-            out.insert(predicate.clone());
-            if let Some(d) = default {
-                value_refs(d, definitions, seen, out);
-            }
-        }
-        ValueExpr::Arith { left, right, .. } => {
-            value_refs(left, definitions, seen, out);
-            value_refs(right, definitions, seen, out);
-        }
-        ValueExpr::Sum { value, body, .. } => {
-            value_refs(value, definitions, seen, out);
-            prop_refs(body, definitions, seen, out);
-        }
-        ValueExpr::Extremum { body, .. } => {
-            prop_refs(body, definitions, seen, out);
-        }
-        // Only one branch runs, but we cannot know which statically, so
-        // load what the condition and both branches read.
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            prop_refs(when, definitions, seen, out);
-            value_refs(then, definitions, seen, out);
-            value_refs(otherwise, definitions, seen, out);
-        }
-        // A builtin reads nothing itself; its footprint is its arguments'.
-        ValueExpr::Call { args, .. } => {
-            for a in args {
-                value_refs(a, definitions, seen, out);
-            }
-        }
-        ValueExpr::Term(_) => {
-            // No predicate references; operates on a Term only.
-        }
-    }
+    let definitions = DefinitionTable::new(definitions);
+    let seen = &mut BTreeSet::new();
+    walk_value(expr, &mut |n| collect_refs(n, definitions, seen, out));
 }
 
 /// Return the predicate names `enumerate_derived(derived, state)` reads from
@@ -172,71 +102,32 @@ pub fn predicates_referenced_by_derived(
     out
 }
 
-/// Return every predicate name a statement **reads from pre-state**. The PG
-/// adapter uses it to load only the predicates a transformation consults.
-///
-/// - `Require` / `BindOne` / `Let` value / `For` collection: read.
-/// - `Retract`: read. Its pattern is matched against pre-state to find
-///   the claims to retract.
-/// - `Assert`: not read. The claim is only written.
-/// - `Emit` / `LetNewSubject`: nothing.
-/// - `For` body: recurses.
-///
-/// Exhaustive, so a new `Stmt` variant must declare its reads.
+/// Return every predicate name a statement **reads from pre-state**,
+/// through `for` bodies. The PG adapter uses it to load only the
+/// predicates a transformation consults.
 pub fn predicates_read_by_stmt(
     stmt: &Stmt,
     definitions: &[Definition],
     out: &mut BTreeSet<PredicateName>,
 ) {
-    match stmt {
-        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => {
-            predicates_referenced_by_prop(p, definitions, out)
-        }
-        Stmt::Let { value, .. } => predicates_referenced_by_value(value, definitions, out),
-        Stmt::LetNewSubject { .. } => {}
-        Stmt::Assert(_) => {
-            // Written, not read.
-        }
-        Stmt::Retract { predicate, .. } => {
-            // The pattern is matched against pre-state, so load it.
-            out.insert(predicate.clone());
-        }
-        Stmt::For {
-            collection, body, ..
-        } => {
-            predicates_referenced_by_value(collection, definitions, out);
-            for inner in body {
-                predicates_read_by_stmt(inner, definitions, out);
-            }
-        }
-        Stmt::Emit(_) => {}
-    }
+    let definitions = DefinitionTable::new(definitions);
+    let seen = &mut BTreeSet::new();
+    walk_stmt(stmt, &mut |n| collect_refs(n, definitions, seen, out));
 }
 
-/// The predicates a statement admits, through `For` bodies. The loaded
+/// The predicates a statement admits, through `for` bodies. The loaded
 /// pre-state must include them for the effective delta to be exact: admitting
 /// a claim already present changes nothing, and only loaded state can tell.
 pub fn predicates_asserted_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
-    match stmt {
-        Stmt::Assert(claim) => {
+    walk_stmt(stmt, &mut |n| {
+        if let Node::Stmt(Stmt::Assert(claim)) = n {
             out.insert(claim.predicate.clone());
         }
-        Stmt::For { body, .. } => {
-            for inner in body {
-                predicates_asserted_by_stmt(inner, out);
-            }
-        }
-        Stmt::Require { .. }
-        | Stmt::BindOne { .. }
-        | Stmt::Let { .. }
-        | Stmt::LetNewSubject { .. }
-        | Stmt::Retract { .. }
-        | Stmt::Emit(_) => {}
-    }
+    });
 }
 
 /// Return the names of every transformation in `program` whose body asserts
-/// `predicate` (including inside `For` bodies), in declaration order. The
+/// `predicate` (including inside `for` bodies), in declaration order. The
 /// explanation engine uses it to name who could supply a missing claim.
 ///
 /// A match is only a *candidate* supplier: its own gates may still stop it
@@ -245,24 +136,13 @@ pub fn transformations_asserting(program: &Program, predicate: &str) -> Vec<Stri
     program
         .transformations
         .iter()
-        .filter(|t| t.body.iter().any(|s| stmt_asserts(s, predicate)))
+        .filter(|t| {
+            let mut asserted = BTreeSet::new();
+            predicates_asserted_by(t, &mut asserted);
+            asserted.iter().any(|p| p.as_str() == predicate)
+        })
         .map(|t| t.name.to_string())
         .collect()
-}
-
-/// Whether a statement (or, for `For`, its body) asserts `predicate`.
-/// Exhaustive, so a new variant cannot hide a supplier from `explain`.
-fn stmt_asserts(stmt: &Stmt, predicate: &str) -> bool {
-    match stmt {
-        Stmt::Assert(claim) => claim.predicate.as_str() == predicate,
-        Stmt::For { body, .. } => body.iter().any(|s| stmt_asserts(s, predicate)),
-        Stmt::Require { .. }
-        | Stmt::BindOne { .. }
-        | Stmt::Let { .. }
-        | Stmt::LetNewSubject { .. }
-        | Stmt::Retract { .. }
-        | Stmt::Emit(_) => false,
-    }
 }
 
 /// The predicates some transformation in this programme asserts. Stored
@@ -273,9 +153,7 @@ fn stmt_asserts(stmt: &Stmt, predicate: &str) -> bool {
 pub(crate) fn declared_supplier_predicates(program: &Program) -> BTreeSet<PredicateName> {
     let mut out = BTreeSet::new();
     for t in &program.transformations {
-        for s in &t.body {
-            collect_asserted(s, &mut out);
-        }
+        predicates_asserted_by(t, &mut out);
     }
     out
 }
@@ -288,30 +166,17 @@ pub fn predicates_written_by(
 ) -> BTreeSet<PredicateName> {
     let mut out = BTreeSet::new();
     for stmt in &transformation.body {
-        collect_written(stmt, &mut out);
+        walk_stmt(stmt, &mut |n| match n {
+            Node::Stmt(Stmt::Assert(claim)) => {
+                out.insert(claim.predicate.clone());
+            }
+            Node::Stmt(Stmt::Retract { predicate, .. }) => {
+                out.insert(predicate.clone());
+            }
+            Node::Stmt(_) | Node::Prop(_) | Node::Value(_) | Node::Slot(_) | Node::Binder(_) => {}
+        });
     }
     out
-}
-
-fn collect_written(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
-    match stmt {
-        Stmt::Assert(claim) => {
-            out.insert(claim.predicate.clone());
-        }
-        Stmt::Retract { predicate, .. } => {
-            out.insert(predicate.clone());
-        }
-        Stmt::For { body, .. } => {
-            for s in body {
-                collect_written(s, out);
-            }
-        }
-        Stmt::Require { .. }
-        | Stmt::BindOne { .. }
-        | Stmt::Let { .. }
-        | Stmt::LetNewSubject { .. }
-        | Stmt::Emit(_) => {}
-    }
 }
 
 /// Whether the transformation has a top-level `require` or `bind`. A gate
@@ -332,27 +197,7 @@ pub(crate) fn predicates_asserted_by(
     out: &mut BTreeSet<PredicateName>,
 ) {
     for stmt in &transformation.body {
-        collect_asserted(stmt, out);
-    }
-}
-
-/// Every predicate a statement asserts (descending into `For` bodies).
-fn collect_asserted(stmt: &Stmt, out: &mut BTreeSet<PredicateName>) {
-    match stmt {
-        Stmt::Assert(claim) => {
-            out.insert(claim.predicate.clone());
-        }
-        Stmt::For { body, .. } => {
-            for s in body {
-                collect_asserted(s, out);
-            }
-        }
-        Stmt::Require { .. }
-        | Stmt::BindOne { .. }
-        | Stmt::Let { .. }
-        | Stmt::LetNewSubject { .. }
-        | Stmt::Retract { .. }
-        | Stmt::Emit(_) => {}
+        predicates_asserted_by_stmt(stmt, out);
     }
 }
 

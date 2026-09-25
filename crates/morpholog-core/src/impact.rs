@@ -9,12 +9,11 @@
 //! term-targeted sum checks the whole invariant. An empty delta touches
 //! nothing, whatever the body.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rust_decimal::Decimal;
 
-use crate::fold::{any_prop_node, any_value_node};
+use crate::fold::{Node, walk_prop};
 use crate::ir::{Invariant, PredicateName, Prop, Term, Value, ValueExpr, Var};
 use crate::state::{ClaimInstance, EvalValue};
 
@@ -56,40 +55,39 @@ pub struct ImpactPlan {
 impl ImpactPlan {
     pub fn new(inv: &Invariant) -> Self {
         let case_vars = case_variables(&inv.body);
-        let occurrences = RefCell::new(Vec::new());
-        let unproved_value = any_value_node(&inv.body, &|v| match v {
-            ValueExpr::Term(_) => false,
-            ValueExpr::Sum { value, .. } => !matches!(**value, ValueExpr::Term(_)),
-            _ => true,
-        });
-        let conservative = unproved_value
-            || any_prop_node(&inv.body, &|p| match p {
-                Prop::Claim { predicate, args } => {
-                    let mut guards = Vec::new();
-                    let mut var_map = Vec::new();
-                    for (i, term) in args.iter().enumerate() {
-                        match term {
-                            Term::Literal(v) => guards.push((i, v.clone())),
-                            Term::Var(v) if case_vars.contains(v) => var_map.push((i, v.clone())),
-                            Term::Var(_) | Term::Wildcard | Term::Actor => {}
-                        }
+        let mut occurrences = Vec::new();
+        let mut conservative = false;
+        walk_prop(&inv.body, &mut |n| match n {
+            Node::Prop(Prop::Claim { predicate, args }) => {
+                let mut guards = Vec::new();
+                let mut var_map = Vec::new();
+                for (i, term) in args.iter().enumerate() {
+                    match term {
+                        Term::Literal(v) => guards.push((i, v.clone())),
+                        Term::Var(v) if case_vars.contains(v) => var_map.push((i, v.clone())),
+                        Term::Var(_) | Term::Wildcard | Term::Actor => {}
                     }
-                    occurrences.borrow_mut().push(Occurrence {
-                        predicate: predicate.clone(),
-                        guards,
-                        var_map,
-                    });
-                    false
                 }
+                occurrences.push(Occurrence {
+                    predicate: predicate.clone(),
+                    guards,
+                    var_map,
+                });
+            }
+            Node::Prop(
                 Prop::Defined { .. }
                 | Prop::Pre(_)
                 | Prop::Or(_)
                 | Prop::Xor(_, _)
-                | Prop::In(_, _) => true,
-                _ => false,
-            });
+                | Prop::In(_, _),
+            ) => conservative = true,
+            // A sum's target is visited next and judged as its own node.
+            Node::Value(ValueExpr::Term(_) | ValueExpr::Sum { .. }) => {}
+            Node::Value(_) => conservative = true,
+            Node::Prop(_) | Node::Stmt(_) | Node::Slot(_) | Node::Binder(_) => {}
+        });
         Self {
-            occurrences: occurrences.into_inner(),
+            occurrences,
             conservative,
         }
     }

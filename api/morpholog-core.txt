@@ -86,6 +86,27 @@ impl core::marker::UnsafeUnpin for morpholog_core::calendar::CalendarSpan
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::calendar::CalendarSpan
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::calendar::CalendarSpan
 pub fn morpholog_core::calendar::parse_calendar_span(&str) -> core::result::Result<morpholog_core::calendar::CalendarSpan, alloc::string::String>
+pub mod morpholog_core::fold
+pub enum morpholog_core::fold::Node<'a>
+pub morpholog_core::fold::Node::Binder(&'a morpholog_core::Var)
+pub morpholog_core::fold::Node::Prop(&'a morpholog_core::Prop)
+pub morpholog_core::fold::Node::Slot(&'a morpholog_core::Term)
+pub morpholog_core::fold::Node::Stmt(&'a morpholog_core::Stmt)
+pub morpholog_core::fold::Node::Value(&'a morpholog_core::ValueExpr)
+impl<'a> core::clone::Clone for morpholog_core::fold::Node<'a>
+pub fn morpholog_core::fold::Node<'a>::clone(&self) -> morpholog_core::fold::Node<'a>
+impl<'a> core::clone::TrivialClone for morpholog_core::fold::Node<'a>
+impl<'a> core::marker::Copy for morpholog_core::fold::Node<'a>
+impl<'a> core::marker::Freeze for morpholog_core::fold::Node<'a>
+impl<'a> core::marker::Send for morpholog_core::fold::Node<'a>
+impl<'a> core::marker::Sync for morpholog_core::fold::Node<'a>
+impl<'a> core::marker::Unpin for morpholog_core::fold::Node<'a>
+impl<'a> core::marker::UnsafeUnpin for morpholog_core::fold::Node<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for morpholog_core::fold::Node<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for morpholog_core::fold::Node<'a>
+pub fn morpholog_core::fold::walk_prop<'a>(&'a morpholog_core::Prop, &mut dyn core::ops::function::FnMut(morpholog_core::fold::Node<'a>))
+pub fn morpholog_core::fold::walk_stmt<'a>(&'a morpholog_core::Stmt, &mut dyn core::ops::function::FnMut(morpholog_core::fold::Node<'a>))
+pub fn morpholog_core::fold::walk_value<'a>(&'a morpholog_core::ValueExpr, &mut dyn core::ops::function::FnMut(morpholog_core::fold::Node<'a>))
 pub mod morpholog_core::format
 pub fn morpholog_core::format::canonical_hash(&morpholog_core::Program) -> alloc::string::String
 pub fn morpholog_core::format::format_program(&morpholog_core::Program) -> alloc::string::String

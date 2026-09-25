@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use crate::fold::{Node, walk_prop};
 use crate::ir::{Definition, DefinitionName, Program, Prop, Stmt, ValueExpr};
 
 /// Turn every `Prop::Claim` whose name is a declared definition into the
@@ -189,65 +190,11 @@ impl<'a> DefinitionTable<'a> {
 /// Collect the definitions a proposition calls directly (not
 /// transitively), including inside value positions such as `Sum` bodies.
 pub(crate) fn defined_calls_in_prop(prop: &Prop, out: &mut BTreeSet<DefinitionName>) {
-    match prop {
-        Prop::Defined { name, .. } => {
+    walk_prop(prop, &mut |n| {
+        if let Node::Prop(Prop::Defined { name, .. }) = n {
             out.insert(name.clone());
         }
-        Prop::Claim { .. } | Prop::In(_, _) => {}
-        Prop::And(props) | Prop::Or(props) => {
-            for p in props {
-                defined_calls_in_prop(p, out);
-            }
-        }
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            defined_calls_in_prop(left, out);
-            defined_calls_in_prop(right, out);
-        }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => {
-            defined_calls_in_prop(p, out);
-        }
-        Prop::Forall { source, body, .. } => {
-            defined_calls_in_prop(source, out);
-            defined_calls_in_prop(body, out);
-        }
-        Prop::Eq(l, r) | Prop::Neq(l, r) => {
-            defined_calls_in_value(l, out);
-            defined_calls_in_value(r, out);
-        }
-        Prop::Compare { left, right, .. } => {
-            defined_calls_in_value(left, out);
-            defined_calls_in_value(right, out);
-        }
-    }
-}
-
-pub(crate) fn defined_calls_in_value(value: &ValueExpr, out: &mut BTreeSet<DefinitionName>) {
-    match value {
-        ValueExpr::Term(_) | ValueExpr::ValueOf { .. } => {}
-        ValueExpr::Arith { left, right, .. } => {
-            defined_calls_in_value(left, out);
-            defined_calls_in_value(right, out);
-        }
-        ValueExpr::Sum { value, body, .. } => {
-            defined_calls_in_value(value, out);
-            defined_calls_in_prop(body, out);
-        }
-        ValueExpr::Extremum { body, .. } => defined_calls_in_prop(body, out),
-        ValueExpr::Cond {
-            when,
-            then,
-            otherwise,
-        } => {
-            defined_calls_in_prop(when, out);
-            defined_calls_in_value(then, out);
-            defined_calls_in_value(otherwise, out);
-        }
-        ValueExpr::Call { args, .. } => {
-            for a in args {
-                defined_calls_in_value(a, out);
-            }
-        }
-    }
+    });
 }
 
 /// Order definitions so each one comes after the definitions it calls.
