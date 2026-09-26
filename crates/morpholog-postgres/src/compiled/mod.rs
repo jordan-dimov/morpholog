@@ -31,12 +31,19 @@
 //! raise while comparing - two quantities of different units, a stored
 //! value of another kind than the comparison expects, which history
 //! admitted under an older declaration can hold, or a value a sum cannot
-//! take - the SQL carries that as data, the way a sum's range test does: the violation query returns such a row, and a
-//! second query then names the first erroring binding in the kernel's own
-//! order (state as loaded, the transition's admissions at the tail) with
-//! its operands, so the runner reports the kernel's exact error. An
-//! error-bearing comparison must therefore close its scope, as a sum
-//! comparison must.
+//! take - the SQL carries that as data, the way a sum's range test does:
+//! the violation query returns such a row, and a second query then names
+//! the first erroring binding in the kernel's own order (state as loaded,
+//! the transition's admissions at the tail) with its operands, so the
+//! runner reports the kernel's exact error.
+//!
+//! The ways a body can raise form an error plan beside the truth query:
+//! one probe scope per stage of a conjunction, and one scope of the
+//! enclosing row for whatever the kernel evaluates whole per row (an
+//! implication's consequent, a `forall` body, `exists`, `not`, a nested
+//! implication), asked in the kernel's order, first hit wins. Sums keep
+//! a narrower fragment: a sum-closing comparison is last in its scope and
+//! never under a nested one.
 //!
 //! Witness contract: rule name, version and the witness VARIABLE SET must
 //! match the kernel. Witness values may differ: a symmetric self-join can
@@ -232,7 +239,7 @@ impl CompiledInvariantSet {
             let Some(row) = row else {
                 continue;
             };
-            if let Some(error_sql) = inv.error_sql(case_filter.as_deref(), steps)? {
+            for error_sql in inv.error_sqls(case_filter.as_deref(), steps)? {
                 let erroring = sqlx::query(sqlx::AssertSqlSafe(error_sql))
                     .fetch_optional(&mut **tx)
                     .await
@@ -316,9 +323,14 @@ fn decode_witness(
     let mut witness = Vec::with_capacity(inv.witness_vars.len());
     for var in &inv.witness_vars {
         let col = format!("w_{var}");
-        let text: String = row
+        let text: Option<String> = row
             .try_get(col.as_str())
             .map_err(|e| PgError::InvalidState(format!("witness column {col} missing: {e}")))?;
+        // A consequent-bound variable is NULL when no row reached it: the
+        // kernel's witness leaves it out too.
+        let Some(text) = text else {
+            continue;
+        };
         let value: EvalValue = serde_json::from_str(&text)
             .map_err(|e| PgError::InvalidState(format!("witness value {col} undecodable: {e}")))?;
         witness.push(WitnessBinding {
@@ -511,17 +523,19 @@ pub(crate) struct CompiledInvariant {
     /// full tagged value as `w_<var>`.
     pub(crate) witness_vars: Vec<Var>,
     /// Which cases a delta touches, decided by core; `case_cols` renders
-    /// its bindings onto the antecedent's columns.
+    /// its bindings onto the antecedent's columns. It also holds the
+    /// columns a consequent binds, for the witness alone: no case is keyed
+    /// by them.
     plan: ImpactPlan,
     case_cols: BTreeMap<Var, ColRef>,
     sql_select_from_where: String,
     sql_order_limit: String,
-    /// The first binding in scope the kernel would raise on, asked only
-    /// after a violation row was found: the violation query stops at its
-    /// first row, and an error must win over a violation that sorts
-    /// earlier. Has no `LIMIT`, so a case filter can bound it like the
-    /// violation query. `None` when nothing in the body can raise.
-    error: Option<ErrorQuery>,
+    /// The scopes the kernel could raise in, in its evaluation order,
+    /// asked one at a time only after a violation row was found: the
+    /// violation query stops at its first row, and an error must win over
+    /// a violation that sorts earlier. The first scope that names a row
+    /// wins. Empty when nothing in the body can raise.
+    probe_scopes: Vec<ProbeScope>,
     /// The indexes this invariant's SQL seeks on at a join or a literal,
     /// in specification order. The plan must reach each through its
     /// index.
@@ -535,11 +549,14 @@ pub(crate) struct CompiledInvariant {
 /// The error query before its runtime parts: the report of the first
 /// erroring binding names values in the kernel's order, which depends on
 /// the transitions in flight, so the runner renders it.
+/// One scope the kernel evaluates binding by binding and could raise
+/// in: the prefix that reaches the raising expressions, and those
+/// expressions' probes in the kernel's order.
 #[derive(Debug)]
-struct ErrorQuery {
+struct ProbeScope {
     from: String,
     where_: String,
-    errors: Vec<RenderedError>,
+    probes: Vec<Probe>,
     /// The claim aliases of the scope with their predicates, in the
     /// kernel's nesting order.
     aliases: Vec<(String, PredicateName)>,
@@ -564,18 +581,16 @@ impl CompiledInvariant {
         sql
     }
 
-    /// The error query over the same obligation as the violation query,
-    /// ordered as the kernel evaluates: rows loaded before the
-    /// transitions, then each step's admissions in statement order, alias
-    /// by alias in the scope's nesting order.
-    pub(crate) fn error_sql(
+    /// The error queries over the same obligation as the violation query,
+    /// one per scope in the kernel's evaluation order, each ordered as the
+    /// kernel evaluates: rows loaded before the transitions, then each
+    /// step's admissions in statement order, alias by alias in the
+    /// scope's nesting order.
+    pub(crate) fn error_sqls(
         &self,
         case_filter: Option<&str>,
         steps: &[DeltaStep],
-    ) -> Result<Option<String>, PgError> {
-        let Some(query) = &self.error else {
-            return Ok(None);
-        };
+    ) -> Result<Vec<String>, PgError> {
         let order = |aliases: &[(String, PredicateName)]| -> Result<String, PgError> {
             Ok(aliases
                 .iter()
@@ -583,16 +598,21 @@ impl CompiledInvariant {
                 .collect::<Result<Vec<_>, _>>()?
                 .join(", "))
         };
-        let report = error_report(&query.errors, &order)?;
-        let mut sql = format!(
-            "SELECT {report}\nFROM {}\nWHERE {}",
-            query.from, query.where_
-        );
-        if let Some(filter) = case_filter {
-            let _ = write!(sql, "\n  AND ({filter})");
-        }
-        let _ = write!(sql, "\nORDER BY {}\nLIMIT 1", order(&query.aliases)?);
-        Ok(Some(sql))
+        self.probe_scopes
+            .iter()
+            .map(|scope| {
+                let report = error_report(&scope.probes, &order)?;
+                let mut sql = format!(
+                    "SELECT {report}\nFROM {}\nWHERE {}",
+                    scope.from, scope.where_
+                );
+                if let Some(filter) = case_filter {
+                    let _ = write!(sql, "\n  AND ({filter})");
+                }
+                let _ = write!(sql, "\nORDER BY {}\nLIMIT 1", order(&scope.aliases)?);
+                Ok(sql)
+            })
+            .collect()
     }
 
     /// Bound the check to the cases a delta could have changed: core
@@ -637,73 +657,27 @@ type OrderRenderer<'a> = dyn Fn(&[(String, PredicateName)]) -> Result<String, Pg
 /// The error query's report columns: which way the first erroring row
 /// raised, and what the kernel needs to word it. A sum's report looks
 /// inside the sum for the first value it could not take, in the kernel's
-/// order, which `order` renders.
-fn error_report(errors: &[RenderedError], order: &OrderRenderer<'_>) -> Result<String, PgError> {
-    let case = |pick: &dyn Fn(&RenderedError) -> Result<Option<String>, PgError>| {
+/// order, which `order` renders; a lifted probe's report looks inside
+/// its scope the same way.
+fn error_report(probes: &[Probe], order: &OrderRenderer<'_>) -> Result<String, PgError> {
+    let case = |column: Column| -> Result<String, PgError> {
         let mut arms = String::new();
-        for e in errors {
-            if let Some(v) = pick(e)? {
+        for e in probes {
+            if let Some(v) = report_column(&e.report, column, order)? {
                 let _ = write!(arms, " WHEN {} THEN {v}", e.condition);
             }
         }
-        Ok::<String, PgError>(if arms.is_empty() {
+        Ok(if arms.is_empty() {
             "NULL::text".to_string()
         } else {
             format!("CASE{arms} END")
         })
     };
-    let kind = case(&|e| {
-        Ok(Some(match e.report {
-            ErrorReport::SumRange => "'range'".to_string(),
-            ErrorReport::SumKind(_) => "'sum_kind'".to_string(),
-            ErrorReport::Compare { .. } => "'compare'".to_string(),
-        }))
-    })?;
-    let domain = case(&|e| {
-        Ok(match &e.report {
-            ErrorReport::Compare { domain, .. } => Some(match domain {
-                OrderedDomain::Decimal => "'decimal'".to_string(),
-                OrderedDomain::Timestamp => "'timestamp'".to_string(),
-                OrderedDomain::Date | OrderedDomain::Duration => unreachable!("never rendered"),
-            }),
-            ErrorReport::SumRange | ErrorReport::SumKind(_) => None,
-        })
-    })?;
-    let left = case(&|e| {
-        Ok(match &e.report {
-            ErrorReport::Compare { left, .. } => Some(format!("({left})::text")),
-            ErrorReport::SumKind(sum) => Some(format!(
-                "(SELECT ({}.arguments -> {})::text FROM {} WHERE {} AND {} ORDER BY {} LIMIT 1)",
-                sum.alias,
-                sum.position,
-                sum.from,
-                sum.where_,
-                sum.foreign(),
-                order(&sum.aliases)?
-            )),
-            ErrorReport::SumRange => None,
-        })
-    })?;
-    let right = case(&|e| {
-        Ok(match &e.report {
-            ErrorReport::Compare { right, .. } => Some(format!("({right})::text")),
-            ErrorReport::SumRange | ErrorReport::SumKind(_) => None,
-        })
-    })?;
-    // Whether the value a sum could not take was its first: the kernel
-    // words that differently.
-    let first = case(&|e| {
-        Ok(match &e.report {
-            ErrorReport::SumKind(sum) => Some(format!(
-                "(SELECT ({}) FROM {} WHERE {} ORDER BY {} LIMIT 1)",
-                sum.foreign(),
-                sum.from,
-                sum.where_,
-                order(&sum.aliases)?
-            )),
-            ErrorReport::SumRange | ErrorReport::Compare { .. } => None,
-        })
-    })?;
+    let kind = case(Column::Kind)?;
+    let domain = case(Column::Domain)?;
+    let left = case(Column::Left)?;
+    let right = case(Column::Right)?;
+    let first = case(Column::First)?;
     let first = if first == "NULL::text" {
         "NULL::boolean".to_string()
     } else {
@@ -712,6 +686,77 @@ fn error_report(errors: &[RenderedError], order: &OrderRenderer<'_>) -> Result<S
     Ok(format!(
         "{kind} AS \"kind\",\n       {domain} AS \"domain\",\n       {left} AS \"left\",\n       {right} AS \"right\",\n       {first} AS \"first\""
     ))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Column {
+    Kind,
+    Domain,
+    Left,
+    Right,
+    /// Whether the value a sum could not take was its first: the kernel
+    /// words that differently.
+    First,
+}
+
+/// One report column for one way of raising, or none when that way has
+/// nothing to say in it.
+fn report_column(
+    report: &ErrorReport,
+    column: Column,
+    order: &OrderRenderer<'_>,
+) -> Result<Option<String>, PgError> {
+    Ok(match (report, column) {
+        (ErrorReport::SumRange, Column::Kind) => Some("'range'".to_string()),
+        (ErrorReport::SumKind(_), Column::Kind) => Some("'sum_kind'".to_string()),
+        (ErrorReport::Compare { .. }, Column::Kind) => Some("'compare'".to_string()),
+        (ErrorReport::Compare { domain, .. }, Column::Domain) => Some(match domain {
+            OrderedDomain::Decimal => "'decimal'".to_string(),
+            OrderedDomain::Timestamp => "'timestamp'".to_string(),
+            OrderedDomain::Date | OrderedDomain::Duration => unreachable!("never rendered"),
+        }),
+        (ErrorReport::Compare { left, .. }, Column::Left) => Some(format!("({left})::text")),
+        (ErrorReport::Compare { right, .. }, Column::Right) => Some(format!("({right})::text")),
+        (ErrorReport::SumKind(sum), Column::Left) => Some(format!(
+            "(SELECT ({}.arguments -> {})::text FROM {} WHERE {} AND {} ORDER BY {} LIMIT 1)",
+            sum.alias,
+            sum.position,
+            sum.from,
+            sum.where_,
+            sum.foreign(),
+            order(&sum.aliases)?
+        )),
+        (ErrorReport::SumKind(sum), Column::First) => Some(format!(
+            "(SELECT ({}) FROM {} WHERE {} ORDER BY {} LIMIT 1)",
+            sum.foreign(),
+            sum.from,
+            sum.where_,
+            order(&sum.aliases)?
+        )),
+        // A lifted probe's kind and domain are constants; its operands
+        // are read from the first inner row that raises.
+        (
+            ErrorReport::Lifted {
+                from,
+                where_,
+                aliases,
+                condition,
+                report,
+            },
+            column,
+        ) => match report_column(report, column, order)? {
+            None => None,
+            Some(inner) if matches!(column, Column::Kind | Column::Domain) => Some(inner),
+            Some(inner) => Some(format!(
+                "(SELECT {inner} FROM {from} WHERE {} ORDER BY {} LIMIT 1)",
+                and_all(&[where_.clone(), condition.clone()]),
+                order(aliases)?
+            )),
+        },
+        (ErrorReport::SumRange, Column::Domain | Column::Left | Column::Right | Column::First)
+        | (ErrorReport::SumKind(_), Column::Domain | Column::Right)
+        | (ErrorReport::Compare { .. }, Column::First) => None,
+    })
 }
 
 /// An invariant name can be any string in hand-built IR, so neutralise
@@ -802,10 +847,11 @@ impl SumScope {
     }
 }
 
-/// A place the kernel could raise, as data: the condition on a row of the
-/// scope, and what to report when it is the first such row.
+/// One way a scope can raise: the condition that holds on the row the
+/// kernel would raise on, and what to report when it is the first such
+/// row.
 #[derive(Debug, Clone)]
-struct RenderedError {
+struct Probe {
     condition: String,
     report: ErrorReport,
 }
@@ -823,61 +869,51 @@ enum ErrorReport {
         left: String,
         right: String,
     },
+    /// A probe of a scope the kernel evaluates whole for each row of the
+    /// enclosing one. Its report is read from the first inner row, in the
+    /// kernel's order, that raises.
+    Lifted {
+        from: String,
+        where_: String,
+        aliases: Vec<(String, PredicateName)>,
+        condition: String,
+        report: Box<ErrorReport>,
+    },
 }
 
-/// A scope's rendering. `where_` holds the conjuncts before any
-/// error-bearing comparison; `tail` is that comparison (the scope's last
-/// conjunct), with its sums in `laterals` and its ways of raising in
-/// `errors`. The tail is kept apart so an error counts only where the
-/// kernel would evaluate the comparison: past the prefix, and then ahead
-/// of the comparison's own result.
+/// A scope's rendering: its joins, the LATERAL items its sums are
+/// computed in, every conjunct, the scopes in it the kernel could raise
+/// in, and its bindings.
 #[derive(Default)]
 struct Rendered {
     from: Vec<(String, PredicateName, String)>, // (alias, predicate, from item)
     laterals: Vec<String>,
     where_: Vec<String>,
-    tail: Option<String>,
-    errors: Vec<RenderedError>,
+    /// The scopes the kernel could raise in, in its evaluation order,
+    /// each relative to this rendering: a prefix names only what this
+    /// rendering joined and filtered before the raising expression.
+    probes: Vec<ScopeDraft>,
     env: Env,
+    /// A comparison consumed a sum. Nothing may follow it in its scope
+    /// and it cannot sit under a nested scope: the sum fragment's
+    /// boundary, until a forcing example moves it.
+    closes_scope: bool,
+    /// How many `from` items and conjuncts each conjunct of a
+    /// conjunction had contributed by its end, so a later reader can
+    /// take the prefix through the conjunct that bound a variable.
+    stages: Vec<(usize, usize)>,
 }
 
 impl Rendered {
     fn has_errors(&self) -> bool {
-        !self.errors.is_empty()
-    }
-
-    /// The prefix conjuncts, or `true` when there are none.
-    fn prefix(&self) -> String {
-        if self.where_.is_empty() {
-            "true".to_string()
-        } else {
-            self.where_.join(" AND ")
-        }
-    }
-
-    /// Any of this scope's ways of raising, or `false`.
-    fn error_any(&self) -> String {
-        or_all(
-            &self
-                .errors
-                .iter()
-                .map(|e| e.condition.clone())
-                .collect::<Vec<_>>(),
-        )
+        !self.probes.is_empty()
     }
 
     fn conjunction(&self) -> String {
-        self.where_
-            .iter()
-            .chain(self.tail.iter())
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(" AND ")
+        joined(&self.where_)
     }
 
     /// `EXISTS`-shaped rendering of this match, usable inside a WHERE.
-    /// Never reached with an error-bearing tail in scope: those shapes
-    /// are refused first.
     fn exists_sql(&self) -> String {
         if self.from.is_empty() && self.laterals.is_empty() {
             format!("({})", self.conjunction())
@@ -898,12 +934,168 @@ impl Rendered {
     }
 }
 
-/// The typed refusal for an error-bearing tail where the fragment has no
-/// place for one: a sum's, unless a comparison itself can raise.
+/// Conjuncts joined as a prefix, or `true` when there are none.
+fn joined(parts: &[String]) -> String {
+    if parts.is_empty() {
+        "true".to_string()
+    } else {
+        parts.join(" AND ")
+    }
+}
+
+/// A scope the kernel could raise in, relative to the rendering that
+/// holds it: the prefix that reaches the raising expressions, and their
+/// probes in the kernel's order.
+#[derive(Debug, Clone, Default)]
+struct ScopeDraft {
+    from: Vec<(String, PredicateName, String)>,
+    laterals: Vec<String>,
+    where_: Vec<String>,
+    probes: Vec<Probe>,
+}
+
+impl ScopeDraft {
+    /// The enclosing rendering's prefix comes before this scope's own.
+    fn prepend(&mut self, prefix: &Rendered) {
+        let mut from = prefix.from.clone();
+        from.append(&mut self.from);
+        self.from = from;
+        let mut laterals = prefix.laterals.clone();
+        laterals.append(&mut self.laterals);
+        self.laterals = laterals;
+        let mut where_ = prefix.where_.clone();
+        where_.append(&mut self.where_);
+        self.where_ = where_;
+    }
+
+    fn sources(&self) -> String {
+        self.from
+            .iter()
+            .map(|(_, _, f)| f.as_str())
+            .chain(self.laterals.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn aliases(&self) -> Vec<(String, PredicateName)> {
+        self.from
+            .iter()
+            .map(|(alias, predicate, _)| (alias.clone(), predicate.clone()))
+            .collect()
+    }
+
+    /// Any of this scope's ways of raising.
+    fn any(&self) -> String {
+        or_all(
+            &self
+                .probes
+                .iter()
+                .map(|p| p.condition.clone())
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// The scope as the error query asks it, once its prefix is whole.
+    fn anchored(&self) -> ProbeScope {
+        ProbeScope {
+            from: self.sources(),
+            where_: and_all(&[joined(&self.where_), self.any()]),
+            probes: self.probes.clone(),
+            aliases: self.aliases(),
+        }
+    }
+}
+
+/// The scopes of a proposition the kernel evaluates whole for each row
+/// of the enclosing scope, collapsed into one scope of the enclosing
+/// row. A filter-only inner scope is read on the row itself; one with
+/// joins is asked as a correlated `EXISTS`, and its report from the
+/// first inner row that raises, in the kernel's order. The result has no
+/// prefix of its own: the enclosing rendering supplies it.
+fn lift(drafts: &[ScopeDraft]) -> ScopeDraft {
+    let mut lifted = ScopeDraft::default();
+    for d in drafts {
+        if d.from.is_empty() {
+            lifted.laterals.extend(d.laterals.iter().cloned());
+            for p in &d.probes {
+                lifted.probes.push(Probe {
+                    condition: and_all(&[joined(&d.where_), p.condition.clone()]),
+                    report: p.report.clone(),
+                });
+            }
+        } else {
+            let from = d.sources();
+            let where_ = joined(&d.where_);
+            for p in &d.probes {
+                lifted.probes.push(Probe {
+                    condition: format!(
+                        "EXISTS (SELECT 1 FROM {from} WHERE {})",
+                        and_all(&[where_.clone(), p.condition.clone()])
+                    ),
+                    report: ErrorReport::Lifted {
+                        from: from.clone(),
+                        where_: where_.clone(),
+                        aliases: d.aliases(),
+                        condition: p.condition.clone(),
+                        report: Box::new(p.report.clone()),
+                    },
+                });
+            }
+        }
+    }
+    lifted
+}
+
+/// The scopes of a nested proposition, lifted into one scope of the
+/// enclosing row; none when nothing inside can raise.
+fn lifted_scopes(drafts: &[ScopeDraft]) -> Vec<ScopeDraft> {
+    if drafts.is_empty() {
+        Vec::new()
+    } else {
+        vec![lift(drafts)]
+    }
+}
+
+/// A scope's conjuncts with the ways of raising folded in at the stage
+/// each arises, ending in `final_`: the WHERE items of a violation
+/// query. Past the prefix a scope shares with the conjunction, a row
+/// violates where that scope raises, or where the next conjunct holds
+/// and the rest violates. The conjuncts before the first raising stage
+/// stay separate items.
+fn violated(r: &Rendered, final_: String) -> Vec<String> {
+    let n = r.where_.len();
+    let stage = |k: usize| -> Vec<String> {
+        r.probes
+            .iter()
+            .filter(|d| d.where_.len() == k)
+            .flat_map(|d| d.probes.iter().map(|p| p.condition.clone()))
+            .collect()
+    };
+    let first = r.probes.iter().map(|d| d.where_.len()).min().unwrap_or(n);
+    let mut rest = final_;
+    for k in (first..=n).rev() {
+        let conds = stage(k);
+        if !conds.is_empty() {
+            rest = or_all(&[or_all(&conds), rest]);
+        }
+        if k > first {
+            rest = and_all(&[r.where_[k - 1].clone(), rest]);
+        }
+    }
+    let mut items: Vec<String> = r.where_[..first].to_vec();
+    if rest != "true" {
+        items.push(rest);
+    }
+    items
+}
+
+/// The typed refusal for a raising scope where the fragment has no place
+/// for one: a sum's, unless a comparison itself can raise.
 fn shape_refusal(r: &Rendered, sum: &'static str, comparison: &'static str) -> CompileReason {
-    if r.errors
+    if r.probes
         .iter()
-        .any(|e| matches!(e.report, ErrorReport::Compare { .. }))
+        .flat_map(|d| d.probes.iter())
+        .any(|p| matches!(p.report, ErrorReport::Compare { .. }))
     {
         CompileReason::ComparisonShape { detail: comparison }
     } else {
@@ -983,25 +1175,15 @@ fn compile_invariant(
             if r.from.is_empty() {
                 generic_denial(&inv.body, &mut ctx)?
             } else {
-                // Violated iff the inner matches: past the prefix, an
-                // error or a holding tail.
                 let (select, order) = witness_select_order(&r);
-                let violated = or_all(&[
-                    r.error_any(),
-                    r.tail.clone().unwrap_or_else(|| "true".to_string()),
-                ]);
-                let mut where_ = r.where_.clone();
-                if violated != "true" {
-                    where_.push(violated);
-                }
                 (
                     format!(
                         "SELECT {select}\nFROM {}\nWHERE {}",
                         from_list(&r),
-                        where_.join("\n  AND ")
+                        violated(&r, "true".to_string()).join("\n  AND ")
                     ),
                     format!("\nORDER BY {order}\nLIMIT 1"),
-                    error_query(&r),
+                    r.probes.iter().map(ScopeDraft::anchored).collect(),
                     r.env,
                 )
             }
@@ -1033,7 +1215,7 @@ fn compile_invariant(
         case_cols,
         sql_select_from_where: select_from_where,
         sql_order_limit: order_limit,
-        error,
+        probe_scopes: error,
         required_indexes: ctx
             .required
             .iter()
@@ -1045,7 +1227,7 @@ fn compile_invariant(
 
 /// The dominant shape: `antecedent implies consequent`. Violation = an
 /// antecedent match with no consequent match.
-type Denial = (String, String, Option<ErrorQuery>, Env);
+type Denial = (String, String, Vec<ProbeScope>, Env);
 
 fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReason> {
     let ant = render_prop(left, Env::new(), ctx)?;
@@ -1055,74 +1237,95 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
         return generic_denial_implies(left, right, ctx);
     }
     let cons = render_prop(right, ant.env.clone(), ctx)?;
-    if cons.has_errors() && !cons.from.is_empty() {
-        return Err(shape_refusal(
-            &cons,
-            "sum beside claim patterns in a consequent",
-            "a quantity or timestamp ordering beside claim patterns in a consequent",
-        ));
-    }
-    // Past the antecedent's prefix, a violation is the antecedent's error,
-    // or its tail holding and the consequent failing. A consequent's error
-    // counts only once the antecedent's tail and the consequent's prefix
-    // hold; a failing prefix is an ordinary violation that never reaches
-    // the comparison.
-    let ant_tail = ant.tail.clone().unwrap_or_else(|| "true".to_string());
-    let mut errors = ant.errors.clone();
-    for e in &cons.errors {
-        errors.push(RenderedError {
-            condition: and_all(&[ant_tail.clone(), cons.prefix(), e.condition.clone()]),
-            report: e.report.clone(),
+    if cons.closes_scope && !cons.from.is_empty() {
+        return Err(CompileReason::SumShape {
+            detail: "sum beside claim patterns in a consequent",
         });
     }
-    let not_cons = if cons.has_errors() {
-        format!(
-            "NOT {}",
-            and_all(&[
-                cons.prefix(),
-                cons.tail.clone().unwrap_or_else(|| "true".to_string())
-            ])
-        )
-    } else if cons.from.is_empty() {
-        format!("NOT ({})", cons.conjunction())
-    } else {
+    // The kernel evaluates the whole consequent for each antecedent
+    // match, so its scopes collapse into one scope of the antecedent
+    // row, after the antecedent's own.
+    let mut lifted = lift(&cons.probes);
+    lifted.prepend(&ant);
+    let not_cons = if !cons.from.is_empty() {
         format!("NOT {}", cons.exists_sql())
+    } else if cons.has_errors() {
+        format!("NOT {}", and_all(&cons.where_))
+    } else {
+        format!("NOT ({})", cons.conjunction())
     };
     let mut scope = Rendered {
         from: ant.from.clone(),
         laterals: ant.laterals.clone(),
         where_: ant.where_.clone(),
-        errors,
+        probes: ant.probes.clone(),
         ..Rendered::default()
     };
-    scope.laterals.extend(cons.laterals.iter().cloned());
-    let (select, order) = witness_select_order(&ant);
-    let mut where_ = ant.where_.clone();
-    where_.push(or_all(&[scope.error_any(), and_all(&[ant_tail, not_cons])]));
+    scope.laterals.extend(lifted.laterals.iter().cloned());
+    if !lifted.probes.is_empty() {
+        scope.probes.push(lifted);
+    }
+    let (mut select, order) = witness_select_order(&ant);
+    // The kernel's witness carries the variables of the longest
+    // consequent prefix that still matched, bound on its first row.
+    // Each such variable is read from the first row of the prefix
+    // through the conjunct that binds it, NULL when none exists.
+    let bound_by_consequent: Vec<&Var> = cons
+        .env
+        .keys()
+        .filter(|v| !ant.env.contains_key(*v))
+        .collect();
+    for var in &bound_by_consequent {
+        let col = &cons.env[*var];
+        let Some(alias_index) = cons
+            .from
+            .iter()
+            .position(|(alias, _, _)| *alias == col.alias)
+        else {
+            continue;
+        };
+        let (from_len, where_len) = cons
+            .stages
+            .iter()
+            .copied()
+            .find(|(from_len, _)| *from_len > alias_index)
+            .unwrap_or((cons.from.len(), cons.where_.len()));
+        let prefix = Rendered {
+            from: cons.from[..from_len].to_vec(),
+            where_: cons.where_[..where_len].to_vec(),
+            ..Rendered::default()
+        };
+        let _ = write!(
+            select,
+            ",\n       (SELECT ({}.arguments -> {})::text FROM {} WHERE {} ORDER BY {} LIMIT 1) AS {}",
+            col.alias,
+            col.position,
+            from_list(&prefix),
+            prefix.conjunction(),
+            prefix
+                .from
+                .iter()
+                .map(|(alias, _, _)| format!("{alias}.arguments_hash"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            quote_ident(&format!("w_{var}"))
+        );
+    }
+    let mut case_cols = ant.env.clone();
+    for var in bound_by_consequent {
+        case_cols.insert(var.clone(), cons.env[var].clone());
+    }
+    let error = scope.probes.iter().map(ScopeDraft::anchored).collect();
     Ok((
         format!(
             "SELECT {select}\nFROM {}\nWHERE {}",
             from_list(&scope),
-            where_.join("\n  AND ")
+            violated(&scope, not_cons).join("\n  AND ")
         ),
         format!("\nORDER BY {order}\nLIMIT 1"),
-        error_query(&scope),
-        ant.env,
+        error,
+        case_cols,
     ))
-}
-
-/// The rows of the scope the kernel would raise on, with what to report
-/// for the first. `None` when nothing in scope can raise.
-fn error_query(scope: &Rendered) -> Option<ErrorQuery> {
-    if !scope.has_errors() {
-        return None;
-    }
-    Some(ErrorQuery {
-        from: from_list(scope),
-        where_: and_all(&[scope.prefix(), scope.error_any()]),
-        errors: scope.errors.clone(),
-        aliases: scope.aliases(),
-    })
 }
 
 /// Any other top-level shape: the invariant holds iff the body matches at
@@ -1133,25 +1336,33 @@ fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReaso
         return Ok((
             format!("SELECT 1 AS \"w\"\nWHERE NOT {}", r.exists_sql()),
             String::new(),
-            None,
+            Vec::new(),
             Env::new(),
         ));
     }
-    // The kernel evaluates the comparison for every prefix match, so an
-    // error anywhere dominates; otherwise the body must match somewhere.
-    let scope = |condition: String| {
-        format!(
-            "EXISTS (SELECT 1 FROM {} WHERE {})",
-            from_list(&r),
-            and_all(&[r.prefix(), condition])
-        )
-    };
-    let raises = scope(r.error_any());
-    let holds = scope(r.tail.clone().unwrap_or_else(|| "true".to_string()));
+    // The kernel evaluates every binding of every scope, so an error
+    // anywhere dominates; otherwise the body must match somewhere.
+    let raises = or_all(
+        &r.probes
+            .iter()
+            .map(|d| {
+                format!(
+                    "EXISTS (SELECT 1 FROM {} WHERE {})",
+                    d.sources(),
+                    and_all(&[joined(&d.where_), d.any()])
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
+    let holds = format!(
+        "EXISTS (SELECT 1 FROM {} WHERE {})",
+        from_list(&r),
+        and_all(&r.where_)
+    );
     Ok((
         format!("SELECT 1 AS \"w\"\nWHERE {raises} OR NOT {holds}"),
         String::new(),
-        error_query(&r),
+        r.probes.iter().map(ScopeDraft::anchored).collect(),
         Env::new(),
     ))
 }
@@ -1163,30 +1374,43 @@ fn generic_denial_implies(
 ) -> Result<Denial, CompileReason> {
     let l = render_prop(left, Env::new(), ctx)?;
     let r = render_prop(right, l.env.clone(), ctx)?;
-    if l.has_errors() || r.has_errors() {
-        let raising = if l.has_errors() { &l } else { &r };
-        return Err(shape_refusal(
-            raising,
-            "sum in a filter-only implication",
-            "a quantity or timestamp ordering in a filter-only implication",
-        ));
+    if l.closes_scope || r.closes_scope {
+        return Err(CompileReason::SumShape {
+            detail: "sum in a filter-only implication",
+        });
     }
     let not_r = if r.from.is_empty() {
         format!("NOT ({})", r.conjunction())
     } else {
         format!("NOT {}", r.exists_sql())
     };
-    let mut where_ = l.where_.clone();
-    where_.push(not_r);
-    let violated = Rendered {
-        from: l.from,
-        where_,
+    let mut lifted = lift(&r.probes);
+    lifted.prepend(&l);
+    let mut scope = Rendered {
+        laterals: l.laterals.clone(),
+        where_: l.where_.clone(),
+        probes: l.probes.clone(),
         ..Rendered::default()
     };
+    scope.laterals.extend(lifted.laterals.iter().cloned());
+    if !lifted.probes.is_empty() {
+        scope.probes.push(lifted);
+    }
+    let error = scope.probes.iter().map(ScopeDraft::anchored).collect();
+    let items = violated(&scope, not_r);
+    let where_ = if scope.laterals.is_empty() {
+        format!("({})", items.join(" AND "))
+    } else {
+        format!(
+            "EXISTS (SELECT 1 FROM {} WHERE {})",
+            from_list(&scope),
+            items.join(" AND ")
+        )
+    };
     Ok((
-        format!("SELECT 1 AS \"w\"\nWHERE {}", violated.exists_sql()),
+        format!("SELECT 1 AS \"w\"\nWHERE {where_}"),
         String::new(),
-        None,
+        error,
         Env::new(),
     ))
 }
@@ -1373,25 +1597,32 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
                 ..Rendered::default()
             };
             for p in ps {
-                if acc.tail.is_some() {
-                    // The kernel evaluates a later conjunct only for
-                    // bindings the comparison admitted; the query computes
-                    // every row's sum, and reports an error wherever its
-                    // condition holds. Only a closing comparison has one
-                    // evaluation boundary.
+                if acc.closes_scope {
+                    return Err(CompileReason::SumShape {
+                        detail: "a sum comparison must be the last conjunct of its scope",
+                    });
+                }
+                let mut r = render_prop(p, acc.env.clone(), ctx)?;
+                // A violation query returns a row of the whole
+                // conjunction, so a binding that raises before a join and
+                // has no row past it would go unreported.
+                if acc.has_errors() && !r.from.is_empty() {
                     return Err(shape_refusal(
                         &acc,
-                        "a sum comparison must be the last conjunct of its scope",
-                        "a quantity or timestamp ordering must be the last conjunct of its scope",
+                        "a claim pattern after a sum comparison in its scope",
+                        "a claim pattern after an ordering in its scope",
                     ));
                 }
-                let r = render_prop(p, acc.env.clone(), ctx)?;
+                for d in &mut r.probes {
+                    d.prepend(&acc);
+                }
                 acc.from.extend(r.from);
                 acc.laterals.extend(r.laterals);
                 acc.where_.extend(r.where_);
-                acc.errors.extend(r.errors);
-                acc.tail = r.tail;
+                acc.probes.extend(r.probes);
                 acc.env = r.env;
+                acc.closes_scope = r.closes_scope;
+                acc.stages.push((acc.from.len(), acc.where_.len()));
             }
             Ok(acc)
         }
@@ -1404,6 +1635,7 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             };
             Ok(Rendered {
                 where_: vec![clause],
+                probes: lifted_scopes(&r.probes),
                 env,
                 ..Rendered::default()
             })
@@ -1412,6 +1644,7 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             let r = nested_scope(render_prop(body, env.clone(), ctx)?)?;
             Ok(Rendered {
                 where_: vec![r.exists_sql()],
+                probes: lifted_scopes(&r.probes),
                 env,
                 ..Rendered::default()
             })
@@ -1424,15 +1657,25 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             } else {
                 format!("NOT {}", r.exists_sql())
             };
-            let mut where_ = l.where_;
+            let mut where_ = l.where_.clone();
             where_.push(not_r);
             let violated = Rendered {
-                from: l.from,
+                from: l.from.clone(),
                 where_,
                 ..Rendered::default()
             };
+            // The kernel evaluates the whole antecedent, then the whole
+            // consequent for each of its matches, all for each enclosing
+            // row.
+            let mut drafts = l.probes.clone();
+            for d in &r.probes {
+                let mut d = d.clone();
+                d.prepend(&l);
+                drafts.push(d);
+            }
             Ok(Rendered {
                 where_: vec![format!("NOT {}", violated.exists_sql())],
+                probes: lifted_scopes(&drafts),
                 env,
                 ..Rendered::default()
             })
@@ -1537,16 +1780,14 @@ fn render_claim(
     })
 }
 
-/// A scope checked by existence (nested negation, exists, implication)
-/// may stop at its first match, while the kernel evaluates every binding
-/// of a scope that can raise, so no error-bearing tail compiles under one.
+/// A scope checked by existence may stop at its first match, while a sum
+/// is computed for every binding of the scope it closes, so no
+/// sum-closing rendering compiles under one.
 fn nested_scope(r: Rendered) -> Result<Rendered, CompileReason> {
-    if r.has_errors() {
-        return Err(shape_refusal(
-            &r,
-            "sum under a nested scope",
-            "a quantity or timestamp ordering under a nested scope",
-        ));
+    if r.closes_scope {
+        return Err(CompileReason::SumShape {
+            detail: "sum under a nested scope",
+        });
     }
     Ok(r)
 }
@@ -1720,16 +1961,11 @@ fn ordered_sql(
 
 /// The comparison's own way of raising: its operands are not what the
 /// kernel can order, unless `well_typed` proves they are.
-fn raising(
-    well_typed: String,
-    domain: OrderedDomain,
-    left: &str,
-    right: &str,
-) -> Option<RenderedError> {
+fn raising(well_typed: String, domain: OrderedDomain, left: &str, right: &str) -> Option<Probe> {
     if well_typed == "true" {
         return None;
     }
-    Some(RenderedError {
+    Some(Probe {
         condition: format!("NOT {well_typed}"),
         report: ErrorReport::Compare {
             domain,
@@ -1739,42 +1975,48 @@ fn raising(
     })
 }
 
-/// A comparison's rendering: a plain conjunct when nothing can raise,
-/// otherwise the scope's tail with its sums and errors. A sum's errors
-/// come first, a value it could not take ahead of its range, as the
-/// kernel meets them; the comparison's own last.
+/// A comparison's rendering: its clause as a conjunct, and, where
+/// anything can raise, one scope holding its sums' probes ahead of its
+/// own, as the kernel meets them. A comparison over a sum closes its
+/// scope.
 fn close_comparison(
     clause: String,
-    raises: Option<RenderedError>,
+    raises: Option<Probe>,
     env: &Env,
     ctx: &mut Ctx<'_>,
 ) -> Rendered {
     let sums = std::mem::take(&mut ctx.pending_sums);
-    let mut errors: Vec<RenderedError> = Vec::new();
+    let mut probes: Vec<Probe> = Vec::new();
     for s in &sums {
         if let Some(scope) = &s.kind_report {
-            errors.push(RenderedError {
+            probes.push(Probe {
                 condition: s.kind_error.clone(),
                 report: ErrorReport::SumKind(scope.clone()),
             });
         }
-        errors.push(RenderedError {
+        probes.push(Probe {
             condition: s.range_error.clone(),
             report: ErrorReport::SumRange,
         });
     }
-    errors.extend(raises);
-    if errors.is_empty() {
+    probes.extend(raises);
+    if probes.is_empty() {
         return Rendered {
             where_: vec![clause],
             env: env.clone(),
             ..Rendered::default()
         };
     }
+    let laterals: Vec<String> = sums.into_iter().map(|s| s.lateral).collect();
     Rendered {
-        laterals: sums.into_iter().map(|s| s.lateral).collect(),
-        tail: Some(clause),
-        errors,
+        laterals: laterals.clone(),
+        where_: vec![clause],
+        closes_scope: !laterals.is_empty(),
+        probes: vec![ScopeDraft {
+            laterals,
+            probes,
+            ..ScopeDraft::default()
+        }],
         env: env.clone(),
         ..Rendered::default()
     }
