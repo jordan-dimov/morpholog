@@ -51,8 +51,8 @@ LIMIT 1"#
     // entry in scope, in the kernel's order, whose lines hold a value a
     // sum cannot take, or whose total no decimal can hold.
     assert_eq!(
-        set.invariants[1].error_sql(None, &[]).unwrap().as_deref(),
-        Some(
+        set.invariants[1].error_sqls(None, &[]).unwrap(),
+        [
             r#"SELECT CASE WHEN l2.f THEN 'sum_kind' WHEN NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) THEN 'range' WHEN l4.f THEN 'sum_kind' WHEN NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric) THEN 'range' END AS "kind",
        NULL::text AS "domain",
        CASE WHEN l2.f THEN (SELECT (t1.arguments -> 2)::text FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0))) AND (t1.arguments -> 2 ->> 'type') IS DISTINCT FROM 'decimal' ORDER BY t1.arguments_hash LIMIT 1) WHEN l4.f THEN (SELECT (t3.arguments -> 3)::text FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0))) AND (t3.arguments -> 3 ->> 'type') IS DISTINCT FROM 'decimal' ORDER BY t3.arguments_hash LIMIT 1) END AS "left",
@@ -62,13 +62,14 @@ FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((CASE WHEN (t1.arguments 
 WHERE (t0.predicate_name = 'JournalEntry' AND (l2.f OR NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR l4.f OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)))
 ORDER BY t0.arguments_hash
 LIMIT 1"#
-        )
+        ]
     );
-    assert_eq!(set.invariants[0].error_sql(None, &[]).unwrap(), None);
+    assert!(set.invariants[0].error_sqls(None, &[]).unwrap().is_empty());
     // Bounded to the obligation, like the violation query.
     let bounded = set.invariants[1]
-        .error_sql(Some("((t0.arguments -> 0 ->> 'value') = 'e42')"), &[])
+        .error_sqls(Some("((t0.arguments -> 0 ->> 'value') = 'e42')"), &[])
         .unwrap()
+        .pop()
         .unwrap();
     assert!(bounded.ends_with(
         "\n  AND (((t0.arguments -> 0 ->> 'value') = 'e42'))\nORDER BY t0.arguments_hash\nLIMIT 1"
@@ -387,8 +388,8 @@ LIMIT 1"#
     // Reports the stored operand whole, so the runner hands the kernel
     // what it would have compared.
     assert_eq!(
-        inv.error_sql(None, &[]).unwrap().as_deref(),
-        Some(
+        inv.error_sqls(None, &[]).unwrap(),
+        [
             r#"SELECT CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'compare' END AS "kind",
        CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'decimal' END AS "domain",
        CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN (t0.arguments -> 1)::text END AS "left",
@@ -398,7 +399,7 @@ FROM morpholog.claims t0
 WHERE (t0.predicate_name = 'Terms' AND NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')))
 ORDER BY t0.arguments_hash
 LIMIT 1"#
-        )
+        ]
     );
     // No ordering seeks an index; the antecedent binds without filtering.
     // The case does: a delta bounds the check to its quantity.
@@ -456,7 +457,7 @@ fn the_error_query_follows_the_kernels_order() {
             asserted: Vec::new(),
         },
     ];
-    let sql = inv.error_sql(None, &steps).unwrap().unwrap();
+    let sql = inv.error_sqls(None, &steps).unwrap().pop().unwrap();
     assert!(sql.ends_with(
         r#"
 ORDER BY CASE t0.asserted_in WHEN '0192b3a4-0000-7000-8000-000000000001' THEN 1 WHEN '0192b3a4-0000-7000-8000-000000000002' THEN 2 ELSE 0 END, CASE t0.asserted_in WHEN '0192b3a4-0000-7000-8000-000000000001' THEN COALESCE(array_position(ARRAY['[{"type":"subject","value":"t1"},{"type":"quantity","value":{"amount":"5","unit":"MW"}},{"type":"timestamp","value":"2026-01-01T00:00:00Z"},{"type":"timestamp","value":"2026-01-02T00:00:00Z"}]'::jsonb], t0.arguments), 0) ELSE 0 END, t0.arguments_hash

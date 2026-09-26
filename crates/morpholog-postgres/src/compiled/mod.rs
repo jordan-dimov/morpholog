@@ -232,7 +232,7 @@ impl CompiledInvariantSet {
             let Some(row) = row else {
                 continue;
             };
-            if let Some(error_sql) = inv.error_sql(case_filter.as_deref(), steps)? {
+            for error_sql in inv.error_sqls(case_filter.as_deref(), steps)? {
                 let erroring = sqlx::query(sqlx::AssertSqlSafe(error_sql))
                     .fetch_optional(&mut **tx)
                     .await
@@ -516,12 +516,12 @@ pub(crate) struct CompiledInvariant {
     case_cols: BTreeMap<Var, ColRef>,
     sql_select_from_where: String,
     sql_order_limit: String,
-    /// The first binding in scope the kernel would raise on, asked only
-    /// after a violation row was found: the violation query stops at its
-    /// first row, and an error must win over a violation that sorts
-    /// earlier. Has no `LIMIT`, so a case filter can bound it like the
-    /// violation query. `None` when nothing in the body can raise.
-    error: Option<ErrorQuery>,
+    /// The scopes the kernel could raise in, in its evaluation order,
+    /// asked one at a time only after a violation row was found: the
+    /// violation query stops at its first row, and an error must win over
+    /// a violation that sorts earlier. The first scope that names a row
+    /// wins. Empty when nothing in the body can raise.
+    probe_scopes: Vec<ProbeScope>,
     /// The indexes this invariant's SQL seeks on at a join or a literal,
     /// in specification order. The plan must reach each through its
     /// index.
@@ -535,11 +535,14 @@ pub(crate) struct CompiledInvariant {
 /// The error query before its runtime parts: the report of the first
 /// erroring binding names values in the kernel's order, which depends on
 /// the transitions in flight, so the runner renders it.
+/// One scope the kernel evaluates binding by binding and could raise
+/// in: the prefix that reaches the raising expressions, and those
+/// expressions' probes in the kernel's order.
 #[derive(Debug)]
-struct ErrorQuery {
+struct ProbeScope {
     from: String,
     where_: String,
-    errors: Vec<RenderedError>,
+    probes: Vec<Probe>,
     /// The claim aliases of the scope with their predicates, in the
     /// kernel's nesting order.
     aliases: Vec<(String, PredicateName)>,
@@ -564,18 +567,16 @@ impl CompiledInvariant {
         sql
     }
 
-    /// The error query over the same obligation as the violation query,
-    /// ordered as the kernel evaluates: rows loaded before the
-    /// transitions, then each step's admissions in statement order, alias
-    /// by alias in the scope's nesting order.
-    pub(crate) fn error_sql(
+    /// The error queries over the same obligation as the violation query,
+    /// one per scope in the kernel's evaluation order, each ordered as the
+    /// kernel evaluates: rows loaded before the transitions, then each
+    /// step's admissions in statement order, alias by alias in the
+    /// scope's nesting order.
+    pub(crate) fn error_sqls(
         &self,
         case_filter: Option<&str>,
         steps: &[DeltaStep],
-    ) -> Result<Option<String>, PgError> {
-        let Some(query) = &self.error else {
-            return Ok(None);
-        };
+    ) -> Result<Vec<String>, PgError> {
         let order = |aliases: &[(String, PredicateName)]| -> Result<String, PgError> {
             Ok(aliases
                 .iter()
@@ -583,16 +584,21 @@ impl CompiledInvariant {
                 .collect::<Result<Vec<_>, _>>()?
                 .join(", "))
         };
-        let report = error_report(&query.errors, &order)?;
-        let mut sql = format!(
-            "SELECT {report}\nFROM {}\nWHERE {}",
-            query.from, query.where_
-        );
-        if let Some(filter) = case_filter {
-            let _ = write!(sql, "\n  AND ({filter})");
-        }
-        let _ = write!(sql, "\nORDER BY {}\nLIMIT 1", order(&query.aliases)?);
-        Ok(Some(sql))
+        self.probe_scopes
+            .iter()
+            .map(|scope| {
+                let report = error_report(&scope.probes, &order)?;
+                let mut sql = format!(
+                    "SELECT {report}\nFROM {}\nWHERE {}",
+                    scope.from, scope.where_
+                );
+                if let Some(filter) = case_filter {
+                    let _ = write!(sql, "\n  AND ({filter})");
+                }
+                let _ = write!(sql, "\nORDER BY {}\nLIMIT 1", order(&scope.aliases)?);
+                Ok(sql)
+            })
+            .collect()
     }
 
     /// Bound the check to the cases a delta could have changed: core
@@ -638,10 +644,10 @@ type OrderRenderer<'a> = dyn Fn(&[(String, PredicateName)]) -> Result<String, Pg
 /// raised, and what the kernel needs to word it. A sum's report looks
 /// inside the sum for the first value it could not take, in the kernel's
 /// order, which `order` renders.
-fn error_report(errors: &[RenderedError], order: &OrderRenderer<'_>) -> Result<String, PgError> {
-    let case = |pick: &dyn Fn(&RenderedError) -> Result<Option<String>, PgError>| {
+fn error_report(probes: &[Probe], order: &OrderRenderer<'_>) -> Result<String, PgError> {
+    let case = |pick: &dyn Fn(&Probe) -> Result<Option<String>, PgError>| {
         let mut arms = String::new();
-        for e in errors {
+        for e in probes {
             if let Some(v) = pick(e)? {
                 let _ = write!(arms, " WHEN {} THEN {v}", e.condition);
             }
@@ -805,7 +811,7 @@ impl SumScope {
 /// A place the kernel could raise, as data: the condition on a row of the
 /// scope, and what to report when it is the first such row.
 #[derive(Debug, Clone)]
-struct RenderedError {
+struct Probe {
     condition: String,
     report: ErrorReport,
 }
@@ -837,7 +843,7 @@ struct Rendered {
     laterals: Vec<String>,
     where_: Vec<String>,
     tail: Option<String>,
-    errors: Vec<RenderedError>,
+    errors: Vec<Probe>,
     env: Env,
 }
 
@@ -1001,7 +1007,7 @@ fn compile_invariant(
                         where_.join("\n  AND ")
                     ),
                     format!("\nORDER BY {order}\nLIMIT 1"),
-                    error_query(&r),
+                    probe_scopes(&r),
                     r.env,
                 )
             }
@@ -1033,7 +1039,7 @@ fn compile_invariant(
         case_cols,
         sql_select_from_where: select_from_where,
         sql_order_limit: order_limit,
-        error,
+        probe_scopes: error,
         required_indexes: ctx
             .required
             .iter()
@@ -1045,7 +1051,7 @@ fn compile_invariant(
 
 /// The dominant shape: `antecedent implies consequent`. Violation = an
 /// antecedent match with no consequent match.
-type Denial = (String, String, Option<ErrorQuery>, Env);
+type Denial = (String, String, Vec<ProbeScope>, Env);
 
 fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReason> {
     let ant = render_prop(left, Env::new(), ctx)?;
@@ -1070,7 +1076,7 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
     let ant_tail = ant.tail.clone().unwrap_or_else(|| "true".to_string());
     let mut errors = ant.errors.clone();
     for e in &cons.errors {
-        errors.push(RenderedError {
+        errors.push(Probe {
             condition: and_all(&[ant_tail.clone(), cons.prefix(), e.condition.clone()]),
             report: e.report.clone(),
         });
@@ -1106,23 +1112,23 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
             where_.join("\n  AND ")
         ),
         format!("\nORDER BY {order}\nLIMIT 1"),
-        error_query(&scope),
+        probe_scopes(&scope),
         ant.env,
     ))
 }
 
-/// The rows of the scope the kernel would raise on, with what to report
-/// for the first. `None` when nothing in scope can raise.
-fn error_query(scope: &Rendered) -> Option<ErrorQuery> {
+/// The scopes the kernel would raise in, with what to report for the
+/// first row of each. Empty when nothing in scope can raise.
+fn probe_scopes(scope: &Rendered) -> Vec<ProbeScope> {
     if !scope.has_errors() {
-        return None;
+        return Vec::new();
     }
-    Some(ErrorQuery {
+    vec![ProbeScope {
         from: from_list(scope),
         where_: and_all(&[scope.prefix(), scope.error_any()]),
-        errors: scope.errors.clone(),
+        probes: scope.errors.clone(),
         aliases: scope.aliases(),
-    })
+    }]
 }
 
 /// Any other top-level shape: the invariant holds iff the body matches at
@@ -1133,7 +1139,7 @@ fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReaso
         return Ok((
             format!("SELECT 1 AS \"w\"\nWHERE NOT {}", r.exists_sql()),
             String::new(),
-            None,
+            Vec::new(),
             Env::new(),
         ));
     }
@@ -1151,7 +1157,7 @@ fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReaso
     Ok((
         format!("SELECT 1 AS \"w\"\nWHERE {raises} OR NOT {holds}"),
         String::new(),
-        error_query(&r),
+        probe_scopes(&r),
         Env::new(),
     ))
 }
@@ -1186,7 +1192,7 @@ fn generic_denial_implies(
     Ok((
         format!("SELECT 1 AS \"w\"\nWHERE {}", violated.exists_sql()),
         String::new(),
-        None,
+        Vec::new(),
         Env::new(),
     ))
 }
@@ -1720,16 +1726,11 @@ fn ordered_sql(
 
 /// The comparison's own way of raising: its operands are not what the
 /// kernel can order, unless `well_typed` proves they are.
-fn raising(
-    well_typed: String,
-    domain: OrderedDomain,
-    left: &str,
-    right: &str,
-) -> Option<RenderedError> {
+fn raising(well_typed: String, domain: OrderedDomain, left: &str, right: &str) -> Option<Probe> {
     if well_typed == "true" {
         return None;
     }
-    Some(RenderedError {
+    Some(Probe {
         condition: format!("NOT {well_typed}"),
         report: ErrorReport::Compare {
             domain,
@@ -1745,20 +1746,20 @@ fn raising(
 /// kernel meets them; the comparison's own last.
 fn close_comparison(
     clause: String,
-    raises: Option<RenderedError>,
+    raises: Option<Probe>,
     env: &Env,
     ctx: &mut Ctx<'_>,
 ) -> Rendered {
     let sums = std::mem::take(&mut ctx.pending_sums);
-    let mut errors: Vec<RenderedError> = Vec::new();
+    let mut errors: Vec<Probe> = Vec::new();
     for s in &sums {
         if let Some(scope) = &s.kind_report {
-            errors.push(RenderedError {
+            errors.push(Probe {
                 condition: s.kind_error.clone(),
                 report: ErrorReport::SumKind(scope.clone()),
             });
         }
-        errors.push(RenderedError {
+        errors.push(Probe {
             condition: s.range_error.clone(),
             report: ErrorReport::SumRange,
         });
