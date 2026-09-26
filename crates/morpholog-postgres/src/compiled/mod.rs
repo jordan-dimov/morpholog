@@ -31,12 +31,19 @@
 //! raise while comparing - two quantities of different units, a stored
 //! value of another kind than the comparison expects, which history
 //! admitted under an older declaration can hold, or a value a sum cannot
-//! take - the SQL carries that as data, the way a sum's range test does: the violation query returns such a row, and a
-//! second query then names the first erroring binding in the kernel's own
-//! order (state as loaded, the transition's admissions at the tail) with
-//! its operands, so the runner reports the kernel's exact error. An
-//! error-bearing comparison must therefore close its scope, as a sum
-//! comparison must.
+//! take - the SQL carries that as data, the way a sum's range test does:
+//! the violation query returns such a row, and a second query then names
+//! the first erroring binding in the kernel's own order (state as loaded,
+//! the transition's admissions at the tail) with its operands, so the
+//! runner reports the kernel's exact error.
+//!
+//! The ways a body can raise form an error plan beside the truth query:
+//! one probe scope per stage of a conjunction, and one scope of the
+//! enclosing row for whatever the kernel evaluates whole per row (an
+//! implication's consequent, a `forall` body, `exists`, `not`, a nested
+//! implication), asked in the kernel's order, first hit wins. Sums keep
+//! a narrower fragment: a sum-closing comparison is last in its scope and
+//! never under a nested one.
 //!
 //! Witness contract: rule name, version and the witness VARIABLE SET must
 //! match the kernel. Witness values may differ: a symmetric self-join can
@@ -516,7 +523,9 @@ pub(crate) struct CompiledInvariant {
     /// full tagged value as `w_<var>`.
     pub(crate) witness_vars: Vec<Var>,
     /// Which cases a delta touches, decided by core; `case_cols` renders
-    /// its bindings onto the antecedent's columns.
+    /// its bindings onto the antecedent's columns. It also holds the
+    /// columns a consequent binds, for the witness alone: no case is keyed
+    /// by them.
     plan: ImpactPlan,
     case_cols: BTreeMap<Var, ColRef>,
     sql_select_from_where: String,
@@ -1080,8 +1089,8 @@ fn violated(r: &Rendered, final_: String) -> Vec<String> {
     items
 }
 
-/// The typed refusal for an error-bearing tail where the fragment has no
-/// place for one: a sum's, unless a comparison itself can raise.
+/// The typed refusal for a raising scope where the fragment has no place
+/// for one: a sum's, unless a comparison itself can raise.
 fn shape_refusal(r: &Rendered, sum: &'static str, comparison: &'static str) -> CompileReason {
     if r.probes
         .iter()
