@@ -485,6 +485,39 @@ transformation set_right_flag(x, v):
 transformation set_left_flag(x, v):
     admit LeftFlag(x, v)
 ",
+    // Two orderings in one consequent, and an ordering after a join in
+    // a consequent: orderings anywhere in a scope, in the shapes the
+    // gallery's insurance and laytime rules have.
+    "program consequent_orderings
+predicate Band(x: Subject, lo: Decimal, hi: Decimal)
+predicate Started(u: Subject, at: Timestamp)
+predicate Seen(m: Subject, u: Subject, at: Timestamp)
+invariant band_is_a_band:
+    Band(x, lo, hi) implies (0 <= lo and lo <= hi)
+invariant seen_after_start:
+    Seen(m, u, at) implies (Started(u, started) and started at_or_before at)
+transformation set_band(x, lo, hi):
+    admit Band(x, lo, hi)
+transformation start(u, at):
+    admit Started(u, at)
+transformation see(m, u, at):
+    admit Seen(m, u, at)
+",
+    // A consequent that joins, then filters on what it bound: the
+    // kernel's witness names the joined row's variable only when a row
+    // joined, and the compiled witness must follow.
+    "program consequent_binds
+predicate Holder(x: Subject)
+predicate Held(x: Subject, y: Subject)
+predicate Valid(y: Subject)
+invariant held_is_valid:
+    Holder(x) implies (Held(x, y) and Valid(y))
+transformation hold(x, y):
+    admit Holder(x)
+    admit Held(x, y)
+transformation validate(y):
+    admit Valid(y)
+",
     "program tagged_timestamp_join
 predicate LeftAt(x: Subject, v: Timestamp)
 predicate RightAt(x: Subject, v: Timestamp)
@@ -1255,4 +1288,311 @@ fn compile_coverage_census_attributes_every_refusal() {
         "anti-vacuity: the gallery exercises both sides of the fragment \
          (compiled {compiled_count}, refused {refused_count})"
     );
+}
+
+// ============================================================
+// Orderings anywhere in a scope: the error the kernel meets first
+// ============================================================
+
+/// Two rows the kernel loads in the order given: loaded rows are read by
+/// argument hash, so the labels are chosen until the first row's hash
+/// sorts first. `make` builds both rows from two subject labels.
+async fn rows_in_load_order(
+    pool: &PgPool,
+    make: impl Fn(&str, &str) -> (serde_json::Value, serde_json::Value),
+) -> (serde_json::Value, serde_json::Value) {
+    for (a, b) in [
+        ("a", "b"),
+        ("b", "a"),
+        ("c", "d"),
+        ("d", "c"),
+        ("e", "f"),
+        ("f", "e"),
+    ] {
+        let (first, second) = make(a, b);
+        let ordered: bool = sqlx::query_scalar(
+            "SELECT morpholog.claim_digest($1::jsonb) < morpholog.claim_digest($2::jsonb)",
+        )
+        .bind(&first)
+        .bind(&second)
+        .fetch_one(pool)
+        .await
+        .expect("digest order");
+        if ordered {
+            return (first, second);
+        }
+    }
+    panic!("no label pair loads in the wanted order");
+}
+
+async fn insert_rows(pool: &PgPool, predicate: &str, rows: &[serde_json::Value]) {
+    for row in rows {
+        sqlx::query(
+            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in) VALUES ($1, $2, $3)",
+        )
+        .bind(predicate)
+        .bind(row)
+        .bind(Uuid::nil())
+        .execute(pool)
+        .await
+        .expect("fixture insert");
+    }
+}
+
+fn subject(label: &str) -> serde_json::Value {
+    serde_json::json!({"type": "subject", "value": label})
+}
+
+fn decimal(text: &str) -> serde_json::Value {
+    serde_json::json!({"type": "decimal", "value": text})
+}
+
+fn instant(text: &str) -> serde_json::Value {
+    serde_json::json!({"type": "timestamp", "value": text})
+}
+
+/// Stage the enabling act and demand that the kernel raised and both
+/// compiled stages named the same error.
+async fn expect_kernel_error_agreed(source: &str, transformation: &str, args: Vec<EvalValue>) {
+    let pool = test_pool().await;
+    let program = morpholog_surface::parse_program(source).expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+    let compiled = CompiledProgram::new(program).expect("compiles");
+    match probe_raw(&pool, &compiled, &sql_set, transformation, args).await {
+        Ok(Probe::KernelErrorAgreed) => {}
+        Ok(Probe::BodyRejected) => panic!("the body admits"),
+        Ok(Probe::Observed(obs)) => panic!("the kernel must error, got {:?}", obs.kernel),
+        Err(ProbeFailure::Disagreement(d)) => panic!("{d}"),
+        Err(ProbeFailure::Kernel(e)) => panic!("body error {e:?}"),
+        Err(ProbeFailure::Pg(e)) => panic!("pg error {e:?}"),
+    }
+}
+
+/// The consequent is evaluated whole for each antecedent row: an error
+/// in its second comparison on the first row wins over an error in its
+/// first comparison on the second row.
+#[tokio::test]
+async fn a_consequents_later_comparison_on_an_earlier_row_raises_first() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let (first, second) = rows_in_load_order(&pool, |a, b| {
+        (
+            serde_json::json!([subject(a), decimal("1"), instant("2026-01-01T00:00:00Z")]),
+            serde_json::json!([subject(b), subject("lo_of_the_second_row"), decimal("1")]),
+        )
+    })
+    .await;
+    insert_rows(&pool, "Band", &[first, second]).await;
+    expect_kernel_error_agreed(
+        "program crossed_consequent
+predicate Enabled(flag: Subject)
+predicate Band(x: Subject, lo: Decimal, hi: Decimal)
+invariant band_is_a_band:
+    Enabled(_) and Band(x, lo, hi) implies (0 <= lo and 0 < hi)
+transformation enable(flag):
+    admit Enabled(flag)
+",
+        "enable",
+        vec![subj("f")],
+    )
+    .await;
+}
+
+/// On one row where both of a consequent's comparisons raise, the
+/// kernel names the first. Two things keep the compiled check right,
+/// and only breaking both makes this fail: the probes of a scope are
+/// asked in order, and a later probe carries the earlier clause, which
+/// is null where the earlier comparison raised.
+#[tokio::test]
+async fn a_consequents_first_comparison_is_named_when_both_raise_on_one_row() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    insert_rows(
+        &pool,
+        "Band",
+        &[serde_json::json!([
+            subject("x"),
+            subject("lo_is_a_subject"),
+            instant("2026-01-01T00:00:00Z")
+        ])],
+    )
+    .await;
+    expect_kernel_error_agreed(
+        "program both_raise
+predicate Enabled(flag: Subject)
+predicate Band(x: Subject, lo: Decimal, hi: Decimal)
+invariant band_is_a_band:
+    Enabled(_) and Band(x, lo, hi) implies (0 <= lo and 0 < hi)
+transformation enable(flag):
+    admit Enabled(flag)
+",
+        "enable",
+        vec![subj("f")],
+    )
+    .await;
+}
+
+/// A conjunction is evaluated stage by stage: an error in the first
+/// comparison on the second row wins over an error in the second
+/// comparison on the first row.
+#[tokio::test]
+async fn an_antecedents_earlier_comparison_on_a_later_row_raises_first() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let (first, second) = rows_in_load_order(&pool, |a, b| {
+        (
+            serde_json::json!([subject(a), decimal("1"), instant("2026-01-01T00:00:00Z")]),
+            serde_json::json!([subject(b), subject("lo_of_the_second_row"), decimal("1")]),
+        )
+    })
+    .await;
+    insert_rows(&pool, "Band", &[first, second]).await;
+    expect_kernel_error_agreed(
+        "program crossed_antecedent
+predicate Enabled(flag: Subject)
+predicate Band(x: Subject, lo: Decimal, hi: Decimal)
+predicate Ok(x: Subject)
+invariant a_band_is_ok:
+    Enabled(_) and Band(x, lo, hi) and 0 <= lo and 0 < hi implies Ok(x)
+transformation enable(flag):
+    admit Enabled(flag)
+",
+        "enable",
+        vec![subj("f")],
+    )
+    .await;
+}
+
+/// A nested implication under a conjunction is evaluated whole for each
+/// enclosing row, so the first row's inner error wins whatever its
+/// stage.
+#[tokio::test]
+async fn a_nested_implications_error_on_the_first_enclosing_row_raises_first() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let (first_outer, second_outer) = rows_in_load_order(&pool, |a, b| {
+        (
+            serde_json::json!([subject(a)]),
+            serde_json::json!([subject(b)]),
+        )
+    })
+    .await;
+    let x1 = first_outer[0]["value"].as_str().unwrap().to_string();
+    let x2 = second_outer[0]["value"].as_str().unwrap().to_string();
+    insert_rows(&pool, "Outer", &[first_outer.clone(), second_outer.clone()]).await;
+    insert_rows(
+        &pool,
+        "Band",
+        &[
+            serde_json::json!([subject(&x1), decimal("1"), instant("2026-01-01T00:00:00Z")]),
+            serde_json::json!([
+                subject(&x2),
+                subject("lo_of_the_second_outer"),
+                decimal("1")
+            ]),
+        ],
+    )
+    .await;
+    expect_kernel_error_agreed(
+        "program crossed_nested
+predicate Enabled(flag: Subject)
+predicate Outer(x: Subject)
+predicate Band(x: Subject, lo: Decimal, hi: Decimal)
+predicate Ok(x: Subject)
+invariant outer_bands_are_bands:
+    Enabled(_) and Outer(x) and (Band(x, lo, hi) implies (0 <= lo and 0 < hi)) implies Ok(x)
+transformation enable(flag):
+    admit Enabled(flag)
+",
+        "enable",
+        vec![subj("f")],
+    )
+    .await;
+}
+
+/// An ordering after a join in a consequent: the error is read from
+/// the joined row, the laytime and biometric shape.
+#[tokio::test]
+async fn an_ordering_after_a_join_in_a_consequent_names_the_joined_row() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    insert_rows(
+        &pool,
+        "Seen",
+        &[serde_json::json!([
+            subject("m1"),
+            subject("u1"),
+            instant("2026-01-02T00:00:00Z")
+        ])],
+    )
+    .await;
+    insert_rows(
+        &pool,
+        "Started",
+        &[serde_json::json!([
+            subject("u1"),
+            subject("not_an_instant")
+        ])],
+    )
+    .await;
+    expect_kernel_error_agreed(
+        "program consequent_join_ordering
+predicate Enabled(flag: Subject)
+predicate Started(u: Subject, at: Timestamp)
+predicate Seen(m: Subject, u: Subject, at: Timestamp)
+invariant seen_after_start:
+    Enabled(_) and Seen(m, u, at) implies (Started(u, started) and started at_or_before at)
+transformation enable(flag):
+    admit Enabled(flag)
+",
+        "enable",
+        vec![subj("f")],
+    )
+    .await;
+}
+
+/// The in-force selector written by hand: an ordering in the
+/// antecedent followed by a negated existence whose body orders again.
+/// A foreign value in the later version raises inside the negation; one
+/// in the selected version raises at the antecedent's own comparison.
+#[tokio::test]
+async fn the_in_force_selector_raises_where_the_kernel_does() {
+    const SELECTOR: &str = "program in_force_by_hand
+predicate Enabled(flag: Subject)
+predicate Ask(k: Subject, as_of: Timestamp)
+predicate Terms(k: Subject, effective_from: Timestamp, v: Decimal)
+predicate Good(k: Subject)
+invariant in_force_terms_are_good:
+    Enabled(_) and Ask(k, as_of) and Terms(k, ef, _) and ef at_or_before as_of and not (exists later: Terms(k, later, _) and later at_or_before as_of and later strictly_after ef) implies Good(k)
+transformation enable(flag):
+    admit Enabled(flag)
+";
+    let pool = test_pool().await;
+    for dirty in ["later", "selected"] {
+        reset_db(&pool).await;
+        insert_rows(
+            &pool,
+            "Ask",
+            &[serde_json::json!([
+                subject("k1"),
+                instant("2026-06-01T00:00:00Z")
+            ])],
+        )
+        .await;
+        let rows = if dirty == "later" {
+            vec![
+                serde_json::json!([subject("k1"), instant("2026-01-01T00:00:00Z"), decimal("1")]),
+                serde_json::json!([subject("k1"), subject("not_an_instant"), decimal("2")]),
+            ]
+        } else {
+            vec![serde_json::json!([
+                subject("k1"),
+                subject("not_an_instant"),
+                decimal("1")
+            ])]
+        };
+        insert_rows(&pool, "Terms", &rows).await;
+        expect_kernel_error_agreed(SELECTOR, "enable", vec![subj("f")]).await;
+    }
 }
