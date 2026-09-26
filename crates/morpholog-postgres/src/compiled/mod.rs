@@ -137,7 +137,12 @@ impl CompiledInvariantSet {
         let mut specs: Vec<IndexSpec> = self
             .invariants
             .iter()
-            .flat_map(|inv| inv.required_indexes.iter().cloned())
+            .flat_map(|inv| {
+                inv.required_indexes
+                    .iter()
+                    .chain(&inv.case_indexes)
+                    .cloned()
+            })
             .collect();
         specs.sort();
         specs.dedup();
@@ -517,9 +522,14 @@ pub(crate) struct CompiledInvariant {
     /// earlier. Has no `LIMIT`, so a case filter can bound it like the
     /// violation query. `None` when nothing in the body can raise.
     error: Option<ErrorQuery>,
-    /// The indexes this invariant's SQL can seek on, in specification
-    /// order.
+    /// The indexes this invariant's SQL seeks on at a join or a literal,
+    /// in specification order. The plan must reach each through its
+    /// index.
     pub(crate) required_indexes: Vec<IndexSpec>,
+    /// The columns a case can be keyed by. The case-bound filter
+    /// constrains every one, so the planner may reach a predicate through
+    /// whichever it judges most selective.
+    pub(crate) case_indexes: Vec<IndexSpec>,
 }
 
 /// The error query before its runtime parts: the report of the first
@@ -1004,6 +1014,17 @@ fn compile_invariant(
         _ => case_cols.keys().cloned().collect(),
     };
     let plan = ImpactPlan::new(inv);
+    // The case-bound check seeks on the case's columns. Without their
+    // indexes it walks the predicate and takes the very lock the bound
+    // exists to avoid.
+    let mut case_indexes: Vec<IndexSpec> = plan
+        .case_variables()
+        .iter()
+        .filter_map(|var| case_cols.get(var))
+        .map(|col| IndexSpec::new(col.predicate.clone(), col.position))
+        .collect();
+    case_indexes.sort();
+    case_indexes.dedup();
     Ok(CompiledInvariant {
         name: inv.name.clone(),
         version: inv.version,
@@ -1018,6 +1039,7 @@ fn compile_invariant(
             .iter()
             .map(|(predicate, position)| IndexSpec::new(predicate.clone(), *position))
             .collect(),
+        case_indexes,
     })
 }
 

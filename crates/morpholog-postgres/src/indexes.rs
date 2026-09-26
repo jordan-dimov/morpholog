@@ -350,6 +350,15 @@ async fn reconcile_locked(
                 | IndexAction::Stale => {}
             }
         }
+        // Statistics over an expression index exist only from the first
+        // ANALYZE after it is built. Without them the planner cannot tell
+        // a selective key from one every row shares. Every applied run
+        // analyzes, so an index adopted or kept from an earlier run that
+        // stopped short has them too.
+        sqlx::raw_sql("ANALYZE morpholog.claims")
+            .execute(&mut *conn)
+            .await
+            .map_err(classify)?;
         // Record every managed specification, then replace this programme's
         // requirement set whole. It includes specifications an operator's
         // index satisfies, so a requirement outlives the index serving it.

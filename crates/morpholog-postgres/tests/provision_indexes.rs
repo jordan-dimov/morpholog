@@ -13,9 +13,10 @@ use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{IndexAction, PgPool, PgProgram, plan_indexes, provision_indexes};
 use sqlx::Row as _;
 
-/// The ledger's requirement: its compiled checks' three seeks and the two
-/// positions its transformations' gates key on.
-const LEDGER_INDEXES: usize = 5;
+/// The ledger's requirement: its compiled checks' seeks, the case column
+/// of its lineage check, and the two positions its transformations' gates
+/// key on.
+const LEDGER_INDEXES: usize = 6;
 
 fn ledger() -> PgProgram {
     compiled(double_entry_ledger::program())
@@ -479,5 +480,71 @@ transformation put(k, v):
         creates,
         vec![("P".to_string(), 0)],
         "one coordinate of the admit, the first, and not the amount"
+    );
+}
+
+/// Statistics over an expression index exist only once the table is
+/// analyzed after the build. Every applied run analyzes, so an index the
+/// run merely adopts has statistics too; a dry run leaves them alone.
+#[tokio::test]
+async fn every_applied_run_analyzes_the_claims_table_and_a_dry_run_does_not() {
+    let pool = test_pool().await;
+    if !session_is_superuser(&pool).await {
+        return;
+    }
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    sqlx::raw_sql(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'JournalEntry',
+                jsonb_build_array(jsonb_build_object('type', 'subject', 'value', 'e_' || i),
+                                  jsonb_build_object('type', 'subject', 'value', 'd_' || i),
+                                  jsonb_build_object('type', 'subject', 'value', 'p_' || (i % 7))),
+                gen_random_uuid()
+         FROM generate_series(1, 300) i",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let stats_for = |name: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM pg_stats WHERE schemaname = 'morpholog' AND tablename = $1",
+            )
+            .bind(name)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    provision_indexes(&pool, &ledger(), false).await.unwrap();
+    let (name, _) = catalogue_names(&pool).await.into_iter().next().unwrap();
+    assert!(
+        stats_for(name.clone()).await > 0,
+        "{name} has statistics after the build"
+    );
+
+    // An earlier run built the index and stopped before analyzing.
+    // The name comes from the catalogue, not from input.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DELETE FROM morpholog.index_requirement; DELETE FROM morpholog.managed_index;
+         DELETE FROM pg_statistic WHERE starelid = 'morpholog.{name}'::regclass"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stats_for(name.clone()).await, 0);
+    plan_indexes(&pool, &ledger()).await.unwrap();
+    assert_eq!(
+        stats_for(name.clone()).await,
+        0,
+        "a dry run analyzes nothing"
+    );
+    let adopting = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    assert_eq!(actions(&adopting), vec![IndexAction::Keep; LEDGER_INDEXES]);
+    assert!(
+        stats_for(name.clone()).await > 0,
+        "{name} has statistics after adoption"
     );
 }
