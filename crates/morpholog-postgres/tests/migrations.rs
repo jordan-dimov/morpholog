@@ -473,6 +473,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     )
     .await
     .expect("simulate a database from before the equality key");
+    ddl(
+        &pool,
+        "DROP FUNCTION morpholog.date_ordinal(jsonb)".to_string(),
+    )
+    .await
+    .expect("simulate a database from before the date coordinate");
     // The guard migration 017 drops, as a database that ran 016 has it.
     ddl(
         &pool,
