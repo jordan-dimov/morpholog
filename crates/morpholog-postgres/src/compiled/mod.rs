@@ -2220,15 +2220,15 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
     }
 }
 
-/// A literal in value position: its key, and a SQL constant of the
-/// kernel's value for ordering. A timestamp's coordinate is computed here,
-/// not by the database.
 /// The coordinate `morpholog.date_ordinal` gives a stored date, for a
 /// literal: monotone in the civil fields, true to negative years.
 fn date_ordinal(d: jiff::civil::Date) -> i64 {
     i64::from(d.year()) * 10000 + i64::from(d.month()) * 100 + i64::from(d.day())
 }
 
+/// A literal in value position: its key, and a SQL constant of the
+/// kernel's value for ordering. A timestamp's or a date's coordinate is
+/// computed here, not by the database.
 fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
     if matches!(value, Value::CalendarSpan(_)) {
         return Err(CompileReason::Literal {
