@@ -111,6 +111,50 @@ $$;
 
 COMMENT ON FUNCTION timestamp_nanos(jsonb) IS 'morpholog timestamp coordinate v1';
 
+-- The coordinate the compiled checks order civil dates by: the year,
+-- month and day as one integer, `year * 10000 + month * 100 + day`,
+-- monotone in the civil fields and true to the signed six-digit years the
+-- codec writes outside 0000-9999, which neither text order nor a `date`
+-- cast would keep. Takes the whole tagged value: another tag is NULL, so
+-- the check reports the kernel's kind error; a date whose text is not the
+-- codec's is an error.
+CREATE FUNCTION date_ordinal(v jsonb) RETURNS integer
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+DECLARE
+    m text[];
+    y integer;
+    mo integer;
+    d integer;
+BEGIN
+    IF v ->> 'type' IS DISTINCT FROM 'date' THEN
+        RETURN NULL;
+    END IF;
+    m := regexp_match(v ->> 'value', '^(-?[0-9]{4,6})-([0-9]{2})-([0-9]{2})$');
+    IF m IS NULL THEN
+        RAISE EXCEPTION 'not a stored date: %', v ->> 'value';
+    END IF;
+    y := m[1]::integer;
+    mo := m[2]::integer;
+    d := m[3]::integer;
+    -- The codec writes only dates jiff holds: years -9999 to 9999, four
+    -- digits inside 0000-9999 and signed six outside, real calendar days.
+    IF y < -9999 OR y > 9999
+       OR m[1] !~ '^([0-9]{4}|-[0-9]{6})$' OR (m[1] ~ '^-' AND y = 0)
+       OR mo < 1 OR mo > 12 OR d < 1
+       OR d > (CASE mo
+                 WHEN 2 THEN (CASE WHEN y % 4 = 0 AND (y % 100 <> 0 OR y % 400 = 0) THEN 29 ELSE 28 END)
+                 WHEN 4 THEN 30 WHEN 6 THEN 30 WHEN 9 THEN 30 WHEN 11 THEN 30
+                 ELSE 31 END)
+    THEN
+        RAISE EXCEPTION 'not a stored date: %', v ->> 'value';
+    END IF;
+    RETURN y * 10000 + mo * 100 + d;
+END
+$$;
+
+COMMENT ON FUNCTION date_ordinal(jsonb) IS 'morpholog date coordinate v1';
+
 -- The one equality the compiled checks compare stored values by: a key
 -- that is equal exactly when the kernel says two values are equal, for
 -- every value the codec writes. Decimals and quantity amounts lose their

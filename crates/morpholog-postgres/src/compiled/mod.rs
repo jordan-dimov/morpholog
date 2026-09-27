@@ -27,7 +27,8 @@
 //!
 //! Ordered comparisons run over numbers: a decimal or a quantity's amount
 //! as `numeric`, a timestamp as `morpholog.timestamp_nanos` (nanoseconds
-//! since the epoch, the kernel's own precision). Where the kernel can
+//! since the epoch, the kernel's own precision), a date as
+//! `morpholog.date_ordinal` (year, month and day as one integer). Where the kernel can
 //! raise while comparing - two quantities of different units, a stored
 //! value of another kind than the comparison expects, which history
 //! admitted under an older declaration can hold, or a value a sum cannot
@@ -365,6 +366,7 @@ fn decode_error(row: &sqlx::postgres::PgRow) -> Result<EvalError, PgError> {
             let domain = match column("domain")?.as_str() {
                 "decimal" => OrderedDomain::Decimal,
                 "timestamp" => OrderedDomain::Timestamp,
+                "date" => OrderedDomain::Date,
                 other => {
                     return Err(PgError::InvalidState(format!(
                         "error domain {other} is not one the compiler renders"
@@ -726,7 +728,8 @@ fn report_column(
         (ErrorReport::Compare { domain, .. }, Column::Domain) => Some(match domain {
             OrderedDomain::Decimal => "'decimal'".to_string(),
             OrderedDomain::Timestamp => "'timestamp'".to_string(),
-            OrderedDomain::Date | OrderedDomain::Duration => unreachable!("never rendered"),
+            OrderedDomain::Date => "'date'".to_string(),
+            OrderedDomain::Duration => unreachable!("never rendered"),
         }),
         (ErrorReport::Compare { left, .. }, Column::Left) => Some(format!("({left})::text")),
         (ErrorReport::Compare { right, .. }, Column::Right) => Some(format!("({right})::text")),
@@ -1731,12 +1734,10 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             left,
             right,
         } => match domain {
-            OrderedDomain::Decimal | OrderedDomain::Timestamp => {
+            OrderedDomain::Decimal | OrderedDomain::Timestamp | OrderedDomain::Date => {
                 ordered_sql(*op, *domain, left, right, &env, ctx)
             }
-            OrderedDomain::Date | OrderedDomain::Duration => {
-                Err(CompileReason::ComparisonDomain { domain: *domain })
-            }
+            OrderedDomain::Duration => Err(CompileReason::ComparisonDomain { domain: *domain }),
         },
         Prop::Or(_) => Err(CompileReason::Construct { construct: "or" }),
         Prop::Xor(_, _) => Err(CompileReason::Construct { construct: "xor" }),
@@ -1850,6 +1851,11 @@ enum Ordered {
     },
     Timestamp {
         nanos: String,
+        well_typed: String,
+        tagged: String,
+    },
+    Date {
+        ordinal: String,
         well_typed: String,
         tagged: String,
     },
@@ -1976,6 +1982,22 @@ fn ordered_sql(
             format!("({xn}) {op} ({yn})"),
             raising(and_all(&[xw.clone(), yw.clone()]), domain, xt, yt),
         ),
+        (
+            OrderedDomain::Date,
+            Ordered::Date {
+                ordinal: xo,
+                well_typed: xw,
+                tagged: xt,
+            },
+            Ordered::Date {
+                ordinal: yo,
+                well_typed: yw,
+                tagged: yt,
+            },
+        ) => (
+            format!("({xo}) {op} ({yo})"),
+            raising(and_all(&[xw.clone(), yw.clone()]), domain, xt, yt),
+        ),
         (_, Ordered::None(Some(kind)), _) | (_, _, Ordered::None(Some(kind))) => {
             // A position of a kind the SQL cannot order by at compile
             // time (`Any`, a collection), which the checker admits.
@@ -2075,6 +2097,11 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                 PredicateArgKind::Timestamp => Ordered::Timestamp {
                     nanos: format!("morpholog.timestamp_nanos({})", tagged_sql(col)),
                     well_typed: tagged_as_sql(col, "timestamp"),
+                    tagged: tagged_sql(col),
+                },
+                PredicateArgKind::Date => Ordered::Date {
+                    ordinal: format!("morpholog.date_ordinal({})", tagged_sql(col)),
+                    well_typed: tagged_as_sql(col, "date"),
                     tagged: tagged_sql(col),
                 },
                 other => Ordered::None(Some(other.clone())),
@@ -2196,6 +2223,12 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
 /// A literal in value position: its key, and a SQL constant of the
 /// kernel's value for ordering. A timestamp's coordinate is computed here,
 /// not by the database.
+/// The coordinate `morpholog.date_ordinal` gives a stored date, for a
+/// literal: monotone in the civil fields, true to negative years.
+fn date_ordinal(d: jiff::civil::Date) -> i64 {
+    i64::from(d.year()) * 10000 + i64::from(d.month()) * 100 + i64::from(d.day())
+}
+
 fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
     if matches!(value, Value::CalendarSpan(_)) {
         return Err(CompileReason::Literal {
@@ -2219,6 +2252,11 @@ fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
         },
         EvalValue::Timestamp(t) => Ordered::Timestamp {
             nanos: format!("{}::numeric", t.as_nanosecond()),
+            well_typed: "true".to_string(),
+            tagged: tagged.clone(),
+        },
+        EvalValue::Date(d) => Ordered::Date {
+            ordinal: format!("{}::integer", date_ordinal(*d)),
             well_typed: "true".to_string(),
             tagged: tagged.clone(),
         },
