@@ -1688,3 +1688,47 @@ transformation set_cap(b, cap):
     )
     .await;
 }
+
+/// A nested implication's own antecedent matches several rows for one
+/// enclosing row: its consequent is evaluated whole for each of them in
+/// order, so the first row's second comparison wins over the second
+/// row's first.
+#[tokio::test]
+async fn a_nested_implications_consequent_is_evaluated_whole_per_inner_row() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    insert_rows(&pool, "Outer", &[serde_json::json!([subject("x")])]).await;
+    let (first, second) = rows_in_load_order(&pool, |a, b| {
+        (
+            serde_json::json!([
+                subject("x"),
+                subject(a),
+                decimal("1"),
+                instant("2026-01-01T00:00:00Z")
+            ]),
+            serde_json::json!([
+                subject("x"),
+                subject(b),
+                subject("lo_is_a_subject"),
+                decimal("1")
+            ]),
+        )
+    })
+    .await;
+    insert_rows(&pool, "Band", &[first, second]).await;
+    expect_kernel_error_agreed(
+        "program crossed_inner_rows
+predicate Enabled(flag: Subject)
+predicate Outer(x: Subject)
+predicate Band(x: Subject, row: Subject, lo: Decimal, hi: Decimal)
+predicate Ok(x: Subject)
+invariant outer_bands_are_bands:
+    Enabled(_) and Outer(x) and (Band(x, row, lo, hi) implies (0 <= lo and 0 < hi)) implies Ok(x)
+transformation enable(flag):
+    admit Enabled(flag)
+",
+        "enable",
+        vec![subj("f")],
+    )
+    .await;
+}

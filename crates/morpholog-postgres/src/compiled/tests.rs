@@ -711,7 +711,8 @@ LIMIT 1"#
 
 /// An ordering under a nested scope: the scope is asked whole for each
 /// enclosing row as a correlated `EXISTS`, and the report is read from
-/// the first inner row that raises.
+/// the first inner row where any of its probes raises, naming the first
+/// that does there.
 #[test]
 fn an_ordering_under_a_nested_scope_is_pinned() {
     let set = compiled(&new_shapes_program());
@@ -729,7 +730,7 @@ LIMIT 1"#
     );
     let error = inv.error_sqls(None, &[]).unwrap().pop().unwrap();
     assert!(error.contains(
-        r#"THEN (SELECT (t1.arguments -> 1)::text FROM morpholog.claims t1 WHERE (t1.predicate_name = 'Timed' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0))) AND NOT (COALESCE((t1.arguments -> 1 ->> 'type') = 'timestamp', false) AND COALESCE((t1.arguments -> 2 ->> 'type') = 'timestamp', false))) ORDER BY t1.arguments_hash LIMIT 1) END AS "left""#
+        r#"THEN (SELECT CASE WHEN NOT (COALESCE((t1.arguments -> 1 ->> 'type') = 'timestamp', false) AND COALESCE((t1.arguments -> 2 ->> 'type') = 'timestamp', false)) THEN (t1.arguments -> 1)::text END FROM morpholog.claims t1 WHERE (t1.predicate_name = 'Timed' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0))) AND NOT (COALESCE((t1.arguments -> 1 ->> 'type') = 'timestamp', false) AND COALESCE((t1.arguments -> 2 ->> 'type') = 'timestamp', false))) ORDER BY t1.arguments_hash LIMIT 1) END AS "left""#
     ));
     assert!(error.ends_with("ORDER BY t0.arguments_hash\nLIMIT 1"));
 }

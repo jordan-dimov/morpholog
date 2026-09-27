@@ -666,24 +666,11 @@ type OrderRenderer<'a> = dyn Fn(&[(String, PredicateName)]) -> Result<String, Pg
 /// order, which `order` renders; a lifted probe's report looks inside
 /// its scope the same way.
 fn error_report(probes: &[Probe], order: &OrderRenderer<'_>) -> Result<String, PgError> {
-    let case = |column: Column| -> Result<String, PgError> {
-        let mut arms = String::new();
-        for e in probes {
-            if let Some(v) = report_column(&e.report, column, order)? {
-                let _ = write!(arms, " WHEN {} THEN {v}", e.condition);
-            }
-        }
-        Ok(if arms.is_empty() {
-            "NULL::text".to_string()
-        } else {
-            format!("CASE{arms} END")
-        })
-    };
-    let kind = case(Column::Kind)?;
-    let domain = case(Column::Domain)?;
-    let left = case(Column::Left)?;
-    let right = case(Column::Right)?;
-    let first = case(Column::First)?;
+    let kind = case_over(probes, Column::Kind, order)?;
+    let domain = case_over(probes, Column::Domain, order)?;
+    let left = case_over(probes, Column::Left, order)?;
+    let right = case_over(probes, Column::Right, order)?;
+    let first = case_over(probes, Column::First, order)?;
     let first = if first == "NULL::text" {
         "NULL::boolean".to_string()
     } else {
@@ -703,6 +690,26 @@ enum Column {
     /// Whether the value a sum could not take was its first: the kernel
     /// words that differently.
     First,
+}
+
+/// One report column across a scope's probes: the first probe that
+/// fires on the row names it, as the kernel meets them.
+fn case_over(
+    probes: &[Probe],
+    column: Column,
+    order: &OrderRenderer<'_>,
+) -> Result<String, PgError> {
+    let mut arms = String::new();
+    for e in probes {
+        if let Some(v) = report_column(&e.report, column, order)? {
+            let _ = write!(arms, " WHEN {} THEN {v}", e.condition);
+        }
+    }
+    Ok(if arms.is_empty() {
+        "NULL::text".to_string()
+    } else {
+        format!("CASE{arms} END")
+    })
 }
 
 /// One report column for one way of raising, or none when that way has
@@ -739,26 +746,34 @@ fn report_column(
             sum.where_,
             order(&sum.aliases)?
         )),
-        // A lifted probe's kind and domain are constants; its operands
-        // are read from the first inner row that raises.
+        // A lifted scope's column is read on the first inner row where
+        // any of its probes fires, from the first that does there.
         (
             ErrorReport::Lifted {
                 from,
                 where_,
                 aliases,
-                condition,
-                report,
+                probes,
             },
             column,
-        ) => match report_column(report, column, order)? {
-            None => None,
-            Some(inner) if matches!(column, Column::Kind | Column::Domain) => Some(inner),
-            Some(inner) => Some(format!(
-                "(SELECT {inner} FROM {from} WHERE {} ORDER BY {} LIMIT 1)",
-                and_all(&[where_.clone(), condition.clone()]),
-                order(aliases)?
-            )),
-        },
+        ) => {
+            let inner = case_over(probes, column, order)?;
+            if inner == "NULL::text" {
+                None
+            } else {
+                let any = or_all(
+                    &probes
+                        .iter()
+                        .map(|p| p.condition.clone())
+                        .collect::<Vec<_>>(),
+                );
+                Some(format!(
+                    "(SELECT {inner} FROM {from} WHERE {} ORDER BY {} LIMIT 1)",
+                    and_all(&[where_.clone(), any]),
+                    order(aliases)?
+                ))
+            }
+        }
         (ErrorReport::SumRange, Column::Domain | Column::Left | Column::Right | Column::First)
         | (ErrorReport::SumKind(_), Column::Domain | Column::Right)
         | (ErrorReport::Compare { .. }, Column::First) => None,
@@ -875,15 +890,15 @@ enum ErrorReport {
         left: String,
         right: String,
     },
-    /// A probe of a scope the kernel evaluates whole for each row of the
-    /// enclosing one. Its report is read from the first inner row, in the
-    /// kernel's order, that raises.
+    /// A scope the kernel evaluates whole for each row of the enclosing
+    /// one, with its probes in the kernel's order. The report is read from
+    /// the first inner row, in the kernel's order, where any of them
+    /// raises, and names the first that does there.
     Lifted {
         from: String,
         where_: String,
         aliases: Vec<(String, PredicateName)>,
-        condition: String,
-        report: Box<ErrorReport>,
+        probes: Vec<Probe>,
     },
 }
 
@@ -1030,23 +1045,23 @@ fn lift(drafts: &[ScopeDraft]) -> ScopeDraft {
                 });
             }
         } else {
+            // One probe for the whole inner scope: the kernel meets its
+            // rows in order and every way of raising on each, so the
+            // first row where any raises names the first that does.
             let from = d.sources();
             let where_ = joined(&d.where_);
-            for p in &d.probes {
-                lifted.probes.push(Probe {
-                    condition: format!(
-                        "EXISTS (SELECT 1 FROM {from} WHERE {})",
-                        and_all(&[where_.clone(), p.condition.clone()])
-                    ),
-                    report: ErrorReport::Lifted {
-                        from: from.clone(),
-                        where_: where_.clone(),
-                        aliases: d.aliases(),
-                        condition: p.condition.clone(),
-                        report: Box::new(p.report.clone()),
-                    },
-                });
-            }
+            lifted.probes.push(Probe {
+                condition: format!(
+                    "EXISTS (SELECT 1 FROM {from} WHERE {})",
+                    and_all(&[where_.clone(), d.any()])
+                ),
+                report: ErrorReport::Lifted {
+                    from,
+                    where_,
+                    aliases: d.aliases(),
+                    probes: d.probes.clone(),
+                },
+            });
         }
     }
     lifted
@@ -1681,12 +1696,13 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             };
             // The kernel evaluates the whole antecedent, then the whole
             // consequent for each of its matches, all for each enclosing
-            // row.
+            // row: the consequent's plan collapses per antecedent row
+            // before the antecedent's rows are joined in.
             let mut drafts = l.probes.clone();
-            for d in &r.probes {
-                let mut d = d.clone();
-                d.prepend(&l);
-                drafts.push(d);
+            let mut consequent = lift(&r.probes);
+            if !consequent.probes.is_empty() {
+                consequent.prepend(&l);
+                drafts.push(consequent);
             }
             Ok(Rendered {
                 where_: vec![format!("NOT {}", violated.exists_sql())],
