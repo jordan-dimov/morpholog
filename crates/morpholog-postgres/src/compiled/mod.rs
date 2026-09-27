@@ -602,14 +602,20 @@ impl CompiledInvariant {
             .iter()
             .map(|scope| {
                 let report = error_report(&scope.probes, &order)?;
-                let mut sql = format!(
-                    "SELECT {report}\nFROM {}\nWHERE {}",
-                    scope.from, scope.where_
-                );
+                let mut sql = format!("SELECT {report}");
+                // A scope with no sources of its own reads its probes on
+                // the one empty binding: nothing to join, nothing to order.
+                if !scope.from.is_empty() {
+                    let _ = write!(sql, "\nFROM {}", scope.from);
+                }
+                let _ = write!(sql, "\nWHERE {}", scope.where_);
                 if let Some(filter) = case_filter {
                     let _ = write!(sql, "\n  AND ({filter})");
                 }
-                let _ = write!(sql, "\nORDER BY {}\nLIMIT 1", order(&scope.aliases)?);
+                if !scope.aliases.is_empty() {
+                    let _ = write!(sql, "\nORDER BY {}", order(&scope.aliases)?);
+                }
+                sql.push_str("\nLIMIT 1");
                 Ok(sql)
             })
             .collect()
@@ -1246,6 +1252,9 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
     // match, so its scopes collapse into one scope of the antecedent
     // row, after the antecedent's own.
     let mut lifted = lift(&cons.probes);
+    // The truth query already lists the antecedent's LATERAL items; the
+    // consequent's own join it once more.
+    let consequent_laterals = lifted.laterals.clone();
     lifted.prepend(&ant);
     let not_cons = if !cons.from.is_empty() {
         format!("NOT {}", cons.exists_sql())
@@ -1261,7 +1270,7 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
         probes: ant.probes.clone(),
         ..Rendered::default()
     };
-    scope.laterals.extend(lifted.laterals.iter().cloned());
+    scope.laterals.extend(consequent_laterals);
     if !lifted.probes.is_empty() {
         scope.probes.push(lifted);
     }
@@ -1346,19 +1355,24 @@ fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReaso
         &r.probes
             .iter()
             .map(|d| {
-                format!(
-                    "EXISTS (SELECT 1 FROM {} WHERE {})",
-                    d.sources(),
-                    and_all(&[joined(&d.where_), d.any()])
-                )
+                let condition = and_all(&[joined(&d.where_), d.any()]);
+                if d.from.is_empty() && d.laterals.is_empty() {
+                    format!("({condition})")
+                } else {
+                    format!("EXISTS (SELECT 1 FROM {} WHERE {condition})", d.sources())
+                }
             })
             .collect::<Vec<_>>(),
     );
-    let holds = format!(
-        "EXISTS (SELECT 1 FROM {} WHERE {})",
-        from_list(&r),
-        and_all(&r.where_)
-    );
+    let holds = if r.from.is_empty() && r.laterals.is_empty() {
+        format!("({})", and_all(&r.where_))
+    } else {
+        format!(
+            "EXISTS (SELECT 1 FROM {} WHERE {})",
+            from_list(&r),
+            and_all(&r.where_)
+        )
+    };
     Ok((
         format!("SELECT 1 AS \"w\"\nWHERE {raises} OR NOT {holds}"),
         String::new(),
@@ -1385,6 +1399,7 @@ fn generic_denial_implies(
         format!("NOT {}", r.exists_sql())
     };
     let mut lifted = lift(&r.probes);
+    let consequent_laterals = lifted.laterals.clone();
     lifted.prepend(&l);
     let mut scope = Rendered {
         laterals: l.laterals.clone(),
@@ -1392,7 +1407,7 @@ fn generic_denial_implies(
         probes: l.probes.clone(),
         ..Rendered::default()
     };
-    scope.laterals.extend(lifted.laterals.iter().cloned());
+    scope.laterals.extend(consequent_laterals);
     if !lifted.probes.is_empty() {
         scope.probes.push(lifted);
     }

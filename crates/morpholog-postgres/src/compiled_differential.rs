@@ -1596,3 +1596,95 @@ transformation enable(flag):
         expect_kernel_error_agreed(SELECTOR, "enable", vec![subj("f")]).await;
     }
 }
+
+/// A scope with no sources of its own: a filter-only antecedent whose
+/// only raising sits inside a nested `exists`, and a top-level negation
+/// of the same. The error query has no FROM item and no order to give;
+/// the raising still reaches the kernel's error.
+#[tokio::test]
+async fn a_source_less_scope_raises_where_the_kernel_does() {
+    let pool = test_pool().await;
+    for source in [
+        "program filter_only_antecedent
+predicate Enabled(flag: Subject)
+predicate Band(x: Subject, lo: Decimal, hi: Decimal)
+predicate Marked(x: Subject)
+invariant a_band_marks:
+    (exists x: Enabled(_) and Band(x, lo, hi) and 0 <= lo) implies Marked(_)
+transformation enable(flag):
+    admit Enabled(flag)
+",
+        "program negated_existence
+predicate Enabled(flag: Subject)
+predicate Band(x: Subject, lo: Decimal, hi: Decimal)
+invariant no_band:
+    not (exists x: Enabled(_) and Band(x, lo, hi) and 0 <= lo)
+transformation enable(flag):
+    admit Enabled(flag)
+",
+    ] {
+        reset_db(&pool).await;
+        insert_rows(
+            &pool,
+            "Band",
+            &[serde_json::json!([
+                subject("x"),
+                subject("lo_is_a_subject"),
+                decimal("1")
+            ])],
+        )
+        .await;
+        expect_kernel_error_agreed(source, "enable", vec![subj("f")]).await;
+    }
+}
+
+/// A sum-closing antecedent followed by a raising consequent: the
+/// antecedent's LATERAL item serves both the truth query and the lifted
+/// consequent probe, once.
+#[tokio::test]
+async fn an_antecedent_sum_and_a_raising_consequent_share_one_lateral() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    insert_rows(
+        &pool,
+        "Line",
+        &[serde_json::json!([
+            subject("b"),
+            subject("side"),
+            decimal("1")
+        ])],
+    )
+    .await;
+    insert_rows(
+        &pool,
+        "Limit",
+        &[serde_json::json!([
+            subject("b"),
+            subject("limit_is_a_subject")
+        ])],
+    )
+    .await;
+    insert_rows(
+        &pool,
+        "Cap",
+        &[serde_json::json!([subject("b"), decimal("5")])],
+    )
+    .await;
+    expect_kernel_error_agreed(
+        "program sum_then_ordering
+predicate Enabled(flag: Subject)
+predicate Cap(b: Subject, cap: Decimal)
+predicate Line(b: Subject, side: Subject, v: Decimal)
+predicate Limit(b: Subject, limit: Decimal)
+invariant capped_within_limit:
+    Enabled(_) and Cap(b, cap) and sum(v | Line(b, _, v)) <= cap implies (Limit(b, limit) and cap <= limit)
+transformation enable(flag):
+    admit Enabled(flag)
+transformation set_cap(b, cap):
+    admit Cap(b, cap)
+",
+        "enable",
+        vec![subj("f")],
+    )
+    .await;
+}
