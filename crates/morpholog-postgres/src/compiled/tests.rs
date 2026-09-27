@@ -242,13 +242,6 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
             },
         ),
         (
-            "temporal comparison",
-            "invariant r:\n    Dated(x, d1, d2) implies d1 on_or_before d2\n",
-            CompileReason::ComparisonDomain {
-                domain: OrderedDomain::Date,
-            },
-        ),
-        (
             "arithmetic",
             "invariant r:\n    Amount(x, n) implies 0 <= n + 1\n",
             CompileReason::Construct {
@@ -354,6 +347,11 @@ invariant quantity_is_positive:
 
 invariant delivery_period_is_ordered:
     Terms(delivery_start: s, delivery_end: e, ..) implies s strictly_before e
+
+predicate Dated(x: Subject, opened: Date, closed: Date)
+
+invariant dates_are_ordered:
+    Dated(x, opened, closed) implies opened on_or_before closed
 ",
     )
     .expect("parses")
@@ -733,4 +731,56 @@ LIMIT 1"#
         r#"THEN (SELECT CASE WHEN NOT (COALESCE((t1.arguments -> 1 ->> 'type') = 'timestamp', false) AND COALESCE((t1.arguments -> 2 ->> 'type') = 'timestamp', false)) THEN (t1.arguments -> 1)::text END FROM morpholog.claims t1 WHERE (t1.predicate_name = 'Timed' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0))) AND NOT (COALESCE((t1.arguments -> 1 ->> 'type') = 'timestamp', false) AND COALESCE((t1.arguments -> 2 ->> 'type') = 'timestamp', false))) ORDER BY t1.arguments_hash LIMIT 1) END AS "left""#
     ));
     assert!(error.ends_with("ORDER BY t0.arguments_hash\nLIMIT 1"));
+}
+
+/// A date ordering: the civil-date coordinate on both sides, a kind
+/// test on each stored operand, and the kernel's error named as `date`.
+#[test]
+fn a_date_ordering_is_pinned() {
+    let set = compiled(&orderings_program());
+    let inv = &set.invariants[2];
+    assert_eq!(inv.name.as_str(), "dates_are_ordered");
+    assert_eq!(
+        inv.violation_sql(None),
+        r#"/* morpholog compiled invariant dates_are_ordered v1 stage1 */
+SELECT (t0.arguments -> 2)::text AS "w_closed",
+       (t0.arguments -> 1)::text AS "w_opened",
+       (t0.arguments -> 0)::text AS "w_x"
+FROM morpholog.claims t0
+WHERE t0.predicate_name = 'Dated'
+  AND (NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'date', false) AND COALESCE((t0.arguments -> 2 ->> 'type') = 'date', false)) OR NOT (morpholog.date_ordinal(t0.arguments -> 1)) <= (morpholog.date_ordinal(t0.arguments -> 2)))
+ORDER BY (morpholog.value_key_v1(t0.arguments -> 2))::text, (morpholog.value_key_v1(t0.arguments -> 1))::text, (morpholog.value_key_v1(t0.arguments -> 0))::text
+LIMIT 1"#
+    );
+    assert_eq!(
+        inv.error_sqls(None, &[]).unwrap(),
+        [
+            r#"SELECT CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'date', false) AND COALESCE((t0.arguments -> 2 ->> 'type') = 'date', false)) THEN 'compare' END AS "kind",
+       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'date', false) AND COALESCE((t0.arguments -> 2 ->> 'type') = 'date', false)) THEN 'date' END AS "domain",
+       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'date', false) AND COALESCE((t0.arguments -> 2 ->> 'type') = 'date', false)) THEN (t0.arguments -> 1)::text END AS "left",
+       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'date', false) AND COALESCE((t0.arguments -> 2 ->> 'type') = 'date', false)) THEN (t0.arguments -> 2)::text END AS "right",
+       NULL::boolean AS "first"
+FROM morpholog.claims t0
+WHERE (t0.predicate_name = 'Dated' AND NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'date', false) AND COALESCE((t0.arguments -> 2 ->> 'type') = 'date', false)))
+ORDER BY t0.arguments_hash
+LIMIT 1"#
+        ]
+    );
+    // A literal date is its ordinal, computed once here.
+    let program = morpholog_surface::parse_program(
+        "program epoch
+predicate Opened(x: Subject, on: Date)
+invariant opened_this_millennium:
+    Opened(x, on) implies on after @2000-01-01
+",
+    )
+    .expect("parses");
+    let set = compiled(&program);
+    assert!(
+        set.invariants[0]
+            .violation_sql(None)
+            .contains("(morpholog.date_ordinal(t0.arguments -> 1)) > (20000101::integer)"),
+        "{}",
+        set.invariants[0].violation_sql(None)
+    );
 }

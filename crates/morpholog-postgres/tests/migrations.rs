@@ -473,6 +473,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     )
     .await
     .expect("simulate a database from before the equality key");
+    ddl(
+        &pool,
+        "DROP FUNCTION morpholog.date_ordinal(jsonb)".to_string(),
+    )
+    .await
+    .expect("simulate a database from before the date coordinate");
     // The guard migration 017 drops, as a database that ran 016 has it.
     ddl(
         &pool,
@@ -617,6 +623,30 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     .map_err(|e| format!("guard lookup failed: {e}"))?;
     if guard.is_some() {
         return Err("migration 017 must drop morpholog.declared_kind".to_string());
+    }
+
+    // Migration 018: the date coordinate is back, marked as ours.
+    let ordinal: Option<i32> = sqlx::query_scalar(
+        "SELECT morpholog.date_ordinal('{\"type\":\"date\",\"value\":\"2026-01-01\"}'::jsonb)",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("date_ordinal must exist after migrating: {e}"))?;
+    if ordinal != Some(20_260_101) {
+        return Err(format!(
+            "date_ordinal must give 20260101 for 2026-01-01, got {ordinal:?}"
+        ));
+    }
+    let marker: Option<String> = sqlx::query_scalar(
+        "SELECT obj_description('morpholog.date_ordinal(jsonb)'::regprocedure, 'pg_proc')",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("marker lookup failed: {e}"))?;
+    if marker.as_deref() != Some("morpholog date coordinate v1") {
+        return Err(format!(
+            "date_ordinal must carry its marker, got {marker:?}"
+        ));
     }
 
     // Migration 014, checked on the migrated table: the old row survives

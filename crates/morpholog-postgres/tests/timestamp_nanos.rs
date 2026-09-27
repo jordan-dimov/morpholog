@@ -149,6 +149,11 @@ fn the_schema_and_the_migrations_define_the_same_functions() {
             "morpholog value key v1",
             include_str!("../../morpholog-core/sql/migrations/017_value_key_v1.sql"),
         ),
+        (
+            "date_ordinal",
+            "morpholog date coordinate v1",
+            include_str!("../../morpholog-core/sql/migrations/018_date_ordinal.sql"),
+        ),
     ] {
         assert_eq!(
             body(schema, &format!("CREATE FUNCTION {name}(")),
@@ -182,5 +187,18 @@ fn the_schema_and_the_migrations_define_the_same_functions() {
     assert!(
         migration.contains(&format!("body_digest IS DISTINCT FROM '{digest}'")),
         "migration 017 must carry the schema body's digest {digest}"
+    );
+    // Migration 018 guards its function the same way.
+    let start = schema.find("CREATE FUNCTION date_ordinal(").unwrap();
+    let body_start = schema[start..].find("AS $$").unwrap() + start + "AS $$".len();
+    let body_end = schema[body_start..].find("$$;").unwrap() + body_start;
+    let digest = {
+        use sha2::{Digest as _, Sha256};
+        hex::encode(Sha256::digest(&schema.as_bytes()[body_start..body_end]))
+    };
+    let migration = include_str!("../../morpholog-core/sql/migrations/018_date_ordinal.sql");
+    assert!(
+        migration.contains(&format!("body_digest IS DISTINCT FROM '{digest}'")),
+        "migration 018 must carry the schema body's digest {digest}"
     );
 }

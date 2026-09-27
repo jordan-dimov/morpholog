@@ -59,6 +59,7 @@ migrations![
     (15, "managed_indexes", "015_managed_indexes.sql"),
     (16, "timestamp_nanos", "016_timestamp_nanos.sql"),
     (17, "value_key_v1", "017_value_key_v1.sql"),
+    (18, "date_ordinal", "018_date_ordinal.sql"),
 ];
 
 /// The newest migration this binary carries.

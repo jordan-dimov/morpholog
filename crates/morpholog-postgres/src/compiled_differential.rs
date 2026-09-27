@@ -518,6 +518,15 @@ transformation hold(x, y):
 transformation validate(y):
     admit Valid(y)
 ",
+    // A date ordering: the civil-date coordinate agrees with the
+    // kernel's order, and its errors with the kernel's.
+    "program date_order
+predicate Period(x: Subject, opened: Date, closed: Date)
+invariant period_is_ordered:
+    Period(x, opened, closed) implies opened on_or_before closed
+transformation open(x, opened, closed):
+    admit Period(x, opened, closed)
+",
     "program tagged_timestamp_join
 predicate LeftAt(x: Subject, v: Timestamp)
 predicate RightAt(x: Subject, v: Timestamp)
@@ -1731,4 +1740,44 @@ transformation enable(flag):
         vec![subj("f")],
     )
     .await;
+}
+
+/// A subject at a date position, ordered against a date: the kernel's
+/// kind error, on both stages.
+#[tokio::test]
+async fn a_subject_that_reads_as_a_date_is_the_kernels_kind_error() {
+    let program = morpholog_surface::parse_program(
+        "program period
+predicate Period(x: Subject, opened: Date, closed: Date)
+invariant period_is_ordered:
+    Period(x, opened, closed) implies opened on_or_before closed
+transformation open(x, opened, closed):
+    admit Period(x, opened, closed)
+",
+    )
+    .expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+    let compiled = CompiledProgram::new(program).expect("compiles");
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let probe = probe_raw(
+        &pool,
+        &compiled,
+        &sql_set,
+        "open",
+        vec![
+            subj("p"),
+            subj("2026-01-01"),
+            morpholog_test_support::date("2026-01-02"),
+        ],
+    )
+    .await;
+    match probe {
+        Ok(Probe::KernelErrorAgreed) => {}
+        other => panic!(
+            "the kernel errors and both stages agree, got {}",
+            describe(other)
+        ),
+    }
 }
