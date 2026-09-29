@@ -564,8 +564,10 @@ pub(crate) struct EvaluateArgs {
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum ProvisionCmd {
     /// Reconcile the indexes a programme's loads and compiled invariants
-    /// seek on. Prints one line per index with its action - KEEP, CREATE,
-    /// REPAIR INVALID, SATISFIED EXTERNALLY, STALE, CONFLICT - and exits
+    /// seek on, and the statistics that let the planner see each seek is
+    /// selective. Prints one line per index with its action - KEEP,
+    /// CREATE, REPAIR INVALID, SATISFIED EXTERNALLY, STALE, CONFLICT - and
+    /// one per statistics object - KEEP, CREATE, CONFLICT - and exits
     /// non-zero on a conflict, which needs an operator. Builds run
     /// concurrently, so the claims table stays writable throughout.
     Indexes(ProvisionIndexesArgs),
