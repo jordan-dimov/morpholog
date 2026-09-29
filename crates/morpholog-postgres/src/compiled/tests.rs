@@ -40,7 +40,7 @@ fn balanced_posted_entry_sql_is_pinned() {
     assert_eq!(
         sql,
         r#"/* morpholog compiled invariant balanced_posted_entry v1 stage1 */
-SELECT (t0.arguments -> 0)::text AS "w_entry"
+SELECT 1 AS "w"
 FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((CASE WHEN (t1.arguments -> 2 ->> 'type') = 'decimal' THEN (t1.arguments -> 2 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t1.arguments -> 2 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0)))) l2, LATERAL (SELECT COALESCE(sum((CASE WHEN (t3.arguments -> 3 ->> 'type') = 'decimal' THEN (t3.arguments -> 3 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t3.arguments -> 3 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0)))) l4
 WHERE t0.predicate_name = 'JournalEntry'
   AND ((l2.f OR NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR l4.f OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)) OR NOT (l2.s) = (l4.s))
@@ -84,9 +84,7 @@ fn supersedes_uniqueness_sql_is_pinned() {
     assert_eq!(
         sql,
         r#"/* morpholog compiled invariant supersedes_unique_by_prior_entry_id v1 stage1 */
-SELECT (t0.arguments -> 0)::text AS "w_new_entry_id_a",
-       (t1.arguments -> 0)::text AS "w_new_entry_id_b",
-       (t0.arguments -> 1)::text AS "w_prior_entry_id"
+SELECT 1 AS "w"
 FROM morpholog.claims t0, morpholog.claims t1
 WHERE t0.predicate_name = 'Supersedes'
   AND t1.predicate_name = 'Supersedes'
@@ -105,7 +103,7 @@ fn journal_entry_has_lines_sql_is_pinned() {
     assert_eq!(
         sql,
         r#"/* morpholog compiled invariant journal_entry_has_lines v1 stage1 */
-SELECT (t0.arguments -> 0)::text AS "w_entry"
+SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'JournalEntry'
   AND NOT EXISTS (SELECT 1 FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0))))
@@ -365,7 +363,7 @@ fn a_quantity_ordering_against_a_literal_is_pinned() {
     assert_eq!(
         inv.violation_sql(None),
         r#"/* morpholog compiled invariant quantity_is_positive v1 stage1 */
-SELECT (t0.arguments -> 1)::text AS "w_qty"
+SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Terms'
   AND (NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) OR NOT ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) > ('0'::numeric))
@@ -407,8 +405,7 @@ fn a_timestamp_ordering_is_pinned() {
     assert_eq!(
         inv.violation_sql(None),
         r#"/* morpholog compiled invariant delivery_period_is_ordered v1 stage1 */
-SELECT (t0.arguments -> 3)::text AS "w_e",
-       (t0.arguments -> 2)::text AS "w_s"
+SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Terms'
   AND (NOT (COALESCE((t0.arguments -> 2 ->> 'type') = 'timestamp', false) AND COALESCE((t0.arguments -> 3 ->> 'type') = 'timestamp', false)) OR NOT (morpholog.timestamp_nanos(t0.arguments -> 2)) < (morpholog.timestamp_nanos(t0.arguments -> 3)))
@@ -682,9 +679,7 @@ fn two_orderings_in_a_consequent_are_pinned() {
     assert_eq!(
         inv.violation_sql(None),
         r#"/* morpholog compiled invariant coverage_terms_within_range v1 stage1 */
-SELECT (t0.arguments -> 1)::text AS "w_deductible",
-       (t0.arguments -> 0)::text AS "w_p",
-       (t0.arguments -> 2)::text AS "w_per_claim_limit"
+SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Terms'
   AND ((NOT COALESCE((t0.arguments -> 1 ->> 'type') = 'decimal', false) OR (('0'::numeric) <= ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric END)) AND NOT COALESCE((t0.arguments -> 2 ->> 'type') = 'decimal', false))) OR NOT (('0'::numeric) <= ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric END)) AND ('0'::numeric) < ((CASE WHEN (t0.arguments -> 2 ->> 'type') = 'decimal' THEN (t0.arguments -> 2 ->> 'value')::numeric END))))
@@ -719,7 +714,7 @@ fn an_ordering_under_a_nested_scope_is_pinned() {
     assert_eq!(
         inv.violation_sql(None),
         r#"/* morpholog compiled invariant r v1 stage1 */
-SELECT (t0.arguments -> 0)::text AS "w_x"
+SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'A'
   AND (EXISTS (SELECT 1 FROM morpholog.claims t1 WHERE (t1.predicate_name = 'Timed' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0))) AND NOT (COALESCE((t1.arguments -> 1 ->> 'type') = 'timestamp', false) AND COALESCE((t1.arguments -> 2 ->> 'type') = 'timestamp', false)))) OR NOT (EXISTS (SELECT 1 FROM morpholog.claims t1 WHERE t1.predicate_name = 'Timed' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0))) AND (morpholog.timestamp_nanos(t1.arguments -> 1)) < (morpholog.timestamp_nanos(t1.arguments -> 2)))))
@@ -743,9 +738,7 @@ fn a_date_ordering_is_pinned() {
     assert_eq!(
         inv.violation_sql(None),
         r#"/* morpholog compiled invariant dates_are_ordered v1 stage1 */
-SELECT (t0.arguments -> 2)::text AS "w_closed",
-       (t0.arguments -> 1)::text AS "w_opened",
-       (t0.arguments -> 0)::text AS "w_x"
+SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Dated'
   AND (NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'date', false) AND COALESCE((t0.arguments -> 2 ->> 'type') = 'date', false)) OR NOT (morpholog.date_ordinal(t0.arguments -> 1)) <= (morpholog.date_ordinal(t0.arguments -> 2)))

@@ -12,8 +12,9 @@
 //! - **Governed history** (states reached only through accepted
 //!   proposals): the kernel, the full SQL check and the case-bound SQL
 //!   check agree on the verdict. On rejection, the first failing rule's
-//!   name, version and witness variable set must match; witness values
-//!   may differ (a symmetric self-join can name a pair in either order).
+//!   name and version must match, the case-bound check's witness must be
+//!   the kernel's, values included, and the full check's must carry the
+//!   same variables.
 //! - **Dirty history** (rows the kernel never admitted, of the declared
 //!   kinds or of another kind altogether): the kernel and the case-bound
 //!   check still agree. Equality is one key for every stored value, and
@@ -30,7 +31,7 @@ use std::fmt::Write as _;
 
 use morpholog_core::{
     CompiledProgram, EvalError, EvalValue, Outcome, Program, RejectionReason, StagedDelta, Subject,
-    Transition, finish_staged_delta_with, propose_stage_delta,
+    Transition, WitnessBinding, finish_staged_delta_with, propose_stage_delta,
 };
 use uuid::Uuid;
 
@@ -242,15 +243,22 @@ fn governed_contract(obs: &ProbeObservation) -> Result<bool, String> {
                         &format!("{} v{}", s.name, s.version),
                     ));
                 }
-                // Witness variables must agree; values may differ.
-                let s_vars: Vec<_> = s.witness.iter().map(|w| &w.var).collect();
-                let k_vars: Vec<_> = witness.iter().map(|w| &w.var).collect();
-                if s_vars != k_vars {
-                    return Err(disagreement(
-                        &format!("{label} witness variables"),
-                        &format!("{k_vars:?}"),
-                        &format!("{s_vars:?}"),
-                    ));
+                // The case-bound check admits, so it reports the kernel's
+                // own path, values and all. The full check answers for the
+                // whole state, which on dirty history can name another
+                // case: its variables must agree, its values may differ.
+                let (k, got) = if label == "case-bound" {
+                    (format!("{witness:?}"), format!("{:?}", s.witness))
+                } else {
+                    let vars =
+                        |w: &[WitnessBinding]| w.iter().map(|b| b.var.clone()).collect::<Vec<_>>();
+                    (
+                        format!("{:?}", vars(witness)),
+                        format!("{:?}", vars(&s.witness)),
+                    )
+                };
+                if k != got {
+                    return Err(disagreement(&format!("{label} witness"), &k, &got));
                 }
             }
             Ok(false)
@@ -1779,5 +1787,101 @@ transformation open(x, opened, closed):
             "the kernel errors and both stages agree, got {}",
             describe(other)
         ),
+    }
+}
+
+/// Two antecedent rows failing the consequent at different depths: one
+/// finds no joined row, the other joins and fails the comparison, so
+/// their witnesses carry different variables. The kernel reports the
+/// first in its state order, and so must the compiled check.
+#[tokio::test]
+async fn the_reported_violation_is_the_kernels_first() {
+    const SOURCE: &str = "program first_violation
+predicate Enabled(flag: Subject)
+predicate A(x: Subject)
+predicate B(x: Subject, y: Decimal)
+invariant joined_rows_are_positive:
+    Enabled(_) and A(x) implies B(x, y) and y > 0
+transformation enable(flag):
+    admit Enabled(flag)
+";
+    let pool = test_pool().await;
+    let names = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    for pair in names.chunks(2) {
+        for (joined, unjoined) in [(pair[0], pair[1]), (pair[1], pair[0])] {
+            reset_db(&pool).await;
+            insert_rows(
+                &pool,
+                "A",
+                &[
+                    serde_json::json!([subject(joined)]),
+                    serde_json::json!([subject(unjoined)]),
+                ],
+            )
+            .await;
+            insert_rows(
+                &pool,
+                "B",
+                &[serde_json::json!([subject(joined), decimal("-1")])],
+            )
+            .await;
+            let program = morpholog_surface::parse_program(SOURCE).expect("parses");
+            let validated = program.validated().expect("validates");
+            let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+            let compiled = CompiledProgram::new(program).expect("compiles");
+            match probe_raw(&pool, &compiled, &sql_set, "enable", vec![subj("f")]).await {
+                Ok(Probe::Observed(obs)) => governed_contract(&obs)
+                    .unwrap_or_else(|msg| panic!("joined {joined}, unjoined {unjoined}: {msg}")),
+                other => panic!("{}", describe(other)),
+            };
+        }
+    }
+}
+
+/// Two rows start the consequent and only one reaches its second
+/// conjunct: the kernel's witness is the first row of the longest prefix
+/// that matched, so it names the value that got furthest, whichever
+/// starts first.
+#[tokio::test]
+async fn the_witness_reads_the_longest_prefix_that_matched() {
+    const SOURCE: &str = "program longest_prefix
+predicate Enabled(flag: Subject)
+predicate A(x: Subject)
+predicate B(x: Subject, y: Subject)
+predicate C(y: Subject, z: Decimal)
+invariant chains_end_positive:
+    Enabled(_) and A(x) implies B(x, y) and C(y, z) and z > 0
+transformation enable(flag):
+    admit Enabled(flag)
+";
+    let pool = test_pool().await;
+    for (reached, stopped) in [("y1", "y2"), ("y2", "y1")] {
+        reset_db(&pool).await;
+        insert_rows(&pool, "A", &[serde_json::json!([subject("p")])]).await;
+        insert_rows(
+            &pool,
+            "B",
+            &[
+                serde_json::json!([subject("p"), subject(reached)]),
+                serde_json::json!([subject("p"), subject(stopped)]),
+            ],
+        )
+        .await;
+        insert_rows(
+            &pool,
+            "C",
+            &[serde_json::json!([subject(reached), decimal("-1")])],
+        )
+        .await;
+        let program = morpholog_surface::parse_program(SOURCE).expect("parses");
+        let validated = program.validated().expect("validates");
+        let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+        let compiled = CompiledProgram::new(program).expect("compiles");
+        match probe_raw(&pool, &compiled, &sql_set, "enable", vec![subj("f")]).await {
+            Ok(Probe::Observed(obs)) => {
+                governed_contract(&obs).unwrap_or_else(|msg| panic!("reached {reached}: {msg}"))
+            }
+            other => panic!("{}", describe(other)),
+        };
     }
 }

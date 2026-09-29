@@ -46,9 +46,12 @@
 //! a narrower fragment: a sum-closing comparison is last in its scope and
 //! never under a nested one.
 //!
-//! Witness contract: rule name, version and the witness VARIABLE SET must
-//! match the kernel. Witness values may differ: a symmetric self-join can
-//! name the violating pair in either order.
+//! Witness contract: rule name, version and witness match the kernel's,
+//! values included. Once a rejection is established, a diagnostic query
+//! follows the kernel's first failing path, in its order: which row fails
+//! decides which variables the witness carries, not only their values.
+//! The full check answers for the whole state, so on dirty history it can
+//! name another case, with the same variables.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -211,7 +214,8 @@ impl CompiledInvariantSet {
     /// the row and a second query names the first erroring binding in the
     /// kernel's order: state as loaded, then each transition's admissions
     /// in statement order, which `steps` supplies. That error wins over any
-    /// violation, as it does in the kernel.
+    /// violation, as it does in the kernel. With no error, the diagnostic
+    /// query finds the witness in the same order.
     pub(crate) async fn first_violation(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -237,9 +241,9 @@ impl CompiledInvariantSet {
                 .fetch_optional(&mut **tx)
                 .await
                 .map_err(classify)?;
-            let Some(row) = row else {
+            if row.is_none() {
                 continue;
-            };
+            }
             for error_sql in inv.error_sqls(case_filter.as_deref(), steps)? {
                 let erroring = sqlx::query(sqlx::AssertSqlSafe(error_sql))
                     .fetch_optional(&mut **tx)
@@ -249,10 +253,26 @@ impl CompiledInvariantSet {
                     return Err(PgError::Kernel(decode_error(&erroring)?));
                 }
             }
+            let witness = match inv.diagnostic_sql(case_filter.as_deref(), steps)? {
+                None => Vec::new(),
+                Some(sql) => {
+                    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+                        .fetch_optional(&mut **tx)
+                        .await
+                        .map_err(classify)?
+                        .ok_or_else(|| {
+                            PgError::InvalidState(format!(
+                                "{} is violated but its diagnostic query found no violation",
+                                inv.name
+                            ))
+                        })?;
+                    decode_witness(inv, &row)?
+                }
+            };
             return Ok(Some(SqlViolation {
                 name: inv.name.clone(),
                 version: inv.version,
-                witness: decode_witness(inv, &row)?,
+                witness,
             }));
         }
         Ok(None)
@@ -521,13 +541,12 @@ struct ColRef {
 pub(crate) struct CompiledInvariant {
     pub(crate) name: InvariantName,
     pub(crate) version: u32,
-    /// Witness variables, sorted by name. Each violation row carries the
-    /// full tagged value as `w_<var>`.
+    /// Witness variables, sorted by name. The diagnostic row carries each
+    /// as the full tagged value in `w_<var>`, NULL where the kernel's
+    /// failing path did not bind it.
     pub(crate) witness_vars: Vec<Var>,
     /// Which cases a delta touches, decided by core; `case_cols` renders
-    /// its bindings onto the antecedent's columns. It also holds the
-    /// columns a consequent binds, for the witness alone: no case is keyed
-    /// by them.
+    /// its bindings onto the antecedent's columns.
     plan: ImpactPlan,
     case_cols: BTreeMap<Var, ColRef>,
     sql_select_from_where: String,
@@ -538,6 +557,8 @@ pub(crate) struct CompiledInvariant {
     /// a violation that sorts earlier. The first scope that names a row
     /// wins. Empty when nothing in the body can raise.
     probe_scopes: Vec<ProbeScope>,
+    /// Where the witness comes from; `None` when the kernel reports none.
+    diagnosis: Option<Diagnosis>,
     /// The indexes this invariant's SQL seeks on at a join or a literal,
     /// in specification order. The plan must reach each through its
     /// index.
@@ -562,6 +583,49 @@ struct ProbeScope {
     /// The claim aliases of the scope with their predicates, in the
     /// kernel's nesting order.
     aliases: Vec<(String, PredicateName)>,
+}
+
+/// The diagnostic query before its runtime parts. It runs only once a
+/// rejection is established, and finds the path the kernel diagnoses:
+/// the first violating antecedent match in the kernel's order, and on it
+/// the first row of the longest consequent prefix that still matched.
+/// The violation query cannot stand in for it: another violating row can
+/// fail at another depth of the consequent and so bind other variables.
+#[derive(Debug)]
+struct Diagnosis {
+    /// The violation query's sources and conditions.
+    from: String,
+    where_: String,
+    /// The antecedent's claim aliases, in the kernel's nesting order.
+    aliases: Vec<(String, PredicateName)>,
+    antecedent: Vec<(Var, ColRef)>,
+    /// The consequent through each of its conjuncts, shortest first.
+    prefixes: Vec<Prefix>,
+    /// Each variable only the consequent binds, with the first prefix
+    /// that binds it.
+    consequent: Vec<(Var, ColRef, usize)>,
+}
+
+#[derive(Debug)]
+struct Prefix {
+    from: String,
+    where_: String,
+    aliases: Vec<(String, PredicateName)>,
+}
+
+impl Prefix {
+    fn of(r: &Rendered, from_len: usize, where_len: usize) -> Self {
+        let prefix = Rendered {
+            from: r.from[..from_len].to_vec(),
+            where_: r.where_[..where_len].to_vec(),
+            ..Rendered::default()
+        };
+        Self {
+            from: from_list(&prefix),
+            where_: prefix.conjunction(),
+            aliases: prefix.aliases(),
+        }
+    }
 }
 
 impl CompiledInvariant {
@@ -621,6 +685,75 @@ impl CompiledInvariant {
                 Ok(sql)
             })
             .collect()
+    }
+
+    /// The diagnostic query over the same obligation as the violation
+    /// query, in the kernel's order; `None` when the kernel reports no
+    /// witness.
+    pub(crate) fn diagnostic_sql(
+        &self,
+        case_filter: Option<&str>,
+        steps: &[DeltaStep],
+    ) -> Result<Option<String>, PgError> {
+        let Some(d) = &self.diagnosis else {
+            return Ok(None);
+        };
+        let order = |aliases: &[(String, PredicateName)]| -> Result<String, PgError> {
+            Ok(aliases
+                .iter()
+                .map(|(alias, predicate)| order_keys(alias, predicate, steps))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", "))
+        };
+        let mut columns: Vec<String> = d
+            .antecedent
+            .iter()
+            .map(|(var, col)| {
+                format!(
+                    "({}.arguments -> {})::text AS {}",
+                    col.alias,
+                    col.position,
+                    quote_ident(&format!("w_{var}"))
+                )
+            })
+            .collect();
+        for (var, col, first) in &d.consequent {
+            // A row of a longer prefix is a row of every shorter one, so
+            // the first reading, longest prefix first, is the longest
+            // prefix that matched.
+            let readings = (*first..d.prefixes.len())
+                .rev()
+                .map(|i| {
+                    let p = &d.prefixes[i];
+                    Ok(format!(
+                        "(SELECT ({}.arguments -> {})::text FROM {} WHERE {} ORDER BY {} LIMIT 1)",
+                        col.alias,
+                        col.position,
+                        p.from,
+                        p.where_,
+                        order(&p.aliases)?
+                    ))
+                })
+                .collect::<Result<Vec<_>, PgError>>()?;
+            columns.push(format!(
+                "COALESCE({}) AS {}",
+                readings.join(", "),
+                quote_ident(&format!("w_{var}"))
+            ));
+        }
+        let mut sql = format!(
+            "/* morpholog diagnosis {} v{} */\nSELECT {}\nFROM {}\nWHERE {}",
+            comment_safe(self.name.as_str()),
+            self.version,
+            columns.join(",\n       "),
+            d.from,
+            d.where_
+        );
+        if let Some(filter) = case_filter {
+            let _ = write!(sql, "\n  AND ({filter})");
+        }
+        let _ = write!(sql, "\nORDER BY {}\nLIMIT 1", order(&d.aliases)?);
+        Ok(Some(sql))
     }
 
     /// Bound the check to the cases a delta could have changed: core
@@ -1184,7 +1317,7 @@ fn compile_invariant(
         pending_sums: Vec::new(),
     };
 
-    let (select_from_where, order_limit, error, case_cols) = match &inv.body {
+    let (select_from_where, order_limit, error, case_cols, diagnosis) = match &inv.body {
         Prop::Implies { left, right } => compile_denial(left, right, &mut ctx)?,
         Prop::Forall {
             binding: _,
@@ -1199,26 +1332,35 @@ fn compile_invariant(
             if r.from.is_empty() {
                 generic_denial(&inv.body, &mut ctx)?
             } else {
-                let (select, order) = witness_select_order(&r);
                 (
                     format!(
-                        "SELECT {select}\nFROM {}\nWHERE {}",
+                        "SELECT 1 AS \"w\"\nFROM {}\nWHERE {}",
                         from_list(&r),
                         violated(&r, "true".to_string()).join("\n  AND ")
                     ),
-                    format!("\nORDER BY {order}\nLIMIT 1"),
+                    format!("\nORDER BY {}\nLIMIT 1", violation_order(&r)),
                     r.probes.iter().map(ScopeDraft::anchored).collect(),
                     r.env,
+                    None,
                 )
             }
         }
         other => generic_denial(other, &mut ctx)?,
     };
 
-    let witness_vars = match &inv.body {
-        Prop::Not(_) => Vec::new(),
-        _ => case_cols.keys().cloned().collect(),
-    };
+    // An empty witness needs no query.
+    let diagnosis = diagnosis.filter(|d| !d.antecedent.is_empty() || !d.consequent.is_empty());
+    let witness_vars: Vec<Var> = diagnosis
+        .iter()
+        .flat_map(|d| {
+            d.antecedent
+                .iter()
+                .map(|(v, _)| v.clone())
+                .chain(d.consequent.iter().map(|(v, _, _)| v.clone()))
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
     let plan = ImpactPlan::new(inv);
     // The case-bound check seeks on the case's columns. Without their
     // indexes it walks the predicate and takes the very lock the bound
@@ -1240,6 +1382,7 @@ fn compile_invariant(
         sql_select_from_where: select_from_where,
         sql_order_limit: order_limit,
         probe_scopes: error,
+        diagnosis,
         required_indexes: ctx
             .required
             .iter()
@@ -1251,7 +1394,7 @@ fn compile_invariant(
 
 /// The dominant shape: `antecedent implies consequent`. Violation = an
 /// antecedent match with no consequent match.
-type Denial = (String, String, Vec<ProbeScope>, Env);
+type Denial = (String, String, Vec<ProbeScope>, Env, Option<Diagnosis>);
 
 fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReason> {
     let ant = render_prop(left, Env::new(), ctx)?;
@@ -1292,18 +1435,19 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
     if !lifted.probes.is_empty() {
         scope.probes.push(lifted);
     }
-    let (mut select, order) = witness_select_order(&ant);
     // The kernel's witness carries the variables of the longest
-    // consequent prefix that still matched, bound on its first row.
-    // Each such variable is read from the first row of the prefix
-    // through the conjunct that binds it, NULL when none exists.
-    let bound_by_consequent: Vec<&Var> = cons
-        .env
-        .keys()
-        .filter(|v| !ant.env.contains_key(*v))
-        .collect();
-    for var in &bound_by_consequent {
-        let col = &cons.env[*var];
+    // consequent prefix that still matched, bound on its first row, so
+    // each consequent variable is read through the prefixes that bind it.
+    let prefixes: Vec<Prefix> = if cons.stages.is_empty() {
+        vec![Prefix::of(&cons, cons.from.len(), cons.where_.len())]
+    } else {
+        cons.stages
+            .iter()
+            .map(|(from_len, where_len)| Prefix::of(&cons, *from_len, *where_len))
+            .collect()
+    };
+    let mut consequent = Vec::new();
+    for (var, col) in cons.env.iter().filter(|(v, _)| !ant.env.contains_key(*v)) {
         let Some(alias_index) = cons
             .from
             .iter()
@@ -1311,47 +1455,34 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
         else {
             continue;
         };
-        let (from_len, where_len) = cons
+        let first = cons
             .stages
             .iter()
-            .copied()
-            .find(|(from_len, _)| *from_len > alias_index)
-            .unwrap_or((cons.from.len(), cons.where_.len()));
-        let prefix = Rendered {
-            from: cons.from[..from_len].to_vec(),
-            where_: cons.where_[..where_len].to_vec(),
-            ..Rendered::default()
-        };
-        let _ = write!(
-            select,
-            ",\n       (SELECT ({}.arguments -> {})::text FROM {} WHERE {} ORDER BY {} LIMIT 1) AS {}",
-            col.alias,
-            col.position,
-            from_list(&prefix),
-            prefix.conjunction(),
-            prefix
-                .from
-                .iter()
-                .map(|(alias, _, _)| format!("{alias}.arguments_hash"))
-                .collect::<Vec<_>>()
-                .join(", "),
-            quote_ident(&format!("w_{var}"))
-        );
+            .position(|(from_len, _)| *from_len > alias_index)
+            .unwrap_or(prefixes.len() - 1);
+        consequent.push((var.clone(), col.clone(), first));
     }
-    let mut case_cols = ant.env.clone();
-    for var in bound_by_consequent {
-        case_cols.insert(var.clone(), cons.env[var].clone());
-    }
+    let from = from_list(&scope);
+    let where_ = violated(&scope, not_cons).join("\n  AND ");
     let error = scope.probes.iter().map(ScopeDraft::anchored).collect();
+    let diagnosis = Diagnosis {
+        from: from.clone(),
+        where_: where_.clone(),
+        aliases: ant.aliases(),
+        antecedent: ant
+            .env
+            .iter()
+            .map(|(v, c)| (v.clone(), c.clone()))
+            .collect(),
+        prefixes,
+        consequent,
+    };
     Ok((
-        format!(
-            "SELECT {select}\nFROM {}\nWHERE {}",
-            from_list(&scope),
-            violated(&scope, not_cons).join("\n  AND ")
-        ),
-        format!("\nORDER BY {order}\nLIMIT 1"),
+        format!("SELECT 1 AS \"w\"\nFROM {from}\nWHERE {where_}"),
+        format!("\nORDER BY {}\nLIMIT 1", violation_order(&ant)),
         error,
-        case_cols,
+        ant.env,
+        Some(diagnosis),
     ))
 }
 
@@ -1365,6 +1496,7 @@ fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReaso
             String::new(),
             Vec::new(),
             Env::new(),
+            None,
         ));
     }
     // The kernel evaluates every binding of every scope, so an error
@@ -1396,6 +1528,7 @@ fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReaso
         String::new(),
         r.probes.iter().map(ScopeDraft::anchored).collect(),
         Env::new(),
+        None,
     ))
 }
 
@@ -1445,6 +1578,7 @@ fn generic_denial_implies(
         String::new(),
         error,
         Env::new(),
+        None,
     ))
 }
 
@@ -1457,30 +1591,12 @@ fn from_list(r: &Rendered) -> String {
         .join(", ")
 }
 
-fn witness_select_order(r: &Rendered) -> (String, String) {
-    let select = if r.env.is_empty() {
-        "1 AS \"w\"".to_string()
-    } else {
-        // The full tagged value, so decoding goes through EvalValue's
-        // serde and needs no per-kind column logic.
-        r.env
-            .iter()
-            .map(|(v, col)| {
-                format!(
-                    "({}.arguments -> {})::text AS {}",
-                    col.alias,
-                    col.position,
-                    quote_ident(&format!("w_{v}"))
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",\n       ")
-    };
-    // Order by the keys, not raw `arguments`. Raw order matches the
-    // primary key, which tempts the planner into an early-stop scan of
-    // the whole predicate (seen at 100k rows). Deterministic in everything
-    // the row reports.
-    let order = if r.env.is_empty() {
+/// The violation query's order. It reports nothing, so any order would
+/// do; this one is kept off the primary key, whose raw order tempts the
+/// planner into an early-stop scan of the whole predicate (seen at 100k
+/// rows).
+fn violation_order(r: &Rendered) -> String {
+    if r.env.is_empty() {
         r.from
             .iter()
             .map(|(alias, _, _)| format!("{alias}.arguments"))
@@ -1492,8 +1608,7 @@ fn witness_select_order(r: &Rendered) -> (String, String) {
             .map(|col| format!("({})::text", key_sql(col)))
             .collect::<Vec<_>>()
             .join(", ")
-    };
-    (select, order)
+    }
 }
 
 /// A position's equality key in a query.
