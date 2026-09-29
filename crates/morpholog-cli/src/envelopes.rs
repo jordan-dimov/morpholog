@@ -259,6 +259,102 @@ impl LeastPrivilegeReport {
     }
 }
 
+/// `provision indexes --json`: what one call planned and did. Every list
+/// has one order whatever order the programmes were named in.
+///
+/// A run that applied under `prune` dropped every `stale` index it lists.
+#[derive(Serialize)]
+pub struct ProvisionReport<'a> {
+    pub applied: bool,
+    pub dry_run: bool,
+    pub indexes: Vec<ProvisionedIndex<'a>>,
+    pub programs: Vec<ProvisionedProgram<'a>>,
+    pub prune: bool,
+    pub required_elsewhere: Vec<RequiredElsewhere<'a>>,
+    pub statistics: Vec<ProvisionedStatistics<'a>>,
+}
+
+#[derive(Serialize)]
+pub struct ProvisionedIndex<'a> {
+    pub action: morpholog_postgres::IndexAction,
+    /// For an operator to read; nothing to decide on.
+    #[serde(skip_serializing_if = "str::is_empty")]
+    pub detail: &'a str,
+    pub name: &'a str,
+    pub position: usize,
+    pub predicate: &'a str,
+    pub required_by: &'a [String],
+}
+
+#[derive(Serialize)]
+pub struct ProvisionedProgram<'a> {
+    pub hash: &'a str,
+    pub program: &'a str,
+}
+
+#[derive(Serialize)]
+pub struct RequiredElsewhere<'a> {
+    pub name: &'a str,
+    pub required_by: &'a [String],
+}
+
+#[derive(Serialize)]
+pub struct ProvisionedStatistics<'a> {
+    pub action: morpholog_postgres::StatisticsAction,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    pub detail: &'a str,
+    pub name: &'a str,
+    pub position: usize,
+}
+
+impl<'a> From<&'a morpholog_postgres::ProvisionReport> for ProvisionReport<'a> {
+    fn from(r: &'a morpholog_postgres::ProvisionReport) -> Self {
+        Self {
+            applied: r.applied,
+            dry_run: r.dry_run,
+            indexes: r
+                .entries
+                .iter()
+                .map(|e| ProvisionedIndex {
+                    action: e.action,
+                    detail: &e.detail,
+                    name: &e.index_name,
+                    position: e.position,
+                    predicate: &e.predicate,
+                    required_by: &e.required_by,
+                })
+                .collect(),
+            programs: r
+                .programs
+                .iter()
+                .map(|p| ProvisionedProgram {
+                    hash: &p.hash,
+                    program: &p.identity,
+                })
+                .collect(),
+            prune: r.prune,
+            required_elsewhere: r
+                .required_elsewhere
+                .iter()
+                .map(|e| RequiredElsewhere {
+                    name: &e.index_name,
+                    required_by: &e.required_by,
+                })
+                .collect(),
+            statistics: r
+                .statistics
+                .iter()
+                .map(|s| ProvisionedStatistics {
+                    action: s.action,
+                    detail: &s.detail,
+                    name: &s.statistics_name,
+                    position: s.position,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// `refresh derived`: the published read-model generation.
 ///
 /// The snapshot pair is the latest audit transition the refresh saw. It is

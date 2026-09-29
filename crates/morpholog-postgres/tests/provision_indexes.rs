@@ -74,7 +74,7 @@ async fn a_dry_run_names_every_index_to_create_and_creates_none() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
-    let report = plan_indexes(&pool, &ledger()).await.unwrap();
+    let report = plan_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert_eq!(
         actions(&report),
         vec![IndexAction::Create; LEDGER_INDEXES],
@@ -90,7 +90,7 @@ async fn provisioning_creates_registers_and_then_keeps() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
-    let first = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    let first = provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert_eq!(
         actions(&first),
         vec![IndexAction::Create; LEDGER_INDEXES],
@@ -104,7 +104,7 @@ async fn provisioning_creates_registers_and_then_keeps() {
         (LEDGER_INDEXES as i64, LEDGER_INDEXES as i64)
     );
 
-    let again = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    let again = provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert_eq!(
         actions(&again),
         vec![IndexAction::Keep; LEDGER_INDEXES],
@@ -123,12 +123,12 @@ async fn an_unrecorded_matching_index_is_adopted() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
-    provision_indexes(&pool, &ledger(), false).await.unwrap();
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     sqlx::raw_sql("DELETE FROM morpholog.index_requirement; DELETE FROM morpholog.managed_index")
         .execute(&pool)
         .await
         .unwrap();
-    let report = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    let report = provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert_eq!(
         actions(&report),
         vec![IndexAction::Keep; LEDGER_INDEXES],
@@ -143,7 +143,7 @@ async fn an_unrecorded_matching_index_is_adopted() {
 /// The first specification the ledger requires, as the public report
 /// states it: name, expression, partial predicate.
 async fn first_spec(pool: &PgPool) -> (String, String, String) {
-    let entry = plan_indexes(pool, &ledger())
+    let entry = plan_indexes(pool, &[&ledger()], false)
         .await
         .unwrap()
         .entries
@@ -170,7 +170,7 @@ async fn an_equivalent_index_under_another_name_satisfies_and_is_never_pruned() 
     .await
     .unwrap();
 
-    let report = provision_indexes(&pool, &ledger(), true).await.unwrap();
+    let report = provision_indexes(&pool, &[&ledger()], true).await.unwrap();
     assert_eq!(
         actions(&report),
         std::iter::once(IndexAction::SatisfiedExternally)
@@ -218,7 +218,7 @@ async fn a_conflicting_definition_under_our_name_applies_nothing() {
     .await
     .unwrap();
 
-    let report = provision_indexes(&pool, &ledger(), true).await.unwrap();
+    let report = provision_indexes(&pool, &[&ledger()], true).await.unwrap();
     assert_eq!(
         report.entries[0].action,
         IndexAction::Conflict,
@@ -265,7 +265,7 @@ async fn a_requirement_once_satisfied_externally_still_protects_the_index() {
     .await
     .unwrap();
     // A: the ledger, its first specification satisfied by the operator.
-    provision_indexes(&pool, &ledger(), false).await.unwrap();
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     // The operator removes their index; B, another book, has Morpholog build it.
     sqlx::query("DROP INDEX morpholog.operator_made_this")
         .execute(&pool)
@@ -276,13 +276,13 @@ async fn a_requirement_once_satisfied_externally_still_protects_the_index() {
         p.name = name.into();
         compiled(p)
     };
-    let built = provision_indexes(&pool, &another("another_book"), false)
+    let built = provision_indexes(&pool, &[&another("another_book")], false)
         .await
         .unwrap();
     assert_eq!(built.entries[0].action, IndexAction::Create, "{built:?}");
     // B stops needing anything and prunes: A still requires all of them.
     let nobody = compiled(program("another_book").build());
-    let pruned = provision_indexes(&pool, &nobody, true).await.unwrap();
+    let pruned = provision_indexes(&pool, &[&nobody], true).await.unwrap();
     assert!(pruned.pruned.is_empty(), "{pruned:?}");
     assert_eq!(
         catalogue_names(&pool).await.len(),
@@ -298,10 +298,12 @@ async fn stale_indexes_are_reported_and_pruned_only_on_request() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
-    provision_indexes(&pool, &ledger(), false).await.unwrap();
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     // The same identity, now needing nothing.
     let successor = compiled(program("double_entry_ledger").build());
-    let reported = provision_indexes(&pool, &successor, false).await.unwrap();
+    let reported = provision_indexes(&pool, &[&successor], false)
+        .await
+        .unwrap();
     assert_eq!(
         actions(&reported),
         vec![IndexAction::Stale; LEDGER_INDEXES],
@@ -320,15 +322,15 @@ async fn stale_indexes_are_reported_and_pruned_only_on_request() {
         p.name = "another_book".into();
         p
     });
-    provision_indexes(&pool, &other, false).await.unwrap();
-    let protected = provision_indexes(&pool, &successor, true).await.unwrap();
+    provision_indexes(&pool, &[&other], false).await.unwrap();
+    let protected = provision_indexes(&pool, &[&successor], true).await.unwrap();
     assert!(actions(&protected).is_empty(), "{protected:?}");
     assert_eq!(catalogue_names(&pool).await.len(), LEDGER_INDEXES);
 
     // Once nobody does, prune drops them.
     let nobody = compiled(program("another_book").build());
-    provision_indexes(&pool, &nobody, false).await.unwrap();
-    let pruned = provision_indexes(&pool, &successor, true).await.unwrap();
+    provision_indexes(&pool, &[&nobody], false).await.unwrap();
+    let pruned = provision_indexes(&pool, &[&successor], true).await.unwrap();
     assert_eq!(
         actions(&pruned),
         vec![IndexAction::Stale; LEDGER_INDEXES],
@@ -347,6 +349,7 @@ async fn two_provisioners_serialise() {
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
     let (first, second) = (ledger(), ledger());
+    let (first, second) = ([&first], [&second]);
     let (a, b) = tokio::join!(
         provision_indexes(&pool, &first, false),
         provision_indexes(&pool, &second, false)
@@ -376,7 +379,7 @@ async fn an_invalid_index_is_repaired_idempotently() {
     }
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
-    provision_indexes(&pool, &ledger(), false).await.unwrap();
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     let (name, _, _) = first_spec(&pool).await;
     sqlx::query(
         "UPDATE pg_index SET indisvalid = false
@@ -387,14 +390,14 @@ async fn an_invalid_index_is_repaired_idempotently() {
     .await
     .unwrap();
 
-    let repaired = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    let repaired = provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert_eq!(
         repaired.entries[0].action,
         IndexAction::RepairInvalid,
         "{repaired:?}"
     );
     assert!(catalogue_names(&pool).await.iter().all(|(_, valid)| *valid));
-    let again = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    let again = provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert_eq!(
         actions(&again),
         vec![IndexAction::Keep; LEDGER_INDEXES],
@@ -413,7 +416,7 @@ async fn an_interpreted_programme_requires_the_indexes_its_loads_seek_on() {
     let interpreted = PgProgram::interpreted(
         morpholog_core::CompiledProgram::new(double_entry_ledger::program()).unwrap(),
     );
-    let report = plan_indexes(&pool, &interpreted).await.unwrap();
+    let report = plan_indexes(&pool, &[&interpreted], false).await.unwrap();
     let creates: Vec<(String, usize)> = report
         .entries
         .iter()
@@ -427,7 +430,7 @@ async fn an_interpreted_programme_requires_the_indexes_its_loads_seek_on() {
     );
     // The compiled programme requires the same loads' indexes plus its
     // checks' own.
-    let compiled_report = plan_indexes(&pool, &ledger()).await.unwrap();
+    let compiled_report = plan_indexes(&pool, &[&ledger()], false).await.unwrap();
     let compiled_creates: Vec<(String, usize)> = compiled_report
         .entries
         .iter()
@@ -471,7 +474,7 @@ transformation put(k, v):
         ),
         "the `or` keeps it interpreted"
     );
-    let report = plan_indexes(&pool, &pg).await.unwrap();
+    let report = plan_indexes(&pool, &[&pg], false).await.unwrap();
     let creates: Vec<(String, usize)> = report
         .entries
         .iter()
@@ -520,7 +523,7 @@ async fn every_applied_run_analyzes_the_claims_table_and_a_dry_run_does_not() {
             .unwrap()
         }
     };
-    provision_indexes(&pool, &ledger(), false).await.unwrap();
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     let (name, _) = catalogue_names(&pool).await.into_iter().next().unwrap();
     assert!(
         stats_for(name.clone()).await > 0,
@@ -537,13 +540,13 @@ async fn every_applied_run_analyzes_the_claims_table_and_a_dry_run_does_not() {
     .await
     .unwrap();
     assert_eq!(stats_for(name.clone()).await, 0);
-    plan_indexes(&pool, &ledger()).await.unwrap();
+    plan_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert_eq!(
         stats_for(name.clone()).await,
         0,
         "a dry run analyzes nothing"
     );
-    let adopting = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    let adopting = provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert_eq!(actions(&adopting), vec![IndexAction::Keep; LEDGER_INDEXES]);
     assert!(
         stats_for(name.clone()).await > 0,
@@ -579,7 +582,7 @@ async fn statistics_are_planned_per_position_created_once_and_then_kept() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
-    let plan = plan_indexes(&pool, &ledger()).await.unwrap();
+    let plan = plan_indexes(&pool, &[&ledger()], false).await.unwrap();
     let positions: std::collections::BTreeSet<usize> =
         plan.entries.iter().map(|e| e.position).collect();
     let expected: Vec<String> = positions
@@ -602,10 +605,10 @@ async fn statistics_are_planned_per_position_created_once_and_then_kept() {
         "a dry run creates none"
     );
 
-    let first = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    let first = provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert!(first.applied);
     assert_eq!(our_statistics(&pool).await, expected);
-    let again = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    let again = provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert!(
         again
             .statistics
@@ -629,7 +632,7 @@ async fn statistics_under_our_name_with_another_definition_apply_nothing() {
     .execute(&pool)
     .await
     .unwrap();
-    let report = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    let report = provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert!(report.has_conflict());
     assert!(!report.applied);
     assert!(
@@ -665,7 +668,7 @@ async fn statistics_of_the_same_name_in_another_schema_are_not_ours() {
     .execute(&pool)
     .await
     .unwrap();
-    let report = plan_indexes(&pool, &ledger()).await.unwrap();
+    let report = plan_indexes(&pool, &[&ledger()], false).await.unwrap();
     sqlx::raw_sql("DROP STATISTICS public.morpholog_cs_vk1_p0")
         .execute(&pool)
         .await
@@ -690,12 +693,12 @@ async fn an_altered_statistics_target_is_a_conflict_until_restored() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
-    provision_indexes(&pool, &ledger(), false).await.unwrap();
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     sqlx::raw_sql("ALTER STATISTICS morpholog.morpholog_cs_vk1_p0 SET STATISTICS 0")
         .execute(&pool)
         .await
         .unwrap();
-    let report = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    let report = provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert!(!report.applied);
     let entry = report
         .statistics
@@ -713,7 +716,7 @@ async fn an_altered_statistics_target_is_a_conflict_until_restored() {
         .execute(&pool)
         .await
         .unwrap();
-    let restored = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    let restored = provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert!(restored.applied, "{restored:?}");
 }
 
@@ -724,7 +727,7 @@ async fn statistics_with_an_extra_column_conflict_and_name_it() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
-    let plan = plan_indexes(&pool, &ledger()).await.unwrap();
+    let plan = plan_indexes(&pool, &[&ledger()], false).await.unwrap();
     let expression = plan
         .statistics
         .iter()
@@ -738,7 +741,7 @@ async fn statistics_with_an_extra_column_conflict_and_name_it() {
     .execute(&pool)
     .await
     .unwrap();
-    let report = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    let report = provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     assert!(!report.applied);
     let entry = report
         .statistics
@@ -754,4 +757,311 @@ async fn statistics_with_an_extra_column_conflict_and_name_it() {
         "{}",
         entry.detail
     );
+}
+
+// ------------------------------------------------------------
+// Several programmes in one call.
+// ------------------------------------------------------------
+
+/// A programme under `identity` requiring what `source` requires.
+fn named(identity: &str, source: morpholog_core::Program) -> PgProgram {
+    let mut p = source;
+    p.name = identity.into();
+    compiled(p)
+}
+
+/// A programme under `identity` that requires nothing.
+fn requiring_nothing(identity: &str) -> PgProgram {
+    compiled(program(identity).build())
+}
+
+async fn catalogue_oids(pool: &PgPool) -> Vec<(String, u32)> {
+    sqlx::query(
+        "SELECT c.relname, c.oid::int8 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+         WHERE i.indrelid = 'morpholog.claims'::regclass AND c.relname LIKE 'morpholog_ci_%'
+         ORDER BY c.relname",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|r| (r.get(0), r.get::<i64, _>(1) as u32))
+    .collect()
+}
+
+/// The registry's requirements as the report states them: index name to
+/// the identities requiring it.
+async fn recorded_requirements(pool: &PgPool) -> Vec<(String, Vec<String>)> {
+    sqlx::query(
+        "SELECT m.index_name, array_agg(r.program_identity ORDER BY r.program_identity)
+         FROM morpholog.managed_index m
+         JOIN morpholog.index_requirement r USING (spec_digest)
+         GROUP BY m.index_name ORDER BY m.index_name",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|r| (r.get(0), r.get(1)))
+    .collect()
+}
+
+/// What a report says of each index it reconciled, without the prose.
+fn stated(report: &morpholog_postgres::ProvisionReport) -> Vec<(IndexAction, String, Vec<String>)> {
+    report
+        .entries
+        .iter()
+        .map(|e| (e.action, e.index_name.clone(), e.required_by.clone()))
+        .collect()
+}
+
+/// One programme stops requiring the indexes another takes up. Named
+/// together, the prune sees both replaced and drops nothing. Named one at
+/// a time with the prune on the first, the indexes go and are built again:
+/// the ordering rule the union removes.
+#[tokio::test]
+async fn pruning_the_union_keeps_what_one_programme_drops_and_another_takes_up() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    let book = || named("book", double_entry_ledger::program());
+    let other = || named("other_book", double_entry_ledger::program());
+
+    provision_indexes(&pool, &[&book(), &requiring_nothing("other_book")], false)
+        .await
+        .unwrap();
+    let built = catalogue_oids(&pool).await;
+    assert_eq!(built.len(), LEDGER_INDEXES);
+
+    let together = provision_indexes(&pool, &[&requiring_nothing("book"), &other()], true)
+        .await
+        .unwrap();
+    assert!(
+        together.applied && together.pruned.is_empty(),
+        "{together:?}"
+    );
+    assert_eq!(
+        actions(&together),
+        vec![IndexAction::Keep; LEDGER_INDEXES],
+        "{together:?}"
+    );
+    assert_eq!(catalogue_oids(&pool).await, built, "no index was rebuilt");
+
+    // Back to the start, then the same change one programme at a time.
+    provision_indexes(&pool, &[&book(), &requiring_nothing("other_book")], false)
+        .await
+        .unwrap();
+    let first = provision_indexes(&pool, &[&requiring_nothing("book")], true)
+        .await
+        .unwrap();
+    assert_eq!(first.pruned.len(), LEDGER_INDEXES, "{first:?}");
+    provision_indexes(&pool, &[&other()], false).await.unwrap();
+    let rebuilt = catalogue_oids(&pool).await;
+    assert_eq!(rebuilt.len(), LEDGER_INDEXES);
+    assert!(
+        rebuilt
+            .iter()
+            .zip(&built)
+            .all(|(now, then)| now.1 != then.1),
+        "each was dropped and built again: {built:?} then {rebuilt:?}"
+    );
+}
+
+/// A conflict under one programme's index name stops the whole call: the
+/// other programme's indexes are not built and no requirement is recorded.
+#[tokio::test]
+async fn a_conflict_in_one_programme_applies_nothing_for_any() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    let (name, _, partial) = first_spec(&pool).await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE INDEX \"{name}\" ON morpholog.claims USING btree ((arguments -> 7 ->> 'value')) WHERE {partial}"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let approvals = compiled(morpholog_examples::approval_controls::program());
+    let alone = plan_indexes(&pool, &[&approvals], false).await.unwrap();
+    assert!(
+        !alone.entries.is_empty() && !alone.has_conflict(),
+        "the second programme has requirements of its own and no conflict: {alone:?}"
+    );
+
+    let report = provision_indexes(&pool, &[&approvals, &ledger()], true)
+        .await
+        .unwrap();
+    assert!(report.has_conflict() && !report.applied, "{report:?}");
+    assert_eq!(
+        catalogue_names(&pool).await,
+        vec![(name, true)],
+        "only the operator's index exists"
+    );
+    assert_eq!(registry_counts(&pool).await, (0, 0), "no registry write");
+}
+
+/// A programme the call does not name keeps its indexes through another's
+/// prune, and the report says which programme protects each.
+#[tokio::test]
+async fn a_requirement_outside_the_call_protects_and_is_reported() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
+    let built = catalogue_oids(&pool).await;
+
+    let report = provision_indexes(&pool, &[&requiring_nothing("other_book")], true)
+        .await
+        .unwrap();
+    assert!(report.applied && report.entries.is_empty(), "{report:?}");
+    assert!(report.pruned.is_empty(), "{report:?}");
+    let protected: Vec<(String, Vec<String>)> = report
+        .required_elsewhere
+        .iter()
+        .map(|e| (e.index_name.clone(), e.required_by.clone()))
+        .collect();
+    let expected: Vec<(String, Vec<String>)> = built
+        .iter()
+        .map(|(name, _)| (name.clone(), vec!["double_entry_ledger".to_string()]))
+        .collect();
+    assert_eq!(protected, expected);
+    assert_eq!(catalogue_oids(&pool).await, built);
+}
+
+/// Requirements are kept per identity, so the second of two programmes
+/// under one name would replace the first's. Refused before any change.
+#[tokio::test]
+async fn a_programme_named_twice_is_refused_before_anything_changes() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    let error = provision_indexes(
+        &pool,
+        &[&ledger(), &requiring_nothing("double_entry_ledger")],
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&error, morpholog_postgres::PgError::ProgramNamedTwice(name) if name == "double_entry_ledger"),
+        "{error:?}"
+    );
+    assert!(catalogue_names(&pool).await.is_empty());
+    assert_eq!(registry_counts(&pool).await, (0, 0));
+}
+
+/// A call that names no programme is refused, prune or not: recorded
+/// indexes stay, and no report names no programme.
+#[tokio::test]
+async fn a_call_naming_no_programme_is_refused() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
+    // Stale, so a prune that ran would drop them.
+    provision_indexes(&pool, &[&requiring_nothing("double_entry_ledger")], false)
+        .await
+        .unwrap();
+    let built = catalogue_oids(&pool).await;
+    assert_eq!(built.len(), LEDGER_INDEXES);
+
+    for planned in [true, false] {
+        let error = if planned {
+            plan_indexes(&pool, &[], true).await.unwrap_err()
+        } else {
+            provision_indexes(&pool, &[], true).await.unwrap_err()
+        };
+        assert!(
+            matches!(error, morpholog_postgres::PgError::NoProgramNamed),
+            "{error:?}"
+        );
+    }
+    assert_eq!(catalogue_oids(&pool).await, built);
+}
+
+/// A dry run changes nothing and states what the applying run then does:
+/// the same actions, the same requirements, the same stale set. After the
+/// applying run the registry holds exactly the requirements both stated.
+#[tokio::test]
+async fn a_dry_run_states_what_the_applying_run_does() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    // Three programmes on one database: the ledger, a second book sharing
+    // its indexes, and the approvals with their own.
+    let approvals = || compiled(morpholog_examples::approval_controls::program());
+    provision_indexes(
+        &pool,
+        &[
+            &ledger(),
+            &named("second_book", double_entry_ledger::program()),
+            &approvals(),
+        ],
+        false,
+    )
+    .await
+    .unwrap();
+    // The change: the second book requires nothing any more, the ledger
+    // takes up the settlement programme's requirements instead of its own,
+    // and the approvals are not named.
+    let successor = || {
+        named(
+            "double_entry_ledger",
+            morpholog_examples::settlement_netting::program(),
+        )
+    };
+    let nothing = || requiring_nothing("second_book");
+
+    let catalogue_before = catalogue_oids(&pool).await;
+    let registry_before = recorded_requirements(&pool).await;
+    let planned = plan_indexes(&pool, &[&successor(), &nothing()], true)
+        .await
+        .unwrap();
+    assert!(planned.dry_run && planned.prune && !planned.applied);
+    assert_eq!(catalogue_oids(&pool).await, catalogue_before);
+    assert_eq!(recorded_requirements(&pool).await, registry_before);
+
+    let applied = provision_indexes(&pool, &[&nothing(), &successor()], true)
+        .await
+        .unwrap();
+    assert!(!applied.dry_run && applied.prune && applied.applied);
+    assert_eq!(stated(&planned), stated(&applied));
+    assert_eq!(planned.required_elsewhere, applied.required_elsewhere);
+    assert_eq!(planned.programs, applied.programs);
+
+    let of = |action: IndexAction| -> Vec<String> {
+        applied
+            .entries
+            .iter()
+            .filter(|e| e.action == action)
+            .map(|e| e.index_name.clone())
+            .collect()
+    };
+    assert_eq!(of(IndexAction::Stale).len(), LEDGER_INDEXES, "{applied:?}");
+    assert_eq!(of(IndexAction::Stale), applied.pruned);
+    assert!(!of(IndexAction::Create).is_empty(), "{applied:?}");
+    assert!(
+        !applied.required_elsewhere.is_empty()
+            && applied
+                .required_elsewhere
+                .iter()
+                .all(|e| e.required_by == ["approval_controls"]),
+        "{applied:?}"
+    );
+
+    // One relation: what the report stated is what the registry now holds.
+    let mut reported: Vec<(String, Vec<String>)> = applied
+        .entries
+        .iter()
+        .filter(|e| e.action != IndexAction::Stale)
+        .map(|e| (e.index_name.clone(), e.required_by.clone()))
+        .chain(
+            applied
+                .required_elsewhere
+                .iter()
+                .map(|e| (e.index_name.clone(), e.required_by.clone())),
+        )
+        .collect();
+    reported.sort();
+    assert_eq!(recorded_requirements(&pool).await, reported);
 }

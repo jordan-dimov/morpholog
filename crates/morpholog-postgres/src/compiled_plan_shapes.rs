@@ -184,7 +184,7 @@ async fn every_required_index_is_eligible_for_every_whole_in_fragment_programme(
         reset(&pool).await;
         let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
         populate_for_probes(&pool, &pg.required_indexes()).await;
-        provision_indexes(&pool, &pg, false).await.unwrap();
+        provision_indexes(&pool, &[&pg], false).await.unwrap();
         for spec in pg.required_indexes() {
             // A seek spelled as the compiled SQL spells it, against the
             // digest of a literal's key. A specification one position
@@ -332,7 +332,7 @@ async fn the_planner_chooses_the_provisioned_indexes_on_a_populated_ledger() {
     // Populated first, then provisioned, as a deployment upgrades: the
     // statistics must come from provisioning's own ANALYZE.
     populate_ledger(&pool, POPULATED).await;
-    provision_indexes(&pool, &pg, false).await.unwrap();
+    provision_indexes(&pool, &[&pg], false).await.unwrap();
     assert_required_indexes_used(&pool, &program, true).await;
 }
 
@@ -360,7 +360,7 @@ async fn a_case_index_is_still_chosen_where_another_predicate_crowds_the_key() {
     .await
     .unwrap();
     populate_ledger(&pool, POPULATED).await;
-    provision_indexes(&pool, &pg, false).await.unwrap();
+    provision_indexes(&pool, &[&pg], false).await.unwrap();
     assert_required_indexes_used(&pool, &program, true).await;
 }
 
@@ -376,7 +376,7 @@ async fn the_loader_seeks_through_the_provisioned_indexes() {
     reset(&pool).await;
     let program = morpholog_examples::double_entry_ledger::program();
     let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
-    provision_indexes(&pool, &pg, false).await.unwrap();
+    provision_indexes(&pool, &[&pg], false).await.unwrap();
     populate_ledger(&pool, POPULATED).await;
     let post = program.transformation("post_simple_entry").unwrap();
     let transition = morpholog_core::Transition {
@@ -460,7 +460,7 @@ transformation record(item, amount):
         required.contains(&("Bounded".to_string(), 1)),
         "the case column is a required index: {required:?}"
     );
-    provision_indexes(&pool, &pg, false).await.unwrap();
+    provision_indexes(&pool, &[&pg], false).await.unwrap();
     sqlx::raw_sql(
         "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
          SELECT 'Bounded',

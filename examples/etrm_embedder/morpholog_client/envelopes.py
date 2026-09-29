@@ -1395,6 +1395,145 @@ class MigrationReport:
 
 
 @dataclass(frozen=True)
+class ProvisionedProgram:
+    program: str
+    hash: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProvisionedProgram:
+        data = _strict("provisioned program", payload, {"program", "hash"})
+        return cls(program=data["program"], hash=data["hash"])
+
+
+_INDEX_ACTIONS = frozenset(
+    {"keep", "create", "repair_invalid", "satisfied_externally", "stale", "conflict"}
+)
+_STATISTICS_ACTIONS = frozenset({"keep", "create", "conflict"})
+
+
+def _action(label: str, value: object, known: AbstractSet[str]) -> str:
+    if not isinstance(value, str) or value not in known:
+        raise EnvelopeError(
+            f"{label}: unknown action {value!r} - the binary's contract has "
+            f"drifted past this generated client; regenerate it"
+        )
+    return value
+
+
+@dataclass(frozen=True)
+class ProvisionedIndex:
+    """One index the call reconciled against the catalogue. ``detail`` is
+    for an operator to read, not to decide on."""
+
+    action: str
+    name: str
+    predicate: str
+    position: int
+    required_by: list[str]
+    detail: str = ""
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProvisionedIndex:
+        data = _strict(
+            "provisioned index",
+            payload,
+            {"action", "name", "predicate", "position", "required_by"},
+            {"detail"},
+        )
+        return cls(
+            action=_action("provisioned index", data["action"], _INDEX_ACTIONS),
+            name=data["name"],
+            predicate=data["predicate"],
+            position=data["position"],
+            required_by=_str_list("required_by", data["required_by"]),
+            detail=data.get("detail", ""),
+        )
+
+
+@dataclass(frozen=True)
+class ProvisionedStatistics:
+    action: str
+    name: str
+    position: int
+    detail: str = ""
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProvisionedStatistics:
+        data = _strict(
+            "provisioned statistics", payload, {"action", "name", "position"}, {"detail"}
+        )
+        return cls(
+            action=_action("provisioned statistics", data["action"], _STATISTICS_ACTIONS),
+            name=data["name"],
+            position=data["position"],
+            detail=data.get("detail", ""),
+        )
+
+
+@dataclass(frozen=True)
+class RequiredElsewhere:
+    """A managed index no named programme requires, protected from a prune
+    by a programme outside the call. It says nothing about whether the
+    index is still in the catalogue."""
+
+    name: str
+    required_by: list[str]
+
+    @classmethod
+    def from_json(cls, payload: object) -> RequiredElsewhere:
+        data = _strict("required elsewhere", payload, {"name", "required_by"})
+        return cls(name=data["name"], required_by=_str_list("required_by", data["required_by"]))
+
+
+@dataclass(frozen=True)
+class ProvisionReport:
+    """What `provision indexes` planned and did, over every programme the
+    call named."""
+
+    applied: bool
+    dry_run: bool
+    prune: bool
+    programs: list[ProvisionedProgram]
+    indexes: list[ProvisionedIndex]
+    statistics: list[ProvisionedStatistics]
+    required_elsewhere: list[RequiredElsewhere]
+
+    @property
+    def has_conflict(self) -> bool:
+        """Something under Morpholog's own name has another definition. The
+        run applied nothing and an operator has to look."""
+        return any(e.action == "conflict" for e in (*self.indexes, *self.statistics))
+
+    @property
+    def pruned(self) -> list[str]:
+        """The indexes this run dropped: every stale one, when it applied
+        under prune."""
+        if not (self.applied and self.prune):
+            return []
+        return [i.name for i in self.indexes if i.action == "stale"]
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProvisionReport:
+        data = _strict(
+            "provision report",
+            payload,
+            {"applied", "dry_run", "prune", "programs", "indexes", "statistics",
+             "required_elsewhere"},
+        )
+        return cls(
+            applied=data["applied"],
+            dry_run=data["dry_run"],
+            prune=data["prune"],
+            programs=[ProvisionedProgram.from_json(p) for p in data["programs"]],
+            indexes=[ProvisionedIndex.from_json(i) for i in data["indexes"]],
+            statistics=[ProvisionedStatistics.from_json(s) for s in data["statistics"]],
+            required_elsewhere=[
+                RequiredElsewhere.from_json(r) for r in data["required_elsewhere"]
+            ],
+        )
+
+
+@dataclass(frozen=True)
 class InitReport:
     status: str
     schema: str

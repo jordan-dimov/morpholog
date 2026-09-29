@@ -1,69 +1,38 @@
-//! `morpholog provision indexes` - reconcile the indexes a programme's
-//! compiled invariants can use. The compiler says what is needed and the
-//! adapter reconciles; this prints the plan it acted on and exits non-zero
-//! when a conflict needs an operator.
+//! `morpholog provision indexes` - reconcile the indexes the programmes'
+//! loads and compiled invariants can use. The compiler says what is needed
+//! and the adapter reconciles; this reports the plan it acted on and exits
+//! non-zero when a conflict needs an operator.
 
 use anyhow::bail;
 use morpholog_postgres::{
-    IndexAction, PgProgram, StatisticsAction, plan_indexes, provision_indexes,
+    IndexAction, PgProgram, ProvisionReport, StatisticsAction, check_named_programs, plan_indexes,
+    provision_indexes,
 };
 
 use crate::ProvisionIndexesArgs;
-use crate::commands::{compile_or_report, connect, parse_or_report};
+use crate::commands::{compile_or_report, connect, parse_or_report, print_json};
+use morpholog_cli::envelopes;
 
 pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
-    let parsed = parse_or_report(&args.file)?;
-    let program = PgProgram::new(compile_or_report(&parsed)?);
+    let mut programs = Vec::with_capacity(args.files.len());
+    for file in &args.files {
+        let parsed = parse_or_report(file)?;
+        programs.push(PgProgram::new(compile_or_report(&parsed)?));
+    }
+    let programs: Vec<&PgProgram> = programs.iter().collect();
+    // A usage error should not need a database to be reported.
+    check_named_programs(&programs)?;
     let pool = connect(&args.db.database_url).await?;
     let report = if args.dry_run {
-        plan_indexes(&pool, &program).await?
+        plan_indexes(&pool, &programs, args.prune).await?
     } else {
-        provision_indexes(&pool, &program, args.prune).await?
+        provision_indexes(&pool, &programs, args.prune).await?
     };
-    println!(
-        "program: {} ({})",
-        report.program_identity, report.program_hash
-    );
-    if report.entries.is_empty() {
-        println!("no compiled invariants: nothing to provision");
+    if args.json {
+        print_json(&envelopes::ProvisionReport::from(&report))?;
+    } else {
+        print_plan(&report);
     }
-    for entry in &report.entries {
-        let detail = if entry.detail.is_empty() {
-            String::new()
-        } else {
-            format!("  - {}", entry.detail)
-        };
-        println!(
-            "{:<20} {}  {}[{}] {}{detail}",
-            entry.action.to_string(),
-            entry.index_name,
-            entry.predicate,
-            entry.position,
-            entry.representation
-        );
-    }
-    for entry in &report.statistics {
-        let detail = if entry.detail.is_empty() {
-            String::new()
-        } else {
-            format!("  - {}", entry.detail)
-        };
-        println!(
-            "{:<20} {}  statistics[{}]{detail}",
-            entry.action.to_string(),
-            entry.statistics_name,
-            entry.position
-        );
-    }
-    println!(
-        "{}",
-        match (report.applied, args.dry_run, report.has_conflict()) {
-            (true, _, _) => "applied; morpholog.claims analyzed",
-            (false, true, _) => "dry run: nothing changed",
-            (false, false, true) => "not applied: a conflict needs an operator first",
-            (false, false, false) => "not applied",
-        }
-    );
     if report.has_conflict() {
         let names: Vec<&str> = report
             .entries
@@ -84,4 +53,58 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// The plan for a person. Not a machine surface: `--json` is.
+fn print_plan(report: &ProvisionReport) {
+    for program in &report.programs {
+        println!("program: {} ({})", program.identity, program.hash);
+    }
+    if report.entries.is_empty() {
+        println!("no compiled invariants: nothing to provision");
+    }
+    let detail = |detail: &str| {
+        if detail.is_empty() {
+            String::new()
+        } else {
+            format!("  - {detail}")
+        }
+    };
+    for entry in &report.entries {
+        println!(
+            "{:<20} {}  {}[{}] {}{}",
+            entry.action.to_string(),
+            entry.index_name,
+            entry.predicate,
+            entry.position,
+            entry.representation,
+            detail(&entry.detail)
+        );
+    }
+    for entry in &report.required_elsewhere {
+        println!(
+            "{:<20} {}  - required by {}",
+            "REQUIRED ELSEWHERE",
+            entry.index_name,
+            entry.required_by.join(", ")
+        );
+    }
+    for entry in &report.statistics {
+        println!(
+            "{:<20} {}  statistics[{}]{}",
+            entry.action.to_string(),
+            entry.statistics_name,
+            entry.position,
+            detail(&entry.detail)
+        );
+    }
+    println!(
+        "{}",
+        match (report.applied, report.dry_run, report.has_conflict()) {
+            (true, _, _) => "applied; morpholog.claims analyzed",
+            (false, true, _) => "dry run: nothing changed",
+            (false, false, true) => "not applied: a conflict needs an operator first",
+            (false, false, false) => "not applied",
+        }
+    );
 }

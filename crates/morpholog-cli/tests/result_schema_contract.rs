@@ -536,6 +536,247 @@ fn rejection_rows_serialize_as_pinned() {
     assert_golden("rejection_row_gate.json", &to_value(&gate));
 }
 
+fn provisioned_index(
+    action: morpholog_postgres::IndexAction,
+    name: &str,
+    predicate: &str,
+    position: usize,
+    required_by: &[&str],
+    detail: &str,
+) -> morpholog_postgres::IndexPlanEntry {
+    let reconciled = action != morpholog_postgres::IndexAction::Stale;
+    morpholog_postgres::IndexPlanEntry {
+        action,
+        index_name: name.to_string(),
+        predicate: predicate.to_string(),
+        position,
+        representation: "vk1",
+        expression_sql: if reconciled {
+            format!("morpholog.claim_digest(morpholog.value_key_v1(arguments -> {position}))")
+        } else {
+            String::new()
+        },
+        partial_predicate_sql: if reconciled {
+            format!("predicate_name = '{predicate}'")
+        } else {
+            String::new()
+        },
+        detail: detail.to_string(),
+        required_by: required_by.iter().map(ToString::to_string).collect(),
+    }
+}
+
+fn provisioned_statistics(
+    action: morpholog_postgres::StatisticsAction,
+    position: usize,
+    detail: &str,
+) -> morpholog_postgres::StatisticsPlanEntry {
+    morpholog_postgres::StatisticsPlanEntry {
+        action,
+        statistics_name: format!("morpholog_cs_vk1_p{position}"),
+        position,
+        expression_sql: format!(
+            "morpholog.claim_digest(morpholog.value_key_v1(arguments -> {position}))"
+        ),
+        detail: detail.to_string(),
+    }
+}
+
+/// The `provision indexes --json` report: a first run, its dry run, a
+/// conflict, and a pruning run over two programmes beside a third the call
+/// does not name. Deploy steps read it instead of the printed plan.
+#[test]
+fn provision_reports_serialize_as_pinned() {
+    use morpholog_cli::envelopes::ProvisionReport;
+    use morpholog_postgres::{IndexAction, StatisticsAction};
+
+    let program = |identity: &str, digit: char| morpholog_postgres::ProvisionedProgram {
+        identity: identity.to_string(),
+        hash: format!("sha256:{}", digit.to_string().repeat(64)),
+    };
+    let entry = "morpholog_ci_journalentry_0_vk1_0123456789ab";
+    let line = "morpholog_ci_journalline_1_vk1_456789abcdef";
+
+    let applied = morpholog_postgres::ProvisionReport {
+        programs: vec![program("ledger", '0')],
+        entries: vec![
+            provisioned_index(
+                IndexAction::Create,
+                entry,
+                "JournalEntry",
+                0,
+                &["ledger"],
+                "",
+            ),
+            provisioned_index(
+                IndexAction::SatisfiedExternally,
+                line,
+                "JournalLine",
+                1,
+                &["ledger"],
+                "lines_by_entry is equivalent and stays unmanaged",
+            ),
+        ],
+        statistics: vec![
+            provisioned_statistics(StatisticsAction::Create, 0, ""),
+            provisioned_statistics(StatisticsAction::Keep, 1, ""),
+        ],
+        required_elsewhere: Vec::new(),
+        dry_run: false,
+        prune: false,
+        applied: true,
+        pruned: Vec::new(),
+    };
+    assert_golden_bytes(
+        "provision_report_applied.json",
+        &ProvisionReport::from(&applied),
+    );
+
+    let dry_run = morpholog_postgres::ProvisionReport {
+        dry_run: true,
+        applied: false,
+        ..applied.clone()
+    };
+    assert_golden_bytes(
+        "provision_report_dry_run.json",
+        &ProvisionReport::from(&dry_run),
+    );
+
+    let conflict = morpholog_postgres::ProvisionReport {
+        entries: vec![
+            provisioned_index(IndexAction::Keep, entry, "JournalEntry", 0, &["ledger"], ""),
+            provisioned_index(
+                IndexAction::Conflict,
+                line,
+                "JournalLine",
+                1,
+                &["ledger"],
+                "the index under this name is defined as (arguments -> 7) where \
+                 (predicate_name = 'JournalLine'::text), not the specification",
+            ),
+        ],
+        statistics: vec![
+            provisioned_statistics(StatisticsAction::Keep, 0, ""),
+            provisioned_statistics(
+                StatisticsAction::Conflict,
+                1,
+                "the statistics under this name differ from Morpholog's: its statistics target is 0",
+            ),
+        ],
+        applied: false,
+        ..applied.clone()
+    };
+    assert!(conflict.has_conflict());
+    assert_golden_bytes(
+        "provision_report_conflict.json",
+        &ProvisionReport::from(&conflict),
+    );
+
+    let pruned = morpholog_postgres::ProvisionReport {
+        programs: vec![program("billing", '1'), program("ledger", '0')],
+        entries: vec![
+            provisioned_index(
+                IndexAction::RepairInvalid,
+                "morpholog_ci_invoice_0_vk1_89abcdef0123",
+                "Invoice",
+                0,
+                &["billing"],
+                "an interrupted concurrent build left it invalid",
+            ),
+            provisioned_index(
+                IndexAction::Keep,
+                entry,
+                "JournalEntry",
+                0,
+                &["billing", "ledger", "reporting"],
+                "",
+            ),
+            provisioned_index(
+                IndexAction::Stale,
+                line,
+                "JournalLine",
+                1,
+                &[],
+                "required by no programme; dropped",
+            ),
+        ],
+        statistics: vec![provisioned_statistics(StatisticsAction::Keep, 0, "")],
+        required_elsewhere: vec![morpholog_postgres::RequiredElsewhere {
+            index_name: "morpholog_ci_period_2_vk1_cdef01234567".to_string(),
+            required_by: vec!["reporting".to_string()],
+        }],
+        dry_run: false,
+        prune: true,
+        applied: true,
+        pruned: vec![line.to_string()],
+    };
+    assert_golden_bytes(
+        "provision_report_pruned.json",
+        &ProvisionReport::from(&pruned),
+    );
+}
+
+/// The wire word of every action is in the schema, and the schema offers
+/// no word the binary cannot emit.
+#[test]
+fn the_provisioning_actions_are_the_schemas() {
+    use morpholog_postgres::{IndexAction, StatisticsAction};
+    // Exhaustive, so a new action does not compile until it is listed.
+    fn listed(action: IndexAction) -> IndexAction {
+        match action {
+            IndexAction::Keep
+            | IndexAction::Create
+            | IndexAction::RepairInvalid
+            | IndexAction::SatisfiedExternally
+            | IndexAction::Stale
+            | IndexAction::Conflict => action,
+        }
+    }
+    let words = |values: Vec<serde_json::Value>| -> Vec<String> {
+        let mut words: Vec<String> = values
+            .iter()
+            .map(|v| v.as_str().expect("an action is a string").to_string())
+            .collect();
+        words.sort();
+        words
+    };
+    let schema = result_schema();
+    let pinned = |def: &str| {
+        words(
+            schema["$defs"][def]["properties"]["action"]["enum"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{def} pins its actions"))
+                .clone(),
+        )
+    };
+    let index_actions = [
+        IndexAction::Keep,
+        IndexAction::Create,
+        IndexAction::RepairInvalid,
+        IndexAction::SatisfiedExternally,
+        IndexAction::Stale,
+        IndexAction::Conflict,
+    ];
+    assert_eq!(
+        words(
+            index_actions
+                .iter()
+                .map(|a| to_value(&listed(*a)))
+                .collect()
+        ),
+        pinned("provisioned_index")
+    );
+    let statistics_actions = [
+        StatisticsAction::Keep,
+        StatisticsAction::Create,
+        StatisticsAction::Conflict,
+    ];
+    assert_eq!(
+        words(statistics_actions.iter().map(to_value).collect()),
+        pinned("provisioned_statistics")
+    );
+}
+
 /// The `migrate` report for a database that is behind and one just brought
 /// current. Deploy steps gate on `--check` and read what is outstanding.
 #[test]
@@ -1960,6 +2201,10 @@ fn every_golden_validates_against_its_defs_entry() {
         ("migration_report_behind.json", "migration_report"),
         ("migration_report_applied.json", "migration_report"),
         ("migration_report_ahead.json", "migration_report"),
+        ("provision_report_applied.json", "provision_report"),
+        ("provision_report_dry_run.json", "provision_report"),
+        ("provision_report_conflict.json", "provision_report"),
+        ("provision_report_pruned.json", "provision_report"),
         ("rejection_row.json", "rejection_row"),
         ("rejection_row_gate.json", "rejection_row"),
         ("outbox_claim.json", "outbox_claim"),

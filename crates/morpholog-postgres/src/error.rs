@@ -41,6 +41,16 @@ pub enum PgError {
     /// matched zero rows when exactly one was expected).
     #[error("invalid persistent state: {0}")]
     InvalidState(String),
+    /// A provisioning call named no programme, so it has nothing to
+    /// reconcile and its report would name none.
+    #[error("no programme was named; name every programme the database serves")]
+    NoProgramNamed,
+    /// Two programmes in one provisioning call share an identity. Index
+    /// requirements are kept per identity, so one would replace the other's.
+    #[error(
+        "two programmes in this call are both named `{0}`; index requirements are kept per programme name, so name each programme once"
+    )]
+    ProgramNamedTwice(String),
     /// The database schema is older than this binary: a query named a
     /// column the table does not have.
     ///

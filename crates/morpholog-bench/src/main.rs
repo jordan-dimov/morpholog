@@ -687,18 +687,18 @@ async fn establish(pool: &PgPool, implementation: Implementation, cores: &[Progr
             CompiledProgram::new(core.clone()).map_err(|e| anyhow!("invalid programme: {e:?}"))?,
         );
         if implementation.indexed() {
-            let report = morpholog_postgres::provision_indexes(pool, &classified, false)
+            let report = morpholog_postgres::provision_indexes(pool, &[&classified], false)
                 .await
                 .context("provisioning the indexed condition")?;
             if !report.applied {
                 return Err(anyhow!(
                     "the indexed condition could not be established for `{}`: {:?}",
-                    report.program_identity,
+                    core.name,
                     report.entries
                 ));
             }
         }
-        let plan = morpholog_postgres::plan_indexes(pool, &classified)
+        let plan = morpholog_postgres::plan_indexes(pool, &[&classified], false)
             .await
             .context("checking the index condition")?;
         let acceptable = |action: &IndexAction| {
@@ -718,7 +718,7 @@ async fn establish(pool: &PgPool, implementation: Implementation, cores: &[Progr
             return Err(anyhow!(
                 "the `{}` condition is not what the database holds for `{}`: {}",
                 implementation.label(),
-                plan.program_identity,
+                core.name,
                 offending.join("; ")
             ));
         }

@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT program_identity AS \"identity!\", spec_digest AS \"digest!\"\n           FROM morpholog.index_requirement\n           WHERE NOT (program_identity = ANY($1))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "identity!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.index_requirement",
+            "name": "program_identity"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "digest!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.index_requirement",
+            "name": "spec_digest"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "6e9f2765ce0338369224635a4341ef2fe6d41b97b64408783dcc71439dea07b5"
+}

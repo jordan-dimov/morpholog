@@ -30,9 +30,11 @@
 //! access method and the key count. Never `CREATE` strings or
 //! `IF NOT EXISTS`.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use morpholog_core::format::canonical_hash;
+use serde::Serialize;
 use sqlx::Row as _;
 
 use crate::PgPool;
@@ -46,7 +48,8 @@ const RECONCILE_LOCK_KEY: i64 = 0x4d4f_5250_4849_4458;
 /// How long a provisioner waits for another to finish.
 const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(600);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum IndexAction {
     Keep,
     Create,
@@ -83,12 +86,16 @@ pub struct IndexPlanEntry {
     /// What the action rests on: the external index that satisfies, what
     /// a conflict differs in, why a stale index is stale.
     pub detail: String,
+    /// The programmes that require the index once every named programme's
+    /// requirements are replaced, by identity; none on a stale entry.
+    pub required_by: Vec<String>,
 }
 
 /// What reconciling one statistics object does. Statistics are never
 /// pruned: a requirement an operator's own index satisfies records no
 /// position, so nothing can yet say that no programme needs one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum StatisticsAction {
     Keep,
@@ -119,16 +126,38 @@ pub struct StatisticsPlanEntry {
     pub detail: String,
 }
 
+/// A programme named in the call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvisionedProgram {
+    pub identity: String,
+    pub hash: String,
+}
+
+/// A managed index the call did not reconcile: no named programme requires
+/// it, and a programme outside the call does, which keeps a prune from
+/// dropping it. It says nothing about the catalogue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequiredElsewhere {
+    pub index_name: String,
+    pub required_by: Vec<String>,
+}
+
+/// What one call planned and did. Every list has one order whatever order
+/// the programmes were named in: programmes by identity, indexes and
+/// `required_elsewhere` by name, statistics by position.
 #[derive(Debug, Clone)]
 pub struct ProvisionReport {
-    pub program_identity: String,
-    pub program_hash: String,
+    pub programs: Vec<ProvisionedProgram>,
     pub entries: Vec<IndexPlanEntry>,
     pub statistics: Vec<StatisticsPlanEntry>,
+    pub required_elsewhere: Vec<RequiredElsewhere>,
+    pub dry_run: bool,
+    pub prune: bool,
     /// Whether the plan was executed: false for a dry run, and false when
     /// a conflict made the run apply nothing.
     pub applied: bool,
-    /// Stale indexes physically dropped, by name.
+    /// Stale indexes physically dropped, by name: every stale entry of a
+    /// run that applied under `prune`.
     pub pruned: Vec<String>,
 }
 
@@ -144,19 +173,44 @@ impl ProvisionReport {
     }
 }
 
-/// Plan the reconciliation and change nothing.
-pub async fn plan_indexes(pool: &PgPool, program: &PgProgram) -> Result<ProvisionReport, PgError> {
-    reconcile(pool, program, false, false).await
+/// Whether a call may name these programmes: at least one, and no name
+/// twice. A requirement set is kept per name, so the second of two
+/// programmes under one name would replace the first's. Needs no database,
+/// so a caller can ask before connecting; both entry points ask it too.
+pub fn check_named_programs(programs: &[&PgProgram]) -> Result<(), PgError> {
+    if programs.is_empty() {
+        return Err(PgError::NoProgramNamed);
+    }
+    let mut seen = BTreeSet::new();
+    for program in programs {
+        let name = program.core().program().name.to_string();
+        if !seen.insert(name.clone()) {
+            return Err(PgError::ProgramNamedTwice(name));
+        }
+    }
+    Ok(())
 }
 
-/// Reconcile the database to the programme's specifications; with
-/// `prune`, also drop managed indexes no programme requires.
-pub async fn provision_indexes(
+/// Plan the reconciliation of the programmes' union and change nothing;
+/// `prune` is what the plan is for, so the stale entries say what an
+/// applying run would drop.
+pub async fn plan_indexes(
     pool: &PgPool,
-    program: &PgProgram,
+    programs: &[&PgProgram],
     prune: bool,
 ) -> Result<ProvisionReport, PgError> {
-    reconcile(pool, program, true, prune).await
+    reconcile(pool, programs, false, prune).await
+}
+
+/// Reconcile the database to the union of the programmes' specifications;
+/// with `prune`, also drop managed indexes no programme requires. A
+/// conflict in any programme applies nothing for any of them.
+pub async fn provision_indexes(
+    pool: &PgPool,
+    programs: &[&PgProgram],
+    prune: bool,
+) -> Result<ProvisionReport, PgError> {
+    reconcile(pool, programs, true, prune).await
 }
 
 /// One index on the claims table as the catalogue describes it.
@@ -415,15 +469,29 @@ fn classify_statistics(
     )
 }
 
+/// A programme named in the call, as reconciliation reads it.
+struct Named {
+    identity: String,
+    hash: String,
+    specs: Vec<IndexSpec>,
+}
+
 async fn reconcile(
     pool: &PgPool,
-    program: &PgProgram,
+    programs: &[&PgProgram],
     apply: bool,
     prune: bool,
 ) -> Result<ProvisionReport, PgError> {
-    let program_identity = program.core().program().name.to_string();
-    let program_hash = canonical_hash(program.core().program());
-    let specs = program.required_indexes();
+    check_named_programs(programs)?;
+    let mut named: Vec<Named> = programs
+        .iter()
+        .map(|program| Named {
+            identity: program.core().program().name.to_string(),
+            hash: canonical_hash(program.core().program()),
+            specs: program.required_indexes(),
+        })
+        .collect();
+    named.sort_by(|a, b| a.identity.cmp(&b.identity));
 
     // The lock holder also runs the DDL: concurrent builds cannot run
     // inside a transaction, and the lock keeps provisioning single-writer.
@@ -449,15 +517,7 @@ async fn reconcile(
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    let outcome = reconcile_locked(
-        &mut conn,
-        &specs,
-        &program_identity,
-        &program_hash,
-        apply,
-        prune,
-    )
-    .await;
+    let outcome = reconcile_locked(&mut conn, &named, apply, prune).await;
     // Released explicitly so a pooled connection never hands the lock to
     // another caller.
     let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
@@ -467,16 +527,61 @@ async fn reconcile(
     outcome
 }
 
+/// Who requires each specification once every named programme's
+/// requirements are replaced, by spec digest: the named programmes' own
+/// specifications, and what the registry records for every other identity.
+/// The report, the stale set and the prune all read this one relation.
+async fn prospective_requirements(
+    conn: &mut sqlx::PgConnection,
+    named: &[Named],
+) -> Result<BTreeMap<String, BTreeSet<String>>, PgError> {
+    let identities: Vec<String> = named.iter().map(|p| p.identity.clone()).collect();
+    let outside = sqlx::query!(
+        r#"SELECT program_identity AS "identity!", spec_digest AS "digest!"
+           FROM morpholog.index_requirement
+           WHERE NOT (program_identity = ANY($1))"#,
+        &identities,
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    let mut required: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for row in outside {
+        required.entry(row.digest).or_default().insert(row.identity);
+    }
+    for program in named {
+        for spec in &program.specs {
+            required
+                .entry(spec.digest())
+                .or_default()
+                .insert(program.identity.clone());
+        }
+    }
+    Ok(required)
+}
+
 async fn reconcile_locked(
     conn: &mut sqlx::PgConnection,
-    specs: &[IndexSpec],
-    program_identity: &str,
-    program_hash: &str,
+    named: &[Named],
     apply: bool,
     prune: bool,
 ) -> Result<ProvisionReport, PgError> {
+    let specs: Vec<IndexSpec> = named
+        .iter()
+        .flat_map(|p| p.specs.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let required = prospective_requirements(conn, named).await?;
+    let required_by = |digest: &str| -> Vec<String> {
+        required
+            .get(digest)
+            .map(|identities| identities.iter().cloned().collect())
+            .unwrap_or_default()
+    };
+
     let catalogue = catalogue(conn).await?;
-    let statistics_specs = StatisticsSpec::for_indexes(specs);
+    let statistics_specs = StatisticsSpec::for_indexes(&specs);
     let mut statistics = Vec::with_capacity(statistics_specs.len());
     for spec in &statistics_specs {
         let normalised = normalise_statistics(conn, spec).await?;
@@ -491,7 +596,7 @@ async fn reconcile_locked(
         });
     }
     let mut entries = Vec::with_capacity(specs.len());
-    for spec in specs {
+    for spec in &specs {
         let normalised = normalise(conn, spec).await?;
         let (action, detail) = classify_spec(spec, &normalised, &catalogue);
         entries.push(IndexPlanEntry {
@@ -503,11 +608,42 @@ async fn reconcile_locked(
             expression_sql: spec.expression_sql.clone(),
             partial_predicate_sql: spec.partial_predicate_sql.clone(),
             detail,
+            required_by: required_by(&spec.digest()),
         });
     }
 
+    // Managed indexes no named programme requires: stale when nobody else
+    // does either, required elsewhere otherwise.
+    let current: BTreeSet<String> = specs.iter().map(IndexSpec::digest).collect();
+    let managed = sqlx::query!(
+        r#"SELECT m.spec_digest AS "digest!", m.index_name AS "index_name!",
+                  m.predicate_name AS "predicate!", m.position AS "position!",
+                  m.representation AS "representation!"
+           FROM morpholog.managed_index m
+           ORDER BY m.index_name"#,
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    let mut stale = Vec::new();
+    let mut required_elsewhere = Vec::new();
+    for row in managed {
+        if current.contains(&row.digest) {
+            continue;
+        }
+        let elsewhere = required_by(&row.digest);
+        if elsewhere.is_empty() {
+            stale.push(row);
+        } else {
+            required_elsewhere.push(RequiredElsewhere {
+                index_name: row.index_name,
+                required_by: elsewhere,
+            });
+        }
+    }
+
     // Fail closed. A conflict means an index under Morpholog's name differs
-    // from the specification. Reconciling around it would drop this
+    // from the specification. Reconciling around it would drop a
     // programme's requirement, and a later prune could then drop the
     // operator's index as stale. Nothing is applied; the report says why.
     let applied = apply
@@ -554,10 +690,12 @@ async fn reconcile_locked(
             .execute(&mut *conn)
             .await
             .map_err(classify)?;
-        // Record every managed specification, then replace this programme's
-        // requirement set whole. It includes specifications an operator's
-        // index satisfies, so a requirement outlives the index serving it.
-        // Runs on the held connection; the session lock outlives the
+        // Record every managed specification, then replace every named
+        // programme's requirement set whole, all in one transaction and
+        // before any drop: a prune never sees some programmes replaced and
+        // others not. The sets include specifications an operator's index
+        // satisfies, so a requirement outlives the index serving it. Runs
+        // on the held connection; the session lock outlives the
         // transaction.
         let mut tx = sqlx::Connection::begin(&mut *conn)
             .await
@@ -587,49 +725,30 @@ async fn reconcile_locked(
             .await
             .map_err(classify_checked_query)?;
         }
-        sqlx::query!(
-            "DELETE FROM morpholog.index_requirement WHERE program_identity = $1",
-            program_identity
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(classify_checked_query)?;
-        for (spec, entry) in specs.iter().zip(&entries) {
-            if entry.action == IndexAction::Conflict {
-                continue;
-            }
+        for program in named {
             sqlx::query!(
-                "INSERT INTO morpholog.index_requirement (program_identity, spec_digest, program_hash)
-                 VALUES ($1, $2, $3)",
-                program_identity,
-                spec.digest(),
-                program_hash,
+                "DELETE FROM morpholog.index_requirement WHERE program_identity = $1",
+                program.identity
             )
             .execute(&mut *tx)
             .await
             .map_err(classify_checked_query)?;
+            for spec in &program.specs {
+                sqlx::query!(
+                    "INSERT INTO morpholog.index_requirement (program_identity, spec_digest, program_hash)
+                     VALUES ($1, $2, $3)",
+                    program.identity,
+                    spec.digest(),
+                    program.hash,
+                )
+                .execute(&mut *tx)
+                .await
+                .map_err(classify_checked_query)?;
+            }
         }
         tx.commit().await.map_err(classify)?;
     }
 
-    // Managed indexes no programme requires - after this programme's
-    // requirements were replaced, or as they would stand once they are.
-    let current: Vec<String> = specs.iter().map(IndexSpec::digest).collect();
-    let stale = sqlx::query!(
-        r#"SELECT m.index_name AS "index_name!", m.predicate_name AS "predicate!",
-                  m.position AS "position!", m.representation AS "representation!"
-           FROM morpholog.managed_index m
-           WHERE NOT (m.spec_digest = ANY($2))
-             AND NOT EXISTS (
-                 SELECT 1 FROM morpholog.index_requirement r
-                 WHERE r.spec_digest = m.spec_digest AND r.program_identity <> $1)
-           ORDER BY m.index_name"#,
-        program_identity,
-        &current,
-    )
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(classify_checked_query)?;
     let mut pruned = Vec::new();
     for row in stale {
         let representation = match row.representation.as_str() {
@@ -663,14 +782,24 @@ async fn reconcile_locked(
             } else {
                 "required by no programme; `--prune` drops it".to_string()
             },
+            required_by: Vec::new(),
         });
     }
+    entries.sort_by(|a, b| a.index_name.cmp(&b.index_name));
 
     Ok(ProvisionReport {
-        program_identity: program_identity.to_string(),
-        program_hash: program_hash.to_string(),
+        programs: named
+            .iter()
+            .map(|p| ProvisionedProgram {
+                identity: p.identity.clone(),
+                hash: p.hash.clone(),
+            })
+            .collect(),
         entries,
         statistics,
+        required_elsewhere,
+        dry_run: !apply,
+        prune,
         applied,
         pruned,
     })
