@@ -2335,3 +2335,35 @@ async fn assert_diagnosis_any(
         other => panic!("{}", describe(other)),
     }
 }
+
+/// A nested implication in the consequent is diagnosed through: the
+/// kernel takes its first antecedent match whose consequent fails and
+/// reports what that match bound. The same for `forall`.
+#[tokio::test]
+async fn a_nested_implication_is_diagnosed_through_its_first_failing_match() {
+    let pool = test_pool().await;
+    for consequent in ["(B(x, y) implies C(y))", "(forall y in B(x, y): C(y))"] {
+        let source = format!(
+            "program nested_implies
+predicate Enabled(flag: Subject)
+predicate A(x: Subject)
+predicate B(x: Subject, y: Subject)
+predicate C(y: Subject)
+invariant nested:
+    Enabled(_) and A(x) implies {consequent}
+transformation enable(flag):
+    admit Enabled(flag)
+"
+        );
+        assert_diagnosis(
+            &pool,
+            morpholog_surface::parse_program(&source).expect("parses"),
+            &[
+                ("A", vec![serde_json::json!([subject("p")])]),
+                ("B", vec![serde_json::json!([subject("p"), subject("q")])]),
+            ],
+            &["x", "y"],
+        )
+        .await;
+    }
+}

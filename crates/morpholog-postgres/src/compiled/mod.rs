@@ -534,7 +534,7 @@ pub(crate) struct CompiledInvariant {
     /// wins. Empty when nothing in the body can raise.
     probe_scopes: Vec<ProbeScope>,
     /// Where the witness comes from; `None` when the kernel reports none.
-    diagnosis: Option<Diagnosis>,
+    diagnosis: Option<Level>,
     /// The indexes this invariant's SQL seeks on at a join or a literal,
     /// in specification order. The plan must reach each through its
     /// index.
@@ -567,30 +567,28 @@ struct ProbeScope {
 /// conjunct by conjunct: under the first row of the longest prefix that
 /// still matched, it blames the conjunct that killed the chain, and
 /// descends into it when that is a defined call (whose frame replaces the
-/// caller's variables) or a nested conjunction. The violation query cannot
-/// stand in for it: another violating row can fail at another depth, or
-/// inside another call, and so carry other variables.
-#[derive(Debug)]
-struct Diagnosis {
-    /// The violation query's sources and conditions.
-    from: String,
-    where_: String,
-    /// The antecedent's claim aliases, in the kernel's nesting order.
-    aliases: Vec<(String, PredicateName)>,
-    level: Level,
-}
-
-/// One conjunction the kernel diagnoses, rendered a second time under
-/// fresh aliases.
+/// caller's variables), a nested conjunction, or a nested implication
+/// (whose first failing antecedent match it takes next). The violation
+/// query cannot stand in for it: another violating row can fail at
+/// another depth, or inside another call, and so carry other variables.
 #[derive(Debug)]
 struct Level {
-    /// The variables in scope on entry: the antecedent's, or a call's
-    /// parameters, or everything bound before a nested conjunction.
+    /// The rows this level starts from: the first match, in the kernel's
+    /// order, of an antecedent whose consequent fails.
+    choice: Option<Choice>,
+    /// The variables in scope on entry.
     entry: Vec<(Var, Bound)>,
     /// Each conjunct's cumulative prefix, in order.
     prefixes: Vec<Prefix>,
     /// Where the kernel goes when the chain dies at a conjunct.
     descents: BTreeMap<usize, Level>,
+}
+
+#[derive(Debug)]
+struct Choice {
+    from: String,
+    where_: String,
+    aliases: Vec<(String, PredicateName)>,
 }
 
 #[derive(Debug)]
@@ -613,6 +611,7 @@ fn diagnostic_level(
     conjuncts: &[&Prop],
     env: Env,
     entry: Vec<(Var, Bound)>,
+    choice: Option<Choice>,
     ctx: &mut Ctx<'_>,
 ) -> Result<Level, CompileReason> {
     let mut acc = Rendered {
@@ -628,7 +627,7 @@ fn diagnostic_level(
                 let entry = frame.iter().map(|(p, b)| (p.clone(), b.clone())).collect();
                 descents.insert(
                     k,
-                    diagnostic_level(&conjuncts_of(&def.body), frame, entry, ctx)?,
+                    diagnostic_level(&conjuncts_of(&def.body), frame, entry, None, ctx)?,
                 );
             }
             Prop::And(ps) => {
@@ -638,7 +637,35 @@ fn diagnostic_level(
                     .map(|(v, b)| (v.clone(), b.clone()))
                     .collect();
                 let inner: Vec<&Prop> = ps.iter().collect();
-                descents.insert(k, diagnostic_level(&inner, acc.env.clone(), entry, ctx)?);
+                descents.insert(
+                    k,
+                    diagnostic_level(&inner, acc.env.clone(), entry, None, ctx)?,
+                );
+            }
+            Prop::Implies { left, right }
+            | Prop::Forall {
+                source: left,
+                body: right,
+                ..
+            } => {
+                let l = render_prop(left, acc.env.clone(), ctx)?;
+                let r = render_prop(right, l.env.clone(), ctx)?;
+                let mut where_ = l.where_.clone();
+                where_.push(if r.from.is_empty() {
+                    format!("NOT ({})", r.conjunction())
+                } else {
+                    format!("NOT {}", r.exists_sql())
+                });
+                let choice = Choice {
+                    from: from_list(&l),
+                    where_: joined(&where_),
+                    aliases: l.aliases(),
+                };
+                let entry = l.env.iter().map(|(v, b)| (v.clone(), b.clone())).collect();
+                descents.insert(
+                    k,
+                    diagnostic_level(&conjuncts_of(right), l.env, entry, Some(choice), ctx)?,
+                );
             }
             _ => {}
         }
@@ -658,6 +685,7 @@ fn diagnostic_level(
         });
     }
     Ok(Level {
+        choice,
         entry,
         prefixes,
         descents,
@@ -805,7 +833,7 @@ impl CompiledInvariant {
             .collect()
     }
 
-    /// The witness, found as the kernel finds it (see [`Diagnosis`]).
+    /// The witness, found as the kernel finds it (see [`Level`]).
     async fn diagnose(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -828,26 +856,38 @@ impl CompiledInvariant {
             self.version
         );
         let mut chosen = Chosen::default();
-        let mut sql = format!(
-            "{label}\nSELECT {}\nFROM {}\nWHERE {}",
-            Chosen::select(&d.aliases),
-            d.from,
-            d.where_
-        );
-        if let Some(filter) = case_filter {
-            let _ = write!(sql, "\n  AND ({filter})");
-        }
-        let _ = write!(sql, "\nORDER BY {}\nLIMIT 1", order(&d.aliases)?);
-        let row = fetch(tx, sql).await?.ok_or_else(|| {
-            PgError::InvalidState(format!(
-                "{} is violated but its diagnosis found no violation",
-                self.name
-            ))
-        })?;
-        chosen.read(&d.aliases, &row)?;
-        let mut level = &d.level;
+        let mut level = d;
+        let mut filter = case_filter;
+        let mut witness = BTreeMap::new();
         loop {
-            let mut witness = BTreeMap::new();
+            if let Some(choice) = &level.choice {
+                let mut sql = format!(
+                    "{label}\nSELECT {}\nFROM {}\nWHERE {}",
+                    Chosen::select(&choice.aliases),
+                    chosen.sources(&choice.from),
+                    chosen.pins(&choice.where_)
+                );
+                if let Some(filter) = filter.take() {
+                    let _ = write!(sql, "\n  AND ({filter})");
+                }
+                if !choice.aliases.is_empty() {
+                    let _ = write!(sql, "\nORDER BY {}", order(&choice.aliases)?);
+                }
+                sql.push_str("\nLIMIT 1");
+                match fetch(tx, sql).await? {
+                    Some(row) => chosen.read(&choice.aliases, &row)?,
+                    // The kernel found nothing to descend into and blames
+                    // the conjunct as a unit.
+                    None if chosen.rows.is_empty() => {
+                        return Err(PgError::InvalidState(format!(
+                            "{} is violated but its diagnosis found no violation",
+                            self.name
+                        )));
+                    }
+                    None => break,
+                }
+            }
+            witness = BTreeMap::new();
             for (var, bound) in &level.entry {
                 witness.insert(var.clone(), chosen.value(bound)?);
             }
@@ -880,14 +920,13 @@ impl CompiledInvariant {
             let killed = longest.map_or(0, |s| s + 1);
             match level.descents.get(&killed) {
                 Some(next) => level = next,
-                None => {
-                    return Ok(witness
-                        .into_iter()
-                        .map(|(var, value)| WitnessBinding { var, value })
-                        .collect());
-                }
+                None => break,
             }
         }
+        Ok(witness
+            .into_iter()
+            .map(|(var, value)| WitnessBinding { var, value })
+            .collect())
     }
 
     /// Bound the check to the cases a delta could have changed: core
@@ -1551,7 +1590,7 @@ type Denial = (
     String,
     Vec<ProbeScope>,
     BTreeMap<Var, ColRef>,
-    Option<Diagnosis>,
+    Option<Level>,
 );
 
 fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReason> {
@@ -1597,16 +1636,21 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
         .into_iter()
         .map(|(v, c)| (v, Bound::Col(c)))
         .collect();
-    let level = diagnostic_level(&conjuncts_of(right), ant.env.clone(), entry, ctx)?;
     let from = from_list(&scope);
     let where_ = violated(&scope, not_cons).join("\n  AND ");
     let error = scope.probes.iter().map(ScopeDraft::anchored).collect();
-    let diagnosis = Diagnosis {
+    let choice = Choice {
         from: from.clone(),
         where_: where_.clone(),
         aliases: ant.aliases(),
-        level,
     };
+    let diagnosis = diagnostic_level(
+        &conjuncts_of(right),
+        ant.env.clone(),
+        entry,
+        Some(choice),
+        ctx,
+    )?;
     Ok((
         format!("SELECT 1 AS \"w\"\nFROM {from}\nWHERE {where_}"),
         format!("\nORDER BY {}\nLIMIT 1", violation_order(&ant)),
