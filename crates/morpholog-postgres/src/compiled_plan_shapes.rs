@@ -297,11 +297,31 @@ pub(crate) async fn populate_ledger(pool: &PgPool, entries: i64) {
     .execute(pool)
     .await
     .unwrap();
+    // Other periods already closed, so a keyed read of whether this one
+    // is has rows to pass over: on an empty predicate any access path is
+    // free and the planner's pick says nothing.
+    sqlx::query(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'PeriodClosed',
+                jsonb_build_array(jsonb_build_object('type','subject','value','p_closed_' || i)),
+                $1
+         FROM generate_series(1, $2 / 20) AS i",
+    )
+    .bind(nil)
+    .bind(entries)
+    .execute(pool)
+    .await
+    .unwrap();
     sqlx::raw_sql("ANALYZE morpholog.claims")
         .execute(pool)
         .await
         .unwrap();
 }
+
+/// Large enough that a seek the planner cannot see is selective loses to
+/// a walk of the predicate: that crossover sits near twenty thousand
+/// entries, and a smaller ledger passes whether or not it can see it.
+const POPULATED: i64 = 20_000;
 
 #[tokio::test]
 async fn the_planner_chooses_the_provisioned_indexes_on_a_populated_ledger() {
@@ -310,7 +330,35 @@ async fn the_planner_chooses_the_provisioned_indexes_on_a_populated_ledger() {
     let program = morpholog_examples::double_entry_ledger::program();
     let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
     provision_indexes(&pool, &pg, false).await.unwrap();
-    populate_ledger(&pool, 5_000).await;
+    populate_ledger(&pool, POPULATED).await;
+    assert_required_indexes_used(&pool, &program, true).await;
+}
+
+/// A key the probe's case is bounded to, crowding another predicate at the
+/// same position: statistics over the position see the value as common,
+/// and the selective case check must still seek its case index.
+#[tokio::test]
+async fn a_case_index_is_still_chosen_where_another_predicate_crowds_the_key() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let program = morpholog_examples::double_entry_ledger::program();
+    let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
+    provision_indexes(&pool, &pg, false).await.unwrap();
+    sqlx::query(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'Crowd',
+                jsonb_build_array(
+                    jsonb_build_object('type','subject','value','e_probe'),
+                    jsonb_build_object('type','decimal','value',i::text)),
+                $1
+         FROM generate_series(1, $2) AS i",
+    )
+    .bind(uuid::Uuid::nil())
+    .bind(POPULATED)
+    .execute(&pool)
+    .await
+    .unwrap();
+    populate_ledger(&pool, POPULATED).await;
     assert_required_indexes_used(&pool, &program, true).await;
 }
 
@@ -327,7 +375,7 @@ async fn the_loader_seeks_through_the_provisioned_indexes() {
     let program = morpholog_examples::double_entry_ledger::program();
     let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
     provision_indexes(&pool, &pg, false).await.unwrap();
-    populate_ledger(&pool, 5_000).await;
+    populate_ledger(&pool, POPULATED).await;
     let post = program.transformation("post_simple_entry").unwrap();
     let transition = morpholog_core::Transition {
         transformation_name: post.name.clone(),
