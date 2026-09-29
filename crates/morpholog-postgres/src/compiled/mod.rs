@@ -482,6 +482,45 @@ impl IndexSpec {
     }
 }
 
+/// Statistics on one position's seek expression, across the whole claims
+/// table. The indexes are partial, and the planner does not estimate a
+/// filter from a partial index's statistics: without these it guesses, and
+/// a selective seek looks like a walk of the predicate. One object serves
+/// every predicate's index at the position.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct StatisticsSpec {
+    pub(crate) position: usize,
+}
+
+impl StatisticsSpec {
+    /// One per position the indexes seek on.
+    pub(crate) fn for_indexes(indexes: &[IndexSpec]) -> Vec<Self> {
+        let positions: BTreeSet<usize> = indexes.iter().map(|spec| spec.position).collect();
+        positions
+            .into_iter()
+            .map(|position| Self { position })
+            .collect()
+    }
+
+    /// Named for the seek representation and the position, so statistics
+    /// on another key are another object.
+    pub(crate) fn name(&self) -> String {
+        format!("morpholog_cs_vk1_p{}", self.position)
+    }
+
+    pub(crate) fn expression_sql(&self) -> String {
+        seek_expression("", self.position)
+    }
+
+    pub(crate) fn create_sql(&self) -> String {
+        format!(
+            "CREATE STATISTICS morpholog.{} ON ({}) FROM morpholog.claims",
+            quote_ident(&self.name()),
+            self.expression_sql()
+        )
+    }
+}
+
 /// The equality key of a position: the one equality the checks compare
 /// stored values by. The module doc gives what it keys.
 fn key_expression(qualifier: &str, position: usize) -> String {

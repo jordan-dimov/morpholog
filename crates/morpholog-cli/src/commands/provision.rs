@@ -4,7 +4,9 @@
 //! when a conflict needs an operator.
 
 use anyhow::bail;
-use morpholog_postgres::{IndexAction, PgProgram, plan_indexes, provision_indexes};
+use morpholog_postgres::{
+    IndexAction, PgProgram, StatisticsAction, plan_indexes, provision_indexes,
+};
 
 use crate::ProvisionIndexesArgs;
 use crate::commands::{compile_or_report, connect, parse_or_report};
@@ -40,6 +42,19 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
             entry.representation
         );
     }
+    for entry in &report.statistics {
+        let detail = if entry.detail.is_empty() {
+            String::new()
+        } else {
+            format!("  - {}", entry.detail)
+        };
+        println!(
+            "{:<20} {}  statistics[{}]{detail}",
+            entry.action.to_string(),
+            entry.statistics_name,
+            entry.position
+        );
+    }
     println!(
         "{}",
         match (report.applied, args.dry_run, report.has_conflict()) {
@@ -55,9 +70,16 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
             .iter()
             .filter(|e| e.action == IndexAction::Conflict)
             .map(|e| e.index_name.as_str())
+            .chain(
+                report
+                    .statistics
+                    .iter()
+                    .filter(|s| s.action == StatisticsAction::Conflict)
+                    .map(|s| s.statistics_name.as_str()),
+            )
             .collect();
         bail!(
-            "an index under Morpholog's name has another definition and was left alone: {}",
+            "an index or statistics object under Morpholog's name has another definition and was left alone: {}",
             names.join(", ")
         );
     }

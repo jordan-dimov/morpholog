@@ -10,7 +10,9 @@ mod common;
 use common::{compiled, reset_db, session_is_superuser, test_pool};
 use morpholog_core::ir_builder::program;
 use morpholog_examples::double_entry_ledger;
-use morpholog_postgres::{IndexAction, PgPool, PgProgram, plan_indexes, provision_indexes};
+use morpholog_postgres::{
+    IndexAction, PgPool, PgProgram, StatisticsAction, plan_indexes, provision_indexes,
+};
 use sqlx::Row as _;
 
 /// The ledger's requirement: its compiled checks' seeks, the case column
@@ -546,5 +548,135 @@ async fn every_applied_run_analyzes_the_claims_table_and_a_dry_run_does_not() {
     assert!(
         stats_for(name.clone()).await > 0,
         "{name} has statistics after adoption"
+    );
+}
+
+async fn our_statistics(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT stxname::text FROM pg_statistic_ext
+         WHERE stxnamespace = 'morpholog'::regnamespace AND stxname LIKE 'morpholog\\_cs\\_%'
+         ORDER BY stxname",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+fn statistics_actions(
+    report: &morpholog_postgres::ProvisionReport,
+) -> Vec<(String, StatisticsAction)> {
+    report
+        .statistics
+        .iter()
+        .map(|s| (s.statistics_name.clone(), s.action))
+        .collect()
+}
+
+/// Statistics follow positions, not indexes: one object per position any
+/// required index seeks on, whatever predicates share it.
+#[tokio::test]
+async fn statistics_are_planned_per_position_created_once_and_then_kept() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    let plan = plan_indexes(&pool, &ledger()).await.unwrap();
+    let positions: std::collections::BTreeSet<usize> =
+        plan.entries.iter().map(|e| e.position).collect();
+    let expected: Vec<String> = positions
+        .iter()
+        .map(|p| format!("morpholog_cs_vk1_p{p}"))
+        .collect();
+    assert!(
+        positions.len() < plan.entries.len(),
+        "the ledger shares a position across predicates"
+    );
+    assert_eq!(
+        statistics_actions(&plan),
+        expected
+            .iter()
+            .map(|n| (n.clone(), StatisticsAction::Create))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        our_statistics(&pool).await.is_empty(),
+        "a dry run creates none"
+    );
+
+    let first = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    assert!(first.applied);
+    assert_eq!(our_statistics(&pool).await, expected);
+    let again = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    assert!(
+        again
+            .statistics
+            .iter()
+            .all(|s| s.action == StatisticsAction::Keep),
+        "{again:?}"
+    );
+}
+
+/// Attacker capability modelled: an operator with DDL on the claims table
+/// who created statistics under Morpholog's name with another definition.
+/// The run applies nothing, indexes included, and leaves theirs alone.
+#[tokio::test]
+async fn statistics_under_our_name_with_another_definition_apply_nothing() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    sqlx::raw_sql(
+        "CREATE STATISTICS morpholog.morpholog_cs_vk1_p0 ON ((arguments ->> 0)) FROM morpholog.claims",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let report = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    assert!(report.has_conflict());
+    assert!(!report.applied);
+    assert!(
+        report
+            .statistics
+            .iter()
+            .any(|s| s.statistics_name == "morpholog_cs_vk1_p0"
+                && s.action == StatisticsAction::Conflict),
+        "{report:?}"
+    );
+    assert!(
+        catalogue_names(&pool).await.is_empty(),
+        "no index was built"
+    );
+    assert_eq!(registry_counts(&pool).await, (0, 0));
+    assert_eq!(
+        our_statistics(&pool).await,
+        vec!["morpholog_cs_vk1_p0".to_string()],
+        "only the operator's object, untouched"
+    );
+}
+
+/// Statistics of the same name outside Morpholog's schema are not its own.
+#[tokio::test]
+async fn statistics_of_the_same_name_in_another_schema_are_not_ours() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    sqlx::raw_sql(
+        "DROP STATISTICS IF EXISTS public.morpholog_cs_vk1_p0;
+         CREATE STATISTICS public.morpholog_cs_vk1_p0 ON ((arguments ->> 0)) FROM morpholog.claims",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let report = plan_indexes(&pool, &ledger()).await.unwrap();
+    sqlx::raw_sql("DROP STATISTICS public.morpholog_cs_vk1_p0")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(!report.has_conflict(), "{report:?}");
+    assert!(
+        report
+            .statistics
+            .iter()
+            .any(|s| s.statistics_name == "morpholog_cs_vk1_p0"
+                && s.action == StatisticsAction::Create),
+        "{report:?}"
     );
 }
