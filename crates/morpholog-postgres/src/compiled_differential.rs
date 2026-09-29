@@ -2355,3 +2355,49 @@ transformation enable(flag):
         .await;
     }
 }
+
+/// Bodies the compiled check denies whole, with no antecedent row to
+/// start from, are still diagnosed as the kernel diagnoses them: a body
+/// that is a call reports the callee's frame, a conjunction the prefix
+/// that matched, and an implication whose antecedent only filters its
+/// consequent's failing path.
+#[tokio::test]
+async fn a_body_without_an_antecedent_row_is_diagnosed_too() {
+    let pool = test_pool().await;
+    for (body, expected) in [
+        ("required(#x)", &["p"][..]),
+        ("A(y) and B(y)", &["y"][..]),
+        ("1 > 0 implies (A(z) and B(z))", &["z"][..]),
+    ] {
+        let source = format!(
+            "program no_antecedent_row
+predicate A(p: Subject)
+predicate B(p: Subject)
+define required(p):
+    A(p) and B(p)
+invariant holds:
+    {body}
+transformation add_a(p):
+    admit A(p)
+"
+        );
+        reset_db(&pool).await;
+        let program = morpholog_surface::parse_program(&source).expect("parses");
+        let validated = program.validated().expect("validates");
+        let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+        let compiled = CompiledProgram::new(program).expect("compiles");
+        let obs = match probe_raw(&pool, &compiled, &sql_set, "add_a", vec![subj("x")]).await {
+            Ok(Probe::Observed(obs)) => obs,
+            other => panic!("{body}: {}", describe(other)),
+        };
+        governed_contract(&obs).unwrap_or_else(|msg| panic!("{body}: {msg}"));
+        let Some(Outcome::Rejected {
+            reason: RejectionReason::Invariant { witness, .. },
+        }) = &obs.kernel
+        else {
+            panic!("{body}: expected an invariant rejection");
+        };
+        let vars: Vec<&str> = witness.iter().map(|w| w.var.as_str()).collect();
+        assert_eq!(vars, expected, "{body}");
+    }
+}

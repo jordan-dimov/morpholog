@@ -83,8 +83,8 @@ use crate::sql_quote::{quote_ident, quote_literal};
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CompileReason {
-    /// A construct the fragment has no rendering for (`or`, `pre`, a
-    /// defined call, arithmetic, ...).
+    /// A construct the fragment has no rendering for (`or`, `pre`,
+    /// arithmetic, ...).
     Construct { construct: &'static str },
     /// An ordered comparison in a non-decimal domain.
     ComparisonDomain { domain: OrderedDomain },
@@ -736,14 +736,20 @@ impl Chosen {
         Ok(())
     }
 
-    /// The chosen rows, pinned by primary key, ahead of `from`.
-    fn sources(&self, from: &str) -> String {
-        self.rows
+    /// The chosen rows, pinned by primary key, ahead of `from`; no clause
+    /// at all when there is nothing to read from.
+    fn sources_clause(&self, from: &str) -> String {
+        let sources: Vec<String> = self
+            .rows
             .keys()
             .map(|alias| format!("morpholog.claims {alias}"))
             .chain((!from.is_empty()).then(|| from.to_string()))
-            .collect::<Vec<_>>()
-            .join(", ")
+            .collect();
+        if sources.is_empty() {
+            String::new()
+        } else {
+            format!("\nFROM {}", sources.join(", "))
+        }
     }
 
     fn pins(&self, where_: &str) -> String {
@@ -857,17 +863,19 @@ impl CompiledInvariant {
         );
         let mut chosen = Chosen::default();
         let mut level = d;
+        // The case bounds the invariant's own antecedent: the first level.
         let mut filter = case_filter;
         let mut witness = BTreeMap::new();
         loop {
+            let level_filter = filter.take();
             if let Some(choice) = &level.choice {
                 let mut sql = format!(
-                    "{label}\nSELECT {}\nFROM {}\nWHERE {}",
+                    "{label}\nSELECT {}{}\nWHERE {}",
                     Chosen::select(&choice.aliases),
-                    chosen.sources(&choice.from),
+                    chosen.sources_clause(&choice.from),
                     chosen.pins(&choice.where_)
                 );
-                if let Some(filter) = filter.take() {
+                if let Some(filter) = level_filter {
                     let _ = write!(sql, "\n  AND ({filter})");
                 }
                 if !choice.aliases.is_empty() {
@@ -894,9 +902,9 @@ impl CompiledInvariant {
             let mut longest = None;
             for (s, prefix) in level.prefixes.iter().enumerate().rev() {
                 let sql = format!(
-                    "{label}\nSELECT {}\nFROM {}\nWHERE {}\nORDER BY {}\nLIMIT 1",
+                    "{label}\nSELECT {}{}\nWHERE {}\nORDER BY {}\nLIMIT 1",
                     Chosen::select(&prefix.aliases),
-                    chosen.sources(&prefix.from),
+                    chosen.sources_clause(&prefix.from),
                     chosen.pins(&prefix.where_),
                     if prefix.aliases.is_empty() {
                         "1".to_string()
@@ -1662,16 +1670,18 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
 }
 
 /// Any other top-level shape: the invariant holds iff the body matches at
-/// all, so violation is bare non-existence, with an empty witness.
+/// all, so violation is bare non-existence. The kernel still diagnoses the
+/// body, from no binding at all.
 fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReason> {
     let r = render_prop(body, Env::new(), ctx)?;
+    let diagnosis = diagnostic_level(&conjuncts_of(body), Env::new(), Vec::new(), None, ctx)?;
     if !r.has_errors() {
         return Ok((
             format!("SELECT 1 AS \"w\"\nWHERE NOT {}", r.exists_sql()),
             String::new(),
             Vec::new(),
             BTreeMap::new(),
-            None,
+            Some(diagnosis),
         ));
     }
     // The kernel evaluates every binding of every scope, so an error
@@ -1703,7 +1713,7 @@ fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReaso
         String::new(),
         r.probes.iter().map(ScopeDraft::anchored).collect(),
         BTreeMap::new(),
-        None,
+        Some(diagnosis),
     ))
 }
 
@@ -1738,7 +1748,22 @@ fn generic_denial_implies(
         scope.probes.push(lifted);
     }
     let error = scope.probes.iter().map(ScopeDraft::anchored).collect();
-    let items = violated(&scope, not_r);
+    let items = violated(&scope, not_r.clone());
+    let mut chosen_where = l.where_.clone();
+    chosen_where.push(not_r);
+    let choice = Choice {
+        from: from_list(&l),
+        where_: joined(&chosen_where),
+        aliases: Vec::new(),
+    };
+    let entry = l.env.iter().map(|(v, b)| (v.clone(), b.clone())).collect();
+    let diagnosis = diagnostic_level(
+        &conjuncts_of(right),
+        l.env.clone(),
+        entry,
+        Some(choice),
+        ctx,
+    )?;
     let where_ = if scope.laterals.is_empty() {
         format!("({})", items.join(" AND "))
     } else {
@@ -1753,7 +1778,7 @@ fn generic_denial_implies(
         String::new(),
         error,
         BTreeMap::new(),
-        None,
+        Some(diagnosis),
     ))
 }
 
