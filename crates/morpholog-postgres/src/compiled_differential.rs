@@ -2091,14 +2091,12 @@ transformation enable(flag):
 // ============================================================
 
 /// Probe `enable` over `rows` and hold the compiled witness to the
-/// kernel's, then pin which variables the kernel reported, so the state
-/// is known to reach the scope the caller means.
-async fn assert_diagnosis(
+/// kernel's.
+async fn probe_enable(
     pool: &PgPool,
     program: Program,
     rows: &[(&str, Vec<serde_json::Value>)],
-    expected: &[&str],
-) {
+) -> Box<ProbeObservation> {
     reset_db(pool).await;
     for (predicate, values) in rows {
         insert_rows(pool, predicate, values).await;
@@ -2111,6 +2109,18 @@ async fn assert_diagnosis(
         other => panic!("{}", describe(other)),
     };
     governed_contract(&obs).unwrap_or_else(|msg| panic!("{rows:?}: {msg}"));
+    obs
+}
+
+/// [`probe_enable`], then pin which variables the kernel reported, so the
+/// state is known to reach the scope the caller means.
+async fn assert_diagnosis(
+    pool: &PgPool,
+    program: Program,
+    rows: &[(&str, Vec<serde_json::Value>)],
+    expected: &[&str],
+) {
+    let obs = probe_enable(pool, program, rows).await;
     let Some(Outcome::Rejected {
         reason: RejectionReason::Invariant { witness, .. },
     }) = &obs.kernel
@@ -2292,7 +2302,7 @@ transformation enable(flag):
         conjuncts.push(Prop::And(nested));
         // Only `second` reaches `C`; whichever sorts first, the nested
         // conjunction is judged under the first `B` row the kernel meets.
-        assert_diagnosis_any(
+        probe_enable(
             &pool,
             program,
             &[
@@ -2311,28 +2321,6 @@ transformation enable(flag):
             ],
         )
         .await;
-    }
-}
-
-/// [`assert_diagnosis`] without pinning the variables, for a state whose
-/// witness depends on the row order.
-async fn assert_diagnosis_any(
-    pool: &PgPool,
-    program: Program,
-    rows: &[(&str, Vec<serde_json::Value>)],
-) {
-    reset_db(pool).await;
-    for (predicate, values) in rows {
-        insert_rows(pool, predicate, values).await;
-    }
-    let validated = program.validated().expect("validates");
-    let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-    let compiled = CompiledProgram::new(program).expect("compiles");
-    match probe_raw(pool, &compiled, &sql_set, "enable", vec![subj("f")]).await {
-        Ok(Probe::Observed(obs)) => {
-            governed_contract(&obs).unwrap_or_else(|msg| panic!("{rows:?}: {msg}"));
-        }
-        other => panic!("{}", describe(other)),
     }
 }
 
