@@ -1,0 +1,61 @@
+{
+  "applied": true,
+  "dry_run": false,
+  "indexes": [
+    {
+      "action": "repair_invalid",
+      "detail": "an interrupted concurrent build left it invalid",
+      "name": "morpholog_ci_invoice_0_vk1_89abcdef0123",
+      "position": 0,
+      "predicate": "Invoice",
+      "required_by": [
+        "billing"
+      ]
+    },
+    {
+      "action": "keep",
+      "name": "morpholog_ci_journalentry_0_vk1_0123456789ab",
+      "position": 0,
+      "predicate": "JournalEntry",
+      "required_by": [
+        "billing",
+        "ledger",
+        "reporting"
+      ]
+    },
+    {
+      "action": "stale",
+      "detail": "required by no programme; dropped",
+      "name": "morpholog_ci_journalline_1_vk1_456789abcdef",
+      "position": 1,
+      "predicate": "JournalLine",
+      "required_by": []
+    }
+  ],
+  "programs": [
+    {
+      "hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "program": "billing"
+    },
+    {
+      "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "program": "ledger"
+    }
+  ],
+  "prune": true,
+  "required_elsewhere": [
+    {
+      "name": "morpholog_ci_period_2_vk1_cdef01234567",
+      "required_by": [
+        "reporting"
+      ]
+    }
+  ],
+  "statistics": [
+    {
+      "action": "keep",
+      "name": "morpholog_cs_vk1_p0",
+      "position": 0
+    }
+  ]
+}

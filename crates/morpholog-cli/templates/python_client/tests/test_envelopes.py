@@ -273,6 +273,57 @@ class Migrations(unittest.TestCase):
         self.assertEqual([m.version for m in report.unknown], [15])
 
 
+class Provisioning(unittest.TestCase):
+    def test_an_applied_run_and_its_dry_run_differ_only_in_what_they_did(self):
+        applied = envelopes.ProvisionReport.from_json(golden("provision_report_applied.json"))
+        planned = envelopes.ProvisionReport.from_json(golden("provision_report_dry_run.json"))
+        self.assertTrue(applied.applied)
+        self.assertFalse(applied.dry_run)
+        self.assertTrue(planned.dry_run)
+        self.assertFalse(planned.applied)
+        self.assertEqual(applied.indexes, planned.indexes)
+        self.assertEqual(
+            [i.action for i in applied.indexes], ["create", "satisfied_externally"]
+        )
+        self.assertFalse(applied.has_conflict)
+        self.assertEqual(applied.pruned, [])
+
+    def test_a_conflict_is_in_the_report(self):
+        report = envelopes.ProvisionReport.from_json(golden("provision_report_conflict.json"))
+        self.assertTrue(report.has_conflict)
+        self.assertFalse(report.applied)
+        self.assertFalse(report.dry_run)
+        self.assertIn("arguments -> 7", report.indexes[1].detail)
+
+    def test_a_conflict_in_the_statistics_alone_is_a_conflict(self):
+        payload = golden("provision_report_conflict.json")
+        payload["indexes"][1]["action"] = "keep"
+        self.assertTrue(envelopes.ProvisionReport.from_json(payload).has_conflict)
+
+    def test_a_pruning_run_names_what_it_dropped_and_what_others_protect(self):
+        report = envelopes.ProvisionReport.from_json(golden("provision_report_pruned.json"))
+        self.assertEqual([p.program for p in report.programs], ["billing", "ledger"])
+        self.assertEqual(report.pruned, ["morpholog_ci_journalline_1_vk1_456789abcdef"])
+        self.assertEqual(
+            [(r.name, r.required_by) for r in report.required_elsewhere],
+            [("morpholog_ci_period_2_vk1_cdef01234567", ["reporting"])],
+        )
+        self.assertEqual(report.indexes[1].required_by, ["billing", "ledger", "reporting"])
+
+    def test_a_stale_index_is_dropped_only_by_a_run_that_applied_under_prune(self):
+        for change in ({"applied": False, "dry_run": True}, {"prune": False}):
+            payload = golden("provision_report_pruned.json")
+            payload.update(change)
+            self.assertEqual(envelopes.ProvisionReport.from_json(payload).pruned, [])
+
+    def test_an_action_this_client_does_not_know_is_drift(self):
+        for section in ("indexes", "statistics"):
+            payload = golden("provision_report_pruned.json")
+            payload[section][0]["action"] = "rebuild"
+            with self.assertRaises(envelopes.EnvelopeError):
+                envelopes.ProvisionReport.from_json(payload)
+
+
 class Explanations(unittest.TestCase):
     def test_all_four_verdicts(self):
         admissible = envelopes.Explanation.from_json(golden("explanation_admissible.json"))

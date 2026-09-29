@@ -563,31 +563,42 @@ pub(crate) struct EvaluateArgs {
 /// neither.
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum ProvisionCmd {
-    /// Reconcile the indexes a programme's loads and compiled invariants
+    /// Reconcile the indexes the programmes' loads and compiled invariants
     /// seek on, and the statistics that let the planner see each seek is
     /// selective. Prints one line per index with its action - KEEP,
     /// CREATE, REPAIR INVALID, SATISFIED EXTERNALLY, STALE, CONFLICT - and
     /// one per statistics object - KEEP, CREATE, CONFLICT - and exits
     /// non-zero on a conflict, which needs an operator. Builds run
     /// concurrently, so the claims table stays writable throughout.
+    ///
+    /// Name every programme the database serves in one call: the plan is
+    /// their union, a conflict in one applies nothing for any, and
+    /// `--prune` acts once, after all of them are recorded.
     Indexes(ProvisionIndexesArgs),
 }
 
 #[derive(clap::Args, Debug)]
 pub(crate) struct ProvisionIndexesArgs {
-    /// The `.morph` programme whose compiled invariants set the requirement.
-    pub(crate) file: std::path::PathBuf,
+    /// The `.morph` programmes whose loads and compiled invariants set
+    /// the requirement.
+    #[arg(required = true, num_args = 1..)]
+    pub(crate) files: Vec<std::path::PathBuf>,
 
     #[command(flatten)]
     pub(crate) db: DatabaseArgs,
 
-    /// Print the plan and change nothing.
+    /// Plan and change nothing.
     #[arg(long)]
     pub(crate) dry_run: bool,
 
-    /// Also drop managed indexes no programme requires any more.
+    /// Also drop managed indexes no programme requires any more, the
+    /// named programmes and every other the database has recorded.
     #[arg(long)]
     pub(crate) prune: bool,
+
+    /// Emit the report as one JSON object instead of the printed plan.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(clap::Subcommand, Debug)]

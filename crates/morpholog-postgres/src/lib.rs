@@ -80,8 +80,8 @@ pub use compiled::{CompileReason, CompileRefusal};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
 pub use error::PgError;
 pub use indexes::{
-    IndexAction, IndexPlanEntry, ProvisionReport, StatisticsAction, StatisticsPlanEntry,
-    plan_indexes, provision_indexes,
+    IndexAction, IndexPlanEntry, ProvisionReport, ProvisionedProgram, RequiredElsewhere,
+    StatisticsAction, StatisticsPlanEntry, plan_indexes, provision_indexes,
 };
 pub use merkle::{Digest, DigestError};
 pub use migrations::{

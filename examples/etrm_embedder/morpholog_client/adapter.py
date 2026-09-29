@@ -293,6 +293,48 @@ class Morpholog:
             args.append("--check")
         return envelopes.MigrationReport.from_json(self._json(*args))
 
+    def provision_indexes(
+        self,
+        *,
+        dry_run: bool = False,
+        prune: bool = False,
+        with_programs: list[str] | None = None,
+        timeout: float | None = None,
+    ) -> envelopes.ProvisionReport:
+        """Reconcile the indexes and statistics this programme's proposals
+        seek on. Run it on every deploy, after `migrate`.
+
+        `with_programs` names the other `.morph` files this database
+        serves. Name them all in one call: the plan is their union, a
+        conflict in one applies nothing for any, and `prune` acts once,
+        after every programme's requirements are recorded.
+
+        **Needs a connection that owns the schema**, as `migrate` does.
+
+        A conflict makes the binary exit non-zero, but this client reads
+        stdout rather than the exit code, so you get the report either
+        way. Gate on the report:
+
+            report = client.provision_indexes()
+            if report.has_conflict:
+                ...
+
+        ``timeout`` bounds this one call and defaults to unbounded,
+        ignoring the client-wide timeout: an index build over a large
+        table is the legitimate long case. A build cut short leaves an
+        invalid index, which the next run repairs.
+        """
+        args = ["provision", "indexes", self.file, *(with_programs or [])]
+        args.extend(["--database-url", self.database_url, "--json"])
+        if dry_run:
+            args.append("--dry-run")
+        if prune:
+            args.append("--prune")
+        proc = self._run(args, timeout=timeout)
+        if not proc.stdout.strip():
+            raise MorphologError(f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}")
+        return envelopes.ProvisionReport.from_json(json.loads(proc.stdout))
+
     def hash(self) -> envelopes.HashReport:
         return envelopes.HashReport.from_json(self._json("hash", self.file))
 

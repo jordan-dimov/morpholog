@@ -1,0 +1,46 @@
+{
+  "applied": false,
+  "dry_run": false,
+  "indexes": [
+    {
+      "action": "keep",
+      "name": "morpholog_ci_journalentry_0_vk1_0123456789ab",
+      "position": 0,
+      "predicate": "JournalEntry",
+      "required_by": [
+        "ledger"
+      ]
+    },
+    {
+      "action": "conflict",
+      "detail": "the index under this name is defined as (arguments -> 7) where (predicate_name = 'JournalLine'::text), not the specification",
+      "name": "morpholog_ci_journalline_1_vk1_456789abcdef",
+      "position": 1,
+      "predicate": "JournalLine",
+      "required_by": [
+        "ledger"
+      ]
+    }
+  ],
+  "programs": [
+    {
+      "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "program": "ledger"
+    }
+  ],
+  "prune": false,
+  "required_elsewhere": [],
+  "statistics": [
+    {
+      "action": "keep",
+      "name": "morpholog_cs_vk1_p0",
+      "position": 0
+    },
+    {
+      "action": "conflict",
+      "detail": "the statistics under this name differ from Morpholog's: its statistics target is 0",
+      "name": "morpholog_cs_vk1_p1",
+      "position": 1
+    }
+  ]
+}

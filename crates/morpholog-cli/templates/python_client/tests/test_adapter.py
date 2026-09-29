@@ -181,6 +181,52 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertNotIn("--reset", argv)
             self.assertNotIn("--i-know-this-deletes-data", argv)
 
+    def test_provisioning_names_every_programme_and_asks_for_the_envelope(self):
+        self._mode("record_argv_stdout")
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "provision_report_pruned.json").read_text()
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with recording_argv() as argv_after:
+            argv = argv_after(
+                lambda: self.client.provision_indexes(
+                    prune=True, with_programs=["billing.morph"]
+                )
+            )
+            self.assertEqual(
+                argv[:4], ["provision", "indexes", self.client.file, "billing.morph"]
+            )
+            self.assertIn("--json", argv)
+            self.assertIn("--prune", argv)
+            self.assertNotIn("--dry-run", argv)
+
+            argv = argv_after(lambda: self.client.provision_indexes(dry_run=True))
+            self.assertEqual(argv[:3], ["provision", "indexes", self.client.file])
+            self.assertIn("--dry-run", argv)
+            self.assertNotIn("--prune", argv)
+
+    def test_a_provisioning_conflict_is_a_report_not_a_raise(self):
+        # The binary exits non-zero on a conflict with the report already
+        # on stdout. A raise would throw away which index conflicts.
+        self._export_stdout((GOLDEN_DIR / "provision_report_conflict.json").read_text(), 1)
+        report = self.client.provision_indexes()
+        self.assertTrue(report.has_conflict)
+        self.assertFalse(report.applied)
+
+    def test_provisioning_with_nothing_on_stdout_is_operational(self):
+        self._mode("operational_failure")
+        with self.assertRaises(MorphologError) as caught:
+            self.client.provision_indexes()
+        self.assertIn("failed to connect", str(caught.exception))
+
+    def test_an_index_build_is_not_bounded_by_the_client_wide_timeout(self):
+        self._export_stdout((GOLDEN_DIR / "provision_report_applied.json").read_text(), 0)
+        hurried = Morpholog(
+            self.client.file, self.client.database_url, binary=self.client.binary, timeout=1e-9
+        )
+        self.assertTrue(hurried.provision_indexes().applied)
+        self._mode("hang")
+        with self.assertRaises(MorphologTimeout):
+            hurried.provision_indexes(timeout=0.5)
+
     def test_empty_stdout_on_a_read_is_operational_and_on_a_proposal_is_unknown(self):
         self._mode("operational_failure")
         with self.assertRaises(MorphologError) as read:

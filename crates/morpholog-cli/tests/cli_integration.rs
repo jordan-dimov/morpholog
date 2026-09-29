@@ -4425,3 +4425,197 @@ async fn a_pack_larger_than_the_verifiers_memory_still_verifies() {
     );
     assert_eq!(pack_verdict(&stdout)["status"], "intact", "{stdout}");
 }
+
+// ============================================================
+// `provision indexes --json` - the report as an envelope
+// ============================================================
+
+fn example(path: &str) -> String {
+    common::repo_root()
+        .join("examples")
+        .join(path)
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+fn provision_report(stdout: &str) -> Value {
+    let report: Value = serde_json::from_str(stdout)
+        .unwrap_or_else(|e| panic!("one JSON object on stdout ({e}): {stdout:?}"));
+    let mut keys: Vec<&str> = report
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "applied",
+            "dry_run",
+            "indexes",
+            "programs",
+            "prune",
+            "required_elsewhere",
+            "statistics"
+        ]
+    );
+    report
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn provision_indexes_reports_the_same_bytes_whatever_order_the_programmes_are_named_in() {
+    reset_db().await;
+    let ledger = example("03_double_entry_ledger/ledger.morph");
+    let approvals = example("04_approval_controls/approval_controls.morph");
+
+    let (status, planned, stderr) = run_cli(&[
+        "provision",
+        "indexes",
+        &ledger,
+        &approvals,
+        "--dry-run",
+        "--json",
+    ]);
+    assert!(status.success(), "{stderr}");
+    let (status, reversed, stderr) = run_cli(&[
+        "provision",
+        "indexes",
+        &approvals,
+        &ledger,
+        "--dry-run",
+        "--json",
+    ]);
+    assert!(status.success(), "{stderr}");
+    assert_eq!(planned, reversed);
+
+    let report = provision_report(&planned);
+    assert_eq!(report["dry_run"], true);
+    assert_eq!(report["applied"], false);
+    let programs: Vec<&str> = report["programs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["program"].as_str().unwrap())
+        .collect();
+    assert_eq!(programs, ["approval_controls", "double_entry_ledger"]);
+    let indexes = report["indexes"].as_array().unwrap();
+    assert!(indexes.iter().all(|i| i["action"] == "create"), "{planned}");
+    let names: Vec<&str> = indexes
+        .iter()
+        .map(|i| i["name"].as_str().unwrap())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    assert_eq!(names, sorted, "indexes come by name");
+    for owner in programs {
+        assert!(
+            indexes
+                .iter()
+                .any(|i| i["required_by"] == serde_json::json!([owner])),
+            "{owner} requires an index of its own: {planned}"
+        );
+    }
+
+    // Applying in either order reaches the plan, and then keeps.
+    let (status, applied, stderr) =
+        run_cli(&["provision", "indexes", &approvals, &ledger, "--json"]);
+    assert!(status.success(), "{stderr}");
+    let applied = provision_report(&applied);
+    assert_eq!(applied["applied"], true);
+    assert_eq!(applied["indexes"], report["indexes"]);
+    let (_, kept, _) = run_cli(&["provision", "indexes", &ledger, &approvals, "--json"]);
+    assert!(
+        provision_report(&kept)["indexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["action"] == "keep"),
+        "{kept}"
+    );
+    reset_db().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn provision_indexes_reports_a_conflict_on_stdout_and_exits_non_zero() {
+    reset_db().await;
+    let ledger = example("03_double_entry_ledger/ledger.morph");
+    let approvals = example("04_approval_controls/approval_controls.morph");
+    let (_, planned, _) = run_cli(&["provision", "indexes", &ledger, "--dry-run", "--json"]);
+    let taken = provision_report(&planned)["indexes"][0]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE INDEX \"{taken}\" ON morpholog.claims USING btree ((arguments -> 7))"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let (status, stdout, stderr) =
+        run_cli(&["provision", "indexes", &approvals, &ledger, "--json"]);
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains(&taken), "the conflict is named: {stderr}");
+    let report = provision_report(&stdout);
+    assert_eq!(report["applied"], false);
+    assert_eq!(report["dry_run"], false);
+    let conflicts: Vec<&Value> = report["indexes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["action"] == "conflict")
+        .collect();
+    assert_eq!(conflicts.len(), 1, "{stdout}");
+    assert_eq!(conflicts[0]["name"], taken.as_str());
+    let built: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_indexes
+         WHERE schemaname = 'morpholog' AND indexname LIKE 'morpholog\\_ci\\_%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(built, 1, "nothing was built for either programme");
+    reset_db().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn provision_indexes_json_keeps_stdout_for_the_report() {
+    reset_db().await;
+    let ledger = example("03_double_entry_ledger/ledger.morph");
+
+    // The same programme twice: refused, nothing on stdout, nothing built.
+    let (status, stdout, stderr) = run_cli(&["provision", "indexes", &ledger, &ledger, "--json"]);
+    assert!(!status.success());
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("both named `double_entry_ledger`"),
+        "{stderr}"
+    );
+
+    // A file that does not parse stops the call before the database.
+    let broken = common::write_fixture("broken", "invariant without a body\n");
+    let (status, stdout, stderr) = run_cli(&[
+        "provision",
+        "indexes",
+        &ledger,
+        broken.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(!status.success());
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(!stderr.is_empty());
+
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    let recorded: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM morpholog.index_requirement)
+              + (SELECT count(*) FROM pg_indexes
+                 WHERE schemaname = 'morpholog' AND indexname LIKE 'morpholog\\_ci\\_%')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(recorded, 0, "neither refusal changed anything");
+}
