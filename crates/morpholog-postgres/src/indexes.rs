@@ -36,7 +36,7 @@ use morpholog_core::format::canonical_hash;
 use sqlx::Row as _;
 
 use crate::PgPool;
-use crate::compiled::IndexSpec;
+use crate::compiled::{IndexSpec, StatisticsSpec};
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::program::PgProgram;
 use crate::sql_quote::quote_ident;
@@ -85,11 +85,46 @@ pub struct IndexPlanEntry {
     pub detail: String,
 }
 
+/// What reconciling one statistics object does. Statistics are never
+/// pruned: a requirement an operator's own index satisfies records no
+/// position, so nothing can yet say that no programme needs one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StatisticsAction {
+    Keep,
+    Create,
+    Conflict,
+}
+
+impl fmt::Display for StatisticsAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            StatisticsAction::Keep => "KEEP",
+            StatisticsAction::Create => "CREATE",
+            StatisticsAction::Conflict => "CONFLICT",
+        })
+    }
+}
+
+/// Statistics on one position's seek expression, across the claims
+/// table: what lets the planner see that a seek on a partial index is
+/// selective.
+#[derive(Debug, Clone)]
+pub struct StatisticsPlanEntry {
+    pub action: StatisticsAction,
+    pub statistics_name: String,
+    pub position: usize,
+    pub expression_sql: String,
+    /// What a conflict differs in; empty otherwise.
+    pub detail: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProvisionReport {
     pub program_identity: String,
     pub program_hash: String,
     pub entries: Vec<IndexPlanEntry>,
+    pub statistics: Vec<StatisticsPlanEntry>,
     /// Whether the plan was executed: false for a dry run, and false when
     /// a conflict made the run apply nothing.
     pub applied: bool,
@@ -102,6 +137,10 @@ impl ProvisionReport {
         self.entries
             .iter()
             .any(|e| e.action == IndexAction::Conflict)
+            || self
+                .statistics
+                .iter()
+                .any(|s| s.action == StatisticsAction::Conflict)
     }
 }
 
@@ -246,6 +285,136 @@ fn classify_spec(
     (IndexAction::Create, String::new())
 }
 
+/// A statistics object on the claims table as the catalogue describes it,
+/// looked up by name in Morpholog's own schema only.
+struct CatalogueStatistics {
+    on_claims: bool,
+    /// The plain columns it also covers, by name; none for ours.
+    columns: Option<String>,
+    /// The statistics kinds, as PostgreSQL spells the array: `{e}` for
+    /// expression statistics alone.
+    kinds: String,
+    /// An explicit statistics target; none means the default. A target of
+    /// zero collects nothing, so an altered target is never ours.
+    target: Option<i32>,
+    expressions: Option<Vec<String>>,
+}
+
+async fn catalogue_statistics(
+    conn: &mut sqlx::PgConnection,
+    name: &str,
+) -> Result<Option<CatalogueStatistics>, PgError> {
+    let row = sqlx::query!(
+        r#"SELECT s.stxrelid = 'morpholog.claims'::regclass AS "on_claims!",
+                  (SELECT string_agg(a.attname::text, ', ' ORDER BY a.attnum)
+                   FROM pg_attribute a
+                   WHERE a.attrelid = s.stxrelid AND a.attnum = ANY(s.stxkeys)) AS "columns?",
+                  s.stxkind::text AS "kinds!",
+                  s.stxstattarget::integer AS "target?",
+                  pg_get_statisticsobjdef_expressions(s.oid) AS "expressions?"
+           FROM pg_statistic_ext s
+           WHERE s.stxnamespace = 'morpholog'::regnamespace AND s.stxname = $1"#,
+        name
+    )
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(row.map(|r| CatalogueStatistics {
+        on_claims: r.on_claims,
+        columns: r.columns,
+        kinds: r.kinds,
+        target: r.target,
+        expressions: r.expressions,
+    }))
+}
+
+/// A statistics specification's expression as PostgreSQL renders it, from
+/// a probe on a temporary copy of the claims table in a rolled-back
+/// transaction, as the indexes are normalised.
+async fn normalise_statistics(
+    conn: &mut sqlx::PgConnection,
+    spec: &StatisticsSpec,
+) -> Result<Option<Vec<String>>, PgError> {
+    sqlx::raw_sql("BEGIN")
+        .execute(&mut *conn)
+        .await
+        .map_err(classify)?;
+    let result: Result<Option<Vec<String>>, PgError> = async {
+        sqlx::raw_sql(
+            "CREATE TEMP TABLE morpholog_index_probe (LIKE morpholog.claims) ON COMMIT DROP",
+        )
+        .execute(&mut *conn)
+        .await
+        .map_err(classify)?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE STATISTICS pg_temp.morpholog_statistics_probe ON ({}) FROM morpholog_index_probe",
+            spec.expression_sql()
+        )))
+        .execute(&mut *conn)
+        .await
+        .map_err(classify)?;
+        let row = sqlx::query(
+            "SELECT pg_get_statisticsobjdef_expressions(oid) FROM pg_statistic_ext
+             WHERE stxname = 'morpholog_statistics_probe' AND stxnamespace = pg_my_temp_schema()",
+        )
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(classify)?;
+        Ok(row.get(0))
+    }
+    .await;
+    sqlx::raw_sql("ROLLBACK")
+        .execute(&mut *conn)
+        .await
+        .map_err(classify)?;
+    result
+}
+
+fn classify_statistics(
+    name: &str,
+    normalised: &Option<Vec<String>>,
+    existing: Option<&CatalogueStatistics>,
+) -> (StatisticsAction, String) {
+    let Some(ours) = existing else {
+        return (StatisticsAction::Create, String::new());
+    };
+    let listed = |expressions: &Option<Vec<String>>| {
+        expressions
+            .as_ref()
+            .map_or_else(|| "no expressions".to_string(), |e| e.join(", "))
+    };
+    let mut differences = Vec::new();
+    if !ours.on_claims {
+        differences.push("it is on another table".to_string());
+    }
+    if &ours.expressions != normalised {
+        differences.push(format!("it covers {}", listed(&ours.expressions)));
+    }
+    if let Some(columns) = &ours.columns {
+        differences.push(format!("it also covers the columns {columns}"));
+    }
+    if ours.kinds != "{e}" {
+        differences.push(format!("its statistics kinds are {}", ours.kinds));
+    }
+    if let Some(target) = ours.target {
+        differences.push(format!(
+            "its statistics target is {target}, which `ALTER STATISTICS morpholog.{} SET STATISTICS DEFAULT` restores",
+            quote_ident(name)
+        ));
+    }
+    if differences.is_empty() {
+        return (StatisticsAction::Keep, String::new());
+    }
+    (
+        StatisticsAction::Conflict,
+        format!(
+            "the statistics under this name differ from Morpholog's ({} on morpholog.claims, default target): {}",
+            listed(normalised),
+            differences.join("; ")
+        ),
+    )
+}
+
 async fn reconcile(
     pool: &PgPool,
     program: &PgProgram,
@@ -307,6 +476,20 @@ async fn reconcile_locked(
     prune: bool,
 ) -> Result<ProvisionReport, PgError> {
     let catalogue = catalogue(conn).await?;
+    let statistics_specs = StatisticsSpec::for_indexes(specs);
+    let mut statistics = Vec::with_capacity(statistics_specs.len());
+    for spec in &statistics_specs {
+        let normalised = normalise_statistics(conn, spec).await?;
+        let existing = catalogue_statistics(conn, &spec.name()).await?;
+        let (action, detail) = classify_statistics(&spec.name(), &normalised, existing.as_ref());
+        statistics.push(StatisticsPlanEntry {
+            action,
+            statistics_name: spec.name(),
+            position: spec.position,
+            expression_sql: spec.expression_sql(),
+            detail,
+        });
+    }
     let mut entries = Vec::with_capacity(specs.len());
     for spec in specs {
         let normalised = normalise(conn, spec).await?;
@@ -327,7 +510,11 @@ async fn reconcile_locked(
     // from the specification. Reconciling around it would drop this
     // programme's requirement, and a later prune could then drop the
     // operator's index as stale. Nothing is applied; the report says why.
-    let applied = apply && !entries.iter().any(|e| e.action == IndexAction::Conflict);
+    let applied = apply
+        && !entries.iter().any(|e| e.action == IndexAction::Conflict)
+        && !statistics
+            .iter()
+            .any(|s| s.action == StatisticsAction::Conflict);
     if applied {
         for (spec, entry) in specs.iter().zip(&entries) {
             match entry.action {
@@ -348,6 +535,14 @@ async fn reconcile_locked(
                 | IndexAction::SatisfiedExternally
                 | IndexAction::Conflict
                 | IndexAction::Stale => {}
+            }
+        }
+        for (spec, entry) in statistics_specs.iter().zip(&statistics) {
+            if entry.action == StatisticsAction::Create {
+                sqlx::raw_sql(sqlx::AssertSqlSafe(spec.create_sql()))
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(classify)?;
             }
         }
         // Statistics over an expression index exist only from the first
@@ -475,6 +670,7 @@ async fn reconcile_locked(
         program_identity: program_identity.to_string(),
         program_hash: program_hash.to_string(),
         entries,
+        statistics,
         applied,
         pruned,
     })

@@ -27,6 +27,11 @@ BEGIN
     LOOP
         EXECUTE format('DROP INDEX morpholog.%I', ix);
     END LOOP;
+    FOR ix IN SELECT stxname FROM pg_statistic_ext
+               WHERE stxnamespace = 'morpholog'::regnamespace AND stxname LIKE 'morpholog\\_cs\\_%'
+    LOOP
+        EXECUTE format('DROP STATISTICS morpholog.%I', ix);
+    END LOOP;
 END $$";
 
 /// Always returns [`DeliveryOutcome::Delivered`].

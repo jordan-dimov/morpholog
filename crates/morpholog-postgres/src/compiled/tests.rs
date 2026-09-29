@@ -841,3 +841,27 @@ LIMIT 1"#
         ]
     );
 }
+
+/// Indexes are per predicate and position; their statistics are per
+/// position across the table. Two predicates seeking at one position share
+/// one statistics object, and another position adds another.
+#[test]
+fn statistics_are_one_per_position_across_predicates() {
+    let a0 = IndexSpec::new("A".into(), 0);
+    let b0 = IndexSpec::new("B".into(), 0);
+    let a1 = IndexSpec::new("A".into(), 1);
+    let names = |specs: &[IndexSpec]| -> Vec<String> {
+        StatisticsSpec::for_indexes(specs)
+            .iter()
+            .map(StatisticsSpec::name)
+            .collect()
+    };
+    assert_eq!(
+        names(&[a0.clone(), b0.clone()]),
+        vec!["morpholog_cs_vk1_p0"]
+    );
+    assert_eq!(
+        names(&[a0, b0, a1]),
+        vec!["morpholog_cs_vk1_p0", "morpholog_cs_vk1_p1"]
+    );
+}

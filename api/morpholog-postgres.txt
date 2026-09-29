@@ -657,6 +657,29 @@ impl core::marker::Unpin for morpholog_postgres::SplitBoundary
 impl core::marker::UnsafeUnpin for morpholog_postgres::SplitBoundary
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::SplitBoundary
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::SplitBoundary
+#[non_exhaustive] pub enum morpholog_postgres::StatisticsAction
+pub morpholog_postgres::StatisticsAction::Conflict
+pub morpholog_postgres::StatisticsAction::Create
+pub morpholog_postgres::StatisticsAction::Keep
+impl core::clone::Clone for morpholog_postgres::StatisticsAction
+pub fn morpholog_postgres::StatisticsAction::clone(&self) -> morpholog_postgres::StatisticsAction
+impl core::clone::TrivialClone for morpholog_postgres::StatisticsAction
+impl core::cmp::Eq for morpholog_postgres::StatisticsAction
+impl core::cmp::PartialEq for morpholog_postgres::StatisticsAction
+pub fn morpholog_postgres::StatisticsAction::eq(&self, &morpholog_postgres::StatisticsAction) -> bool
+impl core::fmt::Debug for morpholog_postgres::StatisticsAction
+pub fn morpholog_postgres::StatisticsAction::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for morpholog_postgres::StatisticsAction
+pub fn morpholog_postgres::StatisticsAction::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_postgres::StatisticsAction
+impl core::marker::StructuralPartialEq for morpholog_postgres::StatisticsAction
+impl core::marker::Freeze for morpholog_postgres::StatisticsAction
+impl core::marker::Send for morpholog_postgres::StatisticsAction
+impl core::marker::Sync for morpholog_postgres::StatisticsAction
+impl core::marker::Unpin for morpholog_postgres::StatisticsAction
+impl core::marker::UnsafeUnpin for morpholog_postgres::StatisticsAction
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::StatisticsAction
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::StatisticsAction
 pub enum morpholog_postgres::TreeVerification
 pub morpholog_postgres::TreeVerification::AnchorMismatch
 pub morpholog_postgres::TreeVerification::AnchorMismatch::anchor_checkpoint_hash: morpholog_postgres::Digest
@@ -1433,6 +1456,7 @@ pub morpholog_postgres::ProvisionReport::entries: alloc::vec::Vec<morpholog_post
 pub morpholog_postgres::ProvisionReport::program_hash: alloc::string::String
 pub morpholog_postgres::ProvisionReport::program_identity: alloc::string::String
 pub morpholog_postgres::ProvisionReport::pruned: alloc::vec::Vec<alloc::string::String>
+pub morpholog_postgres::ProvisionReport::statistics: alloc::vec::Vec<morpholog_postgres::StatisticsPlanEntry>
 impl morpholog_postgres::ProvisionReport
 pub fn morpholog_postgres::ProvisionReport::has_conflict(&self) -> bool
 impl core::clone::Clone for morpholog_postgres::ProvisionReport
@@ -1652,6 +1676,23 @@ impl core::marker::Unpin for morpholog_postgres::SignaturePolicy
 impl core::marker::UnsafeUnpin for morpholog_postgres::SignaturePolicy
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::SignaturePolicy
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::SignaturePolicy
+pub struct morpholog_postgres::StatisticsPlanEntry
+pub morpholog_postgres::StatisticsPlanEntry::action: morpholog_postgres::StatisticsAction
+pub morpholog_postgres::StatisticsPlanEntry::detail: alloc::string::String
+pub morpholog_postgres::StatisticsPlanEntry::expression_sql: alloc::string::String
+pub morpholog_postgres::StatisticsPlanEntry::position: usize
+pub morpholog_postgres::StatisticsPlanEntry::statistics_name: alloc::string::String
+impl core::clone::Clone for morpholog_postgres::StatisticsPlanEntry
+pub fn morpholog_postgres::StatisticsPlanEntry::clone(&self) -> morpholog_postgres::StatisticsPlanEntry
+impl core::fmt::Debug for morpholog_postgres::StatisticsPlanEntry
+pub fn morpholog_postgres::StatisticsPlanEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for morpholog_postgres::StatisticsPlanEntry
+impl core::marker::Send for morpholog_postgres::StatisticsPlanEntry
+impl core::marker::Sync for morpholog_postgres::StatisticsPlanEntry
+impl core::marker::Unpin for morpholog_postgres::StatisticsPlanEntry
+impl core::marker::UnsafeUnpin for morpholog_postgres::StatisticsPlanEntry
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::StatisticsPlanEntry
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::StatisticsPlanEntry
 pub struct morpholog_postgres::TimedProposalOutcome
 pub morpholog_postgres::TimedProposalOutcome::outcome: morpholog_postgres::PgProposalOutcome
 pub morpholog_postgres::TimedProposalOutcome::phases: morpholog_postgres::ProposalPhases
