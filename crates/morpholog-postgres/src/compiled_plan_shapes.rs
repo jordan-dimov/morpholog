@@ -329,8 +329,10 @@ async fn the_planner_chooses_the_provisioned_indexes_on_a_populated_ledger() {
     reset(&pool).await;
     let program = morpholog_examples::double_entry_ledger::program();
     let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
-    provision_indexes(&pool, &pg, false).await.unwrap();
+    // Populated first, then provisioned, as a deployment upgrades: the
+    // statistics must come from provisioning's own ANALYZE.
     populate_ledger(&pool, POPULATED).await;
+    provision_indexes(&pool, &pg, false).await.unwrap();
     assert_required_indexes_used(&pool, &program, true).await;
 }
 
@@ -343,7 +345,6 @@ async fn a_case_index_is_still_chosen_where_another_predicate_crowds_the_key() {
     reset(&pool).await;
     let program = morpholog_examples::double_entry_ledger::program();
     let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
-    provision_indexes(&pool, &pg, false).await.unwrap();
     sqlx::query(
         "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
          SELECT 'Crowd',
@@ -359,6 +360,7 @@ async fn a_case_index_is_still_chosen_where_another_predicate_crowds_the_key() {
     .await
     .unwrap();
     populate_ledger(&pool, POPULATED).await;
+    provision_indexes(&pool, &pg, false).await.unwrap();
     assert_required_indexes_used(&pool, &program, true).await;
 }
 

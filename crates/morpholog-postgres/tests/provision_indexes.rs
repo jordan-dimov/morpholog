@@ -680,3 +680,78 @@ async fn statistics_of_the_same_name_in_another_schema_are_not_ours() {
         "{report:?}"
     );
 }
+
+/// Attacker capability modelled: an operator with DDL on the claims table
+/// who altered the statistics target of Morpholog's object. A target of
+/// zero collects nothing, so an altered target is a conflict naming the
+/// remedy, and restoring the default is kept again.
+#[tokio::test]
+async fn an_altered_statistics_target_is_a_conflict_until_restored() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    provision_indexes(&pool, &ledger(), false).await.unwrap();
+    sqlx::raw_sql("ALTER STATISTICS morpholog.morpholog_cs_vk1_p0 SET STATISTICS 0")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let report = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    assert!(!report.applied);
+    let entry = report
+        .statistics
+        .iter()
+        .find(|s| s.statistics_name == "morpholog_cs_vk1_p0")
+        .unwrap();
+    assert_eq!(entry.action, StatisticsAction::Conflict);
+    assert!(
+        entry.detail.contains("statistics target is 0")
+            && entry.detail.contains("SET STATISTICS DEFAULT"),
+        "{}",
+        entry.detail
+    );
+    sqlx::raw_sql("ALTER STATISTICS morpholog.morpholog_cs_vk1_p0 SET STATISTICS DEFAULT")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let restored = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    assert!(restored.applied, "{restored:?}");
+}
+
+/// A same-named object over the right expression that also covers a
+/// column is not Morpholog's, and the conflict says what differs.
+#[tokio::test]
+async fn statistics_with_an_extra_column_conflict_and_name_it() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    let plan = plan_indexes(&pool, &ledger()).await.unwrap();
+    let expression = plan
+        .statistics
+        .iter()
+        .find(|s| s.statistics_name == "morpholog_cs_vk1_p0")
+        .unwrap()
+        .expression_sql
+        .clone();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE STATISTICS morpholog.morpholog_cs_vk1_p0 ON predicate_name, ({expression}) FROM morpholog.claims"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let report = provision_indexes(&pool, &ledger(), false).await.unwrap();
+    assert!(!report.applied);
+    let entry = report
+        .statistics
+        .iter()
+        .find(|s| s.statistics_name == "morpholog_cs_vk1_p0")
+        .unwrap();
+    assert_eq!(entry.action, StatisticsAction::Conflict);
+    assert!(
+        entry
+            .detail
+            .contains("also covers the columns predicate_name")
+            && !entry.detail.contains("it covers"),
+        "{}",
+        entry.detail
+    );
+}

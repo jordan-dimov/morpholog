@@ -1,0 +1,51 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.stxrelid = 'morpholog.claims'::regclass AS \"on_claims!\",\n                  (SELECT string_agg(a.attname::text, ', ' ORDER BY a.attnum)\n                   FROM pg_attribute a\n                   WHERE a.attrelid = s.stxrelid AND a.attnum = ANY(s.stxkeys)) AS \"columns?\",\n                  s.stxkind::text AS \"kinds!\",\n                  s.stxstattarget::integer AS \"target?\",\n                  pg_get_statisticsobjdef_expressions(s.oid) AS \"expressions?\"\n           FROM pg_statistic_ext s\n           WHERE s.stxnamespace = 'morpholog'::regnamespace AND s.stxname = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "on_claims!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "columns?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "kinds!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "target?",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "expressions?",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Name"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "bcfe2e2a99c92d42dd66d2402c55025dbffb1b8f52c971750979edacb73ea63e"
+}

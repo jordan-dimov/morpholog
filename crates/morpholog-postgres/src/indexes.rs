@@ -89,6 +89,7 @@ pub struct IndexPlanEntry {
 /// pruned: a requirement an operator's own index satisfies records no
 /// position, so nothing can yet say that no programme needs one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StatisticsAction {
     Keep,
     Create,
@@ -288,8 +289,14 @@ fn classify_spec(
 /// looked up by name in Morpholog's own schema only.
 struct CatalogueStatistics {
     on_claims: bool,
-    /// Over expressions alone, not columns, and of the expression kind.
-    expressions_only: bool,
+    /// The plain columns it also covers, by name; none for ours.
+    columns: Option<String>,
+    /// The statistics kinds, as PostgreSQL spells the array: `{e}` for
+    /// expression statistics alone.
+    kinds: String,
+    /// An explicit statistics target; none means the default. A target of
+    /// zero collects nothing, so an altered target is never ours.
+    target: Option<i32>,
     expressions: Option<Vec<String>>,
 }
 
@@ -299,7 +306,11 @@ async fn catalogue_statistics(
 ) -> Result<Option<CatalogueStatistics>, PgError> {
     let row = sqlx::query!(
         r#"SELECT s.stxrelid = 'morpholog.claims'::regclass AS "on_claims!",
-                  (s.stxkeys::text = '' AND s.stxkind = ARRAY['e'::"char"]) AS "expressions_only!",
+                  (SELECT string_agg(a.attname::text, ', ' ORDER BY a.attnum)
+                   FROM pg_attribute a
+                   WHERE a.attrelid = s.stxrelid AND a.attnum = ANY(s.stxkeys)) AS "columns?",
+                  s.stxkind::text AS "kinds!",
+                  s.stxstattarget::integer AS "target?",
                   pg_get_statisticsobjdef_expressions(s.oid) AS "expressions?"
            FROM pg_statistic_ext s
            WHERE s.stxnamespace = 'morpholog'::regnamespace AND s.stxname = $1"#,
@@ -310,7 +321,9 @@ async fn catalogue_statistics(
     .map_err(classify_checked_query)?;
     Ok(row.map(|r| CatalogueStatistics {
         on_claims: r.on_claims,
-        expressions_only: r.expressions_only,
+        columns: r.columns,
+        kinds: r.kinds,
+        target: r.target,
         expressions: r.expressions,
     }))
 }
@@ -358,34 +371,48 @@ async fn normalise_statistics(
 }
 
 fn classify_statistics(
+    name: &str,
     normalised: &Option<Vec<String>>,
     existing: Option<&CatalogueStatistics>,
 ) -> (StatisticsAction, String) {
-    match existing {
-        None => (StatisticsAction::Create, String::new()),
-        Some(ours)
-            if ours.on_claims && ours.expressions_only && &ours.expressions == normalised =>
-        {
-            (StatisticsAction::Keep, String::new())
-        }
-        Some(ours) => (
-            StatisticsAction::Conflict,
-            format!(
-                "the statistics under this name cover {}{}, not {} on morpholog.claims",
-                ours.expressions
-                    .as_ref()
-                    .map_or_else(|| "<no expressions>".to_string(), |e| e.join(", ")),
-                if ours.on_claims {
-                    ""
-                } else {
-                    " on another table"
-                },
-                normalised
-                    .as_ref()
-                    .map_or_else(|| "<no expressions>".to_string(), |e| e.join(", "))
-            ),
-        ),
+    let Some(ours) = existing else {
+        return (StatisticsAction::Create, String::new());
+    };
+    let listed = |expressions: &Option<Vec<String>>| {
+        expressions
+            .as_ref()
+            .map_or_else(|| "no expressions".to_string(), |e| e.join(", "))
+    };
+    let mut differences = Vec::new();
+    if !ours.on_claims {
+        differences.push("it is on another table".to_string());
     }
+    if &ours.expressions != normalised {
+        differences.push(format!("it covers {}", listed(&ours.expressions)));
+    }
+    if let Some(columns) = &ours.columns {
+        differences.push(format!("it also covers the columns {columns}"));
+    }
+    if ours.kinds != "{e}" {
+        differences.push(format!("its statistics kinds are {}", ours.kinds));
+    }
+    if let Some(target) = ours.target {
+        differences.push(format!(
+            "its statistics target is {target}, which `ALTER STATISTICS morpholog.{} SET STATISTICS DEFAULT` restores",
+            quote_ident(name)
+        ));
+    }
+    if differences.is_empty() {
+        return (StatisticsAction::Keep, String::new());
+    }
+    (
+        StatisticsAction::Conflict,
+        format!(
+            "the statistics under this name differ from Morpholog's ({} on morpholog.claims, default target): {}",
+            listed(normalised),
+            differences.join("; ")
+        ),
+    )
 }
 
 async fn reconcile(
@@ -454,7 +481,7 @@ async fn reconcile_locked(
     for spec in &statistics_specs {
         let normalised = normalise_statistics(conn, spec).await?;
         let existing = catalogue_statistics(conn, &spec.name()).await?;
-        let (action, detail) = classify_statistics(&normalised, existing.as_ref());
+        let (action, detail) = classify_statistics(&spec.name(), &normalised, existing.as_ref());
         statistics.push(StatisticsPlanEntry {
             action,
             statistics_name: spec.name(),

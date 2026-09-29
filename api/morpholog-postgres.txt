@@ -657,7 +657,7 @@ impl core::marker::Unpin for morpholog_postgres::SplitBoundary
 impl core::marker::UnsafeUnpin for morpholog_postgres::SplitBoundary
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::SplitBoundary
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::SplitBoundary
-pub enum morpholog_postgres::StatisticsAction
+#[non_exhaustive] pub enum morpholog_postgres::StatisticsAction
 pub morpholog_postgres::StatisticsAction::Conflict
 pub morpholog_postgres::StatisticsAction::Create
 pub morpholog_postgres::StatisticsAction::Keep
