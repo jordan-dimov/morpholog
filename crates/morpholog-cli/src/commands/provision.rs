@@ -5,7 +5,8 @@
 
 use anyhow::bail;
 use morpholog_postgres::{
-    IndexAction, PgProgram, ProvisionReport, StatisticsAction, plan_indexes, provision_indexes,
+    IndexAction, PgProgram, ProvisionReport, StatisticsAction, check_named_programs, plan_indexes,
+    provision_indexes,
 };
 
 use crate::ProvisionIndexesArgs;
@@ -19,6 +20,8 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
         programs.push(PgProgram::new(compile_or_report(&parsed)?));
     }
     let programs: Vec<&PgProgram> = programs.iter().collect();
+    // A usage error should not need a database to be reported.
+    check_named_programs(&programs)?;
     let pool = connect(&args.db.database_url).await?;
     let report = if args.dry_run {
         plan_indexes(&pool, &programs, args.prune).await?

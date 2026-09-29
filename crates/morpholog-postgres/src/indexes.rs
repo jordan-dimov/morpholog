@@ -173,6 +173,24 @@ impl ProvisionReport {
     }
 }
 
+/// Whether a call may name these programmes: at least one, and no name
+/// twice. A requirement set is kept per name, so the second of two
+/// programmes under one name would replace the first's. Needs no database,
+/// so a caller can ask before connecting; both entry points ask it too.
+pub fn check_named_programs(programs: &[&PgProgram]) -> Result<(), PgError> {
+    if programs.is_empty() {
+        return Err(PgError::NoProgramNamed);
+    }
+    let mut seen = BTreeSet::new();
+    for program in programs {
+        let name = program.core().program().name.to_string();
+        if !seen.insert(name.clone()) {
+            return Err(PgError::ProgramNamedTwice(name));
+        }
+    }
+    Ok(())
+}
+
 /// Plan the reconciliation of the programmes' union and change nothing;
 /// `prune` is what the plan is for, so the stale entries say what an
 /// applying run would drop.
@@ -464,9 +482,7 @@ async fn reconcile(
     apply: bool,
     prune: bool,
 ) -> Result<ProvisionReport, PgError> {
-    if programs.is_empty() {
-        return Err(PgError::NoProgramNamed);
-    }
+    check_named_programs(programs)?;
     let mut named: Vec<Named> = programs
         .iter()
         .map(|program| Named {
@@ -476,11 +492,6 @@ async fn reconcile(
         })
         .collect();
     named.sort_by(|a, b| a.identity.cmp(&b.identity));
-    // A requirement set is kept per identity, so the second of two
-    // programmes under one identity would replace the first's.
-    if let Some(pair) = named.windows(2).find(|w| w[0].identity == w[1].identity) {
-        return Err(PgError::ProgramNamedTwice(pair[0].identity.clone()));
-    }
 
     // The lock holder also runs the DDL: concurrent builds cannot run
     // inside a transaction, and the lock keeps provisioning single-writer.

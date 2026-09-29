@@ -1952,6 +1952,7 @@ pub async fn morpholog_postgres::audit_resume_watermark(&sqlx_postgres::PgPool, 
 pub async fn morpholog_postgres::begin_audit_tail<'p>(&'p sqlx_postgres::PgPool, core::option::Option<uuid::Uuid>, core::option::Option<&[alloc::string::String]>) -> core::result::Result<morpholog_postgres::AuditTail<'p>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::begin_compensation(&sqlx_postgres::PgPool, uuid::Uuid, &str, core::time::Duration) -> core::result::Result<core::option::Option<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::begin_prefix_export(&sqlx_postgres::PgPool, core::option::Option<i64>) -> core::result::Result<morpholog_postgres::PrefixExport<'_>, morpholog_postgres::PgError>
+pub fn morpholog_postgres::check_named_programs(&[&morpholog_postgres::PgProgram]) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::claim_pending_outbox_row(&sqlx_postgres::PgPool, &str, &str, core::time::Duration, jiff::timestamp::Timestamp) -> core::result::Result<core::option::Option<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::complete_compensation(&sqlx_postgres::PgPool, uuid::Uuid, &str, uuid::Uuid) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub fn morpholog_postgres::compute_idempotency_key(uuid::Uuid, &morpholog_core::state::IntentInstance) -> core::result::Result<alloc::string::String, serde_json::error::Error>

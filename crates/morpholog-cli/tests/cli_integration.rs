@@ -4595,6 +4595,20 @@ async fn provision_indexes_json_keeps_stdout_for_the_report() {
         "{stderr}"
     );
 
+    // And it is refused for what it is, with no database to reach.
+    let unreachable = Command::new(common::bin())
+        .args(["provision", "indexes", &ledger, &ledger, "--json"])
+        .args(["--database-url", "postgres://127.0.0.1:1/nowhere"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(unreachable.stderr).unwrap();
+    assert!(!unreachable.status.success());
+    assert!(unreachable.stdout.is_empty());
+    assert!(
+        stderr.contains("both named `double_entry_ledger`") && !stderr.contains("connect"),
+        "{stderr}"
+    );
+
     // No programme at all is a usage error: no report names none.
     let (status, stdout, stderr) = run_cli(&["provision", "indexes", "--json", "--prune"]);
     assert_eq!(status.code(), Some(2), "{stderr}");

@@ -81,7 +81,7 @@ pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived
 pub use error::PgError;
 pub use indexes::{
     IndexAction, IndexPlanEntry, ProvisionReport, ProvisionedProgram, RequiredElsewhere,
-    StatisticsAction, StatisticsPlanEntry, plan_indexes, provision_indexes,
+    StatisticsAction, StatisticsPlanEntry, check_named_programs, plan_indexes, provision_indexes,
 };
 pub use merkle::{Digest, DigestError};
 pub use migrations::{
