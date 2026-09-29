@@ -233,10 +233,12 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
             },
         ),
         (
-            "defined",
-            "define d(x):\n    B(x)\n\ninvariant r:\n    A(x) implies d(x)\n",
-            CompileReason::Construct {
-                construct: "defined call",
+            // A sum observes how many witnesses a call has; the kernel
+            // yields each projection once.
+            "defined call under a sum",
+            "define amount_of(x, n):\n    Amount(x, n)\n\ninvariant r:\n    Cap(cap) implies sum(n | amount_of(_, n)) <= cap\n",
+            CompileReason::SumShape {
+                detail: "a defined call under a sum",
             },
         ),
         (
@@ -775,5 +777,67 @@ invariant opened_this_millennium:
             .contains("(morpholog.date_ordinal(t0.arguments -> 1)) > (20000101::integer)"),
         "{}",
         set.invariants[0].violation_sql(None)
+    );
+}
+
+fn selector_program() -> morpholog_core::Program {
+    morpholog_surface::parse_program(
+        "program selector
+predicate Ask(trade: Subject, as_of: Timestamp)
+predicate Terms(trade: Subject, effective_from: Timestamp, qty: Decimal)
+    effective by (trade) on (effective_from)
+predicate Good(trade: Subject, qty: Decimal)
+invariant asked_terms_are_good:
+    Ask(trade, as_of) and terms_in_force_on(trade, as_of, qty) implies Good(trade, qty)
+",
+    )
+    .expect("parses")
+}
+
+/// The generated in-force selector called from an antecedent: the key
+/// and the as-of arrive bound, the payload binds from the body and
+/// reaches the witness and the consequent, the body's own variables do
+/// not. The body's joins inline after the caller's; its error plan, a
+/// second rendering, sits past those joins and asks the body whole for
+/// each caller row.
+#[test]
+fn the_generated_selector_call_is_pinned() {
+    let set = compiled(&selector_program());
+    let inv = &set.invariants[1];
+    assert_eq!(inv.name.as_str(), "asked_terms_are_good");
+    assert_eq!(
+        inv.violation_sql(None),
+        r#"/* morpholog compiled invariant asked_terms_are_good v1 stage1 */
+SELECT 1 AS "w"
+FROM morpholog.claims t0, morpholog.claims t1
+WHERE t0.predicate_name = 'Ask'
+  AND t1.predicate_name = 'Terms'
+  AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0)))
+  AND ((EXISTS (SELECT 1 FROM morpholog.claims t3 WHERE (t3.predicate_name = 'Terms' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0))) AND NOT (COALESCE((t3.arguments -> 1 ->> 'type') = 'timestamp', false) AND COALESCE((t0.arguments -> 1 ->> 'type') = 'timestamp', false)))) OR EXISTS (SELECT 1 FROM morpholog.claims t3 WHERE (t3.predicate_name = 'Terms' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0))) AND (morpholog.timestamp_nanos(t3.arguments -> 1)) <= (morpholog.timestamp_nanos(t0.arguments -> 1)) AND (EXISTS (SELECT 1 FROM morpholog.claims t4 WHERE (t4.predicate_name = 'Terms' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t4.arguments -> 0))) AND NOT (COALESCE((t4.arguments -> 1 ->> 'type') = 'timestamp', false) AND COALESCE((t0.arguments -> 1 ->> 'type') = 'timestamp', false)))) OR EXISTS (SELECT 1 FROM morpholog.claims t4 WHERE (t4.predicate_name = 'Terms' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t4.arguments -> 0))) AND (morpholog.timestamp_nanos(t4.arguments -> 1)) <= (morpholog.timestamp_nanos(t0.arguments -> 1)) AND NOT (COALESCE((t4.arguments -> 1 ->> 'type') = 'timestamp', false) AND COALESCE((t3.arguments -> 1 ->> 'type') = 'timestamp', false)))))))) OR ((morpholog.timestamp_nanos(t1.arguments -> 1)) <= (morpholog.timestamp_nanos(t0.arguments -> 1)) AND (NOT (EXISTS (SELECT 1 FROM morpholog.claims t2 WHERE t2.predicate_name = 'Terms' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t2.arguments -> 0))) AND (morpholog.timestamp_nanos(t2.arguments -> 1)) <= (morpholog.timestamp_nanos(t0.arguments -> 1)) AND (morpholog.timestamp_nanos(t2.arguments -> 1)) > (morpholog.timestamp_nanos(t1.arguments -> 1)))) AND NOT EXISTS (SELECT 1 FROM morpholog.claims t5 WHERE t5.predicate_name = 'Good' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t5.arguments -> 0))) AND (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 2))) = (morpholog.claim_digest(morpholog.value_key_v1(t5.arguments -> 1)))))))
+ORDER BY (morpholog.value_key_v1(t0.arguments -> 1))::text, (morpholog.value_key_v1(t1.arguments -> 2))::text, (morpholog.value_key_v1(t0.arguments -> 0))::text
+LIMIT 1"#
+    );
+    // One error scope, over the caller row and the body's join; its
+    // probes read the second rendering, never the inlined alias.
+    let errors = inv.error_sqls(None, &[]).unwrap();
+    assert_eq!(errors.len(), 1);
+    let error = &errors[0];
+    assert!(error.starts_with("SELECT CASE WHEN EXISTS (SELECT 1 FROM morpholog.claims t3 WHERE"));
+    assert!(error.contains("\nFROM morpholog.claims t0, morpholog.claims t1\nWHERE (t0.predicate_name = 'Ask' AND t1.predicate_name = 'Terms' AND "));
+    assert!(error.ends_with("\nORDER BY t0.arguments_hash, t1.arguments_hash\nLIMIT 1"));
+    let required: Vec<(String, usize)> = inv
+        .required_indexes
+        .iter()
+        .map(|s| (s.predicate.to_string(), s.position))
+        .collect();
+    assert_eq!(
+        required,
+        vec![
+            ("Ask".to_string(), 0),
+            ("Good".to_string(), 0),
+            ("Good".to_string(), 1),
+            ("Terms".to_string(), 0),
+            ("Terms".to_string(), 2),
+        ]
     );
 }

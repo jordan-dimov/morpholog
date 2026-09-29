@@ -46,21 +46,31 @@
 //! a narrower fragment: a sum-closing comparison is last in its scope and
 //! never under a nested one.
 //!
+//! A defined call joins its body into the caller's chain under the call's
+//! frame: a parameter bound to a caller column becomes a correlated
+//! equality, one bound to a literal a filter, a free one binds from the
+//! body, and only parameters come back to the caller. The error plan
+//! renders the body a second time and asks it whole per caller row, as
+//! the kernel does. A call under a sum is refused: a sum sees how many
+//! witnesses a call has, and the kernel counts each projection once.
+//!
 //! Witness contract: rule name, version and witness match the kernel's,
-//! values included. Once a rejection is established, a diagnostic query
-//! follows the kernel's first failing path, in its order: which row fails
-//! decides which variables the witness carries, not only their values.
-//! The full check answers for the whole state, so on dirty history it can
-//! name another case, with the same variables.
+//! values included. Once a rejection is established, the diagnosis
+//! follows the kernel's first failing path, in its order, into the call
+//! that killed the chain, whose frame replaces the caller's variables:
+//! which row fails, and where, decides which variables the witness
+//! carries, not only their values. The full check answers for the whole
+//! state, so on dirty history it can name another case, with the same
+//! variables.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use morpholog_core::{
-    ClaimInstance, CompareOp, EvalError, EvalValue, Impact, ImpactPlan, Invariant, InvariantName,
-    OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Prop, RejectionReason, SumSeed,
-    Term, ValidatedProgram, Value, ValueExpr, Var, WitnessBinding, literal_value,
-    ordered_compare_error,
+    ClaimInstance, CompareOp, Definition, DefinitionName, EvalError, EvalValue, Impact, ImpactPlan,
+    Invariant, InvariantName, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Prop,
+    RejectionReason, SumSeed, Term, ValidatedProgram, Value, ValueExpr, Var, WitnessBinding,
+    literal_value, ordered_compare_error,
 };
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -253,22 +263,7 @@ impl CompiledInvariantSet {
                     return Err(PgError::Kernel(decode_error(&erroring)?));
                 }
             }
-            let witness = match inv.diagnostic_sql(case_filter.as_deref(), steps)? {
-                None => Vec::new(),
-                Some(sql) => {
-                    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
-                        .fetch_optional(&mut **tx)
-                        .await
-                        .map_err(classify)?
-                        .ok_or_else(|| {
-                            PgError::InvalidState(format!(
-                                "{} is violated but its diagnostic query found no violation",
-                                inv.name
-                            ))
-                        })?;
-                    decode_witness(inv, &row)?
-                }
-            };
+            let witness = inv.diagnose(tx, case_filter.as_deref(), steps).await?;
             return Ok(Some(SqlViolation {
                 name: inv.name.clone(),
                 version: inv.version,
@@ -334,32 +329,17 @@ fn order_keys(
     Ok(keys.join(", "))
 }
 
-/// Decode a violation row's witness columns. Each is the `::text` of the
-/// full tagged value, so `EvalValue`'s serde decodes it with no per-kind
-/// logic.
-fn decode_witness(
-    inv: &CompiledInvariant,
-    row: &sqlx::postgres::PgRow,
-) -> Result<Vec<WitnessBinding>, PgError> {
-    let mut witness = Vec::with_capacity(inv.witness_vars.len());
-    for var in &inv.witness_vars {
-        let col = format!("w_{var}");
-        let text: Option<String> = row
-            .try_get(col.as_str())
-            .map_err(|e| PgError::InvalidState(format!("witness column {col} missing: {e}")))?;
-        // A consequent-bound variable is NULL when no row reached it: the
-        // kernel's witness leaves it out too.
-        let Some(text) = text else {
-            continue;
-        };
-        let value: EvalValue = serde_json::from_str(&text)
-            .map_err(|e| PgError::InvalidState(format!("witness value {col} undecodable: {e}")))?;
-        witness.push(WitnessBinding {
-            var: var.clone(),
-            value,
-        });
-    }
-    Ok(witness)
+async fn fetch(
+    tx: &mut Transaction<'_, Postgres>,
+    sql: String,
+) -> Result<Option<sqlx::postgres::PgRow>, PgError> {
+    // Safe: this module renders the SQL from a validated programme, with
+    // identifiers quoted, literals escaped and the name comment
+    // neutralised.
+    sqlx::query(sqlx::AssertSqlSafe(sql))
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(classify)
 }
 
 /// The kernel's error for the first erroring binding: a sum's range, or
@@ -541,10 +521,6 @@ struct ColRef {
 pub(crate) struct CompiledInvariant {
     pub(crate) name: InvariantName,
     pub(crate) version: u32,
-    /// Witness variables, sorted by name. The diagnostic row carries each
-    /// as the full tagged value in `w_<var>`, NULL where the kernel's
-    /// failing path did not bind it.
-    pub(crate) witness_vars: Vec<Var>,
     /// Which cases a delta touches, decided by core; `case_cols` renders
     /// its bindings onto the antecedent's columns.
     plan: ImpactPlan,
@@ -585,12 +561,15 @@ struct ProbeScope {
     aliases: Vec<(String, PredicateName)>,
 }
 
-/// The diagnostic query before its runtime parts. It runs only once a
-/// rejection is established, and finds the path the kernel diagnoses:
-/// the first violating antecedent match in the kernel's order, and on it
-/// the first row of the longest consequent prefix that still matched.
-/// The violation query cannot stand in for it: another violating row can
-/// fail at another depth of the consequent and so bind other variables.
+/// How the kernel explains a rejection, before its runtime parts. It runs
+/// only once a rejection is established. The kernel takes the first
+/// violating antecedent match in its order, then diagnoses the consequent
+/// conjunct by conjunct: under the first row of the longest prefix that
+/// still matched, it blames the conjunct that killed the chain, and
+/// descends into it when that is a defined call (whose frame replaces the
+/// caller's variables) or a nested conjunction. The violation query cannot
+/// stand in for it: another violating row can fail at another depth, or
+/// inside another call, and so carry other variables.
 #[derive(Debug)]
 struct Diagnosis {
     /// The violation query's sources and conditions.
@@ -598,12 +577,20 @@ struct Diagnosis {
     where_: String,
     /// The antecedent's claim aliases, in the kernel's nesting order.
     aliases: Vec<(String, PredicateName)>,
-    antecedent: Vec<(Var, ColRef)>,
-    /// The consequent through each of its conjuncts, shortest first.
+    level: Level,
+}
+
+/// One conjunction the kernel diagnoses, rendered a second time under
+/// fresh aliases.
+#[derive(Debug)]
+struct Level {
+    /// The variables in scope on entry: the antecedent's, or a call's
+    /// parameters, or everything bound before a nested conjunction.
+    entry: Vec<(Var, Bound)>,
+    /// Each conjunct's cumulative prefix, in order.
     prefixes: Vec<Prefix>,
-    /// Each variable only the consequent binds, with the first prefix
-    /// that binds it.
-    consequent: Vec<(Var, ColRef, usize)>,
+    /// Where the kernel goes when the chain dies at a conjunct.
+    descents: BTreeMap<usize, Level>,
 }
 
 #[derive(Debug)]
@@ -611,19 +598,150 @@ struct Prefix {
     from: String,
     where_: String,
     aliases: Vec<(String, PredicateName)>,
+    /// The variables bound by the end of this conjunct beyond the entry.
+    bound: Vec<(Var, ColRef)>,
 }
 
-impl Prefix {
-    fn of(r: &Rendered, from_len: usize, where_len: usize) -> Self {
-        let prefix = Rendered {
-            from: r.from[..from_len].to_vec(),
-            where_: r.where_[..where_len].to_vec(),
-            ..Rendered::default()
-        };
-        Self {
-            from: from_list(&prefix),
-            where_: prefix.conjunction(),
-            aliases: prefix.aliases(),
+fn conjuncts_of(prop: &Prop) -> Vec<&Prop> {
+    match prop {
+        Prop::And(ps) => ps.iter().collect(),
+        other => vec![other],
+    }
+}
+
+fn diagnostic_level(
+    conjuncts: &[&Prop],
+    env: Env,
+    entry: Vec<(Var, Bound)>,
+    ctx: &mut Ctx<'_>,
+) -> Result<Level, CompileReason> {
+    let mut acc = Rendered {
+        env,
+        ..Rendered::default()
+    };
+    let mut prefixes = Vec::new();
+    let mut descents = BTreeMap::new();
+    for (k, conjunct) in conjuncts.iter().enumerate() {
+        match conjunct {
+            Prop::Defined { name, args } => {
+                let (def, frame) = call_frame(name, args, &acc.env, ctx)?;
+                let entry = frame.iter().map(|(p, b)| (p.clone(), b.clone())).collect();
+                descents.insert(
+                    k,
+                    diagnostic_level(&conjuncts_of(&def.body), frame, entry, ctx)?,
+                );
+            }
+            Prop::And(ps) => {
+                let entry = acc
+                    .env
+                    .iter()
+                    .map(|(v, b)| (v.clone(), b.clone()))
+                    .collect();
+                let inner: Vec<&Prop> = ps.iter().collect();
+                descents.insert(k, diagnostic_level(&inner, acc.env.clone(), entry, ctx)?);
+            }
+            _ => {}
+        }
+        let r = render_prop(conjunct, acc.env.clone(), ctx)?;
+        acc.from.extend(r.from);
+        acc.laterals.extend(r.laterals);
+        acc.where_.extend(r.where_);
+        acc.env = r.env;
+        prefixes.push(Prefix {
+            from: from_list(&acc),
+            where_: acc.conjunction(),
+            aliases: acc.aliases(),
+            bound: columns(&acc.env)
+                .into_iter()
+                .filter(|(v, _)| !entry.iter().any(|(e, _)| e == v))
+                .collect(),
+        });
+    }
+    Ok(Level {
+        entry,
+        prefixes,
+        descents,
+    })
+}
+
+/// The rows the diagnosis has chosen so far, by alias.
+#[derive(Default)]
+struct Chosen {
+    rows: BTreeMap<String, (PredicateName, String, serde_json::Value)>,
+}
+
+impl Chosen {
+    /// Each alias's primary key and arguments, to pin and read the row.
+    fn select(aliases: &[(String, PredicateName)]) -> String {
+        if aliases.is_empty() {
+            return "1 AS \"w\"".to_string();
+        }
+        aliases
+            .iter()
+            .map(|(alias, _)| {
+                format!(
+                    "encode({alias}.arguments_hash, 'hex') AS {}, {alias}.arguments::text AS {}",
+                    quote_ident(&format!("h_{alias}")),
+                    quote_ident(&format!("a_{alias}"))
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn read(
+        &mut self,
+        aliases: &[(String, PredicateName)],
+        row: &sqlx::postgres::PgRow,
+    ) -> Result<(), PgError> {
+        for (alias, predicate) in aliases {
+            let hash: String = row
+                .try_get(format!("h_{alias}").as_str())
+                .map_err(|e| PgError::InvalidState(format!("diagnosis row: {e}")))?;
+            let text: String = row
+                .try_get(format!("a_{alias}").as_str())
+                .map_err(|e| PgError::InvalidState(format!("diagnosis row: {e}")))?;
+            let args = serde_json::from_str(&text)?;
+            self.rows
+                .insert(alias.clone(), (predicate.clone(), hash, args));
+        }
+        Ok(())
+    }
+
+    /// The chosen rows, pinned by primary key, ahead of `from`.
+    fn sources(&self, from: &str) -> String {
+        self.rows
+            .keys()
+            .map(|alias| format!("morpholog.claims {alias}"))
+            .chain((!from.is_empty()).then(|| from.to_string()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn pins(&self, where_: &str) -> String {
+        self.rows
+            .iter()
+            .map(|(alias, (predicate, hash, _))| {
+                format!(
+                    "{alias}.predicate_name = {} AND {alias}.arguments_hash = decode({}, 'hex')",
+                    quote_literal(predicate.as_str()),
+                    quote_literal(hash)
+                )
+            })
+            .chain(std::iter::once(where_.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n  AND ")
+    }
+
+    fn value(&self, bound: &Bound) -> Result<EvalValue, PgError> {
+        match bound {
+            Bound::Lit(value) => literal_value(value).map_err(PgError::Kernel),
+            Bound::Col(col) => {
+                let (_, _, args) = self.rows.get(&col.alias).ok_or_else(|| {
+                    PgError::InvalidState(format!("diagnosis read unchosen alias {}", col.alias))
+                })?;
+                Ok(serde_json::from_value(args[col.position].clone())?)
+            }
         }
     }
 }
@@ -687,16 +805,15 @@ impl CompiledInvariant {
             .collect()
     }
 
-    /// The diagnostic query over the same obligation as the violation
-    /// query, in the kernel's order; `None` when the kernel reports no
-    /// witness.
-    pub(crate) fn diagnostic_sql(
+    /// The witness, found as the kernel finds it (see [`Diagnosis`]).
+    async fn diagnose(
         &self,
+        tx: &mut Transaction<'_, Postgres>,
         case_filter: Option<&str>,
         steps: &[DeltaStep],
-    ) -> Result<Option<String>, PgError> {
+    ) -> Result<Vec<WitnessBinding>, PgError> {
         let Some(d) = &self.diagnosis else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
         let order = |aliases: &[(String, PredicateName)]| -> Result<String, PgError> {
             Ok(aliases
@@ -705,47 +822,15 @@ impl CompiledInvariant {
                 .collect::<Result<Vec<_>, _>>()?
                 .join(", "))
         };
-        let mut columns: Vec<String> = d
-            .antecedent
-            .iter()
-            .map(|(var, col)| {
-                format!(
-                    "({}.arguments -> {})::text AS {}",
-                    col.alias,
-                    col.position,
-                    quote_ident(&format!("w_{var}"))
-                )
-            })
-            .collect();
-        for (var, col, first) in &d.consequent {
-            // A row of a longer prefix is a row of every shorter one, so
-            // the first reading, longest prefix first, is the longest
-            // prefix that matched.
-            let readings = (*first..d.prefixes.len())
-                .rev()
-                .map(|i| {
-                    let p = &d.prefixes[i];
-                    Ok(format!(
-                        "(SELECT ({}.arguments -> {})::text FROM {} WHERE {} ORDER BY {} LIMIT 1)",
-                        col.alias,
-                        col.position,
-                        p.from,
-                        p.where_,
-                        order(&p.aliases)?
-                    ))
-                })
-                .collect::<Result<Vec<_>, PgError>>()?;
-            columns.push(format!(
-                "COALESCE({}) AS {}",
-                readings.join(", "),
-                quote_ident(&format!("w_{var}"))
-            ));
-        }
-        let mut sql = format!(
-            "/* morpholog diagnosis {} v{} */\nSELECT {}\nFROM {}\nWHERE {}",
+        let label = format!(
+            "/* morpholog diagnosis {} v{} */",
             comment_safe(self.name.as_str()),
-            self.version,
-            columns.join(",\n       "),
+            self.version
+        );
+        let mut chosen = Chosen::default();
+        let mut sql = format!(
+            "{label}\nSELECT {}\nFROM {}\nWHERE {}",
+            Chosen::select(&d.aliases),
             d.from,
             d.where_
         );
@@ -753,7 +838,56 @@ impl CompiledInvariant {
             let _ = write!(sql, "\n  AND ({filter})");
         }
         let _ = write!(sql, "\nORDER BY {}\nLIMIT 1", order(&d.aliases)?);
-        Ok(Some(sql))
+        let row = fetch(tx, sql).await?.ok_or_else(|| {
+            PgError::InvalidState(format!(
+                "{} is violated but its diagnosis found no violation",
+                self.name
+            ))
+        })?;
+        chosen.read(&d.aliases, &row)?;
+        let mut level = &d.level;
+        loop {
+            let mut witness = BTreeMap::new();
+            for (var, bound) in &level.entry {
+                witness.insert(var.clone(), chosen.value(bound)?);
+            }
+            let mut longest = None;
+            for (s, prefix) in level.prefixes.iter().enumerate().rev() {
+                let sql = format!(
+                    "{label}\nSELECT {}\nFROM {}\nWHERE {}\nORDER BY {}\nLIMIT 1",
+                    Chosen::select(&prefix.aliases),
+                    chosen.sources(&prefix.from),
+                    chosen.pins(&prefix.where_),
+                    if prefix.aliases.is_empty() {
+                        "1".to_string()
+                    } else {
+                        order(&prefix.aliases)?
+                    }
+                );
+                if let Some(row) = fetch(tx, sql).await? {
+                    chosen.read(&prefix.aliases, &row)?;
+                    longest = Some(s);
+                    break;
+                }
+            }
+            // A conjunction that matched whole is blamed as a unit: the
+            // kernel reports what was bound on entry.
+            if let Some(s) = longest.filter(|s| s + 1 < level.prefixes.len()) {
+                for (var, col) in &level.prefixes[s].bound {
+                    witness.insert(var.clone(), chosen.value(&Bound::Col(col.clone()))?);
+                }
+            }
+            let killed = longest.map_or(0, |s| s + 1);
+            match level.descents.get(&killed) {
+                Some(next) => level = next,
+                None => {
+                    return Ok(witness
+                        .into_iter()
+                        .map(|(var, value)| WitnessBinding { var, value })
+                        .collect());
+                }
+            }
+        }
     }
 
     /// Bound the check to the cases a delta could have changed: core
@@ -937,10 +1071,15 @@ pub(crate) fn compile_invariants(
         .iter()
         .map(|p| (p.name.as_str(), p))
         .collect();
+    let defs: BTreeMap<&str, &Definition> = program
+        .definitions
+        .iter()
+        .map(|d| (d.name.as_str(), d))
+        .collect();
     let mut compiled = Vec::new();
     let mut refusals = Vec::new();
     for inv in &program.invariants {
-        match compile_invariant(inv, &decls) {
+        match compile_invariant(inv, &decls, &defs) {
             Ok(c) => compiled.push(c),
             Err(reason) => refusals.push(CompileRefusal {
                 invariant: inv.name.clone(),
@@ -957,10 +1096,34 @@ pub(crate) fn compile_invariants(
     }
 }
 
-type Env = BTreeMap<Var, ColRef>;
+/// What a variable stands for while a scope renders: a column of a
+/// joined claim, or, inside a definition body, the literal a call bound
+/// its parameter to.
+#[derive(Debug, Clone)]
+enum Bound {
+    Col(ColRef),
+    Lit(Value),
+}
+
+type Env = BTreeMap<Var, Bound>;
+
+/// The columns an environment binds: a caller's environment holds
+/// nothing else, since a call exports only the columns its body bound.
+fn columns(env: &Env) -> BTreeMap<Var, ColRef> {
+    env.iter()
+        .filter_map(|(v, b)| match b {
+            Bound::Col(col) => Some((v.clone(), col.clone())),
+            Bound::Lit(_) => None,
+        })
+        .collect()
+}
 
 struct Ctx<'a> {
     decls: &'a BTreeMap<&'a str, &'a PredicateDecl>,
+    defs: &'a BTreeMap<&'a str, &'a Definition>,
+    /// Rendering a sum's body, where a call's internal multiplicity
+    /// would count.
+    in_sum: bool,
     counter: usize,
     /// Every (predicate, position) the SQL seeks on, collected where the
     /// seek is emitted: the index specification.
@@ -1309,9 +1472,12 @@ fn range_error_sql(total: &str) -> String {
 fn compile_invariant(
     inv: &Invariant,
     decls: &BTreeMap<&str, &PredicateDecl>,
+    defs: &BTreeMap<&str, &Definition>,
 ) -> Result<CompiledInvariant, CompileReason> {
     let mut ctx = Ctx {
         decls,
+        defs,
+        in_sum: false,
         counter: 0,
         required: BTreeSet::new(),
         pending_sums: Vec::new(),
@@ -1340,7 +1506,7 @@ fn compile_invariant(
                     ),
                     format!("\nORDER BY {}\nLIMIT 1", violation_order(&r)),
                     r.probes.iter().map(ScopeDraft::anchored).collect(),
-                    r.env,
+                    columns(&r.env),
                     None,
                 )
             }
@@ -1348,19 +1514,6 @@ fn compile_invariant(
         other => generic_denial(other, &mut ctx)?,
     };
 
-    // An empty witness needs no query.
-    let diagnosis = diagnosis.filter(|d| !d.antecedent.is_empty() || !d.consequent.is_empty());
-    let witness_vars: Vec<Var> = diagnosis
-        .iter()
-        .flat_map(|d| {
-            d.antecedent
-                .iter()
-                .map(|(v, _)| v.clone())
-                .chain(d.consequent.iter().map(|(v, _, _)| v.clone()))
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
     let plan = ImpactPlan::new(inv);
     // The case-bound check seeks on the case's columns. Without their
     // indexes it walks the predicate and takes the very lock the bound
@@ -1376,7 +1529,6 @@ fn compile_invariant(
     Ok(CompiledInvariant {
         name: inv.name.clone(),
         version: inv.version,
-        witness_vars,
         plan,
         case_cols,
         sql_select_from_where: select_from_where,
@@ -1394,7 +1546,13 @@ fn compile_invariant(
 
 /// The dominant shape: `antecedent implies consequent`. Violation = an
 /// antecedent match with no consequent match.
-type Denial = (String, String, Vec<ProbeScope>, Env, Option<Diagnosis>);
+type Denial = (
+    String,
+    String,
+    Vec<ProbeScope>,
+    BTreeMap<Var, ColRef>,
+    Option<Diagnosis>,
+);
 
 fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReason> {
     let ant = render_prop(left, Env::new(), ctx)?;
@@ -1435,33 +1593,11 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
     if !lifted.probes.is_empty() {
         scope.probes.push(lifted);
     }
-    // The kernel's witness carries the variables of the longest
-    // consequent prefix that still matched, bound on its first row, so
-    // each consequent variable is read through the prefixes that bind it.
-    let prefixes: Vec<Prefix> = if cons.stages.is_empty() {
-        vec![Prefix::of(&cons, cons.from.len(), cons.where_.len())]
-    } else {
-        cons.stages
-            .iter()
-            .map(|(from_len, where_len)| Prefix::of(&cons, *from_len, *where_len))
-            .collect()
-    };
-    let mut consequent = Vec::new();
-    for (var, col) in cons.env.iter().filter(|(v, _)| !ant.env.contains_key(*v)) {
-        let Some(alias_index) = cons
-            .from
-            .iter()
-            .position(|(alias, _, _)| *alias == col.alias)
-        else {
-            continue;
-        };
-        let first = cons
-            .stages
-            .iter()
-            .position(|(from_len, _)| *from_len > alias_index)
-            .unwrap_or(prefixes.len() - 1);
-        consequent.push((var.clone(), col.clone(), first));
-    }
+    let entry = columns(&ant.env)
+        .into_iter()
+        .map(|(v, c)| (v, Bound::Col(c)))
+        .collect();
+    let level = diagnostic_level(&conjuncts_of(right), ant.env.clone(), entry, ctx)?;
     let from = from_list(&scope);
     let where_ = violated(&scope, not_cons).join("\n  AND ");
     let error = scope.probes.iter().map(ScopeDraft::anchored).collect();
@@ -1469,19 +1605,13 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
         from: from.clone(),
         where_: where_.clone(),
         aliases: ant.aliases(),
-        antecedent: ant
-            .env
-            .iter()
-            .map(|(v, c)| (v.clone(), c.clone()))
-            .collect(),
-        prefixes,
-        consequent,
+        level,
     };
     Ok((
         format!("SELECT 1 AS \"w\"\nFROM {from}\nWHERE {where_}"),
         format!("\nORDER BY {}\nLIMIT 1", violation_order(&ant)),
         error,
-        ant.env,
+        columns(&ant.env),
         Some(diagnosis),
     ))
 }
@@ -1495,7 +1625,7 @@ fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReaso
             format!("SELECT 1 AS \"w\"\nWHERE NOT {}", r.exists_sql()),
             String::new(),
             Vec::new(),
-            Env::new(),
+            BTreeMap::new(),
             None,
         ));
     }
@@ -1527,7 +1657,7 @@ fn generic_denial(body: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial, CompileReaso
         format!("SELECT 1 AS \"w\"\nWHERE {raises} OR NOT {holds}"),
         String::new(),
         r.probes.iter().map(ScopeDraft::anchored).collect(),
-        Env::new(),
+        BTreeMap::new(),
         None,
     ))
 }
@@ -1577,7 +1707,7 @@ fn generic_denial_implies(
         format!("SELECT 1 AS \"w\"\nWHERE {where_}"),
         String::new(),
         error,
-        Env::new(),
+        BTreeMap::new(),
         None,
     ))
 }
@@ -1596,15 +1726,15 @@ fn from_list(r: &Rendered) -> String {
 /// planner into an early-stop scan of the whole predicate (seen at 100k
 /// rows).
 fn violation_order(r: &Rendered) -> String {
-    if r.env.is_empty() {
+    let env = columns(&r.env);
+    if env.is_empty() {
         r.from
             .iter()
             .map(|(alias, _, _)| format!("{alias}.arguments"))
             .collect::<Vec<_>>()
             .join(", ")
     } else {
-        r.env
-            .values()
+        env.values()
             .map(|col| format!("({})::text", key_sql(col)))
             .collect::<Vec<_>>()
             .join(", ")
@@ -1857,11 +1987,134 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
         Prop::Or(_) => Err(CompileReason::Construct { construct: "or" }),
         Prop::Xor(_, _) => Err(CompileReason::Construct { construct: "xor" }),
         Prop::Pre(_) => Err(CompileReason::Construct { construct: "pre" }),
-        Prop::Defined { .. } => Err(CompileReason::Construct {
-            construct: "defined call",
-        }),
+        Prop::Defined { name, args } => render_defined(name, args, env, ctx),
         Prop::In(_, _) => Err(CompileReason::Construct { construct: "in" }),
     }
+}
+
+/// A call to a definition. The body renders under the call's frame
+/// alone: a parameter bound to a caller column or a literal, an unbound
+/// one free for the body to bind. Its joins and conjuncts join the
+/// caller's chain for truth and bindings; only the parameters project
+/// back to the caller (a bound one already agreed, an unbound one binds
+/// its argument, a repeated argument must agree, a wildcard receives
+/// nothing), so the body's own variables never escape. The kernel
+/// evaluates the body whole for each caller binding, so its error plan
+/// is a second rendering under fresh aliases, lifted per caller row.
+/// A call's definition and the frame its body renders under: each
+/// parameter bound to what its argument is bound to, a wildcard or a
+/// variable not yet bound leaving it free.
+fn call_frame<'a>(
+    name: &DefinitionName,
+    args: &[Term],
+    env: &Env,
+    ctx: &Ctx<'a>,
+) -> Result<(&'a Definition, Env), CompileReason> {
+    let def = *ctx
+        .defs
+        .get(name.as_str())
+        .ok_or_else(|| CompileReason::UnvalidatedShape {
+            detail: format!("undeclared definition {name}"),
+        })?;
+    if def.parameters.len() != args.len() {
+        return Err(CompileReason::UnvalidatedShape {
+            detail: format!("arity mismatch on {name}"),
+        });
+    }
+    let mut frame = Env::new();
+    for (param, arg) in def.parameters.iter().zip(args) {
+        match arg {
+            Term::Wildcard => {}
+            Term::Actor => return Err(CompileReason::Construct { construct: "actor" }),
+            Term::Literal(value) => {
+                frame.insert(param.clone(), Bound::Lit(value.clone()));
+            }
+            Term::Var(x) => {
+                if let Some(bound) = env.get(x) {
+                    frame.insert(param.clone(), bound.clone());
+                }
+            }
+        }
+    }
+    Ok((def, frame))
+}
+
+fn render_defined(
+    name: &DefinitionName,
+    args: &[Term],
+    env: Env,
+    ctx: &mut Ctx<'_>,
+) -> Result<Rendered, CompileReason> {
+    if ctx.in_sum {
+        // A sum observes how many witnesses a call has; the kernel yields
+        // each projection once.
+        return Err(CompileReason::SumShape {
+            detail: "a defined call under a sum",
+        });
+    }
+    let (def, frame) = call_frame(name, args, &env, ctx)?;
+    let truth = render_prop(&def.body, frame.clone(), ctx)?;
+    let mut env = env;
+    let mut where_ = truth.where_.clone();
+    for (param, arg) in def.parameters.iter().zip(args) {
+        let Term::Var(x) = arg else {
+            continue;
+        };
+        if frame.contains_key(param) {
+            continue;
+        }
+        let Some(Bound::Col(generated)) = truth.env.get(param) else {
+            return Err(CompileReason::UnvalidatedShape {
+                detail: format!("{name} never binds its parameter {param}"),
+            });
+        };
+        match env.get(x) {
+            Some(Bound::Col(earlier)) => {
+                where_.push(col_eq(earlier, generated));
+                ctx.required
+                    .insert((earlier.predicate.clone(), earlier.position));
+                ctx.required
+                    .insert((generated.predicate.clone(), generated.position));
+            }
+            Some(Bound::Lit(_)) => {
+                return Err(CompileReason::UnvalidatedShape {
+                    detail: format!("{x} is bound to a literal outside a call"),
+                });
+            }
+            None => {
+                env.insert(x.clone(), Bound::Col(generated.clone()));
+            }
+        }
+    }
+    if truth.closes_scope {
+        return Err(CompileReason::SumShape {
+            detail: "a sum inside a defined call",
+        });
+    }
+    let probes = if truth.has_errors() {
+        let again = render_prop(&def.body, frame, ctx)?;
+        let mut scope = lift(&again.probes);
+        // The kernel reaches a body's raising expression only through the
+        // body's joins before it, so the lifted scope sits past those in
+        // the caller's chain: a probe branch over the caller row alone
+        // would leave the inlined joins unconstrained.
+        let earliest = &truth.probes[0];
+        scope.from = earliest.from.clone();
+        scope.laterals = earliest.laterals.clone();
+        scope.where_ = earliest.where_.clone();
+        vec![scope]
+    } else {
+        Vec::new()
+    };
+    Ok(Rendered {
+        from: truth.from,
+        laterals: truth.laterals,
+        where_,
+        probes,
+        env,
+        closes_scope: truth.closes_scope,
+        stages: Vec::new(),
+    })
 }
 
 fn render_claim(
@@ -1903,16 +2156,20 @@ fn render_claim(
             Term::Literal(v) => {
                 where_.push(literal_filter(&col, v, ctx)?);
             }
-            Term::Var(v) => {
-                if let Some(bound) = env.get(v) {
+            Term::Var(v) => match env.get(v) {
+                Some(Bound::Col(bound)) => {
                     where_.push(col_eq(bound, &col));
                     ctx.required
                         .insert((bound.predicate.clone(), bound.position));
                     ctx.required.insert((predicate.clone(), i));
-                } else {
-                    env.insert(v.clone(), col);
                 }
-            }
+                Some(Bound::Lit(value)) => {
+                    where_.push(literal_filter(&col, value, ctx)?);
+                }
+                None => {
+                    env.insert(v.clone(), Bound::Col(col));
+                }
+            },
         }
     }
     Ok(Rendered {
@@ -2193,9 +2450,15 @@ fn close_comparison(
 fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, CompileReason> {
     match expr {
         ValueExpr::Term(Term::Var(v)) => {
-            let col = env.get(v).ok_or_else(|| CompileReason::UnvalidatedShape {
-                detail: format!("unbound variable in value position: {v}"),
-            })?;
+            let col = match env.get(v) {
+                Some(Bound::Col(col)) => col,
+                Some(Bound::Lit(value)) => return literal_operand(value),
+                None => {
+                    return Err(CompileReason::UnvalidatedShape {
+                        detail: format!("unbound variable in value position: {v}"),
+                    });
+                }
+            };
             let ordered = match &col.kind {
                 PredicateArgKind::Decimal => Ordered::Numeric {
                     sql: decimal_sql(col),
@@ -2237,7 +2500,10 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                     detail: "non-decimal seed",
                 });
             }
-            let r = render_prop(body, env.clone(), ctx)?;
+            let outside = std::mem::replace(&mut ctx.in_sum, true);
+            let r = render_prop(body, env.clone(), ctx);
+            ctx.in_sum = outside;
+            let r = r?;
             if r.from.is_empty() {
                 return Err(CompileReason::SumShape {
                     detail: "body binds no claims",
@@ -2255,12 +2521,11 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
             let (val, kind_test, kind_report): (String, String, Option<SumScope>) =
                 match value.as_ref() {
                     ValueExpr::Term(Term::Var(v)) => {
-                        let col = r
-                            .env
-                            .get(v)
-                            .ok_or_else(|| CompileReason::UnvalidatedShape {
+                        let Some(Bound::Col(col)) = r.env.get(v) else {
+                            return Err(CompileReason::UnvalidatedShape {
                                 detail: format!("sum target unbound: {v}"),
-                            })?;
+                            });
+                        };
                         if col.kind != PredicateArgKind::Decimal {
                             return Err(CompileReason::SumShape {
                                 detail: "target is not a decimal position",
