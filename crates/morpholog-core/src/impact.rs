@@ -4,17 +4,21 @@
 //! cases.
 //!
 //! When in doubt, the answer widens toward the whole invariant; it never
-//! misses a touched case. A non-empty delta against a body holding a defined
-//! call, `pre`, `or`, `xor`, membership, or any value form but a term and a
-//! term-targeted sum checks the whole invariant. An empty delta touches
-//! nothing, whatever the body.
+//! misses a touched case. A non-empty delta against a body holding `pre`,
+//! `or`, `xor`, membership, or any value form but a term and a
+//! term-targeted sum checks the whole invariant, and so does a defined
+//! call unless the plan was built with the definitions to follow. An empty
+//! delta touches nothing, whatever the body.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rust_decimal::Decimal;
 
+use crate::definitions::DefinitionTable;
 use crate::fold::{Node, walk_prop};
-use crate::ir::{Invariant, PredicateName, Prop, Term, Value, ValueExpr, Var};
+use crate::ir::{
+    Definition, DefinitionName, Invariant, PredicateName, Prop, Term, Value, ValueExpr, Var,
+};
 use crate::state::{ClaimInstance, EvalValue};
 
 /// How much of an invariant a delta touches.
@@ -53,12 +57,14 @@ pub struct ImpactPlan {
 }
 
 impl ImpactPlan {
+    /// The plan with no definitions to follow: a defined call checks the
+    /// whole invariant.
     pub fn new(inv: &Invariant) -> Self {
         let case_vars = candidate_case_variables(&inv.body);
         let mut occurrences = Vec::new();
         let mut conservative = false;
-        walk_prop(&inv.body, &mut |n| match n {
-            Node::Prop(Prop::Claim { predicate, args }) => {
+        walk_prop(&inv.body, &mut |n| match classify_node(&n) {
+            NodeKind::Claim(predicate, args) => {
                 let mut guards = Vec::new();
                 let mut var_map = Vec::new();
                 for (i, term) in args.iter().enumerate() {
@@ -74,40 +80,32 @@ impl ImpactPlan {
                     var_map,
                 });
             }
-            Node::Prop(
-                Prop::Defined { .. }
-                | Prop::Pre(_)
-                | Prop::Or(_)
-                | Prop::Xor(_, _)
-                | Prop::In(_, _),
-            ) => conservative = true,
-            Node::Prop(
-                Prop::And(_)
-                | Prop::Not(_)
-                | Prop::Implies { .. }
-                | Prop::Exists { .. }
-                | Prop::Forall { .. }
-                | Prop::Eq(_, _)
-                | Prop::Neq(_, _)
-                | Prop::Compare { .. },
-            ) => {}
-            Node::Value(ValueExpr::Term(_)) => {}
-            Node::Value(ValueExpr::Sum { value, .. }) => {
-                conservative |= !matches!(**value, ValueExpr::Term(_));
-            }
-            Node::Value(
-                ValueExpr::Arith { .. }
-                | ValueExpr::ValueOf { .. }
-                | ValueExpr::Extremum { .. }
-                | ValueExpr::Cond { .. }
-                | ValueExpr::Call { .. },
-            ) => conservative = true,
-            Node::Stmt(_) | Node::Slot(_) | Node::Binder(_) => {}
+            NodeKind::Call(..) | NodeKind::Widens => conservative = true,
+            NodeKind::Inert => {}
         });
         Self {
             occurrences,
             conservative,
         }
+    }
+
+    /// The plan following the body's defined calls. A call carries a case
+    /// variable or a literal from its argument into the claim patterns of
+    /// its body; it creates no case variable, and a body variable it does
+    /// not carry one into binds nothing, so an occurrence reached only
+    /// through such variables widens to the whole invariant when touched.
+    pub fn with_definitions(inv: &Invariant, definitions: &[Definition]) -> Self {
+        let frame: Frame = candidate_case_variables(&inv.body)
+            .into_iter()
+            .map(|v| (v.clone(), Traced::Case(v)))
+            .collect();
+        let mut out = Self {
+            occurrences: Vec::new(),
+            conservative: false,
+        };
+        let table = DefinitionTable::new(definitions);
+        follow(&inv.body, &frame, table, &mut BTreeSet::new(), &mut out);
+        out
     }
 
     /// The variables a bounded case can carry: those a claim pattern in
@@ -171,6 +169,123 @@ impl ImpactPlan {
             return Impact::Untouched;
         }
         Impact::Bounded(cases)
+    }
+}
+
+/// What a variable is known to hold where a definition body reads it,
+/// traced through the calls that led there.
+#[derive(Debug, Clone)]
+enum Traced {
+    Case(Var),
+    Literal(Value),
+}
+
+/// A body's variables that trace to a case variable or a literal. A
+/// variable absent here traces to nothing: a body's own variable, or a
+/// parameter whose argument was a wildcard or a non-case variable.
+type Frame = BTreeMap<Var, Traced>;
+
+fn follow(
+    body: &Prop,
+    frame: &Frame,
+    table: DefinitionTable<'_>,
+    seen: &mut BTreeSet<DefinitionName>,
+    out: &mut ImpactPlan,
+) {
+    let mut calls = Vec::new();
+    walk_prop(body, &mut |n| match classify_node(&n) {
+        NodeKind::Claim(predicate, args) => {
+            let mut guards = Vec::new();
+            let mut var_map = Vec::new();
+            for (i, term) in args.iter().enumerate() {
+                match term {
+                    Term::Literal(v) => guards.push((i, v.clone())),
+                    Term::Var(v) => match frame.get(v) {
+                        Some(Traced::Case(case)) => var_map.push((i, case.clone())),
+                        Some(Traced::Literal(lit)) => guards.push((i, lit.clone())),
+                        None => {}
+                    },
+                    Term::Wildcard | Term::Actor => {}
+                }
+            }
+            out.occurrences.push(Occurrence {
+                predicate: predicate.clone(),
+                guards,
+                var_map,
+            });
+        }
+        NodeKind::Call(name, args) => calls.push((name.clone(), args.to_vec())),
+        NodeKind::Widens => out.conservative = true,
+        NodeKind::Inert => {}
+    });
+    for (name, args) in calls {
+        let followed = table.enter(&name, seen, |def, seen| {
+            let callee: Frame = def
+                .parameters
+                .iter()
+                .zip(&args)
+                .filter_map(|(param, arg)| {
+                    let traced = match arg {
+                        Term::Literal(v) => Traced::Literal(v.clone()),
+                        Term::Var(v) => frame.get(v)?.clone(),
+                        Term::Wildcard | Term::Actor => return None,
+                    };
+                    Some((param.clone(), traced))
+                })
+                .collect();
+            follow(&def.body, &callee, table, seen, out);
+            true
+        });
+        // An undeclared or cyclic call contributes nothing to a walker
+        // that only reads; here nothing would be unsound.
+        if !followed {
+            out.conservative = true;
+        }
+    }
+}
+
+/// What a node means to the plan.
+enum NodeKind<'a> {
+    Claim(&'a PredicateName, &'a [Term]),
+    Call(&'a DefinitionName, &'a [Term]),
+    /// A construct the bounding proof does not cover.
+    Widens,
+    Inert,
+}
+
+fn classify_node<'a>(n: &Node<'a>) -> NodeKind<'a> {
+    match n {
+        Node::Prop(Prop::Claim { predicate, args }) => NodeKind::Claim(predicate, args),
+        Node::Prop(Prop::Defined { name, args }) => NodeKind::Call(name, args),
+        Node::Prop(Prop::Pre(_) | Prop::Or(_) | Prop::Xor(_, _) | Prop::In(_, _)) => {
+            NodeKind::Widens
+        }
+        Node::Prop(
+            Prop::And(_)
+            | Prop::Not(_)
+            | Prop::Implies { .. }
+            | Prop::Exists { .. }
+            | Prop::Forall { .. }
+            | Prop::Eq(_, _)
+            | Prop::Neq(_, _)
+            | Prop::Compare { .. },
+        ) => NodeKind::Inert,
+        Node::Value(ValueExpr::Term(_)) => NodeKind::Inert,
+        Node::Value(ValueExpr::Sum { value, .. }) => {
+            if matches!(**value, ValueExpr::Term(_)) {
+                NodeKind::Inert
+            } else {
+                NodeKind::Widens
+            }
+        }
+        Node::Value(
+            ValueExpr::Arith { .. }
+            | ValueExpr::ValueOf { .. }
+            | ValueExpr::Extremum { .. }
+            | ValueExpr::Cond { .. }
+            | ValueExpr::Call { .. },
+        ) => NodeKind::Widens,
+        Node::Stmt(_) | Node::Slot(_) | Node::Binder(_) => NodeKind::Inert,
     }
 }
 

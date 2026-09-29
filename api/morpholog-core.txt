@@ -2019,6 +2019,7 @@ impl morpholog_core::ImpactPlan
 pub fn morpholog_core::ImpactPlan::case_variables(&self) -> alloc::collections::btree::set::BTreeSet<morpholog_core::Var>
 pub fn morpholog_core::ImpactPlan::classify(&self, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance]) -> morpholog_core::Impact
 pub fn morpholog_core::ImpactPlan::new(&morpholog_core::Invariant) -> Self
+pub fn morpholog_core::ImpactPlan::with_definitions(&morpholog_core::Invariant, &[morpholog_core::Definition]) -> Self
 impl core::clone::Clone for morpholog_core::ImpactPlan
 pub fn morpholog_core::ImpactPlan::clone(&self) -> morpholog_core::ImpactPlan
 impl core::cmp::Eq for morpholog_core::ImpactPlan

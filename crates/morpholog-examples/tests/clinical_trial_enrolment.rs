@@ -26,7 +26,7 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, date, has_claim, subj};
-use morpholog_core::{EvalValue, Outcome, State, eval_invariant};
+use morpholog_core::{CandidateScorer, EvalValue, Outcome, State, effective_delta, eval_invariant};
 use morpholog_examples::clinical_trial_enrolment::{self as cte, ROLE_RANDOMISE_PARTICIPANT};
 
 fn ex() -> &'static Example {
@@ -569,4 +569,63 @@ fn later_randomisation_must_use_active_protocol_version() {
             subj(s.investigator),
         ],
     ));
+}
+
+/// Scoring replays admission case by case, through the rule's call. The
+/// history opens with a participant randomised with no consent on record.
+/// A consent for another participant is not charged to the rule, since
+/// admission would not re-check that case; a late consent for the first
+/// participant, which cures nothing, is.
+#[test]
+fn scoring_charges_a_write_only_in_the_case_it_touches() {
+    let program = cte::program();
+    let mut scorer = CandidateScorer::new(&program).expect("scorable");
+    let mut held: Vec<morpholog_core::ClaimInstance> = Vec::new();
+    let consent = |participant: &str, on: &str| {
+        claim_instance(
+            "InformedConsentObtained",
+            &[
+                subj(participant),
+                subj("t1"),
+                subj("cf1"),
+                date(on),
+                subj("investigator"),
+            ],
+        )
+    };
+    let history = [
+        (
+            "dirt",
+            vec![
+                claim_instance("Trial", &[subj("t1")]),
+                claim_instance(
+                    "ParticipantRandomised",
+                    &[
+                        subj("p1"),
+                        subj("t1"),
+                        subj("v1"),
+                        date("2026-03-01"),
+                        subj("investigator"),
+                    ],
+                ),
+            ],
+        ),
+        ("elsewhere", vec![consent("p2", "2026-02-01")]),
+        ("late", vec![consent("p1", "2026-04-01")]),
+    ];
+    for (id, admitted) in history {
+        let pre = State::from_claims(held.clone());
+        let effective = effective_delta(&pre, &admitted, &[]);
+        held.extend(admitted);
+        scorer
+            .observe_transition(&State::from_claims(held.clone()), &effective, id)
+            .expect("evaluates");
+    }
+    let report = scorer.into_report();
+    let rule = report
+        .invariants
+        .iter()
+        .find(|s| s.invariant == "consent_obtained_before_randomisation")
+        .expect("scored");
+    assert_eq!(rule.refused_transitions, vec!["dirt", "late"]);
 }

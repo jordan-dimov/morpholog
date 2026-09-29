@@ -59,7 +59,11 @@ impl CompiledProgram {
     /// the `Program::*` lookups.
     pub fn new(program: Program) -> Result<Self, Vec<ValidationError>> {
         program.validate()?;
-        let impact = program.invariants.iter().map(ImpactPlan::new).collect();
+        let impact = program
+            .invariants
+            .iter()
+            .map(|inv| ImpactPlan::with_definitions(inv, &program.definitions))
+            .collect();
         Ok(Self {
             impact,
             transformations: position_index(&program.transformations, |t| t.name.clone()),

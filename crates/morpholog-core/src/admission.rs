@@ -33,7 +33,12 @@ impl<'a> Admission<'a> {
         Self {
             invariants,
             definitions,
-            plans: Cow::Owned(invariants.iter().map(ImpactPlan::new).collect()),
+            plans: Cow::Owned(
+                invariants
+                    .iter()
+                    .map(|inv| ImpactPlan::with_definitions(inv, definitions))
+                    .collect(),
+            ),
         }
     }
 

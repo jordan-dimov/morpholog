@@ -40,7 +40,7 @@ fn balanced_posted_entry_sql_is_pinned() {
     assert_eq!(
         sql,
         r#"/* morpholog compiled invariant balanced_posted_entry v1 stage1 */
-SELECT (t0.arguments -> 0)::text AS "w_entry"
+SELECT 1 AS "w"
 FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((CASE WHEN (t1.arguments -> 2 ->> 'type') = 'decimal' THEN (t1.arguments -> 2 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t1.arguments -> 2 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0)))) l2, LATERAL (SELECT COALESCE(sum((CASE WHEN (t3.arguments -> 3 ->> 'type') = 'decimal' THEN (t3.arguments -> 3 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t3.arguments -> 3 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0)))) l4
 WHERE t0.predicate_name = 'JournalEntry'
   AND ((l2.f OR NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR l4.f OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)) OR NOT (l2.s) = (l4.s))
@@ -84,9 +84,7 @@ fn supersedes_uniqueness_sql_is_pinned() {
     assert_eq!(
         sql,
         r#"/* morpholog compiled invariant supersedes_unique_by_prior_entry_id v1 stage1 */
-SELECT (t0.arguments -> 0)::text AS "w_new_entry_id_a",
-       (t1.arguments -> 0)::text AS "w_new_entry_id_b",
-       (t0.arguments -> 1)::text AS "w_prior_entry_id"
+SELECT 1 AS "w"
 FROM morpholog.claims t0, morpholog.claims t1
 WHERE t0.predicate_name = 'Supersedes'
   AND t1.predicate_name = 'Supersedes'
@@ -105,7 +103,7 @@ fn journal_entry_has_lines_sql_is_pinned() {
     assert_eq!(
         sql,
         r#"/* morpholog compiled invariant journal_entry_has_lines v1 stage1 */
-SELECT (t0.arguments -> 0)::text AS "w_entry"
+SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'JournalEntry'
   AND NOT EXISTS (SELECT 1 FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0))))
@@ -235,10 +233,12 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
             },
         ),
         (
-            "defined",
-            "define d(x):\n    B(x)\n\ninvariant r:\n    A(x) implies d(x)\n",
-            CompileReason::Construct {
-                construct: "defined call",
+            // A sum observes how many witnesses a call has; the kernel
+            // yields each projection once.
+            "defined call under a sum",
+            "define amount_of(x, n):\n    Amount(x, n)\n\ninvariant r:\n    Cap(cap) implies sum(n | amount_of(_, n)) <= cap\n",
+            CompileReason::SumShape {
+                detail: "a defined call under a sum",
             },
         ),
         (
@@ -365,7 +365,7 @@ fn a_quantity_ordering_against_a_literal_is_pinned() {
     assert_eq!(
         inv.violation_sql(None),
         r#"/* morpholog compiled invariant quantity_is_positive v1 stage1 */
-SELECT (t0.arguments -> 1)::text AS "w_qty"
+SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Terms'
   AND (NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) OR NOT ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) > ('0'::numeric))
@@ -407,8 +407,7 @@ fn a_timestamp_ordering_is_pinned() {
     assert_eq!(
         inv.violation_sql(None),
         r#"/* morpholog compiled invariant delivery_period_is_ordered v1 stage1 */
-SELECT (t0.arguments -> 3)::text AS "w_e",
-       (t0.arguments -> 2)::text AS "w_s"
+SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Terms'
   AND (NOT (COALESCE((t0.arguments -> 2 ->> 'type') = 'timestamp', false) AND COALESCE((t0.arguments -> 3 ->> 'type') = 'timestamp', false)) OR NOT (morpholog.timestamp_nanos(t0.arguments -> 2)) < (morpholog.timestamp_nanos(t0.arguments -> 3)))
@@ -682,9 +681,7 @@ fn two_orderings_in_a_consequent_are_pinned() {
     assert_eq!(
         inv.violation_sql(None),
         r#"/* morpholog compiled invariant coverage_terms_within_range v1 stage1 */
-SELECT (t0.arguments -> 1)::text AS "w_deductible",
-       (t0.arguments -> 0)::text AS "w_p",
-       (t0.arguments -> 2)::text AS "w_per_claim_limit"
+SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Terms'
   AND ((NOT COALESCE((t0.arguments -> 1 ->> 'type') = 'decimal', false) OR (('0'::numeric) <= ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric END)) AND NOT COALESCE((t0.arguments -> 2 ->> 'type') = 'decimal', false))) OR NOT (('0'::numeric) <= ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric END)) AND ('0'::numeric) < ((CASE WHEN (t0.arguments -> 2 ->> 'type') = 'decimal' THEN (t0.arguments -> 2 ->> 'value')::numeric END))))
@@ -719,7 +716,7 @@ fn an_ordering_under_a_nested_scope_is_pinned() {
     assert_eq!(
         inv.violation_sql(None),
         r#"/* morpholog compiled invariant r v1 stage1 */
-SELECT (t0.arguments -> 0)::text AS "w_x"
+SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'A'
   AND (EXISTS (SELECT 1 FROM morpholog.claims t1 WHERE (t1.predicate_name = 'Timed' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0))) AND NOT (COALESCE((t1.arguments -> 1 ->> 'type') = 'timestamp', false) AND COALESCE((t1.arguments -> 2 ->> 'type') = 'timestamp', false)))) OR NOT (EXISTS (SELECT 1 FROM morpholog.claims t1 WHERE t1.predicate_name = 'Timed' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0))) AND (morpholog.timestamp_nanos(t1.arguments -> 1)) < (morpholog.timestamp_nanos(t1.arguments -> 2)))))
@@ -743,9 +740,7 @@ fn a_date_ordering_is_pinned() {
     assert_eq!(
         inv.violation_sql(None),
         r#"/* morpholog compiled invariant dates_are_ordered v1 stage1 */
-SELECT (t0.arguments -> 2)::text AS "w_closed",
-       (t0.arguments -> 1)::text AS "w_opened",
-       (t0.arguments -> 0)::text AS "w_x"
+SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Dated'
   AND (NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'date', false) AND COALESCE((t0.arguments -> 2 ->> 'type') = 'date', false)) OR NOT (morpholog.date_ordinal(t0.arguments -> 1)) <= (morpholog.date_ordinal(t0.arguments -> 2)))
@@ -782,5 +777,67 @@ invariant opened_this_millennium:
             .contains("(morpholog.date_ordinal(t0.arguments -> 1)) > (20000101::integer)"),
         "{}",
         set.invariants[0].violation_sql(None)
+    );
+}
+
+fn selector_program() -> morpholog_core::Program {
+    morpholog_surface::parse_program(
+        "program selector
+predicate Ask(trade: Subject, as_of: Timestamp)
+predicate Terms(trade: Subject, effective_from: Timestamp, qty: Decimal)
+    effective by (trade) on (effective_from)
+predicate Good(trade: Subject, qty: Decimal)
+invariant asked_terms_are_good:
+    Ask(trade, as_of) and terms_in_force_on(trade, as_of, qty) implies Good(trade, qty)
+",
+    )
+    .expect("parses")
+}
+
+/// The generated in-force selector called from an antecedent: the key
+/// and the as-of arrive bound, the payload binds from the body and
+/// reaches the witness and the consequent, the body's own variables do
+/// not. The body's joins inline after the caller's; its error plan, a
+/// second rendering, sits past those joins and asks the body whole for
+/// each caller row.
+#[test]
+fn the_generated_selector_call_is_pinned() {
+    let set = compiled(&selector_program());
+    let inv = &set.invariants[1];
+    assert_eq!(inv.name.as_str(), "asked_terms_are_good");
+    assert_eq!(
+        inv.violation_sql(None),
+        r#"/* morpholog compiled invariant asked_terms_are_good v1 stage1 */
+SELECT 1 AS "w"
+FROM morpholog.claims t0, morpholog.claims t1
+WHERE t0.predicate_name = 'Ask'
+  AND t1.predicate_name = 'Terms'
+  AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0)))
+  AND ((EXISTS (SELECT 1 FROM morpholog.claims t3 WHERE (t3.predicate_name = 'Terms' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0))) AND NOT (COALESCE((t3.arguments -> 1 ->> 'type') = 'timestamp', false) AND COALESCE((t0.arguments -> 1 ->> 'type') = 'timestamp', false)))) OR EXISTS (SELECT 1 FROM morpholog.claims t3 WHERE (t3.predicate_name = 'Terms' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0))) AND (morpholog.timestamp_nanos(t3.arguments -> 1)) <= (morpholog.timestamp_nanos(t0.arguments -> 1)) AND (EXISTS (SELECT 1 FROM morpholog.claims t4 WHERE (t4.predicate_name = 'Terms' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t4.arguments -> 0))) AND NOT (COALESCE((t4.arguments -> 1 ->> 'type') = 'timestamp', false) AND COALESCE((t0.arguments -> 1 ->> 'type') = 'timestamp', false)))) OR EXISTS (SELECT 1 FROM morpholog.claims t4 WHERE (t4.predicate_name = 'Terms' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t4.arguments -> 0))) AND (morpholog.timestamp_nanos(t4.arguments -> 1)) <= (morpholog.timestamp_nanos(t0.arguments -> 1)) AND NOT (COALESCE((t4.arguments -> 1 ->> 'type') = 'timestamp', false) AND COALESCE((t3.arguments -> 1 ->> 'type') = 'timestamp', false)))))))) OR ((morpholog.timestamp_nanos(t1.arguments -> 1)) <= (morpholog.timestamp_nanos(t0.arguments -> 1)) AND (NOT (EXISTS (SELECT 1 FROM morpholog.claims t2 WHERE t2.predicate_name = 'Terms' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t2.arguments -> 0))) AND (morpholog.timestamp_nanos(t2.arguments -> 1)) <= (morpholog.timestamp_nanos(t0.arguments -> 1)) AND (morpholog.timestamp_nanos(t2.arguments -> 1)) > (morpholog.timestamp_nanos(t1.arguments -> 1)))) AND NOT EXISTS (SELECT 1 FROM morpholog.claims t5 WHERE t5.predicate_name = 'Good' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t5.arguments -> 0))) AND (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 2))) = (morpholog.claim_digest(morpholog.value_key_v1(t5.arguments -> 1)))))))
+ORDER BY (morpholog.value_key_v1(t0.arguments -> 1))::text, (morpholog.value_key_v1(t1.arguments -> 2))::text, (morpholog.value_key_v1(t0.arguments -> 0))::text
+LIMIT 1"#
+    );
+    // One error scope, over the caller row and the body's join; its
+    // probes read the second rendering, never the inlined alias.
+    let errors = inv.error_sqls(None, &[]).unwrap();
+    assert_eq!(errors.len(), 1);
+    let error = &errors[0];
+    assert!(error.starts_with("SELECT CASE WHEN EXISTS (SELECT 1 FROM morpholog.claims t3 WHERE"));
+    assert!(error.contains("\nFROM morpholog.claims t0, morpholog.claims t1\nWHERE (t0.predicate_name = 'Ask' AND t1.predicate_name = 'Terms' AND "));
+    assert!(error.ends_with("\nORDER BY t0.arguments_hash, t1.arguments_hash\nLIMIT 1"));
+    let required: Vec<(String, usize)> = inv
+        .required_indexes
+        .iter()
+        .map(|s| (s.predicate.to_string(), s.position))
+        .collect();
+    assert_eq!(
+        required,
+        vec![
+            ("Ask".to_string(), 0),
+            ("Good".to_string(), 0),
+            ("Good".to_string(), 1),
+            ("Terms".to_string(), 0),
+            ("Terms".to_string(), 2),
+        ]
     );
 }

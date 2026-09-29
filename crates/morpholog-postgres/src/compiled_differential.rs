@@ -12,8 +12,9 @@
 //! - **Governed history** (states reached only through accepted
 //!   proposals): the kernel, the full SQL check and the case-bound SQL
 //!   check agree on the verdict. On rejection, the first failing rule's
-//!   name, version and witness variable set must match; witness values
-//!   may differ (a symmetric self-join can name a pair in either order).
+//!   name and version must match, the case-bound check's witness must be
+//!   the kernel's, values included, and the full check's must carry the
+//!   same variables.
 //! - **Dirty history** (rows the kernel never admitted, of the declared
 //!   kinds or of another kind altogether): the kernel and the case-bound
 //!   check still agree. Equality is one key for every stored value, and
@@ -29,8 +30,8 @@
 use std::fmt::Write as _;
 
 use morpholog_core::{
-    CompiledProgram, EvalError, EvalValue, Outcome, Program, RejectionReason, StagedDelta, Subject,
-    Transition, finish_staged_delta_with, propose_stage_delta,
+    CompiledProgram, EvalError, EvalValue, Outcome, Program, Prop, RejectionReason, StagedDelta,
+    Subject, Transition, WitnessBinding, finish_staged_delta_with, propose_stage_delta,
 };
 use uuid::Uuid;
 
@@ -242,15 +243,22 @@ fn governed_contract(obs: &ProbeObservation) -> Result<bool, String> {
                         &format!("{} v{}", s.name, s.version),
                     ));
                 }
-                // Witness variables must agree; values may differ.
-                let s_vars: Vec<_> = s.witness.iter().map(|w| &w.var).collect();
-                let k_vars: Vec<_> = witness.iter().map(|w| &w.var).collect();
-                if s_vars != k_vars {
-                    return Err(disagreement(
-                        &format!("{label} witness variables"),
-                        &format!("{k_vars:?}"),
-                        &format!("{s_vars:?}"),
-                    ));
+                // The case-bound check admits, so it reports the kernel's
+                // own path, values and all. The full check answers for the
+                // whole state, which on dirty history can name another
+                // case: its variables must agree, its values may differ.
+                let (k, got) = if label == "case-bound" {
+                    (format!("{witness:?}"), format!("{:?}", s.witness))
+                } else {
+                    let vars =
+                        |w: &[WitnessBinding]| w.iter().map(|b| b.var.clone()).collect::<Vec<_>>();
+                    (
+                        format!("{:?}", vars(witness)),
+                        format!("{:?}", vars(&s.witness)),
+                    )
+                };
+                if k != got {
+                    return Err(disagreement(&format!("{label} witness"), &k, &got));
                 }
             }
             Ok(false)
@@ -527,6 +535,47 @@ invariant period_is_ordered:
 transformation open(x, opened, closed):
     admit Period(x, opened, closed)
 ",
+    // Defined calls: a call binding what the consequent orders, a call
+    // in a consequent, a negated call, a repeated argument beside a
+    // literal and an internal variable, a wildcard argument, a
+    // definition calling a definition, and two internal witnesses that
+    // project to one caller binding.
+    "program defined_calls
+predicate Holder(x: Subject, n: Decimal)
+predicate Route(x: Subject, via: Subject)
+predicate Cell(a: Subject, internal: Subject, b: Subject, c: Subject)
+predicate Ok(x: Subject)
+define has_route(x):
+    Route(x, via)
+define positive(x, n):
+    Holder(x, n) and n > 0
+define cell(a, b, c):
+    Cell(a, internal, b, c)
+define routed_and_positive(x, n):
+    has_route(x) and positive(x, n)
+invariant positive_holders_are_ok:
+    positive(x, n) implies Ok(x)
+invariant routed_holders_are_positive:
+    Holder(x, n) and has_route(x) implies positive(x, n)
+invariant unrouted_holders_are_ok:
+    Holder(x, _) and not has_route(x) implies Ok(x)
+invariant diagonal_cells_are_ok:
+    cell(x, x, #fixed) implies Ok(x)
+invariant any_cell_is_ok:
+    cell(x, _, _) implies Ok(x)
+invariant routed_positive_holders_are_ok:
+    routed_and_positive(x, n) implies Ok(x)
+invariant positive_holdings_are_bounded:
+    positive(x, n) implies n <= 100
+transformation hold(x, n):
+    admit Holder(x, n)
+transformation route(x, via):
+    admit Route(x, via)
+transformation fill(a, internal, b, c):
+    admit Cell(a, internal, b, c)
+transformation approve(x):
+    admit Ok(x)
+",
     "program tagged_timestamp_join
 predicate LeftAt(x: Subject, v: Timestamp)
 predicate RightAt(x: Subject, v: Timestamp)
@@ -656,6 +705,8 @@ const MINIMUM_CORPUS: &[&str] = &[
     "approval_controls",
     "carbon_credit_provenance",
     "release_governance",
+    "clinical_trial_enrolment",
+    "biometric_identification_oversight",
 ];
 
 pub(crate) fn whole_in_fragment() -> Vec<Program> {
@@ -1779,5 +1830,574 @@ transformation open(x, opened, closed):
             "the kernel errors and both stages agree, got {}",
             describe(other)
         ),
+    }
+}
+
+// ============================================================
+// Defined calls: the body's errors in the kernel's order
+// ============================================================
+
+/// Two caller rows, each calling a body with two comparisons, crossing
+/// their errors: the first caller's second comparison wins, since the
+/// kernel evaluates the body whole per caller binding. Once through a
+/// direct call, once through a definition that calls the definition.
+#[tokio::test]
+async fn a_calls_body_raises_per_caller_row_in_order() {
+    let pool = test_pool().await;
+    for (label, invariant) in [
+        (
+            "direct",
+            "    Enabled(_) and Holder(x) and band(x) implies Ok(x)",
+        ),
+        (
+            "nested",
+            "    Enabled(_) and Holder(x) and outer_band(x) implies Ok(x)",
+        ),
+    ] {
+        reset_db(&pool).await;
+        let (first, second) = rows_in_load_order(&pool, |a, b| {
+            (
+                serde_json::json!([subject(a)]),
+                serde_json::json!([subject(b)]),
+            )
+        })
+        .await;
+        let x1 = first[0]["value"].as_str().unwrap().to_string();
+        let x2 = second[0]["value"].as_str().unwrap().to_string();
+        insert_rows(&pool, "Holder", &[first.clone(), second.clone()]).await;
+        insert_rows(
+            &pool,
+            "Band",
+            &[
+                serde_json::json!([subject(&x1), decimal("1"), instant("2026-01-01T00:00:00Z")]),
+                serde_json::json!([subject(&x2), subject("lo_is_a_subject"), decimal("1")]),
+            ],
+        )
+        .await;
+        let source = format!(
+            "program crossed_callers_{label}
+predicate Enabled(flag: Subject)
+predicate Holder(x: Subject)
+predicate Band(x: Subject, lo: Decimal, hi: Decimal)
+predicate Ok(x: Subject)
+define band(x):
+    Band(x, lo, hi) and 0 <= lo and 0 < hi
+define outer_band(x):
+    band(x)
+invariant bands_are_ok:
+{invariant}
+transformation enable(flag):
+    admit Enabled(flag)
+"
+        );
+        expect_kernel_error_agreed(&source, "enable", vec![subj("f")]).await;
+    }
+}
+
+/// The generated in-force selector called from an antecedent, dirtied
+/// in the version the negation searches and, separately, in the version
+/// the selector picks: two positions of the body's error plan.
+#[tokio::test]
+async fn the_generated_selector_raises_where_the_kernel_does() {
+    const SELECTOR: &str = "program generated_selector
+predicate Enabled(flag: Subject)
+predicate Ask(trade: Subject, as_of: Timestamp)
+predicate Terms(trade: Subject, effective_from: Timestamp, qty: Decimal)
+    effective by (trade) on (effective_from)
+predicate Good(trade: Subject, qty: Decimal)
+invariant asked_terms_are_good:
+    Enabled(_) and Ask(trade, as_of) and terms_in_force_on(trade, as_of, qty) implies Good(trade, qty)
+transformation enable(flag):
+    admit Enabled(flag)
+";
+    let pool = test_pool().await;
+    for dirty in ["later", "selected"] {
+        reset_db(&pool).await;
+        insert_rows(
+            &pool,
+            "Ask",
+            &[serde_json::json!([
+                subject("t1"),
+                instant("2026-06-01T00:00:00Z")
+            ])],
+        )
+        .await;
+        let rows = if dirty == "later" {
+            vec![
+                serde_json::json!([subject("t1"), instant("2026-01-01T00:00:00Z"), decimal("1")]),
+                serde_json::json!([subject("t1"), subject("not_an_instant"), decimal("2")]),
+            ]
+        } else {
+            vec![serde_json::json!([
+                subject("t1"),
+                subject("not_an_instant"),
+                decimal("1")
+            ])]
+        };
+        insert_rows(&pool, "Terms", &rows).await;
+        expect_kernel_error_agreed(SELECTOR, "enable", vec![subj("f")]).await;
+    }
+}
+
+/// Two internal witnesses projecting to one caller binding, then an
+/// ordering over what the caller bound: the compiled check inlines the
+/// body's joins, and the duplicate changes neither the verdict nor which
+/// error is first.
+#[tokio::test]
+async fn duplicate_internal_witnesses_change_nothing_the_caller_sees() {
+    const SOURCE: &str = "program duplicate_witnesses
+predicate Enabled(flag: Subject)
+predicate Route(x: Subject, via: Subject)
+predicate Holder(x: Subject, n: Decimal)
+predicate Ok(x: Subject)
+define has_route(x):
+    Route(x, via)
+invariant routed_holders_are_positive:
+    Enabled(_) and Holder(x, n) and has_route(x) implies n > 0
+transformation enable(flag):
+    admit Enabled(flag)
+";
+    let pool = test_pool().await;
+    for n in [decimal("5"), subject("n_is_a_subject")] {
+        reset_db(&pool).await;
+        insert_rows(
+            &pool,
+            "Route",
+            &[
+                serde_json::json!([subject("x"), subject("via_1")]),
+                serde_json::json!([subject("x"), subject("via_2")]),
+            ],
+        )
+        .await;
+        insert_rows(
+            &pool,
+            "Holder",
+            &[serde_json::json!([subject("x"), n.clone()])],
+        )
+        .await;
+        let program = morpholog_surface::parse_program(SOURCE).expect("parses");
+        let validated = program.validated().expect("validates");
+        let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+        let compiled = CompiledProgram::new(program).expect("compiles");
+        match probe_raw(&pool, &compiled, &sql_set, "enable", vec![subj("f")]).await {
+            Ok(Probe::KernelErrorAgreed) => assert_eq!(n["type"], "subject"),
+            Ok(Probe::Observed(obs)) => {
+                assert_eq!(n["type"], "decimal");
+                governed_contract(&obs).expect("the three agree");
+            }
+            other => panic!("{}", describe(other)),
+        }
+    }
+}
+
+/// Two antecedent rows failing the consequent at different depths: one
+/// finds no joined row, the other joins and fails the comparison, so
+/// their witnesses carry different variables. The kernel reports the
+/// first in its state order, and so must the compiled check.
+#[tokio::test]
+async fn the_reported_violation_is_the_kernels_first() {
+    const SOURCE: &str = "program first_violation
+predicate Enabled(flag: Subject)
+predicate A(x: Subject)
+predicate B(x: Subject, y: Decimal)
+invariant joined_rows_are_positive:
+    Enabled(_) and A(x) implies B(x, y) and y > 0
+transformation enable(flag):
+    admit Enabled(flag)
+";
+    let pool = test_pool().await;
+    let names = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    for pair in names.chunks(2) {
+        for (joined, unjoined) in [(pair[0], pair[1]), (pair[1], pair[0])] {
+            reset_db(&pool).await;
+            insert_rows(
+                &pool,
+                "A",
+                &[
+                    serde_json::json!([subject(joined)]),
+                    serde_json::json!([subject(unjoined)]),
+                ],
+            )
+            .await;
+            insert_rows(
+                &pool,
+                "B",
+                &[serde_json::json!([subject(joined), decimal("-1")])],
+            )
+            .await;
+            let program = morpholog_surface::parse_program(SOURCE).expect("parses");
+            let validated = program.validated().expect("validates");
+            let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+            let compiled = CompiledProgram::new(program).expect("compiles");
+            match probe_raw(&pool, &compiled, &sql_set, "enable", vec![subj("f")]).await {
+                Ok(Probe::Observed(obs)) => governed_contract(&obs)
+                    .unwrap_or_else(|msg| panic!("joined {joined}, unjoined {unjoined}: {msg}")),
+                other => panic!("{}", describe(other)),
+            };
+        }
+    }
+}
+
+/// Two rows start the consequent and only one reaches its second
+/// conjunct: the kernel's witness is the first row of the longest prefix
+/// that matched, so it names the value that got furthest, whichever
+/// starts first.
+#[tokio::test]
+async fn the_witness_reads_the_longest_prefix_that_matched() {
+    const SOURCE: &str = "program longest_prefix
+predicate Enabled(flag: Subject)
+predicate A(x: Subject)
+predicate B(x: Subject, y: Subject)
+predicate C(y: Subject, z: Decimal)
+invariant chains_end_positive:
+    Enabled(_) and A(x) implies B(x, y) and C(y, z) and z > 0
+transformation enable(flag):
+    admit Enabled(flag)
+";
+    let pool = test_pool().await;
+    for (reached, stopped) in [("y1", "y2"), ("y2", "y1")] {
+        reset_db(&pool).await;
+        insert_rows(&pool, "A", &[serde_json::json!([subject("p")])]).await;
+        insert_rows(
+            &pool,
+            "B",
+            &[
+                serde_json::json!([subject("p"), subject(reached)]),
+                serde_json::json!([subject("p"), subject(stopped)]),
+            ],
+        )
+        .await;
+        insert_rows(
+            &pool,
+            "C",
+            &[serde_json::json!([subject(reached), decimal("-1")])],
+        )
+        .await;
+        let program = morpholog_surface::parse_program(SOURCE).expect("parses");
+        let validated = program.validated().expect("validates");
+        let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+        let compiled = CompiledProgram::new(program).expect("compiles");
+        match probe_raw(&pool, &compiled, &sql_set, "enable", vec![subj("f")]).await {
+            Ok(Probe::Observed(obs)) => {
+                governed_contract(&obs).unwrap_or_else(|msg| panic!("reached {reached}: {msg}"))
+            }
+            other => panic!("{}", describe(other)),
+        };
+    }
+}
+
+// ============================================================
+// Defined calls: the diagnosis enters the call's frame
+// ============================================================
+
+/// Probe `enable` over `rows` and hold the compiled witness to the
+/// kernel's.
+async fn probe_enable(
+    pool: &PgPool,
+    program: Program,
+    rows: &[(&str, Vec<serde_json::Value>)],
+) -> Box<ProbeObservation> {
+    reset_db(pool).await;
+    for (predicate, values) in rows {
+        insert_rows(pool, predicate, values).await;
+    }
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+    let compiled = CompiledProgram::new(program).expect("compiles");
+    let obs = match probe_raw(pool, &compiled, &sql_set, "enable", vec![subj("f")]).await {
+        Ok(Probe::Observed(obs)) => obs,
+        other => panic!("{}", describe(other)),
+    };
+    governed_contract(&obs).unwrap_or_else(|msg| panic!("{rows:?}: {msg}"));
+    obs
+}
+
+/// [`probe_enable`], then pin which variables the kernel reported, so the
+/// state is known to reach the scope the caller means.
+async fn assert_diagnosis(
+    pool: &PgPool,
+    program: Program,
+    rows: &[(&str, Vec<serde_json::Value>)],
+    expected: &[&str],
+) {
+    let obs = probe_enable(pool, program, rows).await;
+    let Some(Outcome::Rejected {
+        reason: RejectionReason::Invariant { witness, .. },
+    }) = &obs.kernel
+    else {
+        panic!("{rows:?}: expected an invariant rejection");
+    };
+    let vars: Vec<&str> = witness.iter().map(|w| w.var.as_str()).collect();
+    assert_eq!(vars, expected, "{rows:?}");
+}
+
+const FRAME_SOURCE: &str = "program frames
+predicate Enabled(flag: Subject)
+predicate A(x: Subject)
+predicate Pair(x: Subject, y: Subject)
+predicate B(x: Subject, y: Subject)
+predicate Holder(item: Subject, amount: Decimal)
+predicate Link(o: Subject, mid: Subject)
+define positive(item):
+    Holder(item, amount) and amount > 0
+define positive_through(o):
+    Link(o, mid) and positive(mid)
+define positive_x(x):
+    Holder(x, n) and n > 0
+invariant renamed:
+    Enabled(_) and A(x) implies positive(x)
+invariant nested:
+    Enabled(_) and A(x) implies positive_through(x)
+invariant respelled:
+    Enabled(_) and Pair(x, y) implies positive_x(y)
+invariant two_scopes:
+    Enabled(_) and A(x) implies B(x, y) and positive(y)
+invariant under_exists:
+    Enabled(_) and A(x) implies (exists m: Holder(x, m) and positive(x))
+transformation enable(flag):
+    admit Enabled(flag)
+";
+
+/// The programme with every invariant but `keep` removed.
+fn only(keep: &str) -> Program {
+    let mut program = morpholog_surface::parse_program(FRAME_SOURCE).expect("parses");
+    program.invariants.retain(|inv| inv.name.as_str() == keep);
+    program
+}
+
+/// A failing call reports the callee's frame: its parameter, named
+/// differently from the caller's variable, and what the body bound before
+/// it failed. A body that fails earlier binds less.
+#[tokio::test]
+async fn a_failing_call_reports_the_callees_frame() {
+    let pool = test_pool().await;
+    let a = ("A", vec![serde_json::json!([subject("p")])]);
+    assert_diagnosis(
+        &pool,
+        only("renamed"),
+        &[
+            a.clone(),
+            (
+                "Holder",
+                vec![serde_json::json!([subject("p"), decimal("-1")])],
+            ),
+        ],
+        &["amount", "item"],
+    )
+    .await;
+    assert_diagnosis(&pool, only("renamed"), &[a], &["item"]).await;
+}
+
+/// A call failing inside a nested call reports the inner frame only.
+#[tokio::test]
+async fn a_nested_call_reports_the_innermost_frame() {
+    let pool = test_pool().await;
+    assert_diagnosis(
+        &pool,
+        only("nested"),
+        &[
+            ("A", vec![serde_json::json!([subject("p")])]),
+            (
+                "Link",
+                vec![serde_json::json!([subject("p"), subject("q")])],
+            ),
+            (
+                "Holder",
+                vec![serde_json::json!([subject("q"), decimal("-1")])],
+            ),
+        ],
+        &["amount", "item"],
+    )
+    .await;
+}
+
+/// A parameter spelled like a caller variable is another variable: the
+/// witness's `x` is the callee's, bound to the caller's `y`.
+#[tokio::test]
+async fn a_parameter_spelled_like_a_caller_variable_is_the_callees() {
+    let pool = test_pool().await;
+    assert_diagnosis(
+        &pool,
+        only("respelled"),
+        &[
+            (
+                "Pair",
+                vec![serde_json::json!([subject("p"), subject("q")])],
+            ),
+            (
+                "Holder",
+                vec![serde_json::json!([subject("q"), decimal("-1")])],
+            ),
+        ],
+        &["n", "x"],
+    )
+    .await;
+}
+
+/// One invariant, two witness namespaces: the failing path picks the
+/// scope. Failing at the join reports the caller's variables; failing
+/// inside the call reports the callee's.
+#[tokio::test]
+async fn the_failing_path_picks_the_witness_scope() {
+    let pool = test_pool().await;
+    let a = ("A", vec![serde_json::json!([subject("p")])]);
+    assert_diagnosis(&pool, only("two_scopes"), std::slice::from_ref(&a), &["x"]).await;
+    assert_diagnosis(
+        &pool,
+        only("two_scopes"),
+        &[
+            a,
+            ("B", vec![serde_json::json!([subject("p"), subject("q")])]),
+        ],
+        &["item"],
+    )
+    .await;
+}
+
+/// Under `exists` a call is evaluated, never diagnosed through: the
+/// witness stays in the caller's scope.
+#[tokio::test]
+async fn a_call_under_exists_is_not_a_diagnostic_boundary() {
+    let pool = test_pool().await;
+    assert_diagnosis(
+        &pool,
+        only("under_exists"),
+        &[
+            ("A", vec![serde_json::json!([subject("p")])]),
+            (
+                "Holder",
+                vec![serde_json::json!([subject("p"), decimal("-1")])],
+            ),
+        ],
+        &["x"],
+    )
+    .await;
+}
+
+/// A nested conjunction the surface flattens but the IR can hold: the
+/// kernel diagnoses it under the first row before it alone, so the second
+/// antecedent row's deeper match does not count.
+#[tokio::test]
+async fn a_nested_conjunction_is_diagnosed_under_the_row_before_it() {
+    const SOURCE: &str = "program nested_and
+predicate Enabled(flag: Subject)
+predicate A(x: Subject)
+predicate B(x: Subject, y: Subject)
+predicate C(y: Subject, z: Decimal)
+invariant chain:
+    Enabled(_) and A(x) implies B(x, y) and C(y, z) and z > 0
+transformation enable(flag):
+    admit Enabled(flag)
+";
+    let pool = test_pool().await;
+    for (first, second) in [("y1", "y2"), ("y2", "y1")] {
+        let mut program = morpholog_surface::parse_program(SOURCE).expect("parses");
+        let Prop::Implies { right, .. } = &mut program.invariants[0].body else {
+            panic!("an implication");
+        };
+        let Prop::And(conjuncts) = right.as_mut() else {
+            panic!("a conjunction");
+        };
+        let nested = conjuncts.split_off(1);
+        conjuncts.push(Prop::And(nested));
+        // Only `second` reaches `C`; whichever sorts first, the nested
+        // conjunction is judged under the first `B` row the kernel meets.
+        probe_enable(
+            &pool,
+            program,
+            &[
+                ("A", vec![serde_json::json!([subject("p")])]),
+                (
+                    "B",
+                    vec![
+                        serde_json::json!([subject("p"), subject(first)]),
+                        serde_json::json!([subject("p"), subject(second)]),
+                    ],
+                ),
+                (
+                    "C",
+                    vec![serde_json::json!([subject(second), decimal("-1")])],
+                ),
+            ],
+        )
+        .await;
+    }
+}
+
+/// A nested implication in the consequent is diagnosed through: the
+/// kernel takes its first antecedent match whose consequent fails and
+/// reports what that match bound. The same for `forall`.
+#[tokio::test]
+async fn a_nested_implication_is_diagnosed_through_its_first_failing_match() {
+    let pool = test_pool().await;
+    for consequent in ["(B(x, y) implies C(y))", "(forall y in B(x, y): C(y))"] {
+        let source = format!(
+            "program nested_implies
+predicate Enabled(flag: Subject)
+predicate A(x: Subject)
+predicate B(x: Subject, y: Subject)
+predicate C(y: Subject)
+invariant nested:
+    Enabled(_) and A(x) implies {consequent}
+transformation enable(flag):
+    admit Enabled(flag)
+"
+        );
+        assert_diagnosis(
+            &pool,
+            morpholog_surface::parse_program(&source).expect("parses"),
+            &[
+                ("A", vec![serde_json::json!([subject("p")])]),
+                ("B", vec![serde_json::json!([subject("p"), subject("q")])]),
+            ],
+            &["x", "y"],
+        )
+        .await;
+    }
+}
+
+/// Bodies the compiled check denies whole, with no antecedent row to
+/// start from, are still diagnosed as the kernel diagnoses them: a body
+/// that is a call reports the callee's frame, a conjunction the prefix
+/// that matched, and an implication whose antecedent only filters its
+/// consequent's failing path.
+#[tokio::test]
+async fn a_body_without_an_antecedent_row_is_diagnosed_too() {
+    let pool = test_pool().await;
+    for (body, expected) in [
+        ("required(#x)", &["p"][..]),
+        ("A(y) and B(y)", &["y"][..]),
+        ("1 > 0 implies (A(z) and B(z))", &["z"][..]),
+    ] {
+        let source = format!(
+            "program no_antecedent_row
+predicate A(p: Subject)
+predicate B(p: Subject)
+define required(p):
+    A(p) and B(p)
+invariant holds:
+    {body}
+transformation add_a(p):
+    admit A(p)
+"
+        );
+        reset_db(&pool).await;
+        let program = morpholog_surface::parse_program(&source).expect("parses");
+        let validated = program.validated().expect("validates");
+        let sql_set = compile_invariants(validated).expect("whole-in-fragment");
+        let compiled = CompiledProgram::new(program).expect("compiles");
+        let obs = match probe_raw(&pool, &compiled, &sql_set, "add_a", vec![subj("x")]).await {
+            Ok(Probe::Observed(obs)) => obs,
+            other => panic!("{body}: {}", describe(other)),
+        };
+        governed_contract(&obs).unwrap_or_else(|msg| panic!("{body}: {msg}"));
+        let Some(Outcome::Rejected {
+            reason: RejectionReason::Invariant { witness, .. },
+        }) = &obs.kernel
+        else {
+            panic!("{body}: expected an invariant rejection");
+        };
+        let vars: Vec<&str> = witness.iter().map(|w| w.var.as_str()).collect();
+        assert_eq!(vars, expected, "{body}");
     }
 }

@@ -16,13 +16,13 @@ use common::{attested, reset_db, seed_claims, test_pool};
 use morpholog_core::{
     ClaimInstance, CompiledProgram, EvalError, EvalValue, Program, Subject, Transition,
 };
-use morpholog_examples::double_entry_ledger;
+use morpholog_examples::{clinical_trial_enrolment, double_entry_ledger};
 use morpholog_postgres::{
     InvariantPlan, PgAtomicOutcome, PgError, PgPool, PgProgram, PgProposalOutcome, Proposal,
     list_rejection_rows, propose_against_pg, propose_all_against_pg,
 };
 use morpholog_test_support::differential::{normalize_uuids, sample_args, sample_state};
-use morpholog_test_support::{dec, subj};
+use morpholog_test_support::{date, dec, subj};
 
 async fn count(pool: &PgPool, sql: &'static str) -> i64 {
     sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
@@ -299,6 +299,63 @@ async fn admission_is_case_local_on_both_routes() {
         "touching the unbalanced entry refuses on it: {spec:?}"
     );
     assert_eq!(real, spec);
+}
+
+/// A rule that calls a definition is admitted case by case too. One
+/// participant was randomised with no consent on record, history the rule
+/// forbids. On both routes a consent for another participant is admitted,
+/// and a late consent for the first, which cures nothing, is refused.
+#[tokio::test]
+async fn a_rule_calling_a_definition_is_case_local_on_both_routes() {
+    let pool = test_pool().await;
+    let seeded = vec![
+        ClaimInstance {
+            predicate: "Trial".into(),
+            args: vec![subj("t1")],
+        },
+        ClaimInstance {
+            predicate: "ParticipantRandomised".into(),
+            args: vec![
+                subj("p1"),
+                subj("t1"),
+                subj("v1"),
+                date("2026-03-01"),
+                subj("investigator"),
+            ],
+        },
+    ];
+    let consent = |participant: &str, on: &str| Transition {
+        transformation_name: "record_consent".into(),
+        args: vec![
+            subj(participant),
+            subj("t1"),
+            subj("cf1"),
+            date(on),
+            subj("investigator"),
+        ],
+        actor: Subject::from("route_test"),
+    };
+    let compiled =
+        PgProgram::new(CompiledProgram::new(clinical_trial_enrolment::program()).unwrap());
+    let interpreted =
+        PgProgram::interpreted(CompiledProgram::new(clinical_trial_enrolment::program()).unwrap());
+
+    let elsewhere = consent("p2", "2026-02-01");
+    let spec = observe(&pool, &interpreted, &seeded, &elsewhere).await;
+    assert!(
+        matches!(&spec, RouteObservation::Decided(o) if o.outcome.starts_with("committed")),
+        "inherited dirt in another participant's case does not block: {spec:?}"
+    );
+    assert_eq!(observe(&pool, &compiled, &seeded, &elsewhere).await, spec);
+
+    let late = consent("p1", "2026-04-01");
+    let spec = observe(&pool, &interpreted, &seeded, &late).await;
+    assert!(
+        matches!(&spec, RouteObservation::Decided(o)
+            if o.outcome.contains("consent_obtained_before_randomisation")),
+        "touching the participant's own case refuses on it: {spec:?}"
+    );
+    assert_eq!(observe(&pool, &compiled, &seeded, &late).await, spec);
 }
 
 /// The kernel sums wider than a decimal and checks only the final

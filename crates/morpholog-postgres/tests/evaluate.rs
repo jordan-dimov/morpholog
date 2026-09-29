@@ -62,7 +62,7 @@ async fn a_candidate_history_violates_reports_the_introducing_commit() {
     let report = score_candidate(&pool, &candidate(inv), None).await.unwrap();
 
     assert_eq!(report.transitions_replayed, 2);
-    assert_eq!(report.semantics, "case_bound_admission_v2");
+    assert_eq!(report.semantics, "case_bound_admission_v3");
     assert!(report.program_hash.starts_with("sha256:"));
 
     let scored = &report.invariants[0];
@@ -233,7 +233,7 @@ async fn batch_over_packs_equals_individual_scores() {
 
     let batch = score_candidate_against_packs(&candidate, &cases).unwrap();
     assert_eq!(batch.cases.len(), 3);
-    assert_eq!(batch.semantics, "case_bound_admission_v2");
+    assert_eq!(batch.semantics, "case_bound_admission_v3");
 
     // Each batch case matches its single-pack score (the batch reports
     // the candidate's identity once).
