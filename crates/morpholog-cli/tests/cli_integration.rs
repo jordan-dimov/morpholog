@@ -4595,6 +4595,11 @@ async fn provision_indexes_json_keeps_stdout_for_the_report() {
         "{stderr}"
     );
 
+    // No programme at all is a usage error: no report names none.
+    let (status, stdout, stderr) = run_cli(&["provision", "indexes", "--json", "--prune"]);
+    assert_eq!(status.code(), Some(2), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+
     // A file that does not parse stops the call before the database.
     let broken = common::write_fixture("broken", "invariant without a body\n");
     let (status, stdout, stderr) = run_cli(&[

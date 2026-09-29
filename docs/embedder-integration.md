@@ -353,7 +353,7 @@ morpholog provision indexes ledger.morph billing.morph --json
 morpholog generate views ledger.morph | psql "$DATABASE_URL"   # if you read state as SQL
 ```
 
-`init` cannot do the third step. It provisions Morpholog's own tables and knows no programme; which indexes are worth building is a fact about the rules you deploy. A database reset with `init --reset` has no indexes until `provision indexes` runs again.
+`init` cannot do the third step. It provisions Morpholog's own tables and knows no programme; which indexes are worth building depends on the rules you deploy. A database reset with `init --reset` has no indexes until `provision indexes` runs again.
 
 Name every programme the database serves in one `provision indexes` call. The plan is their union. A conflict in one applies nothing for any. `--prune` acts once, after every named programme's requirements are recorded, so there is no order to remember: an index one programme stops requiring and another takes up is kept, never dropped and rebuilt. Two files that declare the same programme name are refused, because requirements are recorded per name.
 

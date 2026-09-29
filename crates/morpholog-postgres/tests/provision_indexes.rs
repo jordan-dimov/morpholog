@@ -950,6 +950,35 @@ async fn a_programme_named_twice_is_refused_before_anything_changes() {
     assert_eq!(registry_counts(&pool).await, (0, 0));
 }
 
+/// A call that names no programme is refused, prune or not: recorded
+/// indexes stay, and no report names no programme.
+#[tokio::test]
+async fn a_call_naming_no_programme_is_refused() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
+    // Stale, so a prune that ran would drop them.
+    provision_indexes(&pool, &[&requiring_nothing("double_entry_ledger")], false)
+        .await
+        .unwrap();
+    let built = catalogue_oids(&pool).await;
+    assert_eq!(built.len(), LEDGER_INDEXES);
+
+    for planned in [true, false] {
+        let error = if planned {
+            plan_indexes(&pool, &[], true).await.unwrap_err()
+        } else {
+            provision_indexes(&pool, &[], true).await.unwrap_err()
+        };
+        assert!(
+            matches!(error, morpholog_postgres::PgError::NoProgramNamed),
+            "{error:?}"
+        );
+    }
+    assert_eq!(catalogue_oids(&pool).await, built);
+}
+
 /// A dry run changes nothing and states what the applying run then does:
 /// the same actions, the same requirements, the same stale set. After the
 /// applying run the registry holds exactly the requirements both stated.

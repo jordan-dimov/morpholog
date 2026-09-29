@@ -464,6 +464,9 @@ async fn reconcile(
     apply: bool,
     prune: bool,
 ) -> Result<ProvisionReport, PgError> {
+    if programs.is_empty() {
+        return Err(PgError::NoProgramNamed);
+    }
     let mut named: Vec<Named> = programs
         .iter()
         .map(|program| Named {
