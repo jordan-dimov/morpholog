@@ -1118,7 +1118,7 @@ pub(crate) fn compile_invariants(
     let mut compiled = Vec::new();
     let mut refusals = Vec::new();
     for inv in &program.invariants {
-        match compile_invariant(inv, &decls, &defs) {
+        match compile_invariant(inv, &decls, &defs, &program.definitions) {
             Ok(c) => compiled.push(c),
             Err(reason) => refusals.push(CompileRefusal {
                 invariant: inv.name.clone(),
@@ -1512,6 +1512,7 @@ fn compile_invariant(
     inv: &Invariant,
     decls: &BTreeMap<&str, &PredicateDecl>,
     defs: &BTreeMap<&str, &Definition>,
+    definitions: &[Definition],
 ) -> Result<CompiledInvariant, CompileReason> {
     let mut ctx = Ctx {
         decls,
@@ -1553,7 +1554,7 @@ fn compile_invariant(
         other => generic_denial(other, &mut ctx)?,
     };
 
-    let plan = ImpactPlan::new(inv);
+    let plan = ImpactPlan::with_definitions(inv, definitions);
     // The case-bound check seeks on the case's columns. Without their
     // indexes it walks the predicate and takes the very lock the bound
     // exists to avoid.

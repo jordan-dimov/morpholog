@@ -4,6 +4,7 @@
 
 mod eval;
 mod explain;
+mod impact;
 mod propose;
 mod state;
 mod validate;
