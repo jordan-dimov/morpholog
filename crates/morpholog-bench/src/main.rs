@@ -641,8 +641,9 @@ impl Implementation {
                 let program = PgProgram::new(compiled);
                 match program.plan() {
                     InvariantPlan::Compiled => Ok(program),
-                    InvariantPlan::Interpreted { refusals } => Err(anyhow!(
-                        "`{}` requested but the programme `{}` would be interpreted: {}",
+                    InvariantPlan::Interpreted { refusals }
+                    | InvariantPlan::Mixed { refusals, .. } => Err(anyhow!(
+                        "`{}` requested but the programme `{}` would not run compiled whole: {}",
                         self.label(),
                         program.core().program().name,
                         refusals

@@ -6,6 +6,8 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
+pub mod routes;
+
 use morpholog_core::{
     ClaimInstance, CompiledProgram, EvalValue, Program, Subject, Transformation, Transition,
 };

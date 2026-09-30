@@ -381,6 +381,15 @@ fn summary(program: &PgProgram, file: &Path) -> String {
                 out.push_str(&format!("    {}: {}\n", refusal.invariant, refusal.reason));
             }
         }
+        InvariantPlan::Mixed { compiled, refusals } => {
+            out.push_str(&format!(
+                "  invariant checks: mixed, {compiled} compiled, {} interpreted\n",
+                refusals.len()
+            ));
+            for refusal in refusals {
+                out.push_str(&format!("    {}: {}\n", refusal.invariant, refusal.reason));
+            }
+        }
     }
     out
 }

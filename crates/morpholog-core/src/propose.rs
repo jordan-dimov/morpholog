@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::admission::{Admission, effective_delta};
+use crate::admission::{Admission, EffectiveDelta, effective_delta};
 use crate::definitions::DefinitionTable;
 use crate::derive::eval_invariant;
 use crate::eval::{
@@ -350,6 +350,7 @@ pub(crate) fn propose_inner(
         staged,
         pre_state,
         &Admission::of(invariants, definitions),
+        None,
         trace,
     )
 }
@@ -370,7 +371,7 @@ pub fn propose_with(
         admission.definitions,
         &mut trace,
     )?;
-    finish_staged_inner(staged, pre_state, admission, &mut trace)
+    finish_staged_inner(staged, pre_state, admission, None, &mut trace)
 }
 
 /// A transformation body's result before any invariant is checked: a
@@ -415,7 +416,35 @@ pub fn finish_staged_delta_with(
     pre_state: &State,
     admission: &Admission<'_>,
 ) -> Result<Outcome, EvalError> {
-    finish_staged_inner(staged, pre_state, admission, &mut TraceSink::Off)
+    finish_staged_inner(staged, pre_state, admission, None, &mut TraceSink::Off)
+}
+
+/// [`finish_staged_delta_with`] under an effective delta established
+/// elsewhere: an adapter whose store has already said which admissions
+/// and retractions changed the admitted set lends that answer, so every
+/// evaluator in one transaction classifies impact from the one delta.
+/// The candidate state is still this state plus the staged lists.
+///
+/// An adapter seam, not a general entry. The caller owes the true change
+/// in the admitted set: the staged admits that were absent and the staged
+/// retracts that were present and not re-admitted, exactly as
+/// [`effective_delta`] computes it from a complete pre-state. A delta
+/// that understates the change lets an invariant the change touches go
+/// unchecked, since impact is classified from it and nothing else.
+#[doc(hidden)]
+pub fn finish_staged_delta_with_effective(
+    staged: StagedDelta,
+    pre_state: &State,
+    admission: &Admission<'_>,
+    effective: &EffectiveDelta,
+) -> Result<Outcome, EvalError> {
+    finish_staged_inner(
+        staged,
+        pre_state,
+        admission,
+        Some(effective),
+        &mut TraceSink::Off,
+    )
 }
 
 pub(crate) fn stage_delta_inner(
@@ -497,6 +526,7 @@ pub(crate) fn finish_staged_inner(
     staged: StagedDelta,
     pre_state: &State,
     admission: &Admission<'_>,
+    established: Option<&EffectiveDelta>,
     trace: &mut TraceSink<'_>,
 ) -> Result<Outcome, EvalError> {
     let (asserted, retracted, emitted) = match staged {
@@ -510,7 +540,14 @@ pub(crate) fn finish_staged_inner(
 
     let candidate = pre_state.with_delta(&asserted, &retracted);
     let definitions = admission.definitions;
-    let effective = effective_delta(pre_state, &asserted, &retracted);
+    let computed;
+    let effective = match established {
+        Some(effective) => effective,
+        None => {
+            computed = effective_delta(pre_state, &asserted, &retracted);
+            &computed
+        }
+    };
 
     for (inv, plan) in admission.invariants.iter().zip(admission.plans()) {
         // Check only the cases the change could affect.
