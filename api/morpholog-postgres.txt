@@ -254,6 +254,9 @@ pub enum morpholog_postgres::InvariantPlan<'a>
 pub morpholog_postgres::InvariantPlan::Compiled
 pub morpholog_postgres::InvariantPlan::Interpreted
 pub morpholog_postgres::InvariantPlan::Interpreted::refusals: &'a [morpholog_postgres::CompileRefusal]
+pub morpholog_postgres::InvariantPlan::Mixed
+pub morpholog_postgres::InvariantPlan::Mixed::compiled: usize
+pub morpholog_postgres::InvariantPlan::Mixed::refusals: &'a [morpholog_postgres::CompileRefusal]
 impl<'a> core::clone::Clone for morpholog_postgres::InvariantPlan<'a>
 pub fn morpholog_postgres::InvariantPlan<'a>::clone(&self) -> morpholog_postgres::InvariantPlan<'a>
 impl<'a> core::clone::TrivialClone for morpholog_postgres::InvariantPlan<'a>

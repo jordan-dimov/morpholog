@@ -520,3 +520,51 @@ fn a_rebound_parameter_reads_its_predicate_whole() {
         staged_observable(&on_projected)
     );
 }
+
+/// A mixed execution loads what its interpreted invariants read, whole,
+/// and nothing for the invariants the database checks or for the admits:
+/// the table decides membership there.
+#[test]
+fn a_mixed_execution_loads_only_what_its_interpreted_invariants_read() {
+    let program = morpholog_surface::parse_program(
+        "program mixed\n\
+         predicate Amount(id: Subject, v: Decimal)\n\
+         predicate Big(id: Subject, v: Decimal)\n\
+         predicate Seen(id: Subject)\n\
+         invariant compiled_one: forall a in Amount(id, v): v <= 10\n\
+         invariant interpreted_one: forall b in Big(id, v): v + 1 <= v\n\
+         transformation both(id, amount, big):\n\
+         \x20   require Seen(id)\n\
+         \x20   admit Amount(id, amount)\n\
+         \x20   admit Big(id, big)\n",
+    )
+    .expect("parses");
+    let t = &program.transformations[0];
+    let transition = morpholog_core::Transition {
+        transformation_name: t.name.clone(),
+        args: vec![
+            morpholog_test_support::subj("a"),
+            morpholog_test_support::dec(1),
+            morpholog_test_support::dec(1),
+        ],
+        actor: morpholog_test_support::test_actor(),
+    };
+    let scope = compute_load_scope(
+        t,
+        Some(&transition),
+        &program.invariants,
+        &program.definitions,
+        Reads::BodyAndSome(&[1]),
+    );
+    let mut predicates: Vec<String> = scope.predicates().iter().map(ToString::to_string).collect();
+    predicates.sort();
+    assert_eq!(
+        predicates,
+        ["Big", "Seen"],
+        "the body's read and the interpreted invariant's, not the compiled one's: {scope:?}"
+    );
+    assert_eq!(
+        scope.filters.get(&"Big".into()),
+        Some(&crate::propose::LoadFilter::Whole)
+    );
+}

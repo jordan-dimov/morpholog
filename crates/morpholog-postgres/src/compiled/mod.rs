@@ -226,6 +226,8 @@ impl CompiledInvariantSet {
     /// in statement order, which `steps` supplies. That error wins over any
     /// violation, as it does in the kernel. With no error, the diagnostic
     /// query finds the witness in the same order.
+    /// Production walks runs; the differentials check a set whole.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn first_violation(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -234,7 +236,30 @@ impl CompiledInvariantSet {
         retracted: &[ClaimInstance],
         steps: &[DeltaStep],
     ) -> Result<Option<SqlViolation>, PgError> {
-        for inv in &self.invariants {
+        self.first_violation_in(
+            0..self.invariants.len(),
+            tx,
+            stage,
+            asserted,
+            retracted,
+            steps,
+        )
+        .await
+    }
+
+    /// [`Self::first_violation`] over one run of the set's invariants, so
+    /// an execution that interleaves this evaluator with the kernel keeps
+    /// the programme's order.
+    pub(crate) async fn first_violation_in(
+        &self,
+        run: std::ops::Range<usize>,
+        tx: &mut Transaction<'_, Postgres>,
+        stage: Stage,
+        asserted: &[ClaimInstance],
+        retracted: &[ClaimInstance],
+        steps: &[DeltaStep],
+    ) -> Result<Option<SqlViolation>, PgError> {
+        for inv in &self.invariants[run] {
             let case_filter = match stage {
                 Stage::Full => None,
                 Stage::CaseBound => match inv.case_filter(asserted, retracted) {
@@ -1147,11 +1172,30 @@ fn comment_safe(name: &str) -> String {
         .replace("/*", "/ *")
 }
 
-/// Compile every invariant of a validated programme, or report every
-/// refusal: nothing compiles unless everything does.
-pub(crate) fn compile_invariants(
-    program: ValidatedProgram<'_>,
-) -> Result<CompiledInvariantSet, Vec<CompileRefusal>> {
+/// One contiguous run of a programme's invariants, in programme order,
+/// checked by one evaluator: a run of compiled invariants is a range
+/// into the compiled set, a run of interpreted ones a range into the
+/// programme's invariants. The runs cover the programme in order, so an
+/// execution that walks them names the first violation the kernel would.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Run {
+    Compiled(std::ops::Range<usize>),
+    Interpreted(std::ops::Range<usize>),
+}
+
+/// What compiling a programme's invariants one by one yields: the ones
+/// that compile, in programme order, the refusals for the rest, and the
+/// runs that say which evaluator checks which, in order.
+#[derive(Debug)]
+pub(crate) struct Compilation {
+    pub(crate) compiled: CompiledInvariantSet,
+    pub(crate) refusals: Vec<CompileRefusal>,
+    pub(crate) runs: Vec<Run>,
+}
+
+/// Compile each invariant of a validated programme that the fragment
+/// holds, and say which evaluator checks each, in programme order.
+pub(crate) fn compile_each(program: ValidatedProgram<'_>) -> Compilation {
     let program = program.as_program();
     let decls: BTreeMap<&str, &PredicateDecl> = program
         .predicates
@@ -1165,21 +1209,50 @@ pub(crate) fn compile_invariants(
         .collect();
     let mut compiled = Vec::new();
     let mut refusals = Vec::new();
-    for inv in &program.invariants {
+    let mut runs: Vec<Run> = Vec::new();
+    for (index, inv) in program.invariants.iter().enumerate() {
         match compile_invariant(inv, &decls, &defs, &program.definitions) {
-            Ok(c) => compiled.push(c),
-            Err(reason) => refusals.push(CompileRefusal {
-                invariant: inv.name.clone(),
-                reason,
-            }),
+            Ok(c) => {
+                let at = compiled.len();
+                compiled.push(c);
+                match runs.last_mut() {
+                    Some(Run::Compiled(range)) => range.end = at + 1,
+                    _ => runs.push(Run::Compiled(at..at + 1)),
+                }
+            }
+            Err(reason) => {
+                refusals.push(CompileRefusal {
+                    invariant: inv.name.clone(),
+                    reason,
+                });
+                match runs.last_mut() {
+                    Some(Run::Interpreted(range)) => range.end = index + 1,
+                    _ => runs.push(Run::Interpreted(index..index + 1)),
+                }
+            }
         }
     }
-    if refusals.is_empty() {
-        Ok(CompiledInvariantSet {
+    Compilation {
+        compiled: CompiledInvariantSet {
             invariants: compiled,
-        })
+        },
+        refusals,
+        runs,
+    }
+}
+
+/// Compile every invariant of a validated programme, or report every
+/// refusal: nothing compiles unless everything does. What the
+/// differentials ask of a whole-in-fragment programme.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn compile_invariants(
+    program: ValidatedProgram<'_>,
+) -> Result<CompiledInvariantSet, Vec<CompileRefusal>> {
+    let compilation = compile_each(program);
+    if compilation.refusals.is_empty() {
+        Ok(compilation.compiled)
     } else {
-        Err(refusals)
+        Err(compilation.refusals)
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::attestation::{AuditAttestation, Proposal};
-use crate::compiled::{DeltaStep, Stage, disable_jit};
+use crate::compiled::{DeltaStep, Run, Stage, disable_jit};
 use crate::error::{PgError, classify, classify_checked_query, classify_commit};
 use crate::program::{PgProgram, Route};
 use crate::sql_quote::quote_literal;
@@ -8,8 +8,8 @@ use morpholog_core::{
     Admission, ClaimInstance, CompiledProgram, Definition, EffectiveDelta, EvalError, EvalValue,
     IntentInstance, Invariant, InvariantName, Outcome, PredicateName, ReadFilter, ReadPlan,
     RejectionReason, RuleName, StagedDelta, State, Subject, TraceEntry, TracedProposal,
-    Transformation, TransformationName, Transition, WitnessBinding, propose_stage_delta,
-    propose_with, propose_with_trace,
+    Transformation, TransformationName, Transition, WitnessBinding,
+    finish_staged_delta_with_effective, propose_stage_delta, propose_with, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -280,7 +280,7 @@ pub(crate) async fn propose_against_pg_run(
             let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
             (Decided::Kernel(outcome), rejection_state)
         }
-        Route::Compiled(set) => {
+        Route::Compiled(_) | Route::Mixed(_) => {
             let staged = propose_stage_delta(transformation, transition, &state, definitions)?;
             match staged {
                 StagedDelta::Rejected { reason } => {
@@ -300,20 +300,13 @@ pub(crate) async fn propose_against_pg_run(
                         transition_id,
                         asserted: asserted.clone(),
                     }];
-                    let violation = set
-                        .first_violation(
-                            &mut tx,
-                            Stage::CaseBound,
-                            &effective.asserted,
-                            &effective.retracted,
-                            &steps,
-                        )
-                        .await?;
+                    let violation = check_in_order(
+                        &mut tx, route, admission, &state, &asserted, &retracted, &effective,
+                        &steps,
+                    )
+                    .await?;
                     match violation {
-                        Some(v) => (
-                            Decided::Kernel(Outcome::Rejected { reason: v.into() }),
-                            None,
-                        ),
+                        Some(reason) => (Decided::Kernel(Outcome::Rejected { reason }), None),
                         None => (
                             Decided::Checked {
                                 transition_id,
@@ -382,6 +375,72 @@ pub(crate) async fn propose_against_pg_run(
             finalise,
         }),
     })
+}
+
+/// Check a staged delta's invariants after its claims are written, in
+/// programme order: on the compiled route every invariant through SQL;
+/// on the mixed route each run of like kind through its evaluator, the
+/// compiled runs over the table and the interpreted runs in the kernel
+/// over the loaded state plus the staged lists, both classifying impact
+/// from the one effective delta the table reported. The first violation
+/// or error in programme order is the answer, as the kernel's would be.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn check_in_order(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    route: Route<'_>,
+    admission: &Admission<'_>,
+    state: &State,
+    asserted: &[ClaimInstance],
+    retracted: &[ClaimInstance],
+    effective: &EffectiveDelta,
+    steps: &[DeltaStep],
+) -> Result<Option<RejectionReason>, PgError> {
+    let runs: Vec<Run> = match route {
+        Route::Compiled(set) => vec![Run::Compiled(0..set.invariants.len())],
+        Route::Mixed(backend) => backend.runs.clone(),
+        Route::Interpreted => unreachable!("the interpreted route checks before it writes"),
+    };
+    let set = match route {
+        Route::Compiled(set) => set,
+        Route::Mixed(backend) => &backend.compiled,
+        Route::Interpreted => unreachable!(),
+    };
+    for run in runs {
+        match run {
+            Run::Compiled(range) => {
+                let violation = set
+                    .first_violation_in(
+                        range,
+                        tx,
+                        Stage::CaseBound,
+                        &effective.asserted,
+                        &effective.retracted,
+                        steps,
+                    )
+                    .await?;
+                if let Some(v) = violation {
+                    return Ok(Some(v.into()));
+                }
+            }
+            Run::Interpreted(range) => {
+                let staged = StagedDelta::Staged {
+                    asserted: asserted.to_vec(),
+                    retracted: retracted.to_vec(),
+                    emitted: Vec::new(),
+                };
+                let outcome = finish_staged_delta_with_effective(
+                    staged,
+                    state,
+                    &admission.range(range),
+                    effective,
+                )?;
+                if let Outcome::Rejected { reason } = outcome {
+                    return Ok(Some(reason));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// What the deciding phase settled: a kernel outcome still to persist, or
@@ -661,11 +720,15 @@ pub(crate) fn load_sql(scope: &LoadScope) -> Result<(String, Vec<serde_json::Val
 /// What a loaded state must serve. `Body`: the compiled route, where the
 /// claims table serves the checks and reports the effective delta.
 /// `BodyAndInvariants`: the interpreter, which evaluates invariants and
-/// computes the effective delta from the state it holds.
+/// computes the effective delta from the state it holds. `BodyAndSome`:
+/// a mixed execution, where the interpreter evaluates the invariants at
+/// these indices over the effective delta the table reports, so it needs
+/// their reads and nothing for the admits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Reads {
+pub(crate) enum Reads<'a> {
     Body,
     BodyAndInvariants,
+    BodyAndSome(&'a [usize]),
 }
 
 /// How much of one predicate a load fetches: every row, or the rows
@@ -755,7 +818,7 @@ pub(crate) fn compute_load_scope(
     transition: Option<&Transition>,
     invariants: &[Invariant],
     definitions: &[Definition],
-    reads: Reads,
+    reads: Reads<'_>,
 ) -> LoadScope {
     let plan = ReadPlan::of(transformation, definitions);
     let resolve =
@@ -767,17 +830,22 @@ pub(crate) fn compute_load_scope(
     for (predicate, filter) in &plan.reads {
         scope.add(predicate.clone(), resolve(filter));
     }
-    if reads == Reads::BodyAndInvariants {
-        for (predicate, filter) in &plan.admits {
-            scope.add(predicate.clone(), resolve(filter));
+    let interpreted: Vec<&Invariant> = match reads {
+        Reads::Body => Vec::new(),
+        Reads::BodyAndInvariants => {
+            for (predicate, filter) in &plan.admits {
+                scope.add(predicate.clone(), resolve(filter));
+            }
+            invariants.iter().collect()
         }
-        let mut referenced = std::collections::BTreeSet::new();
-        for inv in invariants {
-            morpholog_core::predicates_referenced_by_prop(&inv.body, definitions, &mut referenced);
-        }
-        for predicate in referenced {
-            scope.add(predicate, LoadFilter::Whole);
-        }
+        Reads::BodyAndSome(indices) => indices.iter().map(|i| &invariants[*i]).collect(),
+    };
+    let mut referenced = std::collections::BTreeSet::new();
+    for inv in interpreted {
+        morpholog_core::predicates_referenced_by_prop(&inv.body, definitions, &mut referenced);
+    }
+    for predicate in referenced {
+        scope.add(predicate, LoadFilter::Whole);
     }
     scope
 }

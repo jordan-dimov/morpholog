@@ -63,6 +63,17 @@ impl<'a> Admission<'a> {
     pub(crate) fn plans(&self) -> &[ImpactPlan] {
         &self.plans
     }
+
+    /// The rules of one contiguous run of these invariants, in order,
+    /// with their plans: what an adapter that checks some invariants
+    /// itself hands the kernel for the rest.
+    pub fn range(&self, range: std::ops::Range<usize>) -> Admission<'_> {
+        Admission {
+            invariants: &self.invariants[range.clone()],
+            definitions: self.definitions,
+            plans: Cow::Borrowed(&self.plans[range]),
+        }
+    }
 }
 
 /// The admitted-set change a transition makes: what the candidate

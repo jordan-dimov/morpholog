@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::PgPool;
 use crate::attestation::Proposal;
-use crate::compiled::{DeltaStep, Stage, disable_jit};
+use crate::compiled::{DeltaStep, disable_jit};
 use crate::error::{PgError, classify_commit};
 use crate::program::{PgProgram, Route};
 use crate::propose::{
@@ -92,7 +92,7 @@ pub async fn propose_all_against_pg(
     let route = program.route();
 
     let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &acts[0].1.actor).await?;
-    if matches!(route, Route::Compiled(_)) {
+    if matches!(route, Route::Compiled(_) | Route::Mixed(_)) {
         disable_jit(&mut tx).await?;
     }
 
@@ -145,7 +145,7 @@ pub async fn propose_all_against_pg(
                     }
                 }
             }
-            Route::Compiled(set) => {
+            Route::Compiled(_) | Route::Mixed(_) => {
                 match propose_stage_delta(transformation, transition, &state, definitions)? {
                     StagedDelta::Rejected { reason } => {
                         return refuse(pool, tx, transformation, transition, reason, row).await;
@@ -162,18 +162,13 @@ pub async fn propose_all_against_pg(
                             transition_id,
                             asserted: asserted.clone(),
                         });
-                        if let Some(v) = set
-                            .first_violation(
-                                &mut tx,
-                                Stage::CaseBound,
-                                &effective.asserted,
-                                &effective.retracted,
-                                &steps,
-                            )
-                            .await?
+                        if let Some(reason) = crate::propose::check_in_order(
+                            &mut tx, route, &admission, &state, &asserted, &retracted, &effective,
+                            &steps,
+                        )
+                        .await?
                         {
-                            return refuse(pool, tx, transformation, transition, v.into(), row)
-                                .await;
+                            return refuse(pool, tx, transformation, transition, reason, row).await;
                         }
                         write_acceptance_record(
                             &mut tx,

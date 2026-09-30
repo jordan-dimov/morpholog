@@ -105,6 +105,36 @@ fn check_verbose_clean_program_prints_summary() {
 
 /// A programme with an invariant that cannot compile to SQL runs
 /// interpreted, and the summary names that invariant and why.
+/// One invariant outside the fragment no longer costs the programme the
+/// compiled route: the plan says which are checked where.
+#[test]
+fn check_verbose_reports_a_mixed_programme_with_its_counts() {
+    let tmp = temp_morph(
+        "program demo\n\
+         predicate Foo(x: Subject)\n\
+         predicate Amount(x: Subject, v: Decimal)\n\
+         invariant sticky: pre(Foo(x)) implies Foo(x)\n\
+         invariant small: forall a in Amount(x, v): v <= 10\n\
+         transformation t(x):\n    admit Foo(x)\n",
+    );
+    let out = Command::new(bin())
+        .arg("check")
+        .arg("--verbose")
+        .arg(tmp.path())
+        .output()
+        .expect("morpholog check should run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("  invariant checks: mixed, 1 compiled, 1 interpreted\n    sticky: "),
+        "got: {stdout}"
+    );
+}
+
 #[test]
 fn check_verbose_names_the_invariant_that_keeps_a_programme_interpreted() {
     let tmp = temp_morph(
