@@ -157,7 +157,9 @@ class Morpholog:
     before the first call: a binary of another version than the package was
     generated for, or a file whose rules are not the ones it was generated
     from, is refused. That check parses the file even ahead of a call that
-    needs no programme, such as ``init`` or ``migrate``.
+    needs no programme, such as ``init`` or ``migrate``. ``expected_version``
+    and ``expected_model_hash`` are that same check for a client constructed
+    or subclassed directly; both names are part of the pinned client surface.
 
     ``binary`` resolves as: explicit argument, then the
     ``MORPHOLOG_BIN`` environment variable, then ``morpholog`` on
@@ -191,6 +193,8 @@ class Morpholog:
         # until then, ``True`` once it agreed, or the error a mismatch
         # raised, raised again on every later call.
         self._checked: bool | MorphologError | None = None
+        # The report the check read, until the first ``hash()`` takes it.
+        self._checked_report: envelopes.HashReport | None = None
         self._check_lock = threading.Lock()
 
     # ------------------------------------------------------------
@@ -258,6 +262,7 @@ class Morpholog:
                 )
                 raise self._checked
             self._checked = True
+            self._checked_report = report
 
     def _run_raw(
         self,
@@ -268,7 +273,8 @@ class Morpholog:
         stdout: IO[bytes] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """The one ``subprocess.run``. A timeout is operational, not a
-        decided outcome, so it raises ``MorphologError``. ``stdout``, when
+        decided outcome, so it raises ``MorphologError``; so is a binary
+        that cannot start (missing, not executable). ``stdout``, when
         given, receives the output instead of memory."""
         try:
             return subprocess.run(
@@ -279,6 +285,10 @@ class Morpholog:
                 input=stdin,
                 timeout=timeout,
             )
+        except OSError as exc:
+            raise MorphologError(
+                f"`{self.binary} {_redact_argv(args)}` failed to start: {exc}"
+            ) from None
         except subprocess.TimeoutExpired as exc:
             raise MorphologTimeout(
                 f"`{self.binary} {_redact_argv(args)}` timed out after {timeout}s",
@@ -415,6 +425,14 @@ class Morpholog:
         return envelopes.ProvisionReport.from_json(json.loads(proc.stdout))
 
     def hash(self) -> envelopes.HashReport:
+        """The stamps the binary reports for the file. The first call after
+        the pinned check returns the report that check read, without a
+        second spawn; every later call asks the binary again."""
+        self._ensure_compatible()
+        with self._check_lock:
+            kept, self._checked_report = self._checked_report, None
+        if kept is not None:
+            return kept
         return envelopes.HashReport.from_json(self._json("hash", self.file))
 
     def check(self, strict: bool = False) -> envelopes.CheckReport:

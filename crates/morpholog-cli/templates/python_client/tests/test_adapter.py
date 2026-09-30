@@ -357,6 +357,70 @@ class AdapterDiscrimination(unittest.TestCase):
             client.provision_indexes()
         self.assertEqual(self._ran(record), ["hash model.morph"])
 
+    def test_the_constructor_pins_are_the_generated_clients_surface(self):
+        # An embedder that subclasses the client passes the two pins by
+        # name; ``open_client`` / ``open_session`` are the same call. The
+        # drift gate cannot see a subclass, so the names are pinned here.
+        import inspect
+
+        from python_client.session import Session
+
+        for cls in (Morpholog, Session):
+            params = inspect.signature(cls.__init__).parameters
+            for name in ("expected_version", "expected_model_hash"):
+                self.assertIn(name, params, f"{cls.__name__}({name}=...)")
+                param = params[name]
+                self.assertIsNone(param.default)
+                self.assertIn(
+                    param.kind,
+                    (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY),
+                    f"{cls.__name__}({name}=...) is passed by keyword",
+                )
+
+    def test_the_check_keeps_its_report_and_the_first_hash_returns_it(self):
+        agreeing = {"hash": self.HASH, "morpholog_version": "0.0.0", "program": "p"}
+        # A verify that opens with hash(): the check's own report, one spawn.
+        client, record = self._pinned(agreeing)
+        report = client.hash()
+        self.assertEqual(report.hash, self.HASH)
+        self.assertEqual(self._ran(record), ["hash model.morph"])
+        # Later calls ask the binary again, as before.
+        client.hash()
+        self.assertEqual(self._ran(record), ["hash model.morph"] * 2)
+        # The kept report survives other calls until hash() takes it.
+        client, record = self._pinned(agreeing)
+        client.claims()
+        client.hash()
+        self.assertEqual(self._ran(record).count("hash model.morph"), 1)
+        # An unpinned client has no check to keep a report from.
+        client, record = self._pinned(agreeing, expected_version=None, expected_model_hash=None)
+        client.hash()
+        self.assertEqual(self._ran(record), ["hash model.morph"])
+
+    def test_a_binary_that_cannot_start_is_an_operational_error(self):
+        # A mis-set MORPHOLOG_BIN raises the client's own error from every
+        # generated method, never the OSError out of subprocess. Nothing
+        # ran, so a proposal is plain operational, not outcome-unknown.
+        missing = str(Path(self._dir.name) / "no-such-morpholog")
+        client = Morpholog("model.morph", "postgres:///stub", binary=missing)
+        with self.assertRaises(MorphologError) as caught:
+            client.claims()
+        self.assertIn("failed to start", str(caught.exception))
+        self.assertIn(missing, str(caught.exception))
+        with self.assertRaises(MorphologError) as proposal:
+            client.propose("post", "alex", {})
+        self.assertNotIsInstance(proposal.exception, MorphologOutcomeUnknown)
+        pinned = Morpholog(
+            "model.morph",
+            "postgres:///stub",
+            binary=missing,
+            expected_version="0.0.0",
+            expected_model_hash=self.HASH,
+        )
+        with self.assertRaises(MorphologError) as checked:
+            pinned.hash()
+        self.assertIn("failed to start", str(checked.exception))
+
     def test_empty_stdout_on_a_read_is_operational_and_on_a_proposal_is_unknown(self):
         self._mode("operational_failure")
         with self.assertRaises(MorphologError) as read:
