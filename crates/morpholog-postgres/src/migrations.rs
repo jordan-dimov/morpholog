@@ -171,7 +171,7 @@ fn refuse_if_ahead(status: &MigrationReport) -> Result<(), PgError> {
 /// Refuse a database this binary cannot serve, before its first query:
 /// one with no `morpholog` schema, one ahead of this binary, or one behind
 /// it, asked in that order, so an older binary never advises a migration
-/// against a database it does not understand. What every command asks
+/// against a database it does not understand. What every database-backed command asks
 /// once after connecting, except the two that make a database current,
 /// `init` and `migrate`.
 pub async fn require_current_schema(pool: &PgPool) -> Result<(), PgError> {

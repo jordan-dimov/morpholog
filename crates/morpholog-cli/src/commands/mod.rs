@@ -190,7 +190,7 @@ pub(crate) fn lookup_transformation<'a>(
 /// ends up in logs. The `sqlx` error already says what went wrong.
 /// Connect, and refuse a database this binary cannot serve before the
 /// command's first query: none provisioned, ahead of the binary, or
-/// behind it, each by name. Every command connects here except `init`
+/// behind it, each by name. Every database-backed command connects here except `init`
 /// and `migrate`, which are what make a database current.
 pub(crate) async fn connect(url: &str) -> anyhow::Result<PgPool> {
     let pool = connect_unchecked(url).await?;

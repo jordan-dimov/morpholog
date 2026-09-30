@@ -147,7 +147,8 @@ has not recorded, in order, and leaves an already-current one alone. A fresh
 schema records that it is.
 
 Rollback is restoring the backup. It is never running an older binary
-against a migrated database: from this release, every command refuses a
+against a migrated database: from this release, every command that opens
+the database refuses a
 database ahead of the binary that asks, by name, before its first query,
 and a database behind it the same way, naming `morpholog migrate`. Only
 `migrate --check` reports the state and `init` and `migrate` still reach
