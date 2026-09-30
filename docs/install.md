@@ -125,12 +125,20 @@ deliberate - it means running `init` against a live database cannot alter
 it. Upgrading is its own verb, and it sits in a sequence:
 
 ```bash
-pg_dump "$DATABASE_URL" > before-upgrade.sql                 # 1. back up
-morpholog migrate --check --database-url "$DATABASE_URL"     # 2. ask: exit 1 if behind or ahead
-morpholog migrate --database-url "$DATABASE_URL"             # 3. bring the schema forward
-morpholog audit verify --database-url "$DATABASE_URL"        # 4. the record still agrees with itself
-morpholog provision indexes a.morph b.morph                  # 5. every programme, one call
+# 1. stop every process on the database: sessions, workers, the service
+pg_dump "$DATABASE_URL" > before-upgrade.sql                 # 2. back up
+morpholog migrate --check --database-url "$DATABASE_URL"     # 3. ask: exit 1 if behind or ahead
+morpholog migrate --database-url "$DATABASE_URL"             # 4. bring the schema forward
+morpholog audit verify --database-url "$DATABASE_URL"        # 5. the record still agrees with itself
+morpholog provision indexes a.morph b.morph                  # 6. every programme, one call
+# 7. start every process on the new binary
 ```
+
+Stopping first is not ceremony. A resident session and an outbox worker
+ask whether the database is theirs once, when they start, so one still
+running when the migration lands keeps writing until it is restarted;
+and a backup taken while processes write does not hold what they wrote
+after it.
 
 The migrations are compiled into the binary, like the schema itself, so the
 released artifact is all you need. `migrate` applies whatever your database
@@ -149,10 +157,12 @@ be retrofitted, and against a newer schema they fail the way they always
 did, one query at a time.
 
 When several processes share one database - a web service and a nightly
-job, say - migrate once, then restart every process on the new binary. A
-process left on the old binary refuses every command until it is
-restarted; one started on the new binary before the migration refuses until
-the migration runs. Neither writes.
+job, say - the sequence is the same for all of them at once: stop them,
+migrate once, start them on the new binary. The refusal is the net under
+the sequence, not the sequence: a command that runs on the old binary
+after the migration is refused by name, and one that runs on the new
+binary before it refuses until the migration runs, so a process someone
+forgot writes nothing.
 
 **Migrating needs ownership of the schema, not the runtime login.** If you
 provisioned with `--least-privilege`, the writer role deliberately cannot

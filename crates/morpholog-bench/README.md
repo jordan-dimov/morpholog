@@ -34,7 +34,7 @@ The `contend` fixture posts uniquely-keyed entries concurrently. In the default 
 ```bash
 # Use a throwaway database - the bench TRUNCATES it. Never your dev DB.
 createdb morpholog_bench
-psql morpholog_bench -f crates/morpholog-core/sql/schema.sql
+psql morpholog_bench -v ON_ERROR_STOP=1 -1 -f crates/morpholog-core/sql/schema.sql
 # the bench refuses a database behind the migration head; record the versions:
 cargo run -p morpholog-cli --release -- migrate --database-url postgres:///morpholog_bench
 

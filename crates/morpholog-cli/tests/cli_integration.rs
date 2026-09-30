@@ -4681,11 +4681,8 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
         .output()
         .unwrap();
     let init = run_cli(&["init", "--skip-if-exists"]);
-    sqlx::query("INSERT INTO morpholog.schema_migrations (version, name) SELECT $1, 'restored' WHERE NOT EXISTS (SELECT 1 FROM morpholog.schema_migrations WHERE version = $1)")
-        .bind(head)
-        .execute(&pool)
-        .await
-        .unwrap();
+    // The repair the refusal names, so the record comes back by name.
+    morpholog_postgres::apply_migrations(&pool).await.unwrap();
 
     for (what, (status, stdout, stderr)) in [("read", &read), ("write", &write)] {
         assert_eq!(status.code(), Some(1), "{what}: {stderr}");

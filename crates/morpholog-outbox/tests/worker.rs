@@ -66,24 +66,37 @@ where
 // Tests
 // ============================================================
 
+/// A worker told to stop before it starts does nothing at all, not even
+/// ask about the database: here the database would be refused.
 #[tokio::test]
 async fn worker_returns_immediately_when_shutdown_is_set_at_start() {
     let pool = test_pool().await;
     reset_db(&pool).await;
+    let head = morpholog_postgres::head_version();
+    sqlx::query("INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, 'from_a_newer_morpholog')")
+        .bind(head + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(true);
     drop(shutdown_tx); // not modified after this
 
     let clock = MockClock::new(Timestamp::now());
     let worker = OutboxWorker::new(
-        pool,
+        pool.clone(),
         "worker_a",
         INTENT_TYPE,
         AlwaysDelivers,
         clock,
         FixedJitter::new(1.0),
     );
-    worker.run(shutdown_rx).await.unwrap();
-    // Passing means `run` returned at all.
+    let outcome = worker.run(shutdown_rx).await;
+    sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
+        .bind(head + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
+    outcome.unwrap();
 }
 
 /// The worker asks once, before its first drain, whether the database is

@@ -4,10 +4,10 @@
 //! the migrations it expects, with nothing to vendor or drift.
 //!
 //! **What "pending" means.** `morpholog.schema_migrations` records applied
-//! versions. A database provisioned from `schema.sql` is at the head, so
-//! [`crate::initialise_schema`] records every migration without running
-//! any. A database predating that table has no record, so everything is
-//! pending. That is sound because the migrations are idempotent.
+//! versions. A database provisioned from `schema.sql` is at the head, and
+//! the file records every migration it embodies, so none is pending. A
+//! database predating that table has no record, so everything is pending.
+//! That is sound because the migrations are idempotent.
 
 use crate::error::{PgError, classify, classify_checked_query};
 use serde::{Deserialize, Serialize};

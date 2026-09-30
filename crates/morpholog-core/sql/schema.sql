@@ -10,15 +10,20 @@
 -- are serialised as JSON strings to avoid float-precision drift.
 
 
+-- Apply in one transaction that stops at the first error:
+--   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f schema.sql
+-- The file records at its end that the database is at the migration head,
+-- and a half-applied schema must not say so. `morpholog init` applies it
+-- that way from the binary.
 CREATE SCHEMA IF NOT EXISTS morpholog;
 
 SET search_path TO morpholog, public;
 
 
 -- Which numbered migrations this database has had applied. A fresh
--- database created from this file is at the head by construction, so
--- `morpholog init` records every migration as applied without running
--- any of them.
+-- database created from this file is at the head by construction, and
+-- the file records every migration it embodies at its end, so none is
+-- run against it.
 --
 -- Deliberately plain substrate state rather than an admitted claim: the
 -- claims table is itself created by this file, so the first migrations
