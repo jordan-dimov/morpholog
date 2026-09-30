@@ -152,8 +152,8 @@ class Morpholog:
     """A typed client over the ``morpholog`` CLI: arguments in, parsed
     envelope dataclasses out.
 
-    Constructed directly it is unchecked: it runs whatever binary and file
-    it is given. The generated ``open_client`` checks both once, immediately
+    Constructed directly without either pin it is unchecked: it runs
+    whatever binary and file it is given. The generated ``open_client`` checks both once, immediately
     before the first call: a binary of another version than the package was
     generated for, or a file whose rules are not the ones it was generated
     from, is refused. That check parses the file even ahead of a call that
