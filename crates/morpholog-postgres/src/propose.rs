@@ -1,5 +1,5 @@
 use crate::attestation::{AuditAttestation, Proposal};
-use crate::compiled::{DeltaStep, Run, Stage, disable_jit};
+use crate::compiled::{CompiledInvariantSet, DeltaStep, Run, Stage, disable_jit};
 use crate::error::{PgError, classify, classify_checked_query, classify_commit};
 use crate::program::{PgProgram, Route};
 use crate::sql_quote::quote_literal;
@@ -56,13 +56,16 @@ pub enum PgProposalOutcome {
 ///
 /// Opens one SERIALIZABLE transaction, loads the claims the proposal
 /// needs into an in-memory [`State`], and runs the body through the
-/// kernel. When the invariants compile to SQL ([`PgProgram::plan`]), only
-/// the body's reads are loaded, the delta is written into the
-/// transaction, and each invariant is checked in programme order against
-/// the claims table. Otherwise the invariants' reads are loaded too and
-/// the interpreter checks them. Either way, claims, audit and outbox rows
-/// commit or roll back together; a rejection is then logged (see
-/// [`PgProposalOutcome`]).
+/// kernel. Then the invariants, as [`PgProgram::plan`] says: when every
+/// one compiles to SQL, only the body's reads are loaded, the delta is
+/// written into the transaction, and each invariant is checked in
+/// programme order against the claims table; when none does, the
+/// invariants' reads are loaded too and the interpreter checks them
+/// before anything is written; when some do, the delta is written and the
+/// invariants are walked in programme order, each through its evaluator,
+/// the interpreted ones over the loaded state and the delta the table
+/// reported. Whichever it is, claims, audit and outbox rows commit or roll
+/// back together; a rejection is then logged (see [`PgProposalOutcome`]).
 ///
 /// External side effects never run inside this transaction: outbox rows
 /// are delivered after commit by workers outside it.
@@ -206,8 +209,9 @@ pub struct TimedProposalOutcome {
 /// Phases depend on the route. Interpreted: `kernel` is the body and the
 /// in-memory invariants, and `finalise` writes the delta and the record.
 /// Compiled: `kernel` is the body, the delta write and the SQL checks, and
-/// `finalise` the record alone. Compare routes by total time, never by
-/// phase.
+/// `finalise` the record alone. Mixed: as compiled, with the interpreted
+/// runs' in-memory checks inside `kernel` too. Compare routes by total
+/// time, never by phase.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProposalPhases {
     pub begin: std::time::Duration,
@@ -395,22 +399,21 @@ pub(crate) async fn check_in_order(
     effective: &EffectiveDelta,
     steps: &[DeltaStep],
 ) -> Result<Option<RejectionReason>, PgError> {
-    let runs: Vec<Run> = match route {
-        Route::Compiled(set) => vec![Run::Compiled(0..set.invariants.len())],
-        Route::Mixed(backend) => backend.runs.clone(),
+    let whole;
+    let (set, runs): (&CompiledInvariantSet, &[Run]) = match route {
+        Route::Compiled(set) => {
+            whole = [Run::Compiled(0..set.invariants.len())];
+            (set, &whole)
+        }
+        Route::Mixed(backend) => (&backend.compiled, &backend.runs),
         Route::Interpreted => unreachable!("the interpreted route checks before it writes"),
-    };
-    let set = match route {
-        Route::Compiled(set) => set,
-        Route::Mixed(backend) => &backend.compiled,
-        Route::Interpreted => unreachable!(),
     };
     for run in runs {
         match run {
             Run::Compiled(range) => {
                 let violation = set
                     .first_violation_in(
-                        range,
+                        range.clone(),
                         tx,
                         Stage::CaseBound,
                         &effective.asserted,
@@ -431,7 +434,7 @@ pub(crate) async fn check_in_order(
                 let outcome = finish_staged_delta_with_effective(
                     staged,
                     state,
-                    &admission.range(range),
+                    &admission.range(range.clone()),
                     effective,
                 )?;
                 if let Outcome::Rejected { reason } = outcome {

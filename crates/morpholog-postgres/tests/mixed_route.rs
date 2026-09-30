@@ -16,7 +16,7 @@
 
 mod common;
 
-use common::routes::{RouteObservation, observe};
+use common::routes::{RouteObservation, count, observe};
 use common::{reset_db, test_pool};
 use morpholog_core::{ClaimInstance, CompiledProgram, EvalValue, Program, Subject, Transition};
 use morpholog_postgres::{
@@ -215,6 +215,46 @@ async fn the_first_error_or_violation_in_programme_order_wins_across_evaluators(
             ),
         }
     }
+}
+
+/// A kernel error in an interpreted run comes after the claim delta is
+/// written, so the mixed route relies on the transaction: the error is
+/// reported, and the claims, the audit, the outbox and the rejection log
+/// are as they were.
+#[tokio::test]
+async fn a_kernel_error_after_the_write_leaves_nothing_behind() {
+    let pool = test_pool().await;
+    let program = interleaved(&["c_viol", "i_err"]);
+    let mixed = PgProgram::new(CompiledProgram::new(program).unwrap());
+    let seeded = vec![big("x", MAX)];
+    reset_db(&pool).await;
+    common::seed_claims(&pool, &seeded).await;
+    let before = (
+        count(&pool, "SELECT count(*) FROM morpholog.claims").await,
+        count(&pool, "SELECT count(*) FROM morpholog.audit").await,
+        count(&pool, "SELECT count(*) FROM morpholog.outbox").await,
+        count(&pool, "SELECT count(*) FROM morpholog.rejections").await,
+    );
+    assert_eq!(before, (1, 0, 0, 0));
+    // Within the compiled bound and touching Big, so the interpreted run
+    // raises on the seeded ceiling figure after the write.
+    let transition = Transition {
+        transformation_name: "both".into(),
+        args: vec![subj("a"), dec("1"), dec("1")],
+        actor: test_actor(),
+    };
+    let outcome = propose_against_pg(&pool, &mixed, &Proposal::gateway(&transition)).await;
+    assert!(
+        matches!(outcome, Err(PgError::Kernel(_))),
+        "the interpreted run's error is the proposal's: {outcome:?}"
+    );
+    let after = (
+        count(&pool, "SELECT count(*) FROM morpholog.claims").await,
+        count(&pool, "SELECT count(*) FROM morpholog.audit").await,
+        count(&pool, "SELECT count(*) FROM morpholog.outbox").await,
+        count(&pool, "SELECT count(*) FROM morpholog.rejections").await,
+    );
+    assert_eq!(after, before, "rolled back whole");
 }
 
 // ------------------------------------------------------------

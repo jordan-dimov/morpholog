@@ -424,6 +424,14 @@ pub fn finish_staged_delta_with(
 /// and retractions changed the admitted set lends that answer, so every
 /// evaluator in one transaction classifies impact from the one delta.
 /// The candidate state is still this state plus the staged lists.
+///
+/// An adapter seam, not a general entry. The caller owes the true change
+/// in the admitted set: the staged admits that were absent and the staged
+/// retracts that were present and not re-admitted, exactly as
+/// [`effective_delta`] computes it from a complete pre-state. A delta
+/// that understates the change lets an invariant the change touches go
+/// unchecked, since impact is classified from it and nothing else.
+#[doc(hidden)]
 pub fn finish_staged_delta_with_effective(
     staged: StagedDelta,
     pre_state: &State,

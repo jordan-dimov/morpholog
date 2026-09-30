@@ -66,7 +66,14 @@ impl<'a> Admission<'a> {
 
     /// The rules of one contiguous run of these invariants, in order,
     /// with their plans: what an adapter that checks some invariants
-    /// itself hands the kernel for the rest.
+    /// itself hands the kernel for the rest. An adapter seam, not a
+    /// general entry: the run must be one the adapter derived from this
+    /// admission's own order, or the answer names the wrong rule.
+    ///
+    /// # Panics
+    ///
+    /// If `range` reaches past the invariants.
+    #[doc(hidden)]
     pub fn range(&self, range: std::ops::Range<usize>) -> Admission<'_> {
         Admission {
             invariants: &self.invariants[range.clone()],
