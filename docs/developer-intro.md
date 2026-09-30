@@ -281,7 +281,7 @@ program: reported_revenue
   invariant checks: compiled
 ```
 
-The last line says how your invariants are checked when you propose: every one here is inside the fragment the runtime compiles to SQL, so the checks run in the database, over the records the change touches, and `morpholog provision indexes` gives them indexes to seek on. A programme with an invariant outside the fragment reports `interpreted` and names the invariant and the construct that kept it out; the interpreter then checks the whole programme. Either way the rules mean the same thing, and the same proposal reaches the same decision.
+The last line says how your invariants are checked when you propose: every one here is inside the fragment the runtime compiles to SQL, so the checks run in the database, over the records the change touches, and `morpholog provision indexes` gives them indexes to seek on. A programme with an invariant outside the fragment reports `mixed`, naming the invariant and the construct that kept it out; the database checks the invariants that compile and the interpreter checks the rest, in the programme's order, inside the same transaction. Either way the rules mean the same thing, and the same proposal reaches the same decision.
 
 ## Make it happen
 
