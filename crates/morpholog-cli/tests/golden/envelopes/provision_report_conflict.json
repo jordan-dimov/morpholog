@@ -22,6 +22,7 @@
       ]
     }
   ],
+  "positions_unknown_for": [],
   "programs": [
     {
       "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -34,13 +35,19 @@
     {
       "action": "keep",
       "name": "morpholog_cs_vk1_p0",
-      "position": 0
+      "position": 0,
+      "required_by": [
+        "ledger"
+      ]
     },
     {
       "action": "conflict",
       "detail": "the statistics under this name differ from Morpholog's: its statistics target is 0",
       "name": "morpholog_cs_vk1_p1",
-      "position": 1
+      "position": 1,
+      "required_by": [
+        "ledger"
+      ]
     }
   ]
 }

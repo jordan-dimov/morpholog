@@ -91,11 +91,22 @@ fn print_plan(report: &ProvisionReport) {
     }
     for entry in &report.statistics {
         println!(
-            "{:<20} {}  statistics[{}]{}",
+            "{:<20} {}  statistics[{}]{}{}",
             entry.action.to_string(),
             entry.statistics_name,
             entry.position,
-            detail(&entry.detail)
+            detail(&entry.detail),
+            if entry.required_by.is_empty() {
+                String::new()
+            } else {
+                format!("  - required by {}", entry.required_by.join(", "))
+            }
+        );
+    }
+    if !report.positions_unknown_for.is_empty() {
+        println!(
+            "positions unknown for: {}  - provision these programmes again; no statistics object is stale until then",
+            report.positions_unknown_for.join(", ")
         );
     }
     println!(

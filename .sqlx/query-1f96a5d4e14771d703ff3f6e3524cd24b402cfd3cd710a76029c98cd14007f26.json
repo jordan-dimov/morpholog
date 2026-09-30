@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO morpholog.index_requirement\n                        (program_identity, spec_digest, program_hash, position)\n                     VALUES ($1, $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1f96a5d4e14771d703ff3f6e3524cd24b402cfd3cd710a76029c98cd14007f26"
+}

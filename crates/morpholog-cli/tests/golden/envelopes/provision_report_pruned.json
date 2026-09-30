@@ -32,6 +32,9 @@
       "required_by": []
     }
   ],
+  "positions_unknown_for": [
+    "archive"
+  ],
   "programs": [
     {
       "hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -55,7 +58,34 @@
     {
       "action": "keep",
       "name": "morpholog_cs_vk1_p0",
-      "position": 0
+      "position": 0,
+      "required_by": [
+        "billing",
+        "ledger",
+        "reporting"
+      ]
+    },
+    {
+      "action": "stale",
+      "detail": "required by no programme; dropped",
+      "name": "morpholog_cs_vk1_p1",
+      "position": 1,
+      "required_by": []
+    },
+    {
+      "action": "keep",
+      "name": "morpholog_cs_vk1_p2",
+      "position": 2,
+      "required_by": [
+        "reporting"
+      ]
+    },
+    {
+      "action": "keep",
+      "detail": "required by no programme known; kept while positions are unknown for archive",
+      "name": "morpholog_cs_vk1_p3",
+      "position": 3,
+      "required_by": []
     }
   ]
 }

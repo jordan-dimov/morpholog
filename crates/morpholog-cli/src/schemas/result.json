@@ -1045,17 +1045,22 @@
       }
     },
     "provision_report": {
-      "description": "provision indexes --json. Every list has one order whatever order the programmes were named in: programs by name, indexes and required_elsewhere by index name, statistics by position, required_by by programme name. A run that applied under prune dropped every stale index it lists.",
+      "description": "provision indexes --json. Every list has one order whatever order the programmes were named in: programs by name, indexes and required_elsewhere by index name, statistics by position, required_by and positions_unknown_for by programme name. A run that applied under prune dropped every stale index and statistics object it lists.",
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "applied", "dry_run", "indexes", "programs", "prune",
+        "applied", "dry_run", "indexes", "positions_unknown_for", "programs", "prune",
         "required_elsewhere", "statistics"
       ],
       "properties": {
         "applied": { "type": "boolean" },
         "dry_run": { "type": "boolean" },
         "indexes": { "type": "array", "items": { "$ref": "#/$defs/provisioned_index" } },
+        "positions_unknown_for": {
+          "description": "Programmes outside the call with a recorded requirement whose position is not known. While any, no statistics object is stale.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
         "programs": {
           "type": "array",
           "minItems": 1,
@@ -1104,14 +1109,16 @@
       }
     },
     "provisioned_statistics": {
+      "description": "Every statistics object Morpholog manages, the named programmes' and others' alike: an object is fully known from its position.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["action", "name", "position"],
+      "required": ["action", "name", "position", "required_by"],
       "properties": {
-        "action": { "enum": ["keep", "create", "conflict"] },
+        "action": { "enum": ["keep", "create", "conflict", "stale"] },
         "detail": { "description": "For an operator to read; not for parsing.", "type": "string" },
         "name": { "type": "string" },
-        "position": { "type": "integer" }
+        "position": { "type": "integer" },
+        "required_by": { "type": "array", "items": { "type": "string" } }
       }
     },
     "refresh_derived_report": {

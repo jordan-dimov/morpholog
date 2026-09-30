@@ -4455,6 +4455,7 @@ fn provision_report(stdout: &str) -> Value {
             "applied",
             "dry_run",
             "indexes",
+            "positions_unknown_for",
             "programs",
             "prune",
             "required_elsewhere",

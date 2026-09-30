@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.program_identity AS \"identity!\", r.spec_digest AS \"digest!\",\n                  r.position AS \"recorded?\",\n                  (SELECT m.position FROM morpholog.managed_index m\n                    WHERE m.spec_digest = r.spec_digest) AS \"managed?\"\n           FROM morpholog.index_requirement r\n           WHERE NOT (r.program_identity = ANY($1))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "identity!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.index_requirement",
+            "name": "program_identity"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "digest!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.index_requirement",
+            "name": "spec_digest"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "recorded?",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "morpholog.index_requirement",
+            "name": "position"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "managed?",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "267e2f74463dcf9fc6b3426a22ff0ca64509a2658dbee7d3fd14cf7a3e35527d"
+}

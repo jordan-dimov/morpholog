@@ -337,7 +337,20 @@ class Provisioning(unittest.TestCase):
     def test_a_pruning_run_names_what_it_dropped_and_what_others_protect(self):
         report = envelopes.ProvisionReport.from_json(golden("provision_report_pruned.json"))
         self.assertEqual([p.program for p in report.programs], ["billing", "ledger"])
-        self.assertEqual(report.pruned, ["morpholog_ci_journalline_1_vk1_456789abcdef"])
+        self.assertEqual(
+            report.pruned,
+            ["morpholog_ci_journalline_1_vk1_456789abcdef", "morpholog_cs_vk1_p1"],
+        )
+        self.assertEqual(report.positions_unknown_for, ["archive"])
+        self.assertEqual(
+            [(s.position, s.action, s.required_by) for s in report.statistics],
+            [
+                (0, "keep", ["billing", "ledger", "reporting"]),
+                (1, "stale", []),
+                (2, "keep", ["reporting"]),
+                (3, "keep", []),
+            ],
+        )
         self.assertEqual(
             [(r.name, r.required_by) for r in report.required_elsewhere],
             [("morpholog_ci_period_2_vk1_cdef01234567", ["reporting"])],

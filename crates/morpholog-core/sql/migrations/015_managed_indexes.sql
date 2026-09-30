@@ -14,7 +14,10 @@
 -- table of the same name and another shape. The shape the command
 -- relies on is pinned whole: columns with nullability and defaults,
 -- and every other constraint as PostgreSQL renders it (nullability is
--- read once, from the column).
+-- read once, from the column). A later migration may add to
+-- index_requirement, and a database at the head with no record of any
+-- version carries its additions, so that table is pinned over the
+-- columns and key this migration makes and nothing it does not.
 
 DO $$
 DECLARE
@@ -42,11 +45,12 @@ BEGIN
         SELECT string_agg(column_name || ':' || data_type || ':' || is_nullable || ':' || coalesce(column_default, '-'), ',' ORDER BY ordinal_position)
           INTO columns_seen
           FROM information_schema.columns
-         WHERE table_schema = 'morpholog' AND table_name = 'index_requirement';
+         WHERE table_schema = 'morpholog' AND table_name = 'index_requirement'
+           AND column_name IN ('program_identity', 'spec_digest', 'program_hash', 'reconciled_at');
         SELECT string_agg(contype::text || ':' || pg_get_constraintdef(oid), ',' ORDER BY contype::text, pg_get_constraintdef(oid))
           INTO constraints_seen
           FROM pg_constraint
-         WHERE conrelid = 'morpholog.index_requirement'::regclass AND contype <> 'n';
+         WHERE conrelid = 'morpholog.index_requirement'::regclass AND contype IN ('p', 'u');
         IF columns_seen IS DISTINCT FROM
            'program_identity:text:NO:-,spec_digest:text:NO:-,program_hash:text:NO:-,reconciled_at:timestamp with time zone:NO:now()'
            OR constraints_seen IS DISTINCT FROM

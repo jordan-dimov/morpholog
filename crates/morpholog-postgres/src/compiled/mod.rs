@@ -493,19 +493,20 @@ pub(crate) struct StatisticsSpec {
 }
 
 impl StatisticsSpec {
-    /// One per position the indexes seek on.
-    pub(crate) fn for_indexes(indexes: &[IndexSpec]) -> Vec<Self> {
-        let positions: BTreeSet<usize> = indexes.iter().map(|spec| spec.position).collect();
-        positions
-            .into_iter()
-            .map(|position| Self { position })
-            .collect()
-    }
-
     /// Named for the seek representation and the position, so statistics
     /// on another key are another object.
     pub(crate) fn name(&self) -> String {
         format!("morpholog_cs_vk1_p{}", self.position)
+    }
+
+    /// The specification an object under this exact name is expected to
+    /// be, or none for any other name: another representation, a
+    /// position spelled otherwise than this crate spells it, or a stray
+    /// suffix is not this build's object to reconcile.
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        let digits = name.strip_prefix("morpholog_cs_vk1_p")?;
+        let position: usize = digits.parse().ok()?;
+        (position.to_string() == digits).then_some(Self { position })
     }
 
     pub(crate) fn expression_sql(&self) -> String {

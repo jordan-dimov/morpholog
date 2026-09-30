@@ -168,6 +168,7 @@ pub struct morpholog_cli::envelopes::ProvisionReport<'a>
 pub morpholog_cli::envelopes::ProvisionReport::applied: bool
 pub morpholog_cli::envelopes::ProvisionReport::dry_run: bool
 pub morpholog_cli::envelopes::ProvisionReport::indexes: alloc::vec::Vec<morpholog_cli::envelopes::ProvisionedIndex<'a>>
+pub morpholog_cli::envelopes::ProvisionReport::positions_unknown_for: &'a [alloc::string::String]
 pub morpholog_cli::envelopes::ProvisionReport::programs: alloc::vec::Vec<morpholog_cli::envelopes::ProvisionedProgram<'a>>
 pub morpholog_cli::envelopes::ProvisionReport::prune: bool
 pub morpholog_cli::envelopes::ProvisionReport::required_elsewhere: alloc::vec::Vec<morpholog_cli::envelopes::RequiredElsewhere<'a>>
@@ -216,6 +217,7 @@ pub morpholog_cli::envelopes::ProvisionedStatistics::action: morpholog_postgres:
 pub morpholog_cli::envelopes::ProvisionedStatistics::detail: &'a str
 pub morpholog_cli::envelopes::ProvisionedStatistics::name: &'a str
 pub morpholog_cli::envelopes::ProvisionedStatistics::position: usize
+pub morpholog_cli::envelopes::ProvisionedStatistics::required_by: &'a [alloc::string::String]
 impl<'a> serde_core::ser::Serialize for morpholog_cli::envelopes::ProvisionedStatistics<'a>
 pub fn morpholog_cli::envelopes::ProvisionedStatistics<'a>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'a> core::marker::Freeze for morpholog_cli::envelopes::ProvisionedStatistics<'a>
