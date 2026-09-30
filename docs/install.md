@@ -147,7 +147,8 @@ has not recorded, in order, and leaves an already-current one alone. A fresh
 schema records that it is.
 
 Rollback is restoring the backup. It is never running an older binary
-against a migrated database: from this release, every command refuses a
+against a migrated database: from this release, every command that opens
+the database refuses a
 database ahead of the binary that asks, by name, before its first query,
 and a database behind it the same way, naming `morpholog migrate`. Only
 `migrate --check` reports the state and `init` and `migrate` still reach
@@ -182,9 +183,9 @@ per version, side by side, and point each project at the one its generated
 client was built for:
 
 ```bash
-mkdir -p ~/.local/lib/morpholog/v0.0.12
-tar -xzf "morpholog-v0.0.12-$TARGET.tar.gz" --strip-components=1 -C ~/.local/lib/morpholog/v0.0.12
-export MORPHOLOG_BIN=~/.local/lib/morpholog/v0.0.12/morpholog   # per project
+mkdir -p ~/.local/lib/morpholog/v0.0.13
+tar -xzf "morpholog-v0.0.13-$TARGET.tar.gz" --strip-components=1 -C ~/.local/lib/morpholog/v0.0.13
+export MORPHOLOG_BIN=~/.local/lib/morpholog/v0.0.13/morpholog   # per project
 ```
 
 The generated Python client reads `MORPHOLOG_BIN` before `PATH`, and its
