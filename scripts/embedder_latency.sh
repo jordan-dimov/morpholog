@@ -38,7 +38,7 @@ BIN="target/release/morpholog"
 
 echo "resetting schema in ${DATABASE_URL}..."
 psql "$DATABASE_URL" -q -c "DROP SCHEMA IF EXISTS morpholog CASCADE"
-psql "$DATABASE_URL" -q -f crates/morpholog-core/sql/schema.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -q -f crates/morpholog-core/sql/schema.sql
 
 # Spawn + parse + validate, no database. The fixed compute floor every
 # call pays before it ever touches PostgreSQL.
@@ -74,7 +74,7 @@ run_ms=$(awk "BEGIN { printf \"%.2f\", ($end - $start) / 1000000 / $N }")
 # the EPOCHREALTIME builtin: a `date` subprocess per sample would put
 # milliseconds of measurement inside the measured window.
 psql "$DATABASE_URL" -q -c "DROP SCHEMA IF EXISTS morpholog CASCADE" 2>/dev/null
-psql "$DATABASE_URL" -q -f crates/morpholog-core/sql/schema.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -q -f crates/morpholog-core/sql/schema.sql
 
 now_us() { local t="${EPOCHREALTIME/./}"; echo "$t"; }
 

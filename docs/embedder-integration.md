@@ -355,6 +355,8 @@ morpholog generate views ledger.morph | psql "$DATABASE_URL"   # if you read sta
 
 `init` cannot do the third step. It provisions Morpholog's own tables and knows no programme; which indexes are worth building depends on the rules you deploy. A database reset with `init --reset` has no indexes until `provision indexes` runs again.
 
+Every command but `init` and `migrate` asks first whether the database is one this binary serves, and refuses by name before its first query when it is behind (naming `morpholog migrate`) or ahead (migrated by a newer Morpholog). An embedder sees an operational error with nothing on stdout, and on a proposal the `not_committed` error object; the resident session refuses before its ready line. So a process left on an old binary after a migration, or started on a new one before it, writes nothing.
+
 Name every programme the database serves in one `provision indexes` call. The plan is their union. A conflict in one applies nothing for any. `--prune` acts once, after every named programme's requirements are recorded, so there is no order to remember: an index one programme stops requiring and another takes up is kept, never dropped and rebuilt. Two files that declare the same programme name are refused, because requirements are recorded per name.
 
 A programme you do not name keeps what it recorded on its last run, and its indexes are safe from your prune. The report lists them under `required_elsewhere`, each with the programmes that protect it. That list is also where a retired programme shows: its requirements stay recorded until a run under its name replaces them.

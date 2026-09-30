@@ -14,7 +14,7 @@ use morpholog_postgres::{
 };
 
 use crate::InitArgs;
-use crate::commands::{AlreadyReported, connect, print_json};
+use crate::commands::{AlreadyReported, connect_unchecked, print_json};
 use morpholog_cli::envelopes::{InitReport, LeastPrivilegeReport};
 
 pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
@@ -34,7 +34,8 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
         ));
     }
 
-    let pool = connect(&args.db.database_url).await?;
+    // Unchecked: this is the command that provisions a database.
+    let pool = connect_unchecked(&args.db.database_url).await?;
     let dropped = if args.reset {
         Some(drop_schema(&pool).await.context("schema drop failed")?)
     } else {
@@ -56,6 +57,11 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
         }
     };
     let least_privilege = if args.least_privilege {
+        // The floor is applied to an existing schema too, so that schema
+        // must be one this binary serves.
+        if status == "already-initialised" {
+            morpholog_postgres::require_current_schema(&pool).await?;
+        }
         provision_least_privilege(&pool)
             .await
             .context("least-privilege provisioning failed")?;

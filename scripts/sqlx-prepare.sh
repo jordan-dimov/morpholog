@@ -38,7 +38,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q <<'SQL'
 DROP SCHEMA IF EXISTS morpholog_read CASCADE;
 DROP SCHEMA IF EXISTS morpholog CASCADE;
 SQL
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f crates/morpholog-core/sql/schema.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -1 -q -f crates/morpholog-core/sql/schema.sql
 
 echo 'Preparing query cache ...'
 # Force online: the workspace defaults to SQLX_OFFLINE=true, which would

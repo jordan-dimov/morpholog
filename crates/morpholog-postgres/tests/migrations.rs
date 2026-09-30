@@ -385,6 +385,105 @@ fn with_database_only_moves_the_last_segment() {
 ///
 /// A release ships the binary without the source tree, so the migrations
 /// come from the ones compiled in; nothing here reads the repository.
+/// The schema file records the migrations it embodies, exactly the ones
+/// this binary carries, by version and name: what makes a database
+/// provisioned from the bare file current.
+#[tokio::test]
+async fn the_bare_schema_file_records_exactly_the_binarys_migrations() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    sqlx::raw_sql("DROP SCHEMA morpholog CASCADE; DROP SCHEMA IF EXISTS morpholog_read CASCADE")
+        .execute(&pool)
+        .await
+        .expect("a bare database");
+    sqlx::raw_sql(include_str!("../../morpholog-core/sql/schema.sql"))
+        .execute(&pool)
+        .await
+        .expect("the file applies");
+    let recorded: Vec<(i32, String)> =
+        sqlx::query_as("SELECT version, name FROM morpholog.schema_migrations ORDER BY version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let carried: Vec<(i32, String)> = {
+        // Migrate a database that recorded nothing: the report lists every
+        // migration the binary carries, in order, with its name.
+        sqlx::raw_sql("DELETE FROM morpholog.schema_migrations")
+            .execute(&pool)
+            .await
+            .unwrap();
+        morpholog_postgres::apply_migrations(&pool)
+            .await
+            .unwrap()
+            .applied
+            .into_iter()
+            .map(|m| (m.version, m.name))
+            .collect()
+    };
+    assert_eq!(recorded, carried, "the file's record is the binary's list");
+    assert_eq!(
+        recorded.last().map(|(v, _)| *v),
+        Some(morpholog_postgres::head_version())
+    );
+    morpholog_postgres::require_current_schema(&pool)
+        .await
+        .expect("a database from the bare file is current");
+}
+
+/// What every command asks before its first query, in the order that
+/// never advises a migration against a database the binary does not
+/// understand: ahead wins over behind.
+#[tokio::test]
+async fn require_current_schema_refuses_ahead_before_behind() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    morpholog_postgres::require_current_schema(&pool)
+        .await
+        .expect("the test database starts current");
+    let head = morpholog_postgres::head_version();
+
+    // Behind: the head's record missing.
+    sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
+        .bind(head)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let behind = morpholog_postgres::require_current_schema(&pool)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&behind, morpholog_postgres::PgError::SchemaBehind { detail } if detail.contains("1 migration(s) pending")),
+        "{behind:?}"
+    );
+    assert!(behind.to_string().contains("morpholog migrate"), "{behind}");
+
+    // Ahead as well: a version this binary does not carry. Ahead wins.
+    sqlx::query("INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, 'from_a_newer_morpholog')")
+        .bind(head + 2)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let ahead = morpholog_postgres::require_current_schema(&pool)
+        .await
+        .unwrap_err();
+    // Put the record back before asserting, so a failure cannot leave the
+    // shared database ahead.
+    sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
+        .bind(head + 2)
+        .execute(&pool)
+        .await
+        .unwrap();
+    morpholog_postgres::apply_migrations(&pool).await.unwrap();
+    assert!(
+        matches!(ahead, morpholog_postgres::PgError::SchemaAhead { recorded, binary } if recorded == head + 2 && binary == head),
+        "{ahead:?}"
+    );
+    assert!(!ahead.to_string().contains("morpholog migrate"), "{ahead}");
+    morpholog_postgres::require_current_schema(&pool)
+        .await
+        .expect("current again");
+}
+
 /// A database provisioned at the head from `schema.sql`, with no record of
 /// any version, as `psql -f` leaves it and CI makes it: every migration
 /// runs, and each finds the table it would make already there in the
@@ -1000,8 +1099,8 @@ async fn a_database_ahead_of_the_binary_is_not_current() {
     );
     assert!(!status.is_current(), "an ahead database is not current");
     assert!(
-        matches!(applied, Err(morpholog_postgres::PgError::InvalidState(_))),
-        "migrating an ahead database must be refused, got {applied:?}"
+        matches!(applied, Err(morpholog_postgres::PgError::SchemaAhead { recorded, .. }) if recorded == future),
+        "migrating an ahead database must be refused by name, got {applied:?}"
     );
 }
 

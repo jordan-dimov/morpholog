@@ -43,28 +43,99 @@ impl Deliverer for ShutdownAfterFirstDelivery {
     }
 }
 
+/// Wait until `done` holds, yielding to the worker meanwhile, or fail
+/// after a second: the worker's round trips before and inside its loop
+/// are real, so a fixed number of yields would assume how many there are.
+async fn wait_until<F, Fut>(mut done: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !done().await {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the worker did not get there in time"
+        );
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
 // ============================================================
 // Tests
 // ============================================================
 
+/// A worker told to stop before it starts does nothing at all, not even
+/// ask about the database: here the database would be refused.
 #[tokio::test]
 async fn worker_returns_immediately_when_shutdown_is_set_at_start() {
     let pool = test_pool().await;
     reset_db(&pool).await;
+    let head = morpholog_postgres::head_version();
+    sqlx::query("INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, 'from_a_newer_morpholog')")
+        .bind(head + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(true);
     drop(shutdown_tx); // not modified after this
 
     let clock = MockClock::new(Timestamp::now());
     let worker = OutboxWorker::new(
-        pool,
+        pool.clone(),
         "worker_a",
         INTENT_TYPE,
         AlwaysDelivers,
         clock,
         FixedJitter::new(1.0),
     );
-    worker.run(shutdown_rx).await.unwrap();
-    // Passing means `run` returned at all.
+    let outcome = worker.run(shutdown_rx).await;
+    sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
+        .bind(head + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
+    outcome.unwrap();
+}
+
+/// The worker asks once, before its first drain, whether the database is
+/// one this binary serves; an ahead database is refused by name and no row
+/// is delivered.
+#[tokio::test]
+async fn worker_refuses_a_database_ahead_of_the_binary_before_its_first_drain() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let head = morpholog_postgres::head_version();
+    sqlx::query("INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, 'from_a_newer_morpholog')")
+        .bind(head + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let worker = OutboxWorker::new(
+        pool.clone(),
+        "worker_a",
+        INTENT_TYPE,
+        AlwaysDelivers,
+        MockClock::new(Timestamp::now()),
+        FixedJitter::new(1.0),
+    );
+    // Bounded: a worker that does not refuse would run until shutdown,
+    // and this test never sends one.
+    let outcome = tokio::time::timeout(Duration::from_secs(2), worker.run(shutdown_rx)).await;
+    sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
+        .bind(head + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            outcome,
+            Ok(Err(morpholog_postgres::PgError::SchemaAhead { .. }))
+        ),
+        "refused before the first drain, not run: {outcome:?}"
+    );
 }
 
 #[tokio::test]
@@ -138,12 +209,13 @@ async fn worker_applies_jitter_factor_to_base_interval() {
     )
     .with_base_interval(Duration::from_millis(80));
 
-    // Mock sleeps resolve at once, so yielding lets the worker loop several times.
+    // Mock sleeps resolve at once, so the worker loops until told to stop.
     let handle = tokio::spawn(worker.run(shutdown_rx));
-    tokio::task::yield_now().await;
-    for _ in 0..10 {
-        tokio::task::yield_now().await;
-    }
+    wait_until(|| {
+        let clock = clock.clone();
+        async move { clock.sleeps().len() >= 3 }
+    })
+    .await;
     shutdown_tx_for_task.send(true).unwrap();
     handle.await.unwrap().unwrap();
 
@@ -188,10 +260,19 @@ async fn two_workers_concurrent_do_not_double_claim_a_row() {
 
     let handle_a = tokio::spawn(worker_a.run(shutdown_rx_a));
     let handle_b = tokio::spawn(worker_b.run(shutdown_rx_b));
-    // Let both workers complete at least one drain pass.
-    for _ in 0..20 {
-        tokio::task::yield_now().await;
-    }
+    // Let both workers drain everything there is.
+    wait_until(|| {
+        let pool = pool.clone();
+        async move {
+            let (n,): (i64,) =
+                sqlx::query_as("SELECT count(*) FROM morpholog.outbox WHERE status='delivered'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            n >= 6
+        }
+    })
+    .await;
     shutdown_tx.send(true).unwrap();
     handle_a.await.unwrap().unwrap();
     handle_b.await.unwrap().unwrap();
@@ -280,9 +361,11 @@ async fn worker_uses_base_interval_when_no_pending_retries_exist() {
     .with_base_interval(Duration::from_millis(40));
 
     let handle = tokio::spawn(worker.run(shutdown_rx));
-    for _ in 0..10 {
-        tokio::task::yield_now().await;
-    }
+    wait_until(|| {
+        let clock = clock.clone();
+        async move { !clock.sleeps().is_empty() }
+    })
+    .await;
     shutdown_tx.send(true).unwrap();
     handle.await.unwrap().unwrap();
 

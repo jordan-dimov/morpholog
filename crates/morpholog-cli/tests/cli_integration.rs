@@ -4639,3 +4639,115 @@ async fn provision_indexes_json_keeps_stdout_for_the_report() {
     .unwrap();
     assert_eq!(recorded, 0, "neither refusal changed anything");
 }
+
+// ============================================================
+// Every command refuses a schema behind or ahead of the binary
+// ============================================================
+
+/// The commands that reach the governed schema refuse a database this
+/// binary cannot serve before their first query, by name in both
+/// directions; `migrate --check` still reports, and `init` still
+/// provisions. Wound back and forward on the shared database, restored
+/// before any assertion.
+#[tokio::test(flavor = "current_thread")]
+async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
+    reset_db().await;
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    let ledger = example("03_double_entry_ledger/ledger.morph");
+    let head = morpholog_postgres::head_version();
+    let args_named = r#"{"entry_id":"e1","posting_date":"2026-04-15","period":"q1_2026","debit_account":"a","credit_account":"b","amount":"100"}"#;
+
+    // Behind: the head's record missing.
+    sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
+        .bind(head)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let read = run_cli(&["inspect", "claims"]);
+    let write = run_cli(&[
+        "propose",
+        &ledger,
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+    ]);
+    let check = run_cli(&["migrate", "--check"]);
+    let session = Command::new(common::bin())
+        .args(["session", &ledger])
+        .env("DATABASE_URL", database_url())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let init = run_cli(&["init", "--skip-if-exists"]);
+    // The repair the refusal names, so the record comes back by name.
+    morpholog_postgres::apply_migrations(&pool).await.unwrap();
+
+    for (what, (status, stdout, stderr)) in [("read", &read), ("write", &write)] {
+        assert_eq!(status.code(), Some(1), "{what}: {stderr}");
+        assert!(
+            stderr.contains("behind this binary") && stderr.contains("morpholog migrate"),
+            "{what} names the direction and the remedy: {stderr}"
+        );
+        if what == "read" {
+            assert!(stdout.is_empty(), "{what}: {stdout}");
+        }
+    }
+    // A proposal states its non-commit with the published code.
+    let refusal: Value =
+        serde_json::from_str(&write.1).unwrap_or_else(|e| panic!("{e}: {}", write.1));
+    assert_eq!(refusal["code"], "not_committed", "{}", write.1);
+    assert!(!session.status.success());
+    assert!(
+        session.stdout.is_empty(),
+        "no ready line: {:?}",
+        String::from_utf8_lossy(&session.stdout)
+    );
+    assert!(String::from_utf8_lossy(&session.stderr).contains("behind this binary"));
+    assert!(!check.0.success(), "check reports a behind database");
+    let report: Value = serde_json::from_str(&check.1).unwrap();
+    assert_eq!(report["pending"].as_array().map(Vec::len), Some(1));
+    assert!(
+        init.0.success(),
+        "init never migrates and still provisions: {}",
+        init.2
+    );
+
+    // Ahead: a version this binary does not carry.
+    sqlx::query("INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, 'from_a_newer_morpholog')")
+        .bind(head + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let read = run_cli(&["inspect", "claims"]);
+    let write = run_cli(&[
+        "propose",
+        &ledger,
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args-named",
+        args_named,
+    ]);
+    let floor = run_cli(&["init", "--skip-if-exists", "--least-privilege"]);
+    sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
+        .bind(head + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    for (what, (status, _, stderr)) in [("read", &read), ("write", &write), ("floor", &floor)] {
+        assert_eq!(status.code(), Some(1), "{what}: {stderr}");
+        assert!(
+            stderr.contains("older than the database") && !stderr.contains("morpholog migrate"),
+            "{what} names the direction, never the migrate remedy: {stderr}"
+        );
+    }
+    let refusal: Value = serde_json::from_str(&write.1).unwrap();
+    assert_eq!(refusal["code"], "not_committed");
+
+    // Current again: the same read runs.
+    let (status, _, stderr) = run_cli(&["inspect", "claims"]);
+    assert!(status.success(), "{stderr}");
+}

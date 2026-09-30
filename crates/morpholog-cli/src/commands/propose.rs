@@ -319,6 +319,7 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
         | PgError::NoProgramNamed
         | PgError::ProgramNamedTwice(_)
         | PgError::SchemaBehind { .. }
+        | PgError::SchemaAhead { .. }
         | PgError::TransitionNotFound(_)
         | PgError::TransitionNotCovered { .. }
         | PgError::NoTransitionAtOrBefore(_)

@@ -4,10 +4,10 @@
 //! the migrations it expects, with nothing to vendor or drift.
 //!
 //! **What "pending" means.** `morpholog.schema_migrations` records applied
-//! versions. A database provisioned from `schema.sql` is at the head, so
-//! [`crate::initialise_schema`] records every migration without running
-//! any. A database predating that table has no record, so everything is
-//! pending. That is sound because the migrations are idempotent.
+//! versions. A database provisioned from `schema.sql` is at the head, and
+//! the file records every migration it embodies, so none is pending. A
+//! database predating that table has no record, so everything is pending.
+//! That is sound because the migrations are idempotent.
 
 use crate::error::{PgError, classify, classify_checked_query};
 use serde::{Deserialize, Serialize};
@@ -140,26 +140,6 @@ async fn recorded_versions(pool: &PgPool) -> Result<Option<Vec<MigrationRef>>, P
     ))
 }
 
-/// Record every migration this build carries as applied, without running
-/// them. For a database provisioned from `schema.sql`, which is at the head
-/// by construction.
-pub(crate) async fn record_all_applied(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-) -> Result<(), PgError> {
-    for m in MIGRATIONS {
-        sqlx::query!(
-            "INSERT INTO morpholog.schema_migrations (version, name)
-             VALUES ($1, $2) ON CONFLICT (version) DO NOTHING",
-            m.version,
-            m.name,
-        )
-        .execute(&mut **tx)
-        .await
-        .map_err(classify_checked_query)?;
-    }
-    Ok(())
-}
-
 /// Refuse a database that has never been provisioned, rather than running
 /// migrations against nothing and reporting success.
 async fn ensure_schema_present(pool: &PgPool) -> Result<(), PgError> {
@@ -174,6 +154,38 @@ async fn ensure_schema_present(pool: &PgPool) -> Result<(), PgError> {
              head and needs no migrations."
                 .to_string(),
         ));
+    }
+    Ok(())
+}
+
+fn refuse_if_ahead(status: &MigrationReport) -> Result<(), PgError> {
+    match status.unknown.iter().map(|m| m.version).max() {
+        Some(recorded) => Err(PgError::SchemaAhead {
+            recorded,
+            binary: head_version(),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// Refuse a database this binary cannot serve, before its first query:
+/// one with no `morpholog` schema, one ahead of this binary, or one behind
+/// it, asked in that order, so an older binary never advises a migration
+/// against a database it does not understand. What every command asks
+/// once after connecting, except the two that make a database current,
+/// `init` and `migrate`.
+pub async fn require_current_schema(pool: &PgPool) -> Result<(), PgError> {
+    let status = migration_status(pool).await?;
+    refuse_if_ahead(&status)?;
+    if let Some(first) = status.pending.first() {
+        return Err(PgError::SchemaBehind {
+            detail: format!(
+                "{} migration(s) pending, from {} ({})",
+                status.pending.len(),
+                first.version,
+                first.name
+            ),
+        });
     }
     Ok(())
 }
@@ -218,22 +230,9 @@ pub async fn migration_status(pool: &PgPool) -> Result<MigrationReport, PgError>
 pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError> {
     ensure_schema_present(pool).await?;
     let before = migration_status(pool).await?;
-    if !before.unknown.is_empty() {
-        // Migrating a database that is ahead would apply nothing and report
-        // success, although an unseen migration may have broken this binary.
-        let names: Vec<String> = before
-            .unknown
-            .iter()
-            .map(|m| format!("{} ({})", m.version, m.name))
-            .collect();
-        return Err(PgError::InvalidState(format!(
-            "this database records migrations this binary does not know: {}. \
-             It was migrated by a newer Morpholog, so this build cannot tell \
-             whether its schema is still compatible - upgrade the binary rather \
-             than migrating the database.",
-            names.join(", ")
-        )));
-    }
+    // Migrating a database that is ahead would apply nothing and report
+    // success, although an unseen migration may have broken this binary.
+    refuse_if_ahead(&before)?;
     // The record table must exist before the first migration records
     // itself, though a later migration introduces it. This matches what that
     // migration creates, which stays for anyone applying files by hand.

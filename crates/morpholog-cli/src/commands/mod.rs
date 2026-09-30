@@ -188,7 +188,17 @@ pub(crate) fn lookup_transformation<'a>(
 ///
 /// The error never includes the URL: it may carry a password, and stderr
 /// ends up in logs. The `sqlx` error already says what went wrong.
+/// Connect, and refuse a database this binary cannot serve before the
+/// command's first query: none provisioned, ahead of the binary, or
+/// behind it, each by name. Every command connects here except `init`
+/// and `migrate`, which are what make a database current.
 pub(crate) async fn connect(url: &str) -> anyhow::Result<PgPool> {
+    let pool = connect_unchecked(url).await?;
+    morpholog_postgres::require_current_schema(&pool).await?;
+    Ok(pool)
+}
+
+pub(crate) async fn connect_unchecked(url: &str) -> anyhow::Result<PgPool> {
     // `postgres:///mydb` means "the OS user" to every other Postgres
     // tool; sqlx 0.9 alone reads it as `anonymous`.
     let url = morpholog_postgres::with_default_user(url);
@@ -199,12 +209,15 @@ pub(crate) async fn connect(url: &str) -> anyhow::Result<PgPool> {
 
 /// `connect`, capped at one connection, for sessions. A lockstep session
 /// never needs a second one, and the cap bounds load when many workers each
-/// hold a session open.
+/// hold a session open. Checked the same way, so a session on a database
+/// this binary cannot serve refuses before its ready line.
 pub(crate) async fn connect_single(url: &str) -> anyhow::Result<PgPool> {
     let url = morpholog_postgres::with_default_user(url);
-    morpholog_postgres::single_connection_pool(&url)
+    let pool = morpholog_postgres::single_connection_pool(&url)
         .await
-        .context("failed to connect to PostgreSQL")
+        .context("failed to connect to PostgreSQL")?;
+    morpholog_postgres::require_current_schema(&pool).await?;
+    Ok(pool)
 }
 
 /// The read-side tail every inspect surface shares: the structured form

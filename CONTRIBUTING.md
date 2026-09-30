@@ -29,13 +29,13 @@ cd morpholog
 sudo pg_createcluster -p 55432 --start 18 morpholog_test
 sudo -u postgres createuser -p 55432 --superuser "$USER"
 createdb -p 55432 morpholog_dev
-psql -p 55432 morpholog_dev -f crates/morpholog-core/sql/schema.sql
+psql -p 55432 morpholog_dev -v ON_ERROR_STOP=1 -1 -f crates/morpholog-core/sql/schema.sql
 export DATABASE_URL='postgres:///morpholog_dev?port=55432'
 ```
 
 The socket form keeps peer authentication, so no password is involved; `postgres://localhost:55432/...` would ask for one under the default `pg_hba.conf`. Real Morpholog deployments stay on `:5432`, untouched by any test. To dispose of the cluster: `sudo pg_dropcluster --stop 18 morpholog_test`.
 
-The schema applies the head state from `crates/morpholog-core/sql/schema.sql`. An existing database comes forward with `morpholog migrate` (`--check` to ask first), which carries the numbered migrations under `crates/morpholog-core/sql/migrations/` inside the binary. (An installed `morpholog` binary provisions the same schema with `morpholog init`; the `psql` path is right for a source checkout, where the binary you last installed may trail the schema at head.)
+The schema applies the head state from `crates/morpholog-core/sql/schema.sql`, in one transaction (`-1`) that stops at the first error, since the file records at its end that the database is at the head and must not say so over a half-applied schema. An existing database comes forward with `morpholog migrate` (`--check` to ask first), which carries the numbered migrations under `crates/morpholog-core/sql/migrations/` inside the binary. (An installed `morpholog` binary provisions the same schema with `morpholog init`; the `psql` path is right for a source checkout, where the binary you last installed may trail the schema at head.)
 
 Optional but recommended:
 

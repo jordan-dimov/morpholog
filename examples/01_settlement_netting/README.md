@@ -46,7 +46,7 @@ The same scenario, end-to-end through `propose_against_pg`, with the resulting c
 
 ```bash
 createdb morpholog_dev
-psql morpholog_dev -f crates/morpholog-core/sql/schema.sql
+psql morpholog_dev -v ON_ERROR_STOP=1 -1 -f crates/morpholog-core/sql/schema.sql
 
 DATABASE_URL=postgres:///morpholog_dev \
   cargo test -p morpholog-postgres --test integration -- --test-threads=1 \

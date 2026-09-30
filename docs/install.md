@@ -122,28 +122,47 @@ DATABASE_URL=postgres:///morpholog_scratch python3 examples/etrm_embedder/etrm_l
 
 `morpholog init` provisions a schema; it never migrates one. That is
 deliberate - it means running `init` against a live database cannot alter
-it. Upgrading is its own verb:
+it. Upgrading is its own verb, and it sits in a sequence:
 
 ```bash
-morpholog migrate --database-url "$DATABASE_URL"
+# 1. stop every process on the database: sessions, workers, the service
+pg_dump "$DATABASE_URL" > before-upgrade.sql                 # 2. back up
+morpholog migrate --check --database-url "$DATABASE_URL"     # 3. ask: exit 1 if behind or ahead
+morpholog migrate --database-url "$DATABASE_URL"             # 4. bring the schema forward
+morpholog audit verify --database-url "$DATABASE_URL"        # 5. the record still agrees with itself
+morpholog provision indexes a.morph b.morph                  # 6. every programme, one call
+# 7. start every process on the new binary
 ```
+
+Stopping first is not ceremony. A resident session and an outbox worker
+ask whether the database is theirs once, when they start, so one still
+running when the migration lands keeps writing until it is restarted;
+and a backup taken while processes write does not hold what they wrote
+after it.
 
 The migrations are compiled into the binary, like the schema itself, so the
 released artifact is all you need. `migrate` applies whatever your database
 has not recorded, in order, and leaves an already-current one alone. A fresh
-`morpholog init` needs none of them: it provisions at the head and records
-them as applied.
+`morpholog init` needs none of them: it provisions at the head, and the
+schema records that it is.
 
-Before a deployment runs a workload, it can ask instead of finding out:
+Rollback is restoring the backup. It is never running an older binary
+against a migrated database: from this release, every command refuses a
+database ahead of the binary that asks, by name, before its first query,
+and a database behind it the same way, naming `morpholog migrate`. Only
+`migrate --check` reports the state and `init` and `migrate` still reach
+such a database, since they are what make it current. The refusal exists
+from the first release that carries it; v0.0.12 and older binaries cannot
+be retrofitted, and against a newer schema they fail the way they always
+did, one query at a time.
 
-```bash
-morpholog migrate --check --database-url "$DATABASE_URL"   # exit 1 if behind
-```
-
-`--check` also refuses a database that is **ahead** - one migrated by a
-newer Morpholog than the binary asking. Nothing is pending there, so a
-naive check would report success at exactly the moment this build cannot
-know whether the schema is still compatible.
+When several processes share one database - a web service and a nightly
+job, say - the sequence is the same for all of them at once: stop them,
+migrate once, start them on the new binary. The refusal is the net under
+the sequence, not the sequence: a command that runs on the old binary
+after the migration is refused by name, and one that runs on the new
+binary before it refuses until the migration runs, so a process someone
+forgot writes nothing.
 
 **Migrating needs ownership of the schema, not the runtime login.** If you
 provisioned with `--least-privilege`, the writer role deliberately cannot
@@ -154,25 +173,13 @@ to act. Migrations re-apply the privilege floor when they have changed
 anything, since a `GRANT` cannot reach a table that did not exist when it
 ran.
 
-If an unapplied migration leaves a **column** this binary expects absent, its
-queries report the database as out of date and tell you to run `migrate`,
-rather than surfacing a raw database error. The migrations since the record
-existed take that shape; it is not general schema-version detection, so a
-migration adding a table or an index would fail differently.
-
-Worth knowing where the column case presents. The claims-key migration is
-named by every write, so the first proposal that admits or retracts a claim
-reports it. The rejection-witness migration is named only by a *refusal*, so
-**accepted proposals keep working** and the trouble surfaces well after the
-upgrade.
-
 ## Several projects on one machine
 
 A `morpholog` on `PATH` serves every project on the machine. Migrate one
 project's database with a newer binary and the older projects' binary
-refuses that database until they upgrade too - safely, but by surprise. So
-keep one binary per version, side by side, and point each project at the
-one its generated client was built for:
+refuses that database, by name, until they upgrade too. So keep one binary
+per version, side by side, and point each project at the one its generated
+client was built for:
 
 ```bash
 mkdir -p ~/.local/lib/morpholog/v0.0.12
