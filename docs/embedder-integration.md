@@ -389,7 +389,7 @@ Statistics objects are reconciled for every programme at once, named or not: one
 ```
 
 - `dry_run` and `prune` say what was asked, so a report read later from a log still says what it is. `applied` says whether anything changed: false for a dry run, and false when a conflict stopped the run.
-- An index's `action` is one of `keep`, `create`, `repair_invalid`, `satisfied_externally`, `stale`, `conflict`; a statistics object's is `keep`, `create` or `conflict`. A dry run reports the same actions the applying run takes.
+- An index's `action` is one of `keep`, `create`, `repair_invalid`, `satisfied_externally`, `stale`, `conflict`; a statistics object's is `keep`, `create`, `stale` or `conflict`. A dry run reports the same actions the applying run takes.
 - A run that applied under `prune` dropped every `stale` index and statistics object it lists.
 - `required_by` names the programmes that require the index or the statistics object's position once every named programme's requirements are replaced: the named ones and any other the database has recorded.
 - `positions_unknown_for` names programmes outside the call with a recorded requirement whose position is not known. While it is not empty no statistics object is stale.

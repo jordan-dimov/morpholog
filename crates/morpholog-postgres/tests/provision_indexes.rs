@@ -1067,6 +1067,46 @@ async fn a_position_left_unrecorded_is_read_from_the_managed_index() {
     }
 }
 
+/// A position decides what a prune drops, so a registry that disagrees
+/// with itself about one is refused before any change: the recorded
+/// requirement against the managed index of the same specification.
+#[tokio::test]
+async fn a_registry_disagreeing_about_a_position_is_refused_before_any_change() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
+    let before = (
+        catalogue_oids(&pool).await,
+        statistics_positions(&pool).await,
+    );
+    sqlx::query(
+        "UPDATE morpholog.index_requirement SET position = position + 1
+         WHERE spec_digest = (SELECT min(spec_digest) FROM morpholog.index_requirement)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    for prune in [false, true] {
+        let error = provision_indexes(&pool, &[&requiring_nothing("other_book")], prune)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, morpholog_postgres::PgError::InvalidState(m) if m.contains("agrees with itself")),
+            "{error:?}"
+        );
+    }
+    assert_eq!(
+        (
+            catalogue_oids(&pool).await,
+            statistics_positions(&pool).await
+        ),
+        before,
+        "nothing changed"
+    );
+}
+
 /// One programme stops requiring the indexes another takes up. Named
 /// together, the prune sees both replaced and drops nothing. Named one at
 /// a time with the prune on the first, the indexes go and are built again:

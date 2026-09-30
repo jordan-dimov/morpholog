@@ -591,8 +591,9 @@ async fn prospective_requirements(
     // the rows, which made the committed cache differ from a checked one.
     let outside = sqlx::query!(
         r#"SELECT r.program_identity AS "identity!", r.spec_digest AS "digest!",
-                  COALESCE(r.position, (SELECT m.position FROM morpholog.managed_index m
-                                        WHERE m.spec_digest = r.spec_digest)) AS "position?"
+                  r.position AS "recorded?",
+                  (SELECT m.position FROM morpholog.managed_index m
+                    WHERE m.spec_digest = r.spec_digest) AS "managed?"
            FROM morpholog.index_requirement r
            WHERE NOT (r.program_identity = ANY($1))"#,
         &identities,
@@ -602,13 +603,31 @@ async fn prospective_requirements(
     .map_err(classify_checked_query)?;
     let mut required: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut position_of: BTreeMap<String, usize> = BTreeMap::new();
+    // A position decides what a prune drops, so every source that knows
+    // one for a specification must say the same; a disagreement is
+    // refused before any change rather than settled by whichever came
+    // first.
+    let mut learn = |digest: &str, position: i32, source: &str| -> Result<(), PgError> {
+        let position = usize::try_from(position).map_err(|_| {
+            PgError::InvalidState(format!(
+                "the {source} of specification {digest} records position {position}"
+            ))
+        })?;
+        match position_of.insert(digest.to_string(), position) {
+            Some(known) if known != position => Err(PgError::InvalidState(format!(
+                "specification {digest} seeks on position {known}, but the {source} records {position}; \
+                 provisioning refuses to drop anything until the registry agrees with itself"
+            ))),
+            _ => Ok(()),
+        }
+    };
     for program in named {
         for spec in &program.specs {
             required
                 .entry(spec.digest())
                 .or_default()
                 .insert(program.identity.clone());
-            position_of.insert(spec.digest(), spec.position);
+            learn(&spec.digest(), spec.position as i32, "named programme")?;
         }
     }
     for row in &outside {
@@ -616,10 +635,11 @@ async fn prospective_requirements(
             .entry(row.digest.clone())
             .or_default()
             .insert(row.identity.clone());
-        if let Some(position) = row.position {
-            position_of
-                .entry(row.digest.clone())
-                .or_insert(position as usize);
+        if let Some(position) = row.managed {
+            learn(&row.digest, position, "managed index")?;
+        }
+        if let Some(position) = row.recorded {
+            learn(&row.digest, position, "recorded requirement")?;
         }
     }
     let positions_unknown_for: Vec<String> = outside

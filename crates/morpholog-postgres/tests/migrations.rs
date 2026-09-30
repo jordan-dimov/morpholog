@@ -16,7 +16,7 @@
 
 mod common;
 
-use common::test_pool;
+use common::{reset_db, test_pool};
 use sqlx::{PgPool, Row};
 
 const WITNESS_MIGRATION: &str =
@@ -385,6 +385,36 @@ fn with_database_only_moves_the_last_segment() {
 ///
 /// A release ships the binary without the source tree, so the migrations
 /// come from the ones compiled in; nothing here reads the repository.
+/// A database provisioned at the head from `schema.sql`, with no record of
+/// any version, as `psql -f` leaves it and CI makes it: every migration
+/// runs, and each finds the table it would make already there in the
+/// shape the head gives it, later additions included.
+#[tokio::test]
+async fn a_head_database_with_no_record_migrates_cleanly() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    sqlx::raw_sql("DROP TABLE morpholog.schema_migrations")
+        .execute(&pool)
+        .await
+        .expect("simulate a head schema applied by psql");
+    let report = morpholog_postgres::apply_migrations(&pool)
+        .await
+        .expect("every migration adopts the head shape");
+    assert_eq!(
+        report.recorded_version_after,
+        Some(morpholog_postgres::head_version()),
+        "{report:?}"
+    );
+    let position = columns(&pool, "morpholog", "index_requirement")
+        .await
+        .into_iter()
+        .find(|(name, _, _)| name == "position");
+    assert!(
+        position.is_some(),
+        "the head's later column survives the replay"
+    );
+}
+
 #[tokio::test]
 async fn a_legacy_database_upgrades_from_the_binary_alone() {
     let Ok(base) = std::env::var("DATABASE_URL") else {
@@ -685,6 +715,46 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
         .execute(&pool)
         .await
         .map_err(|e| format!("cleanup: {e}"))?;
+
+    // It refuses a same-named column of another shape, rather than adopting
+    // one that stops an older binary writing or lets a negative position
+    // in. Run with the migration's own SQL on each twin, then the column is
+    // put back.
+    let migration_019 =
+        include_str!("../../morpholog-core/sql/migrations/019_requirement_position.sql");
+    for (label, twin) in [
+        (
+            "not null",
+            "position integer NOT NULL DEFAULT 0 CHECK (position >= 0)",
+        ),
+        ("no check", "position integer"),
+        ("another type", "position bigint CHECK (position >= 0)"),
+    ] {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "ALTER TABLE morpholog.index_requirement DROP COLUMN position;
+             ALTER TABLE morpholog.index_requirement ADD COLUMN {twin}"
+        )))
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("shaping the twin ({label}): {e}"))?;
+        match sqlx::raw_sql(migration_019).execute(&pool).await {
+            Ok(_) => return Err(format!("migration 019 adopted a position twin ({label})")),
+            Err(e) if e.to_string().contains("another shape") => {}
+            Err(e) => {
+                return Err(format!(
+                    "migration 019 refused {label} for the wrong reason: {e}"
+                ));
+            }
+        }
+    }
+    sqlx::raw_sql("ALTER TABLE morpholog.index_requirement DROP COLUMN position")
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("removing the last twin: {e}"))?;
+    sqlx::raw_sql(migration_019)
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("migration 019 must add the column back: {e}"))?;
 
     // Migration 014, checked on the migrated table: the old row survives
     // unstamped, the column is nullable, and each named constraint refuses
