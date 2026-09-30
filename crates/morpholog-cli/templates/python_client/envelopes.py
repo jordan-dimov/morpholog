@@ -1329,23 +1329,28 @@ class HashReport:
 
 
 def version_skew(payload: object, expected: str) -> str | None:
-    """Why a binary's envelope cannot be trusted by a client generated for
-    ``expected``, or ``None`` when the versions agree.
+    """The version the binary states in its envelope against the one this
+    client was generated for, or ``None`` when they agree or the envelope
+    states none.
 
     Read before the strict parser, on purpose: a binary of another version
     may speak another protocol or carry a field this client does not know,
     and the version is the reason for that, so it is the diagnosis to give.
     The strict parser then still sees the whole object when the versions
-    agree; this reads one key and nothing else."""
+    agree; this reads one key and nothing else. An envelope that states no
+    version is not evidence of any version, so it is left to the strict
+    parser to refuse."""
     actual = payload.get("morpholog_version") if isinstance(payload, dict) else None
-    if not isinstance(actual, str):
-        return (
-            f"the binary does not report its version, so it predates the versioned "
-            f"handshake; this client was generated for Morpholog {expected}"
-        )
-    if actual != expected:
+    if isinstance(actual, str) and actual != expected:
         return f"the binary is Morpholog {actual}; this client was generated for {expected}"
     return None
+
+
+def predates_versioned_hash(payload: object) -> bool:
+    """Whether a `hash` report is the exact shape every binary emitted
+    before the report carried a version: the one legacy shape a
+    generated client names as such rather than as drift."""
+    return isinstance(payload, dict) and set(payload) == {"hash", "program"}
 
 
 @dataclass(frozen=True)

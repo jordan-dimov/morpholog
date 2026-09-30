@@ -284,22 +284,27 @@ class VersionSkew(unittest.TestCase):
         self.assertIn("0.0.0", skew)
         self.assertIn("1.2.3", skew)
 
-    def test_a_report_from_before_the_handshake_is_named_as_such(self):
+    def test_only_the_exact_pre_versioned_report_shape_is_recognised_as_old(self):
         # The two-field report every binary before the versioned handshake
-        # emits. Its version is unknowable; the refusal says so.
+        # emitted. It states no version, so it is no version skew; it is the
+        # one shape a client names as old rather than as drift.
         legacy = {"hash": "sha256:" + "0" * 64, "program": "envelopes"}
-        skew = envelopes.version_skew(legacy, "1.2.3")
-        self.assertIn("does not report its version", skew)
-        self.assertIn("1.2.3", skew)
+        self.assertIsNone(envelopes.version_skew(legacy, "1.2.3"))
+        self.assertTrue(envelopes.predates_versioned_hash(legacy))
         with self.assertRaises(envelopes.EnvelopeError):
             envelopes.HashReport.from_json(legacy)
+        for other in (
+            {"hash": "x"},
+            {"hash": "x", "program": "p", "novel": 1},
+            golden("hash_report.json"),
+            ["x"],
+        ):
+            self.assertFalse(envelopes.predates_versioned_hash(other), other)
 
-    def test_a_payload_that_is_not_an_object_is_not_a_version(self):
-        self.assertIn("does not report", envelopes.version_skew(["x"], "1.2.3"))
-        self.assertIn(
-            "does not report",
-            envelopes.version_skew({"morpholog_version": 7}, "1.2.3"),
-        )
+    def test_an_absent_or_unreadable_version_is_no_evidence_of_a_version(self):
+        self.assertIsNone(envelopes.version_skew(["x"], "1.2.3"))
+        self.assertIsNone(envelopes.version_skew({}, "1.2.3"))
+        self.assertIsNone(envelopes.version_skew({"morpholog_version": 7}, "1.2.3"))
 
 
 class Provisioning(unittest.TestCase):

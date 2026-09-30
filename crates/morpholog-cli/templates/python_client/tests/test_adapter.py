@@ -286,9 +286,16 @@ class AdapterDiscrimination(unittest.TestCase):
         client, record = self._pinned({"hash": self.HASH, "program": "p"})
         with self.assertRaises(MorphologError) as caught:
             client.claims()
-        self.assertIn("does not report its version", str(caught.exception))
+        self.assertIn("predates the versioned hash report", str(caught.exception))
         self.assertIn("0.0.0", str(caught.exception))
         self.assertEqual(self._ran(record), ["hash model.morph"])
+
+    def test_a_report_stating_no_version_in_a_new_shape_is_drift_not_an_old_binary(self):
+        # Only the exact pre-versioned shape is named as old. Anything else
+        # without a version is a report this client cannot read.
+        client, _ = self._pinned({"hash": self.HASH, "program": "p", "novel": 1})
+        with self.assertRaises(envelopes.EnvelopeError):
+            client.claims()
 
     def test_the_version_is_diagnosed_before_envelope_drift(self):
         # A report this client cannot parse, from a binary of another

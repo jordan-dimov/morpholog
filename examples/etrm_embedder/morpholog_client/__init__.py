@@ -34,11 +34,13 @@ def open_client(
     binary: str | None = None,
     timeout: float | None = None,
 ) -> Morpholog:
-    """A one-shot client pinned to this package's stamps: a binary of
-    another version than it was generated for, or a file whose rules
-    are not the ones it was generated from, is refused before the
-    first call. Construct ``Morpholog`` directly to run deliberately
-    unpinned."""
+    """A one-shot client checked against this package's stamps once,
+    immediately before its first call: a binary of another version
+    than it was generated for, or a file whose rules are not the ones
+    it was generated from, is refused. It detects deployment skew at
+    first use, and does not guard against a binary or file replaced
+    under a client already checked. Construct ``Morpholog`` directly
+    to run deliberately unchecked."""
     return Morpholog(
         file,
         database_url,

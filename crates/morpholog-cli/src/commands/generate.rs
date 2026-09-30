@@ -547,11 +547,13 @@ fn render_init(program: &Program) -> String {
              binary: str | None = None,\n    \
              timeout: float | None = None,\n\
          ) -> Morpholog:\n    \
-             \"\"\"A one-shot client pinned to this package's stamps: a binary of\n    \
-             another version than it was generated for, or a file whose rules\n    \
-             are not the ones it was generated from, is refused before the\n    \
-             first call. Construct ``Morpholog`` directly to run deliberately\n    \
-             unpinned.\"\"\"\n    \
+             \"\"\"A one-shot client checked against this package's stamps once,\n    \
+             immediately before its first call: a binary of another version\n    \
+             than it was generated for, or a file whose rules are not the ones\n    \
+             it was generated from, is refused. It detects deployment skew at\n    \
+             first use, and does not guard against a binary or file replaced\n    \
+             under a client already checked. Construct ``Morpholog`` directly\n    \
+             to run deliberately unchecked.\"\"\"\n    \
              return Morpholog(\n        \
                  file,\n        \
                  database_url,\n        \

@@ -217,8 +217,9 @@ class Session:
         except ValueError as exc:
             self._poison("the ready line did not parse")
             raise MorphologError(f"malformed session ready line: {exc}") from None
-        # Before the strict parse and the protocol: a binary of another
-        # version is the reason either of those would differ.
+        # Before the strict parse and the protocol: a binary that states
+        # another version is the reason either of those would differ. One
+        # that states none is malformed, which the strict parse says.
         skew = (
             envelopes.version_skew(payload, expected_version)
             if expected_version is not None

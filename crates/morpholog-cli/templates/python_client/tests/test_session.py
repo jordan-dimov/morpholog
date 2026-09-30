@@ -631,10 +631,13 @@ class Startup(SessionHarness):
             self.session(mode="novel_ready_field", expected_version="0.0.0")
         self.assertIn("unknown key", str(err.exception))
 
-    def test_a_ready_line_without_a_version_is_refused_by_that_name(self):
+    def test_a_ready_line_without_a_version_is_malformed_not_an_old_binary(self):
+        # Every session has stated its version, so a ready line without one
+        # is not evidence of any version: the strict parse refuses it.
         with self.assertRaises(MorphologError) as err:
             self.session(mode="ready_without_version", expected_version="0.0.0")
-        self.assertIn("does not report its version", str(err.exception))
+        self.assertIn("malformed session ready line", str(err.exception))
+        self.assertIn("morpholog_version", str(err.exception))
 
     def test_an_unpinned_session_ignores_the_version(self):
         os.environ["SESSION_STUB_VERSION"] = "9.9.9"

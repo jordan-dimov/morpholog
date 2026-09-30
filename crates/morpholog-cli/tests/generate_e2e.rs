@@ -153,10 +153,10 @@ fn the_model_hash_stamp_matches_morpholog_hash() {
     );
 }
 
-/// Both factories pin both stamps: the generated package is the one
-/// place that knows them, and a client constructed directly is unpinned.
+/// Both factories check both stamps: the generated package is the one
+/// place that knows them, and a client constructed directly is unchecked.
 #[test]
-fn the_factories_pin_the_version_and_the_model_hash() {
+fn the_factories_check_the_version_and_the_model_hash() {
     let out = tempfile::tempdir().unwrap();
     assert!(generate(&trade_lifecycle(), out.path()).status.success());
     let init = std::fs::read_to_string(out.path().join("morpholog_client/__init__.py")).unwrap();

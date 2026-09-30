@@ -152,12 +152,12 @@ class Morpholog:
     """A typed client over the ``morpholog`` CLI: arguments in, parsed
     envelope dataclasses out.
 
-    Constructed directly it is unpinned: it runs whatever binary and file
-    it is given. The generated ``open_client`` pins both, refusing before
-    the first call a binary of another version than the package was
+    Constructed directly it is unchecked: it runs whatever binary and file
+    it is given. The generated ``open_client`` checks both once, immediately
+    before the first call: a binary of another version than the package was
     generated for, or a file whose rules are not the ones it was generated
-    from. That first check parses the file even ahead of a call that needs
-    no programme, such as ``init`` or ``migrate``.
+    from, is refused. That check parses the file even ahead of a call that
+    needs no programme, such as ``init`` or ``migrate``.
 
     ``binary`` resolves as: explicit argument, then the
     ``MORPHOLOG_BIN`` environment variable, then ``morpholog`` on
@@ -187,11 +187,11 @@ class Morpholog:
         self.timeout = timeout
         self._expected_version = expected_version
         self._expected_model_hash = expected_model_hash
-        # Pinned clients check the binary once, before their first call:
-        # ``None`` until then, ``True`` once it agreed, or the error a
-        # mismatch raised, raised again on every later call.
-        self._pin: bool | MorphologError | None = None
-        self._pin_lock = threading.Lock()
+        # The binary is checked once, before the first call: ``None``
+        # until then, ``True`` once it agreed, or the error a mismatch
+        # raised, raised again on every later call.
+        self._checked: bool | MorphologError | None = None
+        self._check_lock = threading.Lock()
 
     # ------------------------------------------------------------
     # The one subprocess seam.
@@ -205,25 +205,25 @@ class Morpholog:
         timeout: float | None,
         stdout: IO[bytes] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        """Every invocation lands here, and a pinned client's check runs
+        """Every invocation lands here, and the compatibility check runs
         before the first of them."""
-        self._ensure_pinned()
+        self._ensure_compatible()
         return self._run_raw(args, stdin, timeout=timeout, stdout=stdout)
 
-    def _ensure_pinned(self) -> None:
+    def _ensure_compatible(self) -> None:
         """Refuse a binary of another version, or one serving other rules,
         before anything else runs. Asked of `hash`, whose report carries
-        both, once per client: a mismatch stays refused, and a new client
-        is how a changed binary or file is taken up. It guards a deploy,
-        not a running process: a binary or file replaced under a client
-        already checked is not noticed until the next client."""
+        both, once per client, immediately before its first operation: a
+        mismatch stays refused. It detects deployment skew at first use;
+        it does not protect against replacing the binary or the programme
+        file under a client already checked."""
         if self._expected_version is None and self._expected_model_hash is None:
             return
-        with self._pin_lock:
-            if self._pin is True:
+        with self._check_lock:
+            if self._checked is True:
                 return
-            if isinstance(self._pin, MorphologError):
-                raise self._pin
+            if isinstance(self._checked, MorphologError):
+                raise self._checked
             args = ["hash", self.file]
             proc = self._run_raw(args, None, timeout=self.timeout)
             if not proc.stdout.strip():
@@ -231,29 +231,33 @@ class Morpholog:
                     f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}"
                 )
             payload = json.loads(proc.stdout)
-            skew = (
-                envelopes.version_skew(payload, self._expected_version)
-                if self._expected_version is not None
-                else None
-            )
+            skew = None
+            if self._expected_version is not None:
+                skew = envelopes.version_skew(payload, self._expected_version)
+                if skew is None and envelopes.predates_versioned_hash(payload):
+                    skew = (
+                        f"the binary predates the versioned hash report, so it is "
+                        f"older than Morpholog {self._expected_version}, which this "
+                        f"client was generated for"
+                    )
             if skew is not None:
-                self._pin = MorphologError(
+                self._checked = MorphologError(
                     f"{skew} (binary `{self.binary}`; MORPHOLOG_BIN selects the "
-                    f"matching one, and a client constructed directly runs unpinned)"
+                    f"matching one, and a client constructed directly runs unchecked)"
                 )
-                raise self._pin
+                raise self._checked
             report = envelopes.HashReport.from_json(payload)
             if (
                 self._expected_model_hash is not None
                 and report.hash != self._expected_model_hash
             ):
-                self._pin = MorphologError(
+                self._checked = MorphologError(
                     f"`{self.file}` hashes to {report.hash}; this client was generated "
                     f"from {self._expected_model_hash} - regenerate it, or point it at "
                     f"the programme it was generated from"
                 )
-                raise self._pin
-            self._pin = True
+                raise self._checked
+            self._checked = True
 
     def _run_raw(
         self,
