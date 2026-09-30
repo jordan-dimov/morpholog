@@ -24,6 +24,7 @@ pub(crate) fn run(args: SourceFileArgs) -> anyhow::Result<()> {
     validate_or_report(&parsed)?;
     print_json(&morpholog_cli::envelopes::HashReport {
         hash: canonical_hash(&parsed.program),
+        morpholog_version: env!("CARGO_PKG_VERSION"),
         program: parsed.program.name.clone(),
     })
 }

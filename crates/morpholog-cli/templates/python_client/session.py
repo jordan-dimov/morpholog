@@ -138,11 +138,12 @@ class Session:
     """A context manager over one resident ``morpholog session`` child.
 
     Opening spawns the child, waits for its ready line, and - when
-    ``expected_model_hash`` is given - refuses to open against a
-    programme whose canonical hash is not the one this deployment
-    expects. Prefer the generated ``open_session``, which pins the
-    hash this package was built against; construct ``Session``
-    directly to open deliberately unpinned.
+    ``expected_version`` or ``expected_model_hash`` is given - refuses
+    to open against a binary of another version, or a programme whose
+    canonical hash is not the one this deployment expects. Prefer the
+    generated ``open_session``, which pins both stamps this package was
+    built with; construct ``Session`` directly to open deliberately
+    unpinned.
 
     ``timeout`` bounds how long each request waits for its RESPONSE in
     seconds (and the ready handshake); ``None`` waits indefinitely. It
@@ -163,6 +164,7 @@ class Session:
         binary: str | None = None,
         timeout: float | None = None,
         expected_model_hash: str | None = None,
+        expected_version: str | None = None,
     ) -> None:
         self.file = str(file)
         self.database_url = database_url
@@ -211,8 +213,26 @@ class Session:
             self._poison("the session never became ready")
             raise
         try:
-            self.ready = envelopes.SessionReady.from_json(json.loads(ready_line))
-        except (ValueError, envelopes.EnvelopeError) as exc:
+            payload = json.loads(ready_line)
+        except ValueError as exc:
+            self._poison("the ready line did not parse")
+            raise MorphologError(f"malformed session ready line: {exc}") from None
+        # Before the strict parse and the protocol: a binary of another
+        # version is the reason either of those would differ.
+        skew = (
+            envelopes.version_skew(payload, expected_version)
+            if expected_version is not None
+            else None
+        )
+        if skew is not None:
+            self._poison("version mismatch")
+            raise MorphologError(
+                f"{skew} (binary `{self.binary}`; MORPHOLOG_BIN selects the matching "
+                f"one, and a session constructed directly opens unpinned)"
+            )
+        try:
+            self.ready = envelopes.SessionReady.from_json(payload)
+        except envelopes.EnvelopeError as exc:
             self._poison("the ready line did not parse")
             raise MorphologError(f"malformed session ready line: {exc}") from None
         if self.ready.protocol != PROTOCOL:

@@ -1137,8 +1137,10 @@ fn report_envelopes_serialize_as_pinned() {
     );
     assert_golden(
         "hash_report.json",
+        // The crate version changes every release, so fix it here.
         &to_value(&HashReport {
             hash: format!("sha256:{}", "0".repeat(64)),
+            morpholog_version: "0.0.0",
             program: "envelopes".to_string(),
         }),
     );

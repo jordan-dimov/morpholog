@@ -1311,13 +1311,41 @@ class CheckReport:
 
 @dataclass(frozen=True)
 class HashReport:
+    """The rules-identity hash of a programme, from the binary reporting
+    it. A pinned client compares both against its own stamps."""
+
     program: str
     hash: str
+    morpholog_version: str
 
     @classmethod
     def from_json(cls, payload: object) -> HashReport:
-        data = _strict("hash report", payload, {"program", "hash"})
-        return cls(program=data["program"], hash=data["hash"])
+        data = _strict("hash report", payload, {"program", "hash", "morpholog_version"})
+        return cls(
+            program=data["program"],
+            hash=data["hash"],
+            morpholog_version=data["morpholog_version"],
+        )
+
+
+def version_skew(payload: object, expected: str) -> str | None:
+    """Why a binary's envelope cannot be trusted by a client generated for
+    ``expected``, or ``None`` when the versions agree.
+
+    Read before the strict parser, on purpose: a binary of another version
+    may speak another protocol or carry a field this client does not know,
+    and the version is the reason for that, so it is the diagnosis to give.
+    The strict parser then still sees the whole object when the versions
+    agree; this reads one key and nothing else."""
+    actual = payload.get("morpholog_version") if isinstance(payload, dict) else None
+    if not isinstance(actual, str):
+        return (
+            f"the binary does not report its version, so it predates the versioned "
+            f"handshake; this client was generated for Morpholog {expected}"
+        )
+    if actual != expected:
+        return f"the binary is Morpholog {actual}; this client was generated for {expected}"
+    return None
 
 
 @dataclass(frozen=True)

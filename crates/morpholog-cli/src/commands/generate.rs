@@ -540,6 +540,26 @@ fn render_init(program: &Program) -> String {
              MorphologOutcomeUnknown,\n    \
              MorphologRequestError,\n    \
              Session,\n)\n\n\
+         def open_client(\n    \
+             file: str,\n    \
+             database_url: str,\n    \
+             *,\n    \
+             binary: str | None = None,\n    \
+             timeout: float | None = None,\n\
+         ) -> Morpholog:\n    \
+             \"\"\"A one-shot client pinned to this package's stamps: a binary of\n    \
+             another version than it was generated for, or a file whose rules\n    \
+             are not the ones it was generated from, is refused before the\n    \
+             first call. Construct ``Morpholog`` directly to run deliberately\n    \
+             unpinned.\"\"\"\n    \
+             return Morpholog(\n        \
+                 file,\n        \
+                 database_url,\n        \
+                 binary=binary,\n        \
+                 timeout=timeout,\n        \
+                 expected_version=MORPHOLOG_VERSION,\n        \
+                 expected_model_hash=MODEL_HASH,\n    \
+             )\n\n\n\
          def open_session(\n    \
              file: str,\n    \
              database_url: str,\n    \
@@ -547,16 +567,18 @@ fn render_init(program: &Program) -> String {
              binary: str | None = None,\n    \
              timeout: float | None = None,\n\
          ) -> Session:\n    \
-             \"\"\"Open a session pinned to the programme this package was\n    \
-             generated from: a binary serving any other rules is refused at\n    \
-             the handshake, before a single proposal is written. Construct\n    \
-             ``Session`` directly to open deliberately unpinned.\"\"\"\n    \
+             \"\"\"Open a session pinned to this package's stamps: a binary of\n    \
+             another version than it was generated for, or one serving other\n    \
+             rules, is refused at the handshake, before a single proposal is\n    \
+             written. Construct ``Session`` directly to open deliberately\n    \
+             unpinned.\"\"\"\n    \
              return Session(\n        \
                  file,\n        \
                  database_url,\n        \
                  binary=binary,\n        \
                  timeout=timeout,\n        \
-                 expected_model_hash=MODEL_HASH,\n    \
+                 expected_model_hash=MODEL_HASH,\n        \
+                 expected_version=MORPHOLOG_VERSION,\n    \
              )\n\n\n\
          __all__ = [\n    \
              \"PROGRAM\",\n    \
@@ -569,6 +591,7 @@ fn render_init(program: &Program) -> String {
              \"MorphologOutcomeUnknown\",\n    \
              \"MorphologRequestError\",\n    \
              \"Session\",\n    \
+             \"open_client\",\n    \
              \"open_session\",\n    \
              \"envelopes\",\n    \
              \"models\",\n    \

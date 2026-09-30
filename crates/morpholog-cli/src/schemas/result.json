@@ -990,12 +990,14 @@
       }
     },
     "hash_report": {
+      "description": "The rules-identity hash of a programme, and the version of the binary reporting it: the stamps a generated client pins before its first call.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["program", "hash"],
+      "required": ["program", "hash", "morpholog_version"],
       "properties": {
         "program": { "type": "string" },
-        "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "morpholog_version": { "type": "string" }
       }
     },
     "migration_ref": {

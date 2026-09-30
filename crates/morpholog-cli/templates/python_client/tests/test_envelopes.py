@@ -273,6 +273,35 @@ class Migrations(unittest.TestCase):
         self.assertEqual([m.version for m in report.unknown], [15])
 
 
+class VersionSkew(unittest.TestCase):
+    def test_the_hash_report_carries_the_binary_version(self):
+        report = envelopes.HashReport.from_json(golden("hash_report.json"))
+        self.assertEqual(report.morpholog_version, "0.0.0")
+        self.assertIsNone(envelopes.version_skew(golden("hash_report.json"), "0.0.0"))
+
+    def test_another_version_is_named_with_both_sides(self):
+        skew = envelopes.version_skew(golden("hash_report.json"), "1.2.3")
+        self.assertIn("0.0.0", skew)
+        self.assertIn("1.2.3", skew)
+
+    def test_a_report_from_before_the_handshake_is_named_as_such(self):
+        # The two-field report every binary before the versioned handshake
+        # emits. Its version is unknowable; the refusal says so.
+        legacy = {"hash": "sha256:" + "0" * 64, "program": "envelopes"}
+        skew = envelopes.version_skew(legacy, "1.2.3")
+        self.assertIn("does not report its version", skew)
+        self.assertIn("1.2.3", skew)
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.HashReport.from_json(legacy)
+
+    def test_a_payload_that_is_not_an_object_is_not_a_version(self):
+        self.assertIn("does not report", envelopes.version_skew(["x"], "1.2.3"))
+        self.assertIn(
+            "does not report",
+            envelopes.version_skew({"morpholog_version": 7}, "1.2.3"),
+        )
+
+
 class Provisioning(unittest.TestCase):
     def test_an_applied_run_and_its_dry_run_differ_only_in_what_they_did(self):
         applied = envelopes.ProvisionReport.from_json(golden("provision_report_applied.json"))

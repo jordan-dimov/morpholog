@@ -32,7 +32,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from morpholog_client import Morpholog, MorphologError, envelopes, models
+from morpholog_client import Morpholog, MorphologError, envelopes, models, open_client
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MORPH_FILE = REPO_ROOT / "examples" / "10_trade_lifecycle" / "trade_lifecycle.morph"
@@ -96,7 +96,7 @@ def main() -> None:
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         raise MorphologError("set DATABASE_URL to a disposable database (the run path commits)")
-    morph = Morpholog(str(MORPH_FILE), database_url)
+    morph = open_client(str(MORPH_FILE), database_url)
     reset_schema(morph)
 
     trade, commodity, desk = "t1", "oil", "middle_office"

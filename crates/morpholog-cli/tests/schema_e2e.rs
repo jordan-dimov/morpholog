@@ -191,6 +191,8 @@ fn hash_is_formatting_insensitive_and_rule_sensitive() {
         let v: serde_json::Value =
             serde_json::from_str(&String::from_utf8(out.stdout).unwrap()).unwrap();
         assert_eq!(v["program"], "demo");
+        // The version a generated client pins against is this binary's own.
+        assert_eq!(v["morpholog_version"], env!("CARGO_PKG_VERSION"));
         let h = v["hash"].as_str().unwrap().to_string();
         assert!(h.starts_with("sha256:"), "self-describing prefix: {h}");
         h
