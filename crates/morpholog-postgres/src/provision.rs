@@ -36,12 +36,12 @@ pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
     if exists.is_some() {
         return Ok(InitOutcome::AlreadyInitialised);
     }
+    // The file records the migrations it embodies, so the fresh schema
+    // says it is at the head.
     sqlx::raw_sql(SCHEMA_SQL)
         .execute(&mut *tx)
         .await
         .map_err(classify)?;
-    // A fresh schema is at the head, so record every migration as applied.
-    crate::migrations::record_all_applied(&mut tx).await?;
     tx.commit().await.map_err(classify)?;
     Ok(InitOutcome::Initialised)
 }

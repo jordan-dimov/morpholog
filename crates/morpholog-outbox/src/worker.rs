@@ -117,6 +117,10 @@ where
     ///
     /// The first [`PgError`] from a drain pass stops the worker; restarting is the caller's call.
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<(), PgError> {
+        // Once, before the first drain: a database this binary cannot serve
+        // is refused by name, and a migration under a running worker is the
+        // deploy sequence's job, which restarts it.
+        morpholog_postgres::require_current_schema(&self.pool).await?;
         loop {
             if *shutdown.borrow() {
                 return Ok(());

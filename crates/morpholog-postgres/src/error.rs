@@ -67,6 +67,15 @@ pub enum PgError {
          the database is out of date, not the query."
     )]
     SchemaBehind { detail: String },
+    /// The database records a migration this binary does not carry: it was
+    /// migrated by a newer Morpholog, so this build cannot tell whether the
+    /// schema is still what it expects. Refused up front: a newer schema
+    /// can accept an older binary's writes and leave them incomplete.
+    #[error(
+        "this binary (migration {binary}) is older than the database (migration {recorded}); \
+         run the Morpholog the database was migrated by, or newer, rather than migrating the database"
+    )]
+    SchemaAhead { recorded: i32, binary: i32 },
     /// A supplied `transition_id` does not name an existing audit row.
     /// Every unknown id is refused, including one that sorts between known
     /// ids.

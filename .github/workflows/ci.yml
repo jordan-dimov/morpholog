@@ -190,7 +190,7 @@ jobs:
       - name: Apply Morpholog schema
         env:
           PGPASSWORD: postgres
-        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f crates/morpholog-core/sql/schema.sql
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -1 -f crates/morpholog-core/sql/schema.sql
 
       # The committed `.sqlx/` cache is generated against the PG 18 floor;
       # check it against the live schema so a query that drifted from the
@@ -352,7 +352,7 @@ jobs:
       - name: Apply Morpholog schema
         env:
           PGPASSWORD: postgres
-        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f crates/morpholog-core/sql/schema.sql
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -1 -f crates/morpholog-core/sql/schema.sql
 
       # Coverage runs the full workspace test suite under llvm-cov.
       # PG-backed tests share one schema and must run serially.

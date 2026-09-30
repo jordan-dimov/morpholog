@@ -9,10 +9,10 @@ use anyhow::Context;
 use morpholog_postgres::{apply_migrations, migration_status};
 
 use crate::MigrateArgs;
-use crate::commands::{AlreadyReported, connect, print_json};
+use crate::commands::{AlreadyReported, connect_unchecked, print_json};
 
 pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
-    let pool = connect(&args.db.database_url).await?;
+    let pool = connect_unchecked(&args.db.database_url).await?;
 
     if args.check {
         let report = migration_status(&pool)

@@ -553,3 +553,28 @@ CREATE TABLE morpholog_read.derived_claims (
 
 CREATE INDEX derived_claims_generation_predicate
     ON morpholog_read.derived_claims (refresh_id, predicate_name);
+
+-- The migrations this file embodies. A database provisioned from it is at
+-- the head and says so: `morpholog migrate` has nothing to apply and every
+-- command finds it current. One line per migration, beside the file under
+-- migrations/; a test holds this list to the binary's.
+INSERT INTO schema_migrations (version, name) VALUES
+    (1, 'outbox_delivery_state'),
+    (2, 'compensation_in_progress'),
+    (3, 'outbox_intent_type_next_attempt_index'),
+    (4, 'audit_actor'),
+    (5, 'rejections'),
+    (6, 'audit_keyset_index'),
+    (7, 'derived_read_cache'),
+    (8, 'checkpoint_signatures'),
+    (9, 'audit_attestation'),
+    (10, 'rejections_witness'),
+    (11, 'schema_migrations'),
+    (12, 'claims_hash_key'),
+    (13, 'checkpoint_witnesses'),
+    (14, 'audit_parameters'),
+    (15, 'managed_indexes'),
+    (16, 'timestamp_nanos'),
+    (17, 'value_key_v1'),
+    (18, 'date_ordinal'),
+    (19, 'requirement_position');

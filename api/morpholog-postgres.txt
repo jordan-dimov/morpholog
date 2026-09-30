@@ -395,6 +395,9 @@ pub morpholog_postgres::PgError::NoProgramNamed
 pub morpholog_postgres::PgError::NoTransitionAtOrBefore(jiff::timestamp::Timestamp)
 pub morpholog_postgres::PgError::ProgramNamedTwice(alloc::string::String)
 pub morpholog_postgres::PgError::RejectionLogFailure(alloc::boxed::Box<morpholog_postgres::PgError>)
+pub morpholog_postgres::PgError::SchemaAhead
+pub morpholog_postgres::PgError::SchemaAhead::binary: i32
+pub morpholog_postgres::PgError::SchemaAhead::recorded: i32
 pub morpholog_postgres::PgError::SchemaBehind
 pub morpholog_postgres::PgError::SchemaBehind::detail: alloc::string::String
 pub morpholog_postgres::PgError::SerializationFailure
@@ -2010,6 +2013,7 @@ pub async fn morpholog_postgres::release_outbox_claim(&sqlx_postgres::PgPool, uu
 pub fn morpholog_postgres::render_public_key(&ed25519_dalek::verifying::VerifyingKey) -> alloc::string::String
 pub fn morpholog_postgres::render_signature(&ed25519::Signature) -> alloc::string::String
 pub fn morpholog_postgres::render_views(morpholog_core::validate::ValidatedProgram<'_>, &str, &str) -> core::result::Result<morpholog_postgres::RenderedViews, alloc::vec::Vec<morpholog_postgres::ViewRefusal>>
+pub async fn morpholog_postgres::require_current_schema(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::resolve_transition_at_or_before<'e, E>(E, jiff::timestamp::Timestamp) -> core::result::Result<uuid::Uuid, morpholog_postgres::PgError> where E: sqlx_core::executor::Executor<'e, Database = sqlx_postgres::database::Postgres>
 pub async fn morpholog_postgres::score_candidate(&sqlx_postgres::PgPool, &morpholog_core::ir::Program, core::option::Option<morpholog_postgres::SplitBoundary>) -> core::result::Result<morpholog_core::score::CandidateScore, morpholog_postgres::PgError>
 pub fn morpholog_postgres::score_candidate_against_pack(&morpholog_core::ir::Program, &morpholog_postgres::EvidencePack, core::option::Option<&morpholog_postgres::Checkpoint>, core::option::Option<morpholog_postgres::SplitBoundary>) -> core::result::Result<morpholog_core::score::CandidateScore, morpholog_postgres::PgError>
