@@ -214,7 +214,9 @@ class Morpholog:
         """Refuse a binary of another version, or one serving other rules,
         before anything else runs. Asked of `hash`, whose report carries
         both, once per client: a mismatch stays refused, and a new client
-        is how a changed binary or file is taken up."""
+        is how a changed binary or file is taken up. It guards a deploy,
+        not a running process: a binary or file replaced under a client
+        already checked is not noticed until the next client."""
         if self._expected_version is None and self._expected_model_hash is None:
             return
         with self._pin_lock:
