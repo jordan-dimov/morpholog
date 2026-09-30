@@ -97,6 +97,14 @@ if mode == "hang":
     import time
     time.sleep(30)
     sys.exit(0)
+if mode == "pinned":
+    with open(os.environ["STUB_ARGV_FILE"], "a") as f:
+        f.write(" ".join(sys.argv[1:3]) + "\\n")
+    if sys.argv[1] == "hash":
+        print(os.environ["STUB_HASH_STDOUT"])
+        sys.exit(0)
+    print("[]")
+    sys.exit(0)
 if mode == "audit_ndjson":
     row = ('{"transition_id": "01900000-0000-7000-8000-00000000000%d", '
            '"transformation_name": "post", "arguments": [], '
@@ -226,6 +234,128 @@ class AdapterDiscrimination(unittest.TestCase):
         self._mode("hang")
         with self.assertRaises(MorphologTimeout):
             hurried.provision_indexes(timeout=0.5)
+
+    # ------------------------------------------------------------
+    # The pin: a generated client checks the binary before its first
+    # call, through the one subprocess seam.
+    # ------------------------------------------------------------
+
+    HASH = "sha256:" + "a" * 64
+
+    def _pinned(self, hash_stdout: object, **pins) -> tuple:
+        """A pinned client over a stub answering `hash` with
+        ``hash_stdout`` and every other command with ``[]``, plus the
+        path of the stub's record of what ran."""
+        self._mode("pinned")
+        record = tempfile.NamedTemporaryFile(mode="r", suffix=".argv", delete=False)
+        self.addCleanup(os.unlink, record.name)
+        os.environ["STUB_ARGV_FILE"] = record.name
+        self.addCleanup(os.environ.pop, "STUB_ARGV_FILE", None)
+        os.environ["STUB_HASH_STDOUT"] = json.dumps(hash_stdout)
+        self.addCleanup(os.environ.pop, "STUB_HASH_STDOUT", None)
+        pins.setdefault("expected_version", "0.0.0")
+        pins.setdefault("expected_model_hash", self.HASH)
+        client = Morpholog("model.morph", "postgres:///stub", binary=str(self.stub), **pins)
+        return client, record.name
+
+    @staticmethod
+    def _ran(record: str) -> list[str]:
+        return Path(record).read_text().splitlines()
+
+    def test_a_pinned_client_refuses_another_version_before_its_first_call(self):
+        client, record = self._pinned(
+            {"hash": self.HASH, "morpholog_version": "9.9.9", "program": "p"}
+        )
+        with self.assertRaises(MorphologError) as caught:
+            client.claims()
+        message = str(caught.exception)
+        self.assertIn("9.9.9", message)
+        self.assertIn("0.0.0", message)
+        self.assertIn("MORPHOLOG_BIN", message)
+        self.assertEqual(self._ran(record), ["hash model.morph"], "nothing else ran")
+        # Once refused, refused: no second look at the binary.
+        with self.assertRaises(MorphologError) as again:
+            client.claims()
+        self.assertEqual(str(again.exception), message)
+        self.assertEqual(self._ran(record), ["hash model.morph"])
+
+    def test_a_binary_that_predates_the_handshake_is_refused_by_that_name(self):
+        # A binary from before the report carried a version answers with
+        # the two-field report. The client cannot say which version it is,
+        # only that it is not the one it was generated for.
+        client, record = self._pinned({"hash": self.HASH, "program": "p"})
+        with self.assertRaises(MorphologError) as caught:
+            client.claims()
+        self.assertIn("predates the versioned hash report", str(caught.exception))
+        self.assertIn("0.0.0", str(caught.exception))
+        self.assertEqual(self._ran(record), ["hash model.morph"])
+
+    def test_a_report_stating_no_version_in_a_new_shape_is_drift_not_an_old_binary(self):
+        # Only the exact pre-versioned shape is named as old. Anything else
+        # without a version is a report this client cannot read.
+        client, _ = self._pinned({"hash": self.HASH, "program": "p", "novel": 1})
+        with self.assertRaises(envelopes.EnvelopeError):
+            client.claims()
+
+    def test_the_version_is_diagnosed_before_envelope_drift(self):
+        # A report this client cannot parse, from a binary of another
+        # version: the version is the reason, so it is the diagnosis.
+        client, _ = self._pinned(
+            {"hash": self.HASH, "morpholog_version": "9.9.9", "program": "p", "novel": 1}
+        )
+        with self.assertRaises(MorphologError) as caught:
+            client.claims()
+        self.assertIn("9.9.9", str(caught.exception))
+        self.assertNotIn("unknown key", str(caught.exception))
+
+    def test_strictness_holds_once_the_versions_agree(self):
+        client, _ = self._pinned(
+            {"hash": self.HASH, "morpholog_version": "0.0.0", "program": "p", "novel": 1}
+        )
+        with self.assertRaises(envelopes.EnvelopeError) as caught:
+            client.claims()
+        self.assertIn("unknown key", str(caught.exception))
+
+    def test_a_pinned_client_that_agrees_runs_and_checks_once(self):
+        client, record = self._pinned(
+            {"hash": self.HASH, "morpholog_version": "0.0.0", "program": "p"}
+        )
+        client.claims()
+        client.claims()
+        ran = self._ran(record)
+        self.assertEqual(ran[0], "hash model.morph")
+        self.assertEqual(ran.count("hash model.morph"), 1)
+        self.assertEqual(len(ran), 3)
+
+    def test_other_rules_than_the_client_was_generated_from_refuse(self):
+        other = "sha256:" + "b" * 64
+        client, record = self._pinned(
+            {"hash": other, "morpholog_version": "0.0.0", "program": "p"}
+        )
+        with self.assertRaises(MorphologError) as caught:
+            client.claims()
+        self.assertIn(other, str(caught.exception))
+        self.assertIn(self.HASH, str(caught.exception))
+        self.assertEqual(self._ran(record), ["hash model.morph"])
+
+    def test_a_client_constructed_directly_is_unpinned(self):
+        client, record = self._pinned(
+            {"hash": self.HASH, "morpholog_version": "9.9.9", "program": "p"},
+            expected_version=None,
+            expected_model_hash=None,
+        )
+        client.claims()
+        self.assertNotIn("hash model.morph", self._ran(record))
+
+    def test_the_pin_guards_every_path_to_the_binary(self):
+        # Paths that do not go through the ordinary invocation still go
+        # through the one seam, so the pin is asked first there too.
+        client, record = self._pinned(
+            {"hash": self.HASH, "morpholog_version": "9.9.9", "program": "p"}
+        )
+        with self.assertRaises(MorphologError):
+            client.provision_indexes()
+        self.assertEqual(self._ran(record), ["hash model.morph"])
 
     def test_empty_stdout_on_a_read_is_operational_and_on_a_proposal_is_unknown(self):
         self._mode("operational_failure")

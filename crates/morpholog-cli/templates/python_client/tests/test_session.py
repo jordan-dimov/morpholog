@@ -56,17 +56,20 @@ def say(line):
     sys.stdout.flush()
 
 
-READY = json.dumps(
-    {
-        "model_hash": "sha256:" + "1" * 64,
-        "morpholog_version": "0.0.0",
-        "program": "stub",
-        "protocol": 2 if mode == "bad_protocol" else 1,
-        "status": "ready",
-    },
-    separators=(",", ":"),
-    sort_keys=True,
-)
+ready = {
+    "model_hash": "sha256:" + "1" * 64,
+    "morpholog_version": os.environ.get("SESSION_STUB_VERSION", "0.0.0"),
+    "program": "stub",
+    "protocol": 2 if mode == "bad_protocol" else 1,
+    "status": "ready",
+}
+if mode == "skewed_everything":
+    ready.update({"morpholog_version": "9.9.9", "protocol": 999, "novel": 1})
+if mode == "novel_ready_field":
+    ready["novel"] = 1
+if mode == "ready_without_version":
+    del ready["morpholog_version"]
+READY = json.dumps(ready, separators=(",", ":"), sort_keys=True)
 
 note("ARGV " + json.dumps(sys.argv))
 note("HAS_DATABASE_URL " + str("DATABASE_URL" in os.environ))
@@ -599,6 +602,48 @@ class Startup(SessionHarness):
         with self.assertRaises(MorphologError) as err:
             Session("rules.morph", "postgres://u:p@db/x", binary=self.binary)
         self.assertIn("protocol", str(err.exception))
+
+    def test_a_session_of_another_version_refuses_at_open_before_any_request(self):
+        os.environ["SESSION_STUB_VERSION"] = "9.9.9"
+        self.addCleanup(os.environ.pop, "SESSION_STUB_VERSION", None)
+        with self.assertRaises(MorphologError) as err:
+            self.session(mode="echo_committed", expected_version="0.0.0")
+        self.assertIn("9.9.9", str(err.exception))
+        self.assertIn("0.0.0", str(err.exception))
+        self.assertIn("MORPHOLOG_BIN", str(err.exception))
+        self.assertEqual(self.recorded(), [], "no request reached the child")
+
+    def test_a_matching_version_opens(self):
+        with self.session(expected_version="0.0.0") as s:
+            self.assertEqual(s.ready.morpholog_version, "0.0.0")
+
+    def test_the_version_is_diagnosed_before_protocol_and_envelope_drift(self):
+        # Another protocol and a field this client does not know, from a
+        # binary of another version: the version is the reason.
+        with self.assertRaises(MorphologError) as err:
+            self.session(mode="skewed_everything", expected_version="0.0.0")
+        self.assertIn("9.9.9", str(err.exception))
+        self.assertNotIn("protocol", str(err.exception))
+        self.assertNotIn("unknown key", str(err.exception))
+
+    def test_strictness_holds_once_the_versions_agree(self):
+        with self.assertRaises(MorphologError) as err:
+            self.session(mode="novel_ready_field", expected_version="0.0.0")
+        self.assertIn("unknown key", str(err.exception))
+
+    def test_a_ready_line_without_a_version_is_malformed_not_an_old_binary(self):
+        # Every session has stated its version, so a ready line without one
+        # is not evidence of any version: the strict parse refuses it.
+        with self.assertRaises(MorphologError) as err:
+            self.session(mode="ready_without_version", expected_version="0.0.0")
+        self.assertIn("malformed session ready line", str(err.exception))
+        self.assertIn("morpholog_version", str(err.exception))
+
+    def test_an_unpinned_session_ignores_the_version(self):
+        os.environ["SESSION_STUB_VERSION"] = "9.9.9"
+        self.addCleanup(os.environ.pop, "SESSION_STUB_VERSION", None)
+        with self.session(mode="echo_committed") as s:
+            self.assertEqual(s.ready.morpholog_version, "9.9.9")
 
     def test_an_unexpected_model_hash_refuses_to_open(self):
         with self.assertRaises(MorphologError) as err:

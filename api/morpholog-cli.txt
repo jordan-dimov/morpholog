@@ -113,6 +113,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::Error
 impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::ErrorReceipt
 pub struct morpholog_cli::envelopes::HashReport
 pub morpholog_cli::envelopes::HashReport::hash: alloc::string::String
+pub morpholog_cli::envelopes::HashReport::morpholog_version: &'static str
 pub morpholog_cli::envelopes::HashReport::program: alloc::string::String
 impl serde_core::ser::Serialize for morpholog_cli::envelopes::HashReport
 pub fn morpholog_cli::envelopes::HashReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer

@@ -1311,13 +1311,46 @@ class CheckReport:
 
 @dataclass(frozen=True)
 class HashReport:
+    """The rules-identity hash of a programme, from the binary reporting
+    it. A pinned client compares both against its own stamps."""
+
     program: str
     hash: str
+    morpholog_version: str
 
     @classmethod
     def from_json(cls, payload: object) -> HashReport:
-        data = _strict("hash report", payload, {"program", "hash"})
-        return cls(program=data["program"], hash=data["hash"])
+        data = _strict("hash report", payload, {"program", "hash", "morpholog_version"})
+        return cls(
+            program=data["program"],
+            hash=data["hash"],
+            morpholog_version=data["morpholog_version"],
+        )
+
+
+def version_skew(payload: object, expected: str) -> str | None:
+    """The version the binary states in its envelope against the one this
+    client was generated for, or ``None`` when they agree or the envelope
+    states none.
+
+    Read before the strict parser, on purpose: a binary of another version
+    may speak another protocol or carry a field this client does not know,
+    and the version is the reason for that, so it is the diagnosis to give.
+    The strict parser then still sees the whole object when the versions
+    agree; this reads one key and nothing else. An envelope that states no
+    version is not evidence of any version, so it is left to the strict
+    parser to refuse."""
+    actual = payload.get("morpholog_version") if isinstance(payload, dict) else None
+    if isinstance(actual, str) and actual != expected:
+        return f"the binary is Morpholog {actual}; this client was generated for {expected}"
+    return None
+
+
+def predates_versioned_hash(payload: object) -> bool:
+    """Whether a `hash` report is the exact shape every binary emitted
+    before the report carried a version: the one legacy shape a
+    generated client names as such rather than as drift."""
+    return isinstance(payload, dict) and set(payload) == {"hash", "program"}
 
 
 @dataclass(frozen=True)

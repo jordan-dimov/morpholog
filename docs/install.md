@@ -180,10 +180,11 @@ tar -xzf "morpholog-v0.0.12-$TARGET.tar.gz" --strip-components=1 -C ~/.local/lib
 export MORPHOLOG_BIN=~/.local/lib/morpholog/v0.0.12/morpholog   # per project
 ```
 
-The generated Python client reads `MORPHOLOG_BIN` before `PATH`. It does
-not check the binary's version itself, and a client generated for an older
-binary can refuse a newer binary's output as contract drift, so upgrade the
-binary and regenerate the client together.
+The generated Python client reads `MORPHOLOG_BIN` before `PATH`, and its
+`open_client()` and `open_session()` refuse a binary of another version
+than the client was generated for, by name, before the first call. Upgrade
+the binary and regenerate the client together; between the two, the
+refusal says which side is behind.
 
 From here: the [developer introduction](developer-intro.md) builds a
 governed model from scratch; [`embedder-integration.md`](embedder-integration.md)

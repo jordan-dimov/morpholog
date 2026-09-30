@@ -27,6 +27,30 @@ from .session import (  # noqa: E402
     Session,
 )
 
+def open_client(
+    file: str,
+    database_url: str,
+    *,
+    binary: str | None = None,
+    timeout: float | None = None,
+) -> Morpholog:
+    """A one-shot client checked against this package's stamps once,
+    immediately before its first call: a binary of another version
+    than it was generated for, or a file whose rules are not the ones
+    it was generated from, is refused. It detects deployment skew at
+    first use, and does not guard against a binary or file replaced
+    under a client already checked. Construct ``Morpholog`` directly
+    to run deliberately unchecked."""
+    return Morpholog(
+        file,
+        database_url,
+        binary=binary,
+        timeout=timeout,
+        expected_version=MORPHOLOG_VERSION,
+        expected_model_hash=MODEL_HASH,
+    )
+
+
 def open_session(
     file: str,
     database_url: str,
@@ -34,16 +58,18 @@ def open_session(
     binary: str | None = None,
     timeout: float | None = None,
 ) -> Session:
-    """Open a session pinned to the programme this package was
-    generated from: a binary serving any other rules is refused at
-    the handshake, before a single proposal is written. Construct
-    ``Session`` directly to open deliberately unpinned."""
+    """Open a session pinned to this package's stamps: a binary of
+    another version than it was generated for, or one serving other
+    rules, is refused at the handshake, before a single proposal is
+    written. Construct ``Session`` directly to open deliberately
+    unpinned."""
     return Session(
         file,
         database_url,
         binary=binary,
         timeout=timeout,
         expected_model_hash=MODEL_HASH,
+        expected_version=MORPHOLOG_VERSION,
     )
 
 
@@ -58,6 +84,7 @@ __all__ = [
     "MorphologOutcomeUnknown",
     "MorphologRequestError",
     "Session",
+    "open_client",
     "open_session",
     "envelopes",
     "models",

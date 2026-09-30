@@ -57,10 +57,13 @@ impl CheckDiagnostic {
     }
 }
 
-/// `hash`: the canonical rules-identity hash of a programme.
+/// `hash`: the canonical rules-identity hash of a programme, from the
+/// binary that reports it. A generated client pins both against the
+/// stamps it was built with before its first call.
 #[derive(Serialize)]
 pub struct HashReport {
     pub hash: String,
+    pub morpholog_version: &'static str,
     pub program: String,
 }
 
