@@ -665,6 +665,7 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::SplitBoundary
 pub morpholog_postgres::StatisticsAction::Conflict
 pub morpholog_postgres::StatisticsAction::Create
 pub morpholog_postgres::StatisticsAction::Keep
+pub morpholog_postgres::StatisticsAction::Stale
 impl core::clone::Clone for morpholog_postgres::StatisticsAction
 pub fn morpholog_postgres::StatisticsAction::clone(&self) -> morpholog_postgres::StatisticsAction
 impl core::clone::TrivialClone for morpholog_postgres::StatisticsAction
@@ -1461,6 +1462,7 @@ pub struct morpholog_postgres::ProvisionReport
 pub morpholog_postgres::ProvisionReport::applied: bool
 pub morpholog_postgres::ProvisionReport::dry_run: bool
 pub morpholog_postgres::ProvisionReport::entries: alloc::vec::Vec<morpholog_postgres::IndexPlanEntry>
+pub morpholog_postgres::ProvisionReport::positions_unknown_for: alloc::vec::Vec<alloc::string::String>
 pub morpholog_postgres::ProvisionReport::programs: alloc::vec::Vec<morpholog_postgres::ProvisionedProgram>
 pub morpholog_postgres::ProvisionReport::prune: bool
 pub morpholog_postgres::ProvisionReport::pruned: alloc::vec::Vec<alloc::string::String>
@@ -1728,6 +1730,7 @@ pub morpholog_postgres::StatisticsPlanEntry::action: morpholog_postgres::Statist
 pub morpholog_postgres::StatisticsPlanEntry::detail: alloc::string::String
 pub morpholog_postgres::StatisticsPlanEntry::expression_sql: alloc::string::String
 pub morpholog_postgres::StatisticsPlanEntry::position: usize
+pub morpholog_postgres::StatisticsPlanEntry::required_by: alloc::vec::Vec<alloc::string::String>
 pub morpholog_postgres::StatisticsPlanEntry::statistics_name: alloc::string::String
 impl core::clone::Clone for morpholog_postgres::StatisticsPlanEntry
 pub fn morpholog_postgres::StatisticsPlanEntry::clone(&self) -> morpholog_postgres::StatisticsPlanEntry

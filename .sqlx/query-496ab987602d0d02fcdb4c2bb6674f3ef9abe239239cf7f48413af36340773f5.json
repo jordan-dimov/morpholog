@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT stxname AS \"name!\" FROM pg_statistic_ext\n           WHERE stxnamespace = 'morpholog'::regnamespace AND stxname LIKE 'morpholog\\_cs\\_%'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_statistic_ext",
+            "name": "stxname"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "496ab987602d0d02fcdb4c2bb6674f3ef9abe239239cf7f48413af36340773f5"
+}

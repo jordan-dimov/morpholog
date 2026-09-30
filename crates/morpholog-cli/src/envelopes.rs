@@ -265,12 +265,16 @@ impl LeastPrivilegeReport {
 /// `provision indexes --json`: what one call planned and did. Every list
 /// has one order whatever order the programmes were named in.
 ///
-/// A run that applied under `prune` dropped every `stale` index it lists.
+/// A run that applied under `prune` dropped every `stale` index and
+/// statistics object it lists.
 #[derive(Serialize)]
 pub struct ProvisionReport<'a> {
     pub applied: bool,
     pub dry_run: bool,
     pub indexes: Vec<ProvisionedIndex<'a>>,
+    /// Programmes outside the call with a recorded requirement whose
+    /// position is not known. While any, no statistics object is stale.
+    pub positions_unknown_for: &'a [String],
     pub programs: Vec<ProvisionedProgram<'a>>,
     pub prune: bool,
     pub required_elsewhere: Vec<RequiredElsewhere<'a>>,
@@ -308,6 +312,7 @@ pub struct ProvisionedStatistics<'a> {
     pub detail: &'a str,
     pub name: &'a str,
     pub position: usize,
+    pub required_by: &'a [String],
 }
 
 impl<'a> From<&'a morpholog_postgres::ProvisionReport> for ProvisionReport<'a> {
@@ -327,6 +332,7 @@ impl<'a> From<&'a morpholog_postgres::ProvisionReport> for ProvisionReport<'a> {
                     required_by: &e.required_by,
                 })
                 .collect(),
+            positions_unknown_for: &r.positions_unknown_for,
             programs: r
                 .programs
                 .iter()
@@ -352,6 +358,7 @@ impl<'a> From<&'a morpholog_postgres::ProvisionReport> for ProvisionReport<'a> {
                     detail: &s.detail,
                     name: &s.statistics_name,
                     position: s.position,
+                    required_by: &s.required_by,
                 })
                 .collect(),
         }

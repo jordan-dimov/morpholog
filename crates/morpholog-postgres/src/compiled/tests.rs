@@ -842,26 +842,29 @@ LIMIT 1"#
     );
 }
 
-/// Indexes are per predicate and position; their statistics are per
-/// position across the table. Two predicates seeking at one position share
-/// one statistics object, and another position adds another.
+/// The name says what an object is expected to be, in this build's exact
+/// spelling; anything else is not this build's object to reconcile.
 #[test]
-fn statistics_are_one_per_position_across_predicates() {
-    let a0 = IndexSpec::new("A".into(), 0);
-    let b0 = IndexSpec::new("B".into(), 0);
-    let a1 = IndexSpec::new("A".into(), 1);
-    let names = |specs: &[IndexSpec]| -> Vec<String> {
-        StatisticsSpec::for_indexes(specs)
-            .iter()
-            .map(StatisticsSpec::name)
-            .collect()
-    };
+fn a_statistics_name_is_read_back_only_as_this_build_spells_it() {
     assert_eq!(
-        names(&[a0.clone(), b0.clone()]),
-        vec!["morpholog_cs_vk1_p0"]
+        StatisticsSpec::from_name("morpholog_cs_vk1_p0"),
+        Some(StatisticsSpec { position: 0 })
     );
     assert_eq!(
-        names(&[a0, b0, a1]),
-        vec!["morpholog_cs_vk1_p0", "morpholog_cs_vk1_p1"]
+        StatisticsSpec::from_name("morpholog_cs_vk1_p12"),
+        Some(StatisticsSpec { position: 12 })
     );
+    for other in [
+        "morpholog_cs_vk1_p03",
+        "morpholog_cs_vk1_p",
+        "morpholog_cs_vk1_p1x",
+        "morpholog_cs_vk2_p1",
+        "morpholog_cs_vk1_p-1",
+        "morpholog_cs_vk1_p99999999999999999999",
+        "morpholog_ci_vk1_p1",
+    ] {
+        assert_eq!(StatisticsSpec::from_name(other), None, "{other}");
+    }
+    let spec = StatisticsSpec { position: 7 };
+    assert_eq!(StatisticsSpec::from_name(&spec.name()), Some(spec));
 }

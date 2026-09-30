@@ -569,6 +569,7 @@ fn provisioned_index(
 fn provisioned_statistics(
     action: morpholog_postgres::StatisticsAction,
     position: usize,
+    required_by: &[&str],
     detail: &str,
 ) -> morpholog_postgres::StatisticsPlanEntry {
     morpholog_postgres::StatisticsPlanEntry {
@@ -579,6 +580,7 @@ fn provisioned_statistics(
             "morpholog.claim_digest(morpholog.value_key_v1(arguments -> {position}))"
         ),
         detail: detail.to_string(),
+        required_by: required_by.iter().map(ToString::to_string).collect(),
     }
 }
 
@@ -618,10 +620,11 @@ fn provision_reports_serialize_as_pinned() {
             ),
         ],
         statistics: vec![
-            provisioned_statistics(StatisticsAction::Create, 0, ""),
-            provisioned_statistics(StatisticsAction::Keep, 1, ""),
+            provisioned_statistics(StatisticsAction::Create, 0, &["ledger"], ""),
+            provisioned_statistics(StatisticsAction::Keep, 1, &["ledger"], ""),
         ],
         required_elsewhere: Vec::new(),
+        positions_unknown_for: Vec::new(),
         dry_run: false,
         prune: false,
         applied: true,
@@ -656,10 +659,11 @@ fn provision_reports_serialize_as_pinned() {
             ),
         ],
         statistics: vec![
-            provisioned_statistics(StatisticsAction::Keep, 0, ""),
+            provisioned_statistics(StatisticsAction::Keep, 0, &["ledger"], ""),
             provisioned_statistics(
                 StatisticsAction::Conflict,
                 1,
+                &["ledger"],
                 "the statistics under this name differ from Morpholog's: its statistics target is 0",
             ),
         ],
@@ -700,15 +704,36 @@ fn provision_reports_serialize_as_pinned() {
                 "required by no programme; dropped",
             ),
         ],
-        statistics: vec![provisioned_statistics(StatisticsAction::Keep, 0, "")],
+        statistics: vec![
+            provisioned_statistics(
+                StatisticsAction::Keep,
+                0,
+                &["billing", "ledger", "reporting"],
+                "",
+            ),
+            provisioned_statistics(
+                StatisticsAction::Stale,
+                1,
+                &[],
+                "required by no programme; dropped",
+            ),
+            provisioned_statistics(StatisticsAction::Keep, 2, &["reporting"], ""),
+            provisioned_statistics(
+                StatisticsAction::Keep,
+                3,
+                &[],
+                "required by no programme known; kept while positions are unknown for archive",
+            ),
+        ],
         required_elsewhere: vec![morpholog_postgres::RequiredElsewhere {
             index_name: "morpholog_ci_period_2_vk1_cdef01234567".to_string(),
             required_by: vec!["reporting".to_string()],
         }],
+        positions_unknown_for: vec!["archive".to_string()],
         dry_run: false,
         prune: true,
         applied: true,
-        pruned: vec![line.to_string()],
+        pruned: vec![line.to_string(), "morpholog_cs_vk1_p1".to_string()],
     };
     assert_golden_bytes(
         "provision_report_pruned.json",
@@ -770,6 +795,7 @@ fn the_provisioning_actions_are_the_schemas() {
         StatisticsAction::Keep,
         StatisticsAction::Create,
         StatisticsAction::Conflict,
+        StatisticsAction::Stale,
     ];
     assert_eq!(
         words(statistics_actions.iter().map(to_value).collect()),

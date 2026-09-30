@@ -479,6 +479,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     )
     .await
     .expect("simulate a database from before the date coordinate");
+    ddl(
+        &pool,
+        "ALTER TABLE morpholog.index_requirement DROP COLUMN position".to_string(),
+    )
+    .await
+    .expect("simulate a database from before requirements recorded positions");
     // The guard migration 017 drops, as a database that ran 016 has it.
     ddl(
         &pool,
@@ -648,6 +654,37 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
             "date_ordinal must carry its marker, got {marker:?}"
         ));
     }
+
+    // Migration 019: a requirement records its position, nullable, so a
+    // binary from before it keeps recording requirements without one.
+    let position = columns(&pool, "morpholog", "index_requirement")
+        .await
+        .into_iter()
+        .find(|(name, _, _)| name == "position");
+    if position
+        != Some((
+            "position".to_string(),
+            "YES".to_string(),
+            "integer".to_string(),
+        ))
+    {
+        return Err(format!(
+            "index_requirement.position must come back as nullable integer, got {position:?}"
+        ));
+    }
+    sqlx::query(
+        "INSERT INTO morpholog.index_requirement (program_identity, spec_digest, program_hash)
+         VALUES ('older_binary', 'digest_from_before_positions', 'sha256:0')",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|e| {
+        format!("an older binary's requirement without a position must still be accepted: {e}")
+    })?;
+    sqlx::query("DELETE FROM morpholog.index_requirement WHERE program_identity = 'older_binary'")
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("cleanup: {e}"))?;
 
     // Migration 014, checked on the migrated table: the old row survives
     // unstamped, the column is nullable, and each named constraint refuses

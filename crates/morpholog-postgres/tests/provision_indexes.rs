@@ -336,8 +336,19 @@ async fn stale_indexes_are_reported_and_pruned_only_on_request() {
         vec![IndexAction::Stale; LEDGER_INDEXES],
         "{pruned:?}"
     );
-    assert_eq!(pruned.pruned.len(), LEDGER_INDEXES);
+    assert_eq!(
+        pruned
+            .pruned
+            .iter()
+            .filter(|n| n.starts_with("morpholog_ci_"))
+            .count(),
+        LEDGER_INDEXES
+    );
     assert!(catalogue_names(&pool).await.is_empty());
+    assert!(
+        our_statistics(&pool).await.is_empty(),
+        "their statistics go with them"
+    );
     assert_eq!(registry_counts(&pool).await, (0, 0));
 }
 
@@ -815,6 +826,247 @@ fn stated(report: &morpholog_postgres::ProvisionReport) -> Vec<(IndexAction, Str
         .collect()
 }
 
+// ------------------------------------------------------------
+// Statistics follow the requirements' positions.
+// ------------------------------------------------------------
+
+async fn statistics_positions(pool: &PgPool) -> Vec<usize> {
+    our_statistics(pool)
+        .await
+        .iter()
+        .map(|name| {
+            name.trim_start_matches("morpholog_cs_vk1_p")
+                .parse()
+                .unwrap()
+        })
+        .collect()
+}
+
+fn statistics_of(
+    report: &morpholog_postgres::ProvisionReport,
+) -> Vec<(usize, StatisticsAction, Vec<String>)> {
+    report
+        .statistics
+        .iter()
+        .map(|s| (s.position, s.action, s.required_by.clone()))
+        .collect()
+}
+
+/// A requirement met by an operator's own index records its position
+/// like any other, so its statistics survive another programme's prune.
+#[tokio::test]
+async fn an_operator_satisfied_requirement_keeps_its_statistics_through_anothers_prune() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    let (_, expression, partial) = first_spec(&pool).await;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE INDEX operator_made_this ON morpholog.claims USING btree (({expression})) WHERE {partial}"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let report = provision_indexes(&pool, &[&ledger()], false).await.unwrap();
+    assert!(
+        report
+            .entries
+            .iter()
+            .any(|e| e.action == IndexAction::SatisfiedExternally),
+        "{report:?}"
+    );
+    let positions = statistics_positions(&pool).await;
+    assert!(!positions.is_empty());
+
+    let pruned = provision_indexes(&pool, &[&requiring_nothing("other_book")], true)
+        .await
+        .unwrap();
+    assert!(pruned.pruned.is_empty(), "{pruned:?}");
+    assert_eq!(statistics_positions(&pool).await, positions);
+    assert!(pruned.positions_unknown_for.is_empty(), "{pruned:?}");
+    for entry in &pruned.statistics {
+        assert_eq!(entry.action, StatisticsAction::Keep, "{entry:?}");
+        assert_eq!(entry.required_by, ["double_entry_ledger"], "{entry:?}");
+    }
+}
+
+/// Statistics no programme needs any more are stale: reported, dropped
+/// only under prune, and only then.
+#[tokio::test]
+async fn statistics_nobody_requires_are_stale_and_pruned_only_on_request() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
+    let positions = statistics_positions(&pool).await;
+    let retired = requiring_nothing("double_entry_ledger");
+
+    let reported = provision_indexes(&pool, &[&retired], false).await.unwrap();
+    assert_eq!(
+        statistics_of(&reported),
+        positions
+            .iter()
+            .map(|p| (*p, StatisticsAction::Stale, Vec::new()))
+            .collect::<Vec<_>>(),
+        "{reported:?}"
+    );
+    assert_eq!(
+        statistics_positions(&pool).await,
+        positions,
+        "kept without prune"
+    );
+
+    let pruned = provision_indexes(&pool, &[&retired], true).await.unwrap();
+    assert!(statistics_positions(&pool).await.is_empty(), "{pruned:?}");
+    let mut dropped: Vec<String> = pruned
+        .statistics
+        .iter()
+        .map(|s| s.statistics_name.clone())
+        .collect();
+    dropped.extend(pruned.entries.iter().map(|e| e.index_name.clone()));
+    dropped.sort();
+    let mut recorded = pruned.pruned.clone();
+    recorded.sort();
+    assert_eq!(recorded, dropped, "pruned names every object dropped");
+}
+
+/// Another programme's statistics object that has gone missing is
+/// created again: its position is all a statistics object needs.
+#[tokio::test]
+async fn a_missing_statistics_object_another_programme_requires_is_created() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
+    let positions = statistics_positions(&pool).await;
+    let gone = format!("morpholog_cs_vk1_p{}", positions[0]);
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DROP STATISTICS morpholog.{gone}"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let report = provision_indexes(&pool, &[&requiring_nothing("other_book")], false)
+        .await
+        .unwrap();
+    let entry = report
+        .statistics
+        .iter()
+        .find(|s| s.statistics_name == gone)
+        .unwrap_or_else(|| panic!("{report:?}"));
+    assert_eq!(entry.action, StatisticsAction::Create);
+    assert_eq!(entry.required_by, ["double_entry_ledger"]);
+    assert_eq!(
+        statistics_positions(&pool).await,
+        positions,
+        "created again"
+    );
+}
+
+/// An object under Morpholog's name with another definition is a conflict
+/// whoever requires it, and a prune never drops it.
+#[tokio::test]
+async fn an_unrequired_statistics_object_of_another_definition_is_never_pruned() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    sqlx::raw_sql(
+        "CREATE STATISTICS morpholog.morpholog_cs_vk1_p9 ON predicate_name, (arguments -> 9) FROM morpholog.claims",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let report = provision_indexes(&pool, &[&ledger()], true).await.unwrap();
+    let stray = report
+        .statistics
+        .iter()
+        .find(|s| s.position == 9)
+        .unwrap_or_else(|| panic!("{report:?}"));
+    assert_eq!(stray.action, StatisticsAction::Conflict, "{stray:?}");
+    assert!(stray.required_by.is_empty());
+    assert!(!report.applied, "a conflict fails closed");
+    assert!(
+        our_statistics(&pool)
+            .await
+            .contains(&"morpholog_cs_vk1_p9".to_string()),
+        "left exactly as found"
+    );
+}
+
+/// A requirement recorded without its position, by a binary from before
+/// positions were recorded, whose specification no managed index resolves:
+/// unknown, so nothing is stale, and the report names the programme to
+/// provision again. Provisioning it again records the position.
+#[tokio::test]
+async fn an_unresolved_position_keeps_every_statistics_object_and_names_the_programme() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
+    let positions = statistics_positions(&pool).await;
+    // As an older binary records a requirement an operator's index met:
+    // no managed index carries this digest, and no position is recorded.
+    sqlx::query(
+        "INSERT INTO morpholog.index_requirement (program_identity, spec_digest, program_hash)
+         VALUES ('legacy_book', 'a_digest_no_managed_index_carries', 'sha256:0')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let retired = requiring_nothing("double_entry_ledger");
+    let held = provision_indexes(&pool, &[&retired], true).await.unwrap();
+    assert_eq!(held.positions_unknown_for, ["legacy_book"], "{held:?}");
+    // The retired ledger's indexes go; no statistics object does.
+    assert!(
+        !held.pruned.is_empty() && held.pruned.iter().all(|n| n.starts_with("morpholog_ci_")),
+        "{held:?}"
+    );
+    assert_eq!(statistics_positions(&pool).await, positions);
+    for entry in &held.statistics {
+        assert_eq!(entry.action, StatisticsAction::Keep, "{entry:?}");
+        assert!(
+            entry.required_by.is_empty(),
+            "unknown is not a requirement: {entry:?}"
+        );
+        assert!(entry.detail.contains("legacy_book"), "{entry:?}");
+    }
+
+    // The legacy programme, provisioned again, records what it needs.
+    provision_indexes(&pool, &[&requiring_nothing("legacy_book")], false)
+        .await
+        .unwrap();
+    let pruned = provision_indexes(&pool, &[&retired], true).await.unwrap();
+    assert!(pruned.positions_unknown_for.is_empty(), "{pruned:?}");
+    assert!(statistics_positions(&pool).await.is_empty(), "{pruned:?}");
+}
+
+/// A requirement recorded without its position whose specification a
+/// managed index carries is not unknown: the index says the position.
+#[tokio::test]
+async fn a_position_left_unrecorded_is_read_from_the_managed_index() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    drop_our_indexes(&pool).await;
+    provision_indexes(&pool, &[&ledger()], false).await.unwrap();
+    let positions = statistics_positions(&pool).await;
+    // As an older binary would record the ledger's own requirements.
+    sqlx::query("UPDATE morpholog.index_requirement SET position = NULL")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let report = provision_indexes(&pool, &[&requiring_nothing("other_book")], true)
+        .await
+        .unwrap();
+    assert!(report.positions_unknown_for.is_empty(), "{report:?}");
+    assert!(report.pruned.is_empty(), "{report:?}");
+    assert_eq!(statistics_positions(&pool).await, positions);
+    for entry in &report.statistics {
+        assert_eq!(entry.required_by, ["double_entry_ledger"], "{entry:?}");
+    }
+}
+
 /// One programme stops requiring the indexes another takes up. Named
 /// together, the prune sees both replaced and drops nothing. Named one at
 /// a time with the prune on the first, the indexes go and are built again:
@@ -854,7 +1106,15 @@ async fn pruning_the_union_keeps_what_one_programme_drops_and_another_takes_up()
     let first = provision_indexes(&pool, &[&requiring_nothing("book")], true)
         .await
         .unwrap();
-    assert_eq!(first.pruned.len(), LEDGER_INDEXES, "{first:?}");
+    assert_eq!(
+        first
+            .pruned
+            .iter()
+            .filter(|n| n.starts_with("morpholog_ci_"))
+            .count(),
+        LEDGER_INDEXES,
+        "{first:?}"
+    );
     provision_indexes(&pool, &[&other()], false).await.unwrap();
     let rebuilt = catalogue_oids(&pool).await;
     assert_eq!(rebuilt.len(), LEDGER_INDEXES);
@@ -1026,6 +1286,7 @@ async fn a_dry_run_states_what_the_applying_run_does() {
         .unwrap();
     assert!(!applied.dry_run && applied.prune && applied.applied);
     assert_eq!(stated(&planned), stated(&applied));
+    assert_eq!(statistics_of(&planned), statistics_of(&applied));
     assert_eq!(planned.required_elsewhere, applied.required_elsewhere);
     assert_eq!(planned.programs, applied.programs);
 

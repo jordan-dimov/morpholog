@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT program_identity AS \"identity!\", spec_digest AS \"digest!\"\n           FROM morpholog.index_requirement\n           WHERE NOT (program_identity = ANY($1))",
+  "query": "SELECT r.program_identity AS \"identity!\", r.spec_digest AS \"digest!\",\n                  COALESCE(r.position, (SELECT m.position FROM morpholog.managed_index m\n                                        WHERE m.spec_digest = r.spec_digest)) AS \"position?\"\n           FROM morpholog.index_requirement r\n           WHERE NOT (r.program_identity = ANY($1))",
   "describe": {
     "columns": [
       {
@@ -24,6 +24,12 @@
             "name": "spec_digest"
           }
         }
+      },
+      {
+        "ordinal": 2,
+        "name": "position?",
+        "type_info": "Int4",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -33,8 +39,9 @@
     },
     "nullable": [
       false,
-      false
+      false,
+      null
     ]
   },
-  "hash": "6e9f2765ce0338369224635a4341ef2fe6d41b97b64408783dcc71439dea07b5"
+  "hash": "b3b915ffac5acd931c1ae5047ea29f51dd00404986ed08036170275e3864711f"
 }

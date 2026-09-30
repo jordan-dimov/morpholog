@@ -91,9 +91,9 @@ pub struct IndexPlanEntry {
     pub required_by: Vec<String>,
 }
 
-/// What reconciling one statistics object does. Statistics are never
-/// pruned: a requirement an operator's own index satisfies records no
-/// position, so nothing can yet say that no programme needs one.
+/// What reconciling one statistics object does. An object under
+/// Morpholog's name with another definition is a conflict whatever
+/// requires it; one nobody requires is stale, dropped under `prune`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -101,6 +101,7 @@ pub enum StatisticsAction {
     Keep,
     Create,
     Conflict,
+    Stale,
 }
 
 impl fmt::Display for StatisticsAction {
@@ -109,21 +110,28 @@ impl fmt::Display for StatisticsAction {
             StatisticsAction::Keep => "KEEP",
             StatisticsAction::Create => "CREATE",
             StatisticsAction::Conflict => "CONFLICT",
+            StatisticsAction::Stale => "STALE",
         })
     }
 }
 
 /// Statistics on one position's seek expression, across the claims
 /// table: what lets the planner see that a seek on a partial index is
-/// selective.
+/// selective. Every object Morpholog manages is reconciled, the named
+/// programmes' and other programmes' alike, since the position says all
+/// there is to know about it.
 #[derive(Debug, Clone)]
 pub struct StatisticsPlanEntry {
     pub action: StatisticsAction,
     pub statistics_name: String,
     pub position: usize,
     pub expression_sql: String,
-    /// What a conflict differs in; empty otherwise.
+    /// What a conflict differs in, why a stale object is stale, or what
+    /// keeps an unrequired one; empty otherwise.
     pub detail: String,
+    /// The programmes known to require the position once every named
+    /// programme's requirements are replaced, by identity.
+    pub required_by: Vec<String>,
 }
 
 /// A programme named in the call.
@@ -151,13 +159,19 @@ pub struct ProvisionReport {
     pub entries: Vec<IndexPlanEntry>,
     pub statistics: Vec<StatisticsPlanEntry>,
     pub required_elsewhere: Vec<RequiredElsewhere>,
+    /// Programmes outside the call with a recorded requirement whose
+    /// position is not known: one recorded before positions were, for a
+    /// specification no managed index or named programme resolves. While
+    /// any, no statistics object is stale; provisioning them again
+    /// records it.
+    pub positions_unknown_for: Vec<String>,
     pub dry_run: bool,
     pub prune: bool,
     /// Whether the plan was executed: false for a dry run, and false when
     /// a conflict made the run apply nothing.
     pub applied: bool,
-    /// Stale indexes physically dropped, by name: every stale entry of a
-    /// run that applied under `prune`.
+    /// Every managed object physically dropped, by name: the stale
+    /// indexes and statistics of a run that applied under `prune`.
     pub pruned: Vec<String>,
 }
 
@@ -527,37 +541,118 @@ async fn reconcile(
     outcome
 }
 
-/// Who requires each specification once every named programme's
-/// requirements are replaced, by spec digest: the named programmes' own
-/// specifications, and what the registry records for every other identity.
-/// The report, the stale set and the prune all read this one relation.
+/// The requirements as they will stand once every named programme's
+/// requirements are replaced: the named programmes' own specifications,
+/// and what the registry records for every other identity. The report,
+/// the stale sets and the prune all read this one relation.
+struct Prospective {
+    /// Who requires each specification, by spec digest.
+    required: BTreeMap<String, BTreeSet<String>>,
+    /// The position each required specification seeks on, where known: a
+    /// named programme's specification says it, a recorded requirement may,
+    /// and the managed index of the same specification does.
+    position_of: BTreeMap<String, usize>,
+    /// Outside identities with a requirement whose position none of those
+    /// resolve.
+    positions_unknown_for: Vec<String>,
+}
+
+impl Prospective {
+    fn required_by(&self, digest: &str) -> Vec<String> {
+        self.required
+            .get(digest)
+            .map(|identities| identities.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Who requires each position, over the specifications whose position
+    /// is known.
+    fn required_positions(&self) -> BTreeMap<usize, BTreeSet<String>> {
+        let mut by_position: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
+        for (digest, identities) in &self.required {
+            if let Some(position) = self.position_of.get(digest) {
+                by_position
+                    .entry(*position)
+                    .or_default()
+                    .extend(identities.iter().cloned());
+            }
+        }
+        by_position
+    }
+}
+
 async fn prospective_requirements(
     conn: &mut sqlx::PgConnection,
     named: &[Named],
-) -> Result<BTreeMap<String, BTreeSet<String>>, PgError> {
+) -> Result<Prospective, PgError> {
     let identities: Vec<String> = named.iter().map(|p| p.identity.clone()).collect();
+    // A subquery, not an outer join: the cache's nullability inference
+    // reads the planner's plan, and an outer join's plan changes with
+    // the rows, which made the committed cache differ from a checked one.
     let outside = sqlx::query!(
-        r#"SELECT program_identity AS "identity!", spec_digest AS "digest!"
-           FROM morpholog.index_requirement
-           WHERE NOT (program_identity = ANY($1))"#,
+        r#"SELECT r.program_identity AS "identity!", r.spec_digest AS "digest!",
+                  COALESCE(r.position, (SELECT m.position FROM morpholog.managed_index m
+                                        WHERE m.spec_digest = r.spec_digest)) AS "position?"
+           FROM morpholog.index_requirement r
+           WHERE NOT (r.program_identity = ANY($1))"#,
         &identities,
     )
     .fetch_all(&mut *conn)
     .await
     .map_err(classify_checked_query)?;
     let mut required: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for row in outside {
-        required.entry(row.digest).or_default().insert(row.identity);
-    }
+    let mut position_of: BTreeMap<String, usize> = BTreeMap::new();
     for program in named {
         for spec in &program.specs {
             required
                 .entry(spec.digest())
                 .or_default()
                 .insert(program.identity.clone());
+            position_of.insert(spec.digest(), spec.position);
         }
     }
-    Ok(required)
+    for row in &outside {
+        required
+            .entry(row.digest.clone())
+            .or_default()
+            .insert(row.identity.clone());
+        if let Some(position) = row.position {
+            position_of
+                .entry(row.digest.clone())
+                .or_insert(position as usize);
+        }
+    }
+    let positions_unknown_for: Vec<String> = outside
+        .iter()
+        .filter(|row| !position_of.contains_key(&row.digest))
+        .map(|row| row.identity.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    Ok(Prospective {
+        required,
+        position_of,
+        positions_unknown_for,
+    })
+}
+
+/// The positions of every statistics object under Morpholog's exact
+/// naming in its schema, whatever their definition.
+async fn managed_statistics_positions(
+    conn: &mut sqlx::PgConnection,
+) -> Result<BTreeSet<usize>, PgError> {
+    let names = sqlx::query!(
+        r#"SELECT stxname AS "name!" FROM pg_statistic_ext
+           WHERE stxnamespace = 'morpholog'::regnamespace AND stxname LIKE 'morpholog\_cs\_%'"#
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(names
+        .iter()
+        .filter_map(|row| StatisticsSpec::from_name(&row.name))
+        .map(|spec| spec.position)
+        .collect())
 }
 
 async fn reconcile_locked(
@@ -572,27 +667,55 @@ async fn reconcile_locked(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let required = prospective_requirements(conn, named).await?;
-    let required_by = |digest: &str| -> Vec<String> {
-        required
-            .get(digest)
-            .map(|identities| identities.iter().cloned().collect())
-            .unwrap_or_default()
-    };
+    let prospective = prospective_requirements(conn, named).await?;
+    let required_by = |digest: &str| prospective.required_by(digest);
 
     let catalogue = catalogue(conn).await?;
-    let statistics_specs = StatisticsSpec::for_indexes(&specs);
+    // Every position some programme is known to require, and every
+    // statistics object under Morpholog's name: an object is fully known
+    // from its position, so another programme's is reconciled here too.
+    let required_positions = prospective.required_positions();
+    let positions: BTreeSet<usize> = required_positions
+        .keys()
+        .copied()
+        .chain(managed_statistics_positions(conn).await?)
+        .collect();
+    let statistics_specs: Vec<StatisticsSpec> = positions
+        .into_iter()
+        .map(|position| StatisticsSpec { position })
+        .collect();
     let mut statistics = Vec::with_capacity(statistics_specs.len());
     for spec in &statistics_specs {
         let normalised = normalise_statistics(conn, spec).await?;
         let existing = catalogue_statistics(conn, &spec.name()).await?;
-        let (action, detail) = classify_statistics(&spec.name(), &normalised, existing.as_ref());
+        let (found, mut detail) = classify_statistics(&spec.name(), &normalised, existing.as_ref());
+        let required_by: Vec<String> = required_positions
+            .get(&spec.position)
+            .map(|identities| identities.iter().cloned().collect())
+            .unwrap_or_default();
+        let action = match found {
+            StatisticsAction::Conflict => StatisticsAction::Conflict,
+            StatisticsAction::Create => StatisticsAction::Create,
+            _ if !required_by.is_empty() => StatisticsAction::Keep,
+            _ if !prospective.positions_unknown_for.is_empty() => {
+                detail = format!(
+                    "required by no programme known; kept while positions are unknown for {}",
+                    prospective.positions_unknown_for.join(", ")
+                );
+                StatisticsAction::Keep
+            }
+            _ => {
+                detail = "required by no programme; `--prune` drops it".to_string();
+                StatisticsAction::Stale
+            }
+        };
         statistics.push(StatisticsPlanEntry {
             action,
             statistics_name: spec.name(),
             position: spec.position,
             expression_sql: spec.expression_sql(),
             detail,
+            required_by,
         });
     }
     let mut entries = Vec::with_capacity(specs.len());
@@ -735,11 +858,13 @@ async fn reconcile_locked(
             .map_err(classify_checked_query)?;
             for spec in &program.specs {
                 sqlx::query!(
-                    "INSERT INTO morpholog.index_requirement (program_identity, spec_digest, program_hash)
-                     VALUES ($1, $2, $3)",
+                    "INSERT INTO morpholog.index_requirement
+                        (program_identity, spec_digest, program_hash, position)
+                     VALUES ($1, $2, $3, $4)",
                     program.identity,
                     spec.digest(),
                     program.hash,
+                    spec.position as i32,
                 )
                 .execute(&mut *tx)
                 .await
@@ -786,6 +911,21 @@ async fn reconcile_locked(
         });
     }
     entries.sort_by(|a, b| a.index_name.cmp(&b.index_name));
+    if applied && prune {
+        for entry in &mut statistics {
+            if entry.action == StatisticsAction::Stale {
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                    "DROP STATISTICS IF EXISTS morpholog.{}",
+                    quote_ident(&entry.statistics_name)
+                )))
+                .execute(&mut *conn)
+                .await
+                .map_err(classify)?;
+                entry.detail = "required by no programme; dropped".to_string();
+                pruned.push(entry.statistics_name.clone());
+            }
+        }
+    }
 
     Ok(ProvisionReport {
         programs: named
@@ -798,6 +938,7 @@ async fn reconcile_locked(
         entries,
         statistics,
         required_elsewhere,
+        positions_unknown_for: prospective.positions_unknown_for,
         dry_run: !apply,
         prune,
         applied,

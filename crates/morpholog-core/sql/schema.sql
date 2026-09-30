@@ -469,6 +469,11 @@ CREATE TABLE index_requirement (
     spec_digest        text        NOT NULL,
     program_hash       text        NOT NULL,
     reconciled_at      timestamptz NOT NULL DEFAULT now(),
+    -- The argument position the specification seeks on: what says whether
+    -- a statistics object is still needed. Nullable for a binary from before
+    -- it was recorded; resolved from the managed index of the same
+    -- specification where one exists, otherwise unknown.
+    position           integer     CHECK (position >= 0),
     PRIMARY KEY (program_identity, spec_digest)
 );
 

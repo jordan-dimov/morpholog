@@ -1441,7 +1441,7 @@ class ProvisionedProgram:
 _INDEX_ACTIONS = frozenset(
     {"keep", "create", "repair_invalid", "satisfied_externally", "stale", "conflict"}
 )
-_STATISTICS_ACTIONS = frozenset({"keep", "create", "conflict"})
+_STATISTICS_ACTIONS = frozenset({"keep", "create", "conflict", "stale"})
 
 
 def _action(label: str, value: object, known: AbstractSet[str]) -> str:
@@ -1485,20 +1485,28 @@ class ProvisionedIndex:
 
 @dataclass(frozen=True)
 class ProvisionedStatistics:
+    """One statistics object Morpholog manages, the named programmes' or
+    another's: an object is fully known from its position."""
+
     action: str
     name: str
     position: int
+    required_by: list[str]
     detail: str = ""
 
     @classmethod
     def from_json(cls, payload: object) -> ProvisionedStatistics:
         data = _strict(
-            "provisioned statistics", payload, {"action", "name", "position"}, {"detail"}
+            "provisioned statistics",
+            payload,
+            {"action", "name", "position", "required_by"},
+            {"detail"},
         )
         return cls(
             action=_action("provisioned statistics", data["action"], _STATISTICS_ACTIONS),
             name=data["name"],
             position=data["position"],
+            required_by=_str_list("required_by", data["required_by"]),
             detail=data.get("detail", ""),
         )
 
@@ -1530,6 +1538,10 @@ class ProvisionReport:
     indexes: list[ProvisionedIndex]
     statistics: list[ProvisionedStatistics]
     required_elsewhere: list[RequiredElsewhere]
+    # Programmes outside the call with a recorded requirement whose
+    # position is not known. While any, no statistics object is stale;
+    # provisioning them again records it.
+    positions_unknown_for: list[str]
 
     @property
     def has_conflict(self) -> bool:
@@ -1539,11 +1551,11 @@ class ProvisionReport:
 
     @property
     def pruned(self) -> list[str]:
-        """The indexes this run dropped: every stale one, when it applied
-        under prune."""
+        """What this run dropped: every stale index and statistics object,
+        when it applied under prune."""
         if not (self.applied and self.prune):
             return []
-        return [i.name for i in self.indexes if i.action == "stale"]
+        return [e.name for e in (*self.indexes, *self.statistics) if e.action == "stale"]
 
     @classmethod
     def from_json(cls, payload: object) -> ProvisionReport:
@@ -1551,7 +1563,7 @@ class ProvisionReport:
             "provision report",
             payload,
             {"applied", "dry_run", "prune", "programs", "indexes", "statistics",
-             "required_elsewhere"},
+             "required_elsewhere", "positions_unknown_for"},
         )
         return cls(
             applied=data["applied"],
@@ -1563,6 +1575,9 @@ class ProvisionReport:
             required_elsewhere=[
                 RequiredElsewhere.from_json(r) for r in data["required_elsewhere"]
             ],
+            positions_unknown_for=_str_list(
+                "positions_unknown_for", data["positions_unknown_for"]
+            ),
         )
 
 
