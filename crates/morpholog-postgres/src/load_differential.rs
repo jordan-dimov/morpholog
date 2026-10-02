@@ -260,7 +260,7 @@ async fn race(
     reset_db(&pool).await;
     populate_entries(&pool).await;
     let program = crate::program::PgProgram::new(
-        morpholog_core::CompiledProgram::new(entries_program()).unwrap(),
+        morpholog_core::PreparedProgram::new(entries_program()).unwrap(),
     );
     crate::indexes::provision_indexes(&pool, &[&program], false)
         .await

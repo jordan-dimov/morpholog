@@ -10,7 +10,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
-use common::{compiled, propose_pg_with_test_actor, reset_db, subj, test_pool};
+use common::{pg_program, propose_pg_with_test_actor, reset_db, subj, test_pool};
 
 use morpholog_core::Program;
 use morpholog_postgres::{PgPool, PgProposalOutcome, VerifyOutcome, verify_replay};
@@ -66,7 +66,7 @@ async fn claim_rows(pool: &PgPool) -> i64 {
 async fn propose(pool: &PgPool, p: &Program, name: &str, statement: &str) -> PgProposalOutcome {
     propose_pg_with_test_actor(
         pool,
-        &compiled(p.clone()),
+        &pg_program(p.clone()),
         p.transformation(name).unwrap(),
         vec![subj("case-17"), subj(statement)],
     )

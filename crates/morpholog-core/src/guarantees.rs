@@ -11,9 +11,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::compiled::CompiledProgram;
 use crate::format;
 use crate::ir::Prop;
+use crate::prepared::PreparedProgram;
 
 /// One guarantee derived from one invariant: the impossible state it
 /// rules out.
@@ -41,8 +41,8 @@ pub struct Guarantee {
 /// Derive the guarantees a programme makes from its declared invariants,
 /// in declaration order. Pure and mechanical: one [`Guarantee`] per
 /// invariant.
-pub fn guarantees(compiled: &CompiledProgram) -> Vec<Guarantee> {
-    let program = compiled.program();
+pub fn guarantees(prepared: &PreparedProgram) -> Vec<Guarantee> {
+    let program = prepared.program();
     let provenance = crate::disciplines::discipline_provenance(program);
     program
         .invariants

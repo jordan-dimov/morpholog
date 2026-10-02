@@ -40,7 +40,7 @@ impl From<Act> for BatchRow {
 /// invalid; it never reaches the database.
 pub(crate) fn decode_acts(
     file: &std::path::Path,
-    compiled: &morpholog_core::CompiledProgram,
+    prepared: &morpholog_core::PreparedProgram,
     acts: Vec<Act>,
 ) -> Result<Vec<Proposal>, RowError> {
     if acts.is_empty() {
@@ -52,7 +52,7 @@ pub(crate) fn decode_acts(
     acts.into_iter()
         .enumerate()
         .map(|(index, act)| {
-            decode_row(file, compiled, act.into())
+            decode_row(file, prepared, act.into())
                 .map(|t| Proposal::gateway(&t))
                 .map_err(|e| RowError {
                     code: e.code,
@@ -70,7 +70,7 @@ pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
         Ok((_, program)) => program,
         Err(failure) => return report_request_failure(failure),
     };
-    let compiled = program.core();
+    let prepared = program.prepared();
     let input = if args.acts == std::path::Path::new("-") {
         let mut buf = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
@@ -99,7 +99,7 @@ pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
                 .map_err(|e| RowError::coded(envelopes::ProposeCode::InvalidRequest, e))
         })
         .collect();
-    let proposals = match rows.and_then(|rows| decode_acts(&args.file, compiled, rows)) {
+    let proposals = match rows.and_then(|rows| decode_acts(&args.file, prepared, rows)) {
         Ok(proposals) => proposals,
         Err(failure) => return report_request_failure(failure),
     };

@@ -11,15 +11,15 @@ use common::all_programs;
 use morpholog_core::{Guarantee, guarantees, render_guarantees};
 use morpholog_examples::{approval_controls, carbon_credit_provenance as cc};
 
-/// Build a CompiledProgram for the analysis entry points.
-fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
-    morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
+/// Build a PreparedProgram for the analysis entry points.
+fn prepared(p: &morpholog_core::Program) -> morpholog_core::PreparedProgram {
+    morpholog_core::PreparedProgram::new(p.clone()).expect("fixture is valid")
 }
 
 #[test]
 fn every_registered_program_yields_one_guarantee_per_invariant() {
     for program in all_programs() {
-        let gs = guarantees(&compiled(&program));
+        let gs = guarantees(&prepared(&program));
         assert_eq!(
             gs.len(),
             program.invariants.len(),
@@ -35,7 +35,7 @@ fn every_registered_program_yields_one_guarantee_per_invariant() {
 
 #[test]
 fn a_not_invariant_names_the_forbidden_state() {
-    let gs = guarantees(&compiled(&cc::program()));
+    let gs = guarantees(&prepared(&cc::program()));
     let terminal = gs
         .iter()
         .find(|g| g.invariant == "retirement_terminal")
@@ -53,7 +53,7 @@ fn a_not_invariant_names_the_forbidden_state() {
 
 #[test]
 fn an_implies_invariant_has_no_mechanical_forbidden_state() {
-    let gs = guarantees(&compiled(&cc::program()));
+    let gs = guarantees(&prepared(&cc::program()));
     let double = gs
         .iter()
         .find(|g| g.invariant == "issued_unique_by_measurement")
@@ -66,7 +66,7 @@ fn an_implies_invariant_has_no_mechanical_forbidden_state() {
 #[test]
 fn render_is_deterministic_prose() {
     let program = cc::program();
-    let gs = guarantees(&compiled(&program));
+    let gs = guarantees(&prepared(&program));
     let prose = render_guarantees(&program.name, &gs);
 
     assert_eq!(prose, render_guarantees(&program.name, &gs));
@@ -80,7 +80,7 @@ fn a_program_with_no_invariants_guarantees_nothing_structurally() {
     // approval_controls declares no invariants - revocation prevents
     // future approvals via a gate, not an invariant.
     let program = approval_controls::program();
-    let gs = guarantees(&compiled(&program));
+    let gs = guarantees(&prepared(&program));
     assert!(gs.is_empty());
     assert!(
         render_guarantees(&program.name, &gs).contains("nothing structurally impossible"),
@@ -91,7 +91,7 @@ fn a_program_with_no_invariants_guarantees_nothing_structurally() {
 
 #[test]
 fn guarantees_json_round_trips() {
-    let gs = guarantees(&compiled(&cc::program()));
+    let gs = guarantees(&prepared(&cc::program()));
     let json = serde_json::to_string(&gs).unwrap();
     let parsed: Vec<Guarantee> = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed, gs);

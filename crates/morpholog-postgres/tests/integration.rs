@@ -73,7 +73,7 @@ async fn settlement_netting_happy_path_commits_claims_audit_and_outbox() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(settlement_netting::program()),
+        &common::pg_program(settlement_netting::program()),
         &settlement_netting::create_net_settlement(),
         netting_args(),
     )
@@ -156,7 +156,7 @@ async fn propose_against_pg_does_not_load_unreferenced_predicates() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(settlement_netting::program()),
+        &common::pg_program(settlement_netting::program()),
         &settlement_netting::create_net_settlement(),
         netting_args(),
     )
@@ -228,7 +228,7 @@ async fn require_failure_writes_nothing() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(settlement_netting::program()),
+        &common::pg_program(settlement_netting::program()),
         &settlement_netting::create_net_settlement(),
         netting_args(),
     )
@@ -271,7 +271,7 @@ async fn propose_against_pg_with_trace_returns_trace_on_committed() {
 
     let traced = common::propose_pg_with_trace_using_test_actor(
         &pool,
-        &common::compiled(settlement_netting::program()),
+        &common::pg_program(settlement_netting::program()),
         &settlement_netting::create_net_settlement(),
         netting_args(),
     )
@@ -328,7 +328,7 @@ async fn propose_against_pg_with_trace_preserves_trace_on_kernel_error() {
 
     let traced = common::propose_pg_with_trace_using_test_actor(
         &pool,
-        &common::compiled(settlement_netting::program()),
+        &common::pg_program(settlement_netting::program()),
         &settlement_netting::create_net_settlement(),
         netting_args(),
     )
@@ -398,7 +398,7 @@ async fn propose_against_pg_with_trace_returns_trace_on_rejected() {
 
     let traced = common::propose_pg_with_trace_using_test_actor(
         &pool,
-        &common::compiled(settlement_netting::program()),
+        &common::pg_program(settlement_netting::program()),
         &settlement_netting::create_net_settlement(),
         netting_args(),
     )
@@ -443,7 +443,7 @@ async fn invariant_violation_on_candidate_state_writes_nothing() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(settlement_netting::program()),
+        &common::pg_program(settlement_netting::program()),
         &settlement_netting::create_net_settlement(),
         netting_args(),
     )
@@ -530,7 +530,7 @@ async fn retraction_deletes_targeted_row_and_preserves_others() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(marker_program()),
+        &common::pg_program(marker_program()),
         &retract_marker_transformation(),
         vec![subj("y")],
     )
@@ -585,7 +585,7 @@ async fn audit_jsonb_columns_round_trip_through_codec() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(settlement_netting::program()),
+        &common::pg_program(settlement_netting::program()),
         &settlement_netting::create_net_settlement(),
         netting_args(),
     )
@@ -702,7 +702,7 @@ async fn verified_revenue_full_chain_through_pg() {
     //    pointer is established.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(verified_revenue::program()),
+        &common::pg_program(verified_revenue::program()),
         &verified_revenue::admit_independent_verification(),
         vec![asset(), period(), dec(91), subj("ver_001")],
     )
@@ -713,7 +713,7 @@ async fn verified_revenue_full_chain_through_pg() {
     // 2. Bank credit committee grants debt-service standing on ver_001.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(verified_revenue::program()),
+        &common::pg_program(verified_revenue::program()),
         &verified_revenue::grant_standing(),
         vec![
             subj("ver_001"),
@@ -729,7 +729,7 @@ async fn verified_revenue_full_chain_through_pg() {
     // 3. Bank admits a debt-service decision against ver_001.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(verified_revenue::program()),
+        &common::pg_program(verified_revenue::program()),
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -747,7 +747,7 @@ async fn verified_revenue_full_chain_through_pg() {
     //    on the same verification - parallel admissibility.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(verified_revenue::program()),
+        &common::pg_program(verified_revenue::program()),
         &verified_revenue::grant_standing(),
         vec![
             subj("ver_001"),
@@ -763,7 +763,7 @@ async fn verified_revenue_full_chain_through_pg() {
     // 5. Investor admits investor-reporting decision against ver_001.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(verified_revenue::program()),
+        &common::pg_program(verified_revenue::program()),
         &verified_revenue::admit_investor_reported_revenue(),
         vec![
             asset(),
@@ -783,7 +783,7 @@ async fn verified_revenue_full_chain_through_pg() {
     //    and historical decisions stay admitted.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(verified_revenue::program()),
+        &common::pg_program(verified_revenue::program()),
         &verified_revenue::correct_independent_verification(),
         vec![asset(), period(), dec(88), subj("ver_002"), subj("ver_001")],
     )
@@ -894,7 +894,7 @@ async fn verified_revenue_full_chain_through_pg() {
     let outbox_before = list_pending_outbox(&pool).await.unwrap().len();
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(verified_revenue::program()),
+        &common::pg_program(verified_revenue::program()),
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -927,7 +927,7 @@ async fn verified_revenue_full_chain_through_pg() {
     //    decision now admits.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(verified_revenue::program()),
+        &common::pg_program(verified_revenue::program()),
         &verified_revenue::grant_standing(),
         vec![
             subj("ver_002"),
@@ -942,7 +942,7 @@ async fn verified_revenue_full_chain_through_pg() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(verified_revenue::program()),
+        &common::pg_program(verified_revenue::program()),
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -1005,7 +1005,7 @@ async fn double_entry_full_chain_through_pg() {
     // 1. Post a simple entry: cash debit 100, revenue credit 100.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -1036,7 +1036,7 @@ async fn double_entry_full_chain_through_pg() {
     // 2. Close the period.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::close_period(),
         vec![ledger_period()],
     )
@@ -1057,7 +1057,7 @@ async fn double_entry_full_chain_through_pg() {
     //    does not check PeriodClosed - it is the closed-period path.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::restate_entry(),
         vec![
             subj("entry_002"),
@@ -1184,7 +1184,7 @@ async fn ledger_closed_period_rejects_new_entry_and_writes_nothing() {
     // with no writes to claims, audit, or outbox.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -1223,7 +1223,7 @@ async fn list_claims_returns_admitted_claims_in_stable_order() {
     // Post a simple journal entry: 1 JournalEntry, 2 JournalLine.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -1266,7 +1266,7 @@ async fn list_audit_rows_returns_committed_transformations_in_order() {
     // Two committed transformations in causal order: post then close.
     let _ = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -1281,7 +1281,7 @@ async fn list_audit_rows_returns_committed_transformations_in_order() {
     .unwrap();
     let _ = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::close_period(),
         vec![ledger_period()],
     )
@@ -1342,7 +1342,7 @@ async fn list_pending_outbox_returns_intents_in_enqueue_order() {
 
     let _ = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -1357,7 +1357,7 @@ async fn list_pending_outbox_returns_intents_in_enqueue_order() {
     .unwrap();
     let _ = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::close_period(),
         vec![ledger_period()],
     )
@@ -1397,7 +1397,7 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
     // Entry 1: cash debit 100, revenue credit 100.
     let _ = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -1415,7 +1415,7 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
     // two rows accumulate rather than producing four distinct rows.
     let _ = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_002"),
@@ -1496,7 +1496,7 @@ async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
     // Real ledger fixture: 1 entry, 2 journal lines.
     let _ = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -1568,7 +1568,7 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -1627,7 +1627,7 @@ async fn audit_row_records_actor() {
 
     let outcome = propose_against_pg(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &common::attested(&transition),
     )
     .await
@@ -1740,7 +1740,7 @@ async fn duplicate_intent_in_one_transformation_surfaces_named_error() {
     };
     let err = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(prog),
+        &common::pg_program(prog),
         &double_emit_transformation(),
         vec![],
     )
@@ -1778,7 +1778,7 @@ async fn approval_controls_full_chain_through_pg() {
     // 1. jordan is granted unconditional authority for vendor onboarding.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(approval_controls::program()),
+        &common::pg_program(approval_controls::program()),
         &approval_controls::grant_approval_authority(),
         vec![subj("jordan"), subj("vendor_onboarding")],
     )
@@ -1789,7 +1789,7 @@ async fn approval_controls_full_chain_through_pg() {
     // 2. jordan approves; Term::Actor stamps her onto the Approval.
     let outcome = common::propose_pg_as(
         &pool,
-        &common::compiled(approval_controls::program()),
+        &common::pg_program(approval_controls::program()),
         &approval_controls::approve_document(),
         vec![subj("doc_001"), subj("vendor_onboarding")],
         "jordan",
@@ -1828,7 +1828,7 @@ async fn approval_controls_full_chain_through_pg() {
     let outbox_before = list_pending_outbox(&pool).await.unwrap().len();
     let outcome = common::propose_pg_as(
         &pool,
-        &common::compiled(approval_controls::program()),
+        &common::pg_program(approval_controls::program()),
         &approval_controls::approve_document(),
         vec![subj("doc_002"), subj("vendor_onboarding")],
         "alice",
@@ -1852,7 +1852,7 @@ async fn approval_controls_full_chain_through_pg() {
     // 5. jordan is granted an invoice limit of 1000.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(approval_controls::program()),
+        &common::pg_program(approval_controls::program()),
         &approval_controls::grant_approval_limit(),
         vec![subj("jordan"), subj("invoice"), dec(1000)],
     )
@@ -1864,7 +1864,7 @@ async fn approval_controls_full_chain_through_pg() {
     // receipt actor, the claim, the outbox intent and the audit actor.
     let outcome = common::propose_pg_as(
         &pool,
-        &common::compiled(approval_controls::program()),
+        &common::pg_program(approval_controls::program()),
         &approval_controls::approve_within_limit(),
         vec![subj("inv_001"), subj("invoice"), dec(750)],
         "jordan",
@@ -1915,7 +1915,7 @@ async fn approval_controls_full_chain_through_pg() {
     let outbox_before = list_pending_outbox(&pool).await.unwrap().len();
     let outcome = common::propose_pg_as(
         &pool,
-        &common::compiled(approval_controls::program()),
+        &common::pg_program(approval_controls::program()),
         &approval_controls::approve_within_limit(),
         vec![subj("inv_over"), subj("invoice"), dec(2000)],
         "jordan",
@@ -1954,7 +1954,7 @@ async fn approval_controls_full_chain_through_pg() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(approval_controls::program()),
+        &common::pg_program(approval_controls::program()),
         &approval_controls::revoke_approval_authority(),
         vec![subj("jordan"), subj("vendor_onboarding")],
     )
@@ -1993,7 +1993,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     // 1. Issue a £100k aggregate policy.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(insurance_claim_settlement::program()),
+        &common::pg_program(insurance_claim_settlement::program()),
         &insurance_claim_settlement::issue_policy(),
         vec![subj("policy_001"), dec(100_000)],
     )
@@ -2004,7 +2004,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     // 2. Grant alex £100k of settlement authority.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(insurance_claim_settlement::program()),
+        &common::pg_program(insurance_claim_settlement::program()),
         &insurance_claim_settlement::grant_settlement_authority(),
         vec![subj("alex"), dec(100_000)],
     )
@@ -2016,7 +2016,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     for (claim_id, amount) in [("claim_001", 60_000_i64), ("claim_002", 40_000)] {
         let outcome = common::propose_pg_with_test_actor(
             &pool,
-            &common::compiled(insurance_claim_settlement::program()),
+            &common::pg_program(insurance_claim_settlement::program()),
             &insurance_claim_settlement::report_claim(),
             vec![subj(claim_id), subj("policy_001"), dec(amount)],
         )
@@ -2029,7 +2029,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     // Pin receipt actor, durable claim, audit row, and outbox intent.
     let outcome = common::propose_pg_as(
         &pool,
-        &common::compiled(insurance_claim_settlement::program()),
+        &common::pg_program(insurance_claim_settlement::program()),
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_001"), subj("settlement_001"), dec(60_000)],
         "alex",
@@ -2113,7 +2113,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     // land at exactly 0.
     let outcome = common::propose_pg_as(
         &pool,
-        &common::compiled(insurance_claim_settlement::program()),
+        &common::pg_program(insurance_claim_settlement::program()),
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_002"), subj("settlement_002"), dec(40_000)],
         "alex",
@@ -2134,7 +2134,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     // rejected at admission, leaving no durable trace.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(insurance_claim_settlement::program()),
+        &common::pg_program(insurance_claim_settlement::program()),
         &insurance_claim_settlement::report_claim(),
         vec![subj("claim_003"), subj("policy_001"), dec(30_000)],
     )
@@ -2146,7 +2146,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     let outbox_before = list_pending_outbox(&pool).await.unwrap().len();
     let outcome = common::propose_pg_as(
         &pool,
-        &common::compiled(insurance_claim_settlement::program()),
+        &common::pg_program(insurance_claim_settlement::program()),
         &insurance_claim_settlement::authorise_settlement(),
         vec![subj("claim_003"), subj("settlement_003"), dec(30_000)],
         "alex",
@@ -2206,7 +2206,7 @@ async fn load_scoped_state_loads_only_in_scope_predicates() {
 
     let state = load_scoped_state(
         &pool,
-        common::compiled(settlement_netting::program()).core(),
+        common::pg_program(settlement_netting::program()).prepared(),
         &settlement_netting::create_net_settlement(),
     )
     .await

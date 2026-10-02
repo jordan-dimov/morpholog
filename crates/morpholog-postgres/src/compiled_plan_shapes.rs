@@ -29,7 +29,7 @@
 
 use std::collections::BTreeSet;
 
-use morpholog_core::{CompiledProgram, Program};
+use morpholog_core::{PreparedProgram, Program};
 use morpholog_test_support::{claim_instance, dec, subj};
 use sqlx::Row as _;
 
@@ -182,7 +182,7 @@ async fn every_required_index_is_eligible_for_every_whole_in_fragment_programme(
     assert!(!programmes.is_empty());
     for program in programmes {
         reset(&pool).await;
-        let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
+        let pg = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
         populate_for_probes(&pool, &pg.required_indexes()).await;
         provision_indexes(&pool, &[&pg], false).await.unwrap();
         for spec in pg.required_indexes() {
@@ -328,7 +328,7 @@ async fn the_planner_chooses_the_provisioned_indexes_on_a_populated_ledger() {
     let pool = test_pool().await;
     reset(&pool).await;
     let program = morpholog_examples::double_entry_ledger::program();
-    let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
+    let pg = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
     // Populated first, then provisioned, as a deployment upgrades: the
     // statistics must come from provisioning's own ANALYZE.
     populate_ledger(&pool, POPULATED).await;
@@ -344,7 +344,7 @@ async fn a_case_index_is_still_chosen_where_another_predicate_crowds_the_key() {
     let pool = test_pool().await;
     reset(&pool).await;
     let program = morpholog_examples::double_entry_ledger::program();
-    let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
+    let pg = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
     sqlx::query(
         "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
          SELECT 'Crowd',
@@ -375,7 +375,7 @@ async fn the_loader_seeks_through_the_provisioned_indexes() {
     let pool = test_pool().await;
     reset(&pool).await;
     let program = morpholog_examples::double_entry_ledger::program();
-    let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
+    let pg = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
     provision_indexes(&pool, &[&pg], false).await.unwrap();
     populate_ledger(&pool, POPULATED).await;
     let post = program.transformation("post_simple_entry").unwrap();
@@ -450,7 +450,7 @@ transformation record(item, amount):
 ",
     )
     .expect("parses");
-    let pg = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
+    let pg = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
     let required: BTreeSet<(String, usize)> = pg
         .required_indexes()
         .iter()

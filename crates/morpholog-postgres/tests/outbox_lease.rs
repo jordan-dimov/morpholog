@@ -30,7 +30,7 @@ use common::{reset_db, test_pool};
 async fn enqueue_pending(pool: &PgPool, entry_id: &str) -> Uuid {
     let outcome = common::propose_pg_with_test_actor(
         pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj(entry_id),

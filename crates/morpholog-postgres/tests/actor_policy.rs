@@ -20,7 +20,7 @@
 mod common;
 
 use common::{
-    compiled, drop_roles_if_present, expect_committed, propose_pg_as, recreate_roles, reset_db,
+    drop_roles_if_present, expect_committed, pg_program, propose_pg_as, recreate_roles, reset_db,
     session_is_superuser, test_pool,
 };
 use morpholog_core::{EvalValue, Subject, Transformation, Transition};
@@ -42,7 +42,7 @@ const CHEN: &str = "verifier_chen";
 const OKAFOR: &str = "verifier_okafor";
 
 fn program() -> PgProgram {
-    compiled(morpholog_examples::biometric_identification_oversight::program())
+    pg_program(morpholog_examples::biometric_identification_oversight::program())
 }
 
 fn subj(s: &str) -> EvalValue {
@@ -103,7 +103,7 @@ async fn deploy(pool: &PgPool, deployer_login: &str) {
         ("assign_oversight", vec![subj(CHEN), subj(SYSTEM)]),
         ("assign_oversight", vec![subj(OKAFOR), subj(SYSTEM)]),
     ] {
-        let t = p.core().transformation(&name.into()).unwrap().clone();
+        let t = p.prepared().transformation(&name.into()).unwrap().clone();
         let actor = if name == "deploy_system" {
             DEPLOYER
         } else {
@@ -116,7 +116,7 @@ async fn deploy(pool: &PgPool, deployer_login: &str) {
 async fn arm(pool: &PgPool, person: &str) {
     let p = program();
     let t = p
-        .core()
+        .prepared()
         .transformation(&"restrict_verifier_identity".into())
         .unwrap()
         .clone();
@@ -130,7 +130,7 @@ async fn arm(pool: &PgPool, person: &str) {
 async fn grant(pool: &PgPool, person: &str, role: &str) {
     let p = program();
     let t = p
-        .core()
+        .prepared()
         .transformation(&"authorise_verifier_login".into())
         .unwrap()
         .clone();
@@ -159,7 +159,7 @@ fn proposal(t: &Transformation, args: Vec<EvalValue>, actor: &str) -> Proposal {
 fn oversight_of(person: &str) -> (Transformation, Vec<EvalValue>) {
     let p = program();
     let t = p
-        .core()
+        .prepared()
         .transformation(&"assign_oversight".into())
         .unwrap()
         .clone();
@@ -306,7 +306,7 @@ async fn withdrawing_the_last_grant_locks_the_actor_out_rather_than_freeing_it()
 
     let p = program();
     let withdraw = p
-        .core()
+        .prepared()
         .transformation(&"withdraw_verifier_login".into())
         .unwrap()
         .clone();
@@ -492,7 +492,7 @@ async fn a_rogue_gateway_cannot_escalate_through_an_unrestricted_deployer() {
     let rogue = gateway_pool("mtest_gw_esc").await;
     let p = program();
     let t = p
-        .core()
+        .prepared()
         .transformation(&"authorise_verifier_login".into())
         .unwrap()
         .clone();

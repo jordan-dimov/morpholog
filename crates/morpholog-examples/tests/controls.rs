@@ -14,9 +14,9 @@ use morpholog_examples::{
     approval_controls, biometric_identification_oversight as bio, trade_lifecycle,
 };
 
-/// Build a CompiledProgram for the analysis entry points.
-fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
-    morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
+/// Build a PreparedProgram for the analysis entry points.
+fn prepared(p: &morpholog_core::Program) -> morpholog_core::PreparedProgram {
+    morpholog_core::PreparedProgram::new(p.clone()).expect("fixture is valid")
 }
 
 #[test]
@@ -27,7 +27,7 @@ fn every_example_front_loads_link_names_a_declared_invariant() {
             .iter()
             .map(|i| i.name.to_string())
             .collect();
-        for t in &controls(&compiled(&program)).transformations {
+        for t in &controls(&prepared(&program)).transformations {
             for link in t.gates.iter().flat_map(|g| &g.front_loads) {
                 assert!(
                     declared.contains(&link.invariant),
@@ -50,7 +50,7 @@ fn every_example_front_loads_link_names_a_declared_invariant() {
 
 #[test]
 fn biometric_two_verifications_gate_front_loads_its_standing_invariant() {
-    let matrix = controls(&compiled(&bio::program()));
+    let matrix = controls(&prepared(&bio::program()));
     let decide = matrix
         .transformations
         .iter()
@@ -79,7 +79,7 @@ fn trade_terms_gate_front_loads_the_backstop_not_the_quantity_cap() {
     // `settled_date_has_effective_terms`. The quantity cap is a
     // `sum(..) <= qty` consequent with no positively-required predicate,
     // so it is honestly NOT front-loaded - the gate does not pre-check it.
-    let matrix = controls(&compiled(&trade_lifecycle::program()));
+    let matrix = controls(&prepared(&trade_lifecycle::program()));
     let settle = matrix
         .transformations
         .iter()
@@ -105,7 +105,7 @@ fn trade_terms_gate_front_loads_the_backstop_not_the_quantity_cap() {
 fn approval_authority_gates_front_load_nothing() {
     // Authority is checked only at action time (revoking it does not undo
     // past approvals), so there is no invariant to link to. By design, not a gap.
-    let matrix = controls(&compiled(&approval_controls::program()));
+    let matrix = controls(&prepared(&approval_controls::program()));
     let links = matrix
         .transformations
         .iter()
@@ -119,7 +119,7 @@ fn approval_authority_gates_front_load_nothing() {
 fn trade_front_line_coverage_separates_front_loaded_from_backstop() {
     // From the invariant side: the settle gate front-loads the terms check,
     // while the quantity cap is a true backstop that no gate pre-checks.
-    let cov = controls(&compiled(&trade_lifecycle::program())).front_line_coverage;
+    let cov = controls(&prepared(&trade_lifecycle::program())).front_line_coverage;
     let backstop = cov
         .iter()
         .find(|i| i.invariant == "settled_within_effective_terms")
@@ -151,7 +151,7 @@ fn every_front_line_coverage_row_names_a_declared_invariant() {
             .iter()
             .map(|i| i.name.to_string())
             .collect();
-        for row in &controls(&compiled(&program)).front_line_coverage {
+        for row in &controls(&prepared(&program)).front_line_coverage {
             assert!(
                 declared.contains(&row.invariant),
                 "program `{}`: coverage names undeclared invariant `{}`",

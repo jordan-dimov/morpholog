@@ -31,9 +31,9 @@ use crate::commands::filter::FieldFilter;
 use crate::commands::inspect::{claims_rows, decode_claims_named, derived_rows, resolve_as_of};
 use crate::commands::propose::{BatchRow, RowError, classify_pg_error, propose_row_outcome};
 use crate::commands::transact::{Act, decode_acts};
-use crate::commands::{compile_or_report, parse_or_report};
+use crate::commands::{parse_or_report, prepare_or_report};
 use morpholog_cli::envelopes::{ErrorCode, ErrorReceipt, SessionReady};
-use morpholog_core::CompiledProgram;
+use morpholog_core::PreparedProgram;
 use morpholog_postgres::PgPool;
 use morpholog_postgres::PgProgram;
 
@@ -62,16 +62,16 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
     // Before the ready line, failures behave as in one-shot commands:
     // diagnostics, then exit.
     let parsed = parse_or_report(&args.file)?;
-    let program = morpholog_postgres::PgProgram::new(compile_or_report(&parsed)?);
-    let compiled = program.core();
+    let program = morpholog_postgres::PgProgram::new(prepare_or_report(&parsed)?);
+    let prepared = program.prepared();
 
     let pool = crate::commands::connect_single(&args.db.database_url).await?;
 
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     let ready = SessionReady::new(
-        morpholog_core::format::canonical_hash(compiled.program()),
-        compiled.program().name.clone(),
+        morpholog_core::format::canonical_hash(prepared.program()),
+        prepared.program().name.clone(),
     );
     write_line(&mut out, &serde_json::to_value(&ready)?)?;
 
@@ -173,8 +173,8 @@ async fn handle_line(
     match op.as_str() {
         "propose" => handle_propose(args, program, pool, value, row).await,
         "transact" => handle_transact(args, program, pool, value, row).await,
-        "claims" => handle_claims(args, program.core(), pool, value).await,
-        "derived" => handle_derived(args, program.core(), pool, value).await,
+        "claims" => handle_claims(args, program.prepared(), pool, value).await,
+        "derived" => handle_derived(args, program.prepared(), pool, value).await,
         other => Err(SessionFailure::request(
             ErrorCode::UnknownOperation,
             anyhow!(
@@ -249,7 +249,7 @@ async fn handle_transact(
 ) -> Result<serde_json::Value, SessionFailure> {
     let body: TransactBody = serde_json::from_value(body)
         .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
-    let proposals = decode_acts(&args.file, program.core(), body.acts).map_err(row_failure)?;
+    let proposals = decode_acts(&args.file, program.prepared(), body.acts).map_err(row_failure)?;
     let outcome = morpholog_postgres::propose_all_against_pg(pool, program, &proposals)
         .await
         .map_err(|e| row_failure(classify_pg_error(e)))?;
@@ -289,13 +289,13 @@ struct ClaimsBody {
 
 async fn handle_claims(
     args: &SessionArgs,
-    compiled: &CompiledProgram,
+    prepared: &PreparedProgram,
     pool: &PgPool,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, SessionFailure> {
     let body: ClaimsBody = serde_json::from_value(body)
         .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
-    let program = compiled.program();
+    let program = prepared.program();
     // As in the one-shot named read, a predicate the programme does not
     // declare is an error.
     if body.named {
@@ -313,7 +313,7 @@ async fn handle_claims(
         }
     }
     let (filters, declared_arity) =
-        resolve_filters(&body.filters, body.named, &body.predicates, compiled)?;
+        resolve_filters(&body.filters, body.named, &body.predicates, prepared)?;
     let as_of = parse_as_of(pool, &body.as_of).await?;
     let claims = claims_rows(pool, as_of, &body.predicates, &filters, declared_arity)
         .await
@@ -345,13 +345,13 @@ struct DerivedBody {
 
 async fn handle_derived(
     args: &SessionArgs,
-    compiled: &CompiledProgram,
+    prepared: &PreparedProgram,
     pool: &PgPool,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, SessionFailure> {
     let body: DerivedBody = serde_json::from_value(body)
         .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
-    let program = compiled.program();
+    let program = prepared.program();
     let Some(derived) = program.derived_claim(&body.name) else {
         return Err(SessionFailure::request(
             ErrorCode::InvalidArguments,
@@ -365,7 +365,7 @@ async fn handle_derived(
         &body.filters,
         true,
         std::slice::from_ref(&body.name),
-        compiled,
+        prepared,
     )?;
     let as_of = parse_as_of(pool, &body.as_of).await?;
     let rows = derived_rows(pool, &program.definitions, derived, as_of, &filters)
@@ -386,14 +386,14 @@ fn resolve_filters(
     filters: &Option<std::collections::BTreeMap<String, String>>,
     named: bool,
     predicates: &[String],
-    compiled: &CompiledProgram,
+    prepared: &PreparedProgram,
 ) -> Result<(Vec<FieldFilter>, i32), SessionFailure> {
     let pairs: Vec<String> = filters
         .iter()
         .flatten()
         .map(|(k, v)| format!("{k}={v}"))
         .collect();
-    crate::commands::filter::resolve_where(named.then(|| compiled.program()), predicates, &pairs)
+    crate::commands::filter::resolve_where(named.then(|| prepared.program()), predicates, &pairs)
         .map_err(|e| SessionFailure::request(ErrorCode::InvalidArguments, e))
 }
 

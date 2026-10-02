@@ -18,7 +18,7 @@ mod common;
 
 use common::routes::{RouteObservation, count, observe};
 use common::{reset_db, test_pool};
-use morpholog_core::{ClaimInstance, CompiledProgram, EvalValue, Program, Subject, Transition};
+use morpholog_core::{ClaimInstance, EvalValue, PreparedProgram, Program, Subject, Transition};
 use morpholog_postgres::{
     InvariantPlan, PgAtomicOutcome, PgError, PgPool, PgProgram, PgProposalOutcome, Proposal,
     propose_against_pg, propose_all_against_pg,
@@ -30,7 +30,7 @@ fn mixed_gallery() -> Vec<Program> {
     morpholog_examples::all_programs()
         .into_iter()
         .filter(|p| {
-            let program = PgProgram::new(CompiledProgram::new(p.clone()).unwrap());
+            let program = PgProgram::new(PreparedProgram::new(p.clone()).unwrap());
             matches!(program.plan(), InvariantPlan::Mixed { .. })
         })
         .collect()
@@ -49,8 +49,8 @@ async fn the_mixed_route_reaches_the_kernels_decision_over_the_gallery() {
     let (mut cases, mut commits, mut refusals, mut errors, mut skipped) =
         (0usize, 0usize, 0usize, 0usize, 0usize);
     for program in mixed_gallery() {
-        let mixed = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
-        let interpreted = PgProgram::interpreted(CompiledProgram::new(program.clone()).unwrap());
+        let mixed = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
+        let interpreted = PgProgram::interpreted(PreparedProgram::new(program.clone()).unwrap());
         for t in &program.transformations {
             for salt in 0..2u64 {
                 let Some(args) = sample_args(&program, t, salt) else {
@@ -140,13 +140,13 @@ async fn both(
     seeded: &[ClaimInstance],
     args: Vec<EvalValue>,
 ) -> (RouteObservation, RouteObservation) {
-    let mixed = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
+    let mixed = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
     assert!(
         matches!(mixed.plan(), InvariantPlan::Mixed { .. }),
         "the fixture must run mixed: {:?}",
         mixed.plan()
     );
-    let interpreted = PgProgram::interpreted(CompiledProgram::new(program.clone()).unwrap());
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(program.clone()).unwrap());
     let transition = Transition {
         transformation_name: "both".into(),
         args,
@@ -225,7 +225,7 @@ async fn the_first_error_or_violation_in_programme_order_wins_across_evaluators(
 async fn a_kernel_error_after_the_write_leaves_nothing_behind() {
     let pool = test_pool().await;
     let program = interleaved(&["c_viol", "i_err"]);
-    let mixed = PgProgram::new(CompiledProgram::new(program).unwrap());
+    let mixed = PgProgram::new(PreparedProgram::new(program).unwrap());
     let seeded = vec![big("x", MAX)];
     reset_db(&pool).await;
     common::seed_claims(&pool, &seeded).await;
@@ -280,9 +280,9 @@ async fn a_mixed_batch_carries_both_parts_across_acts() {
                 \x20   require Seen(id)\n\
                 \x20   admit Amount(id, v)\n";
     let program: Program = morpholog_surface::parse_program(text).unwrap();
-    let mixed = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
+    let mixed = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
     assert!(matches!(mixed.plan(), InvariantPlan::Mixed { .. }));
-    let interpreted = PgProgram::interpreted(CompiledProgram::new(program.clone()).unwrap());
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(program.clone()).unwrap());
     let act = |name: &str, v: &str| Transition {
         transformation_name: name.into(),
         args: vec![subj("a"), dec(v)],

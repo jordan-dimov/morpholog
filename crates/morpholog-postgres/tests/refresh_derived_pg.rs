@@ -48,7 +48,7 @@ async fn seed_entry(pool: &PgPool, p: &Program, account: &str, amount: i64) {
     let post = p.transformation("post").unwrap();
     let _ = common::propose_pg_with_test_actor(
         pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         post,
         vec![subj(account), dec(amount)],
     )
@@ -60,7 +60,7 @@ async fn seed_span(pool: &PgPool, p: &Program, item: &str, started: &str, ended:
     let record = p.transformation("record").unwrap();
     let _ = common::propose_pg_with_test_actor(
         pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         record,
         vec![subj(item), ts(started), ts(ended)],
     )

@@ -40,7 +40,7 @@ async fn a_generated_invariant_rejects_durably_and_signs_the_audit_row() {
     // invariant.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         post,
         vec![subj("e1"), dec(100)],
     )
@@ -62,7 +62,7 @@ async fn a_generated_invariant_rejects_durably_and_signs_the_audit_row() {
     // audit row.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         post,
         vec![subj("e1"), dec(999)],
     )

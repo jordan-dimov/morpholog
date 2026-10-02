@@ -81,12 +81,12 @@ pub async fn propose_all_against_pg(
             "an atomic batch needs at least one proposal".to_string(),
         ));
     }
-    let compiled = program.core();
+    let prepared = program.prepared();
     let acts: Vec<(&Transformation, Transition)> = proposals
         .iter()
-        .map(|p| resolve(compiled, &p.transformation_name).map(|(t, _, _)| (t, p.transition())))
+        .map(|p| resolve(prepared, &p.transformation_name).map(|(t, _, _)| (t, p.transition())))
         .collect::<Result<_, _>>()?;
-    let admission = compiled.admission();
+    let admission = prepared.admission();
     let invariants = admission.invariants;
     let definitions = admission.definitions;
     let route = program.route();

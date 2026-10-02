@@ -1,23 +1,27 @@
-//! A programme as the adapter runs it: the validated core programme plus
-//! how its invariants are checked. Each invariant compiles to SQL or the
+//! A programme as the adapter runs it: a prepared programme bound to its
+//! execution plan, which says how its invariants are checked. Each invariant compiles to SQL or the
 //! interpreter keeps it, decided once, here, at load; an execution walks
 //! them in programme order, each run of like kind through its evaluator.
 
-use morpholog_core::{CompiledProgram, ReadPlan, Transformation, Transition};
+use morpholog_core::{PreparedProgram, ReadPlan, Transformation, Transition};
 
 use crate::compiled::{CompileRefusal, CompiledInvariantSet, IndexSpec, Run, compile_each};
 use crate::propose::{LoadScope, Reads, compute_load_scope};
 
+/// The PostgreSQL binding of a programme: the prepared programme and the
+/// execution plan that runs it. The plan changes what a proposal costs,
+/// never what it decides.
 pub struct PgProgram {
-    core: CompiledProgram,
-    backend: InvariantBackend,
+    prepared: PreparedProgram,
+    execution: ExecutionPlan,
 }
 
-/// How a programme's invariants are checked: the ones that compiled, in
-/// programme order, the refusals that keep the rest with the interpreter,
-/// and the runs that say which evaluator checks which, in order. Every
-/// invariant compiled, none did, and some did are the same shape.
-pub(crate) struct InvariantBackend {
+/// The execution plan: how a programme's invariants are checked. The
+/// ones that compiled, in programme order, the refusals that keep the
+/// rest with the interpreter, and the runs that say which evaluator
+/// checks which, in order. Every invariant compiled, none did, and some
+/// did are the same shape.
+pub(crate) struct ExecutionPlan {
     pub(crate) compiled: CompiledInvariantSet,
     /// Empty when the interpreter was chosen without asking.
     refusals: Vec<CompileRefusal>,
@@ -26,7 +30,7 @@ pub(crate) struct InvariantBackend {
     interpreted: Vec<usize>,
 }
 
-impl InvariantBackend {
+impl ExecutionPlan {
     fn interpreted_indices(runs: &[Run]) -> Vec<usize> {
         runs.iter()
             .filter_map(|run| match run {
@@ -63,7 +67,7 @@ pub(crate) enum Route<'a> {
     Interpreted,
     /// Both, in programme order, each run of like kind through its
     /// evaluator, over one effective delta the claims table reports.
-    Mixed(&'a InvariantBackend),
+    Mixed(&'a ExecutionPlan),
 }
 
 impl<'a> Route<'a> {
@@ -77,18 +81,18 @@ impl<'a> Route<'a> {
         match self {
             Route::Compiled(_) => Reads::Body,
             Route::Interpreted => Reads::BodyAndInvariants,
-            Route::Mixed(backend) => Reads::BodyAndSome(&backend.interpreted),
+            Route::Mixed(execution) => Reads::BodyAndSome(&execution.interpreted),
         }
     }
 }
 
 impl PgProgram {
-    pub fn new(core: CompiledProgram) -> Self {
-        let compilation = compile_each(core.validated());
-        let interpreted = InvariantBackend::interpreted_indices(&compilation.runs);
+    pub fn new(prepared: PreparedProgram) -> Self {
+        let compilation = compile_each(prepared.validated());
+        let interpreted = ExecutionPlan::interpreted_indices(&compilation.runs);
         Self {
-            core,
-            backend: InvariantBackend {
+            prepared,
+            execution: ExecutionPlan {
                 compiled: compilation.compiled,
                 refusals: compilation.refusals,
                 runs: compilation.runs,
@@ -101,41 +105,41 @@ impl PgProgram {
     /// eligible for. Lets the benchmark run one programme through both
     /// evaluators; not a knob for embedders, since both decide the same.
     #[doc(hidden)]
-    pub fn interpreted(core: CompiledProgram) -> Self {
-        let count = core.program().invariants.len();
+    pub fn interpreted(prepared: PreparedProgram) -> Self {
+        let count = prepared.program().invariants.len();
         let runs = if count == 0 {
             Vec::new()
         } else {
             vec![Run::Interpreted(0..count)]
         };
         Self {
-            core,
-            backend: InvariantBackend {
+            prepared,
+            execution: ExecutionPlan {
                 compiled: CompiledInvariantSet {
                     invariants: Vec::new(),
                 },
                 refusals: Vec::new(),
-                interpreted: InvariantBackend::interpreted_indices(&runs),
+                interpreted: ExecutionPlan::interpreted_indices(&runs),
                 runs,
             },
         }
     }
 
-    pub fn core(&self) -> &CompiledProgram {
-        &self.core
+    pub fn prepared(&self) -> &PreparedProgram {
+        &self.prepared
     }
 
     /// The route a production proposal takes. Diagnostics (trace,
     /// explain-on-reject) always take the interpreted route.
     pub(crate) fn route(&self) -> Route<'_> {
-        let backend = &self.backend;
-        let compiled = backend.compiled.invariants.len();
-        if backend.interpreted.is_empty() {
-            Route::Compiled(&backend.compiled)
+        let execution = &self.execution;
+        let compiled = execution.compiled.invariants.len();
+        if execution.interpreted.is_empty() {
+            Route::Compiled(&execution.compiled)
         } else if compiled == 0 {
             Route::Interpreted
         } else {
-            Route::Mixed(backend)
+            Route::Mixed(execution)
         }
     }
 
@@ -147,7 +151,7 @@ impl PgProgram {
         transition: &Transition,
         route: Route<'_>,
     ) -> LoadScope {
-        let program = self.core.program();
+        let program = self.prepared.program();
         compute_load_scope(
             transformation,
             Some(transition),
@@ -163,32 +167,32 @@ impl PgProgram {
     /// What `provision indexes` reconciles; an interpreted programme has
     /// the same physical contract as a compiled one for its loads.
     pub(crate) fn required_indexes(&self) -> Vec<IndexSpec> {
-        let program = self.core.program();
+        let program = self.prepared.program();
         let mut specs: Vec<IndexSpec> = program
             .transformations
             .iter()
             .flat_map(|t| ReadPlan::of(t, &program.definitions).seek_positions())
             .map(|(predicate, position)| IndexSpec::new(predicate, position))
             .collect();
-        specs.extend(self.backend.compiled.required_indexes());
+        specs.extend(self.execution.compiled.required_indexes());
         specs.sort();
         specs.dedup();
         specs
     }
 
     pub fn plan(&self) -> InvariantPlan<'_> {
-        let backend = &self.backend;
-        let compiled = backend.compiled.invariants.len();
-        if backend.interpreted.is_empty() {
+        let execution = &self.execution;
+        let compiled = execution.compiled.invariants.len();
+        if execution.interpreted.is_empty() {
             InvariantPlan::Compiled
         } else if compiled == 0 {
             InvariantPlan::Interpreted {
-                refusals: &backend.refusals,
+                refusals: &execution.refusals,
             }
         } else {
             InvariantPlan::Mixed {
                 compiled,
-                refusals: &backend.refusals,
+                refusals: &execution.refusals,
             }
         }
     }
@@ -203,14 +207,14 @@ mod tests {
     /// invariant reads lines a posting never consults.
     #[test]
     fn the_compiled_route_loads_less_than_the_interpreter() {
-        let core = CompiledProgram::new(morpholog_examples::double_entry_ledger::program())
-            .expect("ledger compiles");
-        let program = PgProgram::new(core);
+        let prepared = PreparedProgram::new(morpholog_examples::double_entry_ledger::program())
+            .expect("ledger is valid");
+        let program = PgProgram::new(prepared);
         let Route::Compiled(_) = program.route() else {
             panic!("the ledger is whole-in-fragment");
         };
         let post = program
-            .core()
+            .prepared()
             .transformation(&"post_simple_entry".into())
             .expect("declared")
             .clone();
@@ -239,7 +243,7 @@ mod tests {
             "compiled {compiled:?}, interpreted {interpreted:?}"
         );
         let pinned = PgProgram::interpreted(
-            CompiledProgram::new(morpholog_examples::double_entry_ledger::program()).unwrap(),
+            PreparedProgram::new(morpholog_examples::double_entry_ledger::program()).unwrap(),
         );
         assert!(matches!(pinned.route(), Route::Interpreted));
         assert!(

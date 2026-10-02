@@ -11,7 +11,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
-use common::{compiled, expect_committed, propose_pg_with_test_actor, reset_db, test_pool};
+use common::{expect_committed, pg_program, propose_pg_with_test_actor, reset_db, test_pool};
 
 use morpholog_core::EvalValue;
 use morpholog_examples::double_entry_ledger;
@@ -36,7 +36,7 @@ fn ledger_args(entry: &str) -> Vec<EvalValue> {
 async fn a_commit_records_the_sessions_authenticated_role() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let program = compiled(double_entry_ledger::program());
+    let program = pg_program(double_entry_ledger::program());
     propose_pg_with_test_actor(
         &pool,
         &program,
@@ -70,7 +70,7 @@ async fn a_commit_records_the_sessions_authenticated_role() {
 async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let program = compiled(double_entry_ledger::program());
+    let program = pg_program(double_entry_ledger::program());
 
     // The real order of an upgraded deployment: rows from before
     // attestation, then the migration's NOT VALID constraint, then
@@ -225,7 +225,7 @@ async fn attested_unstamped_insert(pool: &sqlx::PgPool) -> Result<(), sqlx::Erro
 async fn tampering_with_the_attestation_breaks_the_root() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let program = compiled(double_entry_ledger::program());
+    let program = pg_program(double_entry_ledger::program());
     propose_pg_with_test_actor(
         &pool,
         &program,

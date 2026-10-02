@@ -5,7 +5,7 @@
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{CompiledProgram, Subject, Transition};
+use morpholog_core::{PreparedProgram, Subject, Transition};
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{PgPool, PgProgram, PgProposalOutcome, Proposal, propose_against_pg};
 use morpholog_test_support::{dec, subj};
@@ -58,7 +58,7 @@ pub async fn commit_simple_entry(pool: &PgPool, entry_id: &str, period: &str) ->
         actor: Subject::from("outbox_test"),
     };
     let program = PgProgram::new(
-        CompiledProgram::new(double_entry_ledger::program()).expect("valid programme"),
+        PreparedProgram::new(double_entry_ledger::program()).expect("valid programme"),
     );
     let proposal = Proposal::gateway(&transition);
     let outcome = propose_against_pg(pool, &program, &proposal).await.unwrap();

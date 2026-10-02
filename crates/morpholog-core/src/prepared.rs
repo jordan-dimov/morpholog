@@ -1,12 +1,15 @@
-//! `CompiledProgram`: a validated programme with its by-name lookups
-//! indexed once.
+//! `PreparedProgram`: a validated programme with the preparation worth
+//! keeping across proposals - by-name lookups and each invariant's impact
+//! plan. Light borrowed views, such as the definition table, are built on
+//! demand. A cache, not an identity: the [`Program`] it owns is what the
+//! canonical hash covers, and everything here can be recomputed from it
+//! without changing any decision.
 //!
-//! [`Program`] lookups are linear scans. `CompiledProgram` owns a
-//! validated programme and indexes those lookups once.
+//! [`Program`] lookups are linear scans; these are indexed once.
 //!
 //! It does not replace [`ValidatedProgram`], the cheap borrowed
-//! proof-of-validity handle the analysis API takes. `CompiledProgram`
-//! owns the programme and hands one out via [`CompiledProgram::validated`].
+//! proof-of-validity handle the analysis API takes. `PreparedProgram`
+//! owns the programme and hands one out via [`PreparedProgram::validated`].
 //!
 //! The indices store positions, not references, because a struct holding
 //! references into its own fields would be self-referential.
@@ -34,10 +37,11 @@ fn position_index<T, K: Eq + Hash>(items: &[T], key: impl Fn(&T) -> K) -> HashMa
     map
 }
 
-/// A validated programme with its by-name lookups indexed once. See the
-/// module documentation for the relationship to [`ValidatedProgram`].
+/// A validated programme with its lookups and impact plans built once.
+/// See the module documentation for the relationship to
+/// [`ValidatedProgram`].
 #[derive(Debug, Clone)]
-pub struct CompiledProgram {
+pub struct PreparedProgram {
     program: Program,
     transformations: HashMap<TransformationName, usize>,
     invariants: HashMap<InvariantName, usize>,
@@ -51,7 +55,7 @@ pub struct CompiledProgram {
     impact: Vec<ImpactPlan>,
 }
 
-impl CompiledProgram {
+impl PreparedProgram {
     /// Validate the programme, then index it. The error is the same
     /// `Vec<ValidationError>` [`Program::validate`] returns.
     ///

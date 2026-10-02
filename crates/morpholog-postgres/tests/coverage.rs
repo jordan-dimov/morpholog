@@ -18,7 +18,7 @@ async fn post_entry(pool: &PgPool, entry: &str, amount: i64) -> Uuid {
     expect_committed(
         common::propose_pg_with_test_actor(
             pool,
-            &common::compiled(double_entry_ledger::program()),
+            &common::pg_program(double_entry_ledger::program()),
             &double_entry_ledger::post_simple_entry(),
             vec![
                 subj(entry),
@@ -125,7 +125,7 @@ async fn firing_is_counted_per_relevant_transition() {
     let close_tid = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
-            &common::compiled(double_entry_ledger::program()),
+            &common::pg_program(double_entry_ledger::program()),
             &double_entry_ledger::close_period(),
             vec![subj("p_coverage")],
         )
@@ -190,7 +190,7 @@ transformation retire(credit_id):
     expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
-            &common::compiled(program.clone()),
+            &common::pg_program(program.clone()),
             program.transformation("hold").unwrap(),
             vec![subj("c1"), subj("h1")],
         )
@@ -199,7 +199,7 @@ transformation retire(credit_id):
     );
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(program.clone()),
+        &common::pg_program(program.clone()),
         program.transformation("retire").unwrap(),
         vec![subj("c1")],
     )

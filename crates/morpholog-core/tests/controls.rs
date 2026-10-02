@@ -8,7 +8,7 @@ use morpholog_core::ir_builder::{
     and, assert_, bind_one, claim, for_, implies, invariant, neq, not, params, predicate, program,
     require, var,
 };
-use morpholog_core::{CompiledProgram, Program, controls, render_controls};
+use morpholog_core::{PreparedProgram, Program, controls, render_controls};
 
 /// A miniature of the two-person rule: a decision gated on two
 /// distinct verifications, with a bind, a require, and an invariant -
@@ -66,8 +66,8 @@ fn mini() -> morpholog_core::Program {
 }
 
 /// Compile the programme for the analysis entry points.
-fn cc(p: &Program) -> CompiledProgram {
-    CompiledProgram::new(p.clone()).expect("fixture is valid")
+fn cc(p: &Program) -> PreparedProgram {
+    PreparedProgram::new(p.clone()).expect("fixture is valid")
 }
 
 #[test]

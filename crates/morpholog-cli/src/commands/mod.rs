@@ -6,7 +6,7 @@
 
 use anyhow::{Context, anyhow};
 use morpholog_core::{
-    CompiledProgram, Program, Transformation, TransformationName, ValidatedProgram, ValidationError,
+    PreparedProgram, Program, Transformation, TransformationName, ValidatedProgram, ValidationError,
 };
 use morpholog_postgres::PgPool;
 use morpholog_surface::{Diagnostic, SourceMap, parse_program_with_sources};
@@ -144,12 +144,12 @@ pub(crate) fn validate_or_report(parsed: &ParsedSource) -> anyhow::Result<Valida
 }
 
 /// Like [`validate_or_report`], but returns the owned, indexed
-/// [`CompiledProgram`]: transformation lookup, the analysis handle
-/// ([`CompiledProgram::validated`]) and the rule slices in one object. For
+/// [`PreparedProgram`]: transformation lookup, the analysis handle
+/// ([`PreparedProgram::validated`]) and the rule slices in one object. For
 /// commands that look transformations up by name.
-pub(crate) fn compile_or_report(parsed: &ParsedSource) -> anyhow::Result<CompiledProgram> {
-    match CompiledProgram::new(parsed.program.clone()) {
-        Ok(compiled) => Ok(compiled),
+pub(crate) fn prepare_or_report(parsed: &ParsedSource) -> anyhow::Result<PreparedProgram> {
+    match PreparedProgram::new(parsed.program.clone()) {
+        Ok(prepared) => Ok(prepared),
         Err(errors) => {
             for err in &errors {
                 render_validation_error(err, parsed);
@@ -163,14 +163,14 @@ pub(crate) fn compile_or_report(parsed: &ParsedSource) -> anyhow::Result<Compile
 /// transformation the file declares. Shared so the error reads the same
 /// from every command.
 pub(crate) fn lookup_transformation<'a>(
-    compiled: &'a CompiledProgram,
+    prepared: &'a PreparedProgram,
     name: &str,
     file: &Path,
 ) -> anyhow::Result<&'a Transformation> {
-    compiled
+    prepared
         .transformation(&TransformationName::from(name))
         .ok_or_else(|| {
-            let available = compiled
+            let available = prepared
                 .program()
                 .transformations
                 .iter()

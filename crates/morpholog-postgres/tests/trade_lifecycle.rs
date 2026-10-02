@@ -53,7 +53,7 @@ async fn captured_then_amended(pool: &PgPool) -> (Uuid, Uuid) {
     let tid1 = expect_committed(
         common::propose_pg_with_test_actor(
             pool,
-            &common::compiled(trade_lifecycle::program()),
+            &common::pg_program(trade_lifecycle::program()),
             &trade_lifecycle::capture_trade(),
             vec![
                 subj("t1"),
@@ -73,7 +73,7 @@ async fn captured_then_amended(pool: &PgPool) -> (Uuid, Uuid) {
     let _ = expect_committed(
         common::propose_pg_with_test_actor(
             pool,
-            &common::compiled(trade_lifecycle::program()),
+            &common::pg_program(trade_lifecycle::program()),
             &trade_lifecycle::grant_confirm_authority(),
             vec![subj("mo"), subj("power")],
         )
@@ -84,7 +84,7 @@ async fn captured_then_amended(pool: &PgPool) -> (Uuid, Uuid) {
     let tid2 = expect_committed(
         common::propose_pg_as(
             pool,
-            &common::compiled(trade_lifecycle::program()),
+            &common::pg_program(trade_lifecycle::program()),
             &trade_lifecycle::amend_trade_terms(),
             vec![
                 subj("t1"),

@@ -4,7 +4,7 @@ use crate::CheckArgs;
 use crate::commands::{AlreadyReported, print_json};
 use anyhow::Context;
 use morpholog_cli::envelopes::{CheckDiagnostic, CheckReport};
-use morpholog_core::{CompiledProgram, Program};
+use morpholog_core::{PreparedProgram, Program};
 use morpholog_postgres::{InvariantPlan, PgProgram};
 use morpholog_surface::{Diagnostic, Span, parse_program_with_sources};
 use std::path::Path;
@@ -61,10 +61,10 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     }
     if let Some(program) = &collected.program {
         if args.verbose {
-            let compiled = CompiledProgram::new(program.clone()).map_err(|errors| {
+            let prepared = PreparedProgram::new(program.clone()).map_err(|errors| {
                 anyhow::anyhow!("a checked programme failed to compile: {errors:?}")
             })?;
-            print!("{}", summary(&PgProgram::new(compiled), &args.file));
+            print!("{}", summary(&PgProgram::new(prepared), &args.file));
         }
         if args.ir {
             return print_ir(program);
@@ -160,10 +160,10 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
             return Ok(out);
         }
     };
-    // Building the `CompiledProgram` validates: `Err` holds the same
+    // Building the `PreparedProgram` validates: `Err` holds the same
     // errors `program.validate()` would.
-    let compiled = match CompiledProgram::new(program) {
-        Ok(compiled) => compiled,
+    let prepared = match PreparedProgram::new(program) {
+        Ok(prepared) => prepared,
         Err(errors) => {
             out.failed = true;
             out.findings.extend(
@@ -174,11 +174,11 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
             return Ok(out);
         }
     };
-    for finding in &morpholog_postgres::validate_declarations(compiled.program()) {
+    for finding in &morpholog_postgres::validate_declarations(prepared.program()) {
         out.failed = true;
         out.findings.push(Finding::error(finding.to_string(), None));
     }
-    for lint in &morpholog_core::lints(&compiled) {
+    for lint in &morpholog_core::lints(&prepared) {
         out.failed |= args.strict;
         out.findings.push(Finding::lint(
             lint.to_string(),
@@ -198,7 +198,7 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
                 out.findings.extend(findings);
             }
             Ok(other) => {
-                for lint in &morpholog_core::shared_writer_lints(compiled.program(), &other) {
+                for lint in &morpholog_core::shared_writer_lints(prepared.program(), &other) {
                     out.failed |= args.strict;
                     out.findings.push(Finding::lint(
                         format!("against {}: {lint}", path.display()),
@@ -209,7 +209,7 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
             }
         }
     }
-    out.program = Some(compiled.program().clone());
+    out.program = Some(prepared.program().clone());
     Ok(out)
 }
 
@@ -253,7 +253,7 @@ fn load_against(path: &Path) -> Result<Program, Vec<Finding>> {
             })
             .collect::<Vec<_>>()
     })?;
-    let compiled = CompiledProgram::new(program).map_err(|errors| {
+    let prepared = PreparedProgram::new(program).map_err(|errors| {
         errors
             .iter()
             .map(|e| {
@@ -265,14 +265,14 @@ fn load_against(path: &Path) -> Result<Program, Vec<Finding>> {
             })
             .collect::<Vec<_>>()
     })?;
-    let policy = morpholog_postgres::validate_declarations(compiled.program());
+    let policy = morpholog_postgres::validate_declarations(prepared.program());
     if !policy.is_empty() {
         return Err(policy
             .iter()
             .map(|f| Finding::error(format!("against {against}: {f}"), None))
             .collect());
     }
-    Ok(compiled.program().clone())
+    Ok(prepared.program().clone())
 }
 
 /// `check --ir`: print the validated programme's internal representation
@@ -361,7 +361,7 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
 /// per declaration kind, and how invariants are checked (compiled to SQL,
 /// or interpreted with each reason named).
 fn summary(program: &PgProgram, file: &Path) -> String {
-    let p = program.core().program();
+    let p = program.prepared().program();
     let mut out = format!(
         "ok: {}\nprogram: {}\n  predicates: {}\n  definitions: {}\n  invariants: {}\n  transformations: {}\n  intents: {}\n  derived claims: {}\n",
         file.display(),
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn summary_names_the_program_and_counts_each_declaration_kind() {
-        let p = PgProgram::new(CompiledProgram::new(program("demo").build()).unwrap());
+        let p = PgProgram::new(PreparedProgram::new(program("demo").build()).unwrap());
         let s = summary(&p, Path::new("demo.morph"));
         assert_eq!(
             s,

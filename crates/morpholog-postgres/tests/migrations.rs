@@ -294,10 +294,10 @@ async fn drift_probe(
     let program = morpholog_surface::parse_program(DRIFT_FIXTURE).expect("fixture parses");
     program.validate().expect("fixture validates");
     let program = morpholog_postgres::PgProgram::new(
-        morpholog_core::CompiledProgram::new(program).expect("fixture compiles"),
+        morpholog_core::PreparedProgram::new(program).expect("fixture compiles"),
     );
     let post = program
-        .core()
+        .prepared()
         .program()
         .transformations
         .iter()

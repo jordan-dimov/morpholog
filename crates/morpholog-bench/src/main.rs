@@ -25,7 +25,7 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_core::{
-    ClaimInstance, CompiledProgram, EvalValue, Outcome, Program, State, Subject, Transformation,
+    ClaimInstance, EvalValue, Outcome, PreparedProgram, Program, State, Subject, Transformation,
     TransformationName, Transition, enumerate_derived, predicates_referenced_by_derived, propose,
 };
 use morpholog_examples::double_entry_ledger;
@@ -633,19 +633,19 @@ impl Implementation {
     /// configuration refuses a programme that would fall back to the
     /// interpreter, so a row labelled compiled really is.
     fn program(self, core: Program) -> Result<PgProgram> {
-        let compiled =
-            CompiledProgram::new(core).map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+        let prepared =
+            PreparedProgram::new(core).map_err(|e| anyhow!("invalid programme: {e:?}"))?;
         match self {
-            Implementation::Interpreted => Ok(PgProgram::interpreted(compiled)),
+            Implementation::Interpreted => Ok(PgProgram::interpreted(prepared)),
             Implementation::Compiled | Implementation::CompiledIndexed => {
-                let program = PgProgram::new(compiled);
+                let program = PgProgram::new(prepared);
                 match program.plan() {
                     InvariantPlan::Compiled => Ok(program),
                     InvariantPlan::Interpreted { refusals }
                     | InvariantPlan::Mixed { refusals, .. } => Err(anyhow!(
                         "`{}` requested but the programme `{}` would not run compiled whole: {}",
                         self.label(),
-                        program.core().program().name,
+                        program.prepared().program().name,
                         refusals
                             .iter()
                             .map(|r| format!("{}: {}", r.invariant, r.reason))
@@ -685,7 +685,7 @@ async fn establish(pool: &PgPool, implementation: Implementation, cores: &[Progr
     }
     for core in cores {
         let classified = PgProgram::new(
-            CompiledProgram::new(core.clone()).map_err(|e| anyhow!("invalid programme: {e:?}"))?,
+            PreparedProgram::new(core.clone()).map_err(|e| anyhow!("invalid programme: {e:?}"))?,
         );
         if implementation.indexed() {
             let report = morpholog_postgres::provision_indexes(pool, &[&classified], false)
@@ -873,7 +873,7 @@ async fn measure_write(
 ) -> Result<CaseResult> {
     // The programmes whose index condition this scenario establishes.
     let cores: Vec<Program> = vec![double_entry_ledger::program()];
-    let compiled = implementation.program(double_entry_ledger::program())?;
+    let pg = implementation.program(double_entry_ledger::program())?;
     let mut fixture = Vec::with_capacity(repeat);
     let mut propose = Vec::with_capacity(repeat);
     let mut begin = Vec::with_capacity(repeat);
@@ -894,7 +894,7 @@ async fn measure_write(
 
         let transition = ledger_posting(&format!("entry_bench_target_{r}"), "p_bench");
         let t = Instant::now();
-        let timed = propose_against_pg_timed(pool, &compiled, &Proposal::gateway(&transition))
+        let timed = propose_against_pg_timed(pool, &pg, &Proposal::gateway(&transition))
             .await
             .context("propose_against_pg_timed")?;
         propose.push(t.elapsed());
@@ -1925,7 +1925,7 @@ async fn contend_worker(
         // Here `--periods` splits workers by predicate, not by value.
         let predicate = format!("Bench_{}", worker_id % periods);
         let transformation = synthetic_bump(&predicate);
-        let compiled = implementation.program(synthetic_program(&predicate))?;
+        let pg = implementation.program(synthetic_program(&predicate))?;
         for op in 0..ops {
             let transition = Transition {
                 transformation_name: transformation.name.clone(),
@@ -1933,32 +1933,16 @@ async fn contend_worker(
                 actor: Subject::from("bench"),
             };
             let label = format!("disjoint worker {worker_id} op {op}");
-            one_op(
-                &pool,
-                &compiled,
-                &transition,
-                max_retries,
-                &label,
-                &mut tally,
-            )
-            .await?;
+            one_op(&pool, &pg, &transition, max_retries, &label, &mut tally).await?;
         }
     } else {
-        let compiled = implementation.program(double_entry_ledger::program())?;
+        let pg = implementation.program(double_entry_ledger::program())?;
         let period = format!("p_contend_{}", worker_id % periods);
         for op in 0..ops {
             let transition =
                 ledger_posting(&format!("entry_r{round}_w{worker_id}_op{op}"), &period);
             let label = format!("ledger worker {worker_id} op {op}");
-            one_op(
-                &pool,
-                &compiled,
-                &transition,
-                max_retries,
-                &label,
-                &mut tally,
-            )
-            .await?;
+            one_op(&pool, &pg, &transition, max_retries, &label, &mut tally).await?;
         }
     }
     Ok(tally)
@@ -1969,7 +1953,7 @@ async fn contend_worker(
 /// Any other error is a bug, not contention, so it propagates.
 async fn one_op(
     pool: &PgPool,
-    compiled: &PgProgram,
+    program: &PgProgram,
     transition: &Transition,
     max_retries: usize,
     label: &str,
@@ -1977,7 +1961,7 @@ async fn one_op(
 ) -> Result<()> {
     let mut attempt: u64 = 0;
     loop {
-        match propose_against_pg(pool, compiled, &Proposal::gateway(transition)).await {
+        match propose_against_pg(pool, program, &Proposal::gateway(transition)).await {
             Ok(PgProposalOutcome::Committed { .. }) => {
                 tally.committed += 1;
                 return Ok(());
@@ -2073,7 +2057,7 @@ async fn measure_import(
     if n == 0 {
         return Err(anyhow!("import requires n >= 1"));
     }
-    let compiled = implementation.program(double_entry_ledger::program())?;
+    let pg = implementation.program(double_entry_ledger::program())?;
     let mut total_s = Vec::with_capacity(repeat);
     let mut rows_per_s = Vec::with_capacity(repeat);
     let mut first_decile = Vec::with_capacity(repeat);
@@ -2090,7 +2074,7 @@ async fn measure_import(
         for i in 0..n {
             let transition = ledger_posting(&format!("entry_import_r{r}_{i}"), "p_import");
             let t = Instant::now();
-            let outcome = propose_against_pg(pool, &compiled, &Proposal::gateway(&transition))
+            let outcome = propose_against_pg(pool, &pg, &Proposal::gateway(&transition))
                 .await
                 .context("import propose")?;
             per_commit.push(t.elapsed());
@@ -2255,7 +2239,7 @@ async fn measure_wide(
         ));
     }
     let program = wide_program(arity);
-    let compiled = implementation.program(program.clone())?;
+    let pg = implementation.program(program.clone())?;
     // The programmes whose index condition this scenario establishes.
     let cores: Vec<Program> = vec![program];
     let footprint = vec!["WideLine".to_string()];
@@ -2298,7 +2282,7 @@ async fn measure_wide(
             actor: Subject::from("bench"),
         };
         let t = Instant::now();
-        let outcome = propose_against_pg(pool, &compiled, &Proposal::gateway(&transition))
+        let outcome = propose_against_pg(pool, &pg, &Proposal::gateway(&transition))
             .await
             .context("wide propose")?;
         propose.push(t.elapsed());
@@ -3114,14 +3098,14 @@ fn posting(i: usize, tag: &str) -> Transition {
 /// not an error: it is what a batch on a contended footprint does.
 async fn transact_once(
     pool: &PgPool,
-    compiled: &PgProgram,
+    program: &PgProgram,
     proposals: &[Proposal],
     max_retries: usize,
 ) -> Result<(Duration, u64, bool)> {
     let mut retries = 0u64;
     let t = Instant::now();
     loop {
-        match propose_all_against_pg(pool, compiled, proposals).await {
+        match propose_all_against_pg(pool, program, proposals).await {
             Ok(PgAtomicOutcome::Committed { acts }) => {
                 if acts.len() != proposals.len() {
                     return Err(anyhow!(
@@ -3160,7 +3144,7 @@ async fn measure_transact(
 ) -> Result<CaseResult> {
     // The programmes whose index condition this scenario establishes.
     let cores: Vec<Program> = vec![double_entry_ledger::program()];
-    let compiled = std::sync::Arc::new(implementation.program(double_entry_ledger::program())?);
+    let pg = std::sync::Arc::new(implementation.program(double_entry_ledger::program())?);
     let mut atomic = Vec::with_capacity(repeat);
     let mut sequential = Vec::with_capacity(repeat);
     let mut batch_retries = Vec::with_capacity(repeat);
@@ -3180,7 +3164,7 @@ async fn measure_transact(
         let mut handles = Vec::with_capacity(writers);
         for w in 0..writers {
             let pool = pool.clone();
-            let compiled = compiled.clone();
+            let pg = pg.clone();
             let stop = stop.clone();
             handles.push(tokio::spawn(async move {
                 let mut tally = Tally::default();
@@ -3189,7 +3173,7 @@ async fn measure_transact(
                     let transition = posting(op, &format!("writer_r{round}_w{w}"));
                     one_op(
                         &pool,
-                        &compiled,
+                        &pg,
                         &transition,
                         max_retries,
                         "transact writer",
@@ -3203,7 +3187,7 @@ async fn measure_transact(
             }));
         }
         let (elapsed, retries, committed) =
-            transact_once(pool, &compiled, &proposals, max_retries).await?;
+            transact_once(pool, &pg, &proposals, max_retries).await?;
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let mut commits = 0u64;
         let mut retried = 0u64;
@@ -3227,7 +3211,7 @@ async fn measure_transact(
         for i in 0..acts {
             let outcome = propose_against_pg(
                 pool,
-                &compiled,
+                &pg,
                 &Proposal::gateway(&posting(i, &format!("single_r{round}"))),
             )
             .await?;

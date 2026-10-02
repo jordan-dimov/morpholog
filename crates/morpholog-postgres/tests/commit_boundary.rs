@@ -12,11 +12,11 @@ mod common;
 use common::{reset_db, test_pool};
 
 async fn try_entry(pool: &PgPool, id: &str) -> Result<PgProposalOutcome, PgError> {
-    let compiled = common::compiled(morpholog_examples::double_entry_ledger::program());
+    let pg = common::pg_program(morpholog_examples::double_entry_ledger::program());
     let t = morpholog_examples::double_entry_ledger::post_simple_entry();
     common::propose_pg_with_test_actor(
         pool,
-        &compiled,
+        &pg,
         &t,
         vec![
             morpholog_test_support::subj(id),
@@ -48,7 +48,7 @@ async fn try_gated(pool: &PgPool, id: &str, amount: i64) -> Result<PgProposalOut
     let post = program.transformation("post").unwrap().clone();
     common::propose_pg_with_test_actor(
         pool,
-        &common::compiled(program),
+        &common::pg_program(program),
         &post,
         vec![
             morpholog_test_support::subj(id),

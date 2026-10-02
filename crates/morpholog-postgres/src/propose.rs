@@ -5,8 +5,8 @@ use crate::program::{PgProgram, Route};
 use crate::sql_quote::quote_literal;
 use crate::txn::{LoginRole, begin_authorised_proposal_tx};
 use morpholog_core::{
-    Admission, ClaimInstance, CompiledProgram, Definition, EffectiveDelta, EvalError, EvalValue,
-    IntentInstance, Invariant, InvariantName, Outcome, PredicateName, ReadFilter, ReadPlan,
+    Admission, ClaimInstance, Definition, EffectiveDelta, EvalError, EvalValue, IntentInstance,
+    Invariant, InvariantName, Outcome, PredicateName, PreparedProgram, ReadFilter, ReadPlan,
     RejectionReason, RuleName, StagedDelta, State, Subject, TraceEntry, TracedProposal,
     Transformation, TransformationName, Transition, WitnessBinding,
     finish_staged_delta_with_effective, propose_stage_delta, propose_with, propose_with_trace,
@@ -80,7 +80,7 @@ pub async fn propose_against_pg(
     proposal: &Proposal,
 ) -> Result<PgProposalOutcome, PgError> {
     let (transformation, admission) =
-        resolve_admission(program.core(), &proposal.transformation_name)?;
+        resolve_admission(program.prepared(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
@@ -98,33 +98,33 @@ pub async fn propose_against_pg(
 /// definitions. Refuses misshapen actor-policy declarations; an unknown
 /// name is [`PgError::UnknownTransformation`].
 pub(crate) fn resolve<'a>(
-    compiled: &'a CompiledProgram,
+    prepared: &'a PreparedProgram,
     name: &TransformationName,
 ) -> Result<(&'a Transformation, &'a [Invariant], &'a [Definition]), PgError> {
-    let findings = crate::actor_policy::validate_declarations(compiled.program());
+    let findings = crate::actor_policy::validate_declarations(prepared.program());
     if !findings.is_empty() {
         return Err(PgError::ActorPolicyDeclaration {
             findings: findings.iter().map(ToString::to_string).collect(),
         });
     }
-    let transformation = compiled
+    let transformation = prepared
         .transformation(name)
         .ok_or_else(|| PgError::UnknownTransformation { name: name.clone() })?;
     Ok((
         transformation,
-        &compiled.program().invariants,
-        &compiled.program().definitions,
+        &prepared.program().invariants,
+        &prepared.program().definitions,
     ))
 }
 
 /// [`resolve`] plus the programme's admission rules, with the impact
 /// plans it built at construction.
 pub(crate) fn resolve_admission<'a>(
-    compiled: &'a CompiledProgram,
+    prepared: &'a PreparedProgram,
     name: &TransformationName,
 ) -> Result<(&'a Transformation, Admission<'a>), PgError> {
-    let (transformation, _, _) = resolve(compiled, name)?;
-    Ok((transformation, compiled.admission()))
+    let (transformation, _, _) = resolve(prepared, name)?;
+    Ok((transformation, prepared.admission()))
 }
 
 /// The interpreted propose primitive for compensation, which carries its
@@ -156,7 +156,7 @@ pub async fn propose_against_pg_timed(
     proposal: &Proposal,
 ) -> Result<TimedProposalOutcome, PgError> {
     let (transformation, admission) =
-        resolve_admission(program.core(), &proposal.transformation_name)?;
+        resolve_admission(program.prepared(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
@@ -234,7 +234,7 @@ pub async fn propose_against_pg_with_rejection_state(
     proposal: &Proposal,
 ) -> Result<RejectionStateOutcome, PgError> {
     let (transformation, admission) =
-        resolve_admission(program.core(), &proposal.transformation_name)?;
+        resolve_admission(program.prepared(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
@@ -405,7 +405,7 @@ pub(crate) async fn check_in_order(
             whole = [Run::Compiled(0..set.invariants.len())];
             (set, &whole)
         }
-        Route::Mixed(backend) => (&backend.compiled, &backend.runs),
+        Route::Mixed(execution) => (&execution.compiled, &execution.runs),
         Route::Interpreted => unreachable!("the interpreted route checks before it writes"),
     };
     for run in runs {
@@ -493,7 +493,7 @@ pub async fn propose_against_pg_with_trace(
     proposal: &Proposal,
 ) -> Result<PgTracedOutcome, PgError> {
     let (transformation, invariants, definitions) =
-        resolve(program.core(), &proposal.transformation_name)?;
+        resolve(program.prepared(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     propose_against_pg_with_trace_inner(pool, transformation, &transition, invariants, definitions)
         .await

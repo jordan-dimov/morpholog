@@ -17,15 +17,15 @@ use morpholog_postgres::load_scoped_state;
 use crate::ExplainArgs;
 use crate::commands::args::{CliArgs, decode_args};
 use crate::commands::{
-    compile_or_report, connect, lookup_transformation, parse_or_report, print_json,
+    connect, lookup_transformation, parse_or_report, prepare_or_report, print_json,
 };
 
 pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     // Same front-end as `propose`: a malformed programme stops here.
     let parsed = parse_or_report(&args.file)?;
-    let compiled = compile_or_report(&parsed)?;
+    let prepared = prepare_or_report(&parsed)?;
 
-    let transformation = lookup_transformation(&compiled, &args.transformation, &args.file)?;
+    let transformation = lookup_transformation(&prepared, &args.transformation, &args.file)?;
 
     // The same codec as `propose`, so both accept the same input.
     let codec_input = match (&args.args, &args.args_named) {
@@ -34,14 +34,14 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
         _ => unreachable!("clap enforces exactly-one-of `--args` and `--args-named`"),
     };
     let eval_args = decode_args(
-        &compiled.validated(),
+        &prepared.validated(),
         transformation,
         &args.file,
         codec_input,
     )?;
 
     let pool = connect(&args.db.database_url).await?;
-    let state = load_scoped_state(&pool, &compiled, transformation)
+    let state = load_scoped_state(&pool, &prepared, transformation)
         .await
         .context("failed to load scoped pre-state")?;
 
@@ -51,7 +51,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
         actor: Subject::from(args.actor.clone()),
     };
 
-    let explanation = explain(compiled.program(), &transition, &state);
+    let explanation = explain(prepared.program(), &transition, &state);
     if args.json {
         print_json(&explanation)
     } else {

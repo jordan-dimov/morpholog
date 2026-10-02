@@ -33,7 +33,7 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     let tid1 = expect_committed(
         common::propose_pg_with_test_actor(
             pool,
-            &common::compiled(double_entry_ledger::program()),
+            &common::pg_program(double_entry_ledger::program()),
             &double_entry_ledger::post_simple_entry(),
             vec![
                 subj("entry_001"),
@@ -51,7 +51,7 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     let tid2 = expect_committed(
         common::propose_pg_with_test_actor(
             pool,
-            &common::compiled(double_entry_ledger::program()),
+            &common::pg_program(double_entry_ledger::program()),
             &double_entry_ledger::post_simple_entry(),
             vec![
                 subj("entry_002"),
@@ -69,7 +69,7 @@ async fn three_step_ledger(pool: &PgPool) -> (Uuid, Uuid, Uuid) {
     let tid3 = expect_committed(
         common::propose_pg_with_test_actor(
             pool,
-            &common::compiled(double_entry_ledger::program()),
+            &common::pg_program(double_entry_ledger::program()),
             &double_entry_ledger::restate_entry(),
             vec![
                 subj("entry_001_v2"),
@@ -290,7 +290,7 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
     let new_tid = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
-            &common::compiled(verified_revenue::program()),
+            &common::pg_program(verified_revenue::program()),
             &verified_revenue::admit_independent_verification(),
             vec![
                 subj("noise_asset"),
@@ -372,7 +372,7 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
     let tid1 = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
-            &common::compiled(verified_revenue::program()),
+            &common::pg_program(verified_revenue::program()),
             &verified_revenue::admit_independent_verification(),
             vec![asset.clone(), period.clone(), dec(92), subj("ver_001")],
         )
@@ -384,7 +384,7 @@ async fn reconstruct_state_at_applies_cross_transition_retractions() {
     let tid2 = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
-            &common::compiled(verified_revenue::program()),
+            &common::pg_program(verified_revenue::program()),
             &verified_revenue::correct_independent_verification(),
             vec![asset, period, dec(91), subj("ver_002"), subj("ver_001")],
         )
@@ -459,7 +459,7 @@ async fn reconstruct_state_at_on_empty_audit_log_is_transition_not_found() {
 async fn list_claims_at_moves_a_readmitted_claim_to_the_tail() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let compiled = common::compiled(approval_controls::program());
+    let pg = common::pg_program(approval_controls::program());
     let grant = approval_controls::grant_approval_authority();
     let revoke = approval_controls::revoke_approval_authority();
     let may_approve = |who: &str| ClaimInstance {
@@ -468,25 +468,15 @@ async fn list_claims_at_moves_a_readmitted_claim_to_the_tail() {
     };
     for (t, who) in [(&grant, "p1"), (&grant, "p2"), (&revoke, "p1")] {
         expect_committed(
-            common::propose_pg_with_test_actor(
-                &pool,
-                &compiled,
-                t,
-                vec![subj(who), subj("invoice")],
-            )
-            .await
-            .unwrap(),
+            common::propose_pg_with_test_actor(&pool, &pg, t, vec![subj(who), subj("invoice")])
+                .await
+                .unwrap(),
         );
     }
     let readmitted = expect_committed(
-        common::propose_pg_with_test_actor(
-            &pool,
-            &compiled,
-            &grant,
-            vec![subj("p1"), subj("invoice")],
-        )
-        .await
-        .unwrap(),
+        common::propose_pg_with_test_actor(&pool, &pg, &grant, vec![subj("p1"), subj("invoice")])
+            .await
+            .unwrap(),
     );
     let claims = list_claims_at(&pool, readmitted).await.unwrap();
     assert_eq!(
