@@ -23,7 +23,7 @@ use common::{reset_db, test_pool};
 /// rejection.
 async fn commit(pool: &PgPool, t: &morpholog_core::Transformation, args: Vec<EvalValue>) -> Uuid {
     let outcome =
-        common::propose_pg_with_test_actor(pool, &common::compiled(cte::program()), t, args)
+        common::propose_pg_with_test_actor(pool, &common::pg_program(cte::program()), t, args)
             .await
             .expect("propose_against_pg should not error");
     match outcome {
@@ -123,7 +123,7 @@ async fn randomise_participant_happy_path_through_pg() {
     // would reject anyone else.
     let outcome = common::propose_pg_as(
         &pool,
-        &common::compiled(cte::program()),
+        &common::pg_program(cte::program()),
         &randomise_participant(),
         vec![
             subj(participant),

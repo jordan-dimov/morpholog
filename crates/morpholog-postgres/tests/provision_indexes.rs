@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{compiled, reset_db, session_is_superuser, test_pool};
+use common::{pg_program, reset_db, session_is_superuser, test_pool};
 use morpholog_core::ir_builder::program;
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
@@ -21,7 +21,7 @@ use sqlx::Row as _;
 const LEDGER_INDEXES: usize = 6;
 
 fn ledger() -> PgProgram {
-    compiled(double_entry_ledger::program())
+    pg_program(double_entry_ledger::program())
 }
 
 async fn catalogue_names(pool: &PgPool) -> Vec<(String, bool)> {
@@ -274,14 +274,14 @@ async fn a_requirement_once_satisfied_externally_still_protects_the_index() {
     let another = |name: &str| {
         let mut p = double_entry_ledger::program();
         p.name = name.into();
-        compiled(p)
+        pg_program(p)
     };
     let built = provision_indexes(&pool, &[&another("another_book")], false)
         .await
         .unwrap();
     assert_eq!(built.entries[0].action, IndexAction::Create, "{built:?}");
     // B stops needing anything and prunes: A still requires all of them.
-    let nobody = compiled(program("another_book").build());
+    let nobody = pg_program(program("another_book").build());
     let pruned = provision_indexes(&pool, &[&nobody], true).await.unwrap();
     assert!(pruned.pruned.is_empty(), "{pruned:?}");
     assert_eq!(
@@ -300,7 +300,7 @@ async fn stale_indexes_are_reported_and_pruned_only_on_request() {
     drop_our_indexes(&pool).await;
     provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     // The same identity, now needing nothing.
-    let successor = compiled(program("double_entry_ledger").build());
+    let successor = pg_program(program("double_entry_ledger").build());
     let reported = provision_indexes(&pool, &[&successor], false)
         .await
         .unwrap();
@@ -317,7 +317,7 @@ async fn stale_indexes_are_reported_and_pruned_only_on_request() {
     assert_eq!(registry_counts(&pool).await, (LEDGER_INDEXES as i64, 0));
 
     // Another programme that still requires them protects them.
-    let other = compiled({
+    let other = pg_program({
         let mut p = double_entry_ledger::program();
         p.name = "another_book".into();
         p
@@ -328,7 +328,7 @@ async fn stale_indexes_are_reported_and_pruned_only_on_request() {
     assert_eq!(catalogue_names(&pool).await.len(), LEDGER_INDEXES);
 
     // Once nobody does, prune drops them.
-    let nobody = compiled(program("another_book").build());
+    let nobody = pg_program(program("another_book").build());
     provision_indexes(&pool, &[&nobody], false).await.unwrap();
     let pruned = provision_indexes(&pool, &[&successor], true).await.unwrap();
     assert_eq!(
@@ -477,7 +477,7 @@ transformation put(k, v):
 ",
     )
     .unwrap();
-    let pg = compiled(program);
+    let pg = pg_program(program);
     assert!(
         matches!(
             pg.plan(),
@@ -778,12 +778,12 @@ async fn statistics_with_an_extra_column_conflict_and_name_it() {
 fn named(identity: &str, source: morpholog_core::Program) -> PgProgram {
     let mut p = source;
     p.name = identity.into();
-    compiled(p)
+    pg_program(p)
 }
 
 /// A programme under `identity` that requires nothing.
 fn requiring_nothing(identity: &str) -> PgProgram {
-    compiled(program(identity).build())
+    pg_program(program(identity).build())
 }
 
 async fn catalogue_oids(pool: &PgPool) -> Vec<(String, u32)> {
@@ -1181,7 +1181,7 @@ async fn a_conflict_in_one_programme_applies_nothing_for_any() {
     .execute(&pool)
     .await
     .unwrap();
-    let approvals = compiled(morpholog_examples::approval_controls::program());
+    let approvals = pg_program(morpholog_examples::approval_controls::program());
     let alone = plan_indexes(&pool, &[&approvals], false).await.unwrap();
     assert!(
         !alone.entries.is_empty() && !alone.has_conflict(),
@@ -1289,7 +1289,7 @@ async fn a_dry_run_states_what_the_applying_run_does() {
     drop_our_indexes(&pool).await;
     // Three programmes on one database: the ledger, a second book sharing
     // its indexes, and the approvals with their own.
-    let approvals = || compiled(morpholog_examples::approval_controls::program());
+    let approvals = || pg_program(morpholog_examples::approval_controls::program());
     provision_indexes(
         &pool,
         &[

@@ -1587,8 +1587,8 @@ fn a_sum_reached_through_many_definitions_keeps_its_unit() {
     );
 
     let program = parse_program(&source).expect("the chain should parse");
-    let compiled = morpholog_core::PreparedProgram::new(program).expect("and validate");
-    let transformation = compiled
+    let prepared = morpholog_core::PreparedProgram::new(program).expect("and validate");
+    let transformation = prepared
         .transformation(&"check_total".into())
         .expect("the transformation is declared");
     let outcome = morpholog_core::propose(
@@ -1600,7 +1600,7 @@ fn a_sum_reached_through_many_definitions_keeps_its_unit() {
         },
         &morpholog_core::State::default(),
         &[],
-        compiled.program().definitions.as_slice(),
+        prepared.program().definitions.as_slice(),
     )
     .expect("an empty sum through the chain must evaluate, not raise on kinds");
     assert!(

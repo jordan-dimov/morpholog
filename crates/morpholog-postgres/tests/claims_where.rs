@@ -8,7 +8,7 @@
 
 mod common;
 use common::{
-    compiled, dec_str, expect_committed, propose_pg_with_test_actor, reset_db, subj, test_pool,
+    dec_str, expect_committed, pg_program, propose_pg_with_test_actor, reset_db, subj, test_pool,
 };
 
 use morpholog_postgres::{ClaimFilter, PgPool, list_claims_where};
@@ -40,7 +40,7 @@ async fn seed(pool: &PgPool) {
         ])
         .transformations(vec![t.clone()])
         .build();
-    let compiled = compiled(prog);
+    let pg = pg_program(prog);
     for (line, invoice, net) in [
         ("line_1", "inv_1", "11.50"),
         ("line_2", "inv_0", "12.50"),
@@ -48,7 +48,7 @@ async fn seed(pool: &PgPool) {
     ] {
         let outcome = propose_pg_with_test_actor(
             pool,
-            &compiled,
+            &pg,
             &t,
             vec![subj(line), subj(invoice), dec_str(net)],
         )

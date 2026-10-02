@@ -209,13 +209,13 @@ async fn a_session_whose_role_was_recreated_fails_closed() {
     commit_entry(&old_session, "live_1").await;
 
     create_gateway(&pool, ROLE).await;
-    let compiled = common::compiled(morpholog_examples::double_entry_ledger::program());
+    let pg = common::pg_program(morpholog_examples::double_entry_ledger::program());
     let proposal = common::attested(&morpholog_core::Transition {
         transformation_name: "post_simple_entry".into(),
         args: common::ledger_args("live_2"),
         actor: morpholog_core::Subject::from("alex"),
     });
-    let outcome = morpholog_postgres::propose_against_pg(&old_session, &compiled, &proposal).await;
+    let outcome = morpholog_postgres::propose_against_pg(&old_session, &pg, &proposal).await;
     assert!(
         outcome.is_err(),
         "the old session must fail closed: {outcome:?}"
@@ -233,7 +233,7 @@ async fn a_session_whose_role_was_recreated_fails_closed() {
 async fn every_act_of_a_transact_carries_the_same_role_oid() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let compiled = common::compiled(morpholog_examples::double_entry_ledger::program());
+    let pg = common::pg_program(morpholog_examples::double_entry_ledger::program());
     let acts: Vec<_> = [("t_1", "alex"), ("t_2", "blair")]
         .iter()
         .map(|(entry, actor)| {
@@ -244,7 +244,7 @@ async fn every_act_of_a_transact_carries_the_same_role_oid() {
             })
         })
         .collect();
-    let outcome = morpholog_postgres::propose_all_against_pg(&pool, &compiled, &acts)
+    let outcome = morpholog_postgres::propose_all_against_pg(&pool, &pg, &acts)
         .await
         .unwrap();
     assert!(

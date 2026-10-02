@@ -510,12 +510,12 @@ fn every_fragment_survives_every_walker_deterministically() {
         assert_eq!(program, reparsed, "`{name}`: format round-trip drifted");
 
         // The analysis-grade walkers run, and run the same way twice.
-        let compiled = PreparedProgram::new(program.clone())
+        let prepared = PreparedProgram::new(program.clone())
             .unwrap_or_else(|e| panic!("corpus `{name}` must compile: {e:?}"));
-        assert_eq!(lints(&compiled), lints(&compiled), "`{name}`: lints drift");
+        assert_eq!(lints(&prepared), lints(&prepared), "`{name}`: lints drift");
         assert_eq!(
-            controls(&compiled),
-            controls(&compiled),
+            controls(&prepared),
+            controls(&prepared),
             "`{name}`: controls drift"
         );
         // CoverageReport is a pinned envelope without PartialEq; its
@@ -748,8 +748,8 @@ fn the_unsupplied_antecedent_lint_descends_the_definition() {
     // here means the lint walker stopped at the call.
     use morpholog_core::Lint;
     let program = parsed("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED);
-    let compiled = PreparedProgram::new(program).unwrap();
-    let findings = lints(&compiled);
+    let prepared = PreparedProgram::new(program).unwrap();
+    let findings = lints(&prepared);
     assert!(
         findings.iter().any(|l| matches!(
             l,

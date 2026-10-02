@@ -10,14 +10,14 @@ use morpholog_postgres::{
 };
 
 use crate::ProvisionIndexesArgs;
-use crate::commands::{compile_or_report, connect, parse_or_report, print_json};
+use crate::commands::{connect, parse_or_report, prepare_or_report, print_json};
 use morpholog_cli::envelopes;
 
 pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
     let mut programs = Vec::with_capacity(args.files.len());
     for file in &args.files {
         let parsed = parse_or_report(file)?;
-        programs.push(PgProgram::new(compile_or_report(&parsed)?));
+        programs.push(PgProgram::new(prepare_or_report(&parsed)?));
     }
     let programs: Vec<&PgProgram> = programs.iter().collect();
     // A usage error should not need a database to be reported.

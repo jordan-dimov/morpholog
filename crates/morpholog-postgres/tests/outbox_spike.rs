@@ -125,7 +125,7 @@ async fn process_one_pending(
             if let Some(comp) = compensation {
                 let outcome = common::propose_pg_with_test_actor(
                     pool,
-                    &common::compiled(double_entry_ledger::program()),
+                    &common::pg_program(double_entry_ledger::program()),
                     &comp.transformation,
                     comp.args,
                 )
@@ -167,7 +167,7 @@ async fn outbox_spike_compensates_on_nonretryable_failure() {
     let tid_commit = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
-            &common::compiled(double_entry_ledger::program()),
+            &common::pg_program(double_entry_ledger::program()),
             &double_entry_ledger::post_simple_entry(),
             vec![
                 subj("entry_001"),
@@ -263,7 +263,7 @@ async fn outbox_spike_marks_delivered_on_success() {
     let _tid = expect_committed(
         common::propose_pg_with_test_actor(
             &pool,
-            &common::compiled(double_entry_ledger::program()),
+            &common::pg_program(double_entry_ledger::program()),
             &double_entry_ledger::post_simple_entry(),
             vec![
                 subj("entry_001"),

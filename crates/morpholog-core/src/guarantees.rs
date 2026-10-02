@@ -41,8 +41,8 @@ pub struct Guarantee {
 /// Derive the guarantees a programme makes from its declared invariants,
 /// in declaration order. Pure and mechanical: one [`Guarantee`] per
 /// invariant.
-pub fn guarantees(compiled: &PreparedProgram) -> Vec<Guarantee> {
-    let program = compiled.program();
+pub fn guarantees(prepared: &PreparedProgram) -> Vec<Guarantee> {
+    let program = prepared.program();
     let provenance = crate::disciplines::discipline_provenance(program);
     program
         .invariants

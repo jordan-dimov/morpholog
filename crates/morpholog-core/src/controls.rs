@@ -149,9 +149,9 @@ pub struct ControlMatrix {
 /// Derive the control matrix from a parsed programme: one entry per
 /// transformation in declaration order, gates in body order, plus the
 /// invariant guarantees.
-pub fn controls(compiled: &PreparedProgram) -> ControlMatrix {
-    let program = compiled.program();
-    let defs = compiled.definition_table();
+pub fn controls(prepared: &PreparedProgram) -> ControlMatrix {
+    let program = prepared.program();
+    let defs = prepared.definition_table();
     let implications = authored_implications(program, defs);
 
     let transformations: Vec<TransformationControls> = program
@@ -235,7 +235,7 @@ pub fn controls(compiled: &PreparedProgram) -> ControlMatrix {
     ControlMatrix {
         program: program.name.clone(),
         transformations,
-        guarantees: guarantees(compiled),
+        guarantees: guarantees(prepared),
         front_line_coverage,
     }
 }

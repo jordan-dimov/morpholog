@@ -147,7 +147,7 @@ pub(crate) fn validate_or_report(parsed: &ParsedSource) -> anyhow::Result<Valida
 /// [`PreparedProgram`]: transformation lookup, the analysis handle
 /// ([`PreparedProgram::validated`]) and the rule slices in one object. For
 /// commands that look transformations up by name.
-pub(crate) fn compile_or_report(parsed: &ParsedSource) -> anyhow::Result<PreparedProgram> {
+pub(crate) fn prepare_or_report(parsed: &ParsedSource) -> anyhow::Result<PreparedProgram> {
     match PreparedProgram::new(parsed.program.clone()) {
         Ok(compiled) => Ok(compiled),
         Err(errors) => {

@@ -20,7 +20,7 @@
 mod common;
 
 use common::{
-    compiled, drop_roles_if_present, expect_committed, propose_pg_as, recreate_roles, reset_db,
+    drop_roles_if_present, expect_committed, pg_program, propose_pg_as, recreate_roles, reset_db,
     session_is_superuser, test_pool,
 };
 use morpholog_core::{EvalValue, Subject, Transformation, Transition};
@@ -42,7 +42,7 @@ const CHEN: &str = "verifier_chen";
 const OKAFOR: &str = "verifier_okafor";
 
 fn program() -> PgProgram {
-    compiled(morpholog_examples::biometric_identification_oversight::program())
+    pg_program(morpholog_examples::biometric_identification_oversight::program())
 }
 
 fn subj(s: &str) -> EvalValue {

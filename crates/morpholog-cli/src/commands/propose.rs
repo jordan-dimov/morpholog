@@ -15,8 +15,8 @@ use std::io::Write as _;
 use crate::ProposeArgs;
 use crate::commands::args::{CliArgs, decode_args};
 use crate::commands::{
-    AlreadyReported, CommitOutcomeUnknown, ParsedSource, compile_or_report, connect,
-    lookup_transformation, parse_or_report, print_json,
+    AlreadyReported, CommitOutcomeUnknown, ParsedSource, connect, lookup_transformation,
+    parse_or_report, prepare_or_report, print_json,
 };
 use morpholog_cli::envelopes;
 
@@ -106,8 +106,8 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
 /// Shared by `transact`.
 pub(crate) fn load(file: &std::path::Path) -> Result<(ParsedSource, PgProgram), RowError> {
     let parsed = parse_or_report(file).map_err(|e| not_committed(file, e))?;
-    let compiled = compile_or_report(&parsed).map_err(|e| not_committed(file, e))?;
-    Ok((parsed, PgProgram::new(compiled)))
+    let prepared = prepare_or_report(&parsed).map_err(|e| not_committed(file, e))?;
+    Ok((parsed, PgProgram::new(prepared)))
 }
 
 /// Everything a one-shot proposal needs before the adapter call, each
@@ -117,14 +117,14 @@ async fn prepare(
     program: &PgProgram,
 ) -> Result<(Transition, morpholog_postgres::PgPool), RowError> {
     use envelopes::ProposeCode;
-    let compiled = program.prepared();
+    let prepared = program.prepared();
     let Some(transformation_name) = args.transformation.as_deref() else {
         return Err(RowError::coded(
             ProposeCode::InvalidRequest,
             anyhow::anyhow!("a transformation name is required outside --batch"),
         ));
     };
-    let transformation = lookup_transformation(compiled, transformation_name, &args.file)
+    let transformation = lookup_transformation(prepared, transformation_name, &args.file)
         .map_err(|e| RowError::coded(ProposeCode::UnknownTransformation, e))?;
     let codec_input = match (&args.args, &args.args_named) {
         (Some(tagged), None) => CliArgs::Tagged(tagged.as_str()),
@@ -132,7 +132,7 @@ async fn prepare(
         _ => unreachable!("clap enforces exactly-one-of `--args` and `--args-named`"),
     };
     let eval_args = decode_args(
-        &compiled.validated(),
+        &prepared.validated(),
         transformation,
         &args.file,
         codec_input,
@@ -447,10 +447,10 @@ async fn batch_row_outcome(
 /// refuse a malformed row with the same code.
 pub(crate) fn decode_row(
     file: &std::path::Path,
-    compiled: &morpholog_core::PreparedProgram,
+    prepared: &morpholog_core::PreparedProgram,
     row: BatchRow,
 ) -> Result<Transition, RowError> {
-    let transformation = lookup_transformation(compiled, &row.transformation, file)
+    let transformation = lookup_transformation(prepared, &row.transformation, file)
         .map_err(|e| RowError::coded(envelopes::ProposeCode::UnknownTransformation, e))?;
     let (tagged, named);
     let codec_input = match (&row.args, &row.args_named) {
@@ -469,7 +469,7 @@ pub(crate) fn decode_row(
             ));
         }
     };
-    let eval_args = decode_args(&compiled.validated(), transformation, file, codec_input)
+    let eval_args = decode_args(&prepared.validated(), transformation, file, codec_input)
         .map_err(|e| RowError::coded(envelopes::ProposeCode::InvalidArguments, e))?;
     Ok(Transition {
         transformation_name: transformation.name.clone(),
@@ -488,8 +488,8 @@ pub(crate) async fn propose_row_outcome(
     pool: &morpholog_postgres::PgPool,
     row: BatchRow,
 ) -> Result<serde_json::Value, RowError> {
-    let compiled = program.prepared();
-    let transition = decode_row(file, compiled, row)?;
+    let prepared = program.prepared();
+    let transition = decode_row(file, prepared, row)?;
     if explain_on_reject {
         let morpholog_postgres::RejectionStateOutcome {
             outcome,
@@ -506,7 +506,7 @@ pub(crate) async fn propose_row_outcome(
             Some(state),
         ) = (&outcome, rejection_state)
         {
-            let explanation = explain(compiled.program(), &transition, &state);
+            let explanation = explain(prepared.program(), &transition, &state);
             return serde_json::to_value(envelopes::RejectedWithExplanation::new(
                 reason,
                 rule.as_deref(),

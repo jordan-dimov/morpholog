@@ -28,7 +28,7 @@ async fn commit_as(
     args: Vec<morpholog_core::EvalValue>,
     actor: &str,
 ) -> Uuid {
-    let outcome = propose_pg_as(pool, &common::compiled(bio::program()), t, args, actor)
+    let outcome = propose_pg_as(pool, &common::pg_program(bio::program()), t, args, actor)
         .await
         .expect("propose_against_pg should not error");
     match outcome {

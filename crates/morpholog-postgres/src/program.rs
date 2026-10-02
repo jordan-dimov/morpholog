@@ -203,9 +203,9 @@ mod tests {
     /// invariant reads lines a posting never consults.
     #[test]
     fn the_compiled_route_loads_less_than_the_interpreter() {
-        let core = PreparedProgram::new(morpholog_examples::double_entry_ledger::program())
-            .expect("ledger compiles");
-        let program = PgProgram::new(core);
+        let prepared = PreparedProgram::new(morpholog_examples::double_entry_ledger::program())
+            .expect("ledger is valid");
+        let program = PgProgram::new(prepared);
         let Route::Compiled(_) = program.route() else {
             panic!("the ledger is whole-in-fragment");
         };

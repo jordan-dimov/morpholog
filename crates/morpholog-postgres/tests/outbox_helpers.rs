@@ -29,7 +29,7 @@ use common::{reset_db, test_pool};
 async fn enqueue_one_pending(pool: &PgPool) -> Uuid {
     let outcome = common::propose_pg_with_test_actor(
         pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001"),
@@ -227,7 +227,7 @@ async fn record_compensation_links_compensation_to_failed_row() {
     // swapped.
     let compensation_outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001_reversal"),
@@ -287,7 +287,7 @@ async fn record_compensation_errors_on_double_record() {
     // the FK.
     let compensation_outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001_reversal"),
@@ -316,7 +316,7 @@ async fn record_compensation_errors_on_double_record() {
     // must error rather than overwrite.
     let comp_outcome_b = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(double_entry_ledger::program()),
+        &common::pg_program(double_entry_ledger::program()),
         &double_entry_ledger::post_simple_entry(),
         vec![
             subj("entry_001_reversal_b"),

@@ -61,10 +61,10 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     }
     if let Some(program) = &collected.program {
         if args.verbose {
-            let compiled = PreparedProgram::new(program.clone()).map_err(|errors| {
+            let prepared = PreparedProgram::new(program.clone()).map_err(|errors| {
                 anyhow::anyhow!("a checked programme failed to compile: {errors:?}")
             })?;
-            print!("{}", summary(&PgProgram::new(compiled), &args.file));
+            print!("{}", summary(&PgProgram::new(prepared), &args.file));
         }
         if args.ir {
             return print_ir(program);
@@ -162,8 +162,8 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
     };
     // Building the `PreparedProgram` validates: `Err` holds the same
     // errors `program.validate()` would.
-    let compiled = match PreparedProgram::new(program) {
-        Ok(compiled) => compiled,
+    let prepared = match PreparedProgram::new(program) {
+        Ok(prepared) => prepared,
         Err(errors) => {
             out.failed = true;
             out.findings.extend(
@@ -174,11 +174,11 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
             return Ok(out);
         }
     };
-    for finding in &morpholog_postgres::validate_declarations(compiled.program()) {
+    for finding in &morpholog_postgres::validate_declarations(prepared.program()) {
         out.failed = true;
         out.findings.push(Finding::error(finding.to_string(), None));
     }
-    for lint in &morpholog_core::lints(&compiled) {
+    for lint in &morpholog_core::lints(&prepared) {
         out.failed |= args.strict;
         out.findings.push(Finding::lint(
             lint.to_string(),
@@ -198,7 +198,7 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
                 out.findings.extend(findings);
             }
             Ok(other) => {
-                for lint in &morpholog_core::shared_writer_lints(compiled.program(), &other) {
+                for lint in &morpholog_core::shared_writer_lints(prepared.program(), &other) {
                     out.failed |= args.strict;
                     out.findings.push(Finding::lint(
                         format!("against {}: {lint}", path.display()),
@@ -209,7 +209,7 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
             }
         }
     }
-    out.program = Some(compiled.program().clone());
+    out.program = Some(prepared.program().clone());
     Ok(out)
 }
 
@@ -253,7 +253,7 @@ fn load_against(path: &Path) -> Result<Program, Vec<Finding>> {
             })
             .collect::<Vec<_>>()
     })?;
-    let compiled = PreparedProgram::new(program).map_err(|errors| {
+    let prepared = PreparedProgram::new(program).map_err(|errors| {
         errors
             .iter()
             .map(|e| {
@@ -265,14 +265,14 @@ fn load_against(path: &Path) -> Result<Program, Vec<Finding>> {
             })
             .collect::<Vec<_>>()
     })?;
-    let policy = morpholog_postgres::validate_declarations(compiled.program());
+    let policy = morpholog_postgres::validate_declarations(prepared.program());
     if !policy.is_empty() {
         return Err(policy
             .iter()
             .map(|f| Finding::error(format!("against {against}: {f}"), None))
             .collect());
     }
-    Ok(compiled.program().clone())
+    Ok(prepared.program().clone())
 }
 
 /// `check --ir`: print the validated programme's internal representation

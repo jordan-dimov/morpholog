@@ -45,7 +45,7 @@ fn text_at(span: std::ops::Range<usize>) -> &'static str {
 }
 
 /// Build a PreparedProgram for the analysis entry points.
-fn compiled(p: &morpholog_core::Program) -> morpholog_core::PreparedProgram {
+fn prepared(p: &morpholog_core::Program) -> morpholog_core::PreparedProgram {
     morpholog_core::PreparedProgram::new(p.clone()).expect("fixture is valid")
 }
 
@@ -214,7 +214,7 @@ fn findings_against_generated_invariants_resolve_to_none() {
 #[test]
 fn a_lint_resolves_to_its_invariant() {
     let (program, map) = parsed();
-    let found = lints(&compiled(&program));
+    let found = lints(&prepared(&program));
     // Find the finding rather than pin a count, so a new lint on this fixture does not break it.
     let finding = found
         .iter()

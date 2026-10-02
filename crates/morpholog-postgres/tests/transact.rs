@@ -66,11 +66,11 @@ async fn count(pool: &PgPool, sql: &'static str) -> i64 {
 async fn a_refused_act_leaves_nothing_of_the_batch_written() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let compiled = common::compiled(fixture());
+    let pg = common::pg_program(fixture());
 
     let outcome = propose_all_against_pg(
         &pool,
-        &compiled,
+        &pg,
         &[
             act("open", "teller", vec![subj("a1")]),
             act("post", "teller", vec![subj("ghost"), dec(5)]),
@@ -108,11 +108,11 @@ async fn a_refused_act_leaves_nothing_of_the_batch_written() {
 async fn later_acts_see_earlier_acts_and_the_audit_keeps_act_order() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let compiled = common::compiled(fixture());
+    let pg = common::pg_program(fixture());
 
     let outcome = propose_all_against_pg(
         &pool,
-        &compiled,
+        &pg,
         &[
             act("open", "teller", vec![subj("a1")]),
             act("post", "teller", vec![subj("a1"), dec(100)]),
@@ -166,13 +166,13 @@ async fn later_acts_see_earlier_acts_and_the_audit_keeps_act_order() {
 async fn a_refusal_from_the_staged_prefix_names_the_act_and_carries_its_witness() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let compiled = common::compiled(fixture());
+    let pg = common::pg_program(fixture());
 
     // Act 3 collides with a balance only act 2 staged, and the witness
     // describes that staged state.
     let outcome = propose_all_against_pg(
         &pool,
-        &compiled,
+        &pg,
         &[
             act("open", "teller", vec![subj("a1")]),
             act("post", "teller", vec![subj("a1"), dec(1)]),
@@ -200,7 +200,7 @@ async fn a_refusal_from_the_staged_prefix_names_the_act_and_carries_its_witness(
 async fn later_authorisation_reads_the_policy_as_earlier_acts_left_it() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let compiled = common::compiled(fixture());
+    let pg = common::pg_program(fixture());
     let login_role: String = sqlx::query_scalar("SELECT session_user")
         .fetch_one(&pool)
         .await
@@ -209,14 +209,14 @@ async fn later_authorisation_reads_the_policy_as_earlier_acts_left_it() {
     // B is armed and authorised for this connection's role.
     let armed = propose_against_pg(
         &pool,
-        &compiled,
+        &pg,
         &act("arm", "bootstrap", vec![subj("b"), subj(&login_role)]),
     )
     .await
     .unwrap();
     assert!(matches!(armed, PgProposalOutcome::Committed { .. }));
     assert!(matches!(
-        propose_against_pg(&pool, &compiled, &act("open", "b", vec![subj("x0")]))
+        propose_against_pg(&pool, &pg, &act("open", "b", vec![subj("x0")]))
             .await
             .unwrap(),
         PgProposalOutcome::Committed { .. }
@@ -225,7 +225,7 @@ async fn later_authorisation_reads_the_policy_as_earlier_acts_left_it() {
     // Act 1 revokes B; act 2 acts as B against that staged revocation.
     let err = propose_all_against_pg(
         &pool,
-        &compiled,
+        &pg,
         &[
             act("revoke", "bootstrap", vec![subj("b"), subj(&login_role)]),
             act("open", "b", vec![subj("x1")]),
@@ -261,14 +261,12 @@ async fn later_authorisation_reads_the_policy_as_earlier_acts_left_it() {
 async fn an_empty_or_unknown_batch_is_refused_before_a_transaction_opens() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let compiled = common::compiled(fixture());
-    let err = propose_all_against_pg(&pool, &compiled, &[])
-        .await
-        .unwrap_err();
+    let pg = common::pg_program(fixture());
+    let err = propose_all_against_pg(&pool, &pg, &[]).await.unwrap_err();
     assert!(matches!(err, PgError::InvalidState(_)), "{err}");
     let err = propose_all_against_pg(
         &pool,
-        &compiled,
+        &pg,
         &[
             act("open", "teller", vec![subj("a1")]),
             act("no_such_act", "teller", vec![]),

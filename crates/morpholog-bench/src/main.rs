@@ -1969,7 +1969,7 @@ async fn contend_worker(
 /// Any other error is a bug, not contention, so it propagates.
 async fn one_op(
     pool: &PgPool,
-    compiled: &PgProgram,
+    program: &PgProgram,
     transition: &Transition,
     max_retries: usize,
     label: &str,
@@ -1977,7 +1977,7 @@ async fn one_op(
 ) -> Result<()> {
     let mut attempt: u64 = 0;
     loop {
-        match propose_against_pg(pool, compiled, &Proposal::gateway(transition)).await {
+        match propose_against_pg(pool, program, &Proposal::gateway(transition)).await {
             Ok(PgProposalOutcome::Committed { .. }) => {
                 tally.committed += 1;
                 return Ok(());
@@ -3114,14 +3114,14 @@ fn posting(i: usize, tag: &str) -> Transition {
 /// not an error: it is what a batch on a contended footprint does.
 async fn transact_once(
     pool: &PgPool,
-    compiled: &PgProgram,
+    program: &PgProgram,
     proposals: &[Proposal],
     max_retries: usize,
 ) -> Result<(Duration, u64, bool)> {
     let mut retries = 0u64;
     let t = Instant::now();
     loop {
-        match propose_all_against_pg(pool, compiled, proposals).await {
+        match propose_all_against_pg(pool, program, proposals).await {
             Ok(PgAtomicOutcome::Committed { acts }) => {
                 if acts.len() != proposals.len() {
                     return Err(anyhow!(

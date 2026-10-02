@@ -75,7 +75,7 @@ async fn an_invariant_rejection_writes_one_structured_row() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         post,
         vec![subj("e1"), dec(100)],
     )
@@ -85,7 +85,7 @@ async fn an_invariant_rejection_writes_one_structured_row() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         post,
         vec![subj("e1"), dec(999)],
     )
@@ -129,7 +129,7 @@ async fn a_require_rejection_records_the_gate_kind_and_rendered_rule() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         post_approved,
         vec![subj("e1"), dec(100)],
     )
@@ -154,7 +154,7 @@ async fn a_bind_rejection_records_the_bind_kind() {
 
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         repost,
         vec![subj("missing"), dec(5)],
     )
@@ -180,7 +180,7 @@ async fn commits_and_kernel_errors_write_no_rejection_row() {
     // A commit records nothing here - it records in audit.
     let _ = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         post,
         vec![subj("e1"), dec(1)],
     )
@@ -188,7 +188,7 @@ async fn commits_and_kernel_errors_write_no_rejection_row() {
     .expect("commits");
     let _ = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         post,
         vec![subj("e2"), dec(2)],
     )
@@ -207,7 +207,7 @@ async fn commits_and_kernel_errors_write_no_rejection_row() {
     // before evaluation.
     let mut with_sweep = fixture();
     with_sweep.transformations.push(sweep.clone());
-    common::propose_pg_with_test_actor(&pool, &common::compiled(with_sweep), &sweep, vec![])
+    common::propose_pg_with_test_actor(&pool, &common::pg_program(with_sweep), &sweep, vec![])
         .await
         .expect_err("two candidates must surface a kernel error");
 
@@ -249,7 +249,7 @@ async fn a_pg_layer_error_writes_no_rejection_row() {
             .transformations(vec![double_emit.clone()])
             .build()
     };
-    common::propose_pg_with_test_actor(&pool, &common::compiled(prog), &double_emit, vec![])
+    common::propose_pg_with_test_actor(&pool, &common::pg_program(prog), &double_emit, vec![])
         .await
         .expect_err("duplicate intents must error");
 
@@ -265,7 +265,7 @@ async fn the_trace_and_rejection_state_paths_each_record_exactly_once() {
 
     let traced = common::propose_pg_with_trace_using_test_actor(
         &pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         post_approved,
         vec![subj("t1"), dec(1)],
     )
@@ -284,7 +284,7 @@ async fn the_trace_and_rejection_state_paths_each_record_exactly_once() {
     let transition = test_transition(post_approved, vec![subj("t2"), dec(2)]);
     let result = propose_against_pg_with_rejection_state(
         &pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         &common::attested(&transition),
     )
     .await
@@ -308,7 +308,7 @@ async fn sequential_rejections_each_record_in_replay_order() {
     for (t, eid) in [(post_approved, "a"), (repost, "b"), (post_approved, "c")] {
         let outcome = common::propose_pg_with_test_actor(
             &pool,
-            &common::compiled(p.clone()),
+            &common::pg_program(p.clone()),
             t,
             vec![subj(eid), dec(1)],
         )
@@ -367,7 +367,7 @@ async fn an_invariant_rejection_persists_the_values_the_rule_was_reading() {
 
     let first = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         post,
         vec![subj("e1"), dec(100)],
     )
@@ -379,7 +379,7 @@ async fn an_invariant_rejection_persists_the_values_the_rule_was_reading() {
     );
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         post,
         vec![subj("e1"), dec(999)],
     )
@@ -416,7 +416,7 @@ async fn a_gate_rejection_persists_no_witness() {
     // Nothing approved, so the gate refuses before anything is staged.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
-        &common::compiled(p.clone()),
+        &common::pg_program(p.clone()),
         gated,
         vec![subj("e9"), dec(10)],
     )

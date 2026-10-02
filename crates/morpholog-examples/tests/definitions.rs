@@ -92,7 +92,7 @@ fn club_with_sponsor() -> (Program, State) {
 // never the body's internals.
 
 /// Build a PreparedProgram for the analysis entry points.
-fn compiled(p: &morpholog_core::Program) -> morpholog_core::PreparedProgram {
+fn prepared(p: &morpholog_core::Program) -> morpholog_core::PreparedProgram {
     morpholog_core::PreparedProgram::new(p.clone()).expect("fixture is valid")
 }
 
@@ -546,7 +546,7 @@ invariant flagged_items_recorded:
 
 #[test]
 fn inspect_controls_lists_predicates_consulted_through_definitions() {
-    let matrix = morpholog_core::controls(&compiled(&clinical_trial_enrolment::program()));
+    let matrix = morpholog_core::controls(&prepared(&clinical_trial_enrolment::program()));
     let randomise = matrix
         .transformations
         .iter()

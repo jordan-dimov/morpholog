@@ -13,7 +13,7 @@ use morpholog_surface::parse_program;
 fn lints_of(source: &str) -> Vec<Lint> {
     let program = parse_program(source).expect("programme should parse");
     program.validate().expect("programme should validate");
-    lints(&compiled(&program))
+    lints(&prepared(&program))
 }
 
 /// The predicate list of the single unsupplied-antecedent finding, or
@@ -67,7 +67,7 @@ invariant decisions_need_live_mandate:
 "#;
 
 /// Build the `PreparedProgram` the analysis entry points take.
-fn compiled(p: &morpholog_core::Program) -> morpholog_core::PreparedProgram {
+fn prepared(p: &morpholog_core::Program) -> morpholog_core::PreparedProgram {
     morpholog_core::PreparedProgram::new(p.clone()).expect("fixture is valid")
 }
 
@@ -165,7 +165,7 @@ invariant decisions_need_live_mandate:
 #[test]
 fn every_worked_example_is_lint_clean() {
     for program in morpholog_examples::all_programs() {
-        let found = lints(&compiled(&program));
+        let found = lints(&prepared(&program));
         assert!(
             found.is_empty(),
             "{} should be lint-clean: {found:?}",

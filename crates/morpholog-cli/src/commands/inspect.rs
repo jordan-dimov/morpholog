@@ -17,7 +17,7 @@ use crate::commands::filter::FieldFilter;
 use morpholog_postgres::ClaimFilter;
 
 use crate::commands::{
-    compile_or_report, connect, emit, parse_or_report, print_json, validate_or_report,
+    connect, emit, parse_or_report, prepare_or_report, print_json, validate_or_report,
 };
 use crate::{AsOf, Inspect};
 
@@ -371,8 +371,8 @@ fn inspect_predicates(args: crate::InspectPredicatesArgs) -> anyhow::Result<()> 
 /// invariant guarantees. No database. Prose, or JSON with `--json`.
 fn inspect_controls(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
-    let compiled = compile_or_report(&parsed)?;
-    let matrix = morpholog_core::controls(&compiled);
+    let prepared = prepare_or_report(&parsed)?;
+    let matrix = morpholog_core::controls(&prepared);
     emit(args.json, &matrix, || {
         morpholog_core::render_controls(&matrix)
     })
@@ -382,10 +382,10 @@ fn inspect_controls(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
 /// No database. Prose, or JSON with `--json`.
 fn inspect_guarantees(args: crate::InspectGuaranteesArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
-    let compiled = compile_or_report(&parsed)?;
-    let guarantees = morpholog_core::guarantees(&compiled);
+    let prepared = prepare_or_report(&parsed)?;
+    let guarantees = morpholog_core::guarantees(&prepared);
     emit(args.json, &guarantees, || {
-        morpholog_core::render_guarantees(&compiled.program().name, &guarantees)
+        morpholog_core::render_guarantees(&prepared.program().name, &guarantees)
     })
 }
 

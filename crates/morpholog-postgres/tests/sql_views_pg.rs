@@ -76,7 +76,7 @@ async fn seed_fixture(
         note,
     ];
     let outcome =
-        common::propose_pg_with_test_actor(pool, &common::compiled(p.clone()), open, args)
+        common::propose_pg_with_test_actor(pool, &common::pg_program(p.clone()), open, args)
             .await
             .expect("seed proposes");
     assert!(
@@ -412,7 +412,7 @@ async fn seed_entry(pool: &PgPool, p: &Program, account: &str, amount: i64) {
         EvalValue::Decimal(Decimal::from(amount)),
     ];
     let outcome =
-        common::propose_pg_with_test_actor(pool, &common::compiled(p.clone()), post, args)
+        common::propose_pg_with_test_actor(pool, &common::pg_program(p.clone()), post, args)
             .await
             .expect("post proposes");
     assert!(

@@ -151,15 +151,15 @@ pub async fn list_claims_where(
 /// what would happen and commits nothing, so a point-in-time snapshot is
 /// enough.
 ///
-/// `transformation` must belong to `compiled`: the scope comes from its
-/// body plus `compiled`'s invariants and definitions, so a foreign
+/// `transformation` must belong to `prepared`: the scope comes from its
+/// body plus `prepared`'s invariants and definitions, so a foreign
 /// transformation would load the wrong predicates.
 pub async fn load_scoped_state(
     pool: &PgPool,
-    compiled: &PreparedProgram,
+    prepared: &PreparedProgram,
     transformation: &Transformation,
 ) -> Result<State, PgError> {
-    let program = compiled.program();
+    let program = prepared.program();
     // A diagnostic read: the explanation runs the interpreter, so the
     // invariants' predicates are loaded whatever the programme's plan.
     let scope: Vec<String> = compute_load_scope(

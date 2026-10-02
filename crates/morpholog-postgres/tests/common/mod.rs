@@ -95,9 +95,9 @@ pub use morpholog_test_support::{
     test_actor, test_transition,
 };
 
-/// Compile a test programme into the adapter's programme object, on
+/// Prepare a test programme and bind it to PostgreSQL, on
 /// whatever route it is eligible for.
-pub fn compiled(program: Program) -> PgProgram {
+pub fn pg_program(program: Program) -> PgProgram {
     PgProgram::new(PreparedProgram::new(program).expect("test programme is valid"))
 }
 
@@ -110,12 +110,12 @@ pub fn attested(transition: &Transition) -> Proposal {
 /// Propose `transformation` with `args` as `test_actor()`.
 pub async fn propose_pg_with_test_actor(
     pool: &PgPool,
-    compiled: &PgProgram,
+    pg: &PgProgram,
     transformation: &Transformation,
     args: Vec<EvalValue>,
 ) -> Result<PgProposalOutcome, PgError> {
     let transition = test_transition(transformation, args);
-    propose_against_pg(pool, compiled, &attested(&transition)).await
+    propose_against_pg(pool, pg, &attested(&transition)).await
 }
 
 /// Admit an `AuditSigningKey(key_id, purpose, public_key)` claim, so a
@@ -142,7 +142,7 @@ pub async fn authorize_signing_key(pool: &PgPool, key_id: &str, purpose: &str, p
         .build();
     let outcome = propose_pg_with_test_actor(
         pool,
-        &compiled(prog),
+        &pg_program(prog),
         &t,
         vec![subj(key_id), subj(purpose), subj(public_key)],
     )
@@ -174,7 +174,7 @@ pub async fn retract_signing_key(pool: &PgPool, key_id: &str, purpose: &str, pub
         .build();
     let outcome = propose_pg_with_test_actor(
         pool,
-        &compiled(prog),
+        &pg_program(prog),
         &t,
         vec![subj(key_id), subj(purpose), subj(public_key)],
     )
@@ -186,18 +186,18 @@ pub async fn retract_signing_key(pool: &PgPool, key_id: &str, purpose: &str, pub
 /// `propose_pg_with_test_actor` plus structured trace.
 pub async fn propose_pg_with_trace_using_test_actor(
     pool: &PgPool,
-    compiled: &PgProgram,
+    pg: &PgProgram,
     transformation: &Transformation,
     args: Vec<EvalValue>,
 ) -> Result<PgTracedOutcome, PgError> {
     let transition = test_transition(transformation, args);
-    propose_against_pg_with_trace(pool, compiled, &attested(&transition)).await
+    propose_against_pg_with_trace(pool, pg, &attested(&transition)).await
 }
 
 /// Propose as an explicit actor.
 pub async fn propose_pg_as(
     pool: &PgPool,
-    compiled: &PgProgram,
+    pg: &PgProgram,
     transformation: &Transformation,
     args: Vec<EvalValue>,
     actor: impl Into<Subject>,
@@ -207,15 +207,15 @@ pub async fn propose_pg_as(
         args,
         actor: actor.into(),
     };
-    propose_against_pg(pool, compiled, &attested(&transition)).await
+    propose_against_pg(pool, pg, &attested(&transition)).await
 }
 
 /// Commit one balanced double-entry-ledger posting and return its
 /// transition id.
 pub async fn commit_entry(pool: &PgPool, id: &str) -> Uuid {
-    let compiled = compiled(morpholog_examples::double_entry_ledger::program());
+    let pg = pg_program(morpholog_examples::double_entry_ledger::program());
     let t = morpholog_examples::double_entry_ledger::post_simple_entry();
-    let outcome = propose_pg_with_test_actor(pool, &compiled, &t, ledger_args(id))
+    let outcome = propose_pg_with_test_actor(pool, &pg, &t, ledger_args(id))
         .await
         .unwrap();
     expect_committed(outcome)

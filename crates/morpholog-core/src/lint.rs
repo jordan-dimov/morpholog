@@ -234,9 +234,9 @@ impl std::fmt::Display for Lint {
 /// `effective by` findings first, then each invariant's findings in
 /// declaration order (gate-vs-invariant, unsupplied antecedent, then
 /// governing selection).
-pub fn lints(compiled: &PreparedProgram) -> Vec<Lint> {
-    let program = compiled.program();
-    let definitions = compiled.definition_table();
+pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
+    let program = prepared.program();
+    let definitions = prepared.definition_table();
     let append_only = append_only_predicates(program);
     let pointers: BTreeSet<PredicateName> = program
         .predicates
