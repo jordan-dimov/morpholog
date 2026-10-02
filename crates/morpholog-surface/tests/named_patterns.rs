@@ -393,6 +393,26 @@ fn the_gallery_hashes_did_not_move_when_named_patterns_arrived() {
             "rules identity moved for {rel} - the hash must render positionally"
         );
     }
+    // The metered-billing rules before two of them named their key: the
+    // hash pinned when named patterns arrived must still come out.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/15_metered_billing/metered_billing.morph");
+    let mut before = fs::read_to_string(&path).unwrap();
+    for (now, then) in [
+        ("VatRate(rate_id, rate) implies", "VatRate(_, rate) implies"),
+        (
+            "ChargeLine(line: line, rate_p_per_kwh: rate_p_per_kwh, volume_kwh: volume_kwh, ..)",
+            "ChargeLine(rate_p_per_kwh: rate_p_per_kwh, volume_kwh: volume_kwh, ..)",
+        ),
+    ] {
+        assert!(before.contains(now), "the file no longer spells `{now}`");
+        before = before.replace(now, then);
+    }
+    assert_eq!(
+        canonical_hash(&parse_program(&before).unwrap()),
+        "sha256:5777060fd9d8f488c726c55c4fe1678a63bdecaaced234361bb834c1aee96ef3",
+        "the pre-respelling metered billing no longer hashes as it did"
+    );
 }
 
 /// The named spelling of metered billing hashes exactly as its positional

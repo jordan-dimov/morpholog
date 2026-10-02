@@ -74,9 +74,11 @@ pub enum Lint {
     /// disciplines enforce on that predicate. Its case is then every
     /// claim sharing the constrained fields, not the one claim a
     /// proposal identifies, so a touching proposal reads them all.
-    /// `case` names the constrained fields; `key` the unconstrained
-    /// fields of the declared key closest to constrained, empty when the
-    /// predicate declares none; `unnamed` every unconstrained field.
+    /// `case` names the constrained fields; `key` the fields still
+    /// missing from the enforced key closest to constrained (not the
+    /// whole key), empty when the predicate declares none; `unnamed`
+    /// every unconstrained field. A literal counts as constraining only
+    /// where admission's impact plan compares it.
     ///
     /// A hint, because the rule means the same thing either way; the
     /// cost shows only when many claims share those values. Silent when
@@ -168,16 +170,14 @@ impl std::fmt::Display for Lint {
                         backticked(unnamed)
                     )
                 } else {
-                    let key = match key.as_slice() {
-                        [one] => format!("`{one}`"),
-                        many => format!("({})", many.join(", ")),
-                    };
+                    let fields = if key.len() == 1 { "field" } else { "fields" };
+                    let key = backticked(key);
                     write!(
                         f,
                         "invariant `{invariant}` checks every `{predicate}` sharing {sharing}, \
-                         because its pattern does not constrain the declared key {key}; \
-                         constraining {key} narrows the case to the one `{predicate}` a \
-                         proposal identifies"
+                         because its pattern leaves declared-key {fields} {key} unconstrained; \
+                         constraining {key} completes a uniqueness key and narrows the case \
+                         to the one `{predicate}` a proposal identifies"
                     )
                 }
             }

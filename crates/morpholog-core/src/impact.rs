@@ -49,7 +49,8 @@ struct Occurrence {
 }
 
 /// The one claim pattern an invariant's case is bounded to, and the
-/// positions a case variable or a literal fixes in it.
+/// positions a case variable or a literal the bounding proof compares
+/// fixes in it.
 pub(crate) struct BoundedOccurrence<'a> {
     pub(crate) predicate: &'a PredicateName,
     pub(crate) constrained: BTreeSet<usize>,
@@ -145,6 +146,7 @@ impl ImpactPlan {
             constrained: occ
                 .guards
                 .iter()
+                .filter(|(_, lit)| literal_narrows(lit))
                 .map(|(pos, _)| *pos)
                 .chain(occ.var_map.iter().map(|(pos, _)| *pos))
                 .collect(),
@@ -353,10 +355,20 @@ fn candidate_case_variables(body: &Prop) -> BTreeSet<Var> {
     vars
 }
 
+/// Whether the bounding proof compares a literal of this kind against a
+/// delta value. A literal of any other kind matches every value, so it
+/// narrows nothing.
+fn literal_narrows(lit: &Value) -> bool {
+    matches!(lit, Value::Subject(_) | Value::Decimal(_))
+}
+
 /// A literal guard against a delta value. Kinds the bounding proof does
 /// not compare are treated as matching, which only widens the touched
 /// set.
 fn literal_matches(lit: &Value, ev: &EvalValue) -> bool {
+    if !literal_narrows(lit) {
+        return true;
+    }
     match (lit, ev) {
         (Value::Subject(a), EvalValue::Subject(b)) => a == b,
         (Value::Decimal(a), EvalValue::Decimal(b)) => a.parse::<Decimal>().is_ok_and(|a| a == *b),

@@ -1062,8 +1062,8 @@ fn a_pattern_that_leaves_the_declared_key_unconstrained_fires_and_names_it() {
     assert_eq!(
         lint.to_string(),
         "invariant `runs_run_forwards` checks every `Run` sharing `starts_on` and `ends_on`, \
-         because its pattern does not constrain the declared key `run`; constraining `run` \
-         narrows the case to the one `Run` a proposal identifies"
+         because its pattern leaves declared-key field `run` unconstrained; constraining `run` \
+         completes a uniqueness key and narrows the case to the one `Run` a proposal identifies"
     );
 }
 
@@ -1194,4 +1194,48 @@ invariant sizes_are_positive:
     let found = case_width(source);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].1, vec!["code".to_string()]);
+}
+
+/// A literal constrains a key only where admission compares it: Subject
+/// and Decimal literals narrow the impact plan, a Date literal matches
+/// every delta, so a key fixed by one is still unconstrained.
+#[test]
+fn a_literal_the_planner_does_not_compare_leaves_the_key_open() {
+    let source = r#"
+program days
+predicate Day(day: Date, amount: Decimal)
+    unique by (day)
+transformation set(d, a):
+    admit Day(d, a)
+invariant new_year_is_positive:
+    Day(@2026-01-01, amount) implies amount > 0
+"#;
+    let found = case_width(source);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].1, vec!["day".to_string()]);
+}
+
+/// A composite key with one field already constrained: the message names
+/// only the missing field, and says it completes the key.
+#[test]
+fn a_partly_constrained_key_names_only_its_missing_field() {
+    let source = r#"
+program rates
+predicate Rate(charge: Subject, from: Date, amount: Decimal)
+    effective by (charge) on (from) partial
+transformation set(c, f, a):
+    admit Rate(c, f, a)
+invariant rates_are_non_negative:
+    Rate(charge, _, amount) implies 0 <= amount
+"#;
+    let found = lints_of(source);
+    let message = found
+        .iter()
+        .find(|l| matches!(l, Lint::CaseWiderThanClaim { .. }))
+        .expect("a case-width finding")
+        .to_string();
+    assert!(
+        message.contains("leaves declared-key field `from` unconstrained; constraining `from` completes a uniqueness key"),
+        "{message}"
+    );
 }
