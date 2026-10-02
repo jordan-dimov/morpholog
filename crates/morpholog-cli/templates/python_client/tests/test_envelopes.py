@@ -424,10 +424,51 @@ class Outbox(unittest.TestCase):
         self.assertFalse(lost.applied)
 
 
+class CheckRoutes(unittest.TestCase):
+    def test_a_mixed_plan_names_each_invariant_in_order(self):
+        report = envelopes.CheckReport.from_json(golden("check_report_routes.json"))
+        self.assertEqual([i.name for i in report.invariants], ["cap", "fuel_is_known"])
+        self.assertEqual(report.invariants[0].route, "compiled")
+        self.assertIsNone(report.invariants[0].refusal)
+        self.assertEqual(report.invariants[1].refusal.kind, "construct")
+        self.assertEqual(report.route, "mixed")
+
+    def test_no_invariants_is_an_empty_plan_and_compiled(self):
+        report = envelopes.CheckReport.from_json(golden("check_report_no_invariants.json"))
+        self.assertEqual(report.invariants, [])
+        self.assertEqual(report.route, "compiled")
+
+    def test_every_invariant_interpreted_is_interpreted(self):
+        payload = golden("check_report_routes.json")
+        payload["invariants"] = [payload["invariants"][1]]
+        self.assertEqual(envelopes.CheckReport.from_json(payload).route, "interpreted")
+
+    def test_a_kind_or_route_this_client_does_not_know_is_drift(self):
+        for mutate in (
+            lambda p: p["invariants"][1]["refusal"].__setitem__("kind", "novel"),
+            lambda p: p["invariants"][0].__setitem__("route", "elsewhere"),
+        ):
+            payload = golden("check_report_routes.json")
+            mutate(payload)
+            with self.assertRaises(envelopes.EnvelopeError):
+                envelopes.CheckReport.from_json(payload)
+
+    def test_a_refusal_belongs_to_an_interpreted_invariant_and_only_to_one(self):
+        compiled_with_refusal = golden("check_report_routes.json")
+        compiled_with_refusal["invariants"][0]["refusal"] = {"kind": "construct", "message": "m"}
+        interpreted_without = golden("check_report_routes.json")
+        del interpreted_without["invariants"][1]["refusal"]
+        for payload in (compiled_with_refusal, interpreted_without):
+            with self.assertRaises(envelopes.EnvelopeError):
+                envelopes.CheckReport.from_json(payload)
+
+
 class Reports(unittest.TestCase):
     def test_check_hash_init_and_named_claim(self):
         check = envelopes.CheckReport.from_json(golden("check_report.json"))
         self.assertEqual(check.diagnostics[0].line, 19)
+        self.assertIsNone(check.invariants, "a failed parse or validation has no plan")
+        self.assertIsNone(check.route)
         hashed = envelopes.HashReport.from_json(golden("hash_report.json"))
         self.assertTrue(hashed.hash.startswith("sha256:"))
         init = envelopes.InitReport.from_json(golden("init_report.json"))

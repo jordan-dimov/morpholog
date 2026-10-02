@@ -966,11 +966,16 @@
       }
     },
     "check_report": {
+      "description": "The findings for one file, and, when parsing and validation left a programme, the route this binary plans for each of its invariants in programme order. The route is a property of the programme and the binary together: another version may plan differently.",
       "type": "object",
       "additionalProperties": false,
       "required": ["file", "diagnostics"],
       "properties": {
         "file": { "type": "string" },
+        "invariants": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/checked_invariant" }
+        },
         "diagnostics": {
           "type": "array",
           "items": {
@@ -987,6 +992,44 @@
             }
           }
         }
+      }
+    },
+    "checked_invariant": {
+      "description": "One invariant and its planned route: compiled (checked in SQL), or interpreted (checked by the kernel) with the refusal that kept it out of SQL.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "route"],
+          "properties": {
+            "name": { "type": "string" },
+            "route": { "const": "compiled" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "route", "refusal"],
+          "properties": {
+            "name": { "type": "string" },
+            "route": { "const": "interpreted" },
+            "refusal": { "$ref": "#/$defs/check_refusal" }
+          }
+        }
+      ]
+    },
+    "check_refusal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "message"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "construct", "comparison_domain", "argument_kind", "literal",
+            "sum_shape", "comparison_shape"
+          ]
+        },
+        "message": { "type": "string" }
       }
     },
     "hash_report": {

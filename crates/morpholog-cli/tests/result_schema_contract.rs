@@ -1142,7 +1142,8 @@ fn coverage_report_serializes_as_pinned() {
 #[test]
 fn report_envelopes_serialize_as_pinned() {
     use morpholog_cli::envelopes::{
-        CheckDiagnostic, CheckReport, HashReport, InitReport, LeastPrivilegeReport, NamedClaim,
+        CheckDiagnostic, CheckRefusal, CheckReport, CheckedInvariant, HashReport, InitReport,
+        LeastPrivilegeReport, NamedClaim,
     };
 
     assert_golden(
@@ -1212,6 +1213,37 @@ fn report_envelopes_serialize_as_pinned() {
                 start: Some(412),
             }],
             file: "model.morph".to_string(),
+            invariants: None,
+        }),
+    );
+    assert_golden(
+        "check_report_routes.json",
+        &to_value(&CheckReport {
+            diagnostics: vec![],
+            file: "model.morph".to_string(),
+            invariants: Some(vec![
+                CheckedInvariant {
+                    name: "cap".to_string(),
+                    refusal: None,
+                    route: "compiled",
+                },
+                CheckedInvariant {
+                    name: "fuel_is_known".to_string(),
+                    refusal: Some(CheckRefusal {
+                        kind: "construct",
+                        message: "`or` is outside the compiled fragment".to_string(),
+                    }),
+                    route: "interpreted",
+                },
+            ]),
+        }),
+    );
+    assert_golden(
+        "check_report_no_invariants.json",
+        &to_value(&CheckReport {
+            diagnostics: vec![],
+            file: "model.morph".to_string(),
+            invariants: Some(vec![]),
         }),
     );
     assert_golden(
@@ -2249,6 +2281,8 @@ fn every_golden_validates_against_its_defs_entry() {
         ("audit_row_self_describing.json", "audit_row"),
         ("audit_row_named.json", "audit_row_named"),
         ("check_report.json", "check_report"),
+        ("check_report_routes.json", "check_report"),
+        ("check_report_no_invariants.json", "check_report"),
         ("hash_report.json", "hash_report"),
         ("init_report.json", "init_report"),
         ("init_report_least_privilege.json", "init_report"),

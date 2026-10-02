@@ -7,11 +7,34 @@
 use morpholog_core::WitnessBinding;
 use serde::Serialize;
 
-/// `check --json`: the uniform findings report.
+/// `check --json`: the uniform findings report, and the route this
+/// binary plans for each invariant. `invariants` is absent only when
+/// parsing or validation left no programme to plan.
 #[derive(Serialize)]
 pub struct CheckReport {
     pub diagnostics: Vec<CheckDiagnostic>,
     pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invariants: Option<Vec<CheckedInvariant>>,
+}
+
+/// One invariant in programme order: `compiled` (checked in SQL) or
+/// `interpreted` (checked by the kernel), and for an interpreted one the
+/// refusal that kept it out of SQL.
+#[derive(Serialize)]
+pub struct CheckedInvariant {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<CheckRefusal>,
+    pub route: &'static str,
+}
+
+/// Why an invariant is interpreted: a kind from the report's own closed
+/// list, and the message `check -v` prints.
+#[derive(Serialize)]
+pub struct CheckRefusal {
+    pub kind: &'static str,
+    pub message: String,
 }
 
 /// One finding in `check --json`. Byte offsets and 1-based

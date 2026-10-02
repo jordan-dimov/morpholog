@@ -1295,17 +1295,111 @@ class Diagnostic:
         )
 
 
+_CHECK_ROUTES = frozenset({"compiled", "interpreted"})
+_REFUSAL_KINDS = frozenset(
+    {
+        "construct",
+        "comparison_domain",
+        "argument_kind",
+        "literal",
+        "sum_shape",
+        "comparison_shape",
+    }
+)
+
+
+def _member(label: str, value: object, known: AbstractSet[str]) -> str:
+    if not isinstance(value, str) or value not in known:
+        raise EnvelopeError(
+            f"{label}: unknown value {value!r} - the binary's contract has "
+            f"drifted past this generated client; regenerate it"
+        )
+    return value
+
+
+@dataclass(frozen=True)
+class CheckRefusal:
+    """Why an invariant is interpreted: ``kind`` from a closed list, and
+    the ``message`` that ``check -v`` prints."""
+
+    kind: str
+    message: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> CheckRefusal:
+        data = _strict("check refusal", payload, {"kind", "message"})
+        return cls(
+            kind=_member("check refusal kind", data["kind"], _REFUSAL_KINDS),
+            message=data["message"],
+        )
+
+
+@dataclass(frozen=True)
+class CheckedInvariant:
+    """One invariant and the route the binary plans for it: ``compiled``
+    (checked in SQL) or ``interpreted`` (checked by the kernel, with the
+    refusal that kept it out of SQL)."""
+
+    name: str
+    route: str
+    refusal: CheckRefusal | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> CheckedInvariant:
+        data = _strict("checked invariant", payload, {"name", "route"}, {"refusal"})
+        route = _member("checked invariant route", data["route"], _CHECK_ROUTES)
+        if (route == "interpreted") != ("refusal" in data):
+            raise EnvelopeError(
+                f"checked invariant: a refusal belongs to an interpreted invariant "
+                f"and only to one, got {payload!r}"
+            )
+        refusal = data.get("refusal")
+        return cls(
+            name=data["name"],
+            route=route,
+            refusal=None if refusal is None else CheckRefusal.from_json(refusal),
+        )
+
+
 @dataclass(frozen=True)
 class CheckReport:
+    """The findings for one file, and the route this binary plans for each
+    invariant. ``invariants`` is ``None`` only when parsing or validation
+    left no programme to plan; an empty list is a programme with no
+    invariants. The route belongs to the programme and the binary
+    together: another version may plan differently."""
+
     file: str
     diagnostics: list[Diagnostic]
+    invariants: list[CheckedInvariant] | None = None
+
+    @property
+    def route(self) -> str | None:
+        """``compiled``, ``interpreted`` or ``mixed`` over every invariant,
+        as ``check -v`` says it; ``None`` when there is no plan. A
+        programme with no invariants is ``compiled``, as the runtime
+        treats it."""
+        if self.invariants is None:
+            return None
+        routes = {i.route for i in self.invariants}
+        if routes <= {"compiled"}:
+            return "compiled"
+        if routes == {"interpreted"}:
+            return "interpreted"
+        return "mixed"
 
     @classmethod
     def from_json(cls, payload: object) -> CheckReport:
-        data = _strict("check report", payload, {"file", "diagnostics"})
+        data = _strict("check report", payload, {"file", "diagnostics"}, {"invariants"})
+        invariants = data.get("invariants")
+        if invariants is not None and not isinstance(invariants, list):
+            raise EnvelopeError(f"check report: invariants is not a list in {payload!r}")
         return cls(
             file=data["file"],
             diagnostics=[Diagnostic.from_json(d) for d in data["diagnostics"]],
+            invariants=None
+            if invariants is None
+            else [CheckedInvariant.from_json(i) for i in invariants],
         )
 
 

@@ -3,9 +3,9 @@
 use crate::CheckArgs;
 use crate::commands::{AlreadyReported, print_json};
 use anyhow::Context;
-use morpholog_cli::envelopes::{CheckDiagnostic, CheckReport};
+use morpholog_cli::envelopes::{CheckDiagnostic, CheckRefusal, CheckReport, CheckedInvariant};
 use morpholog_core::{PreparedProgram, Program};
-use morpholog_postgres::{InvariantPlan, PgProgram};
+use morpholog_postgres::{CompileReason, InvariantPlan, PgProgram};
 use morpholog_surface::{Diagnostic, Span, parse_program_with_sources};
 use std::path::Path;
 
@@ -25,6 +25,18 @@ use std::path::Path;
 ///   with byte offsets and line/column; exit codes are the same.
 pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     let collected = collect(&args)?;
+    let routes = match &collected.prepared {
+        Some(prepared) if args.json || args.verbose => {
+            Some(invariant_routes(&PgProgram::new(prepared.clone()))?)
+        }
+        _ => None,
+    };
+    let verbose_summary = match (&collected.prepared, &routes) {
+        (Some(prepared), Some(routes)) if args.verbose => {
+            Some(summary(prepared.program(), routes, &args.file))
+        }
+        _ => None,
+    };
     if args.json {
         let payload = CheckReport {
             diagnostics: collected
@@ -43,6 +55,7 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
                 })
                 .collect(),
             file: args.file.display().to_string(),
+            invariants: routes,
         };
         print_json(&payload)?;
     } else {
@@ -59,16 +72,11 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     if collected.failed {
         return Err(AlreadyReported.into());
     }
-    if let Some(program) = &collected.program {
-        if args.verbose {
-            let prepared = PreparedProgram::new(program.clone()).map_err(|errors| {
-                anyhow::anyhow!("a checked programme failed to compile: {errors:?}")
-            })?;
-            print!("{}", summary(&PgProgram::new(prepared), &args.file));
-        }
-        if args.ir {
-            return print_ir(program);
-        }
+    if let Some(text) = verbose_summary {
+        print!("{text}");
+    }
+    if let (Some(prepared), true) = (&collected.prepared, args.ir) {
+        return print_ir(prepared.program());
     }
     Ok(())
 }
@@ -130,9 +138,9 @@ struct Collected {
     failed: bool,
     source: String,
     source_name: String,
-    /// The validated programme, for `--verbose` and `--ir`; absent when
-    /// parsing or validation failed.
-    program: Option<Program>,
+    /// The prepared programme, for the invariant routes, `--verbose` and
+    /// `--ir`; absent when parsing or validation failed.
+    prepared: Option<PreparedProgram>,
 }
 
 /// Every finding for the file, in the order the layers run.
@@ -144,7 +152,7 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
         failed: false,
         source,
         source_name: args.file.display().to_string(),
-        program: None,
+        prepared: None,
     };
     let (program, map) = match parse_program_with_sources(&out.source) {
         Ok(parsed) => parsed,
@@ -209,7 +217,7 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
             }
         }
     }
-    out.program = Some(prepared.program().clone());
+    out.prepared = Some(prepared);
     Ok(out)
 }
 
@@ -357,11 +365,64 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
     print_json(&payload)
 }
 
+/// Each invariant's route as the production plan (`PgProgram::new`)
+/// decides it, in programme order: no refusal means SQL checks it, a
+/// refusal keeps it with the interpreter. Not a rendering of every
+/// `InvariantPlan`: a plan forced to the interpreter has no refusals to
+/// report, and `check` never builds one.
+fn invariant_routes(pg: &PgProgram) -> anyhow::Result<Vec<CheckedInvariant>> {
+    let refusals = match pg.plan() {
+        InvariantPlan::Compiled => &[][..],
+        InvariantPlan::Interpreted { refusals } | InvariantPlan::Mixed { refusals, .. } => refusals,
+    };
+    pg.prepared()
+        .program()
+        .invariants
+        .iter()
+        .map(|inv| {
+            Ok(match refusals.iter().find(|r| r.invariant == inv.name) {
+                None => CheckedInvariant {
+                    name: inv.name.to_string(),
+                    refusal: None,
+                    route: "compiled",
+                },
+                Some(r) => CheckedInvariant {
+                    name: inv.name.to_string(),
+                    refusal: Some(CheckRefusal {
+                        kind: refusal_kind(&r.reason)?,
+                        message: r.reason.to_string(),
+                    }),
+                    route: "interpreted",
+                },
+            })
+        })
+        .collect()
+}
+
+/// The report's own name for a refusal. The list is part of the result
+/// contract, so a compiler reason it does not name is an error until the
+/// schema names it, never folded into a kind that already exists. A
+/// validated programme cannot produce the defensive unvalidated-shape
+/// reason, so it has no kind either.
+fn refusal_kind(reason: &CompileReason) -> anyhow::Result<&'static str> {
+    Ok(match reason {
+        CompileReason::Construct { .. } => "construct",
+        CompileReason::ComparisonDomain { .. } => "comparison_domain",
+        CompileReason::ArgumentKind { .. } => "argument_kind",
+        CompileReason::Literal { .. } => "literal",
+        CompileReason::SumShape { .. } => "sum_shape",
+        CompileReason::ComparisonShape { .. } => "comparison_shape",
+        other => anyhow::bail!(
+            "the check report has no kind for the refusal \"{other}\"; \
+             the result schema must name it before check can report it"
+        ),
+    })
+}
+
 /// The `--verbose` success summary: the file path, programme name, a count
 /// per declaration kind, and how invariants are checked (compiled to SQL,
-/// or interpreted with each reason named).
-fn summary(program: &PgProgram, file: &Path) -> String {
-    let p = program.prepared().program();
+/// interpreted, or mixed, with each refusal named).
+fn summary(p: &Program, routes: &[CheckedInvariant], file: &Path) -> String {
     let mut out = format!(
         "ok: {}\nprogram: {}\n  predicates: {}\n  definitions: {}\n  invariants: {}\n  transformations: {}\n  intents: {}\n  derived claims: {}\n",
         file.display(),
@@ -373,23 +434,27 @@ fn summary(program: &PgProgram, file: &Path) -> String {
         p.intents.len(),
         p.derived_claims.len(),
     );
-    match program.plan() {
-        InvariantPlan::Compiled => out.push_str("  invariant checks: compiled\n"),
-        InvariantPlan::Interpreted { refusals } => {
-            out.push_str("  invariant checks: interpreted\n");
-            for refusal in refusals {
-                out.push_str(&format!("    {}: {}\n", refusal.invariant, refusal.reason));
-            }
-        }
-        InvariantPlan::Mixed { compiled, refusals } => {
-            out.push_str(&format!(
-                "  invariant checks: mixed, {compiled} compiled, {} interpreted\n",
-                refusals.len()
-            ));
-            for refusal in refusals {
-                out.push_str(&format!("    {}: {}\n", refusal.invariant, refusal.reason));
-            }
-        }
+    let refused: Vec<(&str, &str)> = routes
+        .iter()
+        .filter_map(|r| {
+            r.refusal
+                .as_ref()
+                .map(|f| (r.name.as_str(), f.message.as_str()))
+        })
+        .collect();
+    let compiled = routes.len() - refused.len();
+    if refused.is_empty() {
+        out.push_str("  invariant checks: compiled\n");
+    } else if compiled == 0 {
+        out.push_str("  invariant checks: interpreted\n");
+    } else {
+        out.push_str(&format!(
+            "  invariant checks: mixed, {compiled} compiled, {} interpreted\n",
+            refused.len()
+        ));
+    }
+    for (name, message) in refused {
+        out.push_str(&format!("    {name}: {message}\n"));
     }
     out
 }
@@ -402,7 +467,8 @@ mod tests {
     #[test]
     fn summary_names_the_program_and_counts_each_declaration_kind() {
         let p = PgProgram::new(PreparedProgram::new(program("demo").build()).unwrap());
-        let s = summary(&p, Path::new("demo.morph"));
+        let routes = invariant_routes(&p).unwrap();
+        let s = summary(p.prepared().program(), &routes, Path::new("demo.morph"));
         assert_eq!(
             s,
             "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant checks: compiled\n"

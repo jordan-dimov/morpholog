@@ -1,0 +1,18 @@
+{
+  "diagnostics": [],
+  "file": "model.morph",
+  "invariants": [
+    {
+      "name": "cap",
+      "route": "compiled"
+    },
+    {
+      "name": "fuel_is_known",
+      "refusal": {
+        "kind": "construct",
+        "message": "`or` is outside the compiled fragment"
+      },
+      "route": "interpreted"
+    }
+  ]
+}

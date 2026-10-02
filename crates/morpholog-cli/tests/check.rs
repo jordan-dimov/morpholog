@@ -780,3 +780,197 @@ fn against_a_reader_is_silent_and_against_itself_is_refused() {
         "{payload}"
     );
 }
+
+/// The verdict line and refusal lines `check -v` prints, rebuilt from the
+/// JSON routes alone.
+fn verbose_lines_from_routes(invariants: &[serde_json::Value]) -> String {
+    let refused: Vec<String> = invariants
+        .iter()
+        .filter(|i| i["route"] == "interpreted")
+        .map(|i| {
+            format!(
+                "    {}: {}\n",
+                i["name"].as_str().unwrap(),
+                i["refusal"]["message"].as_str().unwrap()
+            )
+        })
+        .collect();
+    let compiled = invariants.len() - refused.len();
+    let verdict = if refused.is_empty() {
+        "  invariant checks: compiled\n".to_string()
+    } else if compiled == 0 {
+        "  invariant checks: interpreted\n".to_string()
+    } else {
+        format!(
+            "  invariant checks: mixed, {compiled} compiled, {} interpreted\n",
+            refused.len()
+        )
+    };
+    verdict + &refused.concat()
+}
+
+/// `check --json` and `check -v` report one plan. For every worked
+/// example the JSON names each invariant in programme order, and the
+/// verbose text is exactly what its routes imply.
+#[test]
+fn check_json_routes_agree_with_the_verbose_summary_for_every_worked_example() {
+    let schema = Command::new(bin())
+        .args(["schema", "--result"])
+        .output()
+        .expect("morpholog schema should run");
+    let schema: serde_json::Value = serde_json::from_slice(&schema.stdout).unwrap();
+    let published_kinds = schema["$defs"]["check_refusal"]["properties"]["kind"]["enum"]
+        .as_array()
+        .expect("the result schema lists the refusal kinds")
+        .clone();
+    let (mut compiled_seen, mut mixed_seen) = (false, false);
+    for example in morpholog_examples::all_examples() {
+        let path = repo_root().join("examples").join(example.rel_path);
+        let (payload, ok) = check_json(&path, false);
+        assert!(ok, "{} failed check --json: {payload}", example.name);
+        let invariants = payload["invariants"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{}: no invariant routes: {payload}", example.name));
+        let names: Vec<&str> = invariants
+            .iter()
+            .map(|i| i["name"].as_str().unwrap())
+            .collect();
+        let program = (example.program)();
+        let declared: Vec<String> = program
+            .invariants
+            .iter()
+            .map(|i| i.name.to_string())
+            .collect();
+        assert_eq!(names, declared, "{}: names or order differ", example.name);
+        for refusal in invariants.iter().filter_map(|i| i.get("refusal")) {
+            assert!(
+                published_kinds.contains(&refusal["kind"]),
+                "{}: kind {} is not in the published schema",
+                example.name,
+                refusal["kind"]
+            );
+        }
+
+        let out = Command::new(bin())
+            .arg("check")
+            .arg("--verbose")
+            .arg(&path)
+            .output()
+            .expect("morpholog check should run");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let tail = stdout
+            .find("  invariant checks: ")
+            .map(|at| &stdout[at..])
+            .unwrap_or_else(|| panic!("{}: no verdict in: {stdout}", example.name));
+        assert_eq!(
+            tail,
+            verbose_lines_from_routes(invariants),
+            "{}: check -v and check --json disagree",
+            example.name
+        );
+        compiled_seen |= tail.starts_with("  invariant checks: compiled");
+        mixed_seen |= tail.starts_with("  invariant checks: mixed");
+    }
+    assert!(
+        compiled_seen && mixed_seen,
+        "the gallery no longer exercises both a compiled and a mixed plan"
+    );
+}
+
+/// A mixed programme: each invariant in order, the compiled one without a
+/// refusal, the interpreted one with its kind and the verbose message.
+#[test]
+fn check_json_names_each_invariants_route_and_refusal() {
+    let tmp = temp_morph(
+        "program demo\n\
+         predicate Foo(x: Subject)\n\
+         predicate Amount(x: Subject, v: Decimal)\n\
+         invariant sticky: pre(Foo(x)) implies Foo(x)\n\
+         invariant small: forall a in Amount(x, v): v <= 10\n\
+         transformation t(x):\n    admit Foo(x)\n",
+    );
+    let (payload, ok) = check_json(tmp.path(), false);
+    assert!(ok, "{payload}");
+    let invariants = payload["invariants"].as_array().unwrap();
+    assert_eq!(invariants.len(), 2, "{payload}");
+    assert_eq!(invariants[0]["name"], "sticky");
+    assert_eq!(invariants[0]["route"], "interpreted");
+    assert_eq!(invariants[0]["refusal"]["kind"], "construct");
+    assert!(
+        invariants[0]["refusal"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`pre`"),
+        "{payload}"
+    );
+    assert_eq!(
+        invariants[1],
+        serde_json::json!({"name": "small", "route": "compiled"})
+    );
+}
+
+/// No invariants is a plan with nothing in it, not a missing plan; a
+/// parse or validation failure leaves no plan at all.
+#[test]
+fn check_json_distinguishes_an_empty_plan_from_no_plan() {
+    let empty = temp_morph("program demo\npredicate Foo(x: Subject)\n");
+    let (payload, ok) = check_json(empty.path(), false);
+    assert!(ok, "{payload}");
+    assert_eq!(payload["invariants"], serde_json::json!([]));
+
+    let unparsed = temp_morph("predicate Foo(x: Subject)\n");
+    let (payload, ok) = check_json(unparsed.path(), false);
+    assert!(!ok);
+    assert!(payload.get("invariants").is_none(), "{payload}");
+
+    let invalid = temp_morph(
+        "program demo\n\
+         predicate Foo(x: Subject)\n\
+         invariant test: UndeclaredPred(x)\n",
+    );
+    let (payload, ok) = check_json(invalid.path(), false);
+    assert!(!ok);
+    assert!(payload.get("invariants").is_none(), "{payload}");
+}
+
+/// A run that fails on a promoted lint still had a programme to plan,
+/// so the report carries it.
+#[test]
+fn check_json_keeps_the_plan_when_strict_fails_the_run() {
+    let f = temp_morph(LINT_TRIP);
+    let (payload, ok) = check_json(f.path(), true);
+    assert!(!ok, "--strict fails on the lint");
+    assert!(
+        payload["invariants"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty()),
+        "{payload}"
+    );
+}
+
+/// An `--against` programme that fails its own floor fails the run, but
+/// the checked file was still planned.
+#[test]
+fn check_json_keeps_the_plan_when_an_against_file_fails_the_run() {
+    let checked = temp_morph(LINT_TRIP);
+    let broken = temp_morph("predicate Foo(x: Subject)\n");
+    let out = Command::new(bin())
+        .arg("check")
+        .arg("--json")
+        .arg(checked.path())
+        .arg("--against")
+        .arg(broken.path())
+        .output()
+        .expect("spawn morpholog");
+    assert!(
+        !out.status.success(),
+        "a broken --against file fails the run"
+    );
+    let payload: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        payload["invariants"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty()),
+        "{payload}"
+    );
+}
