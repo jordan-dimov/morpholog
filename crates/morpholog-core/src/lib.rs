@@ -32,6 +32,7 @@ mod definitions;
 mod derive;
 mod disciplines;
 mod eval;
+pub mod execution;
 mod explain;
 pub mod fold;
 mod guarantees;
@@ -82,9 +83,8 @@ pub use lint::{Lint, SharedWriterPeer, lints, shared_writer_lints};
 pub use prepared::PreparedProgram;
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RejectionReason, RequireOutcome, StagedDelta,
-    TraceEntry, TracedProposal, Transition, WitnessBinding, finish_staged_delta_with,
-    finish_staged_delta_with_effective, propose, propose_stage_delta, propose_with,
-    propose_with_trace,
+    TraceEntry, TracedProposal, Transition, WitnessBinding, finish_staged_delta_with, propose,
+    propose_stage_delta, propose_with, propose_with_trace,
 };
 pub use reads::{KeyedPattern, KnownTerm, ReadFilter, ReadPlan};
 pub use schema::{intent_arg_schema, transformation_arg_schema};

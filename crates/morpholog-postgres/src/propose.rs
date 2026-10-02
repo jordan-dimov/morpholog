@@ -8,8 +8,8 @@ use morpholog_core::{
     Admission, ClaimInstance, Definition, EffectiveDelta, EvalError, EvalValue, IntentInstance,
     Invariant, InvariantName, Outcome, PredicateName, PreparedProgram, ReadFilter, ReadPlan,
     RejectionReason, RuleName, StagedDelta, State, Subject, TraceEntry, TracedProposal,
-    Transformation, TransformationName, Transition, WitnessBinding,
-    finish_staged_delta_with_effective, propose_stage_delta, propose_with, propose_with_trace,
+    Transformation, TransformationName, Transition, WitnessBinding, execution, propose_stage_delta,
+    propose_with, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -431,10 +431,10 @@ pub(crate) async fn check_in_order(
                     retracted: retracted.to_vec(),
                     emitted: Vec::new(),
                 };
-                let outcome = finish_staged_delta_with_effective(
+                let outcome = execution::finish_staged_delta_with_effective(
                     staged,
                     state,
-                    &admission.range(range.clone()),
+                    &execution::admission_range(admission, range.clone()),
                     effective,
                 )?;
                 if let Outcome::Rejected { reason } = outcome {

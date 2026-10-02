@@ -86,6 +86,9 @@ impl core::marker::UnsafeUnpin for morpholog_core::calendar::CalendarSpan
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::calendar::CalendarSpan
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::calendar::CalendarSpan
 pub fn morpholog_core::calendar::parse_calendar_span(&str) -> core::result::Result<morpholog_core::calendar::CalendarSpan, alloc::string::String>
+pub mod morpholog_core::execution
+pub fn morpholog_core::execution::admission_range<'a>(&'a morpholog_core::Admission<'_>, core::ops::range::Range<usize>) -> morpholog_core::Admission<'a>
+pub fn morpholog_core::execution::finish_staged_delta_with_effective(morpholog_core::StagedDelta, &morpholog_core::State, &morpholog_core::Admission<'_>, &morpholog_core::EffectiveDelta) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
 pub mod morpholog_core::fold
 pub enum morpholog_core::fold::Node<'a>
 pub morpholog_core::fold::Node::Binder(&'a morpholog_core::Var)
@@ -1442,7 +1445,6 @@ pub morpholog_core::Admission::definitions: &'a [morpholog_core::Definition]
 pub morpholog_core::Admission::invariants: &'a [morpholog_core::Invariant]
 impl<'a> morpholog_core::Admission<'a>
 pub fn morpholog_core::Admission<'a>::of(&'a [morpholog_core::Invariant], &'a [morpholog_core::Definition]) -> Self
-pub fn morpholog_core::Admission<'a>::range(&self, core::ops::range::Range<usize>) -> morpholog_core::Admission<'_>
 impl<'a> core::marker::Freeze for morpholog_core::Admission<'a>
 impl<'a> core::marker::Send for morpholog_core::Admission<'a>
 impl<'a> core::marker::Sync for morpholog_core::Admission<'a>
@@ -2955,7 +2957,6 @@ pub fn morpholog_core::enumerate_derived(&morpholog_core::DerivedClaim, &morphol
 pub fn morpholog_core::eval_invariant(&morpholog_core::Invariant, &morpholog_core::State, core::option::Option<&morpholog_core::State>, &[morpholog_core::Definition]) -> core::result::Result<bool, morpholog_core::EvalError>
 pub fn morpholog_core::explain(&morpholog_core::Program, &morpholog_core::Transition, &morpholog_core::State) -> morpholog_core::Explanation
 pub fn morpholog_core::finish_staged_delta_with(morpholog_core::StagedDelta, &morpholog_core::State, &morpholog_core::Admission<'_>) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
-pub fn morpholog_core::finish_staged_delta_with_effective(morpholog_core::StagedDelta, &morpholog_core::State, &morpholog_core::Admission<'_>, &morpholog_core::EffectiveDelta) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
 pub fn morpholog_core::guarantees(&morpholog_core::PreparedProgram) -> alloc::vec::Vec<morpholog_core::Guarantee>
 pub fn morpholog_core::has_admission_gate(&morpholog_core::Transformation) -> bool
 pub fn morpholog_core::in_force_define_name(&morpholog_core::PredicateName) -> alloc::string::String
