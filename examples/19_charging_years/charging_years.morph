@@ -68,7 +68,7 @@ transformation publish_rates(sheet, year_starts_on):
 
 -- A period runs forwards.
 invariant runs_run_forwards:
-    BillingRun(_, starts_on, ends_on, _, _) implies starts_on on_or_before ends_on
+    BillingRun(run, starts_on, ends_on, _, _) implies starts_on on_or_before ends_on
 
 -- The regulation's rule, over every committed run: both ends of the
 -- period sit in the same 1-April-anchored year. The coordinate is

@@ -217,7 +217,7 @@ invariant terms_belong_to_captured_trade:
 -- quantity is not a trade; forbidding it keeps the effective cap, which
 -- sums signed quantities, honest about what it is bounding.
 invariant trade_terms_quantity_is_positive:
-    TradeTerms(_, _, qty, _, _) implies qty > 0
+    TradeTerms(_, version_id, qty, _, _) implies qty > 0
 
 -- The quantitative rule at the heart of settlement, now on the effective
 -- axis. A trade settles in slices, each effective on a business date. For
@@ -253,7 +253,7 @@ invariant settled_date_has_effective_terms total over TradeTerms:
 -- over-large positive one. Reversals, if ever modelled, would be an
 -- explicit claim of their own, not a negative settlement.
 invariant settled_quantity_is_positive:
-    TradeSettled(_, qty, _, _, _) implies qty > 0
+    TradeSettled(_, qty, settlement_id, _, _) implies qty > 0
 
 -- Settlement can never run ahead of confirmation: a settled trade must
 -- have been confirmed. The settle action relies on the official price in

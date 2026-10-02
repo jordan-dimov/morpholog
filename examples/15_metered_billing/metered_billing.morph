@@ -116,10 +116,10 @@ invariant every_line_names_a_declared_rate:
 -- re-rounded), and a boundary a programme only describes in prose is
 -- not a boundary. These rules close it.
 invariant vat_rate_is_a_fraction:
-    VatRate(_, rate) implies 0 <= rate <= 1
+    VatRate(rate_id, rate) implies 0 <= rate <= 1
 
 invariant charge_inputs_are_non_negative:
-    ChargeLine(rate_p_per_kwh: rate_p_per_kwh, volume_kwh: volume_kwh, ..)
+    ChargeLine(line: line, rate_p_per_kwh: rate_p_per_kwh, volume_kwh: volume_kwh, ..)
     implies (0 <= rate_p_per_kwh and 0 <= volume_kwh)
 
 -- A sealed total is the sum of its rounded lines - net plus VAT,

@@ -2,8 +2,9 @@
 //! that requires a revocable pointer, so revoking it rewrites history.
 //! Unsupplied antecedent: a rule that depends on a predicate no
 //! transformation admits. Governing selection: picking "the version in
-//! force" with nothing guaranteeing one exists. Every worked example
-//! stays clean.
+//! force" with nothing guaranteeing one exists. Case width: a rule
+//! over one pattern that leaves its claim's key unconstrained. Every
+//! worked example stays clean.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -28,7 +29,8 @@ fn unsupplied_missing(found: &[Lint]) -> Vec<&str> {
             Lint::GateVsInvariant { .. }
             | Lint::GoverningSelectionWithoutTotality { .. }
             | Lint::EffectiveWithoutDeclaredTotality { .. }
-            | Lint::SharedWriter { .. } => None,
+            | Lint::SharedWriter { .. }
+            | Lint::CaseWiderThanClaim { .. } => None,
         })
         .unwrap_or_default()
 }
@@ -47,7 +49,8 @@ fn governing_finding(found: &[Lint]) -> Option<(&str, Vec<&str>)> {
         Lint::GateVsInvariant { .. }
         | Lint::UnsuppliedAntecedent { .. }
         | Lint::EffectiveWithoutDeclaredTotality { .. }
-        | Lint::SharedWriter { .. } => None,
+        | Lint::SharedWriter { .. }
+        | Lint::CaseWiderThanClaim { .. } => None,
     })
 }
 
@@ -1016,5 +1019,223 @@ fn a_conditional_under_an_outer_negation_still_triggers_it() {
             Lint::GateVsInvariant { pointer, .. } if pointer == "CurrentDiscount"
         )),
         "outer polarity must not hide the selection dependency: {found:?}"
+    );
+}
+
+/// The case-width findings alone, as (invariant, key, unnamed).
+fn case_width(source: &str) -> Vec<(String, Vec<String>, Vec<String>)> {
+    lints_of(source)
+        .into_iter()
+        .filter_map(|l| match l {
+            Lint::CaseWiderThanClaim {
+                invariant,
+                key,
+                unnamed,
+                ..
+            } => Some((invariant, key, unnamed)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A run's dates must run forwards; `run` identifies a run.
+const RUNS: &str = r#"
+program runs
+predicate Run(run: Subject, starts_on: Date, ends_on: Date, label: Subject)
+    unique by (run)
+transformation record(r, s, e, l):
+    admit Run(r, s, e, l)
+invariant runs_run_forwards:
+    PATTERN implies starts_on on_or_before ends_on
+"#;
+
+fn runs(pattern: &str) -> String {
+    RUNS.replace("PATTERN", pattern)
+}
+
+#[test]
+fn a_pattern_that_leaves_the_declared_key_unconstrained_fires_and_names_it() {
+    let found = lints_of(&runs("Run(_, starts_on, ends_on, _)"));
+    let [lint] = found.as_slice() else {
+        panic!("one finding: {found:?}");
+    };
+    assert_eq!(
+        lint.to_string(),
+        "invariant `runs_run_forwards` checks every `Run` sharing `starts_on` and `ends_on`, \
+         because its pattern leaves declared-key field `run` unconstrained; constraining `run` \
+         completes a uniqueness key and narrows the case to the one `Run` a proposal identifies"
+    );
+}
+
+#[test]
+fn naming_or_fixing_the_key_silences_it() {
+    assert!(case_width(&runs("Run(run, starts_on, ends_on, _)")).is_empty());
+    assert!(case_width(&runs("Run(#the_run, starts_on, ends_on, _)")).is_empty());
+}
+
+#[test]
+fn without_a_declared_key_the_advice_is_conditional() {
+    let found =
+        lints_of(&runs("Run(_, starts_on, ends_on, _)").replace("    unique by (run)\n", ""));
+    let [lint] = found.as_slice() else {
+        panic!("one finding: {found:?}");
+    };
+    let message = lint.to_string();
+    assert!(
+        message.contains("leaves `run` and `label` unnamed"),
+        "{message}"
+    );
+    assert!(
+        message.contains("has no declared uniqueness key"),
+        "{message}"
+    );
+}
+
+/// A builtin call makes admission check the whole invariant, so naming
+/// a field would narrow nothing.
+#[test]
+fn a_rule_admission_checks_whole_gets_no_case_hint() {
+    let whole = RUNS.replace(
+        "PATTERN implies starts_on on_or_before ends_on",
+        "Run(_, starts_on, ends_on, _) implies (starts_on - ends_on) <= abs(ends_on - starts_on)",
+    );
+    assert!(case_width(&whole).is_empty(), "{:?}", lints_of(&whole));
+}
+
+/// A second claim pattern: the case spans two predicates.
+#[test]
+fn a_rule_reading_a_second_claim_gets_no_case_hint() {
+    let two = RUNS.replace(
+        "invariant runs_run_forwards:\n    PATTERN implies starts_on on_or_before ends_on",
+        "predicate Label(label: Subject)\ninvariant labelled:\n    Run(_, _, _, label) implies Label(label)",
+    );
+    assert!(case_width(&two).is_empty(), "{:?}", lints_of(&two));
+}
+
+/// A defined call: the pattern to fix might live in the definition, so
+/// advice placed on the invariant could point at the wrong source.
+#[test]
+fn a_rule_calling_a_definition_gets_no_case_hint() {
+    let defined = RUNS.replace(
+        "invariant runs_run_forwards:\n    PATTERN implies starts_on on_or_before ends_on",
+        "define forwards(s, e): s on_or_before e\ninvariant runs_run_forwards:\n    Run(_, starts_on, ends_on, _) implies forwards(starts_on, ends_on)",
+    );
+    assert!(case_width(&defined).is_empty(), "{:?}", lints_of(&defined));
+}
+
+/// Identity comes from every discipline, not only `unique by`: an
+/// `effective by (charge) on (from)` key is (charge, from), and the
+/// key closest to constrained is the one named.
+#[test]
+fn every_enforced_key_counts_and_the_closest_is_named() {
+    let source = r#"
+program rates
+predicate Rate(charge: Subject, from: Date, amount: Decimal, note: Subject)
+    effective by (charge) on (from) partial
+transformation set(c, f, a, n):
+    admit Rate(c, f, a, n)
+invariant rates_are_non_negative:
+    PATTERN implies 0 <= amount
+"#;
+    let full = case_width(&source.replace("PATTERN", "Rate(charge, from, amount, _)"));
+    assert!(
+        full.is_empty(),
+        "the effective-by key is constrained: {full:?}"
+    );
+    let partial = case_width(&source.replace("PATTERN", "Rate(charge, _, amount, _)"));
+    assert_eq!(
+        partial,
+        vec![(
+            "rates_are_non_negative".to_string(),
+            vec!["from".to_string()],
+            vec!["from".to_string(), "note".to_string()],
+        )]
+    );
+}
+
+/// Two keys equally far from constrained: the first declared is named,
+/// so the advice is stable however often `check` runs.
+#[test]
+fn equally_close_keys_name_the_first_declared() {
+    let source = r#"
+program ties
+predicate Slot(by_site: Subject, by_code: Subject, size: Decimal)
+    unique by (by_site)
+    unique by (by_code)
+transformation add(s, c, n):
+    admit Slot(s, c, n)
+invariant sizes_are_positive:
+    Slot(_, _, size) implies 0 < size
+"#;
+    assert_eq!(
+        case_width(source),
+        vec![(
+            "sizes_are_positive".to_string(),
+            vec!["by_site".to_string()],
+            vec!["by_site".to_string(), "by_code".to_string()],
+        )]
+    );
+}
+
+/// The closest key wins over declaration order: the first key declared
+/// lacks two fields, a later one from another discipline lacks one.
+#[test]
+fn the_closest_key_is_named_even_when_declared_later() {
+    let source = r#"
+program bays
+predicate Bay(site: Subject, bay: Subject, code: Subject, size: Decimal)
+    unique by (site, bay)
+    current pointer by (code)
+transformation add(s, b, c, n):
+    admit Bay(s, b, c, n)
+invariant sizes_are_positive:
+    Bay(_, _, _, size) implies 0 < size
+"#;
+    let found = case_width(source);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].1, vec!["code".to_string()]);
+}
+
+/// A literal constrains a key only where admission compares it: Subject
+/// and Decimal literals narrow the impact plan, a Date literal matches
+/// every delta, so a key fixed by one is still unconstrained.
+#[test]
+fn a_literal_the_planner_does_not_compare_leaves_the_key_open() {
+    let source = r#"
+program days
+predicate Day(day: Date, amount: Decimal)
+    unique by (day)
+transformation set(d, a):
+    admit Day(d, a)
+invariant new_year_is_positive:
+    Day(@2026-01-01, amount) implies amount > 0
+"#;
+    let found = case_width(source);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].1, vec!["day".to_string()]);
+}
+
+/// A composite key with one field already constrained: the message names
+/// only the missing field, and says it completes the key.
+#[test]
+fn a_partly_constrained_key_names_only_its_missing_field() {
+    let source = r#"
+program rates
+predicate Rate(charge: Subject, from: Date, amount: Decimal)
+    effective by (charge) on (from) partial
+transformation set(c, f, a):
+    admit Rate(c, f, a)
+invariant rates_are_non_negative:
+    Rate(charge, _, amount) implies 0 <= amount
+"#;
+    let found = lints_of(source);
+    let message = found
+        .iter()
+        .find(|l| matches!(l, Lint::CaseWiderThanClaim { .. }))
+        .expect("a case-width finding")
+        .to_string();
+    assert!(
+        message.contains("leaves declared-key field `from` unconstrained; constraining `from` completes a uniqueness key"),
+        "{message}"
     );
 }

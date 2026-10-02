@@ -376,7 +376,7 @@ fn the_gallery_hashes_did_not_move_when_named_patterns_arrived() {
     let cases = [
         (
             "../../examples/15_metered_billing/metered_billing.morph",
-            "sha256:5777060fd9d8f488c726c55c4fe1678a63bdecaaced234361bb834c1aee96ef3",
+            "sha256:9bbd6c4313dd7a8d22bd97579bbe75eeaeb8d4063790ce15bedc22d5d63cc591",
         ),
         (
             "../../examples/13_biometric_identification_oversight/biometric_oversight.morph",
@@ -393,6 +393,81 @@ fn the_gallery_hashes_did_not_move_when_named_patterns_arrived() {
             "rules identity moved for {rel} - the hash must render positionally"
         );
     }
+    // The metered-billing rules before two of them named their key: the
+    // hash pinned when named patterns arrived must still come out.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/15_metered_billing/metered_billing.morph");
+    let mut before = fs::read_to_string(&path).unwrap();
+    for (now, then) in [
+        ("VatRate(rate_id, rate) implies", "VatRate(_, rate) implies"),
+        (
+            "ChargeLine(line: line, rate_p_per_kwh: rate_p_per_kwh, volume_kwh: volume_kwh, ..)",
+            "ChargeLine(rate_p_per_kwh: rate_p_per_kwh, volume_kwh: volume_kwh, ..)",
+        ),
+    ] {
+        assert!(before.contains(now), "the file no longer spells `{now}`");
+        before = before.replace(now, then);
+    }
+    assert_eq!(
+        canonical_hash(&parse_program(&before).unwrap()),
+        "sha256:5777060fd9d8f488c726c55c4fe1678a63bdecaaced234361bb834c1aee96ef3",
+        "the pre-respelling metered billing no longer hashes as it did"
+    );
+}
+
+/// The named spelling of metered billing hashes exactly as its positional
+/// twin, rebuilt here rather than pinned, so the property holds for the
+/// file as it stands, whatever its rules say.
+#[test]
+fn metered_billing_hashes_as_its_positional_twin() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/15_metered_billing/metered_billing.morph");
+    let named = fs::read_to_string(&path).unwrap();
+    let mut positional = named.clone();
+    for (from, to) in [
+        (
+            "ChargeLine(net_gbp: net_gbp, vat_rate_id: vat_rate_id, vat_gbp: vat_gbp, ..)",
+            "ChargeLine(_, _, _, _, net_gbp, vat_rate_id, vat_gbp)",
+        ),
+        (
+            "ChargeLine(vat_rate_id: vat_rate_id, ..)",
+            "ChargeLine(_, _, _, _, _, vat_rate_id, _)",
+        ),
+        (
+            "ChargeLine(line: line, rate_p_per_kwh: rate_p_per_kwh, volume_kwh: volume_kwh, ..)",
+            "ChargeLine(line, _, rate_p_per_kwh, volume_kwh, _, _, _)",
+        ),
+        (
+            "ChargeLine(invoice: invoice, net_gbp: n, ..)",
+            "ChargeLine(_, invoice, _, _, n, _, _)",
+        ),
+        (
+            "ChargeLine(invoice: invoice, vat_gbp: v, ..)",
+            "ChargeLine(_, invoice, _, _, _, _, v)",
+        ),
+        (
+            "ChargeLine(invoice: invoice, ..)",
+            "ChargeLine(_, invoice, _, _, _, _, _)",
+        ),
+    ] {
+        assert!(
+            positional.contains(from),
+            "the file no longer spells `{from}`"
+        );
+        positional = positional.replace(from, to);
+    }
+    let code: String = positional
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("--"))
+        .collect();
+    assert!(
+        !code.contains("..)"),
+        "a named pattern was left unrewritten"
+    );
+    assert_eq!(
+        canonical_hash(&parse_program(&named).unwrap()),
+        canonical_hash(&parse_program(&positional).unwrap())
+    );
 }
 
 #[test]

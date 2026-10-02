@@ -26,7 +26,7 @@ The verification arc's furthest reading turns the evaluator **backward**: instea
 
 The prior art and influences behind the directions below live in [`prior-art.md`](prior-art.md). That file is possibility pressure; this one is sequencing.
 
-- **The remaining lint occupants.** The lint tier exists (hints on stderr, `--strict` promotes; the gate-vs-invariant, unsupplied-antecedent, and governing-selection lints occupy it). Still to add: unused predicate / intent declarations, `sum(x | body)` where `x` doesn't appear in `body`, unused transformation parameters, fuzzy "did you mean `MayApprove`?" suggestions on an `Undeclared` reference.
+- **The remaining lint occupants.** The lint tier exists (hints on stderr, `--strict` promotes). Still to add: unused predicate / intent declarations, `sum(x | body)` where `x` doesn't appear in `body`, unused transformation parameters, fuzzy "did you mean `MayApprove`?" suggestions on an `Undeclared` reference.
 
 - **Remaining legibility surfaces.** The explanation-engine doctrine stands - deterministic template rendering over the IR and trace, never natural-language generation - and its shipped tiers (`explain`, `inspect guarantees`, `inspect controls`, source-located diagnostics) are recorded in [`design-history.md`](design-history.md). Still to build: `inspect transformation --graph` (the body as a pre/post dependency DAG); subject-flow profiles (clusters where the same `Subject`-kind position recurs). All derive statically from the parsed programme; none adds IR primitives. Full multi-step path-finding is bounded model checking, deferred; predicate-kind annotations were considered and deferred - the classification is largely inferable from structure.
 

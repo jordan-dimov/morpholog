@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use crate::analysis::{has_admission_gate, predicates_written_by};
 use crate::definitions::DefinitionTable;
 use crate::disciplines::append_only_predicates;
+use crate::impact::ImpactPlan;
 use crate::ir::{
     DefinitionName, Discipline, Invariant, InvariantOrigin, PredicateName, Program, Prop, Term,
     ValueExpr,
@@ -68,6 +69,30 @@ pub enum Lint {
     /// version is a valid model.
     EffectiveWithoutDeclaredTotality { predicate: String },
 
+    /// An authored invariant that admission checks case by case over one
+    /// claim pattern, where the pattern constrains no uniqueness key the
+    /// disciplines enforce on that predicate. Its case is then every
+    /// claim sharing the constrained fields, not the one claim a
+    /// proposal identifies, so a touching proposal reads them all.
+    /// `case` names the constrained fields; `key` the fields still
+    /// missing from the enforced key closest to constrained (not the
+    /// whole key), empty when the predicate declares none; `unnamed`
+    /// every unconstrained field. A literal counts as constraining only
+    /// where admission's impact plan compares it.
+    ///
+    /// A hint, because the rule means the same thing either way; the
+    /// cost shows only when many claims share those values. Silent when
+    /// admission checks the whole invariant anyway, when the body reads a
+    /// second claim pattern, or when it calls a definition (the fix
+    /// might belong in the definition, not here).
+    CaseWiderThanClaim {
+        invariant: String,
+        predicate: String,
+        case: Vec<String>,
+        key: Vec<String>,
+        unnamed: Vec<String>,
+    },
+
     /// A transformation of this programme writes a predicate another
     /// programme also writes. In one database they share those rows, and
     /// neither is bound by the other's gates. Reads are not findings. A
@@ -127,6 +152,35 @@ pub fn shared_writer_lints(this: &Program, other: &Program) -> Vec<Lint> {
 impl std::fmt::Display for Lint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Lint::CaseWiderThanClaim {
+                invariant,
+                predicate,
+                case,
+                key,
+                unnamed,
+            } => {
+                let sharing = backticked(case);
+                if key.is_empty() {
+                    write!(
+                        f,
+                        "invariant `{invariant}` checks every `{predicate}` sharing {sharing}: its \
+                         pattern leaves {} unnamed, and `{predicate}` has no declared uniqueness \
+                         key proving the remaining bindings identify one claim. Name a field \
+                         that identifies the claim, if one exists",
+                        backticked(unnamed)
+                    )
+                } else {
+                    let fields = if key.len() == 1 { "field" } else { "fields" };
+                    let key = backticked(key);
+                    write!(
+                        f,
+                        "invariant `{invariant}` checks every `{predicate}` sharing {sharing}, \
+                         because its pattern leaves declared-key {fields} {key} unconstrained; \
+                         constraining {key} completes a uniqueness key and narrows the case \
+                         to the one `{predicate}` a proposal identifies"
+                    )
+                }
+            }
             Lint::EffectiveWithoutDeclaredTotality { predicate } => write!(
                 f,
                 "`{predicate}` is effective-dated but no invariant declares `total over \
@@ -313,6 +367,7 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
         // Generated discipline invariants are not in the source, so they
         // get no hints of these kinds.
         if inv.origin == InvariantOrigin::Authored {
+            case_width_findings(program, inv, &prepared.admission().plans()[index], &mut out);
             unsupplied_antecedent_findings(inv, &implications, &declared, definitions, &mut out);
             governing_selection_findings(
                 inv,
@@ -326,6 +381,71 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
         }
     }
     out
+}
+
+/// The case-width hint for one authored invariant. Eligibility is the
+/// impact plan's: one bounded claim pattern. Identity is the
+/// disciplines': a uniqueness key fully constrained (by a case variable
+/// or a literal) means the case is already one claim.
+fn case_width_findings(program: &Program, inv: &Invariant, plan: &ImpactPlan, out: &mut Vec<Lint>) {
+    if crate::fold::any_prop_node(&inv.body, &|p| matches!(p, Prop::Defined { .. })) {
+        return;
+    }
+    let Some(occ) = plan.single_bounded_occurrence() else {
+        return;
+    };
+    let Some(decl) = program.predicates.iter().find(|d| d.name == *occ.predicate) else {
+        return;
+    };
+    let field = |pos: &usize| {
+        decl.args
+            .get(*pos)
+            .map(|a| a.name.clone())
+            .unwrap_or_default()
+    };
+    let unconstrained: Vec<usize> = (0..decl.args.len())
+        .filter(|pos| !occ.constrained.contains(pos))
+        .collect();
+    if unconstrained.is_empty() {
+        return;
+    }
+    let keys = crate::disciplines::uniqueness_keys_for(program, occ.predicate);
+    let key: Vec<usize> = if keys.is_empty() {
+        Vec::new()
+    } else {
+        let missing = |k: &Vec<usize>| -> Vec<usize> {
+            k.iter()
+                .copied()
+                .filter(|pos| !occ.constrained.contains(pos))
+                .collect()
+        };
+        let closest = keys
+            .iter()
+            .map(missing)
+            .min_by_key(Vec::len)
+            .unwrap_or_default();
+        if closest.is_empty() {
+            return;
+        }
+        closest
+    };
+    out.push(Lint::CaseWiderThanClaim {
+        invariant: inv.name.to_string(),
+        predicate: decl.name.to_string(),
+        case: occ.constrained.iter().map(field).collect(),
+        key: key.iter().map(field).collect(),
+        unnamed: unconstrained.iter().map(field).collect(),
+    });
+}
+
+/// `a`, `` `a` and `b` ``, `` `a`, `b` and `c` ``.
+fn backticked(names: &[String]) -> String {
+    let quoted: Vec<String> = names.iter().map(|n| format!("`{n}`")).collect();
+    match quoted.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
 }
 
 /// Whether `body` reaches `target`, following definition calls through the

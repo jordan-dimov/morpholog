@@ -48,6 +48,14 @@ struct Occurrence {
     var_map: Vec<(usize, Var)>,
 }
 
+/// The one claim pattern an invariant's case is bounded to, and the
+/// positions a case variable or a literal the bounding proof compares
+/// fixes in it.
+pub(crate) struct BoundedOccurrence<'a> {
+    pub(crate) predicate: &'a PredicateName,
+    pub(crate) constrained: BTreeSet<usize>,
+}
+
 /// An invariant's impact plan, built once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImpactPlan {
@@ -116,6 +124,33 @@ impl ImpactPlan {
             .iter()
             .flat_map(|occ| occ.var_map.iter().map(|(_, var)| var.clone()))
             .collect()
+    }
+
+    /// The plan's one claim pattern, when admission bounds every delta
+    /// that touches the invariant to cases of that pattern alone: the
+    /// plan is not conservative, the body holds exactly one claim
+    /// pattern, and the pattern binds a case variable (one that binds
+    /// none leaves a touching delta unbounded).
+    pub(crate) fn single_bounded_occurrence(&self) -> Option<BoundedOccurrence<'_>> {
+        if self.conservative {
+            return None;
+        }
+        let [occ] = self.occurrences.as_slice() else {
+            return None;
+        };
+        if occ.var_map.is_empty() {
+            return None;
+        }
+        Some(BoundedOccurrence {
+            predicate: &occ.predicate,
+            constrained: occ
+                .guards
+                .iter()
+                .filter(|(_, lit)| literal_narrows(lit))
+                .map(|(pos, _)| *pos)
+                .chain(occ.var_map.iter().map(|(pos, _)| *pos))
+                .collect(),
+        })
     }
 
     /// The cases the delta can affect.
@@ -320,10 +355,20 @@ fn candidate_case_variables(body: &Prop) -> BTreeSet<Var> {
     vars
 }
 
+/// Whether the bounding proof compares a literal of this kind against a
+/// delta value. A literal of any other kind matches every value, so it
+/// narrows nothing.
+fn literal_narrows(lit: &Value) -> bool {
+    matches!(lit, Value::Subject(_) | Value::Decimal(_))
+}
+
 /// A literal guard against a delta value. Kinds the bounding proof does
 /// not compare are treated as matching, which only widens the touched
 /// set.
 fn literal_matches(lit: &Value, ev: &EvalValue) -> bool {
+    if !literal_narrows(lit) {
+        return true;
+    }
     match (lit, ev) {
         (Value::Subject(a), EvalValue::Subject(b)) => a == b,
         (Value::Decimal(a), EvalValue::Decimal(b)) => a.parse::<Decimal>().is_ok_and(|a| a == *b),
