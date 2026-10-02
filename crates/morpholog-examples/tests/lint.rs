@@ -1176,3 +1176,22 @@ invariant sizes_are_positive:
         )]
     );
 }
+
+/// The closest key wins over declaration order: the first key declared
+/// lacks two fields, a later one from another discipline lacks one.
+#[test]
+fn the_closest_key_is_named_even_when_declared_later() {
+    let source = r#"
+program bays
+predicate Bay(site: Subject, bay: Subject, code: Subject, size: Decimal)
+    unique by (site, bay)
+    current pointer by (code)
+transformation add(s, b, c, n):
+    admit Bay(s, b, c, n)
+invariant sizes_are_positive:
+    Bay(_, _, _, size) implies 0 < size
+"#;
+    let found = case_width(source);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].1, vec!["code".to_string()]);
+}
