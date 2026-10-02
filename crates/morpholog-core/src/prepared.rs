@@ -1,8 +1,10 @@
-//! `PreparedProgram`: a validated programme with its by-name lookups
-//! indexed once.
+//! `PreparedProgram`: a validated programme with what can be derived from
+//! it computed once - by-name lookups, the definition table, each
+//! invariant's impact plan. A cache, not an identity: the [`Program`] it
+//! owns is what the canonical hash covers, and everything here can be
+//! recomputed from it without changing any decision.
 //!
-//! [`Program`] lookups are linear scans. `PreparedProgram` owns a
-//! validated programme and indexes those lookups once.
+//! [`Program`] lookups are linear scans; these are indexed once.
 //!
 //! It does not replace [`ValidatedProgram`], the cheap borrowed
 //! proof-of-validity handle the analysis API takes. `PreparedProgram`

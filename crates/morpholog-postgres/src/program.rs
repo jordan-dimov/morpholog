@@ -1,5 +1,5 @@
-//! A programme as the adapter runs it: the validated core programme plus
-//! how its invariants are checked. Each invariant compiles to SQL or the
+//! A programme as the adapter runs it: a prepared programme bound to its
+//! execution plan, which says how its invariants are checked. Each invariant compiles to SQL or the
 //! interpreter keeps it, decided once, here, at load; an execution walks
 //! them in programme order, each run of like kind through its evaluator.
 
@@ -8,15 +8,19 @@ use morpholog_core::{PreparedProgram, ReadPlan, Transformation, Transition};
 use crate::compiled::{CompileRefusal, CompiledInvariantSet, IndexSpec, Run, compile_each};
 use crate::propose::{LoadScope, Reads, compute_load_scope};
 
+/// The PostgreSQL binding of a programme: the prepared programme and the
+/// execution plan that runs it. The plan changes what a proposal costs,
+/// never what it decides.
 pub struct PgProgram {
     prepared: PreparedProgram,
     execution: ExecutionPlan,
 }
 
-/// How a programme's invariants are checked: the ones that compiled, in
-/// programme order, the refusals that keep the rest with the interpreter,
-/// and the runs that say which evaluator checks which, in order. Every
-/// invariant compiled, none did, and some did are the same shape.
+/// The execution plan: how a programme's invariants are checked. The
+/// ones that compiled, in programme order, the refusals that keep the
+/// rest with the interpreter, and the runs that say which evaluator
+/// checks which, in order. Every invariant compiled, none did, and some
+/// did are the same shape.
 pub(crate) struct ExecutionPlan {
     pub(crate) compiled: CompiledInvariantSet,
     /// Empty when the interpreter was chosen without asking.
