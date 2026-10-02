@@ -329,9 +329,14 @@ jobs:
       # workspace beside the preinstalled toolchains this job never
       # touches; the test-binary count tipped it into "No space left
       # on device". Clearing the unused toolchains buys ~25 GB.
+      # The df lines measure whether the runner's /mnt disk could hold the
+      # build instead, which would make this clean-up unnecessary.
       - name: Free runner disk
         timeout-minutes: 15
-        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+        run: |
+          df -hT / /mnt || true
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -hT / /mnt || true
 
       - name: Install stable toolchain with llvm-tools
         uses: dtolnay/rust-toolchain@stable
@@ -376,3 +381,9 @@ jobs:
         env:
           RUSTFLAGS: "-C link-arg=-Wl,--threads=1 -C debuginfo=line-tables-only"
         run: cargo llvm-cov --workspace --locked --summary-only -- --test-threads=1
+
+      - name: Disk after coverage
+        if: ${{ always() }}
+        run: |
+          df -hT / /mnt || true
+          du -sh target 2>/dev/null || true
