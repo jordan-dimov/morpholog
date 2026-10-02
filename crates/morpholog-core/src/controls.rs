@@ -33,12 +33,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::{predicates_asserted_by, predicates_referenced_by_prop};
-use crate::compiled::CompiledProgram;
 use crate::definitions::DefinitionTable;
 use crate::format;
 use crate::guarantees::{Guarantee, guarantees};
 use crate::ir::{InvariantOrigin, PredicateName, Program, Prop, Stmt};
 use crate::lint::{implications_of, positive_claims_of};
+use crate::prepared::PreparedProgram;
 
 /// One invariant a gate **front-loads**: the gate checks early what the
 /// invariant enforces at commit. A match on shared predicates, not a
@@ -149,7 +149,7 @@ pub struct ControlMatrix {
 /// Derive the control matrix from a parsed programme: one entry per
 /// transformation in declaration order, gates in body order, plus the
 /// invariant guarantees.
-pub fn controls(compiled: &CompiledProgram) -> ControlMatrix {
+pub fn controls(compiled: &PreparedProgram) -> ControlMatrix {
     let program = compiled.program();
     let defs = compiled.definition_table();
     let implications = authored_implications(program, defs);

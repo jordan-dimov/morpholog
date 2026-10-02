@@ -11,9 +11,9 @@ use common::all_programs;
 use morpholog_core::{Guarantee, guarantees, render_guarantees};
 use morpholog_examples::{approval_controls, carbon_credit_provenance as cc};
 
-/// Build a CompiledProgram for the analysis entry points.
-fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
-    morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
+/// Build a PreparedProgram for the analysis entry points.
+fn compiled(p: &morpholog_core::Program) -> morpholog_core::PreparedProgram {
+    morpholog_core::PreparedProgram::new(p.clone()).expect("fixture is valid")
 }
 
 #[test]

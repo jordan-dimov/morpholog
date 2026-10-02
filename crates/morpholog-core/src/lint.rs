@@ -6,13 +6,13 @@
 use std::collections::BTreeSet;
 
 use crate::analysis::{has_admission_gate, predicates_written_by};
-use crate::compiled::CompiledProgram;
 use crate::definitions::DefinitionTable;
 use crate::disciplines::append_only_predicates;
 use crate::ir::{
     DefinitionName, Discipline, Invariant, InvariantOrigin, PredicateName, Program, Prop, Term,
     ValueExpr,
 };
+use crate::prepared::PreparedProgram;
 
 /// One lint finding. See the module doc for the error-vs-lint line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,7 +234,7 @@ impl std::fmt::Display for Lint {
 /// `effective by` findings first, then each invariant's findings in
 /// declaration order (gate-vs-invariant, unsupplied antecedent, then
 /// governing selection).
-pub fn lints(compiled: &CompiledProgram) -> Vec<Lint> {
+pub fn lints(compiled: &PreparedProgram) -> Vec<Lint> {
     let program = compiled.program();
     let definitions = compiled.definition_table();
     let append_only = append_only_predicates(program);

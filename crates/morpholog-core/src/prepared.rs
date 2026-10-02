@@ -1,12 +1,12 @@
-//! `CompiledProgram`: a validated programme with its by-name lookups
+//! `PreparedProgram`: a validated programme with its by-name lookups
 //! indexed once.
 //!
-//! [`Program`] lookups are linear scans. `CompiledProgram` owns a
+//! [`Program`] lookups are linear scans. `PreparedProgram` owns a
 //! validated programme and indexes those lookups once.
 //!
 //! It does not replace [`ValidatedProgram`], the cheap borrowed
-//! proof-of-validity handle the analysis API takes. `CompiledProgram`
-//! owns the programme and hands one out via [`CompiledProgram::validated`].
+//! proof-of-validity handle the analysis API takes. `PreparedProgram`
+//! owns the programme and hands one out via [`PreparedProgram::validated`].
 //!
 //! The indices store positions, not references, because a struct holding
 //! references into its own fields would be self-referential.
@@ -37,7 +37,7 @@ fn position_index<T, K: Eq + Hash>(items: &[T], key: impl Fn(&T) -> K) -> HashMa
 /// A validated programme with its by-name lookups indexed once. See the
 /// module documentation for the relationship to [`ValidatedProgram`].
 #[derive(Debug, Clone)]
-pub struct CompiledProgram {
+pub struct PreparedProgram {
     program: Program,
     transformations: HashMap<TransformationName, usize>,
     invariants: HashMap<InvariantName, usize>,
@@ -51,7 +51,7 @@ pub struct CompiledProgram {
     impact: Vec<ImpactPlan>,
 }
 
-impl CompiledProgram {
+impl PreparedProgram {
     /// Validate the programme, then index it. The error is the same
     /// `Vec<ValidationError>` [`Program::validate`] returns.
     ///

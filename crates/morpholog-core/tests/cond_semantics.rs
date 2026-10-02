@@ -256,7 +256,7 @@ fn the_parameter_kind_walk_sees_evidence_inside_the_condition() {
         )])
         .build();
     assert!(p.validate().is_ok(), "{:?}", p.validate());
-    let compiled = morpholog_core::CompiledProgram::new(p).expect("compiles");
+    let compiled = morpholog_core::PreparedProgram::new(p).expect("compiles");
     let kinds =
         morpholog_core::transformation_param_kinds(&compiled.validated(), &"evidenced".into())
             .expect("kinds resolve");

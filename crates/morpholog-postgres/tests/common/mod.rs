@@ -9,7 +9,7 @@
 pub mod routes;
 
 use morpholog_core::{
-    ClaimInstance, CompiledProgram, EvalValue, Program, Subject, Transformation, Transition,
+    ClaimInstance, EvalValue, PreparedProgram, Program, Subject, Transformation, Transition,
 };
 use morpholog_postgres::{
     PgError, PgPool, PgProgram, PgProposalOutcome, PgTracedOutcome, Proposal, propose_against_pg,
@@ -98,7 +98,7 @@ pub use morpholog_test_support::{
 /// Compile a test programme into the adapter's programme object, on
 /// whatever route it is eligible for.
 pub fn compiled(program: Program) -> PgProgram {
-    PgProgram::new(CompiledProgram::new(program).expect("test programme is valid"))
+    PgProgram::new(PreparedProgram::new(program).expect("test programme is valid"))
 }
 
 /// Wrap a kernel transition in a gateway-attested proposal - the shape

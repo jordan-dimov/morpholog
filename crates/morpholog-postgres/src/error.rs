@@ -173,7 +173,7 @@ pub enum PgError {
     )]
     ActorAssertionUnauthorised { actor: Subject, login_role: String },
     /// A [`morpholog_core::Transition`] named a transformation the
-    /// [`morpholog_core::CompiledProgram`] does not declare.
+    /// [`morpholog_core::PreparedProgram`] does not declare.
     #[error("no transformation named `{name}` in the programme")]
     UnknownTransformation { name: TransformationName },
     /// `export_pack` found no checkpoint to cover the requested prefix -

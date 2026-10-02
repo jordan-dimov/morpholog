@@ -30,7 +30,7 @@
 use std::fmt::Write as _;
 
 use morpholog_core::{
-    CompiledProgram, EvalError, EvalValue, Outcome, Program, Prop, RejectionReason, StagedDelta,
+    EvalError, EvalValue, Outcome, PreparedProgram, Program, Prop, RejectionReason, StagedDelta,
     Subject, Transition, WitnessBinding, finish_staged_delta_with, propose_stage_delta,
 };
 use uuid::Uuid;
@@ -89,7 +89,7 @@ enum Probe {
 /// contract.
 async fn probe_raw(
     pool: &PgPool,
-    compiled: &CompiledProgram,
+    compiled: &PreparedProgram,
     sql_set: &CompiledInvariantSet,
     transformation_name: &str,
     args: Vec<EvalValue>,
@@ -308,7 +308,7 @@ async fn sweep(program: Program) -> usize {
             )
         })
         .collect();
-    let compiled = CompiledProgram::new(program).expect("gallery programme compiles");
+    let compiled = PreparedProgram::new(program).expect("gallery programme compiles");
     let pool = test_pool().await;
 
     let mut probes = 0usize;
@@ -326,7 +326,7 @@ async fn sweep(program: Program) -> usize {
                 };
                 let outcome = propose_against_pg(
                     &pool,
-                    &PgProgram::new(CompiledProgram::new(compiled.program().clone()).unwrap()),
+                    &PgProgram::new(PreparedProgram::new(compiled.program().clone()).unwrap()),
                     &Proposal::gateway(&transition),
                 )
                 .await
@@ -753,7 +753,7 @@ async fn an_overflow_that_compares_as_holding_is_the_kernels_error_on_both_stage
     assert_eq!(program.name, "two_lines");
     let validated = program.validated().expect("validates");
     let sql_set = compile_invariants(validated).expect("two_lines is whole-in-fragment");
-    let compiled = CompiledProgram::new(program.clone()).expect("compiles");
+    let compiled = PreparedProgram::new(program.clone()).expect("compiles");
     let pool = test_pool().await;
     reset_db(&pool).await;
     let floor = Transition {
@@ -763,7 +763,7 @@ async fn an_overflow_that_compares_as_holding_is_the_kernels_error_on_both_stage
     };
     let outcome = propose_against_pg(
         &pool,
-        &PgProgram::new(CompiledProgram::new(program).expect("compiles")),
+        &PgProgram::new(PreparedProgram::new(program).expect("compiles")),
         &Proposal::gateway(&floor),
     )
     .await
@@ -810,7 +810,7 @@ transformation enable_and_hold(flag, x, q):
     .expect("parses");
     let validated = program.validated().expect("validates");
     let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-    let compiled = CompiledProgram::new(program).expect("compiles");
+    let compiled = PreparedProgram::new(program).expect("compiles");
     let pool = test_pool().await;
     reset_db(&pool).await;
     for (x, unit) in [("a", "EUR"), ("b", "GBP")] {
@@ -871,7 +871,7 @@ transformation enable_and_hold(flag, x1, q1, x2, q2):
     .expect("parses");
     let validated = program.validated().expect("validates");
     let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-    let compiled = CompiledProgram::new(program).expect("compiles");
+    let compiled = PreparedProgram::new(program).expect("compiles");
     let pool = test_pool().await;
     reset_db(&pool).await;
     let probe = probe_raw(
@@ -938,7 +938,7 @@ transformation copy():
         .expect("parses");
         let validated = program.validated().expect("validates");
         let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-        let compiled = CompiledProgram::new(program).expect("compiles");
+        let compiled = PreparedProgram::new(program).expect("compiles");
         let pool = test_pool().await;
         reset_db(&pool).await;
         sqlx::query(
@@ -986,7 +986,7 @@ transformation check(x):
     .expect("parses");
     let validated = program.validated().expect("validates");
     let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-    let compiled = CompiledProgram::new(program).expect("compiles");
+    let compiled = PreparedProgram::new(program).expect("compiles");
     let pool = test_pool().await;
     reset_db(&pool).await;
     for (predicate, amount) in [("Old", "1.0"), ("Mirror", "1.00")] {
@@ -1031,7 +1031,7 @@ transformation open(x, s, e):
     .expect("parses");
     let validated = program.validated().expect("validates");
     let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-    let compiled = CompiledProgram::new(program).expect("compiles");
+    let compiled = PreparedProgram::new(program).expect("compiles");
     let pool = test_pool().await;
     reset_db(&pool).await;
     let probe = probe_raw(
@@ -1071,7 +1071,7 @@ transformation set(x, n):
     .expect("parses");
     let validated = program.validated().expect("validates");
     let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-    let compiled = CompiledProgram::new(program).expect("compiles");
+    let compiled = PreparedProgram::new(program).expect("compiles");
     let pool = test_pool().await;
     reset_db(&pool).await;
     let probe = probe_raw(
@@ -1112,7 +1112,7 @@ transformation add_two(p, amount, q, other):
     let program = morpholog_surface::parse_program(source).expect("parses");
     let validated = program.validated().expect("validates");
     let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-    let compiled = CompiledProgram::new(program).expect("compiles");
+    let compiled = PreparedProgram::new(program).expect("compiles");
     let pool = test_pool().await;
     let subject = |s: &str| serde_json::json!({"type":"subject","value":s});
     let decimal = |s: &str| serde_json::json!({"type":"decimal","value":s});
@@ -1195,7 +1195,7 @@ async fn dirty_history_blocks_only_the_writes_that_touch_it() {
     let program = morpholog_examples::double_entry_ledger::program();
     let validated = program.validated().expect("ledger validates");
     let sql_set = compile_invariants(validated).expect("ledger is whole-in-fragment");
-    let compiled = CompiledProgram::new(program).expect("ledger compiles");
+    let compiled = PreparedProgram::new(program).expect("ledger compiles");
     let pool = test_pool().await;
     reset_db(&pool).await;
 
@@ -1418,7 +1418,7 @@ async fn expect_kernel_error_agreed(source: &str, transformation: &str, args: Ve
     let program = morpholog_surface::parse_program(source).expect("parses");
     let validated = program.validated().expect("validates");
     let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-    let compiled = CompiledProgram::new(program).expect("compiles");
+    let compiled = PreparedProgram::new(program).expect("compiles");
     match probe_raw(&pool, &compiled, &sql_set, transformation, args).await {
         Ok(Probe::KernelErrorAgreed) => {}
         Ok(Probe::BodyRejected) => panic!("the body admits"),
@@ -1809,7 +1809,7 @@ transformation open(x, opened, closed):
     .expect("parses");
     let validated = program.validated().expect("validates");
     let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-    let compiled = CompiledProgram::new(program).expect("compiles");
+    let compiled = PreparedProgram::new(program).expect("compiles");
     let pool = test_pool().await;
     reset_db(&pool).await;
     let probe = probe_raw(
@@ -1978,7 +1978,7 @@ transformation enable(flag):
         let program = morpholog_surface::parse_program(SOURCE).expect("parses");
         let validated = program.validated().expect("validates");
         let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-        let compiled = CompiledProgram::new(program).expect("compiles");
+        let compiled = PreparedProgram::new(program).expect("compiles");
         match probe_raw(&pool, &compiled, &sql_set, "enable", vec![subj("f")]).await {
             Ok(Probe::KernelErrorAgreed) => assert_eq!(n["type"], "subject"),
             Ok(Probe::Observed(obs)) => {
@@ -2028,7 +2028,7 @@ transformation enable(flag):
             let program = morpholog_surface::parse_program(SOURCE).expect("parses");
             let validated = program.validated().expect("validates");
             let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-            let compiled = CompiledProgram::new(program).expect("compiles");
+            let compiled = PreparedProgram::new(program).expect("compiles");
             match probe_raw(&pool, &compiled, &sql_set, "enable", vec![subj("f")]).await {
                 Ok(Probe::Observed(obs)) => governed_contract(&obs)
                     .unwrap_or_else(|msg| panic!("joined {joined}, unjoined {unjoined}: {msg}")),
@@ -2076,7 +2076,7 @@ transformation enable(flag):
         let program = morpholog_surface::parse_program(SOURCE).expect("parses");
         let validated = program.validated().expect("validates");
         let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-        let compiled = CompiledProgram::new(program).expect("compiles");
+        let compiled = PreparedProgram::new(program).expect("compiles");
         match probe_raw(&pool, &compiled, &sql_set, "enable", vec![subj("f")]).await {
             Ok(Probe::Observed(obs)) => {
                 governed_contract(&obs).unwrap_or_else(|msg| panic!("reached {reached}: {msg}"))
@@ -2103,7 +2103,7 @@ async fn probe_enable(
     }
     let validated = program.validated().expect("validates");
     let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-    let compiled = CompiledProgram::new(program).expect("compiles");
+    let compiled = PreparedProgram::new(program).expect("compiles");
     let obs = match probe_raw(pool, &compiled, &sql_set, "enable", vec![subj("f")]).await {
         Ok(Probe::Observed(obs)) => obs,
         other => panic!("{}", describe(other)),
@@ -2385,7 +2385,7 @@ transformation add_a(p):
         let program = morpholog_surface::parse_program(&source).expect("parses");
         let validated = program.validated().expect("validates");
         let sql_set = compile_invariants(validated).expect("whole-in-fragment");
-        let compiled = CompiledProgram::new(program).expect("compiles");
+        let compiled = PreparedProgram::new(program).expect("compiles");
         let obs = match probe_raw(&pool, &compiled, &sql_set, "add_a", vec![subj("x")]).await {
             Ok(Probe::Observed(obs)) => obs,
             other => panic!("{body}: {}", describe(other)),

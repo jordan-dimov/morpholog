@@ -3,13 +3,13 @@
 //! interpreter keeps it, decided once, here, at load; an execution walks
 //! them in programme order, each run of like kind through its evaluator.
 
-use morpholog_core::{CompiledProgram, ReadPlan, Transformation, Transition};
+use morpholog_core::{PreparedProgram, ReadPlan, Transformation, Transition};
 
 use crate::compiled::{CompileRefusal, CompiledInvariantSet, IndexSpec, Run, compile_each};
 use crate::propose::{LoadScope, Reads, compute_load_scope};
 
 pub struct PgProgram {
-    core: CompiledProgram,
+    core: PreparedProgram,
     backend: InvariantBackend,
 }
 
@@ -83,7 +83,7 @@ impl<'a> Route<'a> {
 }
 
 impl PgProgram {
-    pub fn new(core: CompiledProgram) -> Self {
+    pub fn new(core: PreparedProgram) -> Self {
         let compilation = compile_each(core.validated());
         let interpreted = InvariantBackend::interpreted_indices(&compilation.runs);
         Self {
@@ -101,7 +101,7 @@ impl PgProgram {
     /// eligible for. Lets the benchmark run one programme through both
     /// evaluators; not a knob for embedders, since both decide the same.
     #[doc(hidden)]
-    pub fn interpreted(core: CompiledProgram) -> Self {
+    pub fn interpreted(core: PreparedProgram) -> Self {
         let count = core.program().invariants.len();
         let runs = if count == 0 {
             Vec::new()
@@ -121,7 +121,7 @@ impl PgProgram {
         }
     }
 
-    pub fn core(&self) -> &CompiledProgram {
+    pub fn core(&self) -> &PreparedProgram {
         &self.core
     }
 
@@ -203,7 +203,7 @@ mod tests {
     /// invariant reads lines a posting never consults.
     #[test]
     fn the_compiled_route_loads_less_than_the_interpreter() {
-        let core = CompiledProgram::new(morpholog_examples::double_entry_ledger::program())
+        let core = PreparedProgram::new(morpholog_examples::double_entry_ledger::program())
             .expect("ledger compiles");
         let program = PgProgram::new(core);
         let Route::Compiled(_) = program.route() else {
@@ -239,7 +239,7 @@ mod tests {
             "compiled {compiled:?}, interpreted {interpreted:?}"
         );
         let pinned = PgProgram::interpreted(
-            CompiledProgram::new(morpholog_examples::double_entry_ledger::program()).unwrap(),
+            PreparedProgram::new(morpholog_examples::double_entry_ledger::program()).unwrap(),
         );
         assert!(matches!(pinned.route(), Route::Interpreted));
         assert!(

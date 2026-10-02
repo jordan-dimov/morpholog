@@ -5,8 +5,8 @@ use crate::program::{PgProgram, Route};
 use crate::sql_quote::quote_literal;
 use crate::txn::{LoginRole, begin_authorised_proposal_tx};
 use morpholog_core::{
-    Admission, ClaimInstance, CompiledProgram, Definition, EffectiveDelta, EvalError, EvalValue,
-    IntentInstance, Invariant, InvariantName, Outcome, PredicateName, ReadFilter, ReadPlan,
+    Admission, ClaimInstance, Definition, EffectiveDelta, EvalError, EvalValue, IntentInstance,
+    Invariant, InvariantName, Outcome, PredicateName, PreparedProgram, ReadFilter, ReadPlan,
     RejectionReason, RuleName, StagedDelta, State, Subject, TraceEntry, TracedProposal,
     Transformation, TransformationName, Transition, WitnessBinding,
     finish_staged_delta_with_effective, propose_stage_delta, propose_with, propose_with_trace,
@@ -98,7 +98,7 @@ pub async fn propose_against_pg(
 /// definitions. Refuses misshapen actor-policy declarations; an unknown
 /// name is [`PgError::UnknownTransformation`].
 pub(crate) fn resolve<'a>(
-    compiled: &'a CompiledProgram,
+    compiled: &'a PreparedProgram,
     name: &TransformationName,
 ) -> Result<(&'a Transformation, &'a [Invariant], &'a [Definition]), PgError> {
     let findings = crate::actor_policy::validate_declarations(compiled.program());
@@ -120,7 +120,7 @@ pub(crate) fn resolve<'a>(
 /// [`resolve`] plus the programme's admission rules, with the impact
 /// plans it built at construction.
 pub(crate) fn resolve_admission<'a>(
-    compiled: &'a CompiledProgram,
+    compiled: &'a PreparedProgram,
     name: &TransformationName,
 ) -> Result<(&'a Transformation, Admission<'a>), PgError> {
     let (transformation, _, _) = resolve(compiled, name)?;

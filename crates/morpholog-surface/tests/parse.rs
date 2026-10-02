@@ -1587,7 +1587,7 @@ fn a_sum_reached_through_many_definitions_keeps_its_unit() {
     );
 
     let program = parse_program(&source).expect("the chain should parse");
-    let compiled = morpholog_core::CompiledProgram::new(program).expect("and validate");
+    let compiled = morpholog_core::PreparedProgram::new(program).expect("and validate");
     let transformation = compiled
         .transformation(&"check_total".into())
         .expect("the transformation is declared");

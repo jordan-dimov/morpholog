@@ -447,7 +447,7 @@ async fn batch_row_outcome(
 /// refuse a malformed row with the same code.
 pub(crate) fn decode_row(
     file: &std::path::Path,
-    compiled: &morpholog_core::CompiledProgram,
+    compiled: &morpholog_core::PreparedProgram,
     row: BatchRow,
 ) -> Result<Transition, RowError> {
     let transformation = lookup_transformation(compiled, &row.transformation, file)

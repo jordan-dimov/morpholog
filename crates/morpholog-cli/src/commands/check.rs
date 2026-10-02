@@ -4,7 +4,7 @@ use crate::CheckArgs;
 use crate::commands::{AlreadyReported, print_json};
 use anyhow::Context;
 use morpholog_cli::envelopes::{CheckDiagnostic, CheckReport};
-use morpholog_core::{CompiledProgram, Program};
+use morpholog_core::{PreparedProgram, Program};
 use morpholog_postgres::{InvariantPlan, PgProgram};
 use morpholog_surface::{Diagnostic, Span, parse_program_with_sources};
 use std::path::Path;
@@ -61,7 +61,7 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     }
     if let Some(program) = &collected.program {
         if args.verbose {
-            let compiled = CompiledProgram::new(program.clone()).map_err(|errors| {
+            let compiled = PreparedProgram::new(program.clone()).map_err(|errors| {
                 anyhow::anyhow!("a checked programme failed to compile: {errors:?}")
             })?;
             print!("{}", summary(&PgProgram::new(compiled), &args.file));
@@ -160,9 +160,9 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
             return Ok(out);
         }
     };
-    // Building the `CompiledProgram` validates: `Err` holds the same
+    // Building the `PreparedProgram` validates: `Err` holds the same
     // errors `program.validate()` would.
-    let compiled = match CompiledProgram::new(program) {
+    let compiled = match PreparedProgram::new(program) {
         Ok(compiled) => compiled,
         Err(errors) => {
             out.failed = true;
@@ -253,7 +253,7 @@ fn load_against(path: &Path) -> Result<Program, Vec<Finding>> {
             })
             .collect::<Vec<_>>()
     })?;
-    let compiled = CompiledProgram::new(program).map_err(|errors| {
+    let compiled = PreparedProgram::new(program).map_err(|errors| {
         errors
             .iter()
             .map(|e| {
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn summary_names_the_program_and_counts_each_declaration_kind() {
-        let p = PgProgram::new(CompiledProgram::new(program("demo").build()).unwrap());
+        let p = PgProgram::new(PreparedProgram::new(program("demo").build()).unwrap());
         let s = summary(&p, Path::new("demo.morph"));
         assert_eq!(
             s,

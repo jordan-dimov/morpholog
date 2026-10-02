@@ -26,7 +26,6 @@ pub mod ir_builder;
 pub mod analysis;
 pub mod calendar;
 mod check;
-mod compiled;
 mod controls;
 mod coverage;
 mod definitions;
@@ -39,6 +38,7 @@ mod guarantees;
 mod impact;
 mod ir;
 mod lint;
+mod prepared;
 mod propose;
 mod reads;
 pub mod schema;
@@ -53,7 +53,6 @@ pub use analysis::{
     predicates_read_by_stmt, predicates_referenced_by_derived, predicates_referenced_by_prop,
     predicates_written_by, transformation_param_kinds, transformations_asserting,
 };
-pub use compiled::CompiledProgram;
 pub use controls::{
     ControlMatrix, GateControl, GateFrontLoad, GateRef, InvariantFrontLoad, TransformationControls,
     controls, render_controls,
@@ -80,6 +79,7 @@ pub use ir::{
     Unit, Value, ValueExpr, Var,
 };
 pub use lint::{Lint, SharedWriterPeer, lints, shared_writer_lints};
+pub use prepared::PreparedProgram;
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RejectionReason, RequireOutcome, StagedDelta,
     TraceEntry, TracedProposal, Transition, WitnessBinding, finish_staged_delta_with,

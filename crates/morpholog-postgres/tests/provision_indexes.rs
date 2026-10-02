@@ -425,7 +425,7 @@ async fn an_interpreted_programme_requires_the_indexes_its_loads_seek_on() {
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
     let interpreted = PgProgram::interpreted(
-        morpholog_core::CompiledProgram::new(double_entry_ledger::program()).unwrap(),
+        morpholog_core::PreparedProgram::new(double_entry_ledger::program()).unwrap(),
     );
     let report = plan_indexes(&pool, &[&interpreted], false).await.unwrap();
     let creates: Vec<(String, usize)> = report

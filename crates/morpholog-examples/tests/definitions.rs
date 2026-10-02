@@ -91,9 +91,9 @@ fn club_with_sponsor() -> (Program, State) {
 // through the `sponsor` argument. The caller sees only that argument,
 // never the body's internals.
 
-/// Build a CompiledProgram for the analysis entry points.
-fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
-    morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
+/// Build a PreparedProgram for the analysis entry points.
+fn compiled(p: &morpholog_core::Program) -> morpholog_core::PreparedProgram {
+    morpholog_core::PreparedProgram::new(p.clone()).expect("fixture is valid")
 }
 
 #[test]

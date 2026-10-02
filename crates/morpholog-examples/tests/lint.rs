@@ -66,9 +66,9 @@ invariant decisions_need_live_mandate:
     Decision(d, doc) implies CurrentMandate(doc, _)
 "#;
 
-/// Build the `CompiledProgram` the analysis entry points take.
-fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
-    morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
+/// Build the `PreparedProgram` the analysis entry points take.
+fn compiled(p: &morpholog_core::Program) -> morpholog_core::PreparedProgram {
+    morpholog_core::PreparedProgram::new(p.clone()).expect("fixture is valid")
 }
 
 #[test]

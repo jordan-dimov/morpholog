@@ -10,7 +10,7 @@
 mod common;
 
 use common::{reset_db, seed_claims, test_pool};
-use morpholog_core::{CompiledProgram, Subject, Transition};
+use morpholog_core::{PreparedProgram, Subject, Transition};
 use morpholog_postgres::{PgAtomicOutcome, PgProgram, Proposal, propose_all_against_pg};
 use morpholog_test_support::{claim_instance, subj};
 
@@ -44,8 +44,8 @@ fn act(name: &str, k: &str) -> Proposal {
 
 fn routes() -> [PgProgram; 2] {
     [
-        PgProgram::interpreted(CompiledProgram::new(program()).unwrap()),
-        PgProgram::new(CompiledProgram::new(program()).unwrap()),
+        PgProgram::interpreted(PreparedProgram::new(program()).unwrap()),
+        PgProgram::new(PreparedProgram::new(program()).unwrap()),
     ]
 }
 

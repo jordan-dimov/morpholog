@@ -356,7 +356,7 @@ pub(crate) fn propose_inner(
 }
 
 /// [`propose`] with impact plans built ahead of time (see
-/// [`crate::CompiledProgram::admission`]), so nothing is planned per call.
+/// [`crate::PreparedProgram::admission`]), so nothing is planned per call.
 pub fn propose_with(
     transformation: &Transformation,
     transition: &Transition,

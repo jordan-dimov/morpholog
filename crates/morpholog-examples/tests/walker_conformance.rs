@@ -15,7 +15,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::{
-    CompiledProgram, CoverageTracker, PredicateName, Program, controls, format::format_program,
+    CoverageTracker, PredicateName, PreparedProgram, Program, controls, format::format_program,
     lints, predicates_referenced_by_prop, transformation_param_kinds,
 };
 use morpholog_surface::parse_program;
@@ -510,7 +510,7 @@ fn every_fragment_survives_every_walker_deterministically() {
         assert_eq!(program, reparsed, "`{name}`: format round-trip drifted");
 
         // The analysis-grade walkers run, and run the same way twice.
-        let compiled = CompiledProgram::new(program.clone())
+        let compiled = PreparedProgram::new(program.clone())
             .unwrap_or_else(|e| panic!("corpus `{name}` must compile: {e:?}"));
         assert_eq!(lints(&compiled), lints(&compiled), "`{name}`: lints drift");
         assert_eq!(
@@ -748,7 +748,7 @@ fn the_unsupplied_antecedent_lint_descends_the_definition() {
     // here means the lint walker stopped at the call.
     use morpholog_core::Lint;
     let program = parsed("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED);
-    let compiled = CompiledProgram::new(program).unwrap();
+    let compiled = PreparedProgram::new(program).unwrap();
     let findings = lints(&compiled);
     assert!(
         findings.iter().any(|l| matches!(

@@ -25,7 +25,7 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_core::{
-    ClaimInstance, CompiledProgram, EvalValue, Outcome, Program, State, Subject, Transformation,
+    ClaimInstance, EvalValue, Outcome, PreparedProgram, Program, State, Subject, Transformation,
     TransformationName, Transition, enumerate_derived, predicates_referenced_by_derived, propose,
 };
 use morpholog_examples::double_entry_ledger;
@@ -634,7 +634,7 @@ impl Implementation {
     /// interpreter, so a row labelled compiled really is.
     fn program(self, core: Program) -> Result<PgProgram> {
         let compiled =
-            CompiledProgram::new(core).map_err(|e| anyhow!("invalid programme: {e:?}"))?;
+            PreparedProgram::new(core).map_err(|e| anyhow!("invalid programme: {e:?}"))?;
         match self {
             Implementation::Interpreted => Ok(PgProgram::interpreted(compiled)),
             Implementation::Compiled | Implementation::CompiledIndexed => {
@@ -685,7 +685,7 @@ async fn establish(pool: &PgPool, implementation: Implementation, cores: &[Progr
     }
     for core in cores {
         let classified = PgProgram::new(
-            CompiledProgram::new(core.clone()).map_err(|e| anyhow!("invalid programme: {e:?}"))?,
+            PreparedProgram::new(core.clone()).map_err(|e| anyhow!("invalid programme: {e:?}"))?,
         );
         if implementation.indexed() {
             let report = morpholog_postgres::provision_indexes(pool, &[&classified], false)

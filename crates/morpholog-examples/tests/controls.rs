@@ -14,9 +14,9 @@ use morpholog_examples::{
     approval_controls, biometric_identification_oversight as bio, trade_lifecycle,
 };
 
-/// Build a CompiledProgram for the analysis entry points.
-fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
-    morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
+/// Build a PreparedProgram for the analysis entry points.
+fn compiled(p: &morpholog_core::Program) -> morpholog_core::PreparedProgram {
+    morpholog_core::PreparedProgram::new(p.clone()).expect("fixture is valid")
 }
 
 #[test]

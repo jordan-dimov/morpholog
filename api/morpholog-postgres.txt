@@ -1337,9 +1337,9 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::PackVerific
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::PackVerificationReport
 pub struct morpholog_postgres::PgProgram
 impl morpholog_postgres::PgProgram
-pub fn morpholog_postgres::PgProgram::core(&self) -> &morpholog_core::compiled::CompiledProgram
-pub fn morpholog_postgres::PgProgram::interpreted(morpholog_core::compiled::CompiledProgram) -> Self
-pub fn morpholog_postgres::PgProgram::new(morpholog_core::compiled::CompiledProgram) -> Self
+pub fn morpholog_postgres::PgProgram::core(&self) -> &morpholog_core::prepared::PreparedProgram
+pub fn morpholog_postgres::PgProgram::interpreted(morpholog_core::prepared::PreparedProgram) -> Self
+pub fn morpholog_postgres::PgProgram::new(morpholog_core::prepared::PreparedProgram) -> Self
 pub fn morpholog_postgres::PgProgram::plan(&self) -> morpholog_postgres::InvariantPlan<'_>
 impl core::marker::Freeze for morpholog_postgres::PgProgram
 impl core::marker::Send for morpholog_postgres::PgProgram
@@ -1988,7 +1988,7 @@ pub async fn morpholog_postgres::list_outbox_rows(&sqlx_postgres::PgPool, core::
 pub async fn morpholog_postgres::list_pending_outbox(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_rejection_rows(&sqlx_postgres::PgPool, u32) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::RejectionRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::load_checkpoint(&sqlx_postgres::PgPool, i64) -> core::result::Result<core::option::Option<morpholog_postgres::Checkpoint>, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::load_scoped_state(&sqlx_postgres::PgPool, &morpholog_core::compiled::CompiledProgram, &morpholog_core::ir::Transformation) -> core::result::Result<morpholog_core::state::State, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::load_scoped_state(&sqlx_postgres::PgPool, &morpholog_core::prepared::PreparedProgram, &morpholog_core::ir::Transformation) -> core::result::Result<morpholog_core::state::State, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::mark_compensation_failed(&sqlx_postgres::PgPool, uuid::Uuid, &str, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::mark_outbox_delivered(&sqlx_postgres::PgPool, uuid::Uuid, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::mark_outbox_failed(&sqlx_postgres::PgPool, uuid::Uuid, &str, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>

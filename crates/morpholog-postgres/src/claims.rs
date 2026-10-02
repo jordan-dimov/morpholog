@@ -1,6 +1,6 @@
 use crate::error::{PgError, classify_checked_query};
 use crate::propose::{Reads, compute_load_scope};
-use morpholog_core::{ClaimInstance, CompiledProgram, PredicateName, State, Transformation};
+use morpholog_core::{ClaimInstance, PredicateName, PreparedProgram, State, Transformation};
 use sqlx::PgPool;
 /// Return every currently-admitted claim from `morpholog.claims`.
 ///
@@ -156,7 +156,7 @@ pub async fn list_claims_where(
 /// transformation would load the wrong predicates.
 pub async fn load_scoped_state(
     pool: &PgPool,
-    compiled: &CompiledProgram,
+    compiled: &PreparedProgram,
     transformation: &Transformation,
 ) -> Result<State, PgError> {
     let program = compiled.program();

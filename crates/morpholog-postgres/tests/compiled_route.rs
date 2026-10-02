@@ -15,7 +15,7 @@ mod common;
 use common::routes::{RouteObservation, count, observe};
 use common::{reset_db, seed_claims, test_pool};
 use morpholog_core::{
-    ClaimInstance, CompiledProgram, EvalError, EvalValue, Program, Subject, Transition,
+    ClaimInstance, EvalError, EvalValue, PreparedProgram, Program, Subject, Transition,
 };
 use morpholog_examples::{clinical_trial_enrolment, double_entry_ledger};
 use morpholog_postgres::{
@@ -29,7 +29,7 @@ fn eligible_gallery() -> Vec<Program> {
     morpholog_examples::all_programs()
         .into_iter()
         .filter(|p| {
-            let program = PgProgram::new(CompiledProgram::new(p.clone()).unwrap());
+            let program = PgProgram::new(PreparedProgram::new(p.clone()).unwrap());
             matches!(program.plan(), InvariantPlan::Compiled)
         })
         .collect()
@@ -41,8 +41,8 @@ async fn both_routes_reach_the_same_decision_over_the_gallery() {
     let (mut cases, mut commits, mut refusals, mut errors, mut skipped) =
         (0usize, 0usize, 0usize, 0usize, 0usize);
     for program in eligible_gallery() {
-        let compiled = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
-        let interpreted = PgProgram::interpreted(CompiledProgram::new(program.clone()).unwrap());
+        let compiled = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
+        let interpreted = PgProgram::interpreted(PreparedProgram::new(program.clone()).unwrap());
         for t in &program.transformations {
             for salt in 0..2u64 {
                 let Some(args) = sample_args(&program, t, salt) else {
@@ -127,7 +127,7 @@ async fn both_routes(
         actor: Subject::from("route_test"),
     };
     let interpreted =
-        PgProgram::interpreted(CompiledProgram::new(double_entry_ledger::program()).unwrap());
+        PgProgram::interpreted(PreparedProgram::new(double_entry_ledger::program()).unwrap());
     let spec = observe(pool, &interpreted, seeded, &transition).await;
     let real = observe(pool, &ledger(), seeded, &transition).await;
     (spec, real)
@@ -225,9 +225,9 @@ async fn a_rule_calling_a_definition_is_case_local_on_both_routes() {
         actor: Subject::from("route_test"),
     };
     let compiled =
-        PgProgram::new(CompiledProgram::new(clinical_trial_enrolment::program()).unwrap());
+        PgProgram::new(PreparedProgram::new(clinical_trial_enrolment::program()).unwrap());
     let interpreted =
-        PgProgram::interpreted(CompiledProgram::new(clinical_trial_enrolment::program()).unwrap());
+        PgProgram::interpreted(PreparedProgram::new(clinical_trial_enrolment::program()).unwrap());
 
     let elsewhere = consent("p2", "2026-02-01");
     let spec = observe(&pool, &interpreted, &seeded, &elsewhere).await;
@@ -276,7 +276,7 @@ async fn an_excess_that_cancels_is_representable_on_both_routes() {
 /// compares the two routes can silently compare the interpreter with
 /// itself.
 fn ledger() -> PgProgram {
-    let program = PgProgram::new(CompiledProgram::new(double_entry_ledger::program()).unwrap());
+    let program = PgProgram::new(PreparedProgram::new(double_entry_ledger::program()).unwrap());
     assert!(matches!(program.plan(), InvariantPlan::Compiled));
     program
 }
@@ -455,9 +455,9 @@ transformation churn(e, side, dr, cr):
     admit Line(e, side, dr, cr)
 ";
     let program = morpholog_surface::parse_program(source).expect("parses");
-    let compiled = PgProgram::new(CompiledProgram::new(program.clone()).unwrap());
+    let compiled = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
     assert!(matches!(compiled.plan(), InvariantPlan::Compiled));
-    let interpreted = PgProgram::interpreted(CompiledProgram::new(program).unwrap());
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(program).unwrap());
     (compiled, interpreted)
 }
 
@@ -543,8 +543,8 @@ transformation hold(x, q):
 ",
     )
     .unwrap();
-    let interpreted = PgProgram::interpreted(CompiledProgram::new(program.clone()).unwrap());
-    let compiled = PgProgram::new(CompiledProgram::new(program).unwrap());
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(program.clone()).unwrap());
+    let compiled = PgProgram::new(PreparedProgram::new(program).unwrap());
     assert!(matches!(compiled.plan(), InvariantPlan::Compiled { .. }));
     let history = [
         ClaimInstance {

@@ -40,7 +40,7 @@ impl From<Act> for BatchRow {
 /// invalid; it never reaches the database.
 pub(crate) fn decode_acts(
     file: &std::path::Path,
-    compiled: &morpholog_core::CompiledProgram,
+    compiled: &morpholog_core::PreparedProgram,
     acts: Vec<Act>,
 ) -> Result<Vec<Proposal>, RowError> {
     if acts.is_empty() {

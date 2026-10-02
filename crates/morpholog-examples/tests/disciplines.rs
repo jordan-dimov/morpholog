@@ -76,9 +76,9 @@ fn registry_with_figure() -> (Program, State) {
 // content, is refused - and the refusal names the generated invariant,
 // the name an audit row would carry.
 
-/// The analysis entry points take a `&CompiledProgram`.
-fn compiled(p: &morpholog_core::Program) -> morpholog_core::CompiledProgram {
-    morpholog_core::CompiledProgram::new(p.clone()).expect("fixture is valid")
+/// The analysis entry points take a `&PreparedProgram`.
+fn compiled(p: &morpholog_core::Program) -> morpholog_core::PreparedProgram {
+    morpholog_core::PreparedProgram::new(p.clone()).expect("fixture is valid")
 }
 
 #[test]
@@ -982,7 +982,7 @@ transformation price(charge, priced_on, amount):
 fn an_effective_predicate_without_a_declared_companion_is_flagged() {
     let undeclared = TOTALITY.replace(" total over ChargeRate", "");
     let program = parse_program(&undeclared).expect("parses either way");
-    let compiled = morpholog_core::CompiledProgram::new(program).expect("valid");
+    let compiled = morpholog_core::PreparedProgram::new(program).expect("valid");
     let hints = morpholog_core::lints(&compiled);
     assert!(
         hints.iter().any(|l| matches!(
@@ -994,7 +994,7 @@ fn an_effective_predicate_without_a_declared_companion_is_flagged() {
 
     // Declared: no finding.
     let declared = parse_program(TOTALITY).expect("parses");
-    let compiled = morpholog_core::CompiledProgram::new(declared).expect("valid");
+    let compiled = morpholog_core::PreparedProgram::new(declared).expect("valid");
     let hints = morpholog_core::lints(&compiled);
     assert!(
         !hints.iter().any(|l| matches!(
@@ -1012,7 +1012,7 @@ fn an_effective_predicate_without_a_declared_companion_is_flagged() {
 #[test]
 fn a_declared_companion_settles_the_governing_selection_lint() {
     let declared = parse_program(TOTALITY).expect("parses");
-    let compiled = morpholog_core::CompiledProgram::new(declared).expect("valid");
+    let compiled = morpholog_core::PreparedProgram::new(declared).expect("valid");
     let hints = morpholog_core::lints(&compiled);
     assert!(
         !hints.iter().any(|l| matches!(
@@ -1062,7 +1062,7 @@ transformation price(charge, priced_on, amount):
     admit Priced(charge, priced_on, amount)
 "#;
     let program = parse_program(circular).expect("parses");
-    let compiled = morpholog_core::CompiledProgram::new(program).expect("valid");
+    let compiled = morpholog_core::PreparedProgram::new(program).expect("valid");
     let hints = morpholog_core::lints(&compiled);
     assert!(
         hints.iter().any(|l| matches!(
@@ -1098,7 +1098,7 @@ transformation price(charge, priced_on, amount):
     admit Priced(charge, priced_on, amount)
 "#;
     let program = parse_program(indirect).expect("parses");
-    let compiled = morpholog_core::CompiledProgram::new(program).expect("valid");
+    let compiled = morpholog_core::PreparedProgram::new(program).expect("valid");
     let hints = morpholog_core::lints(&compiled);
     assert!(
         hints.iter().any(|l| matches!(
@@ -1134,7 +1134,7 @@ transformation settle(trade, settled_on, settled):
     admit TradeSettled(trade, settled_on, settled)
 "#;
     let program = parse_program(source).expect("parses");
-    let compiled = morpholog_core::CompiledProgram::new(program).expect("valid");
+    let compiled = morpholog_core::PreparedProgram::new(program).expect("valid");
     let hints = morpholog_core::lints(&compiled);
     assert!(
         hints.iter().any(|l| matches!(
@@ -1201,7 +1201,7 @@ fn partial_declares_an_intended_totality_gap() {
         "effective by (charge) on (effective_from) partial",
     );
     let program = parse_program(&source).expect("parses");
-    let compiled = morpholog_core::CompiledProgram::new(program).expect("valid");
+    let compiled = morpholog_core::PreparedProgram::new(program).expect("valid");
     let hints = morpholog_core::lints(&compiled);
     assert!(
         !hints.iter().any(|l| matches!(

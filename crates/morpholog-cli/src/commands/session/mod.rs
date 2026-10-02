@@ -33,7 +33,7 @@ use crate::commands::propose::{BatchRow, RowError, classify_pg_error, propose_ro
 use crate::commands::transact::{Act, decode_acts};
 use crate::commands::{compile_or_report, parse_or_report};
 use morpholog_cli::envelopes::{ErrorCode, ErrorReceipt, SessionReady};
-use morpholog_core::CompiledProgram;
+use morpholog_core::PreparedProgram;
 use morpholog_postgres::PgPool;
 use morpholog_postgres::PgProgram;
 
@@ -289,7 +289,7 @@ struct ClaimsBody {
 
 async fn handle_claims(
     args: &SessionArgs,
-    compiled: &CompiledProgram,
+    compiled: &PreparedProgram,
     pool: &PgPool,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, SessionFailure> {
@@ -345,7 +345,7 @@ struct DerivedBody {
 
 async fn handle_derived(
     args: &SessionArgs,
-    compiled: &CompiledProgram,
+    compiled: &PreparedProgram,
     pool: &PgPool,
     body: serde_json::Value,
 ) -> Result<serde_json::Value, SessionFailure> {
@@ -386,7 +386,7 @@ fn resolve_filters(
     filters: &Option<std::collections::BTreeMap<String, String>>,
     named: bool,
     predicates: &[String],
-    compiled: &CompiledProgram,
+    compiled: &PreparedProgram,
 ) -> Result<(Vec<FieldFilter>, i32), SessionFailure> {
     let pairs: Vec<String> = filters
         .iter()
