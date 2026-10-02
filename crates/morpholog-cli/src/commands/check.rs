@@ -463,6 +463,45 @@ fn summary(p: &Program, routes: &[CheckedInvariant], file: &Path) -> String {
 mod tests {
     use super::*;
     use morpholog_core::ir_builder::program;
+    use morpholog_core::{OrderedDomain, PredicateArgKind};
+    use std::collections::BTreeSet;
+
+    /// The kinds `check` can emit are exactly the kinds the result schema
+    /// publishes: one per reachable compiler reason, none stale in the
+    /// schema, and the defensive unvalidated-shape reason has none.
+    #[test]
+    fn the_refusal_kinds_are_exactly_the_published_list() {
+        let reachable = [
+            CompileReason::Construct { construct: "or" },
+            CompileReason::ComparisonDomain {
+                domain: OrderedDomain::Duration,
+            },
+            CompileReason::ArgumentKind {
+                kind: PredicateArgKind::Any,
+            },
+            CompileReason::Literal { kind: "duration" },
+            CompileReason::SumShape { detail: "shape" },
+            CompileReason::ComparisonShape { detail: "shape" },
+        ];
+        let emitted: BTreeSet<&str> = reachable.iter().map(|r| refusal_kind(r).unwrap()).collect();
+        assert_eq!(emitted.len(), reachable.len(), "two reasons share a kind");
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../schemas/result.json")).unwrap();
+        let published: BTreeSet<&str> =
+            schema["$defs"]["check_refusal"]["properties"]["kind"]["enum"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+        assert_eq!(emitted, published);
+        assert!(
+            refusal_kind(&CompileReason::UnvalidatedShape {
+                detail: String::new()
+            })
+            .is_err()
+        );
+    }
 
     #[test]
     fn summary_names_the_program_and_counts_each_declaration_kind() {

@@ -9,7 +9,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from _support import GOLDEN_DIR, add_client_to_path, golden
+from _support import GOLDEN_DIR, TEMPLATES_DIR, add_client_to_path, golden
 
 add_client_to_path()
 
@@ -458,9 +458,22 @@ class CheckRoutes(unittest.TestCase):
         compiled_with_refusal["invariants"][0]["refusal"] = {"kind": "construct", "message": "m"}
         interpreted_without = golden("check_report_routes.json")
         del interpreted_without["invariants"][1]["refusal"]
-        for payload in (compiled_with_refusal, interpreted_without):
+        interpreted_null = golden("check_report_routes.json")
+        interpreted_null["invariants"][1]["refusal"] = None
+        for payload in (compiled_with_refusal, interpreted_without, interpreted_null):
             with self.assertRaises(envelopes.EnvelopeError):
                 envelopes.CheckReport.from_json(payload)
+
+    def test_the_client_knows_exactly_the_published_kinds(self):
+        schema = json.loads((TEMPLATES_DIR.parent / "src" / "schemas" / "result.json").read_text())
+        published = set(schema["$defs"]["check_refusal"]["properties"]["kind"]["enum"])
+        self.assertEqual(envelopes._REFUSAL_KINDS, published)
+
+    def test_a_present_plan_is_a_list_never_null(self):
+        payload = golden("check_report_no_invariants.json")
+        payload["invariants"] = None
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.CheckReport.from_json(payload)
 
 
 class Reports(unittest.TestCase):

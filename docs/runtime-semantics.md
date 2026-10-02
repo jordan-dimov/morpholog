@@ -670,7 +670,7 @@ The kernel IR carries no source spans - a `Program` can be hand-built or deseria
 
 ## Atomicity boundary
 
-Steps 1-7 are atomic. Post-commit, outbox intents deliver at-least-once via workers running outside the transaction. External effects are never rolled back - only retried or compensated.
+Steps 1-7 are atomic. Post-commit, workers running outside the transaction deliver outbox intents: retried, possibly delivered more than once, and recorded as failed when the deliverer judges a delivery permanently impossible. External effects are never rolled back - only retried or compensated.
 
 ## Explicit non-goals for v0
 

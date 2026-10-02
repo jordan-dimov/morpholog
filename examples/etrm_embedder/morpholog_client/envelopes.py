@@ -1353,11 +1353,10 @@ class CheckedInvariant:
                 f"checked invariant: a refusal belongs to an interpreted invariant "
                 f"and only to one, got {payload!r}"
             )
-        refusal = data.get("refusal")
         return cls(
             name=data["name"],
             route=route,
-            refusal=None if refusal is None else CheckRefusal.from_json(refusal),
+            refusal=CheckRefusal.from_json(data["refusal"]) if "refusal" in data else None,
         )
 
 
@@ -1391,15 +1390,15 @@ class CheckReport:
     @classmethod
     def from_json(cls, payload: object) -> CheckReport:
         data = _strict("check report", payload, {"file", "diagnostics"}, {"invariants"})
-        invariants = data.get("invariants")
-        if invariants is not None and not isinstance(invariants, list):
-            raise EnvelopeError(f"check report: invariants is not a list in {payload!r}")
+        invariants = None
+        if "invariants" in data:
+            if not isinstance(data["invariants"], list):
+                raise EnvelopeError(f"check report: invariants is not a list in {payload!r}")
+            invariants = [CheckedInvariant.from_json(i) for i in data["invariants"]]
         return cls(
             file=data["file"],
             diagnostics=[Diagnostic.from_json(d) for d in data["diagnostics"]],
-            invariants=None
-            if invariants is None
-            else [CheckedInvariant.from_json(i) for i in invariants],
+            invariants=invariants,
         )
 
 
