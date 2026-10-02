@@ -597,7 +597,7 @@ Quantifier composition is non-commutative by design. `pre(forall x in S: body)` 
 A programme passes through three levels on its way to a decision, and only the first has identity.
 
 - **The programme** (`Program`) is the semantic object: the rules as parsed and lowered. It is what the canonical hash covers; formatting, comments and equivalent sugar do not move that hash.
-- **The prepared programme** (`PreparedProgram`) is the programme validated, with what can be derived from it computed once: lookups by name, the definition table, each invariant's impact plan. It is a cache. It can be thrown away and recomputed, and a better analysis may replace any part of it without moving the hash, the audit record or any decision.
+- **The prepared programme** (`PreparedProgram`) is the programme validated, with the preparation worth keeping across proposals: lookups by name and each invariant's impact plan. Light borrowed views, such as the definition table, are built on demand. It is a cache. It can be thrown away and recomputed, and a better analysis may replace any part of it without moving the hash, the audit record or any decision.
 - **The execution plan** chooses machinery for one backend: which invariants run as SQL and which in the kernel, in programme order. On PostgreSQL, `PgProgram` binds a prepared programme to its plan, and derives read plans and index requirements from it when asked.
 
 The law between them: **preparation and execution may change cost, never meaning.** For the same programme, admitted state and proposal, every lawful preparation and execution plan produces the same semantic outcome: the same admitted change and emitted intents, or the same rejection, naming the same rule, version and witness, or the same error.

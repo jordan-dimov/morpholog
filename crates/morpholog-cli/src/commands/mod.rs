@@ -149,7 +149,7 @@ pub(crate) fn validate_or_report(parsed: &ParsedSource) -> anyhow::Result<Valida
 /// commands that look transformations up by name.
 pub(crate) fn prepare_or_report(parsed: &ParsedSource) -> anyhow::Result<PreparedProgram> {
     match PreparedProgram::new(parsed.program.clone()) {
-        Ok(compiled) => Ok(compiled),
+        Ok(prepared) => Ok(prepared),
         Err(errors) => {
             for err in &errors {
                 render_validation_error(err, parsed);
@@ -163,14 +163,14 @@ pub(crate) fn prepare_or_report(parsed: &ParsedSource) -> anyhow::Result<Prepare
 /// transformation the file declares. Shared so the error reads the same
 /// from every command.
 pub(crate) fn lookup_transformation<'a>(
-    compiled: &'a PreparedProgram,
+    prepared: &'a PreparedProgram,
     name: &str,
     file: &Path,
 ) -> anyhow::Result<&'a Transformation> {
-    compiled
+    prepared
         .transformation(&TransformationName::from(name))
         .ok_or_else(|| {
-            let available = compiled
+            let available = prepared
                 .program()
                 .transformations
                 .iter()

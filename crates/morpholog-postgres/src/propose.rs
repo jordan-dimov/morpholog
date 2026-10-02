@@ -98,33 +98,33 @@ pub async fn propose_against_pg(
 /// definitions. Refuses misshapen actor-policy declarations; an unknown
 /// name is [`PgError::UnknownTransformation`].
 pub(crate) fn resolve<'a>(
-    compiled: &'a PreparedProgram,
+    prepared: &'a PreparedProgram,
     name: &TransformationName,
 ) -> Result<(&'a Transformation, &'a [Invariant], &'a [Definition]), PgError> {
-    let findings = crate::actor_policy::validate_declarations(compiled.program());
+    let findings = crate::actor_policy::validate_declarations(prepared.program());
     if !findings.is_empty() {
         return Err(PgError::ActorPolicyDeclaration {
             findings: findings.iter().map(ToString::to_string).collect(),
         });
     }
-    let transformation = compiled
+    let transformation = prepared
         .transformation(name)
         .ok_or_else(|| PgError::UnknownTransformation { name: name.clone() })?;
     Ok((
         transformation,
-        &compiled.program().invariants,
-        &compiled.program().definitions,
+        &prepared.program().invariants,
+        &prepared.program().definitions,
     ))
 }
 
 /// [`resolve`] plus the programme's admission rules, with the impact
 /// plans it built at construction.
 pub(crate) fn resolve_admission<'a>(
-    compiled: &'a PreparedProgram,
+    prepared: &'a PreparedProgram,
     name: &TransformationName,
 ) -> Result<(&'a Transformation, Admission<'a>), PgError> {
-    let (transformation, _, _) = resolve(compiled, name)?;
-    Ok((transformation, compiled.admission()))
+    let (transformation, _, _) = resolve(prepared, name)?;
+    Ok((transformation, prepared.admission()))
 }
 
 /// The interpreted propose primitive for compensation, which carries its

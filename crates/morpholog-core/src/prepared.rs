@@ -1,8 +1,9 @@
-//! `PreparedProgram`: a validated programme with what can be derived from
-//! it computed once - by-name lookups, the definition table, each
-//! invariant's impact plan. A cache, not an identity: the [`Program`] it
-//! owns is what the canonical hash covers, and everything here can be
-//! recomputed from it without changing any decision.
+//! `PreparedProgram`: a validated programme with the preparation worth
+//! keeping across proposals - by-name lookups and each invariant's impact
+//! plan. Light borrowed views, such as the definition table, are built on
+//! demand. A cache, not an identity: the [`Program`] it owns is what the
+//! canonical hash covers, and everything here can be recomputed from it
+//! without changing any decision.
 //!
 //! [`Program`] lookups are linear scans; these are indexed once.
 //!
@@ -36,8 +37,9 @@ fn position_index<T, K: Eq + Hash>(items: &[T], key: impl Fn(&T) -> K) -> HashMa
     map
 }
 
-/// A validated programme with its by-name lookups indexed once. See the
-/// module documentation for the relationship to [`ValidatedProgram`].
+/// A validated programme with its lookups and impact plans built once.
+/// See the module documentation for the relationship to
+/// [`ValidatedProgram`].
 #[derive(Debug, Clone)]
 pub struct PreparedProgram {
     program: Program,
