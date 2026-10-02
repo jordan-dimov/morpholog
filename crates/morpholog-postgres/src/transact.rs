@@ -81,7 +81,7 @@ pub async fn propose_all_against_pg(
             "an atomic batch needs at least one proposal".to_string(),
         ));
     }
-    let compiled = program.core();
+    let compiled = program.prepared();
     let acts: Vec<(&Transformation, Transition)> = proposals
         .iter()
         .map(|p| resolve(compiled, &p.transformation_name).map(|(t, _, _)| (t, p.transition())))

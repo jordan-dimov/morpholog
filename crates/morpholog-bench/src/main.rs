@@ -645,7 +645,7 @@ impl Implementation {
                     | InvariantPlan::Mixed { refusals, .. } => Err(anyhow!(
                         "`{}` requested but the programme `{}` would not run compiled whole: {}",
                         self.label(),
-                        program.core().program().name,
+                        program.prepared().program().name,
                         refusals
                             .iter()
                             .map(|r| format!("{}: {}", r.invariant, r.reason))

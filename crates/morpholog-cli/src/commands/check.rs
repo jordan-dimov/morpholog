@@ -361,7 +361,7 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
 /// per declaration kind, and how invariants are checked (compiled to SQL,
 /// or interpreted with each reason named).
 fn summary(program: &PgProgram, file: &Path) -> String {
-    let p = program.core().program();
+    let p = program.prepared().program();
     let mut out = format!(
         "ok: {}\nprogram: {}\n  predicates: {}\n  definitions: {}\n  invariants: {}\n  transformations: {}\n  intents: {}\n  derived claims: {}\n",
         file.display(),

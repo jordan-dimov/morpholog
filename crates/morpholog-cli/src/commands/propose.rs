@@ -78,7 +78,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                 },
                 Some(state),
             ) => {
-                let explanation = explain(program.core().program(), &transition, &state);
+                let explanation = explain(program.prepared().program(), &transition, &state);
                 print_json(&envelopes::RejectedWithExplanation::new(
                     reason,
                     rule.as_deref(),
@@ -117,7 +117,7 @@ async fn prepare(
     program: &PgProgram,
 ) -> Result<(Transition, morpholog_postgres::PgPool), RowError> {
     use envelopes::ProposeCode;
-    let compiled = program.core();
+    let compiled = program.prepared();
     let Some(transformation_name) = args.transformation.as_deref() else {
         return Err(RowError::coded(
             ProposeCode::InvalidRequest,
@@ -488,7 +488,7 @@ pub(crate) async fn propose_row_outcome(
     pool: &morpholog_postgres::PgPool,
     row: BatchRow,
 ) -> Result<serde_json::Value, RowError> {
-    let compiled = program.core();
+    let compiled = program.prepared();
     let transition = decode_row(file, compiled, row)?;
     if explain_on_reject {
         let morpholog_postgres::RejectionStateOutcome {

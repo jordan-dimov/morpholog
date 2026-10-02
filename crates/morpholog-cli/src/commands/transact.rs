@@ -70,7 +70,7 @@ pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
         Ok((_, program)) => program,
         Err(failure) => return report_request_failure(failure),
     };
-    let compiled = program.core();
+    let compiled = program.prepared();
     let input = if args.acts == std::path::Path::new("-") {
         let mut buf = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)

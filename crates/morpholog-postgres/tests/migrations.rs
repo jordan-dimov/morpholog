@@ -297,7 +297,7 @@ async fn drift_probe(
         morpholog_core::PreparedProgram::new(program).expect("fixture compiles"),
     );
     let post = program
-        .core()
+        .prepared()
         .program()
         .transformations
         .iter()

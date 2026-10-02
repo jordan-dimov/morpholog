@@ -80,7 +80,7 @@ pub async fn propose_against_pg(
     proposal: &Proposal,
 ) -> Result<PgProposalOutcome, PgError> {
     let (transformation, admission) =
-        resolve_admission(program.core(), &proposal.transformation_name)?;
+        resolve_admission(program.prepared(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
@@ -156,7 +156,7 @@ pub async fn propose_against_pg_timed(
     proposal: &Proposal,
 ) -> Result<TimedProposalOutcome, PgError> {
     let (transformation, admission) =
-        resolve_admission(program.core(), &proposal.transformation_name)?;
+        resolve_admission(program.prepared(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
@@ -234,7 +234,7 @@ pub async fn propose_against_pg_with_rejection_state(
     proposal: &Proposal,
 ) -> Result<RejectionStateOutcome, PgError> {
     let (transformation, admission) =
-        resolve_admission(program.core(), &proposal.transformation_name)?;
+        resolve_admission(program.prepared(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
@@ -405,7 +405,7 @@ pub(crate) async fn check_in_order(
             whole = [Run::Compiled(0..set.invariants.len())];
             (set, &whole)
         }
-        Route::Mixed(backend) => (&backend.compiled, &backend.runs),
+        Route::Mixed(execution) => (&execution.compiled, &execution.runs),
         Route::Interpreted => unreachable!("the interpreted route checks before it writes"),
     };
     for run in runs {
@@ -493,7 +493,7 @@ pub async fn propose_against_pg_with_trace(
     proposal: &Proposal,
 ) -> Result<PgTracedOutcome, PgError> {
     let (transformation, invariants, definitions) =
-        resolve(program.core(), &proposal.transformation_name)?;
+        resolve(program.prepared(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     propose_against_pg_with_trace_inner(pool, transformation, &transition, invariants, definitions)
         .await

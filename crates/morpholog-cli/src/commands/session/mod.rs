@@ -63,7 +63,7 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
     // diagnostics, then exit.
     let parsed = parse_or_report(&args.file)?;
     let program = morpholog_postgres::PgProgram::new(compile_or_report(&parsed)?);
-    let compiled = program.core();
+    let compiled = program.prepared();
 
     let pool = crate::commands::connect_single(&args.db.database_url).await?;
 
@@ -173,8 +173,8 @@ async fn handle_line(
     match op.as_str() {
         "propose" => handle_propose(args, program, pool, value, row).await,
         "transact" => handle_transact(args, program, pool, value, row).await,
-        "claims" => handle_claims(args, program.core(), pool, value).await,
-        "derived" => handle_derived(args, program.core(), pool, value).await,
+        "claims" => handle_claims(args, program.prepared(), pool, value).await,
+        "derived" => handle_derived(args, program.prepared(), pool, value).await,
         other => Err(SessionFailure::request(
             ErrorCode::UnknownOperation,
             anyhow!(
@@ -249,7 +249,7 @@ async fn handle_transact(
 ) -> Result<serde_json::Value, SessionFailure> {
     let body: TransactBody = serde_json::from_value(body)
         .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
-    let proposals = decode_acts(&args.file, program.core(), body.acts).map_err(row_failure)?;
+    let proposals = decode_acts(&args.file, program.prepared(), body.acts).map_err(row_failure)?;
     let outcome = morpholog_postgres::propose_all_against_pg(pool, program, &proposals)
         .await
         .map_err(|e| row_failure(classify_pg_error(e)))?;

@@ -1337,10 +1337,10 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::PackVerific
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::PackVerificationReport
 pub struct morpholog_postgres::PgProgram
 impl morpholog_postgres::PgProgram
-pub fn morpholog_postgres::PgProgram::core(&self) -> &morpholog_core::prepared::PreparedProgram
 pub fn morpholog_postgres::PgProgram::interpreted(morpholog_core::prepared::PreparedProgram) -> Self
 pub fn morpholog_postgres::PgProgram::new(morpholog_core::prepared::PreparedProgram) -> Self
 pub fn morpholog_postgres::PgProgram::plan(&self) -> morpholog_postgres::InvariantPlan<'_>
+pub fn morpholog_postgres::PgProgram::prepared(&self) -> &morpholog_core::prepared::PreparedProgram
 impl core::marker::Freeze for morpholog_postgres::PgProgram
 impl core::marker::Send for morpholog_postgres::PgProgram
 impl core::marker::Sync for morpholog_postgres::PgProgram
