@@ -31,6 +31,8 @@ Those are the *constitutional* concepts: claims are the admitted state; invarian
 
 No supporting concept may grow into an independent subsystem - a workflow engine, a projection or query engine, a general query language, host functions, a solver runtime, an analytics layer. Those are the [non-goals](#non-goals); this hierarchy is *why* they are non-goals. The test for any proposed construct is one line: **does it serve claims, invariants, and transformations - or compete with them?**
 
+Underneath the constitution is one algebra, and everything the runtime does is a way of carrying it out: **a programme and a proposal give a decision and a record.** A programme says what legitimate state is. A proposal asks to change it. The decision is committed or rejected. A committed decision leaves its receipt in the record. Compiling rules to SQL, choosing which cases a change can affect, indexes, transactions, the outbox, evidence packs, witnesses and resident sessions are each a way of preparing a programme, making a proposal, reaching a decision, reading the state, or proving the record. None of them is a further concept for a user to learn. So a change to the implementation answers a second question beside the first: **does it introduce a new semantic concept, or another way of preparing, proposing, deciding, reading or proving?** A new concept needs a worked example that forces it. A new way needs only to be correct, and to leave the algebra as it was.
+
 ## The boundary
 
 The line is not "core vs application." It is **governed truth vs everything else**.
