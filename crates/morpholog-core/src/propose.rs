@@ -419,34 +419,6 @@ pub fn finish_staged_delta_with(
     finish_staged_inner(staged, pre_state, admission, None, &mut TraceSink::Off)
 }
 
-/// [`finish_staged_delta_with`] under an effective delta established
-/// elsewhere: an adapter whose store has already said which admissions
-/// and retractions changed the admitted set lends that answer, so every
-/// evaluator in one transaction classifies impact from the one delta.
-/// The candidate state is still this state plus the staged lists.
-///
-/// An adapter seam, not a general entry. The caller owes the true change
-/// in the admitted set: the staged admits that were absent and the staged
-/// retracts that were present and not re-admitted, exactly as
-/// [`effective_delta`] computes it from a complete pre-state. A delta
-/// that understates the change lets an invariant the change touches go
-/// unchecked, since impact is classified from it and nothing else.
-#[doc(hidden)]
-pub fn finish_staged_delta_with_effective(
-    staged: StagedDelta,
-    pre_state: &State,
-    admission: &Admission<'_>,
-    effective: &EffectiveDelta,
-) -> Result<Outcome, EvalError> {
-    finish_staged_inner(
-        staged,
-        pre_state,
-        admission,
-        Some(effective),
-        &mut TraceSink::Off,
-    )
-}
-
 pub(crate) fn stage_delta_inner(
     transformation: &Transformation,
     transition: &Transition,
