@@ -195,6 +195,18 @@ The authoring gate's machine-readable shape, for an embedder (or its authoring A
 
 One entry per finding - parse errors, validation errors, and lints uniformly - with `severity` either `"error"` or `"hint"`. `start`/`end` are byte offsets into the file, `line`/`column` 1-based; a finding with no source anchor (one against a generated discipline invariant, say) carries only `severity` and `message`. A clean programme emits an empty `diagnostics` array. Exit semantics match the plain form: `0` when nothing failed, `1` on any error, and `--strict` promotes hints to errors (in the JSON too). Without `--json`, the same findings render as ariadne caret blocks on stderr and stdout stays script-silent.
 
+When parsing and validation leave a programme, the report also carries `invariants`: one entry per invariant in programme order, with the route this binary plans for it. `compiled` means SQL checks it inside the proposal's transaction; `interpreted` means the kernel does, and the entry carries the refusal that kept it out of SQL, a `kind` from a closed list and the `message` that `check -v` prints:
+
+```json
+"invariants": [
+  { "name": "cap", "route": "compiled" },
+  { "name": "fuel_is_known", "route": "interpreted",
+    "refusal": { "kind": "construct", "message": "`or` is outside the compiled fragment" } }
+]
+```
+
+The field is present even when the run fails on a promoted lint or an `--against` finding, since there was still a programme to plan; it is absent only when parsing or validation left none, and an empty array is a programme with no invariants. There is no summary field: compiled, interpreted or mixed follows from the entries, and the generated client's `CheckReport.route` says which (`None` when there is no plan). The route belongs to the programme and the binary together, so a deployment that must stay compiled pins both the client's version and `route == "compiled"`; the programme's hash does not change when the route does.
+
 ### `morpholog check --against`
 
 Two programmes deployed against one database share rows for any same-named predicate, and each escapes the other's gates: a guarded `register` in one file and an ungated registration in another are two write authorities over one persisted predicate. `check a.morph --against b.morph` (repeatable, one flag per deployed programme) reports every predicate `a.morph` admits or retracts that the other also admits or retracts, as a hint anchored on `a.morph`'s writing transformation, naming the other file, its writing transformations, and whether each carries a top-level admission gate (a gate inside a `for` is an iteration condition, not protection). Reads are never findings. Each `--against` file must itself parse and validate (its own lints are not judged here; that is its own `check`); a failure there is an error naming that path, unanchored in `--json` because the report has one `file`. The CI shape is `--strict` against every other programme in the deployment, which turns the hint into a failing exit. The check is static and needs no database; the database, not the files, is the shared thing, and a census of which programme hashes have actually written a predicate waits on a deployment whose historic programme files are no longer all to hand.

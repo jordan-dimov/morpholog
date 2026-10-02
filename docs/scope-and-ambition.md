@@ -16,8 +16,8 @@ The whole product:
 
 1. The world is a set of admitted **claims**.
 2. The only way claims change is through a **transformation**.
-3. Every transformation must preserve every active **invariant**.
-4. Therefore bad state cannot be committed.
+3. Every transformation must satisfy every active **invariant** in each case it touches.
+4. Therefore a commit cannot introduce a violation, or leave one unrepaired, in a case it touches. Violations inherited outside those cases may remain, as history left them.
 
 A corollary that has become the centre of the bet, not a footnote to it: since admissibility is decided by the invariants and not by whatever produced the proposal, **the proposer does not have to be trusted.** A person, a solver, a heuristic, a model, an agent, a genetic search - each only suggests a candidate next state; the runtime admits or refuses it on the same terms, and explains the refusal in the model's own vocabulary so the proposer can repair and retry. This is the thing that gets harder, not easier, as more of what proposes change is software you did not write and cannot audit line by line. Morpholog's answer is to stop trying to trust the proposer: legitimacy is enforced *outside* the intelligence, never asked *of* it. That is what lets a business put untrusted intelligence to work on the records that matter.
 
@@ -32,6 +32,8 @@ Those are the *constitutional* concepts: claims are the admitted state; invarian
 No supporting concept may grow into an independent subsystem - a workflow engine, a projection or query engine, a general query language, host functions, a solver runtime, an analytics layer. Those are the [non-goals](#non-goals); this hierarchy is *why* they are non-goals. The test for any proposed construct is one line: **does it serve claims, invariants, and transformations - or compete with them?**
 
 Underneath the constitution is one algebra, and everything the runtime does is a way of carrying it out. **A programme, the admitted state and a proposal give a decision. A committed decision gives a new admitted state and its record.** The programme says what legitimate state is. The admitted state is the claims accepted so far, so the same proposal can commit against one state and be refused against another. The decision is committed or rejected. Only a commit persists anything: the new state, and the audit record of what was admitted under which rules. A rejection changes nothing; the rejection log kept beside it is operational evidence, not part of the record. Compiling rules to SQL, choosing which cases a change can affect, indexes, transactions, the outbox, evidence packs, witnesses and resident sessions are each a way of preparing a programme, making a proposal, reaching a decision, reading the state, or proving the record. They may change what a decision costs, never what it is, and none of them is a further concept for a user to learn. So a change to the implementation answers a second question beside the first: **does it introduce a new semantic concept, or another way of preparing, proposing, deciding, reading or proving?** A new concept needs a worked example that forces it. A new way needs only to be correct, and to leave the algebra as it was.
+
+One discipline runs through all of it: **Morpholog claims no more than it can witness.** Only a commit leaves a record, so a refused proposal leaves none, and the rejection log kept beside it is a floor, not a census. The outbox records each committed intent durably, and workers attempt its delivery: transient failures are retried, so a delivery may occur more than once, and a permanent failure is recorded. It claims neither exactly-once delivery nor the power to undo the outside world. Gateway attestation records which login asserted an actor, not that the actor is who it says. A lint finding is a smell, not a proof, and coverage reports what happened, never what could. An evidence pack proves inclusion and consistency, not that it holds a subject's whole history. The same standard holds for the project's own words: a sentence describing the system says only what its code or a test can show, and where nothing can, the sentence is weakened or removed.
 
 ## The boundary
 
@@ -57,7 +59,7 @@ The boundary above says what belongs in Morpholog; the next question is how an e
 |---|---|---|
 | **Compute** | Anything heavy, non-deterministic, or arbitrary. Outside the database transaction. | Monte Carlo simulations, OU price-process integration, ML inference, merit-order dispatch, optimisation solvers, web scraping, image processing. |
 | **Commit** | Small, bounded, deterministic transformations that propose state changes. Inside the transaction; must introduce no violation in any case it touches to become durable. | Admitting a settlement claim, recording a verified figure, posting a journal entry, registering a payment intent. |
-| **Outbox** | Post-commit intents staged inside the same transaction, delivered at-least-once after commit. | Sending an invoice, posting a webhook, calling a downstream service, triggering a recompute. |
+| **Outbox** | Post-commit intents staged inside the same transaction; after commit, delivery is attempted, retried on transient failure (so it may repeat), and a permanent failure is recorded. | Sending an invoice, posting a webhook, calling a downstream service, triggering a recompute. |
 
 The doctrinal statement, in one sentence:
 
@@ -67,7 +69,7 @@ That sentence determines the shape of every integration. There is no synchronous
 
 **Input (compute -> commit).** External compute proposes a transformation by name, with an actor and typed arguments (a `Vec<EvalValue>`, the same codec across the CLI's `propose` and the Rust `propose_against_pg`). The input is deliberately narrow: Morpholog owns whether to admit; the caller owns what to propose.
 
-**Output (commit -> compute).** Intents a committed transformation emitted land in the outbox, delivered at-least-once post-commit - either by an in-process Rust `Deliverer` (the polling worker) or out-of-process through the `morpholog outbox` CLI's claim/complete lease protocol, whichever suits the deployment.
+**Output (commit -> compute).** Intents a committed transformation emitted land in the outbox, and after commit their delivery is attempted, retried on transient failure, and recorded as failed when permanently impossible - either by an in-process Rust `Deliverer` (the polling worker) or out-of-process through the `morpholog outbox` CLI's claim/complete lease protocol, whichever suits the deployment.
 
 The pattern across the two - request transformation, outbox intent, external compute, result transformation - is the *round-trip compute pattern*, walked through concretely in [`outbox-sketch.md`](outbox-sketch.md).
 
