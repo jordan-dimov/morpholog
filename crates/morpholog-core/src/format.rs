@@ -305,10 +305,12 @@ pub(crate) fn format_transformation(t: &Transformation, ctx: FormatContext) -> S
 }
 
 pub(crate) fn format_derived_claim(d: &DerivedClaim, ctx: FormatContext) -> String {
-    // The grammar requires at least one `value` clause. Panic rather
-    // than emit text the parser refuses.
+    // The grammar requires at least one `value` clause, so the source
+    // form panics rather than emit text the parser refuses. The hash and
+    // diagnostics only need a faithful rendering, and must stay total
+    // over every programme validation accepts.
     assert!(
-        !d.values.is_empty(),
+        !ctx.named_canonical || !d.values.is_empty(),
         "format_derived_claim: derived claim `{}` has no values; the surface grammar requires at least one `value` clause",
         d.predicate,
     );
