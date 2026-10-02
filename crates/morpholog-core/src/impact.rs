@@ -48,6 +48,13 @@ struct Occurrence {
     var_map: Vec<(usize, Var)>,
 }
 
+/// The one claim pattern an invariant's case is bounded to, and the
+/// positions a case variable or a literal fixes in it.
+pub(crate) struct BoundedOccurrence<'a> {
+    pub(crate) predicate: &'a PredicateName,
+    pub(crate) constrained: BTreeSet<usize>,
+}
+
 /// An invariant's impact plan, built once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImpactPlan {
@@ -116,6 +123,32 @@ impl ImpactPlan {
             .iter()
             .flat_map(|occ| occ.var_map.iter().map(|(_, var)| var.clone()))
             .collect()
+    }
+
+    /// The plan's one claim pattern, when admission bounds every delta
+    /// that touches the invariant to cases of that pattern alone: the
+    /// plan is not conservative, the body holds exactly one claim
+    /// pattern, and the pattern binds a case variable (one that binds
+    /// none leaves a touching delta unbounded).
+    pub(crate) fn single_bounded_occurrence(&self) -> Option<BoundedOccurrence<'_>> {
+        if self.conservative {
+            return None;
+        }
+        let [occ] = self.occurrences.as_slice() else {
+            return None;
+        };
+        if occ.var_map.is_empty() {
+            return None;
+        }
+        Some(BoundedOccurrence {
+            predicate: &occ.predicate,
+            constrained: occ
+                .guards
+                .iter()
+                .map(|(pos, _)| *pos)
+                .chain(occ.var_map.iter().map(|(pos, _)| *pos))
+                .collect(),
+        })
     }
 
     /// The cases the delta can affect.

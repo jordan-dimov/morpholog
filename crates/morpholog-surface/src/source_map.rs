@@ -161,7 +161,8 @@ impl SourceMap {
         match lint {
             Lint::GateVsInvariant { invariant, .. }
             | Lint::UnsuppliedAntecedent { invariant, .. }
-            | Lint::GoverningSelectionWithoutTotality { invariant, .. } => {
+            | Lint::GoverningSelectionWithoutTotality { invariant, .. }
+            | Lint::CaseWiderThanClaim { invariant, .. } => {
                 self.decl_span(DeclKind::Invariant, invariant)
             }
             // On the predicate: its effective-dating clause is the line the author can act on.

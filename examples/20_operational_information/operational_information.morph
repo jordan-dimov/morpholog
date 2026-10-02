@@ -148,7 +148,7 @@ predicate CoalitionPair(experiment: Subject, left: Subject,
 
 -- A probability is never negative, from the moment it is proposed.
 invariant probabilities_are_never_negative:
-  Case(_, _, _, probability) implies 0 <= probability
+  Case(experiment, case, _, probability) implies 0 <= probability
 
 -- At the seal, the case probabilities are a distribution: they sum to
 -- exactly one. Not "close to one" - the comparison is exact, and a

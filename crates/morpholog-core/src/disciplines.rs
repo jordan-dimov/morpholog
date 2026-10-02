@@ -91,6 +91,23 @@ fn uniqueness_clauses(program: &Program) -> Vec<Uniqueness<'_>> {
     out
 }
 
+/// The uniqueness keys the disciplines enforce on `predicate`, each as
+/// the positions of its fields: the same clauses lowering turns into
+/// invariants, so anything asking what identifies a claim answers to
+/// one authority.
+pub(crate) fn uniqueness_keys_for(program: &Program, predicate: &PredicateName) -> Vec<Vec<usize>> {
+    uniqueness_clauses(program)
+        .iter()
+        .filter(|u| u.target.name == *predicate)
+        .filter_map(|u| {
+            u.fields
+                .iter()
+                .map(|f| u.target.args.iter().position(|a| a.name == *f))
+                .collect::<Option<Vec<usize>>>()
+        })
+        .collect()
+}
+
 /// Add the invariants declared disciplines generate to
 /// [`Program::invariants`], with [`InvariantOrigin::Discipline`].
 /// `unique by`, `current pointer by`, and `effective by` each lower to

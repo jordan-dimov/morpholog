@@ -86,10 +86,10 @@ invariant advance_rate_within_unit_interval:
     Facility(facility, rate) implies 0 <= rate <= 1
 
 invariant collateral_value_is_positive:
-    EligibleCollateral(facility, _, v) implies 0 < v
+    EligibleCollateral(facility, asset, v) implies 0 < v
 
 invariant drawdown_amount_is_non_negative:
-    Drawdown(facility, _, amount) implies 0 <= amount
+    Drawdown(facility, draw_id, amount) implies 0 <= amount
 
 -- The advance limit. The total drawn against a facility can never exceed
 -- its advance rate times the value of its eligible collateral. Written in

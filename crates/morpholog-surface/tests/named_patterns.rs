@@ -376,7 +376,7 @@ fn the_gallery_hashes_did_not_move_when_named_patterns_arrived() {
     let cases = [
         (
             "../../examples/15_metered_billing/metered_billing.morph",
-            "sha256:5777060fd9d8f488c726c55c4fe1678a63bdecaaced234361bb834c1aee96ef3",
+            "sha256:9bbd6c4313dd7a8d22bd97579bbe75eeaeb8d4063790ce15bedc22d5d63cc591",
         ),
         (
             "../../examples/13_biometric_identification_oversight/biometric_oversight.morph",
