@@ -325,18 +325,23 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The hosted runner's free disk cannot hold the instrumented
-      # workspace beside the preinstalled toolchains this job never
-      # touches; the test-binary count tipped it into "No space left
-      # on device". Clearing the unused toolchains buys ~25 GB.
-      # The df lines measure whether the runner's /mnt disk could hold the
-      # build instead, which would make this clean-up unnecessary.
+      # The instrumented workspace needs about 10 GB. Older hosted runners
+      # had too little free disk for it beside the preinstalled toolchains
+      # this job never touches; current ones have tens of GB to spare, and
+      # deleting those toolchains took from half a minute to six. So they
+      # go only when the root disk is short. The df lines stay in the log.
       - name: Free runner disk
         timeout-minutes: 15
         run: |
-          df -hT / /mnt || true
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
-          df -hT / /mnt || true
+          df -hT / || true
+          avail_gb=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+          if [ "$avail_gb" -lt 30 ]; then
+            echo "only ${avail_gb} GB free; removing unused toolchains"
+            sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+            df -hT / || true
+          else
+            echo "${avail_gb} GB free; nothing to remove"
+          fi
 
       - name: Install stable toolchain with llvm-tools
         uses: dtolnay/rust-toolchain@stable
@@ -385,5 +390,5 @@ jobs:
       - name: Disk after coverage
         if: ${{ always() }}
         run: |
-          df -hT / /mnt || true
+          df -hT / || true
           du -sh target 2>/dev/null || true
