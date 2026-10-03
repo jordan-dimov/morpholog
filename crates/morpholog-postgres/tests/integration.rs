@@ -2355,6 +2355,12 @@ async fn a_refusal_is_explained_by_the_draws_that_refused() {
         .expect("a refusal carries its state");
     let rendered = format!("{replayed:?}");
     assert!(rendered.contains(drawn_subjects[0].as_str()), "{rendered}");
+    // The replay is exactly the explanation of the refusing execution's
+    // own inputs: its state and its draws, in order.
+    let direct =
+        pg.prepared()
+            .explain(&transition, &state, &mut drawn_subjects.clone().into_iter());
+    assert_eq!(replayed, direct);
     let rerun = morpholog_test_support::explain(
         &p,
         &transition,
