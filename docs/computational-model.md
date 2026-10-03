@@ -16,7 +16,7 @@ A decision over a validated programme, finite admitted state and a finite propos
 
 - **Holds by:** definitions call each other acyclically; nesting is bounded; everything evaluation ranges over is finite; a transformation body reads the state before it, never its own writes. The argument is [below](#termination).
 - **Checked by:** `crates/morpholog-examples/tests/definitions.rs` (cycles refused), `crates/morpholog-core/tests/definitions_adversarial.rs` and `crates/morpholog-core/tests/check_properties.rs` (depth refused, not overflowed), `crates/morpholog-core/src/check/tests.rs` (no rule or derived claim reads a derived claim), `crates/morpholog-examples/tests/computational_model.rs` (every construct names what it ranges over; a body never reads what it admits).
-- **Gap:** reaching a validated programme is not yet safe everywhere ([#449](https://github.com/jordan-dimov/morpholog/issues/449), [#450](https://github.com/jordan-dimov/morpholog/issues/450)); a deeply nested value can exhaust the host stack before the steps finish (see [the implementation](#the-statement)).
+- **Gap:** reaching a validated programme is not yet safe everywhere ([#449](https://github.com/jordan-dimov/morpholog/issues/449)); a deeply nested value can exhaust the host stack before the steps finish (see [the implementation](#the-statement)).
 
 ### 2. Deterministic decisions
 
@@ -82,10 +82,7 @@ What a transformation can write and emit is visible in its text: every `admit`, 
 
 **The implementation.** The Rust evaluator carries those steps out and ends in a decision or a typed kernel error, on one condition the language does not yet enforce: the values it is given must fit within the host's stack. Validation caps how deep a programme nests (T2), but nothing caps a value a proposal carries. A collection nested inside collections is copied, compared and ordered recursively, so one nested deep enough could exhaust the stack, which is neither a decision nor a typed error. No typed refusal guards against that yet.
 
-**Establishing the premise.** The theorem starts from a validated programme, so reaching one must itself be safe. The shipped CLI validates every programme before evaluating one, and every proposal path, in the CLI or the PostgreSQL adapter, takes a programme built from a validated `PreparedProgram`. Two gaps remain, both in getting to the premise rather than in the theorem:
-
-- some public functions accept unvalidated programmes directly: the kernel's evaluators, and the adapter's read-side scoring, coverage and derived-claim functions. Cyclic definitions handed to one of them can overflow the stack instead of returning a typed result (shown for `eval_invariant`) ([#449](https://github.com/jordan-dimov/morpholog/issues/449));
-- validation itself searches each definition body for calls, recursively, before its depth guard can refuse it, so a definition nested deep enough overflows `validate()` ([#450](https://github.com/jordan-dimov/morpholog/issues/450)).
+**Establishing the premise.** The theorem starts from a validated programme, so reaching one must itself be safe. The shipped CLI validates every programme before evaluating one, and every proposal path, in the CLI or the PostgreSQL adapter, takes a programme built from a validated `PreparedProgram`. Validation's own recursive walks are depth-bounded: before any uncapped structural walk of a programme body, validation measures that body with the capped depth measure and refuses it once the limit is exceeded. (That bounds validation's walks, not every host cost: a large enough programme can still exhaust memory, or the stack while Rust drops it.) One gap remains, in getting to the premise rather than in the theorem: some public functions accept unvalidated programmes directly, the kernel's evaluators and the adapter's read-side scoring, coverage and derived-claim functions. Cyclic definitions handed to one of them can overflow the stack instead of returning a typed result (shown for `eval_invariant`) ([#449](https://github.com/jordan-dimov/morpholog/issues/449)).
 
 ### The rank
 

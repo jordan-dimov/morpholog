@@ -634,7 +634,27 @@ impl std::fmt::Display for ValidationContext {
 /// compare names rather than walk bodies; every body walk lives in
 /// [`crate::check::check_program`].
 pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> {
-    // A definition cycle is checked first: the depth guard and
+    // Every body's own nesting is measured before anything walks it,
+    // because the cycle search and the checks reported beside a cycle
+    // walk bodies without a cap. A call counts at depth 1 here; its
+    // callee is measured later, expanded.
+    let unexpanded = HashMap::new();
+    let mut local_depth_errors: Vec<ValidationError> = p
+        .definitions
+        .iter()
+        .filter(|d| prop_depth_capped(&d.body, MAX_EXPR_DEPTH, &unexpanded).is_none())
+        .map(|d| ValidationError::NestingTooDeep {
+            context: ValidationContext::Definition {
+                name: d.name.to_string(),
+            },
+        })
+        .collect();
+    local_depth_errors.extend(collect_depth_errors(p, &unexpanded));
+    if !local_depth_errors.is_empty() {
+        return Err(local_depth_errors);
+    }
+
+    // A definition cycle is checked next: the depth guard and
     // evaluation both expand calls and would loop forever on one. A
     // cyclic programme gets only the cycle and name-level errors.
     let order = match crate::definitions::definition_topo_order(&p.definitions) {
@@ -702,8 +722,14 @@ fn prop_depth_capped(
         Prop::Implies { left, right } => {
             prop_depth_capped(left, inner, depths)?.max(prop_depth_capped(right, inner, depths)?)
         }
+        // The depth of `xor`'s lowering, `(a or b) and not (a and b)`,
+        // without building it: copying a deep operand would itself recurse
+        // past the budget. The deepest path reaches an operand three
+        // levels down.
         Prop::Xor(left, right) => {
-            prop_depth_capped(&crate::eval::lower_xor(left, right), inner, depths)?
+            let operands = inner.checked_sub(3)?;
+            3 + prop_depth_capped(left, operands, depths)?
+                .max(prop_depth_capped(right, operands, depths)?)
         }
         Prop::Eq(left, right) | Prop::Neq(left, right) | Prop::Compare { left, right, .. } => {
             value_depth_capped(left, inner, depths)?.max(value_depth_capped(right, inner, depths)?)
@@ -1200,6 +1226,39 @@ mod tests {
 
     fn empty_program() -> Program {
         program("t").build()
+    }
+
+    /// `xor` is measured as the lowering it evaluates through, without
+    /// building that lowering, at every budget and on either side.
+    #[test]
+    fn xor_depth_is_its_lowerings_without_building_it() {
+        let leaf = || Prop::Claim {
+            predicate: "A".into(),
+            args: vec![],
+        };
+        let none = HashMap::new();
+        for depth in 0..6 {
+            let mut deep = leaf();
+            for _ in 0..depth {
+                deep = Prop::Not(Box::new(deep));
+            }
+            for (left, right) in [(deep.clone(), leaf()), (leaf(), deep.clone())] {
+                let lowered = crate::eval::lower_xor(&left, &right);
+                let xor = Prop::Xor(Box::new(left), Box::new(right));
+                for budget in 0usize..16 {
+                    let through_lowering = budget.checked_sub(1).and_then(|inner| {
+                        prop_depth_capped(&lowered, inner, &none)
+                            .map(|below| below + 1)
+                            .filter(|total| *total <= budget)
+                    });
+                    assert_eq!(
+                        prop_depth_capped(&xor, budget, &none),
+                        through_lowering,
+                        "operand depth {depth}, budget {budget}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
