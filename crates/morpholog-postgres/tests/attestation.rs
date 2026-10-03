@@ -16,8 +16,8 @@ use common::{expect_committed, pg_program, propose_pg_with_test_actor, reset_db,
 use morpholog_core::EvalValue;
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    AuditAttestation, TreeVerification, create_checkpoint, list_audit_rows, verify_audit_tree,
-    verify_pack,
+    AuditAttestation, CheckpointOutcome, TreeVerification, create_checkpoint, list_audit_rows,
+    verify_audit_tree, verify_pack,
 };
 use morpholog_test_support::{dec, subj};
 
@@ -83,6 +83,10 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::query("ALTER TABLE morpholog.audit DROP CONSTRAINT IF EXISTS audit_model_hash_required")
+        .execute(&pool)
+        .await
+        .unwrap();
     legacy_insert(&pool).await.unwrap();
     sqlx::query(
         "ALTER TABLE morpholog.audit
@@ -103,6 +107,21 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     .execute(&pool)
     .await
     .unwrap();
+    // The third regime: rows that name their parameters but not their
+    // programme, checkpointed before the model-hash boundary.
+    named_unhashed_insert(&pool).await.unwrap();
+    let CheckpointOutcome::Created(before) = create_checkpoint(&pool, None, None).await.unwrap()
+    else {
+        panic!("three rows must make a new checkpoint");
+    };
+    sqlx::query(
+        "ALTER TABLE morpholog.audit
+         ADD CONSTRAINT audit_model_hash_required
+         CHECK (model_hash IS NOT NULL) NOT VALID",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     propose_pg_with_test_actor(
         &pool,
         &program,
@@ -113,28 +132,54 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     .map(expect_committed)
     .unwrap();
 
-    // The whole history - legacy, attested, self-describing - verifies
-    // as one tree, live and offline; the rows carry their encodings.
+    // The whole history - legacy, attested, self-describing, naming its
+    // programme - verifies as one tree, live and offline, and the
+    // checkpoint taken before the last boundary keeps the root it had:
+    // verification recomputes every stored checkpoint's root.
     create_checkpoint(&pool, None, None).await.unwrap();
     let verification = verify_audit_tree(&pool, None).await.unwrap();
     assert!(
         matches!(verification, TreeVerification::Intact { .. }),
         "upgraded history must verify: {verification:?}"
     );
+    let kept = morpholog_postgres::load_checkpoint(&pool, before.tree_size)
+        .await
+        .unwrap()
+        .expect("the pre-boundary checkpoint is still stored");
+    assert_eq!(
+        kept.root_hash, before.root_hash,
+        "the pre-boundary checkpoint keeps its root"
+    );
     let pack = morpholog_postgres::export_pack(&pool, None).await.unwrap();
     assert!(matches!(
         verify_pack(&pack, None).unwrap(),
         TreeVerification::Intact { .. }
     ));
-    let regimes: Vec<(bool, bool)> = pack
+    let regimes: Vec<(bool, bool, bool)> = pack
         .rows
         .iter()
-        .map(|r| (r.attestation.is_some(), r.parameters.is_some()))
+        .map(|r| {
+            (
+                r.attestation.is_some(),
+                r.parameters.is_some(),
+                r.model_hash.is_some(),
+            )
+        })
         .collect();
     assert_eq!(
         regimes,
-        vec![(false, false), (true, false), (true, true)],
+        vec![
+            (false, false, false),
+            (true, false, false),
+            (true, true, false),
+            (true, true, true)
+        ],
         "every encoding, in the real chronology"
+    );
+    assert_eq!(
+        pack.rows[3].model_hash.as_deref(),
+        Some(program.prepared().model_hash()),
+        "the newest row names the programme that admitted it"
     );
     let declared: Vec<String> = double_entry_ledger::post_simple_entry()
         .parameters
@@ -142,7 +187,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         .map(ToString::to_string)
         .collect();
     assert_eq!(
-        pack.rows[2].parameters.as_deref(),
+        pack.rows[3].parameters.as_deref(),
         Some(declared.as_slice()),
         "the stamped row names its own signature, in declaration order"
     );
@@ -150,7 +195,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     // A stamped name is evidence: edit one in the exported pack and the
     // tree no longer verifies.
     let mut edited = pack.clone();
-    edited.rows[2].parameters.as_mut().unwrap()[0] = "entry".to_string();
+    edited.rows[3].parameters.as_mut().unwrap()[0] = "entry".to_string();
     assert!(
         !matches!(
             verify_pack(&edited, None).unwrap(),
@@ -178,10 +223,19 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         err.to_string().contains("audit_attestation_required"),
         "the refusal names the activation constraint: {err}"
     );
+    // PostgreSQL reports the first failing check by constraint name, so
+    // an insert missing two later fields names either boundary.
     let refused = attested_unstamped_insert(&pool).await;
     let err = refused.expect_err("an unstamped insert must be refused after activation");
     assert!(
-        err.to_string().contains("audit_parameters_required"),
+        err.to_string().contains("audit_model_hash_required")
+            || err.to_string().contains("audit_parameters_required"),
+        "the refusal names an activation constraint: {err}"
+    );
+    let refused = named_unhashed_insert(&pool).await;
+    let err = refused.expect_err("an insert naming no programme must be refused after activation");
+    assert!(
+        err.to_string().contains("audit_model_hash_required"),
         "the refusal names the activation constraint: {err}"
     );
 }
@@ -221,6 +275,25 @@ async fn attested_unstamped_insert(pool: &sqlx::PgPool) -> Result<(), sqlx::Erro
     .map(|_| ())
 }
 
+/// An audit insert shaped like the writer from between parameter names
+/// and the model hash: attested and named, no programme.
+async fn named_unhashed_insert(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents, attestation,
+            parameters
+         ) VALUES ($1, 'named_import', '[]', '{\"type\":\"subject\",\"value\":\"importer\"}',
+                   1, '[]', '[]', '[]', '[]',
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"importer_role\"}', '[]')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
 #[tokio::test]
 async fn tampering_with_the_attestation_breaks_the_root() {
     let pool = test_pool().await;
@@ -242,6 +315,10 @@ async fn tampering_with_the_attestation_breaks_the_root() {
     // and breaks the root. Stripping it leaves a row shape no writer
     // produced, refused on read before anything is hashed.
     sqlx::query("ALTER TABLE morpholog.audit DROP CONSTRAINT IF EXISTS audit_attestation_required")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE morpholog.audit DROP CONSTRAINT IF EXISTS audit_model_hash_shape")
         .execute(&pool)
         .await
         .unwrap();
@@ -271,6 +348,18 @@ async fn tampering_with_the_attestation_breaks_the_root() {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "ALTER TABLE morpholog.audit
+         ADD CONSTRAINT audit_model_hash_shape CHECK (
+             model_hash IS NULL
+             OR (model_hash ~ '^sha256:[0-9a-f]{64}$'
+                 AND attestation IS NOT NULL
+                 AND parameters IS NOT NULL)
+         ) NOT VALID",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     assert!(
         !matches!(rewritten, TreeVerification::Intact { .. }),
@@ -278,7 +367,7 @@ async fn tampering_with_the_attestation_breaks_the_root() {
     );
     assert!(
         matches!(&stripped, Err(morpholog_postgres::PgError::InvalidState(detail))
-            if detail.contains("parameter names but no attestation")),
+            if detail.contains("without an attestation")),
         "a stripped stamped row is refused by name: {stripped:?}"
     );
 }

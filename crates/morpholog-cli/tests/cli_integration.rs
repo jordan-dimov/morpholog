@@ -4373,14 +4373,15 @@ async fn a_pack_larger_than_the_verifiers_memory_still_verifies() {
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor, invariant_epoch,
             invariants_checked, asserted_claims, retracted_claims, emitted_intents,
-            attestation, parameters)
+            attestation, parameters, model_hash)
          SELECT gen_random_uuid(), 'note',
                 jsonb_build_array(jsonb_build_object(
                     'type', 'subject', 'value', repeat(md5(i::text), 128))),
                 '{\"type\":\"subject\",\"value\":\"alex\"}'::jsonb, 1,
                 '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
                 '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb,
-                '[\"note\"]'::jsonb
+                '[\"note\"]'::jsonb,
+                'sha256:' || repeat('0', 64)
          FROM generate_series(1, $1) AS i",
     )
     .bind(ROWS)

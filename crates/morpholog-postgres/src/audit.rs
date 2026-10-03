@@ -12,7 +12,12 @@ use uuid::Uuid;
 ///
 /// One row per committed transformation. JSONB columns decode through the
 /// codec that wrote them, so the round-trip is exact.
+///
+/// Unknown fields are refused: a row arrives in packs as hostile input,
+/// and a field this build cannot place in the leaf encoding must make the
+/// row malformed, never silently drop out of the hash.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuditRow {
     pub transition_id: Uuid,
     pub transformation_name: TransformationName,
@@ -37,15 +42,36 @@ pub struct AuditRow {
     /// the self-describing leaf encoding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parameters: Option<Vec<String>>,
+    /// The canonical hash of the whole programme that admitted the row,
+    /// as `morpholog hash` prints it. Absent on older rows; presence on a
+    /// row that also carries an attestation and parameter names selects
+    /// the leaf encoding that commits to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_hash: Option<String>,
 }
 
 impl AuditRow {
     /// Check the row is a shape the runtime writes: nothing extra, an
-    /// attestation, or an attestation plus one name per argument.
+    /// attestation, an attestation plus one name per argument, or those
+    /// plus the model hash. Each rung needs the one below it.
     ///
     /// Checked at the database boundary and before hashing, because packs
     /// carry rows as hostile input.
     pub fn validate_shape(&self) -> Result<(), String> {
+        if let Some(hash) = &self.model_hash {
+            if self.attestation.is_none() || self.parameters.is_none() {
+                return Err(format!(
+                    "audit row {} carries a model hash without an attestation and parameter names",
+                    self.transition_id
+                ));
+            }
+            if !is_model_hash(hash) {
+                return Err(format!(
+                    "audit row {} carries a malformed model hash {hash:?}",
+                    self.transition_id
+                ));
+            }
+        }
         match (&self.attestation, &self.parameters) {
             (_, None) => Ok(()),
             (None, Some(_)) => Err(format!(
@@ -84,13 +110,15 @@ pub(crate) struct AuditRowRaw {
     attestation: Option<serde_json::Value>,
     // Nullable for the same reason: historical rows carry no names.
     parameters: Option<serde_json::Value>,
+    // Nullable for the same reason: historical rows name no programme.
+    model_hash: Option<String>,
 }
 // The canonical column order, shared by `AuditRowRaw` and every listing
 // SELECT (each `query_as!` must spell it out literally):
 //   transition_id, transformation_name, arguments, actor,
 //   invariant_epoch, invariants_checked,
 //   asserted_claims, retracted_claims, emitted_intents, committed_at,
-//   attestation, parameters
+//   attestation, parameters, model_hash
 pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
     let decoded = AuditRow {
         transition_id: row.transition_id,
@@ -120,6 +148,7 @@ pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
             .parameters
             .map(serde_json::from_value::<Vec<String>>)
             .transpose()?,
+        model_hash: row.model_hash,
     };
     decoded.validate_shape().map_err(PgError::InvalidState)?;
     Ok(decoded)
@@ -158,7 +187,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters
+                attestation, parameters, model_hash
                  FROM morpholog.audit
                  ORDER BY committed_at, transition_id
                  LIMIT $1",
@@ -173,7 +202,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters
+                attestation, parameters, model_hash
                  FROM morpholog.audit
                  WHERE (committed_at, transition_id) > ($2, $3)
                  ORDER BY committed_at, transition_id
@@ -191,7 +220,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters
+                attestation, parameters, model_hash
                  FROM morpholog.audit
                  WHERE committed_at < $2
                  ORDER BY committed_at, transition_id
@@ -208,7 +237,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters
+                attestation, parameters, model_hash
                  FROM morpholog.audit
                  WHERE (committed_at, transition_id) > ($2, $3)
                    AND committed_at < $4
@@ -445,4 +474,15 @@ async fn audit_resume_watermark_asserted(
         return Err(PgError::WriterSessionsHidden { hidden: row.hidden });
     }
     Ok(row.horizon.into())
+}
+
+/// `sha256:` and 64 lowercase hex digits: the canonical hash as
+/// `morpholog hash` prints it.
+fn is_model_hash(text: &str) -> bool {
+    text.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
 }

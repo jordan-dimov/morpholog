@@ -372,12 +372,12 @@ pub async fn insert_in_flight_audit_row(conn: &mut sqlx::PgConnection, transitio
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents,
-            attestation, parameters
+            attestation, parameters, model_hash
          ) VALUES ($1, 'post', '[]'::jsonb,
                    '{\"type\":\"subject\",\"value\":\"in_flight\"}'::jsonb,
                    1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
                    '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb,
-                   '[]'::jsonb)",
+                   '[]'::jsonb, 'sha256:' || repeat('0', 64))",
     )
     .bind(transition_id)
     .execute(conn)

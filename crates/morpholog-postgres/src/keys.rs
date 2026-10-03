@@ -117,6 +117,7 @@ mod tests {
             committed_at: jiff::Timestamp::now(),
             attestation: None,
             parameters: None,
+            model_hash: None,
         }
     }
 

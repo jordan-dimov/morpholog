@@ -586,6 +586,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     .expect("simulate a database from before checkpoint witnesses");
     ddl(
         &pool,
+        "ALTER TABLE morpholog.audit DROP COLUMN model_hash".to_string(),
+    )
+    .await
+    .expect("simulate a database from before rows named their programme");
+    ddl(
+        &pool,
         "ALTER TABLE morpholog.audit DROP COLUMN parameters".to_string(),
     )
     .await
@@ -876,9 +882,27 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     let historical = morpholog_postgres::list_audit_rows(&pool)
         .await
         .map_err(|e| format!("the historical row must still read: {e}"))?;
-    if historical.len() != 1 || historical[0].parameters.is_some() {
+    if historical.len() != 1
+        || historical[0].parameters.is_some()
+        || historical[0].model_hash.is_some()
+    {
         return Err(format!(
             "the historical row must survive unstamped, got {historical:?}"
+        ));
+    }
+    let named = columns(&pool, "morpholog", "audit")
+        .await
+        .into_iter()
+        .find(|(name, _, _)| name == "model_hash");
+    if named
+        != Some((
+            "model_hash".to_string(),
+            "YES".to_string(),
+            "text".to_string(),
+        ))
+    {
+        return Err(format!(
+            "model_hash must come back as nullable text, got {named:?}"
         ));
     }
     let unstamped = sqlx::query(
@@ -893,11 +917,35 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     .bind(uuid::Uuid::now_v7())
     .execute(&pool)
     .await;
+    // PostgreSQL reports the first failing check by constraint name, so a
+    // row missing both later fields names either boundary.
     match unstamped {
-        Err(e) if e.to_string().contains("audit_parameters_required") => {}
+        Err(e)
+            if e.to_string().contains("audit_parameters_required")
+                || e.to_string().contains("audit_model_hash_required") => {}
         other => {
             return Err(format!(
-                "a new unstamped row must be refused by audit_parameters_required, got {other:?}"
+                "a new unstamped row must be refused by an activation constraint, got {other:?}"
+            ));
+        }
+    }
+    let unhashed = sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents, attestation, parameters
+         ) VALUES ($1, 'stale_binary', '[]', '{\"type\":\"subject\",\"value\":\"s\"}',
+                   1, '[]', '[]', '[]', '[]',
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"s\"}', '[]')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .execute(&pool)
+    .await;
+    match unhashed {
+        Err(e) if e.to_string().contains("audit_model_hash_required") => {}
+        other => {
+            return Err(format!(
+                "a new row naming no programme must be refused by audit_model_hash_required, got {other:?}"
             ));
         }
     }
@@ -905,10 +953,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents, attestation, parameters
+            asserted_claims, retracted_claims, emitted_intents, attestation, parameters,
+            model_hash
          ) VALUES ($1, 'misshapen', '[]', '{\"type\":\"subject\",\"value\":\"m\"}',
                    1, '[]', '[]', '[]', '[]',
-                   '{\"mode\":\"gateway\",\"authenticated_by\":\"m\"}', '[\"extra\"]')",
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"m\"}', '[\"extra\"]',
+                   'sha256:' || repeat('0', 64))",
     )
     .bind(uuid::Uuid::now_v7())
     .execute(&pool)

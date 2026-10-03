@@ -925,6 +925,7 @@ fn audit_rows_serialize_as_pinned() {
         committed_at: "2026-06-01T12:00:00Z".parse::<jiff::Timestamp>().unwrap(),
         attestation: None,
         parameters: None,
+        model_hash: None,
     };
     assert_golden("audit_row.json", &to_value(&row));
 
@@ -1429,6 +1430,7 @@ fn sample_audit_row() -> AuditRow {
         committed_at: "2026-06-01T12:00:00Z".parse::<jiff::Timestamp>().unwrap(),
         attestation: None,
         parameters: None,
+        model_hash: None,
     }
 }
 

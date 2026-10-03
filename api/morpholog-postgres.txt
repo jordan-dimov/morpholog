@@ -949,6 +949,7 @@ pub morpholog_postgres::AuditRow::committed_at: jiff::timestamp::Timestamp
 pub morpholog_postgres::AuditRow::emitted_intents: alloc::vec::Vec<morpholog_core::state::IntentInstance>
 pub morpholog_postgres::AuditRow::invariant_epoch: i32
 pub morpholog_postgres::AuditRow::invariants_checked: alloc::vec::Vec<morpholog_postgres::AuditedInvariantCheck>
+pub morpholog_postgres::AuditRow::model_hash: core::option::Option<alloc::string::String>
 pub morpholog_postgres::AuditRow::parameters: core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub morpholog_postgres::AuditRow::retracted_claims: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
 pub morpholog_postgres::AuditRow::transformation_name: morpholog_core::ir::TransformationName
