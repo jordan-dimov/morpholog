@@ -292,6 +292,7 @@ pub fn propose(
     pre_state: &State,
     invariants: &[Invariant],
     definitions: &[Definition],
+    subjects: &mut dyn SubjectSource,
 ) -> Result<Outcome, EvalError> {
     propose_inner(
         transformation,
@@ -300,6 +301,7 @@ pub fn propose(
         invariants,
         definitions,
         &mut TraceSink::Off,
+        subjects,
     )
 }
 
@@ -311,6 +313,7 @@ pub fn propose_with_trace(
     pre_state: &State,
     invariants: &[Invariant],
     definitions: &[Definition],
+    subjects: &mut dyn SubjectSource,
 ) -> TracedProposal {
     let mut entries: Vec<TraceEntry> = vec![];
     let result = {
@@ -322,6 +325,7 @@ pub fn propose_with_trace(
             invariants,
             definitions,
             &mut sink,
+            subjects,
         )
     };
     match result {
@@ -344,8 +348,16 @@ pub(crate) fn propose_inner(
     invariants: &[Invariant],
     definitions: &[Definition],
     trace: &mut TraceSink<'_>,
+    subjects: &mut dyn SubjectSource,
 ) -> Result<Outcome, EvalError> {
-    let staged = stage_delta_inner(transformation, transition, pre_state, definitions, trace)?;
+    let staged = stage_delta_inner(
+        transformation,
+        transition,
+        pre_state,
+        definitions,
+        trace,
+        subjects,
+    )?;
     finish_staged_inner(
         staged,
         pre_state,
@@ -362,6 +374,7 @@ pub fn propose_with(
     transition: &Transition,
     pre_state: &State,
     admission: &Admission<'_>,
+    subjects: &mut dyn SubjectSource,
 ) -> Result<Outcome, EvalError> {
     let mut trace = TraceSink::Off;
     let staged = stage_delta_inner(
@@ -370,8 +383,35 @@ pub fn propose_with(
         pre_state,
         admission.definitions,
         &mut trace,
+        subjects,
     )?;
     finish_staged_inner(staged, pre_state, admission, None, &mut trace)
+}
+
+/// Where `new Subject()` gets its subjects: an input to execution, like
+/// the state and the proposal. The kernel neither makes nor inspects
+/// identifiers; the PostgreSQL and CLI runtimes supply UUIDv7.
+///
+/// One subject is drawn each time execution reaches `new Subject()`: in
+/// statement order, a `for` body once per element in collection order,
+/// nested bodies depth-first, and nothing after execution stops. So the
+/// same state, proposal and sequence of subjects give one result, trace
+/// included.
+///
+/// The caller owes fresh subjects: none already in the state or drawn
+/// before, unless it is replaying a recorded execution on purpose.
+///
+/// Any iterator of subjects is a source, so a recorded sequence is
+/// `ids.into_iter()` and a stream is `std::iter::repeat_with(..)`.
+pub trait SubjectSource {
+    /// The next subject, or `None` when the source has run out.
+    fn next_subject(&mut self) -> Option<Subject>;
+}
+
+impl<I: Iterator<Item = Subject>> SubjectSource for I {
+    fn next_subject(&mut self) -> Option<Subject> {
+        self.next()
+    }
 }
 
 /// A transformation body's result before any invariant is checked: a
@@ -397,6 +437,7 @@ pub fn propose_stage_delta(
     transition: &Transition,
     pre_state: &State,
     definitions: &[Definition],
+    subjects: &mut dyn SubjectSource,
 ) -> Result<StagedDelta, EvalError> {
     stage_delta_inner(
         transformation,
@@ -404,6 +445,7 @@ pub fn propose_stage_delta(
         pre_state,
         definitions,
         &mut TraceSink::Off,
+        subjects,
     )
 }
 
@@ -425,6 +467,7 @@ pub(crate) fn stage_delta_inner(
     pre_state: &State,
     definitions: &[Definition],
     trace: &mut TraceSink<'_>,
+    subjects: &mut dyn SubjectSource,
 ) -> Result<StagedDelta, EvalError> {
     if transformation.name != transition.transformation_name {
         return Err(EvalError::TypeMismatch(format!(
@@ -481,6 +524,7 @@ pub(crate) fn stage_delta_inner(
             &mut retracted,
             &mut emitted,
             trace,
+            subjects,
         )? {
             StmtOutcome::Continue => {}
             StmtOutcome::Rejected(reason) => return Ok(StagedDelta::Rejected { reason }),
@@ -589,6 +633,7 @@ pub(crate) fn execute_stmt(
     retracted: &mut Vec<ClaimInstance>,
     emitted: &mut Vec<IntentInstance>,
     trace: &mut TraceSink<'_>,
+    subjects: &mut dyn SubjectSource,
 ) -> Result<StmtOutcome, EvalError> {
     match stmt {
         Stmt::Require { prop: expr, name } => {
@@ -706,8 +751,11 @@ pub(crate) fn execute_stmt(
             Ok(StmtOutcome::Continue)
         }
         Stmt::LetNewSubject { name } => {
-            let id = uuid::Uuid::now_v7().to_string();
-            let subject = EvalValue::Subject(id.into());
+            let subject = EvalValue::Subject(
+                subjects
+                    .next_subject()
+                    .ok_or(EvalError::SubjectSourceExhausted)?,
+            );
             if trace.is_on() {
                 trace.push(TraceEntry::LetNewSubject {
                     name: name.clone(),
@@ -775,6 +823,7 @@ pub(crate) fn execute_stmt(
                                 retracted,
                                 emitted,
                                 &mut iter_sink,
+                                subjects,
                             ) {
                                 Ok(StmtOutcome::Continue) => {}
                                 Ok(StmtOutcome::Rejected(r)) => break 'inner Ok(Some(r)),
@@ -834,6 +883,7 @@ pub(crate) fn execute_stmt(
                             retracted,
                             emitted,
                             &mut off,
+                            subjects,
                         )? {
                             StmtOutcome::Continue => {}
                             StmtOutcome::Rejected(r) => {

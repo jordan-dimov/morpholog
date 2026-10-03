@@ -1018,14 +1018,28 @@ fn measure_kernel(
         let target = ledger_posting("bench_target", "p_bench");
         let t = Instant::now();
         must_commit(
-            propose(&transformation, &target, &pre, &invariants, &definitions)?,
+            propose(
+                &transformation,
+                &target,
+                &pre,
+                &invariants,
+                &definitions,
+                &mut morpholog_postgres::runtime_subjects(),
+            )?,
             "the target proposal",
         )?;
         one.push(t.elapsed());
 
         let t = Instant::now();
         must_commit(
-            propose(&transformation, &target, &pre, &[], &definitions)?,
+            propose(
+                &transformation,
+                &target,
+                &pre,
+                &[],
+                &definitions,
+                &mut morpholog_postgres::runtime_subjects(),
+            )?,
             "the proposal without invariants",
         )?;
         no_invariants.push(t.elapsed());
@@ -1037,7 +1051,14 @@ fn measure_kernel(
         let mut state = pre;
         for act in &batch {
             state = must_commit(
-                propose(&transformation, act, &state, &invariants, &definitions)?,
+                propose(
+                    &transformation,
+                    act,
+                    &state,
+                    &invariants,
+                    &definitions,
+                    &mut morpholog_postgres::runtime_subjects(),
+                )?,
                 "a sequential act",
             )?;
         }

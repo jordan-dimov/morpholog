@@ -195,6 +195,7 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
         &pre,
         &insurance_claim_settlement::all_invariants(),
         &insurance_claim_settlement::definitions(),
+        &mut morpholog_test_support::fresh(),
     ) else {
         panic!("expected Completed");
     };
@@ -367,6 +368,7 @@ fn second_settlement_over_aggregate_is_rejected_at_require() {
         &pre,
         &insurance_claim_settlement::all_invariants(),
         &insurance_claim_settlement::definitions(),
+        &mut morpholog_test_support::fresh(),
     ) else {
         panic!("expected Completed");
     };

@@ -7,9 +7,9 @@ use crate::txn::{LoginRole, begin_authorised_proposal_tx};
 use morpholog_core::{
     Admission, ClaimInstance, Definition, EffectiveDelta, EvalError, EvalValue, IntentInstance,
     Invariant, InvariantName, Outcome, PredicateName, PreparedProgram, ReadFilter, ReadPlan,
-    RejectionReason, RuleName, StagedDelta, State, Subject, TraceEntry, TracedProposal,
-    Transformation, TransformationName, Transition, WitnessBinding, execution, propose_stage_delta,
-    propose_with, propose_with_trace,
+    RejectionReason, RuleName, StagedDelta, State, Subject, SubjectSource, TraceEntry,
+    TracedProposal, Transformation, TransformationName, Transition, WitnessBinding, execution,
+    propose_stage_delta, propose_with, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -116,6 +116,13 @@ pub(crate) fn resolve<'a>(
     ))
 }
 
+/// The subjects this runtime hands `new Subject()`: fresh UUIDv7, its
+/// convention for every identifier it mints. The kernel takes whatever it
+/// is given; the clock and randomness live here.
+pub fn runtime_subjects() -> impl SubjectSource {
+    std::iter::repeat_with(|| Subject::from(Uuid::now_v7().to_string()))
+}
+
 /// The interpreted propose primitive for compensation, under the whole
 /// programme the compensation spec owns.
 pub(crate) async fn propose_against_pg_inner(
@@ -172,6 +179,32 @@ pub async fn propose_against_pg_timed(
 pub struct RejectionStateOutcome {
     pub outcome: PgProposalOutcome,
     pub rejection_state: Option<State>,
+    /// The subjects the execution drew for `new Subject()`, in order.
+    /// Replay them to explain a refusal: an explanation run with other
+    /// subjects would describe an execution that never happened.
+    pub drawn_subjects: Vec<Subject>,
+}
+
+impl RejectionStateOutcome {
+    /// A refusal's explanation, from the execution that refused: the state
+    /// it read and its own draws for `new Subject()`, replayed. `None` for
+    /// a commit. The path the proposal APIs use, so their explanations never
+    /// name subjects the refusing execution did not draw.
+    pub fn explanation(
+        &self,
+        program: &morpholog_core::Program,
+        transition: &Transition,
+    ) -> Option<morpholog_core::Explanation> {
+        let state = self.rejection_state.as_ref()?;
+        matches!(self.outcome, PgProposalOutcome::Rejected { .. }).then(|| {
+            morpholog_core::explain(
+                program,
+                transition,
+                state,
+                &mut self.drawn_subjects.clone().into_iter(),
+            )
+        })
+    }
 }
 
 /// Everything one run yields; each public entry point hands out its part.
@@ -179,7 +212,22 @@ pub struct RejectionStateOutcome {
 pub(crate) struct ProposalRun {
     outcome: PgProposalOutcome,
     rejection_state: Option<State>,
+    drawn_subjects: Vec<Subject>,
     phases: Option<ProposalPhases>,
+}
+
+/// A subject source that remembers what it handed out, in order.
+struct Recorded<S> {
+    inner: S,
+    drawn: Vec<Subject>,
+}
+
+impl<S: SubjectSource> SubjectSource for Recorded<S> {
+    fn next_subject(&mut self) -> Option<Subject> {
+        let subject = self.inner.next_subject()?;
+        self.drawn.push(subject.clone());
+        Some(subject)
+    }
 }
 
 /// A proposal's outcome with where its wall time went, from
@@ -234,6 +282,7 @@ pub async fn propose_against_pg_with_rejection_state(
     Ok(RejectionStateOutcome {
         outcome: run.outcome,
         rejection_state: run.rejection_state,
+        drawn_subjects: run.drawn_subjects,
     })
 }
 
@@ -265,14 +314,25 @@ pub(crate) async fn propose_against_pg_run(
     let state = load_state(&mut tx, &scope).await?;
     let load = elapsed(clock) - begin;
 
+    let mut subjects = Recorded {
+        inner: runtime_subjects(),
+        drawn: Vec::new(),
+    };
     let (decided, rejection_state) = match route {
         Route::Interpreted => {
-            let outcome = propose_with(transformation, transition, &state, admission)?;
+            let outcome =
+                propose_with(transformation, transition, &state, admission, &mut subjects)?;
             let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
             (Decided::Kernel(outcome), rejection_state)
         }
         Route::Compiled(_) | Route::Mixed(_) => {
-            let staged = propose_stage_delta(transformation, transition, &state, definitions)?;
+            let staged = propose_stage_delta(
+                transformation,
+                transition,
+                &state,
+                definitions,
+                &mut subjects,
+            )?;
             match staged {
                 StagedDelta::Rejected { reason } => {
                     (Decided::Kernel(Outcome::Rejected { reason }), Some(state))
@@ -359,6 +419,7 @@ pub(crate) async fn propose_against_pg_run(
     Ok(ProposalRun {
         outcome: pg_outcome,
         rejection_state,
+        drawn_subjects: subjects.drawn,
         phases: timed.then_some(ProposalPhases {
             begin,
             load,
@@ -503,7 +564,14 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
         Reads::BodyAndInvariants,
     );
     let state = load_state(&mut tx, &scope).await?;
-    let traced = propose_with_trace(transformation, transition, &state, invariants, definitions);
+    let traced = propose_with_trace(
+        transformation,
+        transition,
+        &state,
+        invariants,
+        definitions,
+        &mut crate::propose::runtime_subjects(),
+    );
     match traced {
         TracedProposal::Completed { outcome, trace } => {
             let outcome = finalise_outcome(

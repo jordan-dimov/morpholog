@@ -60,6 +60,7 @@ fn issue_with_full_provenance_is_admissible() {
         &cc::program(),
         &issue("c1", "m1", "acme_verifier", "acct1"),
         &state,
+        &mut morpholog_test_support::fresh(),
     );
     assert_eq!(explanation.verdict, Verdict::Admissible);
 }
@@ -74,6 +75,7 @@ fn issue_without_verified_measurement_names_the_missing_measurement() {
         &cc::program(),
         &issue("c1", "m1", "acme_verifier", "acct1"),
         &state,
+        &mut morpholog_test_support::fresh(),
     );
 
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
@@ -102,6 +104,7 @@ fn issue_without_attestation_names_the_missing_attestation() {
         &cc::program(),
         &issue("c1", "m1", "acme_verifier", "acct1"),
         &state,
+        &mut morpholog_test_support::fresh(),
     );
 
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
@@ -131,6 +134,7 @@ fn issue_with_unaccredited_verifier_names_the_missing_accreditation() {
         &cc::program(),
         &issue("c1", "m1", "acme_verifier", "acct1"),
         &state,
+        &mut morpholog_test_support::fresh(),
     );
 
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
@@ -165,6 +169,7 @@ fn second_credit_for_the_same_measurement_violates_issued_unique_by_measurement(
         &cc::program(),
         &issue("c2", "m1", "acme_verifier", "acct2"),
         &state,
+        &mut morpholog_test_support::fresh(),
     );
 
     let Verdict::Rejected(Rejection::Invariant(inv)) = &explanation.verdict else {
@@ -193,6 +198,7 @@ fn reissuing_one_credit_against_a_second_measurement_is_an_invariant_rejection()
         &cc::program(),
         &issue("c1", "m2", "acme_verifier", "acct1"),
         &state,
+        &mut morpholog_test_support::fresh(),
     );
 
     let Verdict::Rejected(Rejection::Invariant(inv)) = &explanation.verdict else {
@@ -221,7 +227,12 @@ fn transfer_after_retirement_is_a_present_blocker() {
         "acct1",
     );
 
-    let explanation = explain(&cc::program(), &t, &state);
+    let explanation = explain(
+        &cc::program(),
+        &t,
+        &state,
+        &mut morpholog_test_support::fresh(),
+    );
 
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
@@ -241,7 +252,12 @@ fn double_retirement_is_a_present_blocker() {
     )]);
     let t = transition("retire_credit", vec![subj("c1"), subj("acct1")], "acct1");
 
-    let explanation = explain(&cc::program(), &t, &state);
+    let explanation = explain(
+        &cc::program(),
+        &t,
+        &state,
+        &mut morpholog_test_support::fresh(),
+    );
 
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
@@ -293,6 +309,7 @@ fn revoking_accreditation_blocks_new_issuance_but_preserves_history() {
         &cc::program(),
         &issue("c2", "m2", "acme_verifier", "acct1"),
         &s,
+        &mut morpholog_test_support::fresh(),
     );
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
@@ -394,7 +411,7 @@ fn discharge_under_target_is_a_comparator_gate_rejection() {
         "acct1",
     );
 
-    let explanation = explain(&cc::program(), &t, &s);
+    let explanation = explain(&cc::program(), &t, &s, &mut morpholog_test_support::fresh());
 
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
@@ -414,7 +431,7 @@ fn discharge_after_the_deadline_is_refused() {
         "acct1",
     );
 
-    let explanation = explain(&cc::program(), &t, &s);
+    let explanation = explain(&cc::program(), &t, &s, &mut morpholog_test_support::fresh());
 
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
@@ -444,7 +461,7 @@ fn sweep_before_the_due_date_does_not_breach() {
         "coordinator",
     );
 
-    let explanation = explain(&cc::program(), &t, &s);
+    let explanation = explain(&cc::program(), &t, &s, &mut morpholog_test_support::fresh());
     assert!(
         matches!(explanation.verdict, Verdict::Rejected(Rejection::Gate(_))),
         "a not-yet-due sweep must be refused, committing no breach: {:?}",
@@ -468,7 +485,7 @@ fn sweep_does_not_breach_a_satisfied_obligation() {
         "coordinator",
     );
 
-    let explanation = explain(&cc::program(), &t, &s);
+    let explanation = explain(&cc::program(), &t, &s, &mut morpholog_test_support::fresh());
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
     };

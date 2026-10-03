@@ -349,7 +349,15 @@ fn bind_one_inside_for_body_composes() {
     };
     let Outcome::Accepted {
         asserted_claims, ..
-    } = propose(&t, &transition, &state, &[], &[]).unwrap()
+    } = propose(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    )
+    .unwrap()
     else {
         panic!("expected Accepted");
     };
@@ -393,7 +401,15 @@ fn bind_one_with_actor_in_pattern() {
     };
     let Outcome::Accepted {
         asserted_claims, ..
-    } = propose(&t, &transition, &state, &[], &[]).unwrap()
+    } = propose(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    )
+    .unwrap()
     else {
         panic!("expected Accepted");
     };
@@ -431,9 +447,14 @@ fn propose_with_trace_records_every_statement_on_accept() {
         ],
     );
     let transition = trace_transition(&t, vec![EvalValue::Subject("p1".into())]);
-    let TracedProposal::Completed { outcome, trace } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { outcome, trace } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     assert!(matches!(outcome, Outcome::Accepted { .. }));
@@ -467,9 +488,14 @@ fn propose_with_trace_records_failing_require_with_rendered_expression() {
         ))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { outcome, trace } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { outcome, trace } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -497,9 +523,14 @@ fn propose_with_trace_records_bind_one_no_match() {
         vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { outcome, trace } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { outcome, trace } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -531,9 +562,14 @@ fn propose_with_trace_records_bind_one_bound_with_sorted_bindings() {
         vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     assert_eq!(trace.len(), 1);
@@ -577,9 +613,14 @@ fn propose_with_trace_preserves_trace_on_bind_one_multi_match_error() {
         vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Errored { error, trace } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Errored { error, trace } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Errored");
     };
     assert!(matches!(error, EvalError::TypeMismatch(_)));
@@ -614,9 +655,14 @@ fn propose_with_trace_records_retract_with_actual_claims() {
         vec![retract("MayApprove", vec![wildcard()])],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     assert_eq!(trace.len(), 1);
@@ -663,9 +709,14 @@ fn propose_with_trace_records_for_with_per_iteration_items() {
             EvalValue::Subject("L2".into()),
         ])],
     );
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     assert_eq!(trace.len(), 1);
@@ -703,9 +754,14 @@ fn propose_with_trace_records_invariant_check_and_failure() {
         ),
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { outcome, trace } =
-        propose_with_trace(&t, &transition, &state, &[inv], &[])
-    else {
+    let TracedProposal::Completed { outcome, trace } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[inv],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     assert!(matches!(outcome, Outcome::Rejected { .. }));
@@ -745,10 +801,25 @@ fn propose_and_propose_with_trace_produce_identical_outcomes() {
         ],
     );
     let transition = trace_transition(&t, vec![]);
-    let outcome_a = propose(&t, &transition, &state, &[], &[]).unwrap();
+    let outcome_a = propose(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    )
+    .unwrap();
     let TracedProposal::Completed {
         outcome: outcome_b, ..
-    } = propose_with_trace(&t, &transition, &state, &[], &[])
+    } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    )
     else {
         panic!("expected Completed");
     };

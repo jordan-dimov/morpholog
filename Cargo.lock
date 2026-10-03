@@ -1280,7 +1280,6 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "thiserror",
- "uuid",
 ]
 
 [[package]]
@@ -1354,6 +1353,7 @@ dependencies = [
  "jiff",
  "morpholog-core",
  "rust_decimal",
+ "uuid",
 ]
 
 [[package]]

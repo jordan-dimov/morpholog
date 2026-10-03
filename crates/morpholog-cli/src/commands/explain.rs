@@ -51,7 +51,12 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
         actor: Subject::from(args.actor.clone()),
     };
 
-    let explanation = explain(prepared.program(), &transition, &state);
+    let explanation = explain(
+        prepared.program(),
+        &transition,
+        &state,
+        &mut morpholog_postgres::runtime_subjects(),
+    );
     if args.json {
         print_json(&explanation)
     } else {

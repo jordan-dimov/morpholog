@@ -108,7 +108,7 @@ pub use propose::{
     AuditedInvariantCheck, PgProposalOutcome, PgTracedOutcome, ProposalPhases,
     RejectionStateOutcome, TimedProposalOutcome, compute_idempotency_key, propose_against_pg,
     propose_against_pg_timed, propose_against_pg_with_rejection_state,
-    propose_against_pg_with_trace,
+    propose_against_pg_with_trace, runtime_subjects,
 };
 pub(crate) use provision::least_privilege_roles_exist;
 pub use provision::{

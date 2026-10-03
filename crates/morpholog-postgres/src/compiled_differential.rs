@@ -118,8 +118,14 @@ async fn probe_raw(
         .await
         .map_err(ProbeFailure::Pg)?;
 
-    let staged = propose_stage_delta(transformation, &transition, &state, definitions)
-        .map_err(ProbeFailure::Kernel)?;
+    let staged = propose_stage_delta(
+        transformation,
+        &transition,
+        &state,
+        definitions,
+        &mut crate::propose::runtime_subjects(),
+    )
+    .map_err(ProbeFailure::Kernel)?;
     let StagedDelta::Staged {
         asserted,
         retracted,

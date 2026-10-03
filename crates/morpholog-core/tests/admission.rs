@@ -89,7 +89,15 @@ fn run(p: &Program, t: &Transition, state: &State) -> Outcome {
         .iter()
         .find(|t0| t0.name == t.transformation_name)
         .unwrap();
-    propose(tf, t, state, &p.invariants, &p.definitions).unwrap()
+    propose(
+        tf,
+        t,
+        state,
+        &p.invariants,
+        &p.definitions,
+        &mut morpholog_test_support::fresh(),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -188,9 +196,14 @@ fn the_trace_records_only_the_obligations_evaluated() {
     let state = dirty();
     let fresh = transition("post", vec![subj("e1"), subj("cash"), dec(5), dec(5)]);
     let tf = &p.transformations[0];
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(tf, &fresh, &state, &p.invariants, &p.definitions)
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        tf,
+        &fresh,
+        &state,
+        &p.invariants,
+        &p.definitions,
+        &mut morpholog_test_support::fresh(),
+    ) else {
         panic!("completes");
     };
     let checks: Vec<_> = trace
@@ -209,9 +222,14 @@ fn the_trace_records_only_the_obligations_evaluated() {
 
     // A delta that touches nothing evaluates nothing.
     let duplicate = transition("post", vec![subj("legacy"), subj("cash"), dec(100), dec(0)]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(tf, &duplicate, &state, &p.invariants, &p.definitions)
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        tf,
+        &duplicate,
+        &state,
+        &p.invariants,
+        &p.definitions,
+        &mut morpholog_test_support::fresh(),
+    ) else {
         panic!("completes");
     };
     assert!(

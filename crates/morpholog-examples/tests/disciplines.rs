@@ -462,6 +462,7 @@ fn a_decision_id_with_a_second_outcome_is_refused() {
         &state,
         &p.invariants,
         &p.definitions,
+        &mut morpholog_test_support::fresh(),
     )
     .expect("kernel must not error");
     assert!(

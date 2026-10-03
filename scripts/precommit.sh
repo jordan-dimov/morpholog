@@ -52,6 +52,9 @@ fi
 step 'cargo fmt --all -- --check'
 cargo fmt --all -- --check
 
+step 'kernel purity: no ambient clock or randomness as a value in morpholog-core'
+./scripts/kernel_purity.sh
+
 step 'cargo clippy --workspace --all-targets --all-features --locked -- -D warnings'
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 

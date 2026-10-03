@@ -297,6 +297,7 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
         &pre,
         &approval_controls::all_invariants(),
         &approval_controls::definitions(),
+        &mut morpholog_test_support::fresh(),
     )
     .expect_err("non-decimal limit must surface as EvalError, not Rejected");
     match err {

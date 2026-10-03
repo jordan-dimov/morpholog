@@ -28,8 +28,7 @@
 //! the equivalence, not the scope set itself.
 
 use morpholog_core::{Program, StagedDelta, State, propose_stage_delta};
-use morpholog_test_support::differential::{observable, sample_args, sample_state};
-use morpholog_test_support::propose_with_test_actor;
+use morpholog_test_support::differential::{observable, same_subjects, sample_args, sample_state};
 
 use crate::propose::{LoadScope, Reads, compute_load_scope};
 
@@ -230,6 +229,15 @@ transformation touch(x):
     admit Out(x)
 ",
     ),
+    (
+        "mints",
+        "program mints
+predicate Minted(x: Subject, s: Subject)
+transformation mint(x):
+    let s = new Subject()
+    admit Minted(x, s)
+",
+    ),
 ];
 
 fn hostile_programs() -> Vec<(String, Program)> {
@@ -304,9 +312,20 @@ fn body_only_scope_stages_the_same_delta_as_full_state() {
                     Reads::Body,
                 );
                 let projected = project(&full, &scope);
-                let on_full = propose_stage_delta(t, &transition, &full, &program.definitions);
-                let on_projected =
-                    propose_stage_delta(t, &transition, &projected, &program.definitions);
+                let on_full = propose_stage_delta(
+                    t,
+                    &transition,
+                    &full,
+                    &program.definitions,
+                    &mut same_subjects(),
+                );
+                let on_projected = propose_stage_delta(
+                    t,
+                    &transition,
+                    &projected,
+                    &program.definitions,
+                    &mut same_subjects(),
+                );
                 assert_eq!(
                     staged_observable(&on_full),
                     staged_observable(&on_projected),
@@ -329,6 +348,7 @@ fn body_only_scope_stages_the_same_delta_as_full_state() {
 fn scoped_loading_is_observationally_equivalent_to_full_state() {
     let mut cases = 0usize;
     let mut skipped = 0usize;
+    let mut minted = false;
     let corpus = corpus();
 
     for (name, program) in &corpus {
@@ -353,20 +373,25 @@ fn scoped_loading_is_observationally_equivalent_to_full_state() {
                 );
                 let projected = project(&full, &scope);
 
-                let on_full = propose_with_test_actor(
+                // Both runs draw the same subjects, so a minted subject
+                // compares like any other value.
+                let on_full = morpholog_core::propose(
                     t,
-                    args.clone(),
+                    &transition,
                     &full,
                     &program.invariants,
                     &program.definitions,
+                    &mut same_subjects(),
                 );
-                let on_projected = propose_with_test_actor(
+                let on_projected = morpholog_core::propose(
                     t,
-                    args,
+                    &transition,
                     &projected,
                     &program.invariants,
                     &program.definitions,
+                    &mut same_subjects(),
                 );
+                minted |= observable(&on_full).contains("same-0");
                 assert_eq!(
                     observable(&on_full),
                     observable(&on_projected),
@@ -384,6 +409,10 @@ fn scoped_loading_is_observationally_equivalent_to_full_state() {
     assert!(
         cases >= 100,
         "generator collapse: only {cases} cases ran ({skipped} skipped)"
+    );
+    assert!(
+        minted,
+        "no case committed a minted subject, so the shared subject sequence is untested"
     );
 }
 
@@ -509,8 +538,20 @@ fn a_rebound_parameter_reads_its_predicate_whole() {
         Reads::Body,
     );
     let projected = project(&full, &scope);
-    let on_full = propose_stage_delta(t, &transition, &full, &program.definitions);
-    let on_projected = propose_stage_delta(t, &transition, &projected, &program.definitions);
+    let on_full = propose_stage_delta(
+        t,
+        &transition,
+        &full,
+        &program.definitions,
+        &mut same_subjects(),
+    );
+    let on_projected = propose_stage_delta(
+        t,
+        &transition,
+        &projected,
+        &program.definitions,
+        &mut same_subjects(),
+    );
     assert!(
         matches!(on_full, Ok(StagedDelta::Staged { .. })),
         "the body reads P through the link: {on_full:?}"

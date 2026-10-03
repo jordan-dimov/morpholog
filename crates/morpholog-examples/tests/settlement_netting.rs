@@ -235,6 +235,7 @@ fn propose_rejects_when_line_already_netted() {
         &pre,
         &settlement_netting::all_invariants(),
         &settlement_netting::definitions(),
+        &mut morpholog_test_support::fresh(),
     ) else {
         panic!("expected Completed");
     };
@@ -304,6 +305,7 @@ fn propose_rejects_transition_name_mismatch() {
         &pre,
         &settlement_netting::all_invariants(),
         &settlement_netting::definitions(),
+        &mut morpholog_test_support::fresh(),
     )
     .expect_err("name mismatch should be an EvalError, not Rejected");
 

@@ -36,8 +36,15 @@ fn a_body_referencing_caller_scope_errors_instead_of_capturing() {
         vec![require(defined("leaky", vec![var("limit")]))],
     );
     let transition = test_transition(&t, vec![dec(7)]);
-    let err = propose(&t, &transition, &State::default(), &[], &[leaky])
-        .expect_err("the body's free name must error, not capture");
+    let err = propose(
+        &t,
+        &transition,
+        &State::default(),
+        &[],
+        &[leaky],
+        &mut morpholog_test_support::fresh(),
+    )
+    .expect_err("the body's free name must error, not capture");
     assert!(
         matches!(&err, EvalError::UnboundVariable(name) if name == "limit"),
         "got {err:?}"
@@ -55,8 +62,15 @@ fn a_call_without_its_definition_is_a_distinct_kernel_error() {
         vec![require(defined("vanished", vec![var("x")]))],
     );
     let transition = test_transition(&t, vec![subj("s")]);
-    let err = propose(&t, &transition, &State::default(), &[], &[])
-        .expect_err("a dangling call must error");
+    let err = propose(
+        &t,
+        &transition,
+        &State::default(),
+        &[],
+        &[],
+        &mut morpholog_test_support::fresh(),
+    )
+    .expect_err("a dangling call must error");
     assert!(
         matches!(err, EvalError::UnknownDefinition(_)),
         "got {err:?}"
@@ -130,6 +144,7 @@ fn resolve_rewrites_claim_shaped_calls_and_the_programme_runs() {
         &State::default(),
         &p.invariants,
         &p.definitions,
+        &mut morpholog_test_support::fresh(),
     )
     .unwrap()
     {
@@ -147,6 +162,7 @@ fn resolve_rewrites_claim_shaped_calls_and_the_programme_runs() {
         &state,
         &p.invariants,
         &p.definitions,
+        &mut morpholog_test_support::fresh(),
     )
     .unwrap();
     assert!(matches!(outcome, morpholog_core::Outcome::Accepted { .. }));
@@ -218,6 +234,7 @@ fn actor_as_a_call_argument_resolves_at_the_call_site() {
         &granted,
         &[],
         std::slice::from_ref(&may_act),
+        &mut morpholog_test_support::fresh(),
     )
     .unwrap();
     assert!(matches!(allowed, morpholog_core::Outcome::Accepted { .. }));
@@ -231,6 +248,7 @@ fn actor_as_a_call_argument_resolves_at_the_call_site() {
         &granted,
         &[],
         &[may_act],
+        &mut morpholog_test_support::fresh(),
     )
     .unwrap();
     assert!(matches!(refused, morpholog_core::Outcome::Rejected { .. }));

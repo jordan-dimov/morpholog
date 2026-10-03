@@ -58,6 +58,11 @@ pub enum EvalError {
         "Prop::Pre evaluated with no pre-state in scope (a derived-claim body, a transformation `require`, the inner of nested `pre`, or an EvalContext built with pre_state: None)"
     )]
     PreStateUnavailable,
+    /// `new Subject()` asked the subject source for another subject and
+    /// it had none: the caller supplied fewer than the transformation
+    /// draws (a replayed transcript cut short, say).
+    #[error("the subject source ran out: `new Subject()` needed another subject")]
+    SubjectSourceExhausted,
     /// An `ArithOp::Div` or `ArithOp::Mod` with a zero divisor. The
     /// proposal fails (or the derived read errors). Gates avoid this by
     /// cross-multiplying with `Mul`.

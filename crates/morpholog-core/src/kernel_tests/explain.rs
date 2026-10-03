@@ -44,9 +44,14 @@ fn failure_walk_and_points_at_first_failing_conjunct() {
         ]))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
@@ -87,9 +92,14 @@ fn failure_walk_and_recurses_through_nested_and() {
         ]))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
@@ -124,9 +134,14 @@ fn failure_walk_implies_points_at_right_when_left_holds() {
         ))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
@@ -165,9 +180,14 @@ fn failure_walk_forall_drills_into_body() {
             EvalValue::Subject("y".into()),
         ])],
     );
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
@@ -201,9 +221,14 @@ fn failure_walk_not_returns_none() {
         )))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     let failing = trace.iter().find_map(|e| match e {
@@ -239,9 +264,14 @@ fn failure_walk_leaf_claim_returns_none() {
         ))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     let failing = trace.iter().find_map(|e| match e {
@@ -274,9 +304,14 @@ fn failure_walk_bind_one_no_match_carries_field() {
         vec![bind_one(claim("Policy", vec![var("pid"), var("limit")]))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     let TraceEntry::BindOne {
@@ -325,9 +360,14 @@ fn failure_walk_and_threads_bindings_through_conjuncts() {
         ]))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     let failing = extract_require_failure(&trace);
@@ -372,9 +412,14 @@ fn failure_walk_implies_with_failing_left_returns_none() {
         ]))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
@@ -414,9 +459,14 @@ fn failure_walk_implies_recurses_into_compound_right() {
         ))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
@@ -469,9 +519,14 @@ fn failure_walk_forall_recurses_into_compound_body() {
             EvalValue::Subject("y".into()),
         ])],
     );
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     let failing = extract_require_failure(&trace).expect("expected failing sub-expression");
@@ -497,9 +552,14 @@ fn failure_walk_exists_returns_none() {
         vec![require(exists("x", claim("Missing", vec![var("x")])))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     let failing = trace.iter().find_map(|e| match e {
@@ -541,9 +601,14 @@ fn failure_walk_bind_one_drills_into_compound_expression() {
         ]))],
     );
     let transition = trace_transition(&t, vec![]);
-    let TracedProposal::Completed { trace, .. } =
-        propose_with_trace(&t, &transition, &state, &[], &[])
-    else {
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        &t,
+        &transition,
+        &state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
         panic!("expected Completed");
     };
     let TraceEntry::BindOne {

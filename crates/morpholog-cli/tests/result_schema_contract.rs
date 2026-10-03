@@ -365,7 +365,14 @@ fn traced_run(
         args,
         actor: Subject::from("alex"),
     };
-    match propose_with_trace(t, &transition, pre, &p.invariants, &p.definitions) {
+    match propose_with_trace(
+        t,
+        &transition,
+        pre,
+        &p.invariants,
+        &p.definitions,
+        &mut morpholog_postgres::runtime_subjects(),
+    ) {
         TracedProposal::Completed { outcome, trace } => {
             let envelope = match outcome {
                 Outcome::Accepted {
@@ -429,7 +436,14 @@ fn errored_run() -> (String, Vec<morpholog_core::TraceEntry>) {
             args: vec![EvalValue::Subject(Subject::from("note_2"))],
         },
     ]);
-    match propose_with_trace(t, &transition, &pre, &p.invariants, &p.definitions) {
+    match propose_with_trace(
+        t,
+        &transition,
+        &pre,
+        &p.invariants,
+        &p.definitions,
+        &mut morpholog_postgres::runtime_subjects(),
+    ) {
         TracedProposal::Errored { error, trace } => (error.to_string(), trace),
         TracedProposal::Completed { outcome, .. } => {
             panic!("expected a kernel error, got {outcome:?}")
@@ -488,10 +502,30 @@ fn walk_args() -> Vec<EvalValue> {
 #[test]
 fn explanations_serialize_as_pinned() {
     let p = explanation_program();
-    let admissible = explain(&p, &transition("flag_account"), &State::from_claims(vec![]));
-    let gate = explain(&p, &transition("open_account"), &State::from_claims(vec![]));
-    let invariant_violated = explain(&p, &transition("open_account"), &flagged_state());
-    let error = explain(&p, &transition("no_such_transformation"), &flagged_state());
+    let admissible = explain(
+        &p,
+        &transition("flag_account"),
+        &State::from_claims(vec![]),
+        &mut morpholog_postgres::runtime_subjects(),
+    );
+    let gate = explain(
+        &p,
+        &transition("open_account"),
+        &State::from_claims(vec![]),
+        &mut morpholog_postgres::runtime_subjects(),
+    );
+    let invariant_violated = explain(
+        &p,
+        &transition("open_account"),
+        &flagged_state(),
+        &mut morpholog_postgres::runtime_subjects(),
+    );
+    let error = explain(
+        &p,
+        &transition("no_such_transformation"),
+        &flagged_state(),
+        &mut morpholog_postgres::runtime_subjects(),
+    );
     assert_golden("explanation_admissible.json", &to_value(&admissible));
     assert_golden("explanation_gate.json", &to_value(&gate));
     // Both shapes: an unnamed gate omits `rule` (above), a named one
@@ -500,6 +534,7 @@ fn explanations_serialize_as_pinned() {
         &named_gate_program(),
         &transition("open_account"),
         &State::from_claims(vec![]),
+        &mut morpholog_postgres::runtime_subjects(),
     );
     assert_golden("explanation_gate_named.json", &to_value(&named));
     assert_golden("explanation_invariant.json", &to_value(&invariant_violated));
@@ -995,7 +1030,12 @@ fn audit_rows_serialize_as_pinned() {
 #[test]
 fn composite_envelopes_serialize_as_pinned() {
     let p = explanation_program();
-    let explanation = explain(&p, &transition("open_account"), &flagged_state());
+    let explanation = explain(
+        &p,
+        &transition("open_account"),
+        &flagged_state(),
+        &mut morpholog_postgres::runtime_subjects(),
+    );
     assert_golden(
         "rejected_with_explanation.json",
         &to_value(&morpholog_cli::envelopes::RejectedWithExplanation::new(
@@ -1006,7 +1046,12 @@ fn composite_envelopes_serialize_as_pinned() {
         )),
     );
     // A rejection with both an explanation and a witness.
-    let explanation = explain(&p, &transition("open_account"), &flagged_state());
+    let explanation = explain(
+        &p,
+        &transition("open_account"),
+        &flagged_state(),
+        &mut morpholog_postgres::runtime_subjects(),
+    );
     assert_golden(
         "rejected_with_explanation_and_witness.json",
         &to_value(&morpholog_cli::envelopes::RejectedWithExplanation::new(

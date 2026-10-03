@@ -455,6 +455,7 @@ pub morpholog_core::EvalError::RoundOutOfRange
 pub morpholog_core::EvalError::RoundOutOfRange::quantum: alloc::string::String
 pub morpholog_core::EvalError::RoundOutOfRange::value: alloc::string::String
 pub morpholog_core::EvalError::RoundQuantumNotPositive(alloc::string::String)
+pub morpholog_core::EvalError::SubjectSourceExhausted
 pub morpholog_core::EvalError::TypeMismatch(alloc::string::String)
 pub morpholog_core::EvalError::UnboundActor
 pub morpholog_core::EvalError::UnboundVariable(alloc::string::String)
@@ -2961,11 +2962,15 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::WitnessBinding
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::WitnessBinding
 pub const morpholog_core::SCORE_FORMAT_VERSION: u32
 pub const morpholog_core::SCORE_SEMANTICS: &str
+pub trait morpholog_core::SubjectSource
+pub fn morpholog_core::SubjectSource::next_subject(&mut self) -> core::option::Option<morpholog_core::Subject>
+impl<I: core::iter::traits::iterator::Iterator<Item = morpholog_core::Subject>> morpholog_core::SubjectSource for I
+pub fn I::next_subject(&mut self) -> core::option::Option<morpholog_core::Subject>
 pub fn morpholog_core::controls(&morpholog_core::PreparedProgram) -> morpholog_core::ControlMatrix
 pub fn morpholog_core::effective_delta(&morpholog_core::State, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance]) -> morpholog_core::EffectiveDelta
 pub fn morpholog_core::enumerate_derived(&morpholog_core::DerivedClaim, &morpholog_core::State, &[morpholog_core::Definition]) -> core::result::Result<alloc::vec::Vec<morpholog_core::ClaimInstance>, morpholog_core::EvalError>
 pub fn morpholog_core::eval_invariant(&morpholog_core::Invariant, &morpholog_core::State, core::option::Option<&morpholog_core::State>, &[morpholog_core::Definition]) -> core::result::Result<bool, morpholog_core::EvalError>
-pub fn morpholog_core::explain(&morpholog_core::Program, &morpholog_core::Transition, &morpholog_core::State) -> morpholog_core::Explanation
+pub fn morpholog_core::explain(&morpholog_core::Program, &morpholog_core::Transition, &morpholog_core::State, &mut dyn morpholog_core::SubjectSource) -> morpholog_core::Explanation
 pub fn morpholog_core::finish_staged_delta_with(morpholog_core::StagedDelta, &morpholog_core::State, &morpholog_core::Admission<'_>) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
 pub fn morpholog_core::guarantees(&morpholog_core::PreparedProgram) -> alloc::vec::Vec<morpholog_core::Guarantee>
 pub fn morpholog_core::has_admission_gate(&morpholog_core::Transformation) -> bool
@@ -2984,10 +2989,10 @@ pub fn morpholog_core::predicates_read_by_stmt(&morpholog_core::Stmt, &[morpholo
 pub fn morpholog_core::predicates_referenced_by_derived(&morpholog_core::DerivedClaim, &[morpholog_core::Definition]) -> alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>
 pub fn morpholog_core::predicates_referenced_by_prop(&morpholog_core::Prop, &[morpholog_core::Definition], &mut alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>)
 pub fn morpholog_core::predicates_written_by(&morpholog_core::Transformation) -> alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>
-pub fn morpholog_core::propose(&morpholog_core::Transformation, &morpholog_core::Transition, &morpholog_core::State, &[morpholog_core::Invariant], &[morpholog_core::Definition]) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
-pub fn morpholog_core::propose_stage_delta(&morpholog_core::Transformation, &morpholog_core::Transition, &morpholog_core::State, &[morpholog_core::Definition]) -> core::result::Result<morpholog_core::StagedDelta, morpholog_core::EvalError>
-pub fn morpholog_core::propose_with(&morpholog_core::Transformation, &morpholog_core::Transition, &morpholog_core::State, &morpholog_core::Admission<'_>) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
-pub fn morpholog_core::propose_with_trace(&morpholog_core::Transformation, &morpholog_core::Transition, &morpholog_core::State, &[morpholog_core::Invariant], &[morpholog_core::Definition]) -> morpholog_core::TracedProposal
+pub fn morpholog_core::propose(&morpholog_core::Transformation, &morpholog_core::Transition, &morpholog_core::State, &[morpholog_core::Invariant], &[morpholog_core::Definition], &mut dyn morpholog_core::SubjectSource) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
+pub fn morpholog_core::propose_stage_delta(&morpholog_core::Transformation, &morpholog_core::Transition, &morpholog_core::State, &[morpholog_core::Definition], &mut dyn morpholog_core::SubjectSource) -> core::result::Result<morpholog_core::StagedDelta, morpholog_core::EvalError>
+pub fn morpholog_core::propose_with(&morpholog_core::Transformation, &morpholog_core::Transition, &morpholog_core::State, &morpholog_core::Admission<'_>, &mut dyn morpholog_core::SubjectSource) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
+pub fn morpholog_core::propose_with_trace(&morpholog_core::Transformation, &morpholog_core::Transition, &morpholog_core::State, &[morpholog_core::Invariant], &[morpholog_core::Definition], &mut dyn morpholog_core::SubjectSource) -> morpholog_core::TracedProposal
 pub fn morpholog_core::render_controls(&morpholog_core::ControlMatrix) -> alloc::string::String
 pub fn morpholog_core::render_coverage(&morpholog_core::CoverageReport) -> alloc::string::String
 pub fn morpholog_core::render_guarantees(&str, &[morpholog_core::Guarantee]) -> alloc::string::String

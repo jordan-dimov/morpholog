@@ -20,7 +20,7 @@ pub mod differential;
 use jiff::civil::Date;
 use morpholog_core::{
     ClaimInstance, Definition, EvalError, EvalValue, IntentInstance, Invariant, Outcome, Program,
-    RejectionReason, State, Subject, Transformation, Transition, propose,
+    RejectionReason, State, Subject, SubjectSource, Transformation, Transition, propose,
 };
 use rust_decimal::Decimal;
 
@@ -115,6 +115,19 @@ pub fn intent_instance(name: &str, args: &[EvalValue]) -> IntentInstance {
 // Default actor and transition
 // ============================================================
 
+/// Fresh UUIDv7 subjects for `new Subject()`, as the runtimes supply them:
+/// for tests that need new identifiers but not particular ones. Never
+/// restarts, so chained proposals cannot reuse a subject.
+pub fn fresh() -> impl SubjectSource {
+    std::iter::repeat_with(|| Subject::from(uuid::Uuid::now_v7().to_string()))
+}
+
+/// Exactly these subjects, in order, for tests that pin which
+/// `new Subject()` gets which; running out is the kernel's typed error.
+pub fn subjects<const N: usize>(ids: [&str; N]) -> impl SubjectSource {
+    ids.map(Subject::from).into_iter()
+}
+
 /// Default actor for tests that do not model authority.
 pub fn test_actor() -> Subject {
     Subject::from("test_actor")
@@ -142,7 +155,7 @@ pub fn propose_with_test_actor(
     definitions: &[Definition],
 ) -> Result<Outcome, EvalError> {
     let transition = test_transition(t, args);
-    propose(t, &transition, pre, invariants, definitions)
+    propose(t, &transition, pre, invariants, definitions, &mut fresh())
 }
 
 /// [`propose`] with a caller-supplied actor.
@@ -159,7 +172,7 @@ pub fn propose_as(
         args,
         actor: actor.into(),
     };
-    propose(t, &transition, pre, invariants, definitions)
+    propose(t, &transition, pre, invariants, definitions, &mut fresh())
 }
 
 /// Propose with [`test_actor`] and return the accepted candidate state, for chained setup.
@@ -172,7 +185,8 @@ pub fn must_accept(
     definitions: &[Definition],
 ) -> State {
     let transition = test_transition(t, args);
-    match propose(t, &transition, &pre, invariants, definitions).expect("propose should not error")
+    match propose(t, &transition, &pre, invariants, definitions, &mut fresh())
+        .expect("propose should not error")
     {
         Outcome::Accepted {
             candidate_state, ..
@@ -200,7 +214,8 @@ pub fn must_accept_as(
         args,
         actor: actor.into(),
     };
-    match propose(t, &transition, &pre, invariants, definitions).expect("propose should not error")
+    match propose(t, &transition, &pre, invariants, definitions, &mut fresh())
+        .expect("propose should not error")
     {
         Outcome::Accepted {
             candidate_state, ..
@@ -224,7 +239,9 @@ pub fn must_reject(
     definitions: &[Definition],
 ) -> RejectionReason {
     let transition = test_transition(t, args);
-    match propose(t, &transition, pre, invariants, definitions).expect("propose should not error") {
+    match propose(t, &transition, pre, invariants, definitions, &mut fresh())
+        .expect("propose should not error")
+    {
         Outcome::Rejected { reason } => reason,
         Outcome::Accepted { .. } => {
             panic!("expected Rejected from `{}`, got Accepted", t.name)
@@ -246,7 +263,9 @@ pub fn must_reject_as(
         args,
         actor: actor.into(),
     };
-    match propose(t, &transition, pre, invariants, definitions).expect("propose should not error") {
+    match propose(t, &transition, pre, invariants, definitions, &mut fresh())
+        .expect("propose should not error")
+    {
         Outcome::Rejected { reason } => reason,
         Outcome::Accepted { .. } => {
             panic!("expected Rejected from `{}`, got Accepted", t.name)

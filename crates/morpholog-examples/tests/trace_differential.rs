@@ -3,16 +3,17 @@
 //! but `Stmt::For` branches on `trace.is_on()` to keep per-iteration
 //! allocations off the untraced path, so the paths really differ.
 //!
-//! Fresh subjects are the one lawful difference: `new Subject()` mints a new
-//! UUIDv7 per run. The comparison renames them away; the last test pins why.
+//! Both runs take the same subjects for `new Subject()`, so they are compared
+//! exactly: tracing may change what observation costs, never the outcome,
+//! the error, or which subjects execution draws.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
 
-use morpholog_core::{Stmt, TraceEntry, TracedProposal, propose_with_trace};
-use morpholog_test_support::differential::{observable, sample_args, sample_state};
-use morpholog_test_support::{propose_with_test_actor, test_transition};
+use morpholog_core::{Stmt, TraceEntry, TracedProposal, propose, propose_with_trace};
+use morpholog_test_support::differential::{same_subjects, sample_args, sample_state};
+use morpholog_test_support::test_transition;
 
 /// Whether the transformation loops. `for` is the only statement
 /// with a nested body, so any nested loop's outermost ancestor is
@@ -55,20 +56,22 @@ fn traced_and_untraced_execution_are_equivalent() {
                 ran_any = true;
                 let state = sample_state(&program, 2, salt);
 
-                let untraced = propose_with_test_actor(
+                let transition = test_transition(t, args);
+                let untraced = propose(
                     t,
-                    args.clone(),
+                    &transition,
                     &state,
                     &program.invariants,
                     &program.definitions,
+                    &mut same_subjects(),
                 );
-                let transition = test_transition(t, args);
                 let traced = propose_with_trace(
                     t,
                     &transition,
                     &state,
                     &program.invariants,
                     &program.definitions,
+                    &mut same_subjects(),
                 );
                 let traced_as_result = match traced {
                     TracedProposal::Completed { outcome, trace } => {
@@ -80,13 +83,13 @@ fn traced_and_untraced_execution_are_equivalent() {
                         Err(error)
                     }
                 };
+                // Exactly, candidate state included: both runs read the
+                // same full pre-state and draw the same subjects.
                 assert_eq!(
-                    observable(&untraced),
-                    observable(&traced_as_result),
+                    untraced, traced_as_result,
                     "programme `{}`, transformation `{}`, salt {salt}: \
                      trace mode changed the outcome",
-                    program.name,
-                    t.name
+                    program.name, t.name
                 );
                 cases += 1;
             }
@@ -116,16 +119,10 @@ fn traced_and_untraced_execution_are_equivalent() {
     );
 }
 
-/// Two runs of a `new Subject()` transformation mint DIFFERENT identifiers,
-/// so a traced dry run never predicts the identifiers of the run that
-/// commits. The differential above holds only because it renames them away.
-#[test]
-fn fresh_subjects_differ_between_executions_by_design() {
-    use morpholog_core::Outcome;
+fn minting_programme() -> (morpholog_core::Transformation, morpholog_core::Program) {
     use morpholog_core::ir_builder::{
         assert_, let_new_subject, params, predicate, program, transformation, var,
     };
-
     let t = transformation(
         "mint",
         params(&[]),
@@ -135,33 +132,27 @@ fn fresh_subjects_differ_between_executions_by_design() {
         .predicates(vec![predicate("Minted").subject("x").build()])
         .transformations(vec![t.clone()])
         .build();
+    (t, p)
+}
 
-    let mut ids = Vec::new();
-    for _ in 0..2 {
-        let outcome = propose_with_test_actor(
-            &t,
-            vec![],
-            &morpholog_core::State::default(),
-            &p.invariants,
-            &p.definitions,
+/// The same subjects give the same execution: outcome and trace alike, with
+/// nothing renamed away.
+#[test]
+fn the_same_subjects_give_the_same_execution_trace_included() {
+    let (t, p) = minting_programme();
+    let transition = test_transition(&t, vec![]);
+    let run = || {
+        format!(
+            "{:?}",
+            propose_with_trace(
+                &t,
+                &transition,
+                &morpholog_core::State::default(),
+                &p.invariants,
+                &p.definitions,
+                &mut same_subjects(),
+            )
         )
-        .expect("minting evaluates");
-        let Outcome::Accepted {
-            asserted_claims, ..
-        } = outcome
-        else {
-            panic!("minting is unconditional");
-        };
-        ids.push(format!("{:?}", asserted_claims[0].args[0]));
-    }
-    assert_ne!(
-        ids[0], ids[1],
-        "fresh subjects are minted per execution; equality here would \
-         mean identifier reuse across proposals"
-    );
-    // And the normaliser sees through exactly this difference.
-    assert_eq!(
-        morpholog_test_support::differential::normalize_uuids(&ids[0]),
-        morpholog_test_support::differential::normalize_uuids(&ids[1]),
-    );
+    };
+    assert_eq!(run(), run());
 }

@@ -240,7 +240,14 @@ fn explain_names_the_gate_that_would_refuse() {
             args: vec![subj("doc_1")],
             actor: morpholog_test_support::test_actor(),
         };
-        match explain(&program, &transition, &submitted()).verdict {
+        match explain(
+            &program,
+            &transition,
+            &submitted(),
+            &mut morpholog_test_support::fresh(),
+        )
+        .verdict
+        {
             Verdict::Rejected(Rejection::Gate(gate)) => gate,
             other => panic!("expected a gate rejection, got {other:?}"),
         }
