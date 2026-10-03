@@ -78,7 +78,12 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                 },
                 Some(state),
             ) => {
-                let explanation = explain(program.prepared().program(), &transition, &state);
+                let explanation = explain(
+                    program.prepared().program(),
+                    &transition,
+                    &state,
+                    &mut morpholog_postgres::runtime_subjects(),
+                );
                 print_json(&envelopes::RejectedWithExplanation::new(
                     reason,
                     rule.as_deref(),
@@ -506,7 +511,12 @@ pub(crate) async fn propose_row_outcome(
             Some(state),
         ) = (&outcome, rejection_state)
         {
-            let explanation = explain(prepared.program(), &transition, &state);
+            let explanation = explain(
+                prepared.program(),
+                &transition,
+                &state,
+                &mut morpholog_postgres::runtime_subjects(),
+            );
             return serde_json::to_value(envelopes::RejectedWithExplanation::new(
                 reason,
                 rule.as_deref(),

@@ -304,9 +304,20 @@ fn body_only_scope_stages_the_same_delta_as_full_state() {
                     Reads::Body,
                 );
                 let projected = project(&full, &scope);
-                let on_full = propose_stage_delta(t, &transition, &full, &program.definitions);
-                let on_projected =
-                    propose_stage_delta(t, &transition, &projected, &program.definitions);
+                let on_full = propose_stage_delta(
+                    t,
+                    &transition,
+                    &full,
+                    &program.definitions,
+                    &mut morpholog_test_support::differential::same_subjects(),
+                );
+                let on_projected = propose_stage_delta(
+                    t,
+                    &transition,
+                    &projected,
+                    &program.definitions,
+                    &mut morpholog_test_support::differential::same_subjects(),
+                );
                 assert_eq!(
                     staged_observable(&on_full),
                     staged_observable(&on_projected),
@@ -509,8 +520,20 @@ fn a_rebound_parameter_reads_its_predicate_whole() {
         Reads::Body,
     );
     let projected = project(&full, &scope);
-    let on_full = propose_stage_delta(t, &transition, &full, &program.definitions);
-    let on_projected = propose_stage_delta(t, &transition, &projected, &program.definitions);
+    let on_full = propose_stage_delta(
+        t,
+        &transition,
+        &full,
+        &program.definitions,
+        &mut morpholog_test_support::differential::same_subjects(),
+    );
+    let on_projected = propose_stage_delta(
+        t,
+        &transition,
+        &projected,
+        &program.definitions,
+        &mut morpholog_test_support::differential::same_subjects(),
+    );
     assert!(
         matches!(on_full, Ok(StagedDelta::Staged { .. })),
         "the body reads P through the link: {on_full:?}"

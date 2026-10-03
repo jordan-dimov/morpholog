@@ -117,7 +117,13 @@ pub async fn propose_all_against_pg(
         let transition_id = Uuid::now_v7();
         let (asserted_claims, retracted_claims, emitted_intents) = match route {
             Route::Interpreted => {
-                match propose_with(transformation, transition, &state, &admission)? {
+                match propose_with(
+                    transformation,
+                    transition,
+                    &state,
+                    &admission,
+                    &mut crate::propose::runtime_subjects(),
+                )? {
                     Outcome::Accepted {
                         asserted_claims,
                         retracted_claims,
@@ -145,7 +151,13 @@ pub async fn propose_all_against_pg(
                 }
             }
             Route::Compiled(_) | Route::Mixed(_) => {
-                match propose_stage_delta(transformation, transition, &state, definitions)? {
+                match propose_stage_delta(
+                    transformation,
+                    transition,
+                    &state,
+                    definitions,
+                    &mut crate::propose::runtime_subjects(),
+                )? {
                     StagedDelta::Rejected { reason } => {
                         return refuse(pool, tx, transformation, transition, reason, row).await;
                     }

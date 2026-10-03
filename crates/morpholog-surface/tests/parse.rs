@@ -1601,6 +1601,7 @@ fn a_sum_reached_through_many_definitions_keeps_its_unit() {
         &morpholog_core::State::default(),
         &[],
         prepared.program().definitions.as_slice(),
+        &mut (0u64..).map(|n| morpholog_core::Subject::from(format!("fresh-{n}"))),
     )
     .expect("an empty sum through the chain must evaluate, not raise on kinds");
     assert!(

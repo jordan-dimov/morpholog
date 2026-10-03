@@ -287,8 +287,15 @@ fn a_span_cannot_arrive_as_a_transition_argument() {
             args: vec![smuggled],
             actor: test_actor(),
         };
-        let err = propose(&t, &transition, &State::default(), &[], &[])
-            .expect_err("a span argument must be refused");
+        let err = propose(
+            &t,
+            &transition,
+            &State::default(),
+            &[],
+            &[],
+            &mut morpholog_test_support::fresh(),
+        )
+        .expect_err("a span argument must be refused");
         assert!(
             format!("{err}").contains("cannot take a calendar span argument"),
             "got: {err}"

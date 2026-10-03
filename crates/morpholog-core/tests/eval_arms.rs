@@ -416,10 +416,22 @@ fn the_missing_claim_diagnosis_descends_a_defined_gate() {
     let transition = test_transition(&ship, vec![morpholog_test_support::subj("box_1")]);
     // The kernel refuses first (the gate fails), then the explanation
     // diagnoses the same snapshot.
-    let outcome =
-        kernel_propose(&ship, &transition, &State::default(), &[], &p.definitions).unwrap();
+    let outcome = kernel_propose(
+        &ship,
+        &transition,
+        &State::default(),
+        &[],
+        &p.definitions,
+        &mut morpholog_test_support::fresh(),
+    )
+    .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
-    let explanation = morpholog_core::explain(&p, &transition, &State::default());
+    let explanation = morpholog_core::explain(
+        &p,
+        &transition,
+        &State::default(),
+        &mut morpholog_test_support::fresh(),
+    );
     let rendered = serde_json::to_string(&explanation).unwrap();
     assert!(
         rendered.contains("Approved") && rendered.contains("approve"),

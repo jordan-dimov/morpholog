@@ -20,7 +20,7 @@ use crate::analysis::transformations_asserting;
 use crate::eval::{RenderedClaim, render_eval_value};
 use crate::ir::Program;
 use crate::propose::{
-    BindOneOutcome, Outcome, RequireOutcome, TraceEntry, TracedProposal, Transition,
+    BindOneOutcome, Outcome, RequireOutcome, SubjectSource, TraceEntry, TracedProposal, Transition,
     propose_with_trace,
 };
 use crate::state::State;
@@ -116,8 +116,15 @@ pub struct MissingClaim {
 }
 
 /// Explain why `transition` is admissible or rejected against
-/// `pre_state`. Pure: it runs the kernel in memory and reads the trace.
-pub fn explain(program: &Program, transition: &Transition, pre_state: &State) -> Explanation {
+/// `pre_state`. Pure: it runs the kernel in memory and reads the trace,
+/// so for the same state, transition and sequence of `subjects` it gives
+/// one explanation.
+pub fn explain(
+    program: &Program,
+    transition: &Transition,
+    pre_state: &State,
+    subjects: &mut dyn SubjectSource,
+) -> Explanation {
     let transition_ref = TransitionRef {
         transformation: transition.transformation_name.to_string(),
         args: transition.args.iter().map(render_eval_value).collect(),
@@ -143,6 +150,7 @@ pub fn explain(program: &Program, transition: &Transition, pre_state: &State) ->
         pre_state,
         &program.invariants,
         &program.definitions,
+        subjects,
     );
     let verdict = match traced {
         TracedProposal::Errored { error, .. } => {

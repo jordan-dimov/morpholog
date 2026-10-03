@@ -284,6 +284,7 @@ fn decision_admits_only_with_matching_standing() {
         &pre,
         &verified_revenue::all_invariants(),
         &verified_revenue::definitions(),
+        &mut morpholog_test_support::fresh(),
     ) else {
         panic!("expected Completed");
     };

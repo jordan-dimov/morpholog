@@ -7,9 +7,9 @@ use crate::txn::{LoginRole, begin_authorised_proposal_tx};
 use morpholog_core::{
     Admission, ClaimInstance, Definition, EffectiveDelta, EvalError, EvalValue, IntentInstance,
     Invariant, InvariantName, Outcome, PredicateName, PreparedProgram, ReadFilter, ReadPlan,
-    RejectionReason, RuleName, StagedDelta, State, Subject, TraceEntry, TracedProposal,
-    Transformation, TransformationName, Transition, WitnessBinding, execution, propose_stage_delta,
-    propose_with, propose_with_trace,
+    RejectionReason, RuleName, StagedDelta, State, Subject, SubjectSource, TraceEntry,
+    TracedProposal, Transformation, TransformationName, Transition, WitnessBinding, execution,
+    propose_stage_delta, propose_with, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -114,6 +114,13 @@ pub(crate) fn resolve<'a>(
         &prepared.program().invariants,
         &prepared.program().definitions,
     ))
+}
+
+/// The subjects this runtime hands `new Subject()`: fresh UUIDv7, its
+/// convention for every identifier it mints. The kernel takes whatever it
+/// is given; the clock and randomness live here.
+pub fn runtime_subjects() -> impl SubjectSource {
+    std::iter::repeat_with(|| Subject::from(Uuid::now_v7().to_string()))
 }
 
 /// The interpreted propose primitive for compensation, under the whole
@@ -267,12 +274,24 @@ pub(crate) async fn propose_against_pg_run(
 
     let (decided, rejection_state) = match route {
         Route::Interpreted => {
-            let outcome = propose_with(transformation, transition, &state, admission)?;
+            let outcome = propose_with(
+                transformation,
+                transition,
+                &state,
+                admission,
+                &mut crate::propose::runtime_subjects(),
+            )?;
             let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
             (Decided::Kernel(outcome), rejection_state)
         }
         Route::Compiled(_) | Route::Mixed(_) => {
-            let staged = propose_stage_delta(transformation, transition, &state, definitions)?;
+            let staged = propose_stage_delta(
+                transformation,
+                transition,
+                &state,
+                definitions,
+                &mut crate::propose::runtime_subjects(),
+            )?;
             match staged {
                 StagedDelta::Rejected { reason } => {
                     (Decided::Kernel(Outcome::Rejected { reason }), Some(state))
@@ -503,7 +522,14 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
         Reads::BodyAndInvariants,
     );
     let state = load_state(&mut tx, &scope).await?;
-    let traced = propose_with_trace(transformation, transition, &state, invariants, definitions);
+    let traced = propose_with_trace(
+        transformation,
+        transition,
+        &state,
+        invariants,
+        definitions,
+        &mut crate::propose::runtime_subjects(),
+    );
     match traced {
         TracedProposal::Completed { outcome, trace } => {
             let outcome = finalise_outcome(

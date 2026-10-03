@@ -127,7 +127,7 @@ Statement
   require Prop                   -- yes/no gate; does not export bindings
   bind_one Prop                  -- unique lookup; replaces bindings with match
   let name = ValueExpr           -- value-producing binding
-  let name = new Subject()       -- generates a fresh UUIDv7
+  let name = new Subject()       -- draws a fresh subject from the caller's source
   assert Claim                   -- IR name; the surface verb is `admit`
   retract Pred(args...)          -- pattern-based; idempotent on zero matches
   for binding in collection: list of Statements  -- iteration; body is scoped
@@ -610,6 +610,14 @@ A programme passes through three levels on its way to a decision, and only the f
 The law between them: **preparation and execution may change cost, never meaning.** For the same programme, admitted state and proposal, every lawful preparation and execution plan produces the same semantic outcome: the same admitted change and emitted intents, or the same rejection, naming the same rule, version and witness, or the same error.
 
 The differentials hold instances of the law; none proves it in general. The compiled differential holds the SQL checks to the kernel's verdict, first failing rule and version, and on the case-bound route its witness. The mixed-route harness holds a programme split between the two evaluators to the kernel. The scope differential holds a proposal against a scoped or keyed load to the same staged change, intents, rejection or error as against the whole state, and the load differential holds the loader to the read plan. A new kind of preparation or plan joins the law the same way, with a differential against the path it replaces. An execution layer that takes part of the check on itself hands the rest back to the kernel only through `morpholog_core::execution`, whose operations each state what the caller owes. An operation belongs there only when the execution layer supplies a derived fact or partition that claims to preserve semantics established elsewhere, the kernel cannot verify it from its own inputs, and a false but well-formed value can change the semantic outcome.
+
+## Fresh subjects: an input, not a side effect
+
+`new Subject()` asks the execution environment for an opaque fresh subject. The kernel neither makes nor interprets identifiers: every execution entry point takes a subject source, and the PostgreSQL and CLI runtimes supply UUIDv7 from the clock and randomness they own. So **for a fixed programme, admitted state, proposal, and sequence of subjects, execution has one result**: the same admitted change and intents, or the same rejection (rule, version, witness) or error, and the same trace.
+
+The order is part of that law. One subject is drawn each time execution reaches `new Subject()`: in statement order, a `for` body once per element in collection order, nested bodies depth-first, and nothing after execution stops. A source with no subject left is the typed error `SubjectSourceExhausted`, never a panic. Tracing changes what observation costs, never the outcome or which subjects are drawn; an accepted traced proposal against the database describes the execution that committed, so the subjects its trace shows are the ones the record holds.
+
+Freshness belongs to transformation-body execution only: admission checking draws nothing.
 
 ## Admission: case-local revalidation
 

@@ -177,7 +177,12 @@ fn the_refused_decision_explains_itself_in_the_statutes_terms() {
         ],
         actor: Subject::from("anna"),
     };
-    let explanation = morpholog_core::explain(&bio::program(), &transition, &state);
+    let explanation = morpholog_core::explain(
+        &bio::program(),
+        &transition,
+        &state,
+        &mut morpholog_test_support::fresh(),
+    );
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
     };
@@ -220,7 +225,12 @@ fn one_verification_names_the_gate_but_distinctness_is_not_a_missing_claim() {
         ],
         actor: Subject::from("anna"),
     };
-    let explanation = morpholog_core::explain(&bio::program(), &transition, &state);
+    let explanation = morpholog_core::explain(
+        &bio::program(),
+        &transition,
+        &state,
+        &mut morpholog_test_support::fresh(),
+    );
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
     };

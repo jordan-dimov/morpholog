@@ -42,7 +42,7 @@ fn rejected_approve_names_the_missing_authority_claim_and_its_supplier() {
         "alice",
     );
 
-    let explanation = explain(&program, &t, &state);
+    let explanation = explain(&program, &t, &state, &mut morpholog_test_support::fresh());
 
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
@@ -69,7 +69,12 @@ fn rendered_rejection_is_the_auditor_facing_artifact() {
         vec![subj("doc-42"), subj("contract")],
         "alice",
     );
-    let explanation = explain(&program, &t, &State::default());
+    let explanation = explain(
+        &program,
+        &t,
+        &State::default(),
+        &mut morpholog_test_support::fresh(),
+    );
 
     let expected = "\
 Rejected: approve_document(doc-42, contract) proposed by alice
@@ -101,7 +106,7 @@ fn admissible_transition_explains_as_admissible() {
         "alice",
     );
 
-    let explanation = explain(&program, &t, &state);
+    let explanation = explain(&program, &t, &state, &mut morpholog_test_support::fresh());
 
     assert_eq!(explanation.verdict, Verdict::Admissible);
     assert_eq!(
@@ -130,7 +135,7 @@ fn comparator_failure_carries_no_directly_missing_claim() {
         "alice",
     );
 
-    let explanation = explain(&program, &t, &state);
+    let explanation = explain(&program, &t, &state, &mut morpholog_test_support::fresh());
 
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
@@ -162,7 +167,7 @@ transformation onboard(customer):
     let state = State::from_claims(vec![claim_instance("Sanctioned", &[subj("alice")])]);
     let t = transition("onboard", vec![subj("alice")], "officer");
 
-    let explanation = explain(&program, &t, &state);
+    let explanation = explain(&program, &t, &state, &mut morpholog_test_support::fresh());
 
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
@@ -197,7 +202,12 @@ transformation issue(cert):
     .expect("no_supplier_demo must parse");
     let t = transition("issue", vec![subj("cert-1")], "officer");
 
-    let explanation = explain(&program, &t, &State::default());
+    let explanation = explain(
+        &program,
+        &t,
+        &State::default(),
+        &mut morpholog_test_support::fresh(),
+    );
 
     let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
         panic!("expected a gate rejection, got {:?}", explanation.verdict);
@@ -242,7 +252,12 @@ transformation flag(customer):
     .expect("invariant_demo must parse");
     let t = transition("flag", vec![subj("alice")], "officer");
 
-    let explanation = explain(&program, &t, &State::default());
+    let explanation = explain(
+        &program,
+        &t,
+        &State::default(),
+        &mut morpholog_test_support::fresh(),
+    );
 
     let Verdict::Rejected(Rejection::Invariant(inv)) = &explanation.verdict else {
         panic!(
@@ -261,7 +276,12 @@ fn kernel_error_uses_the_error_rejection_shape() {
     // not a business rejection - so it must not become a fake gate.
     let t = transition("approve_document", vec![subj("doc-1")], "alice");
 
-    let explanation = explain(&program, &t, &State::default());
+    let explanation = explain(
+        &program,
+        &t,
+        &State::default(),
+        &mut morpholog_test_support::fresh(),
+    );
 
     let Verdict::Rejected(Rejection::Error(err)) = &explanation.verdict else {
         panic!("expected an error rejection, got {:?}", explanation.verdict);
@@ -278,7 +298,12 @@ fn unknown_transformation_is_an_error_rejection() {
     let program = approval_controls::program();
     let t = transition("no_such_transformation", vec![], "alice");
 
-    let explanation = explain(&program, &t, &State::default());
+    let explanation = explain(
+        &program,
+        &t,
+        &State::default(),
+        &mut morpholog_test_support::fresh(),
+    );
 
     let Verdict::Rejected(Rejection::Error(err)) = &explanation.verdict else {
         panic!("expected an error rejection, got {:?}", explanation.verdict);
@@ -298,7 +323,12 @@ fn explanation_json_is_stable_and_round_trips() {
         vec![subj("doc-42"), subj("contract")],
         "alice",
     );
-    let explanation = explain(&program, &t, &State::default());
+    let explanation = explain(
+        &program,
+        &t,
+        &State::default(),
+        &mut morpholog_test_support::fresh(),
+    );
 
     let json = serde_json::to_string(&explanation).unwrap();
     // Key structure of the external surface.

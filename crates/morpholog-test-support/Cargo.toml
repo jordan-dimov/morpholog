@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 morpholog-core = { path = "../morpholog-core" }
+uuid = { workspace = true }
 jiff = { workspace = true }
 rust_decimal = { workspace = true }
 

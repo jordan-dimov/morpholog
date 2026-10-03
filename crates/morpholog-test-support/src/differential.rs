@@ -6,7 +6,8 @@
 
 use morpholog_core::{
     ClaimInstance, EvalError, EvalValue, Outcome, ParamKind, PredicateArgKind, Program, State,
-    Transformation, TransformationName, ValidatedProgram, transformation_param_kinds,
+    Subject, SubjectSource, Transformation, TransformationName, ValidatedProgram,
+    transformation_param_kinds,
 };
 
 use crate::{bool_, coll, date, dec, dur, qty, subj, ts};
@@ -94,14 +95,15 @@ fn sample_param(kind: &ParamKind, salt: u64) -> Option<EvalValue> {
     }
 }
 
-/// The comparable text of a proposal result, with fresh subjects renamed by
-/// [`normalize_uuids`].
+/// The comparable text of a proposal result, compared exactly: both runs
+/// of a differential take their subjects from [`same_subjects`], so the
+/// same execution mints the same subjects.
 ///
 /// `candidate_state` is left out: it lawfully differs between a full and a scoped run.
 /// Rejections render with `{:?}`, not `Display`, because the display string omits the witness;
 /// comparing it would pass a run that rejects the same rule on a different witness.
 pub fn observable(result: &Result<Outcome, EvalError>) -> String {
-    let raw = match result {
+    match result {
         Ok(Outcome::Accepted {
             asserted_claims,
             retracted_claims,
@@ -113,15 +115,22 @@ pub fn observable(result: &Result<Outcome, EvalError>) -> String {
         ),
         Ok(Outcome::Rejected { reason }) => format!("rejected {reason:?}"),
         Err(e) => format!("error {e}"),
-    };
-    normalize_uuids(&raw)
+    }
+}
+
+/// The same subjects for every run of a differential case: one sequence,
+/// restarting at zero for each execution. Safe only because each case is
+/// one self-contained run; chained proposals use [`crate::fresh`].
+pub fn same_subjects() -> impl SubjectSource {
+    (0u64..).map(|n| Subject::from(format!("same-{n}")))
 }
 
 /// Replace each distinct UUID in the text with `<fresh-N>`, numbered in order of first
 /// appearance.
 ///
-/// `new Subject()` mints a fresh UUID on every run, so two lawful runs differ exactly there.
-/// No other fixture value looks like a UUID.
+/// For comparing rows two database runs wrote: the runtime mints transition ids and
+/// subjects fresh each time, so two lawful runs differ exactly there. No other fixture
+/// value looks like a UUID.
 pub fn normalize_uuids(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut seen: Vec<String> = Vec::new();

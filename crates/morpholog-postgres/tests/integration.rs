@@ -2221,3 +2221,53 @@ async fn load_scoped_state_loads_only_in_scope_predicates() {
         "out-of-scope claim must not be loaded"
     );
 }
+
+/// A traced proposal against the database is not a dry run: when it is
+/// accepted, its trace describes the execution that committed, so the
+/// subject `new Subject()` drew there is the one the record holds.
+#[tokio::test]
+async fn an_accepted_traced_proposal_shows_the_subject_it_committed() {
+    use morpholog_core::TraceEntry;
+    use morpholog_core::ir_builder::{
+        assert_, let_new_subject, params, predicate, program, transformation, var,
+    };
+    use morpholog_postgres::{PgProposalOutcome, PgTracedOutcome};
+
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let t = transformation(
+        "mint",
+        params(&[]),
+        vec![let_new_subject("x"), assert_("Minted", vec![var("x")])],
+    );
+    let p = program("minting")
+        .predicates(vec![predicate("Minted").subject("x").build()])
+        .transformations(vec![t.clone()])
+        .build();
+    let traced =
+        common::propose_pg_with_trace_using_test_actor(&pool, &common::pg_program(p), &t, vec![])
+            .await
+            .unwrap();
+    let PgTracedOutcome::Outcome {
+        outcome: PgProposalOutcome::Committed {
+            asserted_claims, ..
+        },
+        trace,
+    } = traced
+    else {
+        panic!("minting is unconditional: {traced:?}");
+    };
+    let drawn = trace
+        .iter()
+        .find_map(|e| match e {
+            TraceEntry::LetNewSubject { subject, .. } => Some(subject.clone()),
+            _ => None,
+        })
+        .expect("the trace records the draw");
+    assert_eq!(asserted_claims[0].args[0], drawn);
+    let audit = morpholog_postgres::list_audit_rows(&pool).await.unwrap();
+    assert_eq!(
+        audit[0].asserted_claims[0].args[0], drawn,
+        "and the record holds it"
+    );
+}

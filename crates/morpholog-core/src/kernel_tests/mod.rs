@@ -117,7 +117,14 @@ fn run(t: &Transformation, state: &State) -> Result<Outcome, EvalError> {
         args: vec![],
         actor: Subject::from("test_actor"),
     };
-    propose(t, &transition, state, &[], &[])
+    propose(
+        t,
+        &transition,
+        state,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    )
 }
 
 fn trace_transition(t: &Transformation, args: Vec<EvalValue>) -> Transition {
@@ -126,4 +133,16 @@ fn trace_transition(t: &Transformation, args: Vec<EvalValue>) -> Transition {
         args,
         actor: Subject::from("trace_actor"),
     }
+}
+
+/// Fresh subjects for `new Subject()` in the kernel's own tests, which
+/// cannot reach the UUIDv7 source in test support (another copy of the
+/// kernel's types). One counter for the whole process, so chained
+/// proposals never reuse a subject.
+pub(crate) fn fresh() -> impl crate::SubjectSource {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    std::iter::repeat_with(|| {
+        crate::Subject::from(format!("fresh-{}", NEXT.fetch_add(1, Ordering::Relaxed)))
+    })
 }
