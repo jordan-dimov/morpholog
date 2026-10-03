@@ -16,9 +16,9 @@
 
 use morpholog_core::ir_builder::*;
 use morpholog_core::{
-    ArgDecl, ArithOp, Claim, CompareOp, Definition, DerivedClaim, DerivedValue, IntentDecl,
-    Invariant, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, Stmt,
-    SumSeed, Term, Transformation, ValidationError, Value, ValueExpr, Var,
+    ArgDecl, ArithOp, Claim, CompareOp, Definition, DerivedClaim, DerivedValue, Discipline,
+    IntentDecl, Invariant, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program,
+    Prop, Stmt, SumSeed, Term, Transformation, ValidationError, Value, ValueExpr, Var,
 };
 use proptest::prelude::*;
 
@@ -505,8 +505,10 @@ fn deeply_nested_for_statements_are_rejected_not_overflowed() {
 }
 
 /// A body nested deeper than any stack holds is refused before anything
-/// walks it without a cap: the cycle search over definitions, or the
-/// depth measure itself on `xor`, whose lowering copies its operands. It
+/// walks it without a cap: the cycle search over definitions, the checks
+/// reported beside a cycle (the append-only retract ban walks every `for`),
+/// or the depth measure itself on `xor`, whose lowering copies its
+/// operands. It
 /// runs on a fixed stack so the verdict does not depend on the
 /// platform's, and every programme is leaked before validation because
 /// dropping one is itself recursive.
@@ -519,6 +521,17 @@ fn a_body_too_deep_for_any_stack_is_refused_before_it_is_walked() {
     };
     let deep_xor = || Prop::Xor(Box::new(nest_prop(0, HOSTILE, leaf())), Box::new(leaf()));
     let leak = |p: Program| -> &'static Program { Box::leak(Box::new(p)) };
+    let mut deep_for = vec![Stmt::Assert(Claim {
+        predicate: "A".into(),
+        args: vec![],
+    })];
+    for _ in 0..HOSTILE {
+        deep_for = vec![Stmt::For {
+            binding: "x".into(),
+            collection: ValueExpr::Term(Term::Var("c".into())),
+            body: deep_for,
+        }];
+    }
     let cases = [
         (
             "definition `d`",
@@ -541,6 +554,23 @@ fn a_body_too_deep_for_any_stack_is_refused_before_it_is_walked() {
             leak(
                 program("deep")
                     .invariants(vec![invariant("i", deep_xor())])
+                    .build(),
+            ),
+        ),
+        (
+            "transformation `t`",
+            leak(
+                program("deep")
+                    .predicates(vec![
+                        predicate("A")
+                            .disciplines(vec![Discipline::AppendOnly])
+                            .build(),
+                    ])
+                    .definitions(vec![
+                        definition("f", vec![], defined("g", vec![])),
+                        definition("g", vec![], defined("f", vec![])),
+                    ])
+                    .transformations(vec![transformation("t", vec!["c".into()], deep_for)])
                     .build(),
             ),
         ),

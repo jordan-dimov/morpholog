@@ -634,19 +634,22 @@ impl std::fmt::Display for ValidationContext {
 /// compare names rather than walk bodies; every body walk lives in
 /// [`crate::check::check_program`].
 pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> {
-    // Each definition body's own nesting is measured before anything
-    // walks it, because the cycle search below walks bodies without a
-    // cap. A call counts at depth 1 here; its callee is measured later.
-    let local_depth_errors: Vec<ValidationError> = p
+    // Every body's own nesting is measured before anything walks it,
+    // because the cycle search and the checks reported beside a cycle
+    // walk bodies without a cap. A call counts at depth 1 here; its
+    // callee is measured later, expanded.
+    let unexpanded = HashMap::new();
+    let mut local_depth_errors: Vec<ValidationError> = p
         .definitions
         .iter()
-        .filter(|d| prop_depth_capped(&d.body, MAX_EXPR_DEPTH, &HashMap::new()).is_none())
+        .filter(|d| prop_depth_capped(&d.body, MAX_EXPR_DEPTH, &unexpanded).is_none())
         .map(|d| ValidationError::NestingTooDeep {
             context: ValidationContext::Definition {
                 name: d.name.to_string(),
             },
         })
         .collect();
+    local_depth_errors.extend(collect_depth_errors(p, &unexpanded));
     if !local_depth_errors.is_empty() {
         return Err(local_depth_errors);
     }
