@@ -14,6 +14,7 @@ morpholog-surface = { path = "../morpholog-surface" }
 morpholog-test-support = { path = "../morpholog-test-support" }
 rust_decimal = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 [lints]
 workspace = true

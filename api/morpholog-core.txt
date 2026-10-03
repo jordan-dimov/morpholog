@@ -2967,6 +2967,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::WitnessBinding
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::WitnessBinding
 pub const morpholog_core::SCORE_FORMAT_VERSION: u32
 pub const morpholog_core::SCORE_SEMANTICS: &str
+pub const morpholog_core::SEMANTICS_VERSION: u32
 pub trait morpholog_core::SubjectSource
 pub fn morpholog_core::SubjectSource::next_subject(&mut self) -> core::option::Option<morpholog_core::Subject>
 impl<I: core::iter::traits::iterator::Iterator<Item = morpholog_core::Subject>> morpholog_core::SubjectSource for I
