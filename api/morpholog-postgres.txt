@@ -949,6 +949,7 @@ pub morpholog_postgres::AuditRow::committed_at: jiff::timestamp::Timestamp
 pub morpholog_postgres::AuditRow::emitted_intents: alloc::vec::Vec<morpholog_core::state::IntentInstance>
 pub morpholog_postgres::AuditRow::invariant_epoch: i32
 pub morpholog_postgres::AuditRow::invariants_checked: alloc::vec::Vec<morpholog_postgres::AuditedInvariantCheck>
+pub morpholog_postgres::AuditRow::model_hash: core::option::Option<alloc::string::String>
 pub morpholog_postgres::AuditRow::parameters: core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub morpholog_postgres::AuditRow::retracted_claims: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
 pub morpholog_postgres::AuditRow::transformation_name: morpholog_core::ir::TransformationName
@@ -1082,10 +1083,8 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::ClaimFilter
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ClaimFilter
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ClaimFilter
 pub struct morpholog_postgres::CompensationSpec
-pub morpholog_postgres::CompensationSpec::args_from_row: alloc::boxed::Box<(dyn core::ops::function::Fn(&morpholog_postgres::OutboxRow) -> alloc::vec::Vec<morpholog_core::state::EvalValue> + core::marker::Send + core::marker::Sync)>
-pub morpholog_postgres::CompensationSpec::definitions: alloc::vec::Vec<morpholog_core::ir::Definition>
-pub morpholog_postgres::CompensationSpec::invariants: alloc::vec::Vec<morpholog_core::ir::Invariant>
-pub morpholog_postgres::CompensationSpec::transformation: morpholog_core::ir::Transformation
+impl morpholog_postgres::CompensationSpec
+pub fn morpholog_postgres::CompensationSpec::new(morpholog_core::prepared::PreparedProgram, morpholog_core::ir::TransformationName, alloc::boxed::Box<(dyn core::ops::function::Fn(&morpholog_postgres::OutboxRow) -> alloc::vec::Vec<morpholog_core::state::EvalValue> + core::marker::Send + core::marker::Sync)>) -> core::result::Result<Self, morpholog_postgres::PgError>
 impl core::marker::Freeze for morpholog_postgres::CompensationSpec
 impl core::marker::Send for morpholog_postgres::CompensationSpec
 impl core::marker::Sync for morpholog_postgres::CompensationSpec

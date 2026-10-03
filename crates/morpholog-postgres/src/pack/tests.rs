@@ -879,3 +879,98 @@ fn a_late_break_in_the_format_outranks_an_earlier_tamper() {
         other => panic!("a malformed pack must outrank the anchor mismatch, got {other:?}"),
     }
 }
+
+/// The same rows on the top rung: each names its programme (leaf V4).
+fn naming_their_programme(rows: Vec<AuditRow>) -> Vec<AuditRow> {
+    rows.into_iter()
+        .map(|r| AuditRow {
+            attestation: Some(crate::attestation::AuditAttestation::Gateway {
+                authenticated_by: "writer".to_string(),
+                authenticated_by_oid: None,
+            }),
+            parameters: Some(Vec::new()),
+            model_hash: Some(format!("sha256:{}", "d".repeat(64))),
+            ..r
+        })
+        .collect()
+}
+
+/// A genuine streamed pack over `rows`, one checkpoint over all of them,
+/// announcing `version`.
+fn streamed_pack_of(rows: &[AuditRow], version: u32) -> Vec<u8> {
+    let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+    let cp = real_checkpoint(&leaves, rows.len(), None);
+    let manifest = PrefixPackManifest {
+        pack_format_version: version,
+        pack_kind: "prefix".into(),
+        tree_size: cp.tree_size,
+        root_hash: cp.root_hash,
+        checkpoint_hash: cp.checkpoint_hash,
+        checkpoint_count: 1,
+    };
+    let mut lines = vec![
+        serde_json::to_string(&manifest).unwrap(),
+        serde_json::to_string(&cp).unwrap(),
+    ];
+    lines.extend(rows.iter().map(|r| serde_json::to_string(r).unwrap()));
+    bytes(&lines)
+}
+
+/// Older rows, then rows naming their programme: the real chronology.
+fn mixed_history() -> Vec<AuditRow> {
+    let mut rows = rows_tagged(4, 'm');
+    let newer = naming_their_programme(rows.split_off(2));
+    rows.extend(newer);
+    rows
+}
+
+#[test]
+fn a_stream_disclosing_a_programme_naming_row_is_version_5_and_verifies() {
+    let rows = mixed_history();
+    assert!(matches!(
+        stream_verdict(&streamed_pack_of(&rows, 5), None),
+        Ok(TreeVerification::Intact { .. })
+    ));
+}
+
+/// A version-4 reader drops a field it does not know and hashes the rest,
+/// reporting tamper on honest history; so version 4 may not carry one.
+#[test]
+fn a_version_4_stream_cannot_disclose_a_programme_naming_row() {
+    match stream_verdict(&streamed_pack_of(&mixed_history(), 4), None) {
+        Err(PackError::Malformed { detail }) => {
+            assert!(detail.contains("cannot disclose"), "{detail}");
+        }
+        other => panic!("expected the version to be refused, got {other:?}"),
+    }
+}
+
+/// The fence holds both ways: version 5 announces what the pack discloses.
+#[test]
+fn a_version_5_stream_must_disclose_one() {
+    match stream_verdict(&streamed_pack_of(&rows_tagged(3, 'u'), 5), None) {
+        Err(PackError::Malformed { detail }) => {
+            assert!(detail.contains("discloses no row"), "{detail}");
+        }
+        other => panic!("expected the version to be refused, got {other:?}"),
+    }
+}
+
+/// The single-document spelling follows the same rule: read whole, a
+/// version-5 stream is a version-8 document; labelled 1, it is refused.
+#[test]
+fn a_programme_naming_document_is_version_8() {
+    let pack = read_prefix_stream(&streamed_pack_of(&mixed_history(), 5)[..]).unwrap();
+    assert_eq!(pack.manifest.pack_format_version, 8);
+    assert!(matches!(
+        verify_pack(&pack, None),
+        Ok(TreeVerification::Intact { .. })
+    ));
+    let mut relabelled = pack.clone();
+    relabelled.manifest.pack_format_version = PACK_FORMAT_V1;
+    malformed("cannot disclose", &relabelled);
+    let unstamped = read_prefix_stream(&streamed_pack_of(&rows_tagged(2, 'v'), 4)[..]).unwrap();
+    let mut overclaimed = unstamped.clone();
+    overclaimed.manifest.pack_format_version = 8;
+    malformed("discloses no row", &overclaimed);
+}

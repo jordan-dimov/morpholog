@@ -702,8 +702,14 @@
         },
         "committed_at": { "type": "string", "format": "date-time" },
         "attestation": { "$ref": "#/$defs/attestation" },
-        "parameters": { "type": "array", "items": { "type": "string" } }
-      }
+        "parameters": { "type": "array", "items": { "type": "string" } },
+        "model_hash": {
+          "description": "The canonical hash of the whole programme that admitted the row, as `morpholog hash` prints it. Absent on rows from before it was stamped.",
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "dependentRequired": { "model_hash": ["attestation", "parameters"] }
     },
     "audit_row_named": {
       "type": "object",
@@ -755,8 +761,14 @@
         },
         "committed_at": { "type": "string", "format": "date-time" },
         "attestation": { "$ref": "#/$defs/attestation" },
-        "parameters": { "type": "array", "items": { "type": "string" } }
-      }
+        "parameters": { "type": "array", "items": { "type": "string" } },
+        "model_hash": {
+          "description": "The canonical hash of the whole programme that admitted the row, as `morpholog hash` prints it. Absent on rows from before it was stamped.",
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "dependentRequired": { "model_hash": ["attestation", "parameters"] }
     },
     "outbox_row": {
       "type": "object",

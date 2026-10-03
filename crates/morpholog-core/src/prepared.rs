@@ -53,6 +53,8 @@ pub struct PreparedProgram {
     /// One impact plan per invariant, in order, built once here so the
     /// commit path plans nothing per proposal.
     impact: Vec<ImpactPlan>,
+    /// The canonical hash of `program`, computed once.
+    model_hash: String,
 }
 
 impl PreparedProgram {
@@ -70,6 +72,7 @@ impl PreparedProgram {
             .collect();
         Ok(Self {
             impact,
+            model_hash: crate::format::canonical_hash(&program),
             transformations: position_index(&program.transformations, |t| t.name.clone()),
             invariants: position_index(&program.invariants, |i| i.name.clone()),
             predicates: position_index(&program.predicates, |p| p.name.clone()),
@@ -82,6 +85,12 @@ impl PreparedProgram {
     /// Borrow the underlying validated programme.
     pub fn program(&self) -> &Program {
         &self.program
+    }
+
+    /// The programme's semantic identity, [`crate::format::canonical_hash`]
+    /// of the whole programme, computed once. Every commit records it.
+    pub fn model_hash(&self) -> &str {
+        &self.model_hash
     }
 
     /// The rules a transition is admitted under, with the plans built

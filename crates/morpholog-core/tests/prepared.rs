@@ -112,3 +112,13 @@ fn validated_bridges_to_the_analysis_api() {
     // intent_arg_schema accepts a ValidatedProgram and finds the intent.
     assert!(morpholog_core::intent_arg_schema(&validated, &IntentName::from("Notified")).is_some());
 }
+
+#[test]
+fn the_model_hash_is_the_canonical_hash_of_the_whole_programme() {
+    let program = fixture();
+    let prepared = PreparedProgram::new(program.clone()).expect("valid");
+    assert_eq!(
+        prepared.model_hash(),
+        morpholog_core::format::canonical_hash(&program)
+    );
+}

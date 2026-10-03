@@ -268,7 +268,20 @@ CREATE TABLE audit (
         OR (jsonb_typeof(parameters) = 'array'
             AND jsonb_array_length(parameters) = jsonb_array_length(arguments))
     ),
-    CONSTRAINT audit_parameters_required CHECK (parameters IS NOT NULL)
+    CONSTRAINT audit_parameters_required CHECK (parameters IS NOT NULL),
+    -- The canonical hash of the whole programme that admitted the row
+    -- (`morpholog hash`): the join key back to the exact rulebook. Part
+    -- of the Merkle leaf for the rows that carry it, chosen by presence
+    -- like the fields above, and only on a row that carries them. Nullable
+    -- for the same reason: never backfill.
+    model_hash           text,
+    CONSTRAINT audit_model_hash_shape CHECK (
+        model_hash IS NULL
+        OR (model_hash ~ '^sha256:[0-9a-f]{64}$'
+            AND attestation IS NOT NULL
+            AND parameters IS NOT NULL)
+    ),
+    CONSTRAINT audit_model_hash_required CHECK (model_hash IS NOT NULL)
 );
 
 -- Keyset replay order: every audit read (the blessed tail, verify,
@@ -582,4 +595,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (16, 'timestamp_nanos'),
     (17, 'value_key_v1'),
     (18, 'date_ordinal'),
-    (19, 'requirement_position');
+    (19, 'requirement_position'),
+    (20, 'audit_model_hash');

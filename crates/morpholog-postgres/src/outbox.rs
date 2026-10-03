@@ -1,8 +1,8 @@
 use crate::error::{PgError, classify_checked_query};
-use crate::propose::{PgProposalOutcome, propose_against_pg_inner};
+use crate::propose::{PgProposalOutcome, propose_against_pg_inner, resolve};
 use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
-use morpholog_core::{Definition, EvalValue, Invariant, Subject, Transformation, Transition};
+use morpholog_core::{EvalValue, PreparedProgram, Subject, TransformationName, Transition};
 use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -672,14 +672,31 @@ pub type CompensationArgsFromRow = Box<dyn Fn(&OutboxRow) -> Vec<EvalValue> + Se
 /// `args_from_row` runs after [`begin_compensation`] claims the lease, so
 /// the row carries the new `failure_reason`.
 ///
-/// The compensation is an ordinary proposal: the same invariant checks,
-/// its own audit row and outbox intents. The audit log keeps the full lineage.
+/// The compensation is an ordinary proposal under a whole programme: every
+/// invariant it declares, its own audit row naming that programme, and its
+/// outbox intents. The audit log keeps the full lineage.
 pub struct CompensationSpec {
-    pub transformation: Transformation,
-    pub invariants: Vec<Invariant>,
-    /// The programme's definitions; empty when it declares none.
-    pub definitions: Vec<Definition>,
-    pub args_from_row: CompensationArgsFromRow,
+    prepared: PreparedProgram,
+    transformation: TransformationName,
+    args_from_row: CompensationArgsFromRow,
+}
+
+impl CompensationSpec {
+    /// Compensate with `transformation` of `prepared`. Refused here, not
+    /// at the first failed delivery, when the programme does not declare
+    /// it or its actor policy is misshapen.
+    pub fn new(
+        prepared: PreparedProgram,
+        transformation: TransformationName,
+        args_from_row: CompensationArgsFromRow,
+    ) -> Result<Self, PgError> {
+        resolve(&prepared, &transformation)?;
+        Ok(Self {
+            prepared,
+            transformation,
+            args_from_row,
+        })
+    }
 }
 /// Outcome of one [`process_one_outbox_row`] cycle: which branch ran.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -797,17 +814,17 @@ where
                 return Ok(ProcessOutcome::CompensationDeferred { intent_id });
             };
             let args = (spec.args_from_row)(&failed_row);
+            let (transformation, _, _) = resolve(&spec.prepared, &spec.transformation)?;
             let compensation_transition = Transition {
-                transformation_name: spec.transformation.name.clone(),
+                transformation_name: transformation.name.clone(),
                 args,
                 actor: system_actor(),
             };
             let outcome = propose_against_pg_inner(
                 pool,
-                &spec.transformation,
+                &spec.prepared,
+                transformation,
                 &compensation_transition,
-                &spec.invariants,
-                &spec.definitions,
             )
             .await?;
             match outcome {

@@ -87,7 +87,6 @@ pub async fn propose_all_against_pg(
         .map(|p| resolve(prepared, &p.transformation_name).map(|(t, _, _)| (t, p.transition())))
         .collect::<Result<_, _>>()?;
     let admission = prepared.admission();
-    let invariants = admission.invariants;
     let definitions = admission.definitions;
     let route = program.route();
 
@@ -130,7 +129,7 @@ pub async fn propose_all_against_pg(
                             transition_id,
                             transformation,
                             transition,
-                            invariants,
+                            prepared,
                             &asserted_claims,
                             &retracted_claims,
                             &emitted_intents,
@@ -175,7 +174,7 @@ pub async fn propose_all_against_pg(
                             transition_id,
                             transformation,
                             transition,
-                            invariants,
+                            prepared,
                             &asserted,
                             &retracted,
                             &emitted,

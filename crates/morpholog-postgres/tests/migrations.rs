@@ -23,6 +23,8 @@ const WITNESS_MIGRATION: &str =
     include_str!("../../morpholog-core/sql/migrations/010_rejections_witness.sql");
 const CLAIMS_KEY_MIGRATION: &str =
     include_str!("../../morpholog-core/sql/migrations/012_claims_hash_key.sql");
+const MODEL_HASH_MIGRATION: &str =
+    include_str!("../../morpholog-core/sql/migrations/020_audit_model_hash.sql");
 
 /// Run one statement whose text this test owns. The scratch schema name is a
 /// literal here, never external input.
@@ -586,6 +588,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     .expect("simulate a database from before checkpoint witnesses");
     ddl(
         &pool,
+        "ALTER TABLE morpholog.audit DROP COLUMN model_hash".to_string(),
+    )
+    .await
+    .expect("simulate a database from before rows named their programme");
+    ddl(
+        &pool,
         "ALTER TABLE morpholog.audit DROP COLUMN parameters".to_string(),
     )
     .await
@@ -876,9 +884,27 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     let historical = morpholog_postgres::list_audit_rows(&pool)
         .await
         .map_err(|e| format!("the historical row must still read: {e}"))?;
-    if historical.len() != 1 || historical[0].parameters.is_some() {
+    if historical.len() != 1
+        || historical[0].parameters.is_some()
+        || historical[0].model_hash.is_some()
+    {
         return Err(format!(
             "the historical row must survive unstamped, got {historical:?}"
+        ));
+    }
+    let named = columns(&pool, "morpholog", "audit")
+        .await
+        .into_iter()
+        .find(|(name, _, _)| name == "model_hash");
+    if named
+        != Some((
+            "model_hash".to_string(),
+            "YES".to_string(),
+            "text".to_string(),
+        ))
+    {
+        return Err(format!(
+            "model_hash must come back as nullable text, got {named:?}"
         ));
     }
     let unstamped = sqlx::query(
@@ -893,11 +919,35 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     .bind(uuid::Uuid::now_v7())
     .execute(&pool)
     .await;
+    // PostgreSQL reports the first failing check by constraint name, so a
+    // row missing both later fields names either boundary.
     match unstamped {
-        Err(e) if e.to_string().contains("audit_parameters_required") => {}
+        Err(e)
+            if e.to_string().contains("audit_parameters_required")
+                || e.to_string().contains("audit_model_hash_required") => {}
         other => {
             return Err(format!(
-                "a new unstamped row must be refused by audit_parameters_required, got {other:?}"
+                "a new unstamped row must be refused by an activation constraint, got {other:?}"
+            ));
+        }
+    }
+    let unhashed = sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents, attestation, parameters
+         ) VALUES ($1, 'stale_binary', '[]', '{\"type\":\"subject\",\"value\":\"s\"}',
+                   1, '[]', '[]', '[]', '[]',
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"s\"}', '[]')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .execute(&pool)
+    .await;
+    match unhashed {
+        Err(e) if e.to_string().contains("audit_model_hash_required") => {}
+        other => {
+            return Err(format!(
+                "a new row naming no programme must be refused by audit_model_hash_required, got {other:?}"
             ));
         }
     }
@@ -905,10 +955,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents, attestation, parameters
+            asserted_claims, retracted_claims, emitted_intents, attestation, parameters,
+            model_hash
          ) VALUES ($1, 'misshapen', '[]', '{\"type\":\"subject\",\"value\":\"m\"}',
                    1, '[]', '[]', '[]', '[]',
-                   '{\"mode\":\"gateway\",\"authenticated_by\":\"m\"}', '[\"extra\"]')",
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"m\"}', '[\"extra\"]',
+                   'sha256:' || repeat('0', 64))",
     )
     .bind(uuid::Uuid::now_v7())
     .execute(&pool)
@@ -1631,4 +1683,130 @@ async fn key_function_probe(url: &str) -> Result<(), String> {
         return Err("the marked guard must be dropped".to_string());
     }
     Ok(())
+}
+
+/// The model-hash migration takes the audit table from before it to the
+/// head shape, leaves the head shape alone (fresh or migrated), and
+/// refuses any other shape by name: a column of another type, or a
+/// same-named constraint that says something else, would leave the
+/// runtime or the activation boundary resting on a definition it never
+/// checked.
+#[tokio::test]
+async fn the_model_hash_migration_accepts_two_shapes_and_refuses_the_rest() {
+    let pool = test_pool().await;
+    let scratch = "morpholog_model_hash_probe";
+    ddl(&pool, format!("DROP SCHEMA IF EXISTS {scratch} CASCADE"))
+        .await
+        .unwrap();
+    ddl(&pool, format!("CREATE SCHEMA {scratch}"))
+        .await
+        .unwrap();
+    ddl(
+        &pool,
+        format!("CREATE TABLE {scratch}.audit (LIKE morpholog.audit INCLUDING ALL)"),
+    )
+    .await
+    .unwrap();
+    let migration = MODEL_HASH_MIGRATION.replace("morpholog.audit", &format!("{scratch}.audit"));
+    let refused = |result: &Result<(), sqlx::Error>| {
+        result
+            .as_ref()
+            .is_err_and(|e| e.to_string().contains("refusing to guess"))
+    };
+
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the fresh head shape is current");
+    ddl(
+        &pool,
+        format!("ALTER TABLE {scratch}.audit DROP COLUMN model_hash"),
+    )
+    .await
+    .unwrap();
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the pre-migration shape migrates");
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the migrated head shape is current");
+    ddl(
+        &pool,
+        format!(
+            "ALTER TABLE {scratch}.audit DROP CONSTRAINT audit_model_hash_shape;
+             ALTER TABLE {scratch}.audit ADD CONSTRAINT audit_model_hash_shape CHECK (
+                 model_hash IS NULL
+                 OR (model_hash ~ '^sha256:[0-9a-f]{{64}}$'
+                     AND attestation IS NOT NULL
+                     AND parameters IS NOT NULL)
+             ) NOT VALID"
+        ),
+    )
+    .await
+    .unwrap();
+    ddl(&pool, migration.clone())
+        .await
+        .expect("a head shape whose shape check is NOT VALID is current");
+
+    ddl(
+        &pool,
+        format!(
+            "ALTER TABLE {scratch}.audit DROP COLUMN model_hash;
+             ALTER TABLE {scratch}.audit ADD COLUMN model_hash jsonb"
+        ),
+    )
+    .await
+    .unwrap();
+    let result = ddl(&pool, migration.clone()).await;
+    assert!(refused(&result), "a column of another type: {result:?}");
+
+    ddl(
+        &pool,
+        format!(
+            "ALTER TABLE {scratch}.audit DROP COLUMN model_hash;
+             ALTER TABLE {scratch}.audit ADD COLUMN model_hash text;
+             ALTER TABLE {scratch}.audit ADD CONSTRAINT audit_model_hash_shape CHECK (true)"
+        ),
+    )
+    .await
+    .unwrap();
+    let result = ddl(&pool, migration.clone()).await;
+    assert!(refused(&result), "an impostor constraint: {result:?}");
+
+    for (what, drift) in [
+        (
+            "a default",
+            "ALTER TABLE {s}.audit ALTER COLUMN model_hash SET DEFAULT 'x'",
+        ),
+        (
+            "a NOT NULL column",
+            "UPDATE {s}.audit SET model_hash = NULL WHERE false;
+             ALTER TABLE {s}.audit ALTER COLUMN model_hash SET NOT NULL",
+        ),
+        (
+            "a required constraint that says something else",
+            "ALTER TABLE {s}.audit DROP CONSTRAINT audit_model_hash_required;
+             ALTER TABLE {s}.audit ADD CONSTRAINT audit_model_hash_required CHECK (true)",
+        ),
+    ] {
+        // Start each from the head shape, then drift one thing.
+        ddl(
+            &pool,
+            format!(
+                "ALTER TABLE {scratch}.audit DROP COLUMN model_hash;
+                 ALTER TABLE {scratch}.audit DROP CONSTRAINT IF EXISTS audit_model_hash_shape"
+            ),
+        )
+        .await
+        .unwrap();
+        ddl(&pool, migration.clone())
+            .await
+            .expect("back to the head shape");
+        ddl(&pool, drift.replace("{s}", scratch)).await.unwrap();
+        let result = ddl(&pool, migration.clone()).await;
+        assert!(refused(&result), "{what}: {result:?}");
+    }
+
+    ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
+        .await
+        .unwrap();
 }

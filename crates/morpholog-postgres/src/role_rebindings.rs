@@ -130,6 +130,7 @@ mod tests {
                 authenticated_by_oid: oid,
             }),
             parameters: None,
+            model_hash: None,
         }
     }
 

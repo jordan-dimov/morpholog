@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
 
 use super::{
-    EvidencePack, PACK_FORMAT_V1, PackError, PackManifest, covering_checkpoint, manifest_agrees,
-    row_count_disagrees, validate_prefix_chain,
+    DOCUMENT_FORMATS, EvidencePack, FormatPair, PackError, PackManifest, covering_checkpoint,
+    manifest_agrees, row_count_disagrees, validate_prefix_chain,
 };
 use crate::audit::AuditRow;
 use crate::audit_pages::AuditPages;
@@ -28,6 +28,12 @@ use crate::txn::{TxIsolation, begin_isolated_tx};
 
 pub(crate) const PACK_FORMAT_V4: u32 = 4;
 const PACK_KIND_PREFIX: &str = "prefix";
+/// The streamed prefix's versions: 4, or 5 once a covered row names its
+/// programme. See [`FormatPair`].
+pub(crate) const PREFIX_FORMATS: FormatPair = FormatPair {
+    unstamped: PACK_FORMAT_V4,
+    stamped: 5,
+};
 
 /// Line 1 of a complete-prefix pack.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,10 +79,30 @@ pub async fn begin_prefix_export(
             rows_present,
         });
     }
+    // The manifest goes out before the rows, so whether any covered row
+    // names its programme is asked first, in the same snapshot and order.
+    let stamped = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM (
+                   SELECT model_hash FROM morpholog.audit
+                   ORDER BY committed_at, transition_id
+                   LIMIT $1
+               ) AS prefix
+               WHERE prefix.model_hash IS NOT NULL
+           ) AS "stamped!""#,
+        covering.tree_size
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(classify_checked_query)?;
 
     Ok(PrefixExport {
         manifest: PrefixPackManifest {
-            pack_format_version: PACK_FORMAT_V4,
+            pack_format_version: if stamped {
+                PREFIX_FORMATS.stamped
+            } else {
+                PREFIX_FORMATS.unstamped
+            },
             pack_kind: PACK_KIND_PREFIX.to_string(),
             tree_size: covering.tree_size,
             root_hash: covering.root_hash,
@@ -165,7 +191,7 @@ pub fn read_prefix_stream(input: impl BufRead) -> Result<EvidencePack, PackError
     let manifest = stream.manifest;
     Ok(EvidencePack {
         manifest: PackManifest {
-            pack_format_version: PACK_FORMAT_V1,
+            pack_format_version: DOCUMENT_FORMATS.for_rows(&rows),
             tree_size: manifest.tree_size,
             root_hash: manifest.root_hash,
             checkpoint_hash: manifest.checkpoint_hash,
@@ -183,13 +209,17 @@ struct RowStream<R> {
     manifest: PrefixPackManifest,
     fed: usize,
     previous: Option<(jiff::Timestamp, uuid::Uuid)>,
+    /// Whether a row read so far names its programme, held to the
+    /// manifest's version once the last row is in.
+    stamped_seen: bool,
 }
 
 impl<R: BufRead> RowStream<R> {
     fn open(input: R) -> Result<(Self, Vec<Checkpoint>), PackError> {
         let mut lines = Lines::new(input);
         let manifest: PrefixPackManifest = lines.parse("the manifest")?;
-        if manifest.pack_format_version != PACK_FORMAT_V4 || manifest.pack_kind != PACK_KIND_PREFIX
+        if !PREFIX_FORMATS.admits(manifest.pack_format_version)
+            || manifest.pack_kind != PACK_KIND_PREFIX
         {
             return Err(PackError::Malformed {
                 detail: format!(
@@ -214,6 +244,7 @@ impl<R: BufRead> RowStream<R> {
             manifest,
             fed: 0,
             previous: None,
+            stamped_seen: false,
         };
         Ok((stream, checkpoints))
     }
@@ -229,6 +260,7 @@ impl<R: BufRead> RowStream<R> {
                     ),
                 });
             }
+            PREFIX_FORMATS.check(self.manifest.pack_format_version, self.stamped_seen)?;
             return Ok(None);
         }
         if self.lines.at_end()? {
@@ -248,6 +280,12 @@ impl<R: BufRead> RowStream<R> {
         }
         self.previous = Some(here);
         self.fed += 1;
+        if row.model_hash.is_some() {
+            self.stamped_seen = true;
+            // Refused at the row, not after the stream: a version-4 reader
+            // must never have been handed it.
+            PREFIX_FORMATS.check(self.manifest.pack_format_version, true)?;
+        }
         Ok(Some(row))
     }
 }

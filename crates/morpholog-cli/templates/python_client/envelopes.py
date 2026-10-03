@@ -1002,16 +1002,18 @@ _AUDIT_ROW_KEYS = {
     "committed_at",
 }
 
-_AUDIT_ROW_OPTIONAL_KEYS = {"attestation", "parameters"}
+_AUDIT_ROW_OPTIONAL_KEYS = {"attestation", "parameters", "model_hash"}
 
 
 def _parameters_of(data: dict[str, object]) -> list[str] | None:
     """The stamped parameter names, held to the shapes a row can have:
     names are strings (leaf-covered evidence, never coerced), only an
     attested row carries them, and there is one per argument."""
-    raw = data.get("parameters")
-    if raw is None:
+    if "parameters" not in data:
         return None
+    raw = data["parameters"]
+    if raw is None:
+        raise EnvelopeError("an audit row carries parameters: null; absent is the only spelling")
     names = _str_list("parameters", raw)
     if data.get("attestation") is None:
         raise EnvelopeError("an audit row carries parameter names but no attestation")
@@ -1022,6 +1024,30 @@ def _parameters_of(data: dict[str, object]) -> list[str] | None:
             f"{len(arguments) if isinstance(arguments, list) else '?'} arguments"
         )
     return names
+
+
+def _model_hash_of(data: dict[str, object]) -> str | None:
+    """The programme hash a row names, held to its one shape: `sha256:`
+    and 64 lowercase hex digits, only on a row that also carries an
+    attestation and parameter names."""
+    raw = data.get("model_hash", _ABSENT)
+    if raw is _ABSENT:
+        return None
+    if (
+        not isinstance(raw, str)
+        or not raw.startswith("sha256:")
+        or len(raw) != 71
+        or any(c not in "0123456789abcdef" for c in raw[7:])
+    ):
+        raise EnvelopeError(f"an audit row carries a malformed model hash {raw!r}")
+    if data.get("attestation") is None or data.get("parameters") is None:
+        raise EnvelopeError(
+            "an audit row carries a model hash without an attestation and parameter names"
+        )
+    return raw
+
+
+_ABSENT = object()
 
 
 @dataclass(frozen=True)
@@ -1058,8 +1084,12 @@ class Attestation:
 
 
 def _attestation_of(data: dict[str, object]) -> Attestation | None:
-    raw = data.get("attestation")
-    return None if raw is None else Attestation.from_json(raw)
+    if "attestation" not in data:
+        return None
+    raw = data["attestation"]
+    if raw is None:
+        raise EnvelopeError("an audit row carries attestation: null; absent is the only spelling")
+    return Attestation.from_json(raw)
 
 
 @dataclass(frozen=True)
@@ -1086,6 +1116,9 @@ class AuditRow:
     # readable after the act is retired. None on rows from before names
     # were stamped.
     parameters: list[str] | None = None
+    # The canonical hash of the whole programme that admitted the row, as
+    # `morpholog hash` prints it. None on rows from before it was stamped.
+    model_hash: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRow:
@@ -1105,6 +1138,7 @@ class AuditRow:
             committed_at=values.parse_timestamp(data["committed_at"]),
             attestation=_attestation_of(data),
             parameters=_parameters_of(data),
+            model_hash=_model_hash_of(data),
         )
 
 
@@ -1131,6 +1165,9 @@ class AuditRowNamed:
     # readable after the act is retired. None on rows from before names
     # were stamped.
     parameters: list[str] | None = None
+    # The canonical hash of the whole programme that admitted the row, as
+    # `morpholog hash` prints it. None on rows from before it was stamped.
+    model_hash: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRowNamed:
@@ -1150,6 +1187,7 @@ class AuditRowNamed:
             committed_at=values.parse_timestamp(data["committed_at"]),
             attestation=_attestation_of(data),
             parameters=_parameters_of(data),
+            model_hash=_model_hash_of(data),
         )
 
 

@@ -40,6 +40,7 @@ fn fixed_row() -> AuditRow {
         committed_at: "2026-01-02T03:04:05.123456Z".parse().unwrap(),
         attestation: None,
         parameters: None,
+        model_hash: None,
     }
 }
 
@@ -519,4 +520,92 @@ fn wrong_length_proofs_are_malformed() {
         verify_consistency_proof(3, &first_root, leaves.len(), &root, &short),
         Err(ProofError::Malformed)
     );
+}
+
+fn hashed_fixed_row() -> AuditRow {
+    AuditRow {
+        model_hash: Some(format!("sha256:{}", "ab".repeat(32))),
+        ..stamped_fixed_row()
+    }
+}
+
+/// The frozen leaf hash of the row that names its programme, derived
+/// separately in Python from the documented layout: the V3 bytes (checked
+/// there against the V3 pin) with version byte 4, then the hash's text as
+/// one more length-prefixed field.
+#[test]
+fn frozen_v4_leaf_hash_pins_the_programme_naming_encoding() {
+    let hash = audit_leaf_hash(&hashed_fixed_row()).unwrap();
+    assert_eq!(
+        Digest::from_bytes(hash).to_string(),
+        "sha256:75b07013ec7fd70f5e16c232ae4a565f999b8be793d7ad423fdad60afcdd1c66"
+    );
+}
+
+/// A model hash belongs only on the top rung: with parameter names and an
+/// attestation, in the exact `sha256:` + 64 lowercase hex form. Any other
+/// shape is malformed, never a hybrid encoding.
+#[test]
+fn a_model_hash_off_the_top_rung_gets_no_leaf() {
+    let hostile = [
+        AuditRow {
+            parameters: None,
+            ..hashed_fixed_row()
+        },
+        AuditRow {
+            attestation: None,
+            parameters: None,
+            ..hashed_fixed_row()
+        },
+        AuditRow {
+            model_hash: Some(format!("sha256:{}", "AB".repeat(32))),
+            ..hashed_fixed_row()
+        },
+        AuditRow {
+            model_hash: Some("sha256:abc".to_string()),
+            ..hashed_fixed_row()
+        },
+    ];
+    for row in &hostile {
+        assert!(audit_leaf_hash(row).is_err(), "{:?}", row.model_hash);
+    }
+}
+
+/// Grafting or stripping the hash changes the encoding, so the leaf breaks.
+#[test]
+fn model_hash_presence_selects_the_encoding() {
+    assert_ne!(
+        audit_leaf_hash(&stamped_fixed_row()).unwrap(),
+        audit_leaf_hash(&hashed_fixed_row()).unwrap()
+    );
+}
+
+/// One spelling for "not on this rung": absent. A present null is
+/// malformed for every field whose presence selects the leaf encoding.
+#[test]
+fn a_null_leaf_rung_field_is_malformed_not_absent() {
+    for field in ["attestation", "parameters", "model_hash"] {
+        let mut value = serde_json::to_value(hashed_fixed_row()).unwrap();
+        value[field] = serde_json::Value::Null;
+        assert!(
+            serde_json::from_value::<AuditRow>(value).is_err(),
+            "a present null {field} must be malformed"
+        );
+    }
+    let absent = serde_json::to_value(stamped_fixed_row()).unwrap();
+    assert!(
+        serde_json::from_value::<AuditRow>(absent)
+            .unwrap()
+            .model_hash
+            .is_none()
+    );
+}
+
+/// A field this build cannot place in the leaf makes the row malformed: an
+/// older reader must never drop it and hash what is left.
+#[test]
+fn an_unknown_audit_row_field_is_malformed() {
+    let mut value = serde_json::to_value(hashed_fixed_row()).unwrap();
+    value["field_from_the_future"] = serde_json::json!("x");
+    assert!(serde_json::from_value::<AuditRow>(value).is_err());
 }

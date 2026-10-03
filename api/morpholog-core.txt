@@ -1246,6 +1246,9 @@ pub morpholog_core::ValidationError::EqualityKindMismatch::context: morpholog_co
 pub morpholog_core::ValidationError::EqualityKindMismatch::left: morpholog_core::PredicateArgKind
 pub morpholog_core::ValidationError::EqualityKindMismatch::operator: &'static str
 pub morpholog_core::ValidationError::EqualityKindMismatch::right: morpholog_core::PredicateArgKind
+pub morpholog_core::ValidationError::GeneratedNotFaithful
+pub morpholog_core::ValidationError::GeneratedNotFaithful::kind: alloc::string::String
+pub morpholog_core::ValidationError::GeneratedNotFaithful::name: alloc::string::String
 pub morpholog_core::ValidationError::InvalidValueExtraction
 pub morpholog_core::ValidationError::InvalidValueExtraction::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::InvalidValueExtraction::extract: usize
@@ -2394,6 +2397,7 @@ pub fn morpholog_core::PreparedProgram::definition(&self, &morpholog_core::Defin
 pub fn morpholog_core::PreparedProgram::derived_claim(&self, &morpholog_core::PredicateName) -> core::option::Option<&morpholog_core::DerivedClaim>
 pub fn morpholog_core::PreparedProgram::intent(&self, &morpholog_core::IntentName) -> core::option::Option<&morpholog_core::IntentDecl>
 pub fn morpholog_core::PreparedProgram::invariant(&self, &morpholog_core::InvariantName) -> core::option::Option<&morpholog_core::Invariant>
+pub fn morpholog_core::PreparedProgram::model_hash(&self) -> &str
 pub fn morpholog_core::PreparedProgram::new(morpholog_core::Program) -> core::result::Result<Self, alloc::vec::Vec<morpholog_core::ValidationError>>
 pub fn morpholog_core::PreparedProgram::predicate(&self, &morpholog_core::PredicateName) -> core::option::Option<&morpholog_core::PredicateDecl>
 pub fn morpholog_core::PreparedProgram::program(&self) -> &morpholog_core::Program

@@ -353,6 +353,34 @@ pub(crate) fn expected_generated_invariants(program: &Program) -> Vec<(Predicate
         .collect()
 }
 
+/// Exactly the invariants and definitions the declared disciplines lower
+/// to, one per name. Generated items stay out of the canonical hash, since
+/// reparsing regenerates them, so a programme may carry no others and no
+/// altered ones: validation holds every generated item to this list, or
+/// two programmes enforcing different rules would share one hash.
+pub(crate) fn exact_lowering(program: &Program) -> (Vec<Invariant>, Vec<Definition>) {
+    let mut invariants: Vec<Invariant> = Vec::new();
+    for u in uniqueness_clauses(program) {
+        if let Some(inv) = unique_invariant(u.target, &u.fields)
+            && !invariants.iter().any(|seen| seen.name == inv.name)
+        {
+            invariants.push(inv);
+        }
+    }
+    let mut definitions: Vec<Definition> = Vec::new();
+    for decl in &program.predicates {
+        for discipline in &decl.disciplines {
+            if let Discipline::EffectiveBy { keys, on, .. } = discipline
+                && let Some(def) = in_force_define(decl, keys, on)
+                && !definitions.iter().any(|seen| seen.name == def.name)
+            {
+                definitions.push(def);
+            }
+        }
+    }
+    (invariants, definitions)
+}
+
 /// Generated invariant name -> the declaration clause that implied it,
 /// rendered as "predicate CurrentFigure, current pointer by (owner)",
 /// so a rejection traces back to its declaration.

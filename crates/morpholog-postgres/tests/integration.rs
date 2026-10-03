@@ -1675,8 +1675,8 @@ async fn audit_read_rejects_non_subject_actor() {
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents,
-            attestation, parameters
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+            attestation, parameters, model_hash
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'sha256:' || repeat('0', 64))",
     )
     .bind(Uuid::now_v7())
     .bind("hand_written")

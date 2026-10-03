@@ -31,11 +31,13 @@ const NODE_PREFIX: u8 = 0x01;
 /// Version bytes for the leaf encoding. A codec change becomes a new
 /// version, never a silent change to historical roots. The row's own
 /// content picks the version: no attestation is V1, an attestation is V2,
-/// an attestation plus parameter names is V3. A verifier needs no side
-/// channel, and moving a field across that line changes the leaf.
+/// an attestation plus parameter names is V3, and those plus the model
+/// hash is V4. A verifier needs no side channel, and moving a field across
+/// that line changes the leaf.
 const LEAF_FORMAT_V1: u8 = 1;
 const LEAF_FORMAT_V2: u8 = 2;
 const LEAF_FORMAT_V3: u8 = 3;
+const LEAF_FORMAT_V4: u8 = 4;
 
 /// A 32-byte SHA-256 digest.
 pub(crate) type Hash = [u8; 32];
@@ -220,12 +222,22 @@ fn canonical_leaf_bytes(row: &AuditRow) -> Result<Vec<u8>, serde_json::Error> {
         }
         // V2's fields plus the parameter names as one JSON array, so a
         // reader's claims about absent arguments rest on hashed content.
+        // With the model hash, V4: V3's fields plus the hash's exact text,
+        // so the row commits to the programme that admitted it. The shape
+        // check above refuses a hash on any lower rung.
         (Some(attestation), Some(parameters)) => {
-            buf.push(LEAF_FORMAT_V3);
+            buf.push(if row.model_hash.is_some() {
+                LEAF_FORMAT_V4
+            } else {
+                LEAF_FORMAT_V3
+            });
             let actor = EvalValue::Subject(row.actor.clone());
             push_transition_fields(&mut buf, row, &serde_json::to_vec(&actor)?)?;
             push_field(&mut buf, &serde_json::to_vec(attestation)?);
             push_field(&mut buf, &serde_json::to_vec(parameters)?);
+            if let Some(model_hash) = &row.model_hash {
+                push_field(&mut buf, model_hash.as_bytes());
+            }
         }
     }
     Ok(buf)

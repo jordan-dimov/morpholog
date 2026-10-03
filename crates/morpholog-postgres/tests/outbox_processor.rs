@@ -23,6 +23,7 @@
 use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
+use morpholog_core::PreparedProgram;
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
     CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, PgPool, PgProposalOutcome,
@@ -101,11 +102,10 @@ impl Deliverer for ExpireLeaseThenReturn {
 /// original posting.
 fn balanced_reversal_spec(suffix: &str) -> CompensationSpec {
     let suffix = suffix.to_string();
-    CompensationSpec {
-        transformation: double_entry_ledger::post_simple_entry(),
-        invariants: double_entry_ledger::all_invariants(),
-        definitions: double_entry_ledger::definitions(),
-        args_from_row: Box::new(move |_row: &OutboxRow| {
+    CompensationSpec::new(
+        PreparedProgram::new(double_entry_ledger::program()).expect("the ledger is valid"),
+        "post_simple_entry".into(),
+        Box::new(move |_row: &OutboxRow| {
             vec![
                 subj(&format!("reversal_{suffix}")),
                 subj("d_2026_05_17"),
@@ -116,18 +116,18 @@ fn balanced_reversal_spec(suffix: &str) -> CompensationSpec {
                 dec(100),
             ]
         }),
-    }
+    )
+    .expect("the ledger declares the compensating transformation")
 }
 
 /// A compensating transformation `balanced_posted_entry` always rejects:
 /// `post_split_entry` with mismatched amounts.
 fn unbalanced_compensation_spec(suffix: &str) -> CompensationSpec {
     let suffix = suffix.to_string();
-    CompensationSpec {
-        transformation: double_entry_ledger::post_split_entry(),
-        invariants: double_entry_ledger::all_invariants(),
-        definitions: double_entry_ledger::definitions(),
-        args_from_row: Box::new(move |_row: &OutboxRow| {
+    CompensationSpec::new(
+        PreparedProgram::new(double_entry_ledger::program()).expect("the ledger is valid"),
+        "post_split_entry".into(),
+        Box::new(move |_row: &OutboxRow| {
             // Debit 100, but two credits totalling only 95 -
             // balanced_posted_entry will reject.
             vec![
@@ -142,7 +142,8 @@ fn unbalanced_compensation_spec(suffix: &str) -> CompensationSpec {
                 dec(45),
             ]
         }),
-    }
+    )
+    .expect("the ledger declares the compensating transformation")
 }
 
 // ============================================================
@@ -326,6 +327,17 @@ async fn process_one_outbox_row_compensates_on_nonretryable_with_spec() {
     assert!(
         tids.contains(&compensation_tid),
         "compensation audit row written"
+    );
+    // The compensation is a commit like any other: it names the programme
+    // its spec owns.
+    let compensating = audit
+        .iter()
+        .find(|r| r.transition_id == compensation_tid)
+        .unwrap();
+    let ledger = PreparedProgram::new(double_entry_ledger::program()).unwrap();
+    assert_eq!(
+        compensating.model_hash.as_deref(),
+        Some(ledger.model_hash())
     );
 }
 
@@ -520,5 +532,25 @@ async fn compensation_refuses_to_commit_under_an_unreadable_policy_claim() {
         list_audit_rows(&pool).await.unwrap().len(),
         audit_before,
         "no compensating transition may have been written"
+    );
+}
+
+/// A compensation names a transformation of the programme it owns; one the
+/// programme does not declare is refused when the spec is built, not at
+/// the first failed delivery.
+#[test]
+fn a_compensation_spec_refuses_a_transformation_its_programme_lacks() {
+    let refused = CompensationSpec::new(
+        PreparedProgram::new(double_entry_ledger::program()).expect("the ledger is valid"),
+        "no_such_reversal".into(),
+        Box::new(|_row: &OutboxRow| Vec::new()),
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(morpholog_postgres::PgError::UnknownTransformation { .. })
+        ),
+        "got {:?}",
+        refused.err()
     );
 }

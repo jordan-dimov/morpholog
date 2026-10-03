@@ -62,12 +62,17 @@ fn first_row(lines: &[Value]) -> usize {
 
 /// The same complete prefix as one JSON document, the form packs took
 /// before they were written a line at a time.
+/// The streamed pack as one document: version 1, or 8 when a row names
+/// its programme, as the exporter would write it.
 fn as_single_document(pack: &str) -> String {
     let lines = pack_lines(pack);
     let rows = first_row(&lines);
+    let stamped = lines[rows..]
+        .iter()
+        .any(|row| row.get("model_hash").is_some());
     serde_json::json!({
         "manifest": {
-            "pack_format_version": 1,
+            "pack_format_version": if stamped { 8 } else { 1 },
             "tree_size": lines[0]["tree_size"],
             "root_hash": lines[0]["root_hash"],
             "checkpoint_hash": lines[0]["checkpoint_hash"],
@@ -1093,8 +1098,8 @@ async fn evidence_verify_names_an_unknown_future_pack_version() {
     // misread as a malformed older one, in either the single-document or
     // the line-by-line spelling.
     for newer in [
-        &br#"{"manifest": {"pack_format_version": 5}}"#[..],
-        &b"{\"pack_format_version\": 5, \"pack_kind\": \"prefix\"}\n{}\n"[..],
+        &br#"{"manifest": {"pack_format_version": 9}}"#[..],
+        &b"{\"pack_format_version\": 9, \"pack_kind\": \"prefix\"}\n{}\n"[..],
     ] {
         let packfile = temp_file(newer);
         let (status, stdout, _stderr) =
@@ -4373,14 +4378,15 @@ async fn a_pack_larger_than_the_verifiers_memory_still_verifies() {
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor, invariant_epoch,
             invariants_checked, asserted_claims, retracted_claims, emitted_intents,
-            attestation, parameters)
+            attestation, parameters, model_hash)
          SELECT gen_random_uuid(), 'note',
                 jsonb_build_array(jsonb_build_object(
                     'type', 'subject', 'value', repeat(md5(i::text), 128))),
                 '{\"type\":\"subject\",\"value\":\"alex\"}'::jsonb, 1,
                 '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
                 '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb,
-                '[\"note\"]'::jsonb
+                '[\"note\"]'::jsonb,
+                'sha256:' || repeat('0', 64)
          FROM generate_series(1, $1) AS i",
     )
     .bind(ROWS)
@@ -4750,4 +4756,125 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
     // Current again: the same read runs.
     let (status, _, stderr) = run_cli(&["inspect", "claims"]);
     assert!(status.success(), "{stderr}");
+}
+
+/// The hash `morpholog hash` reports for a programme file.
+fn programme_hash(file: &str) -> String {
+    let (status, stdout, stderr) = run_cli_no_db(&["hash", file]);
+    assert!(status.success(), "{stderr}");
+    let report: Value = serde_json::from_str(&stdout).unwrap();
+    report["hash"].as_str().unwrap().to_string()
+}
+
+/// Every audit row on the tail, oldest first.
+fn audit_tail() -> Vec<Value> {
+    let (status, stdout, stderr) = run_cli(&["inspect", "audit"]);
+    assert!(status.success(), "{stderr}");
+    stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+fn ledger_named(entry: &str) -> Value {
+    serde_json::json!({
+        "entry_id": entry,
+        "posting_date": "d_2026_05_17",
+        "period": "p_2026",
+        "debit_account": "account_cash",
+        "credit_account": "account_revenue",
+        "amount": "10",
+    })
+}
+
+/// Every commit path - a single proposal, a traced one, a batch row, an
+/// atomic transact - stamps the row with the hash of the whole programme
+/// that admitted it, the one `morpholog hash` prints for the file.
+#[tokio::test]
+async fn every_commit_entry_point_names_the_programme_that_admitted_it() {
+    reset_db().await;
+    let ledger = ledger_morph();
+    let expected = programme_hash(&ledger);
+    for (entry, trace) in [("entry_plain", false), ("entry_traced", true)] {
+        let args = ledger_args_json(entry, "d_2026_05_17", "p_2026", "10");
+        let mut call = vec![
+            "propose",
+            ledger.as_str(),
+            "post_simple_entry",
+            "--actor",
+            "alex",
+            "--args",
+            args.as_str(),
+        ];
+        if trace {
+            call.push("--trace");
+        }
+        let (status, _, stderr) = run_cli(&call);
+        assert!(status.success(), "{entry}: {stderr}");
+    }
+    let (status, receipts, stderr) = run_batch(
+        &ledger_row("post_simple_entry", "alex", ledger_named("entry_batched")),
+        &[],
+    );
+    assert!(status.success(), "{stderr}");
+    assert_eq!(receipts[0]["status"], "committed", "{receipts:?}");
+    let out = transact(
+        std::path::Path::new(&ledger),
+        &ledger_row(
+            "post_simple_entry",
+            "alex",
+            ledger_named("entry_transacted"),
+        ),
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let rows = audit_tail();
+    assert_eq!(rows.len(), 4, "{rows:?}");
+    for row in &rows {
+        assert_eq!(row["model_hash"], expected.as_str(), "{row}");
+    }
+}
+
+/// The stamp names the whole programme, not the rules a commit touched:
+/// an unused definition changes no claim the proposal makes, and still
+/// changes the programme the record names.
+#[tokio::test]
+async fn the_stamp_covers_the_whole_programme() {
+    let ledger = ledger_morph();
+    let mut widened = tempfile::NamedTempFile::new().unwrap();
+    let source = std::fs::read_to_string(&ledger).unwrap()
+        + "\ndefine an_unused_condition(entry):\n    JournalEntry(entry, _, _)\n";
+    std::io::Write::write_all(&mut widened, source.as_bytes()).unwrap();
+    let widened = widened.path().to_str().unwrap().to_string();
+
+    let mut stamped = Vec::new();
+    for file in [&ledger, &widened] {
+        reset_db().await;
+        let args = ledger_args_json("entry_same", "d_2026_05_17", "p_2026", "10");
+        let (status, _, stderr) = run_cli(&[
+            "propose",
+            file,
+            "post_simple_entry",
+            "--actor",
+            "alex",
+            "--args",
+            &args,
+        ]);
+        assert!(status.success(), "{stderr}");
+        let row = audit_tail().pop().unwrap();
+        assert_eq!(row["model_hash"], programme_hash(file).as_str());
+        stamped.push(row);
+    }
+    assert_eq!(
+        stamped[0]["asserted_claims"], stamped[1]["asserted_claims"],
+        "the same proposal makes the same claims under both programmes"
+    );
+    assert_ne!(
+        stamped[0]["model_hash"], stamped[1]["model_hash"],
+        "a declaration no commit touches still changes the programme named"
+    );
 }

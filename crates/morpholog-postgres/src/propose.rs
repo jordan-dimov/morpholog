@@ -79,15 +79,14 @@ pub async fn propose_against_pg(
     program: &PgProgram,
     proposal: &Proposal,
 ) -> Result<PgProposalOutcome, PgError> {
-    let (transformation, admission) =
-        resolve_admission(program.prepared(), &proposal.transformation_name)?;
+    let (transformation, _, _) = resolve(program.prepared(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
         program.route(),
         transformation,
         &transition,
-        &admission,
+        program.prepared(),
         false,
     )
     .await?;
@@ -117,31 +116,20 @@ pub(crate) fn resolve<'a>(
     ))
 }
 
-/// [`resolve`] plus the programme's admission rules, with the impact
-/// plans it built at construction.
-pub(crate) fn resolve_admission<'a>(
-    prepared: &'a PreparedProgram,
-    name: &TransformationName,
-) -> Result<(&'a Transformation, Admission<'a>), PgError> {
-    let (transformation, _, _) = resolve(prepared, name)?;
-    Ok((transformation, prepared.admission()))
-}
-
-/// The interpreted propose primitive for compensation, which carries its
-/// own transformation, invariants and definitions rather than a programme.
+/// The interpreted propose primitive for compensation, under the whole
+/// programme the compensation spec owns.
 pub(crate) async fn propose_against_pg_inner(
     pool: &PgPool,
+    prepared: &PreparedProgram,
     transformation: &Transformation,
     transition: &Transition,
-    invariants: &[Invariant],
-    definitions: &[Definition],
 ) -> Result<PgProposalOutcome, PgError> {
     let run = propose_against_pg_run(
         pool,
         Route::Interpreted,
         transformation,
         transition,
-        &Admission::of(invariants, definitions),
+        prepared,
         false,
     )
     .await?;
@@ -155,15 +143,14 @@ pub async fn propose_against_pg_timed(
     program: &PgProgram,
     proposal: &Proposal,
 ) -> Result<TimedProposalOutcome, PgError> {
-    let (transformation, admission) =
-        resolve_admission(program.prepared(), &proposal.transformation_name)?;
+    let (transformation, _, _) = resolve(program.prepared(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
         program.route(),
         transformation,
         &transition,
-        &admission,
+        program.prepared(),
         true,
     )
     .await?;
@@ -233,15 +220,14 @@ pub async fn propose_against_pg_with_rejection_state(
     program: &PgProgram,
     proposal: &Proposal,
 ) -> Result<RejectionStateOutcome, PgError> {
-    let (transformation, admission) =
-        resolve_admission(program.prepared(), &proposal.transformation_name)?;
+    let (transformation, _, _) = resolve(program.prepared(), &proposal.transformation_name)?;
     let transition = proposal.transition();
     let run = propose_against_pg_run(
         pool,
         Route::Interpreted,
         transformation,
         &transition,
-        &admission,
+        program.prepared(),
         false,
     )
     .await?;
@@ -256,9 +242,10 @@ pub(crate) async fn propose_against_pg_run(
     route: Route<'_>,
     transformation: &Transformation,
     transition: &Transition,
-    admission: &Admission<'_>,
+    prepared: &PreparedProgram,
     timed: bool,
 ) -> Result<ProposalRun, PgError> {
+    let admission = &prepared.admission();
     let invariants = admission.invariants;
     let definitions = admission.definitions;
     let clock = timed.then(std::time::Instant::now);
@@ -334,7 +321,7 @@ pub(crate) async fn propose_against_pg_run(
                 tx,
                 transformation,
                 transition,
-                invariants,
+                prepared,
                 outcome,
                 &login_role,
             )
@@ -351,7 +338,7 @@ pub(crate) async fn propose_against_pg_run(
                 transition_id,
                 transformation,
                 transition,
-                invariants,
+                prepared,
                 &asserted,
                 &retracted,
                 &emitted,
@@ -492,20 +479,19 @@ pub async fn propose_against_pg_with_trace(
     program: &PgProgram,
     proposal: &Proposal,
 ) -> Result<PgTracedOutcome, PgError> {
-    let (transformation, invariants, definitions) =
-        resolve(program.prepared(), &proposal.transformation_name)?;
+    let (transformation, _, _) = resolve(program.prepared(), &proposal.transformation_name)?;
     let transition = proposal.transition();
-    propose_against_pg_with_trace_inner(pool, transformation, &transition, invariants, definitions)
-        .await
+    propose_against_pg_with_trace_inner(pool, program.prepared(), transformation, &transition).await
 }
 
 pub(crate) async fn propose_against_pg_with_trace_inner(
     pool: &PgPool,
+    prepared: &PreparedProgram,
     transformation: &Transformation,
     transition: &Transition,
-    invariants: &[Invariant],
-    definitions: &[Definition],
 ) -> Result<PgTracedOutcome, PgError> {
+    let invariants = &prepared.program().invariants;
+    let definitions = &prepared.program().definitions;
     let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &transition.actor).await?;
 
     // Always interpreted, so the trace shows the specification's own steps.
@@ -525,7 +511,7 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
                 tx,
                 transformation,
                 transition,
-                invariants,
+                prepared,
                 outcome,
                 &login_role,
             )
@@ -583,7 +569,7 @@ pub(crate) async fn finalise_outcome(
     mut tx: Transaction<'_, Postgres>,
     transformation: &Transformation,
     transition: &Transition,
-    invariants: &[Invariant],
+    prepared: &PreparedProgram,
     outcome: Outcome,
     login_role: &LoginRole,
 ) -> Result<PgProposalOutcome, PgError> {
@@ -612,7 +598,7 @@ pub(crate) async fn finalise_outcome(
                 transition_id,
                 transformation,
                 transition,
-                invariants,
+                prepared,
                 &asserted_claims,
                 &retracted_claims,
                 &emitted_intents,
@@ -1030,7 +1016,7 @@ pub(crate) async fn write_accepted(
     transition_id: Uuid,
     transformation: &Transformation,
     transition: &Transition,
-    invariants: &[Invariant],
+    prepared: &PreparedProgram,
     asserted_claims: &[ClaimInstance],
     retracted_claims: &[ClaimInstance],
     emitted_intents: &[IntentInstance],
@@ -1042,7 +1028,7 @@ pub(crate) async fn write_accepted(
         transition_id,
         transformation,
         transition,
-        invariants,
+        prepared,
         asserted_claims,
         retracted_claims,
         emitted_intents,
@@ -1061,13 +1047,15 @@ pub(crate) async fn write_acceptance_record(
     transition_id: Uuid,
     transformation: &Transformation,
     transition: &Transition,
-    invariants: &[Invariant],
+    prepared: &PreparedProgram,
     asserted_claims: &[ClaimInstance],
     retracted_claims: &[ClaimInstance],
     emitted_intents: &[IntentInstance],
     login_role: &LoginRole,
 ) -> Result<(), PgError> {
-    let checked: Vec<AuditedInvariantCheck> = invariants
+    let checked: Vec<AuditedInvariantCheck> = prepared
+        .program()
+        .invariants
         .iter()
         .map(|inv| AuditedInvariantCheck {
             name: inv.name.clone(),
@@ -1088,8 +1076,8 @@ pub(crate) async fn write_acceptance_record(
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents, attestation,
-            parameters
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+            parameters, model_hash
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         transition_id,
         transformation.name.as_str(),
         serde_json::to_value(&transition.args)?,
@@ -1107,6 +1095,7 @@ pub(crate) async fn write_acceptance_record(
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
         )?,
+        prepared.model_hash(),
     )
     .execute(&mut **tx)
     .await
