@@ -963,6 +963,13 @@ fn audit_rows_serialize_as_pinned() {
         &to_value(&self_describing),
     );
 
+    // The row as written now: also naming the programme that admitted it.
+    let programme_naming = AuditRow {
+        model_hash: Some(format!("sha256:{}", "c".repeat(64))),
+        ..self_describing.clone()
+    };
+    assert_golden("audit_row_model_hash.json", &to_value(&programme_naming));
+
     // The --named form replaces the claim arrays with named claims and
     // leaves the rest unchanged, via the binary's own projection.
     let named = morpholog_cli::envelopes::audit_row_named(
@@ -2281,6 +2288,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("audit_row_attested.json", "audit_row"),
         ("audit_row_attested_with_role_oid.json", "audit_row"),
         ("audit_row_self_describing.json", "audit_row"),
+        ("audit_row_model_hash.json", "audit_row"),
         ("audit_row_named.json", "audit_row_named"),
         ("check_report.json", "check_report"),
         ("check_report_routes.json", "check_report"),

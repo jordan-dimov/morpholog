@@ -727,6 +727,26 @@ class TamperEvidence(unittest.TestCase):
             with self.assertRaises(envelopes.EnvelopeError):
                 envelopes.AuditRow.from_json(row)
 
+    def test_an_audit_row_names_the_programme_that_admitted_it(self):
+        row = envelopes.AuditRow.from_json(golden("audit_row_model_hash.json"))
+        self.assertEqual(row.model_hash, "sha256:" + "c" * 64)
+        self.assertIsNone(
+            envelopes.AuditRow.from_json(golden("audit_row_self_describing.json")).model_hash
+        )
+        # One shape only, and only on the top rung: never null, never
+        # another spelling, never without names and an attestation.
+        for tamper in (
+            lambda r: r.__setitem__("model_hash", None),
+            lambda r: r.__setitem__("model_hash", "sha256:" + "C" * 64),
+            lambda r: r.__setitem__("model_hash", "sha256:abc"),
+            lambda r: r.pop("parameters"),
+            lambda r: r.pop("attestation"),
+        ):
+            row = golden("audit_row_model_hash.json")
+            tamper(row)
+            with self.assertRaises(envelopes.EnvelopeError):
+                envelopes.AuditRow.from_json(row)
+
     def test_transact_outcomes(self):
         committed = envelopes.parse_atomic_outcome(golden("transact_committed.json"))
         self.assertIsInstance(committed, envelopes.AtomicCommitted)

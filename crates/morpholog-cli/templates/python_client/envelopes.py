@@ -1002,7 +1002,7 @@ _AUDIT_ROW_KEYS = {
     "committed_at",
 }
 
-_AUDIT_ROW_OPTIONAL_KEYS = {"attestation", "parameters"}
+_AUDIT_ROW_OPTIONAL_KEYS = {"attestation", "parameters", "model_hash"}
 
 
 def _parameters_of(data: dict[str, object]) -> list[str] | None:
@@ -1022,6 +1022,30 @@ def _parameters_of(data: dict[str, object]) -> list[str] | None:
             f"{len(arguments) if isinstance(arguments, list) else '?'} arguments"
         )
     return names
+
+
+def _model_hash_of(data: dict[str, object]) -> str | None:
+    """The programme hash a row names, held to its one shape: `sha256:`
+    and 64 lowercase hex digits, only on a row that also carries an
+    attestation and parameter names."""
+    raw = data.get("model_hash", _ABSENT)
+    if raw is _ABSENT:
+        return None
+    if (
+        not isinstance(raw, str)
+        or not raw.startswith("sha256:")
+        or len(raw) != 71
+        or any(c not in "0123456789abcdef" for c in raw[7:])
+    ):
+        raise EnvelopeError(f"an audit row carries a malformed model hash {raw!r}")
+    if data.get("attestation") is None or data.get("parameters") is None:
+        raise EnvelopeError(
+            "an audit row carries a model hash without an attestation and parameter names"
+        )
+    return raw
+
+
+_ABSENT = object()
 
 
 @dataclass(frozen=True)
@@ -1086,6 +1110,9 @@ class AuditRow:
     # readable after the act is retired. None on rows from before names
     # were stamped.
     parameters: list[str] | None = None
+    # The canonical hash of the whole programme that admitted the row, as
+    # `morpholog hash` prints it. None on rows from before it was stamped.
+    model_hash: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRow:
@@ -1105,6 +1132,7 @@ class AuditRow:
             committed_at=values.parse_timestamp(data["committed_at"]),
             attestation=_attestation_of(data),
             parameters=_parameters_of(data),
+            model_hash=_model_hash_of(data),
         )
 
 
@@ -1131,6 +1159,9 @@ class AuditRowNamed:
     # readable after the act is retired. None on rows from before names
     # were stamped.
     parameters: list[str] | None = None
+    # The canonical hash of the whole programme that admitted the row, as
+    # `morpholog hash` prints it. None on rows from before it was stamped.
+    model_hash: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRowNamed:
@@ -1150,6 +1181,7 @@ class AuditRowNamed:
             committed_at=values.parse_timestamp(data["committed_at"]),
             attestation=_attestation_of(data),
             parameters=_parameters_of(data),
+            model_hash=_model_hash_of(data),
         )
 
 
