@@ -1101,17 +1101,35 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
         }
     }
 
+    // Generated items stay out of the canonical hash, so they must be
+    // exactly the lowering of what the hash covers: the same items, and
+    // the invariants first in lowering order, since order decides which
+    // rule a refusal names.
     let (lowered_invariants, lowered_definitions) = crate::disciplines::exact_lowering(p);
-    for inv in p
+    let unfaithful =
+        |kind: &str, name: &dyn std::fmt::Display| ValidationError::GeneratedNotFaithful {
+            kind: kind.to_string(),
+            name: name.to_string(),
+        };
+    let generated: Vec<&crate::ir::Invariant> = p
         .invariants
         .iter()
         .filter(|inv| inv.origin == crate::ir::InvariantOrigin::Discipline)
-    {
-        if !lowered_invariants.iter().any(|exact| exact == inv) {
-            errors.push(ValidationError::GeneratedNotFaithful {
-                kind: "invariant".to_string(),
-                name: inv.name.to_string(),
-            });
+        .collect();
+    let mut faithful = true;
+    for inv in &generated {
+        if !lowered_invariants.iter().any(|exact| exact == *inv) {
+            errors.push(unfaithful("invariant", &inv.name));
+            faithful = false;
+        }
+    }
+    if faithful && generated.len() == lowered_invariants.len() {
+        let leading = p.invariants.iter().take(lowered_invariants.len());
+        if let Some((actual, _)) = leading
+            .zip(&lowered_invariants)
+            .find(|(actual, exact)| actual != exact)
+        {
+            errors.push(unfaithful("invariant", &actual.name));
         }
     }
     for def in p
@@ -1120,10 +1138,12 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
         .filter(|def| def.origin == crate::ir::DefinitionOrigin::Discipline)
     {
         if !lowered_definitions.iter().any(|exact| exact == def) {
-            errors.push(ValidationError::GeneratedNotFaithful {
-                kind: "definition".to_string(),
-                name: def.name.to_string(),
-            });
+            errors.push(unfaithful("definition", &def.name));
+        }
+    }
+    for exact in &lowered_definitions {
+        if !p.definitions.iter().any(|def| def.name == exact.name) {
+            errors.push(unfaithful("definition", &exact.name));
         }
     }
 

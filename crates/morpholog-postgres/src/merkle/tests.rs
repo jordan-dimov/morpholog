@@ -580,15 +580,18 @@ fn model_hash_presence_selects_the_encoding() {
     );
 }
 
-/// A field this build cannot place in the leaf makes the row malformed: an
-/// older reader must never drop it and hash what is left.
-/// One spelling for "no hash": absent. A present null is malformed, as the
-/// schema and the generated client already hold.
+/// One spelling for "not on this rung": absent. A present null is
+/// malformed for every field whose presence selects the leaf encoding.
 #[test]
-fn a_null_model_hash_is_malformed_not_absent() {
-    let mut value = serde_json::to_value(stamped_fixed_row()).unwrap();
-    value["model_hash"] = serde_json::Value::Null;
-    assert!(serde_json::from_value::<AuditRow>(value).is_err());
+fn a_null_leaf_rung_field_is_malformed_not_absent() {
+    for field in ["attestation", "parameters", "model_hash"] {
+        let mut value = serde_json::to_value(hashed_fixed_row()).unwrap();
+        value[field] = serde_json::Value::Null;
+        assert!(
+            serde_json::from_value::<AuditRow>(value).is_err(),
+            "a present null {field} must be malformed"
+        );
+    }
     let absent = serde_json::to_value(stamped_fixed_row()).unwrap();
     assert!(
         serde_json::from_value::<AuditRow>(absent)
@@ -598,6 +601,8 @@ fn a_null_model_hash_is_malformed_not_absent() {
     );
 }
 
+/// A field this build cannot place in the leaf makes the row malformed: an
+/// older reader must never drop it and hash what is left.
 #[test]
 fn an_unknown_audit_row_field_is_malformed() {
     let mut value = serde_json::to_value(hashed_fixed_row()).unwrap();

@@ -34,13 +34,21 @@ pub struct AuditRow {
     /// How the actor identity was established. Absent on rows written
     /// before attestation existed; those rows keep the original Merkle
     /// leaf encoding, so the field's presence selects the leaf version.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
     pub attestation: Option<AuditAttestation>,
     /// The transformation's parameter names in declaration order, one per
     /// argument, stamped at commit so the row stays readable after the
     /// transformation is retired. Absent on older rows; presence selects
     /// the self-describing leaf encoding.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
     pub parameters: Option<Vec<String>>,
     /// The canonical hash of the whole programme that admitted the row,
     /// as `morpholog hash` prints it. Absent on older rows; presence on a
@@ -49,16 +57,21 @@ pub struct AuditRow {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "present_string"
+        deserialize_with = "present"
     )]
     pub model_hash: Option<String>,
 }
 
-/// An optional field that, when present, must be a string: absent is
-/// `None`, and a JSON `null` is refused rather than read as absent, so a
-/// row has one spelling for "no hash".
-fn present_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
-    String::deserialize(d).map(Some)
+/// A leaf-rung field that is optional by omission only: absent is
+/// `None`, and a present JSON `null` is refused rather than read as
+/// absent. Presence selects the leaf encoding, so a row has one spelling
+/// for "not on this rung".
+fn present<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(d).map(Some)
 }
 
 impl AuditRow {

@@ -1009,9 +1009,11 @@ def _parameters_of(data: dict[str, object]) -> list[str] | None:
     """The stamped parameter names, held to the shapes a row can have:
     names are strings (leaf-covered evidence, never coerced), only an
     attested row carries them, and there is one per argument."""
-    raw = data.get("parameters")
-    if raw is None:
+    if "parameters" not in data:
         return None
+    raw = data["parameters"]
+    if raw is None:
+        raise EnvelopeError("an audit row carries parameters: null; absent is the only spelling")
     names = _str_list("parameters", raw)
     if data.get("attestation") is None:
         raise EnvelopeError("an audit row carries parameter names but no attestation")
@@ -1082,8 +1084,12 @@ class Attestation:
 
 
 def _attestation_of(data: dict[str, object]) -> Attestation | None:
-    raw = data.get("attestation")
-    return None if raw is None else Attestation.from_json(raw)
+    if "attestation" not in data:
+        return None
+    raw = data["attestation"]
+    if raw is None:
+        raise EnvelopeError("an audit row carries attestation: null; absent is the only spelling")
+    return Attestation.from_json(raw)
 
 
 @dataclass(frozen=True)

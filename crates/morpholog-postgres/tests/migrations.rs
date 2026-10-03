@@ -1772,6 +1772,40 @@ async fn the_model_hash_migration_accepts_two_shapes_and_refuses_the_rest() {
     let result = ddl(&pool, migration.clone()).await;
     assert!(refused(&result), "an impostor constraint: {result:?}");
 
+    for (what, drift) in [
+        (
+            "a default",
+            "ALTER TABLE {s}.audit ALTER COLUMN model_hash SET DEFAULT 'x'",
+        ),
+        (
+            "a NOT NULL column",
+            "UPDATE {s}.audit SET model_hash = NULL WHERE false;
+             ALTER TABLE {s}.audit ALTER COLUMN model_hash SET NOT NULL",
+        ),
+        (
+            "a required constraint that says something else",
+            "ALTER TABLE {s}.audit DROP CONSTRAINT audit_model_hash_required;
+             ALTER TABLE {s}.audit ADD CONSTRAINT audit_model_hash_required CHECK (true)",
+        ),
+    ] {
+        // Start each from the head shape, then drift one thing.
+        ddl(
+            &pool,
+            format!(
+                "ALTER TABLE {scratch}.audit DROP COLUMN model_hash;
+                 ALTER TABLE {scratch}.audit DROP CONSTRAINT IF EXISTS audit_model_hash_shape"
+            ),
+        )
+        .await
+        .unwrap();
+        ddl(&pool, migration.clone())
+            .await
+            .expect("back to the head shape");
+        ddl(&pool, drift.replace("{s}", scratch)).await.unwrap();
+        let result = ddl(&pool, migration.clone()).await;
+        assert!(refused(&result), "{what}: {result:?}");
+    }
+
     ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
         .await
         .unwrap();

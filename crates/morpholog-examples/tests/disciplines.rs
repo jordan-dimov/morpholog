@@ -1338,4 +1338,27 @@ fn a_generated_item_that_is_not_the_exact_lowering_is_refused() {
     selector.definitions[position].parameters.reverse();
     let name = selector.definitions[position].name.to_string();
     refused(&selector, &name);
+    assert_eq!(
+        selector
+            .validate()
+            .unwrap_err()
+            .iter()
+            .filter(|e| matches!(e, ValidationError::GeneratedNotFaithful { .. }))
+            .count(),
+        1,
+        "one finding per unfaithful item"
+    );
+
+    // A dropped selector: the lowering implies it, the programme lacks it.
+    let mut dropped = base.clone();
+    dropped.definitions.remove(position);
+    refused(&dropped, &name);
+
+    // A generated invariant moved behind an authored one: the same items,
+    // but a refusal would name a different rule first.
+    let mut reordered = base.clone();
+    let moved = reordered.invariants.remove(generated);
+    reordered.invariants.push(moved);
+    let name = reordered.invariants[0].name.to_string();
+    refused(&reordered, &name);
 }

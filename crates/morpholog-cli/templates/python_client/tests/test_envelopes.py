@@ -747,6 +747,20 @@ class TamperEvidence(unittest.TestCase):
             with self.assertRaises(envelopes.EnvelopeError):
                 envelopes.AuditRow.from_json(row)
 
+    def test_a_present_null_is_malformed_on_its_own_rung(self):
+        # Absent is the only spelling for "not on this rung". Each case is
+        # a row whose other fields are lawful, so only the null is at stake.
+        for golden_name, field in (
+            ("audit_row_self_describing.json", "parameters"),
+            ("audit_row_attested.json", "attestation"),
+            ("audit_row_model_hash.json", "model_hash"),
+        ):
+            row = golden(golden_name)
+            envelopes.AuditRow.from_json(row)
+            row[field] = None
+            with self.assertRaises(envelopes.EnvelopeError, msg=field):
+                envelopes.AuditRow.from_json(row)
+
     def test_transact_outcomes(self):
         committed = envelopes.parse_atomic_outcome(golden("transact_committed.json"))
         self.assertIsInstance(committed, envelopes.AtomicCommitted)
