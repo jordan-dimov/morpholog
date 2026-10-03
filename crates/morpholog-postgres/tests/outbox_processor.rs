@@ -328,6 +328,17 @@ async fn process_one_outbox_row_compensates_on_nonretryable_with_spec() {
         tids.contains(&compensation_tid),
         "compensation audit row written"
     );
+    // The compensation is a commit like any other: it names the programme
+    // its spec owns.
+    let compensating = audit
+        .iter()
+        .find(|r| r.transition_id == compensation_tid)
+        .unwrap();
+    let ledger = PreparedProgram::new(double_entry_ledger::program()).unwrap();
+    assert_eq!(
+        compensating.model_hash.as_deref(),
+        Some(ledger.model_hash())
+    );
 }
 
 #[tokio::test]

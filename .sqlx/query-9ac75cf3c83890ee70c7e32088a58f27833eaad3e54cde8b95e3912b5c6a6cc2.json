@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM (\n                   SELECT model_hash FROM morpholog.audit\n                   ORDER BY committed_at, transition_id\n                   LIMIT $1\n               ) AS prefix\n               WHERE prefix.model_hash IS NOT NULL\n           ) AS \"stamped!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "stamped!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9ac75cf3c83890ee70c7e32088a58f27833eaad3e54cde8b95e3912b5c6a6cc2"
+}

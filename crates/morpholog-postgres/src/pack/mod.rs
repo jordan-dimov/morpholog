@@ -37,6 +37,69 @@ const PACK_KIND_WINDOW: &str = "window";
 const PACK_FORMAT_V3: u32 = 3;
 const PACK_KIND_SELECTIVE: &str = "selective";
 
+/// A pack kind's two format versions. A pack that discloses a row naming
+/// the programme that admitted it carries the stamped one, which a
+/// verifier from before that field refuses as newer than it understands,
+/// instead of dropping the field and reporting tamper on honest history.
+/// A pack of older rows only keeps the version every verifier reads. The
+/// leaf version tells a new verifier how a row hashes; the pack version
+/// keeps an old one from judging bytes it cannot read.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FormatPair {
+    pub(crate) unstamped: u32,
+    pub(crate) stamped: u32,
+}
+
+impl FormatPair {
+    /// The version for a pack disclosing `rows`.
+    pub(crate) fn for_rows<'r>(self, rows: impl IntoIterator<Item = &'r AuditRow>) -> u32 {
+        if rows.into_iter().any(|r| r.model_hash.is_some()) {
+            self.stamped
+        } else {
+            self.unstamped
+        }
+    }
+
+    pub(crate) fn admits(self, version: u32) -> bool {
+        version == self.unstamped || version == self.stamped
+    }
+
+    /// Hold an announced version to what the pack discloses, both ways.
+    pub(crate) fn check(self, version: u32, discloses_stamped: bool) -> Result<(), PackError> {
+        let detail = match (version == self.stamped, discloses_stamped) {
+            (false, true) => format!(
+                "pack_format_version {version} cannot disclose a row naming its programme; \
+                 such a pack is version {}",
+                self.stamped
+            ),
+            (true, false) => format!(
+                "pack_format_version {version} discloses no row naming its programme; \
+                 such a pack is version {}",
+                self.unstamped
+            ),
+            _ => return Ok(()),
+        };
+        Err(PackError::Malformed { detail })
+    }
+}
+
+pub(crate) const DOCUMENT_FORMATS: FormatPair = FormatPair {
+    unstamped: PACK_FORMAT_V1,
+    stamped: 8,
+};
+const WINDOW_FORMATS: FormatPair = FormatPair {
+    unstamped: PACK_FORMAT_V2,
+    stamped: 6,
+};
+const SELECTIVE_FORMATS: FormatPair = FormatPair {
+    unstamped: PACK_FORMAT_V3,
+    stamped: 7,
+};
+
+fn discloses_stamped(rows: &[AuditRow]) -> bool {
+    rows.iter().any(|r| r.model_hash.is_some())
+}
+
 /// A convenience header summarising the covering checkpoint for a human
 /// reader. The authoritative data is `checkpoints` and `rows`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,7 +244,7 @@ pub async fn export_pack(pool: &PgPool, tree_size: Option<i64>) -> Result<Eviden
 
     Ok(EvidencePack {
         manifest: PackManifest {
-            pack_format_version: PACK_FORMAT_V1,
+            pack_format_version: DOCUMENT_FORMATS.for_rows(&rows),
             tree_size: covering.tree_size,
             root_hash: covering.root_hash,
             checkpoint_hash: covering.checkpoint_hash,
@@ -239,11 +302,12 @@ fn validate_envelope(pack: &EvidencePack) -> Result<(), PackError> {
         return Err(row_count_disagrees(pack.rows.len(), covering.tree_size));
     }
     let m = &pack.manifest;
-    if m.pack_format_version != PACK_FORMAT_V1 {
+    if !DOCUMENT_FORMATS.admits(m.pack_format_version) {
         return Err(PackError::Malformed {
             detail: format!("unsupported pack_format_version {}", m.pack_format_version),
         });
     }
+    DOCUMENT_FORMATS.check(m.pack_format_version, discloses_stamped(&pack.rows))?;
     manifest_agrees(covering, m.tree_size, &m.root_hash, &m.checkpoint_hash)
 }
 
@@ -490,7 +554,7 @@ fn assemble_window_pack(
         .collect();
 
     let manifest = WindowPackManifest {
-        pack_format_version: PACK_FORMAT_V2,
+        pack_format_version: WINDOW_FORMATS.for_rows(&rows[from..]),
         pack_kind: PACK_KIND_WINDOW.to_string(),
         from_tree_size: from_checkpoint.tree_size,
         to_tree_size: to_checkpoint.tree_size,
@@ -595,12 +659,13 @@ fn proof_bytes(digests: &[Digest]) -> Vec<Hash> {
 fn validate_window_envelope(pack: &WindowEvidencePack) -> Result<(), PackError> {
     let malformed = |detail: String| PackError::Malformed { detail };
     let m = &pack.manifest;
-    if m.pack_format_version != PACK_FORMAT_V2 {
+    if !WINDOW_FORMATS.admits(m.pack_format_version) {
         return Err(malformed(format!(
             "unsupported pack_format_version {}",
             m.pack_format_version
         )));
     }
+    WINDOW_FORMATS.check(m.pack_format_version, discloses_stamped(&pack.rows))?;
     if m.pack_kind != PACK_KIND_WINDOW {
         return Err(malformed(format!("unexpected pack_kind {:?}", m.pack_kind)));
     }
@@ -815,7 +880,7 @@ fn assemble_selective_pack(
         .collect();
 
     let manifest = SelectivePackManifest {
-        pack_format_version: PACK_FORMAT_V3,
+        pack_format_version: SELECTIVE_FORMATS.for_rows(indices.iter().map(|&i| &rows[i])),
         pack_kind: PACK_KIND_SELECTIVE.to_string(),
         tree_size: checkpoint.tree_size,
         root_hash: checkpoint.root_hash,
@@ -908,12 +973,13 @@ pub fn verify_selective(
 fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackError> {
     let malformed = |detail: String| PackError::Malformed { detail };
     let m = &pack.manifest;
-    if m.pack_format_version != PACK_FORMAT_V3 {
+    if !SELECTIVE_FORMATS.admits(m.pack_format_version) {
         return Err(malformed(format!(
             "unsupported pack_format_version {}",
             m.pack_format_version
         )));
     }
+    SELECTIVE_FORMATS.check(m.pack_format_version, discloses_stamped(&pack.rows))?;
     if m.pack_kind != PACK_KIND_SELECTIVE {
         return Err(malformed(format!("unexpected pack_kind {:?}", m.pack_kind)));
     }

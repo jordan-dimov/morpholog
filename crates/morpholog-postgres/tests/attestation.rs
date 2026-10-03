@@ -155,6 +155,40 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         verify_pack(&pack, None).unwrap(),
         TreeVerification::Intact { .. }
     ));
+
+    // Every exporter announces the stamped version exactly when it
+    // discloses a row naming its programme, so a verifier from before the
+    // field refuses that pack as too new rather than misjudging it, while
+    // a pack of older rows stays readable by it.
+    assert_eq!(pack.manifest.pack_format_version, 8);
+    let older = morpholog_postgres::export_pack(&pool, Some(before.tree_size))
+        .await
+        .unwrap();
+    assert_eq!(older.manifest.pack_format_version, 1);
+    for (size, expected) in [(Some(before.tree_size), 4), (None, 5)] {
+        let export = morpholog_postgres::begin_prefix_export(&pool, size)
+            .await
+            .unwrap();
+        assert_eq!(export.manifest.pack_format_version, expected, "{size:?}");
+    }
+    let window = morpholog_postgres::export_window(
+        &pool,
+        morpholog_postgres::WindowStart::TreeSize(before.tree_size),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(window.manifest.pack_format_version, 6);
+    for (row, expected) in [(0, 3), (3, 7)] {
+        let selective =
+            morpholog_postgres::export_selective(&pool, None, &[pack.rows[row].transition_id])
+                .await
+                .unwrap();
+        assert_eq!(
+            selective.manifest.pack_format_version, expected,
+            "an older row disclosed under a newer checkpoint keeps the readable version"
+        );
+    }
     let regimes: Vec<(bool, bool, bool)> = pack
         .rows
         .iter()

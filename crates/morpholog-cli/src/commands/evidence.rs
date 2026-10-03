@@ -190,8 +190,10 @@ pub(crate) fn open_pack(path: &Path) -> anyhow::Result<PackInput> {
     }
     if first.ends_with(b"\n") {
         match streamed_pack_version(&first) {
-            Some(4) => return Ok(PackInput::Stream(Box::new(Cursor::new(first).chain(input)))),
-            Some(n) if n > 4 => return Ok(PackInput::Newer(n)),
+            Some(4 | 5) => {
+                return Ok(PackInput::Stream(Box::new(Cursor::new(first).chain(input))));
+            }
+            Some(n) if n > NEWEST_PACK_FORMAT => return Ok(PackInput::Newer(n)),
             _ => {}
         }
     }
@@ -213,6 +215,10 @@ fn undecodable(e: std::io::Error) -> anyhow::Result<PackInput> {
         _ => Err(e.into()),
     }
 }
+
+/// The highest pack format this binary reads: 1 to 4, and their
+/// counterparts 5 to 8 for packs disclosing a row that names its programme.
+const NEWEST_PACK_FORMAT: u32 = 8;
 
 fn newer_than_this_binary(n: impl std::fmt::Display) -> PackVerdict {
     PackVerdict::Prefix(TreeVerification::MalformedPack {
@@ -272,7 +278,7 @@ fn verify_document(
 ) -> anyhow::Result<(PackVerdict, Vec<Checkpoint>, RoleRebindings)> {
     let unread = |verdict| Ok((verdict, Vec::new(), RoleRebindings::NotEvaluated));
     match pack_format_version(&bytes) {
-        Some(2) => {
+        Some(2 | 6) => {
             let pack: WindowEvidencePack = match serde_json::from_slice(&bytes) {
                 Ok(pack) => pack,
                 Err(e) => {
@@ -293,7 +299,7 @@ fn verify_document(
                 role_rebindings,
             ))
         }
-        Some(3) => {
+        Some(3 | 7) => {
             let pack: SelectiveEvidencePack = match serde_json::from_slice(&bytes) {
                 Ok(pack) => pack,
                 Err(e) => {
@@ -310,7 +316,7 @@ fn verify_document(
             let role_rebindings = pack_role_rebindings(&pack.rows, &verdict);
             Ok((verdict, vec![pack.checkpoint], role_rebindings))
         }
-        Some(n) if n > 4 => unread(newer_than_this_binary(n)),
+        Some(n) if n > u64::from(NEWEST_PACK_FORMAT) => unread(newer_than_this_binary(n)),
         _ => {
             let pack: EvidencePack = match serde_json::from_slice(&bytes) {
                 Ok(pack) => pack,

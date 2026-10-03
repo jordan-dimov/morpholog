@@ -490,3 +490,40 @@ async fn transact_answers_with_the_one_decision_and_the_session_stays_in_step() 
         "the balance is on the record"
     );
 }
+
+/// A commit through the resident session names the programme the session
+/// loaded: the hash on its ready line.
+#[tokio::test]
+async fn a_session_commit_names_the_programme_the_session_loaded() {
+    reset_db().await;
+    let fixture = common::write_fixture("session_fixture", FIXTURE);
+    let mut child = spawn_session(&fixture.path);
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        r#"{{"actor":"teller","args_named":{{"account":"a1","opened_on":"2026-01-15"}},"op":"propose","transformation":"open_account"}}"#
+    )
+    .unwrap();
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let mut lines = stdout.lines();
+    let ready: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    let receipt: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    assert_eq!(receipt["status"], "committed", "{receipt}");
+
+    let tail = Command::new(common::bin())
+        .args(["inspect", "audit", "--database-url", &database_url()])
+        .output()
+        .unwrap();
+    let row: serde_json::Value = serde_json::from_str(
+        String::from_utf8(tail.stdout)
+            .unwrap()
+            .lines()
+            .last()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(row["model_hash"], ready["model_hash"]);
+}
