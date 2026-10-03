@@ -747,6 +747,29 @@ class TamperEvidence(unittest.TestCase):
             with self.assertRaises(envelopes.EnvelopeError):
                 envelopes.AuditRow.from_json(row)
 
+    def test_an_audit_row_names_the_semantics_that_decided_it(self):
+        row = envelopes.AuditRow.from_json(golden("audit_row_semantics_version.json"))
+        self.assertEqual(row.semantics_version, 1)
+        self.assertIsNone(
+            envelopes.AuditRow.from_json(golden("audit_row_model_hash.json")).semantics_version
+        )
+        # A version from a later Morpholog reads too: integrity is about the
+        # bytes, not the evaluator they name.
+        later = golden("audit_row_semantics_version.json")
+        later["semantics_version"] = 0xFFFFFFFF
+        self.assertEqual(envelopes.AuditRow.from_json(later).semantics_version, 0xFFFFFFFF)
+        for tamper in (
+            lambda r: r.__setitem__("semantics_version", 0),
+            lambda r: r.__setitem__("semantics_version", 0x100000000),
+            lambda r: r.__setitem__("semantics_version", "1"),
+            lambda r: r.__setitem__("semantics_version", True),
+            lambda r: r.pop("model_hash"),
+        ):
+            row = golden("audit_row_semantics_version.json")
+            tamper(row)
+            with self.assertRaises(envelopes.EnvelopeError):
+                envelopes.AuditRow.from_json(row)
+
     def test_a_present_null_is_malformed_on_its_own_rung(self):
         # Absent is the only spelling for "not on this rung". Each case is
         # a row whose other fields are lawful, so only the null is at stake.
@@ -754,6 +777,7 @@ class TamperEvidence(unittest.TestCase):
             ("audit_row_self_describing.json", "parameters"),
             ("audit_row_attested.json", "attestation"),
             ("audit_row_model_hash.json", "model_hash"),
+            ("audit_row_semantics_version.json", "semantics_version"),
         ):
             row = golden(golden_name)
             envelopes.AuditRow.from_json(row)

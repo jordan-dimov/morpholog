@@ -1145,8 +1145,8 @@ pub(crate) async fn write_acceptance_record(
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents, attestation,
-            parameters, model_hash
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+            parameters, model_hash, semantics_version
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         transition_id,
         transformation.name.as_str(),
         serde_json::to_value(&transition.args)?,
@@ -1165,6 +1165,8 @@ pub(crate) async fn write_acceptance_record(
                 .collect::<Vec<_>>()
         )?,
         prepared.model_hash(),
+        // The kernel linked into this binary decided the row.
+        i64::from(morpholog_core::SEMANTICS_VERSION),
     )
     .execute(&mut **tx)
     .await

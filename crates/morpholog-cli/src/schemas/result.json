@@ -707,9 +707,18 @@
           "description": "The canonical hash of the whole programme that admitted the row, as `morpholog hash` prints it. Absent on rows from before it was stamped.",
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "semantics_version": {
+          "description": "The version of the kernel's semantics that decided the row. Absent on rows from before it was stamped; evidence of which contract made the decision, not something integrity verification compares.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
         }
       },
-      "dependentRequired": { "model_hash": ["attestation", "parameters"] }
+      "dependentRequired": {
+        "model_hash": ["attestation", "parameters"],
+        "semantics_version": ["model_hash"]
+      }
     },
     "audit_row_named": {
       "type": "object",
@@ -766,9 +775,18 @@
           "description": "The canonical hash of the whole programme that admitted the row, as `morpholog hash` prints it. Absent on rows from before it was stamped.",
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "semantics_version": {
+          "description": "The version of the kernel's semantics that decided the row. Absent on rows from before it was stamped; evidence of which contract made the decision, not something integrity verification compares.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
         }
       },
-      "dependentRequired": { "model_hash": ["attestation", "parameters"] }
+      "dependentRequired": {
+        "model_hash": ["attestation", "parameters"],
+        "semantics_version": ["model_hash"]
+      }
     },
     "outbox_row": {
       "type": "object",

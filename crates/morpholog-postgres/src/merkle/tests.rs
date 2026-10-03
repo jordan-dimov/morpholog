@@ -41,6 +41,7 @@ fn fixed_row() -> AuditRow {
         attestation: None,
         parameters: None,
         model_hash: None,
+        semantics_version: None,
     }
 }
 
@@ -539,6 +540,60 @@ fn frozen_v4_leaf_hash_pins_the_programme_naming_encoding() {
     assert_eq!(
         Digest::from_bytes(hash).to_string(),
         "sha256:75b07013ec7fd70f5e16c232ae4a565f999b8be793d7ad423fdad60afcdd1c66"
+    );
+}
+
+fn semantics_fixed_row() -> AuditRow {
+    AuditRow {
+        semantics_version: Some(1),
+        ..hashed_fixed_row()
+    }
+}
+
+/// The frozen leaf hash of the row that names its semantics, derived
+/// separately in Python from the documented layout: the V4 bytes (checked
+/// there against the V4 pin) with version byte 5, then the version as one
+/// more length-prefixed field of four little-endian bytes.
+#[test]
+fn frozen_v5_leaf_hash_pins_the_semantics_naming_encoding() {
+    let hash = audit_leaf_hash(&semantics_fixed_row()).unwrap();
+    assert_eq!(
+        Digest::from_bytes(hash).to_string(),
+        "sha256:9bd23f71acad9e90ddd5a2d1da345e08e4225be276ca152896011545bf8b6dbb"
+    );
+}
+
+/// A semantics version belongs only on a row that names its programme, and
+/// starts at 1. Any other shape is malformed, never a hybrid encoding.
+#[test]
+fn a_semantics_version_off_its_rung_gets_no_leaf() {
+    let hostile = [
+        AuditRow {
+            model_hash: None,
+            ..semantics_fixed_row()
+        },
+        AuditRow {
+            semantics_version: Some(0),
+            ..semantics_fixed_row()
+        },
+    ];
+    for row in &hostile {
+        assert!(audit_leaf_hash(row).is_err(), "{:?}", row.semantics_version);
+    }
+}
+
+/// The leaf commits to whatever version the row names, including one this
+/// binary does not implement: integrity reads the bytes, not the evaluator
+/// they name.
+#[test]
+fn any_semantics_version_hashes_and_the_version_is_committed() {
+    let later = AuditRow {
+        semantics_version: Some(morpholog_core::SEMANTICS_VERSION + 1),
+        ..semantics_fixed_row()
+    };
+    assert_ne!(
+        audit_leaf_hash(&later).unwrap(),
+        audit_leaf_hash(&semantics_fixed_row()).unwrap()
     );
 }
 

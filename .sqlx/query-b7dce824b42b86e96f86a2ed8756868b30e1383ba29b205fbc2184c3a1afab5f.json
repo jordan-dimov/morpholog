@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT transition_id, transformation_name, arguments, actor,\n                        invariant_epoch, invariants_checked,\n                        asserted_claims, retracted_claims, emitted_intents, committed_at,\n                attestation, parameters, model_hash\n                 FROM morpholog.audit\n                 WHERE (committed_at, transition_id) > ($2, $3)\n                   AND committed_at < $4\n                 ORDER BY committed_at, transition_id\n                 LIMIT $1",
+  "query": "SELECT transition_id, transformation_name, arguments, actor,\n                        invariant_epoch, invariants_checked,\n                        asserted_claims, retracted_claims, emitted_intents, committed_at,\n                attestation, parameters, model_hash, semantics_version\n                 FROM morpholog.audit\n                 WHERE (committed_at, transition_id) > ($2, $3)\n                 ORDER BY committed_at, transition_id\n                 LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -145,14 +145,24 @@
             "name": "model_hash"
           }
         }
+      },
+      {
+        "ordinal": 13,
+        "name": "semantics_version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "semantics_version"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
         "Int8",
         "Timestamptz",
-        "Uuid",
-        "Timestamptz"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -168,8 +178,9 @@
       false,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "e9850f7f60128bff3d34e7fdda8310c1ec2b1663291553907f250dcf59a73511"
+  "hash": "b7dce824b42b86e96f86a2ed8756868b30e1383ba29b205fbc2184c3a1afab5f"
 }

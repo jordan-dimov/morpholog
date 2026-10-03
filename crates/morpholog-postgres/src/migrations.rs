@@ -62,6 +62,11 @@ migrations![
     (18, "date_ordinal", "018_date_ordinal.sql"),
     (19, "requirement_position", "019_requirement_position.sql"),
     (20, "audit_model_hash", "020_audit_model_hash.sql"),
+    (
+        21,
+        "audit_semantics_version",
+        "021_audit_semantics_version.sql"
+    ),
 ];
 
 /// The newest migration this binary carries.

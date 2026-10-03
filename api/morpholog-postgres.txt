@@ -336,6 +336,28 @@ impl core::marker::Unpin for morpholog_postgres::PackError
 impl core::marker::UnsafeUnpin for morpholog_postgres::PackError
 impl !core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::PackError
 impl !core::panic::unwind_safe::UnwindSafe for morpholog_postgres::PackError
+pub enum morpholog_postgres::PackKind
+pub morpholog_postgres::PackKind::PrefixDocument
+pub morpholog_postgres::PackKind::PrefixStream
+pub morpholog_postgres::PackKind::Selective
+pub morpholog_postgres::PackKind::Window
+impl core::clone::Clone for morpholog_postgres::PackKind
+pub fn morpholog_postgres::PackKind::clone(&self) -> morpholog_postgres::PackKind
+impl core::clone::TrivialClone for morpholog_postgres::PackKind
+impl core::cmp::Eq for morpholog_postgres::PackKind
+impl core::cmp::PartialEq for morpholog_postgres::PackKind
+pub fn morpholog_postgres::PackKind::eq(&self, &morpholog_postgres::PackKind) -> bool
+impl core::fmt::Debug for morpholog_postgres::PackKind
+pub fn morpholog_postgres::PackKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_postgres::PackKind
+impl core::marker::StructuralPartialEq for morpholog_postgres::PackKind
+impl core::marker::Freeze for morpholog_postgres::PackKind
+impl core::marker::Send for morpholog_postgres::PackKind
+impl core::marker::Sync for morpholog_postgres::PackKind
+impl core::marker::Unpin for morpholog_postgres::PackKind
+impl core::marker::UnsafeUnpin for morpholog_postgres::PackKind
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::PackKind
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::PackKind
 pub enum morpholog_postgres::PackVerdict
 pub morpholog_postgres::PackVerdict::Prefix(morpholog_postgres::TreeVerification)
 pub morpholog_postgres::PackVerdict::Selective(morpholog_postgres::SelectiveVerification)
@@ -952,6 +974,7 @@ pub morpholog_postgres::AuditRow::invariants_checked: alloc::vec::Vec<morpholog_
 pub morpholog_postgres::AuditRow::model_hash: core::option::Option<alloc::string::String>
 pub morpholog_postgres::AuditRow::parameters: core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub morpholog_postgres::AuditRow::retracted_claims: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
+pub morpholog_postgres::AuditRow::semantics_version: core::option::Option<u32>
 pub morpholog_postgres::AuditRow::transformation_name: morpholog_core::ir::TransformationName
 pub morpholog_postgres::AuditRow::transition_id: uuid::Uuid
 impl morpholog_postgres::AuditRow
@@ -1945,6 +1968,7 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::WitnessesReport
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::WitnessesReport
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::WitnessesReport
 pub const morpholog_postgres::AUTHORITY_PREDICATE: &str
+pub const morpholog_postgres::NEWEST_PACK_FORMAT: u32
 pub const morpholog_postgres::READER_ROLE: &str
 pub const morpholog_postgres::RESTRICTED_PREDICATE: &str
 pub const morpholog_postgres::WRITER_ROLE: &str
@@ -1997,6 +2021,7 @@ pub async fn morpholog_postgres::mark_outbox_failed(&sqlx_postgres::PgPool, uuid
 pub async fn morpholog_postgres::mark_outbox_transient_attempt(&sqlx_postgres::PgPool, uuid::Uuid, &str, jiff::timestamp::Timestamp) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::migration_status(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub fn morpholog_postgres::pack_format_version(&[u8]) -> core::option::Option<u64>
+pub fn morpholog_postgres::pack_kind(u64) -> core::option::Option<morpholog_postgres::PackKind>
 pub fn morpholog_postgres::pack_role_rebindings(&[morpholog_postgres::AuditRow], &morpholog_postgres::PackVerdict) -> morpholog_postgres::RoleRebindings
 pub fn morpholog_postgres::parse_public_key(&str) -> core::result::Result<ed25519_dalek::verifying::VerifyingKey, morpholog_postgres::SigningError>
 pub fn morpholog_postgres::parse_signature(&str) -> core::result::Result<ed25519::Signature, morpholog_postgres::SigningError>

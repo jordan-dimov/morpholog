@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::audit::AuditRow;
+use crate::audit::{AuditRow, RowRung};
 use crate::audit_pages::AuditPages;
 use crate::checkpoints::{
     Checkpoint, TreeVerification, checkpoint_hash, load_checkpoint_chain, same_tree_head,
@@ -37,67 +37,124 @@ const PACK_KIND_WINDOW: &str = "window";
 const PACK_FORMAT_V3: u32 = 3;
 const PACK_KIND_SELECTIVE: &str = "selective";
 
-/// A pack kind's two format versions. A pack that discloses a row naming
-/// the programme that admitted it carries the stamped one, which a
-/// verifier from before that field refuses as newer than it understands,
-/// instead of dropping the field and reporting tamper on honest history.
-/// A pack of older rows only keeps the version every verifier reads. The
-/// leaf version tells a new verifier how a row hashes; the pack version
-/// keeps an old one from judging bytes it cannot read.
+/// A pack kind's format version for each rung of the leaf-format ladder.
+/// A pack carries the version for the highest rung among the rows it
+/// discloses, so a verifier from before that rung refuses it as newer than
+/// it understands, instead of dropping a field it does not know and
+/// reporting tamper on honest history. A pack of older rows keeps the
+/// version every older verifier reads. The leaf version tells a new
+/// verifier how a row hashes; the pack version keeps an old one from
+/// judging bytes it cannot read.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct FormatPair {
-    pub(crate) unstamped: u32,
-    pub(crate) stamped: u32,
+pub(crate) struct FormatLadder {
+    pub(crate) legacy: u32,
+    pub(crate) model: u32,
+    pub(crate) semantics: u32,
 }
 
-impl FormatPair {
-    /// The version for a pack disclosing `rows`.
-    pub(crate) fn for_rows<'r>(self, rows: impl IntoIterator<Item = &'r AuditRow>) -> u32 {
-        if rows.into_iter().any(|r| r.model_hash.is_some()) {
-            self.stamped
-        } else {
-            self.unstamped
+impl FormatLadder {
+    /// The version for a pack whose highest disclosed row is on `rung`.
+    pub(crate) fn version(self, rung: RowRung) -> u32 {
+        match rung {
+            RowRung::Legacy => self.legacy,
+            RowRung::Model => self.model,
+            RowRung::Semantics => self.semantics,
         }
     }
 
-    pub(crate) fn admits(self, version: u32) -> bool {
-        version == self.unstamped || version == self.stamped
+    /// The rung a version of this kind stands for, or `None` for a version
+    /// that is not this kind's.
+    pub(crate) fn rung(self, version: u32) -> Option<RowRung> {
+        [RowRung::Legacy, RowRung::Model, RowRung::Semantics]
+            .into_iter()
+            .find(|&rung| self.version(rung) == version)
     }
 
-    /// Hold an announced version to what the pack discloses, both ways.
-    pub(crate) fn check(self, version: u32, discloses_stamped: bool) -> Result<(), PackError> {
-        let detail = match (version == self.stamped, discloses_stamped) {
-            (false, true) => format!(
-                "pack_format_version {version} cannot disclose a row naming its programme; \
-                 such a pack is version {}",
-                self.stamped
+    /// The version for a pack disclosing `rows`.
+    pub(crate) fn for_rows<'r>(self, rows: impl IntoIterator<Item = &'r AuditRow>) -> u32 {
+        self.version(highest_rung(rows))
+    }
+
+    pub(crate) fn admits(self, version: u32) -> bool {
+        self.rung(version).is_some()
+    }
+
+    /// Hold an announced version to the highest rung the pack discloses,
+    /// both ways: a version below it cannot carry those rows, and one above
+    /// it claims rows the pack does not have.
+    pub(crate) fn check(self, version: u32, disclosed: RowRung) -> Result<(), PackError> {
+        if self.rung(version) == Some(disclosed) {
+            return Ok(());
+        }
+        Err(PackError::Malformed {
+            detail: format!(
+                "pack_format_version {version} does not match its rows: the newest row it \
+                 discloses {}, and such a pack is version {}",
+                rung_description(disclosed),
+                self.version(disclosed)
             ),
-            (true, false) => format!(
-                "pack_format_version {version} discloses no row naming its programme; \
-                 such a pack is version {}",
-                self.unstamped
-            ),
-            _ => return Ok(()),
-        };
-        Err(PackError::Malformed { detail })
+        })
     }
 }
 
-pub(crate) const DOCUMENT_FORMATS: FormatPair = FormatPair {
-    unstamped: PACK_FORMAT_V1,
-    stamped: 8,
+fn rung_description(rung: RowRung) -> &'static str {
+    match rung {
+        RowRung::Legacy => "names no programme",
+        RowRung::Model => "names its programme but not its semantics",
+        RowRung::Semantics => "names its programme and the semantics that decided it",
+    }
+}
+
+pub(crate) const DOCUMENT_FORMATS: FormatLadder = FormatLadder {
+    legacy: PACK_FORMAT_V1,
+    model: 8,
+    semantics: 12,
 };
-const WINDOW_FORMATS: FormatPair = FormatPair {
-    unstamped: PACK_FORMAT_V2,
-    stamped: 6,
+const WINDOW_FORMATS: FormatLadder = FormatLadder {
+    legacy: PACK_FORMAT_V2,
+    model: 6,
+    semantics: 10,
 };
-const SELECTIVE_FORMATS: FormatPair = FormatPair {
-    unstamped: PACK_FORMAT_V3,
-    stamped: 7,
+const SELECTIVE_FORMATS: FormatLadder = FormatLadder {
+    legacy: PACK_FORMAT_V3,
+    model: 7,
+    semantics: 11,
 };
 
-fn discloses_stamped(rows: &[AuditRow]) -> bool {
-    rows.iter().any(|r| r.model_hash.is_some())
+/// What a pack is, by its format version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackKind {
+    /// A complete prefix in one document.
+    PrefixDocument,
+    /// A complete prefix streamed as NDJSON, manifest first.
+    PrefixStream,
+    Window,
+    Selective,
+}
+
+/// The kind of pack a format version names, or `None` for a version this
+/// binary does not read. The one place a version number is read as a kind.
+pub fn pack_kind(version: u64) -> Option<PackKind> {
+    let version = u32::try_from(version).ok()?;
+    [
+        (DOCUMENT_FORMATS, PackKind::PrefixDocument),
+        (PREFIX_FORMATS, PackKind::PrefixStream),
+        (WINDOW_FORMATS, PackKind::Window),
+        (SELECTIVE_FORMATS, PackKind::Selective),
+    ]
+    .into_iter()
+    .find_map(|(ladder, kind)| ladder.admits(version).then_some(kind))
+}
+
+/// The highest pack format version this binary reads.
+pub const NEWEST_PACK_FORMAT: u32 = 12;
+
+/// The highest rung among `rows`.
+pub(crate) fn highest_rung<'r>(rows: impl IntoIterator<Item = &'r AuditRow>) -> RowRung {
+    rows.into_iter()
+        .map(AuditRow::rung)
+        .max()
+        .unwrap_or(RowRung::Legacy)
 }
 
 /// A convenience header summarising the covering checkpoint for a human
@@ -307,7 +364,7 @@ fn validate_envelope(pack: &EvidencePack) -> Result<(), PackError> {
             detail: format!("unsupported pack_format_version {}", m.pack_format_version),
         });
     }
-    DOCUMENT_FORMATS.check(m.pack_format_version, discloses_stamped(&pack.rows))?;
+    DOCUMENT_FORMATS.check(m.pack_format_version, highest_rung(&pack.rows))?;
     manifest_agrees(covering, m.tree_size, &m.root_hash, &m.checkpoint_hash)
 }
 
@@ -665,7 +722,7 @@ fn validate_window_envelope(pack: &WindowEvidencePack) -> Result<(), PackError> 
             m.pack_format_version
         )));
     }
-    WINDOW_FORMATS.check(m.pack_format_version, discloses_stamped(&pack.rows))?;
+    WINDOW_FORMATS.check(m.pack_format_version, highest_rung(&pack.rows))?;
     if m.pack_kind != PACK_KIND_WINDOW {
         return Err(malformed(format!("unexpected pack_kind {:?}", m.pack_kind)));
     }
@@ -979,7 +1036,7 @@ fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackE
             m.pack_format_version
         )));
     }
-    SELECTIVE_FORMATS.check(m.pack_format_version, discloses_stamped(&pack.rows))?;
+    SELECTIVE_FORMATS.check(m.pack_format_version, highest_rung(&pack.rows))?;
     if m.pack_kind != PACK_KIND_SELECTIVE {
         return Err(malformed(format!("unexpected pack_kind {:?}", m.pack_kind)));
     }
@@ -1036,6 +1093,7 @@ fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackE
 }
 
 mod prefix_stream;
+use prefix_stream::PREFIX_FORMATS;
 pub use prefix_stream::{
     PrefixExport, PrefixPackManifest, PrefixStreamReport, begin_prefix_export, read_prefix_stream,
     streamed_pack_version, verify_prefix_stream,

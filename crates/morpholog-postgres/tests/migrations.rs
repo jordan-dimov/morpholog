@@ -25,6 +25,8 @@ const CLAIMS_KEY_MIGRATION: &str =
     include_str!("../../morpholog-core/sql/migrations/012_claims_hash_key.sql");
 const MODEL_HASH_MIGRATION: &str =
     include_str!("../../morpholog-core/sql/migrations/020_audit_model_hash.sql");
+const SEMANTICS_VERSION_MIGRATION: &str =
+    include_str!("../../morpholog-core/sql/migrations/021_audit_semantics_version.sql");
 
 /// Run one statement whose text this test owns. The scratch schema name is a
 /// literal here, never external input.
@@ -588,6 +590,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     .expect("simulate a database from before checkpoint witnesses");
     ddl(
         &pool,
+        "ALTER TABLE morpholog.audit DROP COLUMN semantics_version".to_string(),
+    )
+    .await
+    .expect("simulate a database from before rows named their semantics");
+    ddl(
+        &pool,
         "ALTER TABLE morpholog.audit DROP COLUMN model_hash".to_string(),
     )
     .await
@@ -951,16 +959,53 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
             ));
         }
     }
-    let wrong_arity = sqlx::query(
+    let versioned = columns(&pool, "morpholog", "audit")
+        .await
+        .into_iter()
+        .find(|(name, _, _)| name == "semantics_version");
+    if versioned
+        != Some((
+            "semantics_version".to_string(),
+            "YES".to_string(),
+            "bigint".to_string(),
+        ))
+    {
+        return Err(format!(
+            "semantics_version must come back as nullable bigint, got {versioned:?}"
+        ));
+    }
+    let unversioned = sqlx::query(
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents, attestation, parameters,
             model_hash
+         ) VALUES ($1, 'stale_binary', '[]', '{\"type\":\"subject\",\"value\":\"s\"}',
+                   1, '[]', '[]', '[]', '[]',
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"s\"}', '[]',
+                   'sha256:' || repeat('0', 64))",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .execute(&pool)
+    .await;
+    match unversioned {
+        Err(e) if e.to_string().contains("audit_semantics_version_required") => {}
+        other => {
+            return Err(format!(
+                "a new row naming no semantics must be refused by audit_semantics_version_required, got {other:?}"
+            ));
+        }
+    }
+    let wrong_arity = sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents, attestation, parameters,
+            model_hash, semantics_version
          ) VALUES ($1, 'misshapen', '[]', '{\"type\":\"subject\",\"value\":\"m\"}',
                    1, '[]', '[]', '[]', '[]',
                    '{\"mode\":\"gateway\",\"authenticated_by\":\"m\"}', '[\"extra\"]',
-                   'sha256:' || repeat('0', 64))",
+                   'sha256:' || repeat('0', 64), 1)",
     )
     .bind(uuid::Uuid::now_v7())
     .execute(&pool)
@@ -1794,6 +1839,132 @@ async fn the_model_hash_migration_accepts_two_shapes_and_refuses_the_rest() {
             format!(
                 "ALTER TABLE {scratch}.audit DROP COLUMN model_hash;
                  ALTER TABLE {scratch}.audit DROP CONSTRAINT IF EXISTS audit_model_hash_shape"
+            ),
+        )
+        .await
+        .unwrap();
+        ddl(&pool, migration.clone())
+            .await
+            .expect("back to the head shape");
+        ddl(&pool, drift.replace("{s}", scratch)).await.unwrap();
+        let result = ddl(&pool, migration.clone()).await;
+        assert!(refused(&result), "{what}: {result:?}");
+    }
+
+    ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
+        .await
+        .unwrap();
+}
+
+/// The semantics-version migration takes the audit table from before it to the
+/// head shape, leaves the head shape alone (fresh or migrated), and
+/// refuses any other shape by name: a column of another type, or a
+/// same-named constraint that says something else, would leave the
+/// runtime or the activation boundary resting on a definition it never
+/// checked.
+#[tokio::test]
+async fn the_semantics_version_migration_accepts_two_shapes_and_refuses_the_rest() {
+    let pool = test_pool().await;
+    let scratch = "morpholog_semantics_version_probe";
+    ddl(&pool, format!("DROP SCHEMA IF EXISTS {scratch} CASCADE"))
+        .await
+        .unwrap();
+    ddl(&pool, format!("CREATE SCHEMA {scratch}"))
+        .await
+        .unwrap();
+    ddl(
+        &pool,
+        format!("CREATE TABLE {scratch}.audit (LIKE morpholog.audit INCLUDING ALL)"),
+    )
+    .await
+    .unwrap();
+    let migration =
+        SEMANTICS_VERSION_MIGRATION.replace("morpholog.audit", &format!("{scratch}.audit"));
+    let refused = |result: &Result<(), sqlx::Error>| {
+        result
+            .as_ref()
+            .is_err_and(|e| e.to_string().contains("refusing to guess"))
+    };
+
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the fresh head shape is current");
+    ddl(
+        &pool,
+        format!("ALTER TABLE {scratch}.audit DROP COLUMN semantics_version"),
+    )
+    .await
+    .unwrap();
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the pre-migration shape migrates");
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the migrated head shape is current");
+    ddl(
+        &pool,
+        format!(
+            "ALTER TABLE {scratch}.audit DROP CONSTRAINT audit_semantics_version_shape;
+             ALTER TABLE {scratch}.audit ADD CONSTRAINT audit_semantics_version_shape CHECK (
+                 semantics_version IS NULL
+                 OR (semantics_version BETWEEN 1 AND 4294967295
+                     AND model_hash IS NOT NULL)
+             ) NOT VALID"
+        ),
+    )
+    .await
+    .unwrap();
+    ddl(&pool, migration.clone())
+        .await
+        .expect("a head shape whose shape check is NOT VALID is current");
+
+    ddl(
+        &pool,
+        format!(
+            "ALTER TABLE {scratch}.audit DROP COLUMN semantics_version;
+             ALTER TABLE {scratch}.audit ADD COLUMN semantics_version integer"
+        ),
+    )
+    .await
+    .unwrap();
+    let result = ddl(&pool, migration.clone()).await;
+    assert!(refused(&result), "a column of another type: {result:?}");
+
+    ddl(
+        &pool,
+        format!(
+            "ALTER TABLE {scratch}.audit DROP COLUMN semantics_version;
+             ALTER TABLE {scratch}.audit ADD COLUMN semantics_version bigint;
+             ALTER TABLE {scratch}.audit ADD CONSTRAINT audit_semantics_version_shape CHECK (true)"
+        ),
+    )
+    .await
+    .unwrap();
+    let result = ddl(&pool, migration.clone()).await;
+    assert!(refused(&result), "an impostor constraint: {result:?}");
+
+    for (what, drift) in [
+        (
+            "a default",
+            "ALTER TABLE {s}.audit ALTER COLUMN semantics_version SET DEFAULT 1",
+        ),
+        (
+            "a NOT NULL column",
+            "UPDATE {s}.audit SET semantics_version = NULL WHERE false;
+             ALTER TABLE {s}.audit ALTER COLUMN semantics_version SET NOT NULL",
+        ),
+        (
+            "a required constraint that says something else",
+            "ALTER TABLE {s}.audit DROP CONSTRAINT audit_semantics_version_required;
+             ALTER TABLE {s}.audit ADD CONSTRAINT audit_semantics_version_required CHECK (true)",
+        ),
+    ] {
+        // Start each from the head shape, then drift one thing.
+        ddl(
+            &pool,
+            format!(
+                "ALTER TABLE {scratch}.audit DROP COLUMN semantics_version;
+                 ALTER TABLE {scratch}.audit DROP CONSTRAINT IF EXISTS audit_semantics_version_shape"
             ),
         )
         .await

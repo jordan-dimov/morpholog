@@ -960,6 +960,7 @@ fn audit_rows_serialize_as_pinned() {
         attestation: None,
         parameters: None,
         model_hash: None,
+        semantics_version: None,
     };
     assert_golden("audit_row.json", &to_value(&row));
 
@@ -1003,6 +1004,16 @@ fn audit_rows_serialize_as_pinned() {
         ..self_describing.clone()
     };
     assert_golden("audit_row_model_hash.json", &to_value(&programme_naming));
+
+    // The row as written now: also naming the semantics that decided it.
+    let semantics_naming = AuditRow {
+        semantics_version: Some(1),
+        ..programme_naming.clone()
+    };
+    assert_golden(
+        "audit_row_semantics_version.json",
+        &to_value(&semantics_naming),
+    );
 
     // The --named form replaces the claim arrays with named claims and
     // leaves the rest unchanged, via the binary's own projection.
@@ -1483,6 +1494,7 @@ fn sample_audit_row() -> AuditRow {
         attestation: None,
         parameters: None,
         model_hash: None,
+        semantics_version: None,
     }
 }
 

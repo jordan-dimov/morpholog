@@ -131,6 +131,7 @@ mod tests {
             }),
             parameters: None,
             model_hash: None,
+            semantics_version: None,
         }
     }
 

@@ -939,7 +939,7 @@ fn a_stream_disclosing_a_programme_naming_row_is_version_5_and_verifies() {
 fn a_version_4_stream_cannot_disclose_a_programme_naming_row() {
     match stream_verdict(&streamed_pack_of(&mixed_history(), 4), None) {
         Err(PackError::Malformed { detail }) => {
-            assert!(detail.contains("cannot disclose"), "{detail}");
+            assert!(detail.contains("such a pack is version 5"), "{detail}");
         }
         other => panic!("expected the version to be refused, got {other:?}"),
     }
@@ -950,7 +950,7 @@ fn a_version_4_stream_cannot_disclose_a_programme_naming_row() {
 fn a_version_5_stream_must_disclose_one() {
     match stream_verdict(&streamed_pack_of(&rows_tagged(3, 'u'), 5), None) {
         Err(PackError::Malformed { detail }) => {
-            assert!(detail.contains("discloses no row"), "{detail}");
+            assert!(detail.contains("such a pack is version 4"), "{detail}");
         }
         other => panic!("expected the version to be refused, got {other:?}"),
     }
@@ -968,9 +968,89 @@ fn a_programme_naming_document_is_version_8() {
     ));
     let mut relabelled = pack.clone();
     relabelled.manifest.pack_format_version = PACK_FORMAT_V1;
-    malformed("cannot disclose", &relabelled);
+    malformed("such a pack is version 8", &relabelled);
     let unstamped = read_prefix_stream(&streamed_pack_of(&rows_tagged(2, 'v'), 4)[..]).unwrap();
     let mut overclaimed = unstamped.clone();
     overclaimed.manifest.pack_format_version = 8;
-    malformed("discloses no row", &overclaimed);
+    malformed("such a pack is version 1", &overclaimed);
+}
+
+/// Older rows, rows naming their programme, then rows naming their
+/// semantics too: the whole ladder, in the real chronology.
+fn semantics_history() -> Vec<AuditRow> {
+    let mut rows = mixed_history();
+    let newest: Vec<AuditRow> = rows_tagged(2, 's')
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| AuditRow {
+            transition_id: uuid::Uuid::from_u128(0x100 + i as u128),
+            committed_at: format!("2026-06-24T00:01:{i:02}Z").parse().unwrap(),
+            semantics_version: Some(morpholog_core::SEMANTICS_VERSION),
+            ..naming_their_programme(vec![r]).remove(0)
+        })
+        .collect();
+    rows.extend(newest);
+    rows
+}
+
+/// A stream whose newest row names its semantics is version 9 and
+/// verifies whole, the older rungs before it included.
+#[test]
+fn a_stream_disclosing_a_semantics_naming_row_is_version_9_and_verifies() {
+    assert!(matches!(
+        stream_verdict(&streamed_pack_of(&semantics_history(), 9), None),
+        Ok(TreeVerification::Intact { .. })
+    ));
+}
+
+/// A version-5 reader would drop the semantics field and report tamper on
+/// honest history, so version 5 may not carry such a row; and version 9
+/// claims one, so it must.
+#[test]
+fn the_semantics_rung_is_held_both_ways() {
+    match stream_verdict(&streamed_pack_of(&semantics_history(), 5), None) {
+        Err(PackError::Malformed { detail }) => {
+            assert!(detail.contains("such a pack is version 9"), "{detail}");
+        }
+        other => panic!("expected version 5 to be refused, got {other:?}"),
+    }
+    match stream_verdict(&streamed_pack_of(&mixed_history(), 9), None) {
+        Err(PackError::Malformed { detail }) => {
+            assert!(detail.contains("such a pack is version 5"), "{detail}");
+        }
+        other => panic!("expected version 9 to be refused, got {other:?}"),
+    }
+}
+
+/// Read whole, a version-9 stream is a version-12 document, held to the
+/// same rule.
+#[test]
+fn a_semantics_naming_document_is_version_12() {
+    let pack = read_prefix_stream(&streamed_pack_of(&semantics_history(), 9)[..]).unwrap();
+    assert_eq!(pack.manifest.pack_format_version, 12);
+    assert!(matches!(
+        verify_pack(&pack, None),
+        Ok(TreeVerification::Intact { .. })
+    ));
+    let mut relabelled = pack.clone();
+    relabelled.manifest.pack_format_version = 8;
+    malformed("such a pack is version 12", &relabelled);
+}
+
+/// Every version names one kind of pack, the ladder's three rungs per kind
+/// included, and nothing past the newest.
+#[test]
+fn every_version_names_one_kind() {
+    let kinds: Vec<_> = (1..=super::NEWEST_PACK_FORMAT)
+        .map(|v| super::pack_kind(v.into()))
+        .collect();
+    assert!(kinds.iter().all(Option::is_some), "{kinds:?}");
+    assert_eq!(super::pack_kind(9), Some(super::PackKind::PrefixStream));
+    assert_eq!(super::pack_kind(10), Some(super::PackKind::Window));
+    assert_eq!(super::pack_kind(11), Some(super::PackKind::Selective));
+    assert_eq!(super::pack_kind(12), Some(super::PackKind::PrefixDocument));
+    assert_eq!(
+        super::pack_kind(u64::from(super::NEWEST_PACK_FORMAT) + 1),
+        None
+    );
 }

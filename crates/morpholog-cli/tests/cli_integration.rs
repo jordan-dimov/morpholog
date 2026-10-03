@@ -67,12 +67,18 @@ fn first_row(lines: &[Value]) -> usize {
 fn as_single_document(pack: &str) -> String {
     let lines = pack_lines(pack);
     let rows = first_row(&lines);
-    let stamped = lines[rows..]
-        .iter()
-        .any(|row| row.get("model_hash").is_some());
+    // The document version for the highest rung among the rows.
+    let has = |field: &str| lines[rows..].iter().any(|row| row.get(field).is_some());
+    let version = if has("semantics_version") {
+        12
+    } else if has("model_hash") {
+        8
+    } else {
+        1
+    };
     serde_json::json!({
         "manifest": {
-            "pack_format_version": if stamped { 8 } else { 1 },
+            "pack_format_version": version,
             "tree_size": lines[0]["tree_size"],
             "root_hash": lines[0]["root_hash"],
             "checkpoint_hash": lines[0]["checkpoint_hash"],
@@ -1098,8 +1104,8 @@ async fn evidence_verify_names_an_unknown_future_pack_version() {
     // misread as a malformed older one, in either the single-document or
     // the line-by-line spelling.
     for newer in [
-        &br#"{"manifest": {"pack_format_version": 9}}"#[..],
-        &b"{\"pack_format_version\": 9, \"pack_kind\": \"prefix\"}\n{}\n"[..],
+        &br#"{"manifest": {"pack_format_version": 13}}"#[..],
+        &b"{\"pack_format_version\": 13, \"pack_kind\": \"prefix\"}\n{}\n"[..],
     ] {
         let packfile = temp_file(newer);
         let (status, stdout, _stderr) =
@@ -4402,7 +4408,7 @@ async fn a_pack_larger_than_the_verifiers_memory_still_verifies() {
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor, invariant_epoch,
             invariants_checked, asserted_claims, retracted_claims, emitted_intents,
-            attestation, parameters, model_hash)
+            attestation, parameters, model_hash, semantics_version)
          SELECT gen_random_uuid(), 'note',
                 jsonb_build_array(jsonb_build_object(
                     'type', 'subject', 'value', repeat(md5(i::text), 128))),
@@ -4410,7 +4416,7 @@ async fn a_pack_larger_than_the_verifiers_memory_still_verifies() {
                 '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
                 '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb,
                 '[\"note\"]'::jsonb,
-                'sha256:' || repeat('0', 64)
+                'sha256:' || repeat('0', 64), 1
          FROM generate_series(1, $1) AS i",
     )
     .bind(ROWS)
