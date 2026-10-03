@@ -621,6 +621,18 @@ The claim is semantic: ambient clock or randomness never supplies a governed val
 
 Freshness belongs to transformation-body execution only: admission checking draws nothing.
 
+## Semantics versions
+
+The programme hash names the rules. `SEMANTICS_VERSION`, a constant in the kernel, names what the kernel makes of them. It moves when the result of any public semantic evaluation can change for the same programme, state and inputs: a proposal's admitted change, emitted intents, rejection (rule, version, witness) or error; an invariant's truth or error; a derived claim's rows or error. Cost, plans, the compiled route, diagnostics, explanation wording and wire formats are not semantics and never move it.
+
+A test holds the version to its meaning. It asks a fixed corpus of questions (every gallery transformation, invariant and derived claim over generated states, plus fixtures for what the gallery does not reach) and keeps, per version, a golden of each question's fingerprint and its answer's. The same question with a different answer fails until the version moves; a question added, removed or asked differently fails until the golden is regenerated, so lost coverage shows in review. Answers are encoded by meaning: an error's kind and the names and values it carries count, its prose does not. The corpus catches a change it can see; a change it cannot see still moves the version, by the author's hand.
+
+| Version | What changed |
+|---|---|
+| 1 | The first semantics recorded. It is not a claim about anything decided before it was named. |
+
+A commit does not yet record which version decided it.
+
 ## Admission: case-local revalidation
 
 An invariant says what lawful state means, and `explain` and the verifiers ask exactly that of a whole state. Admitting a transition asks less, on purpose, and `evaluate` asks the same as admission: it charges a candidate invariant exactly where the commit gate would have refused, case-local, never the whole state. The runtime computes the transition's effective delta - what the candidate holds that the pre-state did not, and the reverse, so a duplicate admit, a retract of what is absent, or a retract followed by a re-admit change nothing - and revalidates each invariant over the cases that delta could affect: untouched cases may remain as history left them; every touched case must satisfy the invariant afterwards; where the impact cannot be bounded safely, the whole invariant is checked. A transition that changes nothing is admitted whatever the history holds. Inherited dirt therefore blocks only the transitions that touch it, which is what adopting a stricter rule version on a live ledger and admitting exception claims both need, and touching a dirty case without fully repairing it still refuses.
