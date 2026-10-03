@@ -3904,9 +3904,33 @@ fn canned_tsa(reply: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
     let url = format!("http://{}/tsr", listener.local_addr().unwrap());
     let handle = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let mut buf = vec![0_u8; 8192];
-        let n = stream.read(&mut buf).unwrap();
-        let head = String::from_utf8_lossy(&buf[..n]).to_string();
+        // The whole request, body included, before answering: closing with
+        // unread bytes resets the connection, and a body sent in a later
+        // segment would arrive after a single read.
+        let mut request = Vec::new();
+        let mut buf = [0_u8; 8192];
+        let head_end = loop {
+            let n = stream.read(&mut buf).unwrap();
+            assert!(n > 0, "the request ended before its headers");
+            request.extend_from_slice(&buf[..n]);
+            if let Some(i) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                break i + 4;
+            }
+        };
+        let head = String::from_utf8_lossy(&request[..head_end]).to_string();
+        let body_len: usize = head
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse().unwrap())
+            })
+            .unwrap_or(0);
+        while request.len() < head_end + body_len {
+            let n = stream.read(&mut buf).unwrap();
+            assert!(n > 0, "the request ended before its body");
+            request.extend_from_slice(&buf[..n]);
+        }
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/timestamp-reply\r\n\
              Content-Length: {}\r\nConnection: close\r\n\r\n",
