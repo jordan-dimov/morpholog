@@ -44,7 +44,7 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --no-deps --all-features --locked
 
-      - name: Kernel purity (no clock or randomness in morpholog-core)
+      - name: Kernel purity (no ambient clock or randomness as a value in morpholog-core)
         run: ./scripts/kernel_purity.sh
 
       # A project rule only the local precommit enforced, so any change

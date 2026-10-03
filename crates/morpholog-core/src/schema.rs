@@ -189,10 +189,12 @@ fn concrete_kind_description(kind: &PredicateArgKind, ctx: SchemaContext) -> Opt
         _ => match kind {
             PredicateArgKind::Subject => Some(
                 "opaque Morpholog subject identifier or domain symbol. \
-             Subjects minted by `Stmt::LetNewSubject` are UUIDv7 by \
-             runtime convention; externally supplied Subjects (commodity \
-             codes, period names, direction enums, etc.) are opaque \
-             strings. The schema describes the shape, not a format constraint.",
+             `new Subject()` receives an opaque fresh subject from the \
+             execution environment (the shipped runtime supplies UUIDv7; \
+             the kernel imposes no representation); externally supplied \
+             Subjects (commodity codes, period names, direction enums, \
+             etc.) are opaque strings. The schema describes the shape, not \
+             a format constraint.",
             ),
             PredicateArgKind::Decimal => {
                 Some("arbitrary-precision decimal carried as a string for exactness")

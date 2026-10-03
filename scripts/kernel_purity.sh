@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# The kernel reads no clock and no randomness: `new Subject()` takes its
-# subjects from a source the caller supplies, and nothing else in
-# `morpholog-core` may reach for the outside world. A mechanical guard,
-# not a proof - Rust can always reach `std::time` - in two parts:
+# Ambient clock and randomness never supply a governed value or affect a
+# decision in the kernel: `new Subject()` takes its subjects from a source
+# the caller supplies, and nothing else in `morpholog-core` may source a
+# value from the outside world. (Its hash maps still seed from host
+# randomness, which changes no result.) A mechanical tripwire, not a
+# proof - Rust can always reach `std::time` - in two parts:
 #
 #   1. no randomness crate among the kernel's normal dependencies
 #      (dev-dependencies such as proptest are free to bring their own);
-#   2. no known ambient read in the kernel's source.
+#   2. no known ambient clock or randomness read in the kernel's source.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -20,7 +22,7 @@ for crate in uuid rand rand_core getrandom fastrand; do
 done
 if git grep -nE 'SystemTime::now|Instant::now|Timestamp::now|Zoned::now|Uuid::now|thread_rng|getrandom|rand::' \
         -- crates/morpholog-core/src; then
-    echo 'morpholog-core reads the clock or randomness above; take it as an input instead' >&2
+    echo 'morpholog-core reads the clock or randomness above; take the value as an input instead' >&2
     status=1
 fi
 exit "$status"

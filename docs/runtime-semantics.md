@@ -617,6 +617,8 @@ The differentials hold instances of the law; none proves it in general. The comp
 
 The order is part of that law. One subject is drawn each time execution reaches `new Subject()`: in statement order, a `for` body once per element in collection order, nested bodies depth-first, and nothing after execution stops. A source with no subject left is the typed error `SubjectSourceExhausted`, never a panic. Tracing changes what observation costs, never the outcome or which subjects are drawn; an accepted traced proposal against the database describes the execution that committed, so the subjects its trace shows are the ones the record holds. A refusal explained on request (`--explain-on-reject`) replays the subjects the refusing execution drew, so the explanation describes that execution, not another run with other subjects.
 
+The claim is semantic: ambient clock or randomness never supplies a governed value or affects a decision. The kernel's hash maps still seed themselves from host randomness, as Rust's do, for resistance to adversarial keys; executions whose maps are seeded differently are compared exactly by the trace and scope differentials, which is the evidence that the seeding reaches no result.
+
 Freshness belongs to transformation-body execution only: admission checking draws nothing.
 
 ## Admission: case-local revalidation

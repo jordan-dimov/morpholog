@@ -12,7 +12,7 @@
 mod common;
 
 use morpholog_core::{Stmt, TraceEntry, TracedProposal, propose, propose_with_trace};
-use morpholog_test_support::differential::{observable, same_subjects, sample_args, sample_state};
+use morpholog_test_support::differential::{same_subjects, sample_args, sample_state};
 use morpholog_test_support::test_transition;
 
 /// Whether the transformation loops. `for` is the only statement
@@ -83,13 +83,13 @@ fn traced_and_untraced_execution_are_equivalent() {
                         Err(error)
                     }
                 };
+                // Exactly, candidate state included: both runs read the
+                // same full pre-state and draw the same subjects.
                 assert_eq!(
-                    observable(&untraced),
-                    observable(&traced_as_result),
+                    untraced, traced_as_result,
                     "programme `{}`, transformation `{}`, salt {salt}: \
                      trace mode changed the outcome",
-                    program.name,
-                    t.name
+                    program.name, t.name
                 );
                 cases += 1;
             }

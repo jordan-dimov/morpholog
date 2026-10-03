@@ -188,8 +188,8 @@ pub struct RejectionStateOutcome {
 impl RejectionStateOutcome {
     /// A refusal's explanation, from the execution that refused: the state
     /// it read and its own draws for `new Subject()`, replayed. `None` for
-    /// a commit. The one way to explain a refusal, so no caller can explain
-    /// it with subjects the refusing execution never drew.
+    /// a commit. The path the proposal APIs use, so their explanations never
+    /// name subjects the refusing execution did not draw.
     pub fn explanation(
         &self,
         program: &morpholog_core::Program,
