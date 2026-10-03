@@ -685,7 +685,7 @@ The kernel IR carries no source spans - a `Program` can be hand-built or deseria
 
 `Program::validate` also bounds nesting depth: a body whose expressions or `for`-statements nest past a fixed limit is rejected (`NestingTooDeep`) before any uncapped walk runs on it. The measure itself stops as soon as a body passes the limit, and it runs first: every body is measured on its own, calls unexpanded, before the search for definition cycles or anything reported beside a cycle walks it, so a body too deep on its own is refused even when the programme also has a cycle. The evaluator and the check itself descend one stack frame per level, so an unbounded body could exhaust the stack during a proposal. This is why **IR cannot be proposed unvalidated**: every public way to evaluate takes a `ValidatedProgram` or a `PreparedProgram`, which only validation produces, so IR accepted from outside is validated on its way in.
 
-`Program::validate` is **not** called automatically by `propose`. The kernel boundary is statement-level, not programme-level; revalidating on every proposal would muddle that distinction and add overhead. The `morpholog check` CLI subcommand runs it explicitly; tests over the worked examples do the same.
+`PreparedProgram::new` validates once and builds the plans every proposal reuses; `PreparedProgram::propose` does not validate again. Validation belongs to preparation, not to the proposal path. The statement-level executor beneath it is internal to the kernel, where the kernel's own tests exercise behaviour below validation. The `morpholog check` CLI subcommand validates without preparing anything to run.
 
 ## Atomicity boundary
 
@@ -702,7 +702,7 @@ The doctrinal floors - no entities/classes/services, no workflow engine, no arbi
 
 ## Success criterion
 
-For every worked example, both in memory (via `propose()` and the kernel test suite) and durably (via `propose_against_pg`):
+For every worked example, both in memory (via `PreparedProgram::propose` and the kernel test suite) and durably (via `propose_against_pg`):
 
 1. Valid transformations commit, writing one audit row and one outbox row per emitted intent in a single SERIALIZABLE transaction.
 2. Invariant-violating attempts roll back atomically - no claims changed, no audit row written, no outbox row enqueued.

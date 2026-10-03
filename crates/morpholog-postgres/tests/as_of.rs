@@ -463,6 +463,36 @@ async fn reconstruct_state_at_on_empty_audit_log_is_transition_not_found() {
     );
 }
 
+/// An unknown transition id is `TransitionNotFound` even when nothing
+/// derives the name asked for; a known id with such a name answers `None`.
+#[tokio::test]
+async fn list_derived_at_checks_the_id_before_the_name() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let (tid1, _tid2, _tid3) = three_step_ledger(&pool).await;
+    let ledger = double_entry_ledger::program();
+
+    let err = list_derived_at(
+        &pool,
+        morpholog_test_support::validated(&ledger),
+        "NothingDerivesThis",
+        Uuid::now_v7(),
+    )
+    .await
+    .expect_err("an unknown id is an error whatever the name");
+    assert!(matches!(err, PgError::TransitionNotFound(_)), "{err:?}");
+
+    let rows = list_derived_at(
+        &pool,
+        morpholog_test_support::validated(&ledger),
+        "NothingDerivesThis",
+        tid1,
+    )
+    .await
+    .expect("a known id with an unknown name is not an error");
+    assert!(rows.is_none(), "{rows:?}");
+}
+
 /// A historical read keeps claims in the order replay admitted them,
 /// and a claim retracted and re-admitted moves to the end - the same
 /// rule the kernel's own state follows.

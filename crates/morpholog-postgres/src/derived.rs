@@ -238,6 +238,9 @@ pub async fn list_derived_at(
     transition_id: Uuid,
 ) -> Result<Option<Vec<ClaimInstance>>, PgError> {
     let Some(footprint) = derived_footprint(program, predicate) else {
+        // The coordinate is checked whatever the name, so an unknown id is
+        // `TransitionNotFound` even for a name nothing derives.
+        reconstruct_state_at_for_predicates(pool, transition_id, &[]).await?;
         return Ok(None);
     };
     let state = reconstruct_state_at_for_predicates(pool, transition_id, &footprint).await?;
