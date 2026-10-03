@@ -28,8 +28,9 @@ if git grep -nE 'SystemTime::now|Instant::now|Timestamp::now|Zoned::now|Uuid::no
     echo 'morpholog-core reads the clock or randomness above; take the value as an input instead' >&2
     status=1
 fi
-# A path (`std::fs`) or a grouped import (`use std::{fs, io}`, possibly
-# across lines), so `fs::read` after a grouped import is caught too.
+# A path (`std::fs`), a grouped import (`use std::{fs, io}`, possibly
+# across lines, so `fs::read` after it is caught too), or `std` itself
+# under another name.
 # Exit 0 = found, 1 = none; anything else means the check itself broke.
 outside_world() {
     git ls-files -z -- 'crates/morpholog-core/src/*.rs' | perl -e '
@@ -40,7 +41,7 @@ outside_world() {
             chomp $file;
             open(my $fh, "<", $file) or die "cannot read $file: $!";
             my $src = do { local $/; <$fh> };
-            while ($src =~ /std\s*::\s*(?:$mods|\{((?:[^{}]|\{[^{}]*\})*)\})/g) {
+            while ($src =~ /std\s*::\s*(?:$mods|\{((?:[^{}]|\{[^{}]*\})*)\})|\bstd\s+as\b/g) {
                 my ($at, $text, $group) = ($-[0], $&, $1);
                 next if defined $group && $group !~ $mods;
                 my $line = 1 + (substr($src, 0, $at) =~ tr/\n//);

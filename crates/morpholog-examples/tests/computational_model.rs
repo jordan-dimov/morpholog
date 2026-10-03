@@ -1,7 +1,8 @@
 //! What each construct of the language ranges over, so a new construct
 //! cannot arrive without naming the termination premise it relies on
 //! (`docs/computational-model.md`). The matches below have no wildcard
-//! arm: a new variant does not compile here until someone classifies it.
+//! arm, down to the operator enums: a new variant does not compile here
+//! until someone classifies it.
 //! That is a review obligation the compiler enforces, not a proof that
 //! the classification is honest.
 
@@ -13,7 +14,8 @@ use std::collections::BTreeSet;
 
 use morpholog_core::fold::{Node, walk_prop, walk_stmt, walk_value};
 use morpholog_core::{
-    Builtin, Outcome, Prop, RejectionReason, State, Stmt, Term, Value, ValueExpr,
+    ArithOp, Builtin, CompareOp, ExtremumOp, OrderedDomain, Outcome, Prop, RejectionReason, State,
+    Stmt, Term, Value, ValueExpr,
 };
 use morpholog_surface::parse_program;
 use morpholog_test_support::{claim_instance, fresh, subj, test_transition};
@@ -71,8 +73,15 @@ fn prop(p: &Prop) -> &'static [Draws] {
         | Prop::Xor(..)
         | Prop::Eq(..)
         | Prop::Neq(..)
-        | Prop::Compare { .. }
         | Prop::Forall { .. } => &[Children],
+        Prop::Compare { op, domain, .. } => {
+            let (CompareOp::Le | CompareOp::Lt | CompareOp::Ge | CompareOp::Gt) = op;
+            let (OrderedDomain::Decimal
+            | OrderedDomain::Date
+            | OrderedDomain::Timestamp
+            | OrderedDomain::Duration) = domain;
+            &[Children]
+        }
         Prop::In(..) => &[MaterialisedCollection],
     }
 }
@@ -80,9 +89,15 @@ fn prop(p: &Prop) -> &'static [Draws] {
 fn value(v: &ValueExpr) -> &'static [Draws] {
     match v {
         ValueExpr::Term(t) => term(t),
-        ValueExpr::Arith { .. } | ValueExpr::Extremum { .. } | ValueExpr::Cond { .. } => {
+        ValueExpr::Arith { op, .. } => {
+            let (ArithOp::Add | ArithOp::Sub | ArithOp::Mul | ArithOp::Div | ArithOp::Mod) = op;
             &[Children]
         }
+        ValueExpr::Extremum { op, .. } => {
+            let (ExtremumOp::Max | ExtremumOp::Min) = op;
+            &[Children]
+        }
+        ValueExpr::Cond { .. } => &[Children],
         // An exact total is normalised by stripping trailing zeros.
         ValueExpr::Sum { .. } => &[Children, InternallyBounded],
         ValueExpr::ValueOf { .. } => &[AdmittedState, Children],

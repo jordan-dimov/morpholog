@@ -12,11 +12,11 @@ This document states eight guarantees. For each it names what makes it true toda
 
 ### 1. Termination
 
-A decision over a validated programme, finite admitted state and a finite proposal terminates, in a decision or a typed kernel error.
+A decision over a validated programme, finite admitted state and a finite proposal takes finitely many steps.
 
 - **Holds by:** definitions call each other acyclically; nesting is bounded; everything evaluation ranges over is finite; a transformation body reads the state before it, never its own writes. The argument is [below](#termination).
 - **Checked by:** `crates/morpholog-examples/tests/definitions.rs` (cycles refused), `crates/morpholog-core/tests/definitions_adversarial.rs` and `crates/morpholog-core/tests/check_properties.rs` (depth refused, not overflowed), `crates/morpholog-core/src/check/tests.rs` (no rule or derived claim reads a derived claim), `crates/morpholog-examples/tests/computational_model.rs` (every construct names what it ranges over; a body never reads what it admits).
-- **Gap:** some public functions accept unvalidated programmes ([#449](https://github.com/jordan-dimov/morpholog/issues/449)); validation can recurse into a deep definition body before refusing it ([#450](https://github.com/jordan-dimov/morpholog/issues/450)).
+- **Gap:** reaching a validated programme is not yet safe everywhere ([#449](https://github.com/jordan-dimov/morpholog/issues/449), [#450](https://github.com/jordan-dimov/morpholog/issues/450)); a deeply nested value can exhaust the host stack before the steps finish (see [the implementation](#the-statement)).
 
 ### 2. Deterministic decisions
 
@@ -32,7 +32,7 @@ Evaluating a rule reads no file, network, process, environment or clock, runs no
 
 - **Holds by:** `morpholog-core` has no I/O dependency; `new Subject()` draws from a source the caller supplies.
 - **Checked by:** `scripts/kernel_purity.sh` (in precommit and CI): no randomness crate among the kernel's dependencies, and no clock, randomness, file, network, process, environment or thread access in its source. A tripwire, not a proof.
-- **Gap:** a subject source is caller code, so termination assumes it answers (see premise T7).
+- **Gap:** a subject source is caller code, so termination assumes it answers (see premise T6).
 
 ### 4. Explicit state
 
@@ -74,11 +74,16 @@ What a transformation can write and emit is visible in its text: every `admit`, 
 
 ### The statement
 
-**Semantic theorem.** Evaluating a validated programme over finite admitted state and finite materialised inputs, with a subject input that answers each request, terminates in a decision or a kernel error.
+**Semantic theorem.** For a validated programme, finite admitted state and finite materialised inputs, with a subject input that answers each request, evaluation takes finitely many steps.
 
-**Enforcement status.** The shipped CLI establishes the validation premise: it validates every programme before evaluating one, and every proposal path, in the CLI or the PostgreSQL adapter, takes a programme built from a validated `PreparedProgram`. Some public functions accept unvalidated programmes directly: the kernel's evaluators, and the adapter's read-side scoring, coverage and derived-claim functions. Cyclic definitions handed to one of them can overflow the stack instead of returning a typed result (shown for `eval_invariant`). That is a gap in enforcing the premise, not an exception to the theorem ([#449](https://github.com/jordan-dimov/morpholog/issues/449)).
+"Total" here means no divergence. A step may end the evaluation with a typed kernel error, which is a terminating outcome; which errors are reachable is a separate question, held by `crates/morpholog-examples/tests/eval_totality.rs`.
 
-"Total" here means no divergence. A typed kernel error is a terminating outcome; which errors are reachable is a separate question, held by `crates/morpholog-examples/tests/eval_totality.rs`.
+**The implementation.** The Rust evaluator carries those steps out and ends in a decision or a typed kernel error, on one condition the language does not yet enforce: the values it is given must fit within the host's stack. Validation caps how deep a programme nests (T2), but nothing caps a value a proposal carries. A collection nested inside collections is copied, compared and ordered recursively, so one nested deep enough could exhaust the stack, which is neither a decision nor a typed error. No typed refusal guards against that yet.
+
+**Establishing the premise.** The theorem starts from a validated programme, so reaching one must itself be safe. The shipped CLI validates every programme before evaluating one, and every proposal path, in the CLI or the PostgreSQL adapter, takes a programme built from a validated `PreparedProgram`. Two gaps remain, both in getting to the premise rather than in the theorem:
+
+- some public functions accept unvalidated programmes directly: the kernel's evaluators, and the adapter's read-side scoring, coverage and derived-claim functions. Cyclic definitions handed to one of them can overflow the stack instead of returning a typed result (shown for `eval_invariant`) ([#449](https://github.com/jordan-dimov/morpholog/issues/449));
+- validation itself searches each definition body for calls, recursively, before its depth guard can refuse it, so a definition nested deep enough overflows `validate()` ([#450](https://github.com/jordan-dimov/morpholog/issues/450)).
 
 ### The rank
 
@@ -119,15 +124,13 @@ A few loops iterate no finite container, and each carries its own ranking argume
 | T3 | No construct ranges over anything but the finite state, a finite collection, its own children, a definition's body or the subject input, apart from the self-bounded loops above. | the construct census, `crates/morpholog-examples/tests/computational_model.rs` |
 | T4 | Derived claims form one layer: a derived claim is computed from admitted claims only, and no rule reads one. There are no recursive views. | `crates/morpholog-core/src/check/tests.rs` |
 | T5 | A body never reads its own staged writes, so nothing feeds back into the state it reads. | `a_transformation_never_reads_what_it_admits` |
-| T6 | Validation terminates: it orders definitions before anything expands them, and measures depth before its recursive checks. | the ordering in `validate_program`; gap [#450](https://github.com/jordan-dimov/morpholog/issues/450) |
-| T7 | The subject input answers each request, with a subject or with nothing left, in finite time. A subject source is caller code. | the `SubjectSource` contract |
+| T6 | The subject input answers each request, with a subject or with nothing left, in finite time. A subject source is caller code. | the `SubjectSource` contract |
 
 The compiled route runs SQL the compiler writes, which is never recursive, over finite tables. That it decides what the kernel decides is guarantee 7.
 
 ### What this does not claim
 
 - **Cost.** Termination is not speed. A join over several claim patterns can cost the size of the state raised to the number of patterns. Case-local admission and the compiled route exist for cost, and change it without changing meaning.
-- **Deeply nested input values.** The depth limit bounds the programme, not the values a proposal carries. A collection nested inside collections is walked recursively by equality, ordering and serialisation; that such values can never exhaust the stack is not claimed.
 - **Parsing.** Parsing a `.morph` file precedes validation and is not a decision. The parser has no depth guard, and its time grows faster than linearly with deeply nested parentheses (see the roadmap).
 
 ## Reviewing a change
