@@ -3925,7 +3925,7 @@ fn canned_tsa(reply: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
                 name.eq_ignore_ascii_case("content-length")
                     .then(|| value.trim().parse().unwrap())
             })
-            .unwrap_or(0);
+            .expect("a timestamp request carries its body length");
         while request.len() < head_end + body_len {
             let n = stream.read(&mut buf).unwrap();
             assert!(n > 0, "the request ended before its body");
