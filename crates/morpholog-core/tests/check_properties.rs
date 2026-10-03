@@ -504,14 +504,13 @@ fn deeply_nested_for_statements_are_rejected_not_overflowed() {
     );
 }
 
-/// A body nested deeper than any stack holds is refused before anything
-/// walks it without a cap: the cycle search over definitions, the checks
-/// reported beside a cycle (the append-only retract ban walks every `for`),
-/// or the depth measure itself on `xor`, whose lowering copies its
-/// operands. It
-/// runs on a fixed stack so the verdict does not depend on the
-/// platform's, and every programme is leaked before validation because
-/// dropping one is itself recursive.
+/// A body nested deep enough to overflow the test's fixed stack is
+/// refused before anything walks it without a cap: the cycle search over
+/// definitions, the checks reported beside a cycle (the append-only
+/// retract ban walks every `for`), or the depth measure itself on `xor`,
+/// whose lowering copies its operands. The fixed stack keeps the verdict
+/// independent of the platform's, and every programme is leaked before
+/// validation because dropping one is itself recursive.
 #[test]
 fn a_body_too_deep_for_any_stack_is_refused_before_it_is_walked() {
     const HOSTILE: usize = 200_000;
