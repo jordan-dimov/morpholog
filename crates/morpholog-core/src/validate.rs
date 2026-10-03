@@ -8,7 +8,9 @@
 //! predicates and intents are errors. Every error is collected, so an
 //! author fixing a programme sees the whole list at once.
 
+use crate::eval::EvalError;
 use crate::ir::{DefinitionName, PredicateArgKind, Program, Prop, Stmt, ValueExpr};
+use crate::state::{ClaimInstance, State};
 use std::collections::HashMap;
 
 /// Proof-of-validity handle: a reference to a [`Program`] that passed
@@ -34,6 +36,34 @@ impl<'a> ValidatedProgram<'a> {
     /// so [`Program::validated`] stays the only way in.
     pub(crate) fn from_validated(program: &'a Program) -> Self {
         Self(program)
+    }
+
+    /// Whether the invariant named `name` holds in `state`. `pre_state`
+    /// is the state before a transition, for invariants that use
+    /// `pre(...)`. `Ok(None)` when no invariant has that name.
+    pub fn eval_invariant(
+        self,
+        name: &str,
+        state: &State,
+        pre_state: Option<&State>,
+    ) -> Result<Option<bool>, EvalError> {
+        let Some(inv) = self.0.invariant(name) else {
+            return Ok(None);
+        };
+        crate::derive::eval_invariant(inv, state, pre_state, &self.0.definitions).map(Some)
+    }
+
+    /// The rows of the derived claim computing `predicate`, in a
+    /// deterministic order. `Ok(None)` when nothing derives it.
+    pub fn enumerate_derived(
+        self,
+        predicate: &str,
+        state: &State,
+    ) -> Result<Option<Vec<ClaimInstance>>, EvalError> {
+        let Some(derived) = self.0.derived_claim(predicate) else {
+            return Ok(None);
+        };
+        crate::derive::enumerate_derived(derived, state, &self.0.definitions).map(Some)
     }
 }
 

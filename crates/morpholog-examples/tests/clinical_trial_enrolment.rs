@@ -26,8 +26,9 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, date, has_claim, subj};
-use morpholog_core::{CandidateScorer, EvalValue, Outcome, State, effective_delta, eval_invariant};
+use morpholog_core::{CandidateScorer, EvalValue, Outcome, State, effective_delta};
 use morpholog_examples::clinical_trial_enrolment::{self as cte, ROLE_RANDOMISE_PARTICIPANT};
+use morpholog_test_support::eval_invariant;
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
@@ -310,7 +311,7 @@ fn consent_after_randomisation_violates_the_invariant() {
         ),
     ]);
     assert!(
-        !eval_invariant(&inv, &randomised_before_consent, None, &cte::definitions()).unwrap(),
+        !eval_invariant(&cte::program(), &inv, &randomised_before_consent, None).unwrap(),
         "randomisation before consent must violate the invariant",
     );
 
@@ -337,7 +338,7 @@ fn consent_after_randomisation_violates_the_invariant() {
             ],
         ),
     ]);
-    assert!(eval_invariant(&inv, &consent_first, None, &cte::definitions()).unwrap());
+    assert!(eval_invariant(&cte::program(), &inv, &consent_first, None).unwrap());
 }
 
 #[test]
@@ -579,7 +580,8 @@ fn later_randomisation_must_use_active_protocol_version() {
 #[test]
 fn scoring_charges_a_write_only_in_the_case_it_touches() {
     let program = cte::program();
-    let mut scorer = CandidateScorer::new(&program).expect("scorable");
+    let mut scorer =
+        CandidateScorer::new(morpholog_test_support::validated(&program)).expect("scorable");
     let mut held: Vec<morpholog_core::ClaimInstance> = Vec::new();
     let consent = |participant: &str, on: &str| {
         claim_instance(

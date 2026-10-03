@@ -12,10 +12,9 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, date, dec, has_claim, subj};
-use morpholog_core::{
-    EvalValue, GateKind, Rejection, State, Subject, Transition, Verdict, explain,
-};
+use morpholog_core::{EvalValue, GateKind, Rejection, State, Subject, Transition, Verdict};
 use morpholog_examples::carbon_credit_provenance as cc;
+use morpholog_test_support::explain;
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();

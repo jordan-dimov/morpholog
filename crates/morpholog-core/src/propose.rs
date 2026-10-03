@@ -28,8 +28,7 @@ use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
 
 /// A proposed state transition. Persisted to the audit log when accepted.
 ///
-/// - `transformation_name`: must match the `name` of the
-///   [`Transformation`] passed to [`propose`].
+/// - `transformation_name`: the transformation to run, by name.
 /// - `args`: positional arguments matching the transformation's
 ///   `parameters`.
 /// - `actor`: the [`Subject`] proposing it. It is context, not a
@@ -286,7 +285,8 @@ impl<'a> TraceSink<'a> {
 /// over the cases the change could affect. No database, audit or outbox.
 ///
 /// `transition.transformation_name` must match `transformation.name`.
-pub fn propose(
+#[cfg(test)]
+pub(crate) fn propose(
     transformation: &Transformation,
     transition: &Transition,
     pre_state: &State,
@@ -307,7 +307,7 @@ pub fn propose(
 
 /// `propose` with a per-statement and per-invariant trace, returned on
 /// both the success and the error path.
-pub fn propose_with_trace(
+pub(crate) fn propose_with_trace(
     transformation: &Transformation,
     transition: &Transition,
     pre_state: &State,
@@ -369,7 +369,7 @@ pub(crate) fn propose_inner(
 
 /// [`propose`] with impact plans built ahead of time (see
 /// [`crate::PreparedProgram::admission`]), so nothing is planned per call.
-pub fn propose_with(
+pub(crate) fn propose_with(
     transformation: &Transformation,
     transition: &Transition,
     pre_state: &State,
@@ -381,7 +381,7 @@ pub fn propose_with(
         transformation,
         transition,
         pre_state,
-        admission.definitions,
+        admission.definitions(),
         &mut trace,
         subjects,
     )?;
@@ -432,7 +432,7 @@ pub enum StagedDelta {
 
 /// Run only the transformation body, stopping before the invariants.
 /// `propose` is exactly this followed by [`finish_staged_delta_with`].
-pub fn propose_stage_delta(
+pub(crate) fn propose_stage_delta(
     transformation: &Transformation,
     transition: &Transition,
     pre_state: &State,
@@ -450,7 +450,7 @@ pub fn propose_stage_delta(
 }
 
 /// Evaluate the invariants over the candidate state a staged delta
-/// implies, completing what [`propose_stage_delta`] began, under rules
+/// implies, completing what [`crate::PreparedProgram::stage_delta`] began, under rules
 /// whose impact plans were built once. A staged rejection passes through
 /// unchanged.
 pub fn finish_staged_delta_with(
@@ -555,7 +555,7 @@ pub(crate) fn finish_staged_inner(
     };
 
     let candidate = pre_state.with_delta(&asserted, &retracted);
-    let definitions = admission.definitions;
+    let definitions = admission.definitions();
     let computed;
     let effective = match established {
         Some(effective) => effective,
@@ -565,7 +565,7 @@ pub(crate) fn finish_staged_inner(
         }
     };
 
-    for (inv, plan) in admission.invariants.iter().zip(admission.plans()) {
+    for (inv, plan) in admission.invariants().iter().zip(admission.plans()) {
         // Check only the cases the change could affect.
         let cases = match plan.classify(&effective.asserted, &effective.retracted) {
             Impact::Untouched => continue,

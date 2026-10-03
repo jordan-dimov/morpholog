@@ -27,7 +27,7 @@
 //! In-crate so `compute_load_scope` can stay `pub(crate)`: the promise is
 //! the equivalence, not the scope set itself.
 
-use morpholog_core::{Program, StagedDelta, State, propose_stage_delta};
+use morpholog_core::{Program, StagedDelta, State};
 use morpholog_test_support::differential::{observable, same_subjects, sample_args, sample_state};
 
 use crate::propose::{LoadScope, Reads, compute_load_scope};
@@ -292,6 +292,7 @@ fn body_only_scope_stages_the_same_delta_as_full_state() {
     let mut cases = 0usize;
     let mut skipped = 0usize;
     for (name, program) in &corpus() {
+        let prepared = morpholog_test_support::prepare(program);
         for t in &program.transformations {
             for salt in 0..3u64 {
                 let Some(args) = sample_args(program, t, salt) else {
@@ -312,20 +313,12 @@ fn body_only_scope_stages_the_same_delta_as_full_state() {
                     Reads::Body,
                 );
                 let projected = project(&full, &scope);
-                let on_full = propose_stage_delta(
-                    t,
-                    &transition,
-                    &full,
-                    &program.definitions,
-                    &mut same_subjects(),
-                );
-                let on_projected = propose_stage_delta(
-                    t,
-                    &transition,
-                    &projected,
-                    &program.definitions,
-                    &mut same_subjects(),
-                );
+                let on_full = prepared
+                    .stage_delta(&transition, &full, &mut same_subjects())
+                    .map(|staged| staged.expect("the transformation is declared"));
+                let on_projected = prepared
+                    .stage_delta(&transition, &projected, &mut same_subjects())
+                    .map(|staged| staged.expect("the transformation is declared"));
                 assert_eq!(
                     staged_observable(&on_full),
                     staged_observable(&on_projected),
@@ -352,6 +345,7 @@ fn scoped_loading_is_observationally_equivalent_to_full_state() {
     let corpus = corpus();
 
     for (name, program) in &corpus {
+        let prepared = morpholog_test_support::prepare(program);
         for t in &program.transformations {
             for salt in 0..3u64 {
                 let Some(args) = sample_args(program, t, salt) else {
@@ -375,22 +369,12 @@ fn scoped_loading_is_observationally_equivalent_to_full_state() {
 
                 // Both runs draw the same subjects, so a minted subject
                 // compares like any other value.
-                let on_full = morpholog_core::propose(
-                    t,
-                    &transition,
-                    &full,
-                    &program.invariants,
-                    &program.definitions,
-                    &mut same_subjects(),
-                );
-                let on_projected = morpholog_core::propose(
-                    t,
-                    &transition,
-                    &projected,
-                    &program.invariants,
-                    &program.definitions,
-                    &mut same_subjects(),
-                );
+                let on_full = prepared
+                    .propose(&transition, &full, &mut same_subjects())
+                    .map(|outcome| outcome.expect("the transformation is declared"));
+                let on_projected = prepared
+                    .propose(&transition, &projected, &mut same_subjects())
+                    .map(|outcome| outcome.expect("the transformation is declared"));
                 minted |= observable(&on_full).contains("same-0");
                 assert_eq!(
                     observable(&on_full),
@@ -514,6 +498,7 @@ fn a_rebound_parameter_reads_its_predicate_whole() {
         .find(|(n, _)| n == "hostile:parameter_rebound_by_let")
         .unwrap();
     let t = &program.transformations[0];
+    let prepared = morpholog_test_support::prepare(&program);
     let full = State::from_claims(vec![
         morpholog_test_support::claim_instance(
             "Link",
@@ -538,20 +523,12 @@ fn a_rebound_parameter_reads_its_predicate_whole() {
         Reads::Body,
     );
     let projected = project(&full, &scope);
-    let on_full = propose_stage_delta(
-        t,
-        &transition,
-        &full,
-        &program.definitions,
-        &mut same_subjects(),
-    );
-    let on_projected = propose_stage_delta(
-        t,
-        &transition,
-        &projected,
-        &program.definitions,
-        &mut same_subjects(),
-    );
+    let on_full = prepared
+        .stage_delta(&transition, &full, &mut same_subjects())
+        .map(|staged| staged.expect("the transformation is declared"));
+    let on_projected = prepared
+        .stage_delta(&transition, &projected, &mut same_subjects())
+        .map(|staged| staged.expect("the transformation is declared"));
     assert!(
         matches!(on_full, Ok(StagedDelta::Staged { .. })),
         "the body reads P through the link: {on_full:?}"

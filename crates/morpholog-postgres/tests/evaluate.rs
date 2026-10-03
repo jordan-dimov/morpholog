@@ -6,7 +6,7 @@
 
 use morpholog_core::CaseOutcome;
 use morpholog_core::Program;
-use morpholog_core::ir_builder::{claim, exists, invariant, not, pre, var, wildcard};
+use morpholog_core::ir_builder::{claim, exists, invariant, not, pre, predicate, var, wildcard};
 use morpholog_postgres::{
     Checkpoint, CheckpointOutcome, EvidencePack, PgError, PgPool, create_checkpoint, export_pack,
     score_candidate, score_candidate_against_pack, score_candidate_against_packs,
@@ -18,7 +18,16 @@ use common::{reset_db, test_pool};
 fn candidate(inv: morpholog_core::Invariant) -> Program {
     Program {
         name: "candidate".into(),
-        predicates: vec![],
+        // The vocabulary the candidates read: the ledger's entries, and a
+        // predicate no history ever holds.
+        predicates: vec![
+            predicate("JournalEntry")
+                .subject("entry_id")
+                .subject("posting_date")
+                .subject("period")
+                .build(),
+            predicate("Unicorn").subject("u").build(),
+        ],
         intents: vec![],
         definitions: vec![],
         invariants: vec![inv],
@@ -59,7 +68,13 @@ async fn a_candidate_history_violates_reports_the_introducing_commit() {
             claim("JournalEntry", vec![var("e"), wildcard(), wildcard()]),
         )),
     );
-    let report = score_candidate(&pool, &candidate(inv), None).await.unwrap();
+    let report = score_candidate(
+        &pool,
+        morpholog_test_support::validated(&candidate(inv)),
+        None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(report.transitions_replayed, 2);
     assert_eq!(report.semantics, "case_bound_admission_v3");
@@ -84,7 +99,13 @@ async fn a_candidate_that_always_holds_refuses_nothing() {
         "NoUnicorns",
         not(exists("u", claim("Unicorn", vec![var("u")]))),
     );
-    let report = score_candidate(&pool, &candidate(inv), None).await.unwrap();
+    let report = score_candidate(
+        &pool,
+        morpholog_test_support::validated(&candidate(inv)),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(report.invariants[0].would_refuse, 0);
     assert!(report.invariants[0].refused_transitions.is_empty());
 }
@@ -102,9 +123,13 @@ async fn a_pre_candidate_is_rejected_not_silently_mis_scored() {
             claim("JournalEntry", vec![var("e"), wildcard(), wildcard()]),
         )),
     );
-    let err = score_candidate(&pool, &candidate(inv), None)
-        .await
-        .unwrap_err();
+    let err = score_candidate(
+        &pool,
+        morpholog_test_support::validated(&candidate(inv)),
+        None,
+    )
+    .await
+    .unwrap_err();
     assert!(
         matches!(err, PgError::InvalidState(msg) if msg.contains("pre(...)")),
         "a transition-relational candidate must be refused, not mis-scored"
@@ -120,8 +145,16 @@ async fn pack_backed_score_reproduces_the_database_score() {
     let pack = export_history_pack(&pool).await;
 
     let candidate = no_entries();
-    let online = score_candidate(&pool, &candidate, None).await.unwrap();
-    let offline = score_candidate_against_pack(&candidate, &pack, None, None).unwrap();
+    let online = score_candidate(&pool, morpholog_test_support::validated(&candidate), None)
+        .await
+        .unwrap();
+    let offline = score_candidate_against_pack(
+        morpholog_test_support::validated(&candidate),
+        &pack,
+        None,
+        None,
+    )
+    .unwrap();
 
     // The offline score of a genuine pack reproduces the live score
     // exactly - same report, byte for byte.
@@ -144,7 +177,13 @@ async fn refuses_to_score_a_tampered_pack() {
     v["rows"][0]["transformation_name"] = serde_json::json!("tampered");
     let tampered: EvidencePack = serde_json::from_value(v).unwrap();
 
-    let err = score_candidate_against_pack(&no_entries(), &tampered, None, None).unwrap_err();
+    let err = score_candidate_against_pack(
+        morpholog_test_support::validated(&no_entries()),
+        &tampered,
+        None,
+        None,
+    )
+    .unwrap_err();
     assert!(
         matches!(err, PgError::InvalidState(msg) if msg.contains("does not verify")),
         "a pack that does not verify must not be scored"
@@ -165,7 +204,13 @@ async fn refuses_a_pre_candidate_against_a_pack() {
             claim("JournalEntry", vec![var("e"), wildcard(), wildcard()]),
         )),
     ));
-    let err = score_candidate_against_pack(&pre_candidate, &pack, None, None).unwrap_err();
+    let err = score_candidate_against_pack(
+        morpholog_test_support::validated(&pre_candidate),
+        &pack,
+        None,
+        None,
+    )
+    .unwrap_err();
     assert!(matches!(err, PgError::InvalidState(msg) if msg.contains("pre(...)")));
 }
 
@@ -178,12 +223,24 @@ async fn pack_row_order_is_not_load_bearing() {
     let pack = export_history_pack(&pool).await;
     let candidate = no_entries();
 
-    let ordered = score_candidate_against_pack(&candidate, &pack, None, None).unwrap();
+    let ordered = score_candidate_against_pack(
+        morpholog_test_support::validated(&candidate),
+        &pack,
+        None,
+        None,
+    )
+    .unwrap();
     // The verifier re-sorts; so must scoring. A shuffled pack scores
     // identically.
     let mut shuffled = pack.clone();
     shuffled.rows.reverse();
-    let reshuffled = score_candidate_against_pack(&candidate, &shuffled, None, None).unwrap();
+    let reshuffled = score_candidate_against_pack(
+        morpholog_test_support::validated(&candidate),
+        &shuffled,
+        None,
+        None,
+    )
+    .unwrap();
 
     assert_eq!(
         serde_json::to_value(&ordered).unwrap(),
@@ -210,7 +267,13 @@ async fn refuses_to_score_against_a_mismatched_anchor() {
         signatures: Vec::new(),
         witnesses: Vec::new(),
     };
-    let err = score_candidate_against_pack(&no_entries(), &pack, Some(&forged), None).unwrap_err();
+    let err = score_candidate_against_pack(
+        morpholog_test_support::validated(&no_entries()),
+        &pack,
+        Some(&forged),
+        None,
+    )
+    .unwrap_err();
     assert!(matches!(err, PgError::InvalidState(msg) if msg.contains("does not verify")));
 }
 
@@ -231,14 +294,22 @@ async fn batch_over_packs_equals_individual_scores() {
     }
     let candidate = no_entries();
 
-    let batch = score_candidate_against_packs(&candidate, &cases).unwrap();
+    let batch =
+        score_candidate_against_packs(morpholog_test_support::validated(&candidate), &cases)
+            .unwrap();
     assert_eq!(batch.cases.len(), 3);
     assert_eq!(batch.semantics, "case_bound_admission_v3");
 
     // Each batch case matches its single-pack score (the batch reports
     // the candidate's identity once).
     for (i, (name, pack)) in cases.iter().enumerate() {
-        let single = score_candidate_against_pack(&candidate, pack, None, None).unwrap();
+        let single = score_candidate_against_pack(
+            morpholog_test_support::validated(&candidate),
+            pack,
+            None,
+            None,
+        )
+        .unwrap();
         let case = &batch.cases[i];
         assert_eq!(case.pack, *name);
         match &case.outcome {
@@ -272,7 +343,11 @@ async fn a_tampered_pack_fails_only_its_own_case() {
     v["rows"][0]["transformation_name"] = serde_json::json!("tampered");
     let p1_bad: EvidencePack = serde_json::from_value(v).unwrap();
 
-    let batch = score_candidate_against_packs(&no_entries(), &[(n0, p0), (n1, p1_bad)]).unwrap();
+    let batch = score_candidate_against_packs(
+        morpholog_test_support::validated(&no_entries()),
+        &[(n0, p0), (n1, p1_bad)],
+    )
+    .unwrap();
     assert!(matches!(batch.cases[0].outcome, CaseOutcome::Scored { .. }));
     match &batch.cases[1].outcome {
         CaseOutcome::Failed { error } => assert!(error.contains("does not verify")),
@@ -291,7 +366,9 @@ async fn a_pre_candidate_fails_the_whole_batch_once() {
             claim("JournalEntry", vec![var("e"), wildcard(), wildcard()]),
         )),
     ));
-    let err = score_candidate_against_packs(&pre_candidate, &[case]).unwrap_err();
+    let err =
+        score_candidate_against_packs(morpholog_test_support::validated(&pre_candidate), &[case])
+            .unwrap_err();
     assert!(matches!(err, PgError::InvalidState(msg) if msg.contains("pre(...)")));
 }
 
@@ -322,9 +399,13 @@ async fn a_split_attributes_violations_to_their_introducing_slice() {
     // NoEntries is violated by e0 (the boundary, in train) and again by
     // e1 (in test). NoE1 names e1 alone, so only the test slice counts it.
     let boundary = Some(morpholog_postgres::SplitBoundary::Transition(e0));
-    let train_hit = score_candidate(&pool, &no_entries(), boundary)
-        .await
-        .unwrap();
+    let train_hit = score_candidate(
+        &pool,
+        morpholog_test_support::validated(&no_entries()),
+        boundary,
+    )
+    .await
+    .unwrap();
     let split = train_hit.split.expect("split was requested");
     assert_eq!(split.boundary.resolved_transition_id, e0.to_string());
     assert_eq!(split.train.transitions_replayed, 1);
@@ -332,7 +413,9 @@ async fn a_split_attributes_violations_to_their_introducing_slice() {
     assert_eq!(split.train.invariants[0].would_refuse, 1);
     assert_eq!(split.test.invariants[0].would_refuse, 1);
 
-    let test_hit = score_candidate(&pool, &no_e1(), boundary).await.unwrap();
+    let test_hit = score_candidate(&pool, morpholog_test_support::validated(&no_e1()), boundary)
+        .await
+        .unwrap();
     let split = test_hit.split.expect("split was requested");
     assert_eq!(split.train.invariants[0].would_refuse, 0);
     assert_eq!(split.test.invariants[0].would_refuse, 1);
@@ -355,14 +438,14 @@ async fn a_timestamp_boundary_matches_the_transition_form() {
 
     let by_id = score_candidate(
         &pool,
-        &no_entries(),
+        morpholog_test_support::validated(&no_entries()),
         Some(morpholog_postgres::SplitBoundary::Transition(e0)),
     )
     .await
     .unwrap();
     let by_time = score_candidate(
         &pool,
-        &no_entries(),
+        morpholog_test_support::validated(&no_entries()),
         Some(morpholog_postgres::SplitBoundary::AtOrBefore(at)),
     )
     .await
@@ -388,10 +471,20 @@ async fn a_pack_split_reproduces_the_database_split() {
     let pack = export_history_pack(&pool).await;
 
     let boundary = Some(morpholog_postgres::SplitBoundary::Transition(e0));
-    let online = score_candidate(&pool, &no_entries(), boundary)
-        .await
-        .unwrap();
-    let offline = score_candidate_against_pack(&no_entries(), &pack, None, boundary).unwrap();
+    let online = score_candidate(
+        &pool,
+        morpholog_test_support::validated(&no_entries()),
+        boundary,
+    )
+    .await
+    .unwrap();
+    let offline = score_candidate_against_pack(
+        morpholog_test_support::validated(&no_entries()),
+        &pack,
+        None,
+        boundary,
+    )
+    .unwrap();
 
     assert_eq!(
         serde_json::to_value(&online).unwrap(),
@@ -408,11 +501,21 @@ async fn an_unknown_boundary_transition_is_an_error_in_both_modes() {
 
     let ghost = uuid::Uuid::from_u128(42);
     let boundary = Some(morpholog_postgres::SplitBoundary::Transition(ghost));
-    let db_err = score_candidate(&pool, &no_entries(), boundary)
-        .await
-        .unwrap_err();
+    let db_err = score_candidate(
+        &pool,
+        morpholog_test_support::validated(&no_entries()),
+        boundary,
+    )
+    .await
+    .unwrap_err();
     assert!(matches!(db_err, PgError::TransitionNotFound(id) if id == ghost));
-    let pack_err = score_candidate_against_pack(&no_entries(), &pack, None, boundary).unwrap_err();
+    let pack_err = score_candidate_against_pack(
+        morpholog_test_support::validated(&no_entries()),
+        &pack,
+        None,
+        boundary,
+    )
+    .unwrap_err();
     assert!(matches!(pack_err, PgError::TransitionNotFound(id) if id == ghost));
 }
 
@@ -425,7 +528,7 @@ async fn a_boundary_before_all_history_is_an_error_not_an_empty_slice() {
     let dawn = jiff::Timestamp::UNIX_EPOCH;
     let err = score_candidate(
         &pool,
-        &no_entries(),
+        morpholog_test_support::validated(&no_entries()),
         Some(morpholog_postgres::SplitBoundary::AtOrBefore(dawn)),
     )
     .await
@@ -442,7 +545,7 @@ async fn a_boundary_at_the_end_of_history_leaves_an_empty_test_slice() {
 
     let report = score_candidate(
         &pool,
-        &no_entries(),
+        morpholog_test_support::validated(&no_entries()),
         Some(morpholog_postgres::SplitBoundary::Transition(e1)),
     )
     .await

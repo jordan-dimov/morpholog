@@ -19,11 +19,15 @@ use std::hash::Hash;
 
 use crate::admission::Admission;
 use crate::definitions::DefinitionTable;
+use crate::eval::EvalError;
+use crate::explain::Explanation;
 use crate::impact::ImpactPlan;
 use crate::ir::{
     Definition, DefinitionName, DerivedClaim, IntentDecl, IntentName, Invariant, InvariantName,
     PredicateDecl, PredicateName, Program, Transformation, TransformationName,
 };
+use crate::propose::{Outcome, StagedDelta, SubjectSource, TracedProposal, Transition};
+use crate::state::State;
 use crate::validate::{ValidatedProgram, ValidationError};
 
 /// Index each item to the position of the *first* occurrence of its key,
@@ -108,6 +112,81 @@ impl PreparedProgram {
     /// validated at construction.
     pub fn validated(&self) -> ValidatedProgram<'_> {
         ValidatedProgram::from_validated(&self.program)
+    }
+
+    /// Propose `transition`: run the transformation it names against
+    /// `pre_state`, then check the invariants over the cases its change
+    /// could affect. `Ok(None)` when no transformation has that name.
+    pub fn propose(
+        &self,
+        transition: &Transition,
+        pre_state: &State,
+        subjects: &mut dyn SubjectSource,
+    ) -> Result<Option<Outcome>, EvalError> {
+        let Some(transformation) = self.transformation(&transition.transformation_name) else {
+            return Ok(None);
+        };
+        crate::propose::propose_with(
+            transformation,
+            transition,
+            pre_state,
+            &self.admission(),
+            subjects,
+        )
+        .map(Some)
+    }
+
+    /// [`Self::propose`], recording the execution trace. `None` when no
+    /// transformation has that name.
+    pub fn propose_with_trace(
+        &self,
+        transition: &Transition,
+        pre_state: &State,
+        subjects: &mut dyn SubjectSource,
+    ) -> Option<TracedProposal> {
+        let transformation = self.transformation(&transition.transformation_name)?;
+        Some(crate::propose::propose_with_trace(
+            transformation,
+            transition,
+            pre_state,
+            &self.program.invariants,
+            &self.program.definitions,
+            subjects,
+        ))
+    }
+
+    /// Run only the transformation body, stopping before the invariants;
+    /// [`crate::finish_staged_delta_with`] with [`Self::admission`]
+    /// completes it. `Ok(None)` when no transformation has that name.
+    pub fn stage_delta(
+        &self,
+        transition: &Transition,
+        pre_state: &State,
+        subjects: &mut dyn SubjectSource,
+    ) -> Result<Option<StagedDelta>, EvalError> {
+        let Some(transformation) = self.transformation(&transition.transformation_name) else {
+            return Ok(None);
+        };
+        crate::propose::propose_stage_delta(
+            transformation,
+            transition,
+            pre_state,
+            &self.program.definitions,
+            subjects,
+        )
+        .map(Some)
+    }
+
+    /// Why `transition` would or would not be admitted against
+    /// `pre_state`. An unknown transformation is a rejection in the
+    /// explanation itself.
+    pub fn explain(
+        &self,
+        transition: &Transition,
+        pre_state: &State,
+        subjects: &mut dyn SubjectSource,
+    ) -> Explanation {
+        crate::explain::explain(&self.program, transition, pre_state, subjects)
     }
 
     /// The transformation with this name, or `None`. O(1).

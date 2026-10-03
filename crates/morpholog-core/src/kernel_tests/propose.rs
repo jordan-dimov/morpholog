@@ -825,3 +825,23 @@ fn propose_and_propose_with_trace_produce_identical_outcomes() {
     };
     assert_eq!(outcome_a, outcome_b);
 }
+
+/// The public API looks a transformation up by the transition's name, so
+/// they cannot disagree there; the kernel still refuses a pair that does,
+/// so an audit row can never name an act that did not run.
+#[test]
+fn a_transition_naming_another_transformation_is_an_error() {
+    use ir_builder::*;
+    let t = transformation("act", params(&[]), vec![]);
+    let transition = Transition {
+        transformation_name: "some_other_name".into(),
+        args: vec![],
+        actor: Subject::from("tester"),
+    };
+    let err = propose(&t, &transition, &State::default(), &[], &[], &mut fresh())
+        .expect_err("a mismatched name is an error, never an outcome");
+    assert!(
+        matches!(&err, EvalError::TypeMismatch(msg) if msg.contains("some_other_name") && msg.contains("act")),
+        "{err:?}"
+    );
+}

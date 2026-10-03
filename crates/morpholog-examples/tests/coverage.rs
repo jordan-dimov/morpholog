@@ -63,7 +63,7 @@ fn parsed() -> morpholog_core::Program {
 #[test]
 fn empty_history_distinguishes_never_fired_from_always_on() {
     let program = parsed();
-    let report = CoverageTracker::new(&program).into_report();
+    let report = CoverageTracker::new(morpholog_test_support::validated(&program)).into_report();
     assert_eq!(report.transitions_replayed, 0);
     let verdict = |name: &str| {
         report
@@ -94,7 +94,7 @@ fn empty_history_distinguishes_never_fired_from_always_on() {
 #[test]
 fn firing_counts_first_and_last_accumulate_per_transition() {
     let program = parsed();
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
     let empty = State::from_claims(vec![]);
 
     // t1: an account opens. Flag's antecedent has nothing to bind.
@@ -158,7 +158,7 @@ fn firing_counts_first_and_last_accumulate_per_transition() {
 #[test]
 fn delta_pruning_skips_untouched_invariants() {
     let program = parsed();
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
     let empty = State::from_claims(vec![]);
     let binding_state = State::from_claims(vec![
         subject_claim("Account", &["a1"]),
@@ -191,7 +191,7 @@ fn delta_pruning_skips_untouched_invariants() {
 #[test]
 fn historical_only_transformations_are_flagged() {
     let program = parsed();
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
     let empty = State::from_claims(vec![]);
     tracker
         .observe(&empty, &empty, &delta(&[]), "t1", "renamed_long_ago")
@@ -225,7 +225,7 @@ transformation tick(slot, n):
 "#;
     let program = parse_program(source).expect("parses");
     program.validate().expect("validates");
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
 
     let count = |n: &str| ClaimInstance {
         predicate: "Count".into(),
@@ -282,7 +282,7 @@ transformation audit(slot):
 "#;
     let program = parse_program(source).expect("parses");
     program.validate().expect("validates");
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
     assert!(tracker.needs_pre_state());
 
     let count = ClaimInstance {
@@ -328,7 +328,7 @@ fn worked_example_shapes_classify_as_documented() {
         "../../../examples/09_carbon_credit_provenance/carbon_credit_provenance.morph"
     ))
     .expect("carbon parses");
-    let report = CoverageTracker::new(&carbon).into_report();
+    let report = CoverageTracker::new(morpholog_test_support::validated(&carbon)).into_report();
     let always_on: Vec<&str> = report
         .invariants
         .iter()
@@ -344,7 +344,7 @@ fn worked_example_shapes_classify_as_documented() {
         "../../../examples/10_trade_lifecycle/trade_lifecycle.morph"
     ))
     .expect("trade parses");
-    let report = CoverageTracker::new(&trade).into_report();
+    let report = CoverageTracker::new(morpholog_test_support::validated(&trade)).into_report();
     for inv in &report.invariants {
         if let Some(from) = &inv.from {
             assert_ne!(
@@ -364,7 +364,7 @@ fn worked_example_shapes_classify_as_documented() {
 #[test]
 fn the_prose_render_carries_verdicts_and_the_legend() {
     let program = parsed();
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
     // Refuse under an implication-shaped rule so every verdict appears:
     // ghosts_never_fire stays never-fired and the prohibition always-on.
     tracker.observe_rejection(Some("flagged_accounts_exist"), "flag_account", "r1");
@@ -385,7 +385,7 @@ fn the_prose_render_carries_verdicts_and_the_legend() {
 fn a_refusal_beats_fired_and_records_first_and_last_ids() {
     let program = parsed();
     let empty = State::from_claims(Vec::new());
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
     let s1 = State::from_claims(vec![
         subject_claim("Account", &["a1"]),
         subject_claim("Flag", &["a1"]),
@@ -420,7 +420,7 @@ fn a_refusal_beats_fired_and_records_first_and_last_ids() {
 #[test]
 fn an_always_on_prohibition_with_a_refusal_is_constrained() {
     let program = parsed();
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
     tracker.observe_rejection(Some("no_flag_without_account_ever"), "flag_account", "r1");
     let report = tracker.into_report();
     let inv = report
@@ -436,7 +436,7 @@ fn an_always_on_prohibition_with_a_refusal_is_constrained() {
 #[test]
 fn a_gate_refusal_counts_for_the_transformation_not_any_invariant() {
     let program = parsed();
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
     tracker.observe_rejection(None, "flag_account", "r1");
     let report = tracker.into_report();
     assert!(
@@ -459,7 +459,7 @@ fn a_gate_refusal_counts_for_the_transformation_not_any_invariant() {
 #[test]
 fn refusals_naming_undeclared_rules_and_transformations_surface_flagged() {
     let program = parsed();
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
     tracker.observe_rejection(Some("retired_rule"), "renamed_long_ago", "r1");
     let report = tracker.into_report();
 
@@ -503,7 +503,7 @@ transformation mark(slot):
 "#;
     let program = parse_program(source).expect("parses");
     program.validate().expect("validates");
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
 
     let empty = State::from_claims(vec![]);
     let s1 = State::from_claims(vec![subject_claim("Count", &["s1"])]);
@@ -556,11 +556,11 @@ invariant accounts_audited_when_flagged:
 "#;
     let program = parse_program(source).expect("parses");
     program.validate().expect("validates");
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
 
     // Zero history: the verdict must be never-fired, NOT always-on -
     // the implication is visible through the call.
-    let report = CoverageTracker::new(&program).into_report();
+    let report = CoverageTracker::new(morpholog_test_support::validated(&program)).into_report();
     assert_eq!(
         report.invariants[0].verdict,
         CoverageVerdict::NeverFired,
@@ -603,7 +603,7 @@ invariant tautological_guard:
 "#;
     let program = parse_program(source).expect("parses");
     program.validate().expect("validates");
-    let report = CoverageTracker::new(&program).into_report();
+    let report = CoverageTracker::new(morpholog_test_support::validated(&program)).into_report();
     assert_eq!(
         report.invariants[0].verdict,
         CoverageVerdict::NeverFired,
@@ -647,7 +647,7 @@ transformation rate(case_id, level):
     // A level-2 rating matches the definition body's raw antecedent
     // (RiskLevel(c, level) with level free) but NOT the call
     // reviewed_at(3) - the invariant has nothing at stake yet.
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
     let s1 = State::from_claims(vec![risk("case_1", "2")]);
     tracker
         .observe(&s1, &empty, &delta(&["RiskLevel"]), "t1", "rate")
@@ -665,7 +665,7 @@ transformation rate(case_id, level):
     );
 
     // A level-3 rating is what the call asks about: fired.
-    let mut tracker = CoverageTracker::new(&program);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
     let s1 = State::from_claims(vec![risk("case_1", "3")]);
     tracker
         .observe(&s1, &empty, &delta(&["RiskLevel"]), "t1", "rate")
@@ -715,7 +715,7 @@ transformation rate(case_id, level):
     let empty = State::from_claims(vec![]);
 
     let verdict_for = |level: &str| {
-        let mut tracker = CoverageTracker::new(&program);
+        let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
         let s1 = State::from_claims(vec![risk("case_1", level)]);
         tracker
             .observe(&s1, &empty, &delta(&["RiskLevel"]), "t1", "rate")

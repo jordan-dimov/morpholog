@@ -35,6 +35,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # programmes. The all-examples check iterates the generated registry
 # instead of re-walking examples/ with its own heuristic.
 morpholog-examples = { path = "../morpholog-examples" }
+morpholog-test-support = { path = "../morpholog-test-support" }
 sqlx = { workspace = true }
 tempfile = "3"
 

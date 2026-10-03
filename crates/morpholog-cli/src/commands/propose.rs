@@ -67,7 +67,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                 Ok(outcome) => outcome,
                 Err(err) => return report_request_failure(classify_pg_error(err)),
             };
-        let explanation = refused.explanation(program.prepared().program(), &transition);
+        let explanation = refused.explanation(program.prepared(), &transition);
         match (&refused.outcome, explanation) {
             (
                 PgProposalOutcome::Rejected {
@@ -500,10 +500,8 @@ pub(crate) async fn propose_row_outcome(
                 witness,
             },
             Some(explanation),
-        ) = (
-            &refused.outcome,
-            refused.explanation(prepared.program(), &transition),
-        ) {
+        ) = (&refused.outcome, refused.explanation(prepared, &transition))
+        {
             return serde_json::to_value(envelopes::RejectedWithExplanation::new(
                 reason,
                 rule.as_deref(),

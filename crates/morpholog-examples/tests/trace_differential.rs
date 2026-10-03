@@ -11,9 +11,10 @@
 
 mod common;
 
-use morpholog_core::{Stmt, TraceEntry, TracedProposal, propose, propose_with_trace};
+use morpholog_core::{Stmt, TraceEntry, TracedProposal};
 use morpholog_test_support::differential::{same_subjects, sample_args, sample_state};
 use morpholog_test_support::test_transition;
+use morpholog_test_support::{propose, propose_with_trace};
 
 /// Whether the transformation loops. `for` is the only statement
 /// with a nested body, so any nested loop's outermost ancestor is
@@ -57,22 +58,9 @@ fn traced_and_untraced_execution_are_equivalent() {
                 let state = sample_state(&program, 2, salt);
 
                 let transition = test_transition(t, args);
-                let untraced = propose(
-                    t,
-                    &transition,
-                    &state,
-                    &program.invariants,
-                    &program.definitions,
-                    &mut same_subjects(),
-                );
-                let traced = propose_with_trace(
-                    t,
-                    &transition,
-                    &state,
-                    &program.invariants,
-                    &program.definitions,
-                    &mut same_subjects(),
-                );
+                let untraced = propose(&program, &transition, &state, &mut same_subjects());
+                let traced =
+                    propose_with_trace(&program, &transition, &state, &mut same_subjects());
                 let traced_as_result = match traced {
                     TracedProposal::Completed { outcome, trace } => {
                         for_entries_seen += count_for_entries(&trace);
@@ -145,11 +133,9 @@ fn the_same_subjects_give_the_same_execution_trace_included() {
         format!(
             "{:?}",
             propose_with_trace(
-                &t,
+                &p,
                 &transition,
                 &morpholog_core::State::default(),
-                &p.invariants,
-                &p.definitions,
                 &mut same_subjects(),
             )
         )

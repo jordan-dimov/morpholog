@@ -263,9 +263,8 @@ fn decision_admits_only_with_matching_standing() {
     // With no bank standing, admit_debt_service_revenue is rejected. The
     // trace shows why: the figure exists (first require held) but the
     // standing does not (second require rejected).
-    use morpholog_core::{
-        RequireOutcome, Subject, TraceEntry, TracedProposal, Transition, propose_with_trace,
-    };
+    use morpholog_core::{RequireOutcome, Subject, TraceEntry, TracedProposal, Transition};
+    use morpholog_test_support::propose_with_trace;
     let t = verified_revenue::admit_debt_service_revenue();
     let transition = Transition {
         transformation_name: t.name.clone(),
@@ -279,11 +278,9 @@ fn decision_admits_only_with_matching_standing() {
         actor: Subject::from("test_actor"),
     };
     let TracedProposal::Completed { outcome, trace } = propose_with_trace(
-        &t,
+        &verified_revenue::program(),
         &transition,
         &pre,
-        &verified_revenue::all_invariants(),
-        &verified_revenue::definitions(),
         &mut morpholog_test_support::fresh(),
     ) else {
         panic!("expected Completed");

@@ -10,16 +10,14 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, dec, subj};
-use morpholog_core::{
-    ArithOp, DerivedClaim, DerivedValue, EvalValue, Prop, State, Term, ValueExpr, enumerate_derived,
-};
+use morpholog_core::{EvalValue, State};
 use morpholog_examples::double_entry_ledger;
+use morpholog_test_support::enumerate_derived;
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
     EX.get_or_init(|| Example::new(&double_entry_ledger::program()))
 }
-use rust_decimal::Decimal;
 
 /// Helper: post one journal entry against the ledger.
 fn post(
@@ -69,8 +67,8 @@ fn small_ledger_state() -> State {
 fn trial_balance_over_simple_ledger_enumerates_one_row_per_account() {
     let state = small_ledger_state();
     let trial_balance = double_entry_ledger::trial_balance_row();
-    let rows =
-        enumerate_derived(&trial_balance, &state, &[]).expect("enumerate_derived should not error");
+    let rows = enumerate_derived(&double_entry_ledger::program(), &trial_balance, &state)
+        .expect("enumerate_derived should not error");
 
     assert_eq!(rows.len(), 3, "one row per distinct account");
 
@@ -93,8 +91,8 @@ fn trial_balance_returns_deterministic_order() {
     let state = small_ledger_state();
     let trial_balance = double_entry_ledger::trial_balance_row();
 
-    let a = enumerate_derived(&trial_balance, &state, &[]).unwrap();
-    let b = enumerate_derived(&trial_balance, &state, &[]).unwrap();
+    let a = enumerate_derived(&double_entry_ledger::program(), &trial_balance, &state).unwrap();
+    let b = enumerate_derived(&double_entry_ledger::program(), &trial_balance, &state).unwrap();
 
     // Two back-to-back evaluations must return rows in the same order.
     assert_eq!(a, b, "enumerate_derived must be deterministic across runs");
@@ -123,9 +121,9 @@ fn derived_claims_do_not_pollute_admitted_state() {
     let snapshot = state.clone();
 
     let _rows = enumerate_derived(
+        &double_entry_ledger::program(),
         &double_entry_ledger::trial_balance_row(),
         &state,
-        &double_entry_ledger::definitions(),
     )
     .expect("enumerate_derived should not error");
 
@@ -145,77 +143,14 @@ fn derived_claims_do_not_pollute_admitted_state() {
 fn enumerate_derived_on_empty_state_is_empty() {
     let empty = State::default();
     let rows = enumerate_derived(
+        &double_entry_ledger::program(),
         &double_entry_ledger::trial_balance_row(),
         &empty,
-        &double_entry_ledger::definitions(),
     )
     .unwrap();
     assert!(
         rows.is_empty(),
         "empty state means empty domain means no derived rows"
-    );
-}
-
-#[test]
-fn expr_sub_subtracts_decimals_and_rejects_other_types() {
-    // Subtract two literal decimals over a one-claim domain, with no
-    // ledger fixture.
-    use morpholog_core::Value;
-
-    let state = State::from_claims(vec![claim_instance("Tag", &[subj("only")])]);
-
-    let derived_decimal_ok = DerivedClaim {
-        predicate: "DecimalSub".into(),
-        keys: vec!["k".into()],
-        values: vec![DerivedValue {
-            name: "result".into(),
-            expr: ValueExpr::Arith {
-                op: ArithOp::Sub,
-                left: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-                    "100".to_string(),
-                )))),
-                right: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-                    "30".to_string(),
-                )))),
-            },
-        }],
-        domain: Prop::Claim {
-            predicate: "Tag".into(),
-            args: vec![Term::Var("k".into())],
-        },
-    };
-
-    let rows = enumerate_derived(&derived_decimal_ok, &state, &[]).unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].args[1], EvalValue::Decimal(Decimal::new(70, 0)));
-
-    // Subtracting a subject from a decimal should be a TypeMismatch.
-    let derived_type_error = DerivedClaim {
-        predicate: "TypeError".into(),
-        keys: vec!["k".into()],
-        values: vec![DerivedValue {
-            name: "result".into(),
-            expr: ValueExpr::Arith {
-                op: ArithOp::Sub,
-                left: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-                    "1".to_string(),
-                )))),
-                right: Box::new(ValueExpr::Term(Term::Literal(Value::Subject(
-                    "not_a_number".into(),
-                )))),
-            },
-        }],
-        domain: Prop::Claim {
-            predicate: "Tag".into(),
-            args: vec![Term::Var("k".into())],
-        },
-    };
-
-    let err = enumerate_derived(&derived_type_error, &state, &[]).unwrap_err();
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("no arithmetic rule for decimal Sub subject"),
-        "the no-rule error names both operand kinds; got: {msg}"
     );
 }
 

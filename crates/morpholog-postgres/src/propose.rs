@@ -9,7 +9,6 @@ use morpholog_core::{
     Invariant, InvariantName, Outcome, PredicateName, PreparedProgram, ReadFilter, ReadPlan,
     RejectionReason, RuleName, StagedDelta, State, Subject, SubjectSource, TraceEntry,
     TracedProposal, Transformation, TransformationName, Transition, WitnessBinding, execution,
-    propose_stage_delta, propose_with, propose_with_trace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -91,6 +90,14 @@ pub async fn propose_against_pg(
     )
     .await?;
     Ok(run.outcome)
+}
+
+/// The prepared programme's answer for `transition`, whose transformation
+/// was already resolved by name: `None` is an unknown transformation.
+pub(crate) fn named<T>(answer: Option<T>, transition: &Transition) -> Result<T, PgError> {
+    answer.ok_or_else(|| PgError::UnknownTransformation {
+        name: transition.transformation_name.clone(),
+    })
 }
 
 /// Look up the named transformation and the programme's invariants and
@@ -192,13 +199,12 @@ impl RejectionStateOutcome {
     /// name subjects the refusing execution did not draw.
     pub fn explanation(
         &self,
-        program: &morpholog_core::Program,
+        prepared: &PreparedProgram,
         transition: &Transition,
     ) -> Option<morpholog_core::Explanation> {
         let state = self.rejection_state.as_ref()?;
         matches!(self.outcome, PgProposalOutcome::Rejected { .. }).then(|| {
-            morpholog_core::explain(
-                program,
+            prepared.explain(
                 transition,
                 state,
                 &mut self.drawn_subjects.clone().into_iter(),
@@ -295,8 +301,8 @@ pub(crate) async fn propose_against_pg_run(
     timed: bool,
 ) -> Result<ProposalRun, PgError> {
     let admission = &prepared.admission();
-    let invariants = admission.invariants;
-    let definitions = admission.definitions;
+    let invariants = admission.invariants();
+    let definitions = admission.definitions();
     let clock = timed.then(std::time::Instant::now);
     let elapsed = |clock: Option<std::time::Instant>| {
         clock.map_or(std::time::Duration::ZERO, |c| c.elapsed())
@@ -320,18 +326,17 @@ pub(crate) async fn propose_against_pg_run(
     };
     let (decided, rejection_state) = match route {
         Route::Interpreted => {
-            let outcome =
-                propose_with(transformation, transition, &state, admission, &mut subjects)?;
+            let outcome = named(
+                prepared.propose(transition, &state, &mut subjects)?,
+                transition,
+            )?;
             let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
             (Decided::Kernel(outcome), rejection_state)
         }
         Route::Compiled(_) | Route::Mixed(_) => {
-            let staged = propose_stage_delta(
-                transformation,
+            let staged = named(
+                prepared.stage_delta(transition, &state, &mut subjects)?,
                 transition,
-                &state,
-                definitions,
-                &mut subjects,
             )?;
             match staged {
                 StagedDelta::Rejected { reason } => {
@@ -564,14 +569,10 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
         Reads::BodyAndInvariants,
     );
     let state = load_state(&mut tx, &scope).await?;
-    let traced = propose_with_trace(
-        transformation,
+    let traced = named(
+        prepared.propose_with_trace(transition, &state, &mut crate::propose::runtime_subjects()),
         transition,
-        &state,
-        invariants,
-        definitions,
-        &mut crate::propose::runtime_subjects(),
-    );
+    )?;
     match traced {
         TracedProposal::Completed { outcome, trace } => {
             let outcome = finalise_outcome(

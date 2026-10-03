@@ -11,10 +11,9 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, dec, subj};
-use morpholog_core::{
-    ClaimInstance, EvalValue, Outcome, Prop, State, Stmt, Subject, ValueExpr, eval_invariant,
-};
+use morpholog_core::{ClaimInstance, EvalValue, Outcome, Prop, State, Stmt, Subject, ValueExpr};
 use morpholog_examples::settlement_netting;
+use morpholog_test_support::eval_invariant;
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
@@ -137,7 +136,8 @@ fn netting_state(amount: i64) -> State {
 fn net_amount_equals_lines_holds_when_amount_matches() {
     let state = netting_state(100);
     let inv = settlement_netting::net_amount_equals_lines();
-    let result = eval_invariant(&inv, &state, None, &[]).expect("evaluation should not error");
+    let result = eval_invariant(&settlement_netting::program(), &inv, &state, None)
+        .expect("evaluation should not error");
     assert!(result, "invariant should hold for amount = 60 + 40 = 100");
 }
 
@@ -145,7 +145,8 @@ fn net_amount_equals_lines_holds_when_amount_matches() {
 fn net_amount_equals_lines_fails_when_amount_mismatches() {
     let state = netting_state(101);
     let inv = settlement_netting::net_amount_equals_lines();
-    let result = eval_invariant(&inv, &state, None, &[]).expect("evaluation should not error");
+    let result = eval_invariant(&settlement_netting::program(), &inv, &state, None)
+        .expect("evaluation should not error");
     assert!(
         !result,
         "invariant should fail for amount = 101 vs lines = 100"
@@ -218,9 +219,8 @@ fn propose_rejects_when_line_already_netted() {
     // The single require is `forall(line in lines): and(approved, between,
     // not(Netted(line)))`. With Netted(l1) admitted, the failure report should
     // drill through the forall and the And to the failing `not(Netted(line))`.
-    use morpholog_core::{
-        RequireOutcome, TraceEntry, TracedProposal, Transition, propose_with_trace,
-    };
+    use morpholog_core::{RequireOutcome, TraceEntry, TracedProposal, Transition};
+    use morpholog_test_support::propose_with_trace;
     let extra = vec![claim_instance("Netted", &[subj("l1")])];
     let pre = netting_pre_state(extra);
     let t = settlement_netting::create_net_settlement();
@@ -230,11 +230,9 @@ fn propose_rejects_when_line_already_netted() {
         actor: Subject::from("test_actor"),
     };
     let TracedProposal::Completed { outcome, trace } = propose_with_trace(
-        &t,
+        &settlement_netting::program(),
         &transition,
         &pre,
-        &settlement_netting::all_invariants(),
-        &settlement_netting::definitions(),
         &mut morpholog_test_support::fresh(),
     ) else {
         panic!("expected Completed");
@@ -284,38 +282,25 @@ fn propose_rejects_when_candidate_state_violates_no_double_netting() {
     );
 }
 
-// A Transition's transformation_name must match the Transformation it is
-// evaluated against; otherwise the audit row would name the wrong one. The
-// mismatch is an EvalError, so the adapter rolls back.
+// A transition names the transformation it runs, and the programme looks
+// it up by that name, so an audit row can never name an act that did not
+// run. A name the programme does not declare runs nothing.
 #[test]
-fn propose_rejects_transition_name_mismatch() {
-    use morpholog_core::{EvalError, Transition, propose};
+fn a_transition_naming_no_transformation_runs_nothing() {
+    use morpholog_core::{PreparedProgram, Transition};
 
-    let t = settlement_netting::create_net_settlement();
-    let pre = netting_pre_state(vec![]);
+    let prepared = PreparedProgram::new(settlement_netting::program()).unwrap();
     let transition = Transition {
         transformation_name: "some_other_name".into(),
         args: netting_args(),
         actor: common::test_actor(),
     };
-
-    let err = propose(
-        &t,
-        &transition,
-        &pre,
-        &settlement_netting::all_invariants(),
-        &settlement_netting::definitions(),
-        &mut morpholog_test_support::fresh(),
-    )
-    .expect_err("name mismatch should be an EvalError, not Rejected");
-
-    match err {
-        EvalError::TypeMismatch(msg) => {
-            assert!(
-                msg.contains("some_other_name") && msg.contains(t.name.as_str()),
-                "error message should name both sides: got `{msg}`"
-            );
-        }
-        other => panic!("expected TypeMismatch, got {other:?}"),
-    }
+    let outcome = prepared
+        .propose(
+            &transition,
+            &netting_pre_state(vec![]),
+            &mut morpholog_test_support::fresh(),
+        )
+        .expect("an unknown name is not an evaluation error");
+    assert!(outcome.is_none(), "{outcome:?}");
 }

@@ -6,9 +6,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::ir_builder::{dec, eq, params, require, round, term, transformation};
-use morpholog_core::{Outcome, Prop, State};
-use morpholog_test_support::propose_with_test_actor;
+use crate::ir_builder::{dec, eq, params, require, round, term, transformation};
+use crate::kernel_tests::support::propose_with_test_actor;
+use crate::{Outcome, Prop, State};
 
 fn holds(prop: Prop) {
     let t = transformation("probe", params(&[]), vec![require(prop)]);
@@ -33,10 +33,10 @@ fn refuses(prop: Prop, fragments: &[&str]) {
     }
 }
 
-fn negated(value: &str) -> morpholog_core::ValueExpr {
+fn negated(value: &str) -> crate::ValueExpr {
     // The surface has no signed literals; a negative arrives as 0 - x,
     // exactly as a rule would spell it.
-    morpholog_core::ir_builder::sub(term(dec("0")), term(dec(value)))
+    crate::ir_builder::sub(term(dec("0")), term(dec(value)))
 }
 
 #[test]
@@ -141,7 +141,7 @@ fn a_result_outside_the_decimal_range_is_a_named_error_not_a_panic() {
 
 #[test]
 fn a_literal_zero_quantum_is_refused_at_validation() {
-    use morpholog_core::ir_builder::{claim, implies, invariant, predicate, program, var};
+    use crate::ir_builder::{claim, implies, invariant, predicate, program, var};
     let p = program("q_zero")
         .predicates(vec![predicate("P").decimal("a").build()])
         .invariants(vec![invariant(
@@ -165,7 +165,7 @@ fn a_literal_zero_quantum_is_refused_at_validation() {
 
 #[test]
 fn a_variable_quantum_passes_validation_and_is_refused_at_runtime() {
-    use morpholog_core::ir_builder::{invariant, params, program, transformation, var};
+    use crate::ir_builder::{invariant, params, program, transformation, var};
     // Statically fine: the quantum arrives through a parameter.
     let t = transformation(
         "probe",
@@ -183,7 +183,7 @@ fn a_variable_quantum_passes_validation_and_is_refused_at_runtime() {
     // At runtime, a zero arriving through the variable is the backstop.
     let err = propose_with_test_actor(
         &t,
-        vec![morpholog_test_support::dec(0)],
+        vec![crate::kernel_tests::support::dec(0)],
         &State::default(),
         &[],
         &[],
@@ -197,7 +197,7 @@ fn a_variable_quantum_passes_validation_and_is_refused_at_runtime() {
 
 #[test]
 fn an_any_declared_slot_refines_through_round() {
-    use morpholog_core::ir_builder::{claim, implies, invariant, predicate, program, var};
+    use crate::ir_builder::{claim, implies, invariant, predicate, program, var};
     // Any is unconstrained and refines at a concrete use - round must
     // follow the checker's doctrine, not reject the flow.
     let p = program("any_flow")
@@ -218,10 +218,7 @@ fn an_any_declared_slot_refines_through_round() {
 fn non_decimal_operand_is_a_type_error() {
     refuses(
         eq(
-            round(
-                term(morpholog_core::ir_builder::qty("5", "USD")),
-                term(dec("0.01")),
-            ),
+            round(term(crate::ir_builder::qty("5", "USD")), term(dec("0.01"))),
             term(dec("5")),
         ),
         &["round is defined on decimals"],

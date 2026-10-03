@@ -7,14 +7,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::ir_builder::{
+use crate::ir_builder::{
     and, claim, defined, definition, eq, invariant, params, predicate, program, require, term,
     transformation, var,
 };
-use morpholog_core::{
-    EvalError, State, Subject, Transition, ValidationError, propose, resolve_defined_calls,
-};
-use morpholog_test_support::{dec, subj, test_transition};
+use crate::kernel_tests::support::{dec, subj, test_transition};
+use crate::propose::propose;
+use crate::{EvalError, State, Subject, Transition, ValidationError, resolve_defined_calls};
 
 // Hygiene is the contract: a definition body sees ONLY its parameters.
 // A body smuggling a reference to a caller-scope name (never possible
@@ -42,7 +41,7 @@ fn a_body_referencing_caller_scope_errors_instead_of_capturing() {
         &State::default(),
         &[],
         &[leaky],
-        &mut morpholog_test_support::fresh(),
+        &mut crate::kernel_tests::support::fresh(),
     )
     .expect_err("the body's free name must error, not capture");
     assert!(
@@ -68,7 +67,7 @@ fn a_call_without_its_definition_is_a_distinct_kernel_error() {
         &State::default(),
         &[],
         &[],
-        &mut morpholog_test_support::fresh(),
+        &mut crate::kernel_tests::support::fresh(),
     )
     .expect_err("a dangling call must error");
     assert!(
@@ -122,14 +121,14 @@ fn resolve_rewrites_claim_shaped_calls_and_the_programme_runs() {
             transformation(
                 "put",
                 params(&["x"]),
-                vec![morpholog_core::ir_builder::assert_("Thing", vec![var("x")])],
+                vec![crate::ir_builder::assert_("Thing", vec![var("x")])],
             ),
             transformation(
                 "see",
                 params(&["x"]),
                 vec![
                     require(and(vec![claim("thing_exists", vec![var("x")])])),
-                    morpholog_core::ir_builder::assert_("Seen", vec![var("x")]),
+                    crate::ir_builder::assert_("Seen", vec![var("x")]),
                 ],
             ),
         ])
@@ -144,14 +143,14 @@ fn resolve_rewrites_claim_shaped_calls_and_the_programme_runs() {
         &State::default(),
         &p.invariants,
         &p.definitions,
-        &mut morpholog_test_support::fresh(),
+        &mut crate::kernel_tests::support::fresh(),
     )
     .unwrap()
     {
-        morpholog_core::Outcome::Accepted {
+        crate::Outcome::Accepted {
             candidate_state, ..
         } => candidate_state,
-        other @ morpholog_core::Outcome::Rejected { .. } => {
+        other @ crate::Outcome::Rejected { .. } => {
             panic!("put should commit, got {other:?}")
         }
     };
@@ -162,10 +161,10 @@ fn resolve_rewrites_claim_shaped_calls_and_the_programme_runs() {
         &state,
         &p.invariants,
         &p.definitions,
-        &mut morpholog_test_support::fresh(),
+        &mut crate::kernel_tests::support::fresh(),
     )
     .unwrap();
-    assert!(matches!(outcome, morpholog_core::Outcome::Accepted { .. }));
+    assert!(matches!(outcome, crate::Outcome::Accepted { .. }));
 }
 
 // The depth budget charges a call its callee's expanded depth: a chain
@@ -183,7 +182,7 @@ fn a_definition_chain_expanding_past_the_depth_limit_is_refused() {
         definitions.push(definition(
             &format!("wrap_{i}"),
             params(&["x"]),
-            morpholog_core::ir_builder::not(defined(&format!("wrap_{}", i - 1), vec![var("x")])),
+            crate::ir_builder::not(defined(&format!("wrap_{}", i - 1), vec![var("x")])),
         ));
     }
     let p = program("deep_chain")
@@ -217,12 +216,12 @@ fn actor_as_a_call_argument_resolves_at_the_call_site() {
         params(&[]),
         vec![require(defined(
             "may_act",
-            vec![morpholog_core::ir_builder::actor()],
+            vec![crate::ir_builder::actor()],
         ))],
     );
-    let granted = State::from_claims(vec![morpholog_core::ClaimInstance {
+    let granted = State::from_claims(vec![crate::ClaimInstance {
         predicate: "MayAct".into(),
-        args: vec![morpholog_core::EvalValue::Subject(Subject::from("anna"))],
+        args: vec![crate::EvalValue::Subject(Subject::from("anna"))],
     }]);
     let allowed = propose(
         &t,
@@ -234,10 +233,10 @@ fn actor_as_a_call_argument_resolves_at_the_call_site() {
         &granted,
         &[],
         std::slice::from_ref(&may_act),
-        &mut morpholog_test_support::fresh(),
+        &mut crate::kernel_tests::support::fresh(),
     )
     .unwrap();
-    assert!(matches!(allowed, morpholog_core::Outcome::Accepted { .. }));
+    assert!(matches!(allowed, crate::Outcome::Accepted { .. }));
     let refused = propose(
         &t,
         &Transition {
@@ -248,8 +247,8 @@ fn actor_as_a_call_argument_resolves_at_the_call_site() {
         &granted,
         &[],
         &[may_act],
-        &mut morpholog_test_support::fresh(),
+        &mut crate::kernel_tests::support::fresh(),
     )
     .unwrap();
-    assert!(matches!(refused, morpholog_core::Outcome::Rejected { .. }));
+    assert!(matches!(refused, crate::Outcome::Rejected { .. }));
 }

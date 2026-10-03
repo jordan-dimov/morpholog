@@ -7,11 +7,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::ir_builder::{
+use crate::ir_builder::{
     date, dec, eq, params, period_index, period_start_of, require, span, term, transformation,
 };
-use morpholog_core::{Outcome, Prop, State};
-use morpholog_test_support::propose_with_test_actor;
+use crate::kernel_tests::support::propose_with_test_actor;
+use crate::{Outcome, Prop, State};
 
 fn holds(prop: Prop) {
     let t = transformation("probe", params(&[]), vec![require(prop)]);
@@ -130,7 +130,7 @@ fn an_index_whose_boundary_leaves_the_calendar_is_refused_not_clamped() {
 
 #[test]
 fn a_literal_zero_span_is_refused_at_validation_by_name() {
-    use morpholog_core::ir_builder::{invariant, program};
+    use crate::ir_builder::{invariant, program};
     let p = program("zero_span")
         .invariants(vec![invariant(
             "z",
@@ -150,7 +150,7 @@ fn a_literal_zero_span_is_refused_at_validation_by_name() {
 
 #[test]
 fn a_zero_span_through_a_variable_is_refused_at_evaluation_by_name() {
-    use morpholog_core::ir_builder::{let_, var};
+    use crate::ir_builder::{let_, var};
     let t = transformation(
         "probe",
         params(&[]),
@@ -173,7 +173,7 @@ fn a_zero_span_through_a_variable_is_refused_at_evaluation_by_name() {
 
 #[test]
 fn a_literal_fractional_index_is_refused_at_validation_by_name() {
-    use morpholog_core::ir_builder::{invariant, program};
+    use crate::ir_builder::{invariant, program};
     let p = program("fractional")
         .invariants(vec![invariant(
             "f",
@@ -199,7 +199,7 @@ fn a_literal_fractional_index_is_refused_at_validation_by_name() {
 
 #[test]
 fn a_computed_fractional_index_is_refused_at_evaluation_by_name() {
-    use morpholog_core::ir_builder::{div, let_, var};
+    use crate::ir_builder::{div, let_, var};
     // The fraction arrives computed, so the literal check cannot see
     // it; the runtime backstop names the refusal.
     let t = transformation(
@@ -224,8 +224,8 @@ fn a_computed_fractional_index_is_refused_at_evaluation_by_name() {
 
 #[test]
 fn every_slot_kind_mismatch_is_refused() {
-    use morpholog_core::ValueExpr;
-    use morpholog_core::ir_builder::{invariant, program};
+    use crate::ValueExpr;
+    use crate::ir_builder::{invariant, program};
     // One wrong slot per row: decimal anchor, date span, date index -
     // the whole (Date, CalendarSpan, Decimal) contract.
     let cases: Vec<(&str, ValueExpr)> = vec![
@@ -265,8 +265,8 @@ fn every_slot_kind_mismatch_is_refused() {
 
 #[test]
 fn a_bare_variable_in_each_slot_refines_to_its_kind() {
-    use morpholog_core::ir_builder::{assert_, let_, predicate, program, var};
-    use morpholog_core::{ParamKind, PredicateArgKind, transformation_param_kinds};
+    use crate::ir_builder::{assert_, let_, predicate, program, var};
+    use crate::{ParamKind, PredicateArgKind, transformation_param_kinds};
     // The anchor slot refines toward Date, the index slot toward
     // Decimal - and the RESULT is a Date, so the admitted claim's
     // declaration agrees with the computed value.
@@ -305,7 +305,7 @@ fn a_bare_variable_in_each_slot_refines_to_its_kind() {
 
 #[test]
 fn a_parameter_refined_by_the_span_slot_cannot_escape_the_expression() {
-    use morpholog_core::ir_builder::{assert_, let_, predicate, program, var};
+    use crate::ir_builder::{assert_, let_, predicate, program, var};
     let p = program("escapes")
         .predicates(vec![predicate("Out").date("starts_on").build()])
         .transformations(vec![transformation(
@@ -361,7 +361,7 @@ fn the_round_trip_refuses_in_the_clipped_lowermost_period() {
 
 #[test]
 fn the_boundary_form_round_trips_through_the_formatter() {
-    use morpholog_core::ir_builder::{invariant, program};
+    use crate::ir_builder::{invariant, program};
     let p = program("fmt")
         .invariants(vec![invariant(
             "start",
@@ -371,7 +371,7 @@ fn the_boundary_form_round_trips_through_the_formatter() {
             ),
         )])
         .build();
-    let rendered = morpholog_core::format::format_program(&p);
+    let rendered = crate::format::format_program(&p);
     assert!(
         rendered.contains("period_start_of(@2000-04-01, span(P1Y), 26)"),
         "{rendered}"

@@ -190,7 +190,8 @@ pub struct CandidateScorer<'p> {
 }
 
 impl<'p> CandidateScorer<'p> {
-    pub fn new(program: &'p Program) -> Result<Self, ScoreError> {
+    pub fn new(program: crate::ValidatedProgram<'p>) -> Result<Self, ScoreError> {
+        let program = program.as_program();
         let pre = invariants_using_pre(program);
         if !pre.is_empty() {
             return Err(ScoreError::PreUnsupported(pre));
@@ -323,8 +324,13 @@ impl<'p> CandidateScorer<'p> {
 
 #[cfg(test)]
 mod tests {
+    /// The scorer over a test programme, which must validate.
+    fn scorer(program: &Program) -> Result<CandidateScorer<'_>, ScoreError> {
+        CandidateScorer::new(program.validated().expect("a test programme must validate"))
+    }
+
     use super::*;
-    use crate::ir_builder::{claim, exists, invariant, not, pre, var};
+    use crate::ir_builder::{claim, exists, invariant, not, pre, predicate, var};
     use crate::state::{ClaimInstance, EvalValue};
     use rust_decimal::Decimal;
 
@@ -338,7 +344,10 @@ mod tests {
     fn program_with(invariants: Vec<Invariant>) -> Program {
         Program {
             name: "candidate".into(),
-            predicates: vec![],
+            predicates: vec![
+                predicate("Flagged").any("x").build(),
+                predicate("Required").any("x").build(),
+            ],
             intents: vec![],
             definitions: vec![],
             invariants,
@@ -380,7 +389,7 @@ mod tests {
     #[test]
     fn fresh_violation_counted_once_then_again_when_it_reappears() {
         let program = no_flag_program();
-        let mut scorer = CandidateScorer::new(&program).unwrap();
+        let mut scorer = scorer(&program).unwrap();
         // holds -> fails -> fails -> holds -> fails: only the two
         // introducing transitions (t1, t4) count, never the inherited t2.
         step(&mut scorer, &empty(), &flagged(), "t1");
@@ -399,7 +408,7 @@ mod tests {
     #[test]
     fn a_split_attributes_each_violation_to_its_introducing_slice() {
         let program = no_flag_program();
-        let mut scorer = CandidateScorer::new(&program).unwrap();
+        let mut scorer = scorer(&program).unwrap();
         // t1 introduces a violation in the train slice; t2 (inherited)
         // never counts; t3 recovers; t4 introduces one in the test
         // slice. The whole-history totals cover both slices.
@@ -427,7 +436,7 @@ mod tests {
     #[test]
     fn an_unsplit_report_serializes_without_a_split_field() {
         let program = no_flag_program();
-        let report = CandidateScorer::new(&program).unwrap().into_report();
+        let report = scorer(&program).unwrap().into_report();
         let value = serde_json::to_value(&report).unwrap();
         assert!(
             value.get("split").is_none(),
@@ -438,7 +447,7 @@ mod tests {
     #[test]
     fn a_candidate_that_always_holds_refuses_nothing() {
         let program = no_flag_program();
-        let mut scorer = CandidateScorer::new(&program).unwrap();
+        let mut scorer = scorer(&program).unwrap();
         step(&mut scorer, &empty(), &empty(), "t1");
         step(&mut scorer, &empty(), &empty(), "t2");
         let report = scorer.into_report();
@@ -453,7 +462,7 @@ mod tests {
             predicate: "Other".into(),
             args: vec![EvalValue::Decimal(Decimal::new(9, 0))],
         }]);
-        let mut scorer = CandidateScorer::new(&program).unwrap();
+        let mut scorer = scorer(&program).unwrap();
         step(&mut scorer, &empty(), &other, "t1");
         let report = scorer.into_report();
         assert_eq!(report.invariants[0].would_refuse, 0);
@@ -467,7 +476,7 @@ mod tests {
         );
         let program = program_with(vec![inv]);
         assert!(invariants_using_pre(&program).contains(&"UsesPre".to_string()));
-        match CandidateScorer::new(&program) {
+        match scorer(&program) {
             Err(ScoreError::PreUnsupported(names)) => assert_eq!(names, vec!["UsesPre"]),
             Err(e) => panic!("expected PreUnsupported, got {e:?}"),
             Ok(_) => panic!("expected PreUnsupported, got a scorer"),
@@ -483,14 +492,10 @@ mod tests {
             "NeedsRequired",
             exists("x", claim("Required", vec![var("x")])),
         );
-        let violated = CandidateScorer::new(&program_with(vec![needs]))
-            .unwrap()
-            .into_report();
+        let violated = scorer(&program_with(vec![needs])).unwrap().into_report();
         assert!(!violated.invariants[0].initially_holds);
 
-        let vacuous = CandidateScorer::new(&no_flag_program())
-            .unwrap()
-            .into_report();
+        let vacuous = scorer(&no_flag_program()).unwrap().into_report();
         assert!(vacuous.invariants[0].initially_holds);
     }
 
@@ -522,14 +527,12 @@ mod tests {
     #[test]
     fn report_carries_version_semantics_and_a_stable_hash() {
         let program = no_flag_program();
-        let report = CandidateScorer::new(&program).unwrap().into_report();
+        let report = scorer(&program).unwrap().into_report();
         assert_eq!(report.score_format_version, SCORE_FORMAT_VERSION);
         assert_eq!(report.semantics, "case_bound_admission_v3");
         assert!(report.program_hash.starts_with("sha256:"));
         // Stable: the same programme hashes identically.
-        let again = CandidateScorer::new(&no_flag_program())
-            .unwrap()
-            .into_report();
+        let again = scorer(&no_flag_program()).unwrap().into_report();
         assert_eq!(report.program_hash, again.program_hash);
     }
 }

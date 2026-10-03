@@ -8,11 +8,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::ir_builder::{
+use crate::ir_builder::{
     add, assert_, date, dec, eq, params, require, span, sub, term, transformation, var,
 };
-use morpholog_core::{Outcome, Prop, State, ValueExpr};
-use morpholog_test_support::{cal_span, propose_with_test_actor, test_actor};
+use crate::kernel_tests::support::{cal_span, propose_with_test_actor, test_actor};
+use crate::{Outcome, Prop, State, ValueExpr};
 
 fn holds(prop: Prop) {
     let t = transformation("probe", params(&[]), vec![require(prop)]);
@@ -191,7 +191,7 @@ fn shifts_off_the_calendar_are_out_of_range_by_name() {
 
 #[test]
 fn the_deliberately_missing_rules_stay_type_errors() {
-    use morpholog_core::ir_builder::{div, duration, mul, timestamp as ts};
+    use crate::ir_builder::{div, duration, mul, timestamp as ts};
     // Exact time cannot shift a civil date: the category error.
     refuses(
         eq(
@@ -256,7 +256,7 @@ fn a_span_cannot_be_admitted_into_a_claim() {
         "smuggle",
         params(&[]),
         vec![
-            morpholog_core::ir_builder::let_("sp", term(span("P3M"))),
+            crate::ir_builder::let_("sp", term(span("P3M"))),
             assert_("Holds", vec![var("sp")]),
         ],
     );
@@ -272,7 +272,7 @@ fn a_span_cannot_be_admitted_into_a_claim() {
 fn a_span_cannot_arrive_as_a_transition_argument() {
     // Even through an Any-kinded position or a collection element, the
     // argument gate refuses before anything can bind.
-    use morpholog_core::propose;
+    use crate::propose::propose;
     let t = transformation(
         "takes",
         params(&["x"]),
@@ -280,9 +280,9 @@ fn a_span_cannot_arrive_as_a_transition_argument() {
     );
     for smuggled in [
         cal_span("P3M"),
-        morpholog_core::EvalValue::Collection(vec![cal_span("P3M")]),
+        crate::EvalValue::Collection(vec![cal_span("P3M")]),
     ] {
-        let transition = morpholog_core::Transition {
+        let transition = crate::Transition {
             transformation_name: "takes".into(),
             args: vec![smuggled],
             actor: test_actor(),
@@ -293,7 +293,7 @@ fn a_span_cannot_arrive_as_a_transition_argument() {
             &State::default(),
             &[],
             &[],
-            &mut morpholog_test_support::fresh(),
+            &mut crate::kernel_tests::support::fresh(),
         )
         .expect_err("a span argument must be refused");
         assert!(
@@ -305,7 +305,7 @@ fn a_span_cannot_arrive_as_a_transition_argument() {
 
 #[test]
 fn a_span_kinded_declaration_is_refused_at_validation() {
-    use morpholog_core::{ArgDecl, PredicateArgKind, PredicateDecl, Program};
+    use crate::{ArgDecl, PredicateArgKind, PredicateDecl, Program};
     let program = Program {
         predicates: vec![PredicateDecl {
             name: "Holds".into(),

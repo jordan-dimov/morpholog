@@ -6,14 +6,15 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::ir_builder::{
+use crate::derive::eval_invariant;
+use crate::ir_builder::{
     and, claim, cond, dec, duration_le, invariant, le, mul, predicate, program, qty, sum, term,
     transformation, value_of, var, wildcard,
 };
-use morpholog_core::{Outcome, State, Term, ValidationError, eval_invariant, lower_sum_seeds};
-use morpholog_test_support::{claim_instance, dec_str, propose_with_test_actor, subj};
+use crate::kernel_tests::support::{claim_instance, dec_str, propose_with_test_actor, subj};
+use crate::{Outcome, State, Term, ValidationError, lower_sum_seeds};
 
-fn capped_program(target_factor: Term) -> morpholog_core::Program {
+fn capped_program(target_factor: Term) -> crate::Program {
     program("sum_targets")
         .predicates(vec![
             predicate("Loss").subject("w").decimal("l").build(),
@@ -22,7 +23,7 @@ fn capped_program(target_factor: Term) -> morpholog_core::Program {
         ])
         .invariants(vec![invariant(
             "capped",
-            morpholog_core::ir_builder::implies(
+            crate::ir_builder::implies(
                 and(vec![
                     claim("Cap", vec![var("c")]),
                     claim("Scale", vec![var("k")]),
@@ -38,7 +39,7 @@ fn capped_program(target_factor: Term) -> morpholog_core::Program {
         )])
         .transformations(vec![transformation(
             "probe",
-            morpholog_core::ir_builder::params(&[]),
+            crate::ir_builder::params(&[]),
             vec![],
         )])
         .build()
@@ -105,7 +106,7 @@ fn an_empty_sum_over_a_lookup_target_has_the_lookups_typed_zero() {
         ])
         .invariants(vec![invariant(
             "capped",
-            morpholog_core::ir_builder::implies(
+            crate::ir_builder::implies(
                 claim("Cap", vec![var("cap")]),
                 le(
                     sum(
@@ -118,7 +119,7 @@ fn an_empty_sum_over_a_lookup_target_has_the_lookups_typed_zero() {
         )])
         .transformations(vec![transformation(
             "probe",
-            morpholog_core::ir_builder::params(&[]),
+            crate::ir_builder::params(&[]),
             vec![],
         )])
         .build();
@@ -128,7 +129,7 @@ fn an_empty_sum_over_a_lookup_target_has_the_lookups_typed_zero() {
     // No Item rows: the sum is its seed, and 0 USD fits the cap.
     let state = State::from_claims(vec![claim_instance(
         "Cap",
-        &[morpholog_test_support::qty("5", "USD")],
+        &[crate::kernel_tests::support::qty("5", "USD")],
     )]);
     let outcome =
         propose_with_test_actor(&p.transformations[0], vec![], &state, &p.invariants, &[])
@@ -146,7 +147,7 @@ fn an_empty_sum_over_a_conditional_target_has_the_branches_agreed_zero() {
         ])
         .invariants(vec![invariant(
             "capped",
-            morpholog_core::ir_builder::implies(
+            crate::ir_builder::implies(
                 claim("Cap", vec![var("cap")]),
                 le(
                     sum(
@@ -163,7 +164,7 @@ fn an_empty_sum_over_a_conditional_target_has_the_branches_agreed_zero() {
         )])
         .transformations(vec![transformation(
             "probe",
-            morpholog_core::ir_builder::params(&[]),
+            crate::ir_builder::params(&[]),
             vec![],
         )])
         .build();
@@ -171,7 +172,7 @@ fn an_empty_sum_over_a_conditional_target_has_the_branches_agreed_zero() {
     p.validate().expect("agreeing branch kinds type the seed");
     let state = State::from_claims(vec![claim_instance(
         "Cap",
-        &[morpholog_test_support::qty("5", "t")],
+        &[crate::kernel_tests::support::qty("5", "t")],
     )]);
     let outcome =
         propose_with_test_actor(&p.transformations[0], vec![], &state, &p.invariants, &[])
@@ -198,7 +199,7 @@ fn an_empty_sum_over_a_nested_sum_target_has_the_inner_sums_zero() {
         )])
         .transformations(vec![transformation(
             "probe",
-            morpholog_core::ir_builder::params(&[]),
+            crate::ir_builder::params(&[]),
             vec![],
         )])
         .build();
@@ -216,7 +217,7 @@ fn an_empty_sum_over_a_nested_sum_target_has_the_inner_sums_zero() {
 }
 
 fn duration_term(s: &str) -> Term {
-    morpholog_core::ir_builder::duration(s)
+    crate::ir_builder::duration(s)
 }
 
 /// A target whose only kind evidence is a binding outside the sum is
@@ -231,7 +232,7 @@ fn an_outer_bound_quantity_target_is_refused_not_mistyped() {
         ])
         .invariants(vec![invariant(
             "capped",
-            morpholog_core::ir_builder::implies(
+            crate::ir_builder::implies(
                 claim("Cap", vec![var("cap")]),
                 le(
                     sum(var("cap"), claim("Item", vec![var("i")])),
@@ -278,7 +279,7 @@ fn a_wildcard_inside_a_sum_target_is_refused_at_authoring_time() {
     );
 }
 
-fn capped_program_with_target(target: morpholog_core::ValueExpr) -> morpholog_core::Program {
+fn capped_program_with_target(target: crate::ValueExpr) -> crate::Program {
     program("wildcard_targets")
         .predicates(vec![
             predicate("Loss").subject("w").decimal("l").build(),
@@ -286,7 +287,7 @@ fn capped_program_with_target(target: morpholog_core::ValueExpr) -> morpholog_co
         ])
         .invariants(vec![invariant(
             "capped",
-            morpholog_core::ir_builder::implies(
+            crate::ir_builder::implies(
                 claim("Cap", vec![var("c")]),
                 le(
                     sum(target, claim("Loss", vec![wildcard(), var("l")])),

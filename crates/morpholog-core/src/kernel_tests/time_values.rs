@@ -7,18 +7,18 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::EvalValue;
-use morpholog_core::Outcome;
-use morpholog_core::ir_builder::{
+use crate::EvalValue;
+use crate::Outcome;
+use crate::ir_builder::{
     add, and, assert_, bind_one, claim, date_le, dec, duration, duration_le, implies, invariant,
     le, let_, params, predicate, program, require, round, sub, sum, term, timestamp_le,
     transformation, var,
 };
-use morpholog_core::{
+use crate::kernel_tests::support::{dur, must_accept, propose_with_test_actor, subj, ts};
+use crate::{
     CompareOp, Definition, EvalError, Invariant, OrderedDomain, ParamKind, PredicateArgKind,
     Program, Prop, State, Transformation, ValidationError, transformation_param_kinds,
 };
-use morpholog_test_support::{dur, must_accept, propose_with_test_actor, subj, ts};
 
 /// Propose and require a business rejection (not a kernel error).
 fn must_reject(
@@ -159,7 +159,7 @@ fn unlowered_duration_sums_are_refused_and_lowering_restores_validity() {
 
     // The same programme through the seed pass is exactly lawful.
     let mut lowered = mini_laytime();
-    morpholog_core::lower_sum_seeds(&mut lowered);
+    crate::lower_sum_seeds(&mut lowered);
     assert!(lowered.validate().is_ok(), "{:?}", lowered.validate());
 }
 
@@ -345,8 +345,8 @@ fn a_parameter_used_only_in_time_arithmetic_infers_its_forced_kind() {
     // `turn_time` appears in no claim position, only as the right
     // operand of `tendered_at + turn_time`. The only rule for
     // Timestamp + _ takes a Duration, so the parameter resolves to one.
-    use morpholog_core::transformation_param_kinds;
-    use morpholog_core::{ParamKind, PredicateArgKind};
+    use crate::transformation_param_kinds;
+    use crate::{ParamKind, PredicateArgKind};
 
     let p = program("turnable")
         .predicates(vec![
@@ -421,7 +421,7 @@ fn the_remaining_matrix_arms_evaluate() {
     // Timestamp - Duration (shift an instant backwards) and
     // Min(Duration, Duration) (the floor's sibling) - the two rule
     // arms no other test reaches.
-    use morpholog_core::ir_builder::min;
+    use crate::ir_builder::min;
 
     let p = program("arms")
         .predicates(vec![

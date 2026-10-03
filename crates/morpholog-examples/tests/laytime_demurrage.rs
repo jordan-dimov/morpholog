@@ -13,8 +13,9 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, dur, qty, subj, ts};
-use morpholog_core::{EvalValue, State, enumerate_derived};
+use morpholog_core::{EvalValue, State};
 use morpholog_examples::laytime_demurrage as lay;
+use morpholog_test_support::enumerate_derived;
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
@@ -39,7 +40,7 @@ fn commenced_voyage() -> State {
 }
 
 fn excess_for(state: &State) -> EvalValue {
-    let rows = enumerate_derived(&lay::time_on_demurrage(), state, &lay::definitions()).unwrap();
+    let rows = enumerate_derived(&lay::program(), &lay::time_on_demurrage(), state).unwrap();
     assert_eq!(rows.len(), 1, "one voyage, one row: {rows:?}");
     // Row shape: (voyage, allowed, excess) - the allowance shown
     // beside the time that ran past it.
@@ -193,7 +194,7 @@ fn time_on_demurrage_is_safe_to_inspect_before_commencement() {
         vec![subj("v1"), subj("mv_aurora"), subj("sines"), dur("PT48H")],
         State::default(),
     );
-    let rows = enumerate_derived(&lay::time_on_demurrage(), &state, &lay::definitions())
+    let rows = enumerate_derived(&lay::program(), &lay::time_on_demurrage(), &state)
         .expect("pre-commencement inspection must not error");
     assert!(rows.is_empty(), "no clock, no row: {rows:?}");
 }
@@ -214,9 +215,9 @@ fn two_voyages_enumerate_deterministically() {
         state,
     );
     let state = ex().must_accept(&lay::commence_laytime(), vec![subj("v2")], state);
-    let rows = enumerate_derived(&lay::time_on_demurrage(), &state, &lay::definitions()).unwrap();
+    let rows = enumerate_derived(&lay::program(), &lay::time_on_demurrage(), &state).unwrap();
     assert_eq!(rows.len(), 2, "two commenced voyages, two rows");
-    let again = enumerate_derived(&lay::time_on_demurrage(), &state, &lay::definitions()).unwrap();
+    let again = enumerate_derived(&lay::program(), &lay::time_on_demurrage(), &state).unwrap();
     assert_eq!(rows, again, "enumeration order is deterministic");
     let voyages: Vec<_> = rows.iter().map(|r| r.args[0].clone()).collect();
     assert!(
@@ -293,7 +294,7 @@ fn demurrage_settles_to_the_exact_due_figure_and_not_a_cent_more() {
     let state = voyage_on_demurrage();
     // The derived figure prices the delay before anything is paid:
     // row shape (voyage, allowed, daily, due).
-    let rows = enumerate_derived(&lay::demurrage_due(), &state, &lay::definitions()).unwrap();
+    let rows = enumerate_derived(&lay::program(), &lay::demurrage_due(), &state).unwrap();
     assert_eq!(rows.len(), 1, "one voyage on demurrage: {rows:?}");
     assert_eq!(rows[0].args[3], qty("137500.00", "USD"));
 
@@ -334,7 +335,7 @@ fn demurrage_due_has_no_row_before_the_rate_is_agreed() {
     // the clock) exists, the question "what is owed?" has no row
     // rather than a wrong answer.
     let state = commenced_voyage();
-    let rows = enumerate_derived(&lay::demurrage_due(), &state, &lay::definitions()).unwrap();
+    let rows = enumerate_derived(&lay::program(), &lay::demurrage_due(), &state).unwrap();
     assert!(rows.is_empty(), "no rate agreed yet: {rows:?}");
 }
 

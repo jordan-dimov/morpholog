@@ -114,9 +114,14 @@ fn repr(rows: &[ClaimInstance]) -> Vec<String> {
 
 async fn assert_cache_matches_kernel(pool: &PgPool, p: &Program, name: &str) {
     let cache = cache_rows(pool, name).await;
-    let kernel = list_derived(pool, derived(p, name), &p.definitions)
-        .await
-        .expect("list_derived");
+    let kernel = list_derived(
+        pool,
+        morpholog_test_support::validated(p),
+        derived(p, name).predicate.as_str(),
+    )
+    .await
+    .expect("list_derived")
+    .expect("the programme derives it");
     assert_eq!(
         repr(&cache),
         repr(&kernel),

@@ -6,12 +6,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::ir_builder::{
+use crate::ir_builder::{
     add, claim, dec, div, eq, modulo, mul, params, qty, require, sub, sum, term, transformation,
     var,
 };
-use morpholog_core::{EvalError, Outcome, Prop, State};
-use morpholog_test_support::{claim_instance, dec_str, propose_with_test_actor, subj};
+use crate::kernel_tests::support::{claim_instance, dec_str, propose_with_test_actor, subj};
+use crate::{EvalError, Outcome, Prop, State};
 
 const MAX: &str = "79228162514264337593543950335";
 const TINY: &str = "0.0000000000000000000000000001";
@@ -184,7 +184,7 @@ fn in_range_extremes_still_evaluate_exactly() {
     let t = transformation(
         "probe",
         params(&[]),
-        vec![require(morpholog_core::ir_builder::and(vec![
+        vec![require(crate::ir_builder::and(vec![
             eq(sub(term(dec(MAX)), term(dec(MAX))), term(dec("0"))),
             eq(add(term(dec(MAX)), term(dec("0"))), term(dec(MAX))),
             eq(mul(term(dec(MAX)), term(dec("1"))), term(dec(MAX))),

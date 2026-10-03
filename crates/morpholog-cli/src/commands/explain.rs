@@ -11,7 +11,7 @@
 //! non-zero. Scripts that want the gate use `propose`.
 
 use anyhow::Context;
-use morpholog_core::{Subject, Transition, explain};
+use morpholog_core::{Subject, Transition};
 use morpholog_postgres::load_scoped_state;
 
 use crate::ExplainArgs;
@@ -41,9 +41,10 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     )?;
 
     let pool = connect(&args.db.database_url).await?;
-    let state = load_scoped_state(&pool, &prepared, transformation)
+    let state = load_scoped_state(&pool, &prepared, &transformation.name)
         .await
-        .context("failed to load scoped pre-state")?;
+        .context("failed to load scoped pre-state")?
+        .context("the transformation was looked up in this programme")?;
 
     let transition = Transition {
         transformation_name: transformation.name.clone(),
@@ -51,8 +52,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
         actor: Subject::from(args.actor.clone()),
     };
 
-    let explanation = explain(
-        prepared.program(),
+    let explanation = prepared.explain(
         &transition,
         &state,
         &mut morpholog_postgres::runtime_subjects(),

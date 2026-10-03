@@ -798,3 +798,131 @@ fn pre_outside_forall_vs_inside_distinguish_iteration_domain() {
         "forall over post Account where body asks pre(Balance) must fail when pre has no Balance"
     );
 }
+
+#[test]
+fn expr_sub_subtracts_decimals_and_rejects_other_types() {
+    // Subtract two literal decimals over a one-claim domain, with no
+    // ledger fixture.
+    use crate::Value;
+
+    let state = State::from_claims(vec![super::support::claim_instance(
+        "Tag",
+        &[super::support::subj("only")],
+    )]);
+
+    let derived_decimal_ok = DerivedClaim {
+        predicate: "DecimalSub".into(),
+        keys: vec!["k".into()],
+        values: vec![DerivedValue {
+            name: "result".into(),
+            expr: ValueExpr::Arith {
+                op: ArithOp::Sub,
+                left: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                    "100".to_string(),
+                )))),
+                right: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                    "30".to_string(),
+                )))),
+            },
+        }],
+        domain: Prop::Claim {
+            predicate: "Tag".into(),
+            args: vec![Term::Var("k".into())],
+        },
+    };
+
+    let rows = crate::derive::enumerate_derived(&derived_decimal_ok, &state, &[]).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].args[1], EvalValue::Decimal(Decimal::new(70, 0)));
+
+    // Subtracting a subject from a decimal should be a TypeMismatch.
+    let derived_type_error = DerivedClaim {
+        predicate: "TypeError".into(),
+        keys: vec!["k".into()],
+        values: vec![DerivedValue {
+            name: "result".into(),
+            expr: ValueExpr::Arith {
+                op: ArithOp::Sub,
+                left: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                    "1".to_string(),
+                )))),
+                right: Box::new(ValueExpr::Term(Term::Literal(Value::Subject(
+                    "not_a_number".into(),
+                )))),
+            },
+        }],
+        domain: Prop::Claim {
+            predicate: "Tag".into(),
+            args: vec![Term::Var("k".into())],
+        },
+    };
+
+    let err = crate::derive::enumerate_derived(&derived_type_error, &state, &[]).unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("no arithmetic rule for decimal Sub subject"),
+        "the no-rule error names both operand kinds; got: {msg}"
+    );
+}
+
+/// Validation refuses a derived value that names a non-key variable; the
+/// evaluator, reached without validation, refuses it too.
+#[test]
+fn a_derived_value_naming_a_non_key_is_unbound_when_evaluated() {
+    use crate::ir_builder as b;
+    let derived = crate::DerivedClaim {
+        predicate: "InvoiceLineEcho".into(),
+        keys: vec!["invoice".into()],
+        values: vec![crate::DerivedValue {
+            name: "which_line".to_string(),
+            expr: b::term(b::var("line")),
+        }],
+        domain: b::claim(
+            "Line",
+            vec![b::var("invoice"), b::var("line"), b::var("amount")],
+        ),
+    };
+    let state = State::from_claims(vec![super::support::claim_instance(
+        "Line",
+        &[
+            super::support::subj("i1"),
+            super::support::subj("l1"),
+            super::support::dec(10),
+        ],
+    )]);
+    let err = crate::derive::enumerate_derived(&derived, &state, &[])
+        .expect_err("a non-key value has no binding at evaluation");
+    assert!(matches!(err, EvalError::UnboundVariable(_)));
+}
+
+// `actor` in an invariant: validation refuses it, and the evaluator,
+// reached without validation, refuses it too.
+#[test]
+fn term_actor_in_invariant_body_surfaces_as_unbound_actor() {
+    let inv = crate::ir_builder::invariant(
+        "improperly_uses_actor",
+        Prop::Claim {
+            predicate: "AnyPredicate".into(),
+            args: vec![Term::Actor],
+        },
+    );
+    let err =
+        crate::derive::eval_invariant(&inv, &State::default(), None, &[]).expect_err("must error");
+    assert!(matches!(err, EvalError::UnboundActor));
+}
+
+#[test]
+fn term_actor_unbound_error_is_position_independent() {
+    // An earlier literal argument that matches nothing must not
+    // short-circuit before Term::Actor is checked.
+    let inv = crate::ir_builder::invariant(
+        "actor_masked_by_earlier_missing_literal",
+        Prop::Claim {
+            predicate: "AnyPredicate".into(),
+            args: vec![Term::Literal(Value::Subject("missing".into())), Term::Actor],
+        },
+    );
+    let err = crate::derive::eval_invariant(&inv, &State::default(), None, &[])
+        .expect_err("Term::Actor outside transition scope must error regardless of arg order");
+    assert!(matches!(err, EvalError::UnboundActor));
+}

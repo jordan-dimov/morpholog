@@ -749,7 +749,7 @@ pub enum Stmt {
 }
 
 /// A named, parameterised proposal to change admitted state: the only way
-/// governed state changes. Run via [`crate::propose`], its [`Stmt`]s read a
+/// governed state changes. Run via [`crate::PreparedProgram::propose`], its [`Stmt`]s read a
 /// snapshot of the pre-state, stage admissions, retractions, and intents,
 /// and produce an [`crate::Outcome`] for the caller to commit or discard.
 ///
@@ -804,9 +804,10 @@ pub enum DefinitionOrigin {
 
 /// A governed domain model: vocabularies, definitions, invariants,
 /// transformations, and derived claims as one unit. It holds no state,
-/// connection, or schema, only the rules. A caller proposes by looking up
-/// a transformation by name and passing it to [`crate::propose`] (or the
-/// PostgreSQL adapter's `propose_against_pg`).
+/// connection, or schema, only the rules. A caller proposes through the
+/// validated [`crate::PreparedProgram`] built from it (or the PostgreSQL
+/// adapter's `propose_against_pg`), naming the transformation in the
+/// transition.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Program {
     pub name: String,

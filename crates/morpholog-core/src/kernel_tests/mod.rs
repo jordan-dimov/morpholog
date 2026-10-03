@@ -2,15 +2,32 @@
 //! `Bindings`) and so cannot live in `tests/`. One file per kernel area;
 //! shared helpers live here.
 
+mod admission;
+mod checked_arith;
+mod cond_semantics;
+mod date_arithmetic;
+mod definitions_adversarial;
+mod error_over_false;
 mod eval;
+mod eval_arms;
 mod explain;
 mod impact;
+mod period_index_semantics;
+mod period_start_of_semantics;
 mod propose;
+mod quantity_values;
+mod round_semantics;
 mod state;
+mod sum_targets;
+mod support;
+mod time_values;
 mod validate;
 
 use super::*;
 use crate::eval::{EvalContext, eval_value, find_matches, resolve_term, unify_args};
+// Below validation: the kernel's own tests evaluate IR directly.
+use crate::derive::{eval_invariant, invariant_witness};
+use crate::propose::{propose, propose_with_trace};
 
 // Comparator builders over boxed operands, to keep test call sites short.
 fn le_(l: Box<ValueExpr>, r: Box<ValueExpr>) -> Prop {

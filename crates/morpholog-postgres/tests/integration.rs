@@ -1431,11 +1431,12 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
 
     let rows = list_derived(
         &pool,
-        &double_entry_ledger::trial_balance_row(),
-        &double_entry_ledger::definitions(),
+        morpholog_test_support::validated(&double_entry_ledger::program()),
+        double_entry_ledger::trial_balance_row().predicate.as_str(),
     )
     .await
-    .expect("list_derived should not error");
+    .expect("list_derived should not error")
+    .expect("the programme derives it");
 
     // Two accounts -> two rows. Structural Subject ordering sorts
     // `account_cash` before `account_revenue`, so the order is stable.
@@ -1473,11 +1474,12 @@ async fn list_derived_on_empty_state_returns_no_rows() {
 
     let rows = list_derived(
         &pool,
-        &double_entry_ledger::trial_balance_row(),
-        &double_entry_ledger::definitions(),
+        morpholog_test_support::validated(&double_entry_ledger::program()),
+        double_entry_ledger::trial_balance_row().predicate.as_str(),
     )
     .await
-    .expect("list_derived against an empty state should not error");
+    .expect("list_derived against an empty state should not error")
+    .expect("the programme derives it");
     assert!(
         rows.is_empty(),
         "empty domain produces no derived rows, got {rows:?}"
@@ -1538,11 +1540,12 @@ async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
 
     let rows = list_derived(
         &pool,
-        &double_entry_ledger::trial_balance_row(),
-        &double_entry_ledger::definitions(),
+        morpholog_test_support::validated(&double_entry_ledger::program()),
+        double_entry_ledger::trial_balance_row().predicate.as_str(),
     )
     .await
-    .expect("list_derived under noise should not error");
+    .expect("list_derived under noise should not error")
+    .expect("the programme derives it");
 
     // One cash/revenue entry yields exactly two rows; the noise must
     // not change that.
@@ -2168,11 +2171,14 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     // 8. Derived `PolicyLimitUsage` matches the cumulative paid.
     let usage_rows = list_derived(
         &pool,
-        &insurance_claim_settlement::policy_limit_usage(),
-        &insurance_claim_settlement::definitions(),
+        morpholog_test_support::validated(&insurance_claim_settlement::program()),
+        insurance_claim_settlement::policy_limit_usage()
+            .predicate
+            .as_str(),
     )
     .await
-    .unwrap();
+    .unwrap()
+    .expect("the programme derives it");
     assert_eq!(
         usage_rows.len(),
         1,
@@ -2207,10 +2213,11 @@ async fn load_scoped_state_loads_only_in_scope_predicates() {
     let state = load_scoped_state(
         &pool,
         common::pg_program(settlement_netting::program()).prepared(),
-        &settlement_netting::create_net_settlement(),
+        &settlement_netting::create_net_settlement().name,
     )
     .await
-    .expect("load_scoped_state should not error");
+    .expect("load_scoped_state should not error")
+    .expect("the programme declares the transformation");
 
     assert!(
         common::has_claim(&state, "ApprovedSettlementLine", &[subj("l1")]),
@@ -2340,7 +2347,7 @@ async fn a_refusal_is_explained_by_the_draws_that_refused() {
         drawn_subjects: drawn_subjects.clone(),
     };
     let replayed = refused
-        .explanation(&p, &transition)
+        .explanation(pg.prepared(), &transition)
         .expect("a refusal is explained");
     let state = refused
         .rejection_state
@@ -2348,7 +2355,7 @@ async fn a_refusal_is_explained_by_the_draws_that_refused() {
         .expect("a refusal carries its state");
     let rendered = format!("{replayed:?}");
     assert!(rendered.contains(drawn_subjects[0].as_str()), "{rendered}");
-    let rerun = morpholog_core::explain(
+    let rerun = morpholog_test_support::explain(
         &p,
         &transition,
         &state,

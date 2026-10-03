@@ -21,8 +21,7 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, dec, has_claim, subj};
-use morpholog_core::ir_builder::invariant;
-use morpholog_core::{EvalError, EvalValue, Prop, State, Subject, Term, Value, eval_invariant};
+use morpholog_core::{EvalError, EvalValue, State, Subject};
 use morpholog_examples::approval_controls;
 
 fn ex() -> &'static Example {
@@ -291,12 +290,10 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
     );
     transition.actor = Subject::from("jordan");
 
-    let err = morpholog_core::propose(
-        &approval_controls::approve_within_limit(),
+    let err = morpholog_test_support::propose(
+        &approval_controls::program(),
         &transition,
         &pre,
-        &approval_controls::all_invariants(),
-        &approval_controls::definitions(),
         &mut morpholog_test_support::fresh(),
     )
     .expect_err("non-decimal limit must surface as EvalError, not Rejected");
@@ -309,39 +306,6 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
         }
         other => panic!("expected TypeMismatch, got {other:?}"),
     }
-}
-
-// ============================================================
-// Kernel-level pins for Term::Actor
-// ============================================================
-
-#[test]
-fn term_actor_in_invariant_body_surfaces_as_unbound_actor() {
-    let inv = invariant(
-        "improperly_uses_actor",
-        Prop::Claim {
-            predicate: "AnyPredicate".into(),
-            args: vec![Term::Actor],
-        },
-    );
-    let err = eval_invariant(&inv, &State::default(), None, &[]).expect_err("must error");
-    assert!(matches!(err, EvalError::UnboundActor));
-}
-
-#[test]
-fn term_actor_unbound_error_is_position_independent() {
-    // An earlier literal argument that matches nothing must not
-    // short-circuit before Term::Actor is checked.
-    let inv = invariant(
-        "actor_masked_by_earlier_missing_literal",
-        Prop::Claim {
-            predicate: "AnyPredicate".into(),
-            args: vec![Term::Literal(Value::Subject("missing".into())), Term::Actor],
-        },
-    );
-    let err = eval_invariant(&inv, &State::default(), None, &[])
-        .expect_err("Term::Actor outside transition scope must error regardless of arg order");
-    assert!(matches!(err, EvalError::UnboundActor));
 }
 
 // ============================================================

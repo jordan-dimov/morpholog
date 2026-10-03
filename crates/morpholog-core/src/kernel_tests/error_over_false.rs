@@ -6,11 +6,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::ir_builder::{
+use crate::derive::eval_invariant;
+use crate::ir_builder::{
     claim, forall, implies, invariant, le, predicate, program, sum, term, transformation, var,
 };
-use morpholog_core::{EvalError, EvalValue, Program, Prop, State, eval_invariant};
-use morpholog_test_support::{claim_instance, dec_str, subj};
+use crate::kernel_tests::support::{claim_instance, dec_str, subj};
+use crate::{EvalError, EvalValue, Program, Prop, State};
 use rust_decimal::Decimal;
 
 fn capped(body: Prop) -> Program {
@@ -22,7 +23,7 @@ fn capped(body: Prop) -> Program {
         .invariants(vec![invariant("capped", body)])
         .transformations(vec![transformation(
             "probe",
-            morpholog_core::ir_builder::params(&[]),
+            crate::ir_builder::params(&[]),
             vec![],
         )])
         .build()
@@ -36,7 +37,7 @@ fn total_within_cap() -> Prop {
 }
 
 /// One bucket over its cap, another whose total no decimal can hold.
-fn mixed_claims() -> Vec<morpholog_core::ClaimInstance> {
+fn mixed_claims() -> Vec<crate::ClaimInstance> {
     vec![
         claim_instance("Cap", &[subj("broken"), dec_str("10")]),
         claim_instance("Item", &[subj("broken"), dec_str("20")]),

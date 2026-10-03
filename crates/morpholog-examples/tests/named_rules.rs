@@ -47,13 +47,7 @@ fn refuse(source: &str, pre: &State) -> RejectionReason {
         .iter()
         .find(|t| t.name == "approve")
         .expect("the scenario declares `approve`");
-    must_reject(
-        transformation,
-        vec![subj("doc_1")],
-        pre,
-        &program.invariants,
-        &program.definitions,
-    )
+    must_reject(transformation, vec![subj("doc_1")], pre, &program)
 }
 
 fn submitted() -> State {
@@ -226,7 +220,8 @@ fn names_survive_format_and_reparse() {
 /// carry the name itself.
 #[test]
 fn explain_names_the_gate_that_would_refuse() {
-    use morpholog_core::{GateRejection, Rejection, Transition, Verdict, explain};
+    use morpholog_core::{GateRejection, Rejection, Transition, Verdict};
+    use morpholog_test_support::explain;
 
     let diagnose = |source: &str| {
         let program = parsed(source);

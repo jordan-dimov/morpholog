@@ -25,8 +25,9 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use morpholog_core::{
-    ClaimInstance, EvalValue, Outcome, PreparedProgram, Program, State, Subject, Transformation,
-    TransformationName, Transition, enumerate_derived, predicates_referenced_by_derived, propose,
+    ClaimInstance, DefinitionOrigin, EvalValue, Outcome, PreparedProgram, Program, State, Subject,
+    Transformation, TransformationName, Transition, ValidatedProgram,
+    predicates_referenced_by_derived,
 };
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
@@ -979,6 +980,36 @@ fn ledger_posting(entry: &str, period: &str) -> Transition {
     }
 }
 
+/// `program` with every rule removed, so a proposal measures the body alone.
+fn without_rules(mut program: Program) -> Program {
+    program.invariants.clear();
+    for predicate in &mut program.predicates {
+        predicate.disciplines.clear();
+    }
+    program
+        .definitions
+        .retain(|d| d.origin != DefinitionOrigin::Discipline);
+    program
+}
+
+fn prepare(program: Program) -> Result<PreparedProgram> {
+    PreparedProgram::new(program).map_err(|errors| anyhow!("invalid programme: {errors:?}"))
+}
+
+fn validated(program: &Program) -> Result<ValidatedProgram<'_>> {
+    program
+        .validated()
+        .map_err(|errors| anyhow!("invalid programme: {errors:?}"))
+}
+
+/// Propose with the runtime's subject source; the transformation is the
+/// one the transition names.
+fn propose_in(prepared: &PreparedProgram, transition: &Transition, pre: &State) -> Result<Outcome> {
+    prepared
+        .propose(transition, pre, &mut morpholog_postgres::runtime_subjects())?
+        .context("the transition names no transformation in the programme")
+}
+
 fn must_commit(outcome: Outcome, what: &str) -> Result<State> {
     match outcome {
         Outcome::Accepted {
@@ -1001,9 +1032,8 @@ fn measure_kernel(
     acts: usize,
     repeat: usize,
 ) -> Result<CaseResult> {
-    let transformation = double_entry_ledger::post_simple_entry();
-    let invariants = double_entry_ledger::all_invariants();
-    let definitions = double_entry_ledger::definitions();
+    let ledger = prepare(double_entry_ledger::program())?;
+    let bare = prepare(without_rules(double_entry_ledger::program()))?;
     let claims = in_memory_book(n);
     let mut build = Vec::with_capacity(repeat);
     let mut one = Vec::with_capacity(repeat);
@@ -1017,29 +1047,12 @@ fn measure_kernel(
 
         let target = ledger_posting("bench_target", "p_bench");
         let t = Instant::now();
-        must_commit(
-            propose(
-                &transformation,
-                &target,
-                &pre,
-                &invariants,
-                &definitions,
-                &mut morpholog_postgres::runtime_subjects(),
-            )?,
-            "the target proposal",
-        )?;
+        must_commit(propose_in(&ledger, &target, &pre)?, "the target proposal")?;
         one.push(t.elapsed());
 
         let t = Instant::now();
         must_commit(
-            propose(
-                &transformation,
-                &target,
-                &pre,
-                &[],
-                &definitions,
-                &mut morpholog_postgres::runtime_subjects(),
-            )?,
+            propose_in(&bare, &target, &pre)?,
             "the proposal without invariants",
         )?;
         no_invariants.push(t.elapsed());
@@ -1050,17 +1063,7 @@ fn measure_kernel(
         let t = Instant::now();
         let mut state = pre;
         for act in &batch {
-            state = must_commit(
-                propose(
-                    &transformation,
-                    act,
-                    &state,
-                    &invariants,
-                    &definitions,
-                    &mut morpholog_postgres::runtime_subjects(),
-                )?,
-                "a sequential act",
-            )?;
+            state = must_commit(propose_in(&ledger, act, &state)?, "a sequential act")?;
         }
         sequential.push(t.elapsed());
     }
@@ -1123,13 +1126,13 @@ async fn measure_replay(
     let mut evaluate = Vec::with_capacity(repeat);
     for _ in 0..repeat {
         let t = Instant::now();
-        coverage_replay(pool, &program)
+        coverage_replay(pool, validated(&program)?)
             .await
             .context("coverage_replay")?;
         coverage.push(t.elapsed());
 
         let t = Instant::now();
-        score_candidate(pool, &program, None)
+        score_candidate(pool, validated(&program)?, None)
             .await
             .context("score_candidate")?;
         evaluate.push(t.elapsed());
@@ -1469,6 +1472,7 @@ async fn measure_read(
     let fixture = reset_took + t.elapsed();
     analyze_claims(pool).await?;
 
+    let ledger = double_entry_ledger::program();
     let derived = double_entry_ledger::trial_balance_row();
     let footprint: Vec<String> = predicates_referenced_by_derived(&derived, &[])
         .into_iter()
@@ -1493,7 +1497,10 @@ async fn measure_read(
         build_state.push(t.elapsed());
 
         let t = Instant::now();
-        let rows = enumerate_derived(&derived, &state, &[]).context("enumerate_derived")?;
+        let rows = validated(&ledger)?
+            .enumerate_derived(derived.predicate.as_str(), &state)
+            .context("enumerate_derived")?
+            .context("the ledger derives its trial balance")?;
         enumerate.push(t.elapsed());
         n_rows = rows.len();
 
@@ -1614,6 +1621,7 @@ async fn measure_as_of(
     .await
     .context("resolve target transition_id")?;
 
+    let ledger = double_entry_ledger::program();
     let mut reconstruct = Vec::with_capacity(repeat);
     let mut list_at = Vec::with_capacity(repeat);
     let mut state_claims = 0usize;
@@ -1629,12 +1637,13 @@ async fn measure_as_of(
         let t = Instant::now();
         let rows = list_derived_at(
             pool,
-            &double_entry_ledger::trial_balance_row(),
-            &double_entry_ledger::definitions(),
+            validated(&ledger)?,
+            double_entry_ledger::trial_balance_row().predicate.as_str(),
             target_tid,
         )
         .await
-        .context("list_derived_at")?;
+        .context("list_derived_at")?
+        .context("the ledger derives its trial balance")?;
         list_at.push(t.elapsed());
         derived_rows = rows.len();
     }

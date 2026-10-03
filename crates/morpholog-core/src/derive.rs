@@ -24,7 +24,7 @@ use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 ///
 /// `definitions` resolves `Prop::Defined` calls in the body; pass `&[]`
 /// when the programme has none.
-pub fn eval_invariant(
+pub(crate) fn eval_invariant(
     inv: &Invariant,
     state: &State,
     pre_state: Option<&State>,
@@ -138,7 +138,7 @@ fn sorted_witness(bindings: Bindings) -> Vec<WitnessBinding> {
 ///
 /// Call this only after [`eval_invariant`] returned `false`. It explains a
 /// rejection; it never decides one.
-pub fn invariant_witness(
+pub(crate) fn invariant_witness(
     inv: &Invariant,
     state: &State,
     pre_state: Option<&State>,
@@ -186,7 +186,7 @@ fn in_invariant_context<T>(
 ///
 /// Evaluation errors propagate, as does a key the domain leaves unbound.
 /// The rows are *not* added to `state.claims`.
-pub fn enumerate_derived(
+pub(crate) fn enumerate_derived(
     derived: &DerivedClaim,
     state: &State,
     definitions: &[Definition],

@@ -6,12 +6,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::ir_builder::{
+use crate::ir_builder::{
     assert_, claim, cond, dec, div, eq, invariant, let_, params, predicate, program, require, subj,
     term, transformation, value_of, var, wildcard,
 };
-use morpholog_core::{ClaimInstance, EvalValue, Outcome, Prop, State};
-use morpholog_test_support::propose_with_test_actor;
+use crate::kernel_tests::support::propose_with_test_actor;
+use crate::{ClaimInstance, EvalValue, Outcome, Prop, State};
 
 fn holds_against(prop: Prop, state: &State) {
     let t = transformation("probe", params(&[]), vec![require(prop)]);
@@ -256,10 +256,9 @@ fn the_parameter_kind_walk_sees_evidence_inside_the_condition() {
         )])
         .build();
     assert!(p.validate().is_ok(), "{:?}", p.validate());
-    let prepared = morpholog_core::PreparedProgram::new(p).expect("valid");
-    let kinds =
-        morpholog_core::transformation_param_kinds(&prepared.validated(), &"evidenced".into())
-            .expect("kinds resolve");
+    let prepared = crate::PreparedProgram::new(p).expect("valid");
+    let kinds = crate::transformation_param_kinds(&prepared.validated(), &"evidenced".into())
+        .expect("kinds resolve");
     let (_, kind) = &kinds[0];
     assert!(
         format!("{kind:?}").contains("Subject"),
@@ -269,7 +268,7 @@ fn the_parameter_kind_walk_sees_evidence_inside_the_condition() {
 
 #[test]
 fn a_defined_call_is_lawful_inside_the_condition() {
-    use morpholog_core::ir_builder::{defined, definition};
+    use crate::ir_builder::{defined, definition};
     let defs = vec![definition(
         "is_on",
         params(&["x"]),
@@ -311,7 +310,7 @@ fn the_conditional_round_trips_through_the_formatter() {
         .predicates(vec![predicate("Flag").subject("x").build()])
         .invariants(vec![inv])
         .build();
-    let rendered = morpholog_core::format::format_program(&p);
+    let rendered = crate::format::format_program(&p);
     assert!(
         rendered.contains("if(Flag(#on), #meter, #book)"),
         "{rendered}"
@@ -343,7 +342,7 @@ fn condition_kind_evidence_survives_into_branch_unification() {
                 ),
                 let_(
                     "incremented",
-                    morpholog_core::ir_builder::add(term(var("picked")), term(dec("1"))),
+                    crate::ir_builder::add(term(var("picked")), term(dec("1"))),
                 ),
                 assert_("Out", vec![var("incremented")]),
             ],

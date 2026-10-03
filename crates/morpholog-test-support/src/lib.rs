@@ -19,8 +19,9 @@ pub mod differential;
 
 use jiff::civil::Date;
 use morpholog_core::{
-    ClaimInstance, Definition, EvalError, EvalValue, IntentInstance, Invariant, Outcome, Program,
-    RejectionReason, State, Subject, SubjectSource, Transformation, Transition, propose,
+    ClaimInstance, DerivedClaim, EvalError, EvalValue, Explanation, IntentInstance, Invariant,
+    Outcome, PreparedProgram, Program, RejectionReason, State, Subject, SubjectSource,
+    TracedProposal, Transformation, Transition, ValidatedProgram,
 };
 use rust_decimal::Decimal;
 
@@ -146,33 +147,85 @@ pub fn test_transition(t: &Transformation, args: Vec<EvalValue>) -> Transition {
 // Sync propose helpers
 // ============================================================
 
-/// [`propose`] with the shared [`test_actor`], returning the raw [`Outcome`].
+/// Validate and prepare a test programme, panicking on a validation error:
+/// evaluation takes only validated programmes.
+pub fn prepare(program: &Program) -> PreparedProgram {
+    PreparedProgram::new(program.clone())
+        .unwrap_or_else(|errors| panic!("a test programme must validate: {errors:?}"))
+}
+
+fn transition_as(
+    t: &Transformation,
+    args: Vec<EvalValue>,
+    actor: impl Into<Subject>,
+) -> Transition {
+    Transition {
+        transformation_name: t.name.clone(),
+        args,
+        actor: actor.into(),
+    }
+}
+
+fn propose_in(
+    prepared: &PreparedProgram,
+    transition: &Transition,
+    pre: &State,
+) -> Result<Outcome, EvalError> {
+    prepared
+        .propose(transition, pre, &mut fresh())
+        .map(|outcome| {
+            outcome.unwrap_or_else(|| {
+                panic!(
+                    "no transformation `{}` in the programme",
+                    transition.transformation_name
+                )
+            })
+        })
+}
+
+fn accepted(outcome: Result<Outcome, EvalError>, t: &Transformation) -> State {
+    match outcome.expect("propose should not error") {
+        Outcome::Accepted {
+            candidate_state, ..
+        } => candidate_state,
+        Outcome::Rejected { reason } => {
+            panic!(
+                "expected Accepted from `{}`, got Rejected: {reason}",
+                t.name
+            )
+        }
+    }
+}
+
+fn rejected(outcome: Result<Outcome, EvalError>, t: &Transformation) -> RejectionReason {
+    match outcome.expect("propose should not error") {
+        Outcome::Rejected { reason } => reason,
+        Outcome::Accepted { .. } => {
+            panic!("expected Rejected from `{}`, got Accepted", t.name)
+        }
+    }
+}
+
+/// Propose `t` from `program` with the shared [`test_actor`], returning
+/// the raw [`Outcome`].
 pub fn propose_with_test_actor(
     t: &Transformation,
     args: Vec<EvalValue>,
     pre: &State,
-    invariants: &[Invariant],
-    definitions: &[Definition],
+    program: &Program,
 ) -> Result<Outcome, EvalError> {
-    let transition = test_transition(t, args);
-    propose(t, &transition, pre, invariants, definitions, &mut fresh())
+    propose_in(&prepare(program), &test_transition(t, args), pre)
 }
 
-/// [`propose`] with a caller-supplied actor.
+/// [`propose_with_test_actor`] with a caller-supplied actor.
 pub fn propose_as(
     t: &Transformation,
     args: Vec<EvalValue>,
     actor: impl Into<Subject>,
     pre: &State,
-    invariants: &[Invariant],
-    definitions: &[Definition],
+    program: &Program,
 ) -> Result<Outcome, EvalError> {
-    let transition = Transition {
-        transformation_name: t.name.clone(),
-        args,
-        actor: actor.into(),
-    };
-    propose(t, &transition, pre, invariants, definitions, &mut fresh())
+    propose_in(&prepare(program), &transition_as(t, args, actor), pre)
 }
 
 /// Propose with [`test_actor`] and return the accepted candidate state, for chained setup.
@@ -181,23 +234,12 @@ pub fn must_accept(
     t: &Transformation,
     args: Vec<EvalValue>,
     pre: State,
-    invariants: &[Invariant],
-    definitions: &[Definition],
+    program: &Program,
 ) -> State {
-    let transition = test_transition(t, args);
-    match propose(t, &transition, &pre, invariants, definitions, &mut fresh())
-        .expect("propose should not error")
-    {
-        Outcome::Accepted {
-            candidate_state, ..
-        } => candidate_state,
-        Outcome::Rejected { reason } => {
-            panic!(
-                "expected Accepted from `{}`, got Rejected: {reason}",
-                t.name
-            )
-        }
-    }
+    accepted(
+        propose_in(&prepare(program), &test_transition(t, args), &pre),
+        t,
+    )
 }
 
 /// [`must_accept`] with a caller-supplied actor.
@@ -206,27 +248,12 @@ pub fn must_accept_as(
     args: Vec<EvalValue>,
     actor: impl Into<Subject>,
     pre: State,
-    invariants: &[Invariant],
-    definitions: &[Definition],
+    program: &Program,
 ) -> State {
-    let transition = Transition {
-        transformation_name: t.name.clone(),
-        args,
-        actor: actor.into(),
-    };
-    match propose(t, &transition, &pre, invariants, definitions, &mut fresh())
-        .expect("propose should not error")
-    {
-        Outcome::Accepted {
-            candidate_state, ..
-        } => candidate_state,
-        Outcome::Rejected { reason } => {
-            panic!(
-                "expected Accepted from `{}`, got Rejected: {reason}",
-                t.name
-            )
-        }
-    }
+    accepted(
+        propose_in(&prepare(program), &transition_as(t, args, actor), &pre),
+        t,
+    )
 }
 
 /// Propose with [`test_actor`] and return the [`RejectionReason`].
@@ -235,18 +262,12 @@ pub fn must_reject(
     t: &Transformation,
     args: Vec<EvalValue>,
     pre: &State,
-    invariants: &[Invariant],
-    definitions: &[Definition],
+    program: &Program,
 ) -> RejectionReason {
-    let transition = test_transition(t, args);
-    match propose(t, &transition, pre, invariants, definitions, &mut fresh())
-        .expect("propose should not error")
-    {
-        Outcome::Rejected { reason } => reason,
-        Outcome::Accepted { .. } => {
-            panic!("expected Rejected from `{}`, got Accepted", t.name)
-        }
-    }
+    rejected(
+        propose_in(&prepare(program), &test_transition(t, args), pre),
+        t,
+    )
 }
 
 /// [`must_reject`] with a caller-supplied actor.
@@ -255,54 +276,138 @@ pub fn must_reject_as(
     args: Vec<EvalValue>,
     actor: impl Into<Subject>,
     pre: &State,
-    invariants: &[Invariant],
-    definitions: &[Definition],
+    program: &Program,
 ) -> RejectionReason {
-    let transition = Transition {
-        transformation_name: t.name.clone(),
-        args,
-        actor: actor.into(),
-    };
-    match propose(t, &transition, pre, invariants, definitions, &mut fresh())
-        .expect("propose should not error")
-    {
-        Outcome::Rejected { reason } => reason,
-        Outcome::Accepted { .. } => {
-            panic!("expected Rejected from `{}`, got Accepted", t.name)
-        }
-    }
+    rejected(
+        propose_in(&prepare(program), &transition_as(t, args, actor), pre),
+        t,
+    )
+}
+
+// ============================================================
+// Validated evaluation
+// ============================================================
+//
+// Evaluation takes a validated programme. These validate `program` first,
+// panicking if it does not validate, and look the rule up by name.
+
+/// [`PreparedProgram::propose`] for a test programme.
+pub fn propose(
+    program: &Program,
+    transition: &Transition,
+    pre: &State,
+    subjects: &mut dyn SubjectSource,
+) -> Result<Outcome, EvalError> {
+    prepare(program)
+        .propose(transition, pre, subjects)
+        .map(|outcome| outcome.expect("the transition names a transformation in the programme"))
+}
+
+/// [`PreparedProgram::propose_with_trace`] for a test programme.
+pub fn propose_with_trace(
+    program: &Program,
+    transition: &Transition,
+    pre: &State,
+    subjects: &mut dyn SubjectSource,
+) -> TracedProposal {
+    prepare(program)
+        .propose_with_trace(transition, pre, subjects)
+        .expect("the transition names a transformation in the programme")
+}
+
+/// [`PreparedProgram::explain`] for a test programme.
+pub fn explain(
+    program: &Program,
+    transition: &Transition,
+    pre: &State,
+    subjects: &mut dyn SubjectSource,
+) -> Explanation {
+    prepare(program).explain(transition, pre, subjects)
+}
+
+/// Whether `invariant`, which `program` declares, holds in `state`.
+pub fn eval_invariant(
+    program: &Program,
+    invariant: &Invariant,
+    state: &State,
+    pre: Option<&State>,
+) -> Result<bool, EvalError> {
+    validated(program)
+        .eval_invariant(invariant.name.as_str(), state, pre)
+        .map(|held| held.expect("the programme declares the invariant"))
+}
+
+/// The rows of `derived`, which `program` declares, in `state`.
+pub fn enumerate_derived(
+    program: &Program,
+    derived: &DerivedClaim,
+    state: &State,
+) -> Result<Vec<ClaimInstance>, EvalError> {
+    validated(program)
+        .enumerate_derived(derived.predicate.as_str(), state)
+        .map(|rows| rows.expect("the programme declares the derived claim"))
+}
+
+/// `program` validated, panicking on a validation error.
+pub fn validated(program: &Program) -> ValidatedProgram<'_> {
+    program
+        .validated()
+        .unwrap_or_else(|errors| panic!("a test programme must validate: {errors:?}"))
 }
 
 // ============================================================
 // Example fixture
 // ============================================================
 
-/// A programme's rules bound once, so each propose call passes only what varies. Use the free
-/// helpers to run against a subset of the rules.
+/// A programme prepared once, so each propose call passes only what varies.
+///
+/// An act the example does not declare, such as one hand-built to skip the
+/// gates, runs against the example's rules with that act declared beside
+/// the example's own, in a programme that must still validate.
 pub struct Example {
-    invariants: Vec<Invariant>,
-    definitions: Vec<Definition>,
+    program: Program,
+    prepared: PreparedProgram,
 }
 
 impl Example {
     pub fn new(program: &Program) -> Self {
         Self {
-            invariants: program.invariants.clone(),
-            definitions: program.definitions.clone(),
+            program: program.clone(),
+            prepared: prepare(program),
         }
     }
 
-    /// [`propose_with_test_actor`] against this example's rules.
+    fn run(
+        &self,
+        t: &Transformation,
+        transition: &Transition,
+        pre: &State,
+    ) -> Result<Outcome, EvalError> {
+        match self.prepared.transformation(&t.name) {
+            Some(declared) if declared == t => propose_in(&self.prepared, transition, pre),
+            Some(_) => panic!(
+                "`{}` differs from the example's act of that name; give the hand-built one its own name",
+                t.name
+            ),
+            None => {
+                let mut program = self.program.clone();
+                program.transformations.push(t.clone());
+                propose_in(&prepare(&program), transition, pre)
+            }
+        }
+    }
+
+    /// [`propose_with_test_actor`] against this example.
     pub fn propose(
         &self,
         t: &Transformation,
         args: Vec<EvalValue>,
         pre: &State,
     ) -> Result<Outcome, EvalError> {
-        propose_with_test_actor(t, args, pre, &self.invariants, &self.definitions)
+        self.run(t, &test_transition(t, args), pre)
     }
 
-    /// [`propose_as`] against this example's rules.
+    /// [`propose_as`] against this example.
     pub fn propose_as(
         &self,
         t: &Transformation,
@@ -310,15 +415,15 @@ impl Example {
         actor: impl Into<Subject>,
         pre: &State,
     ) -> Result<Outcome, EvalError> {
-        propose_as(t, args, actor, pre, &self.invariants, &self.definitions)
+        self.run(t, &transition_as(t, args, actor), pre)
     }
 
-    /// [`must_accept`] against this example's rules.
+    /// [`must_accept`] against this example.
     pub fn must_accept(&self, t: &Transformation, args: Vec<EvalValue>, pre: State) -> State {
-        must_accept(t, args, pre, &self.invariants, &self.definitions)
+        accepted(self.propose(t, args, &pre), t)
     }
 
-    /// [`must_accept_as`] against this example's rules.
+    /// [`must_accept_as`] against this example.
     pub fn must_accept_as(
         &self,
         t: &Transformation,
@@ -326,20 +431,20 @@ impl Example {
         actor: impl Into<Subject>,
         pre: State,
     ) -> State {
-        must_accept_as(t, args, actor, pre, &self.invariants, &self.definitions)
+        accepted(self.propose_as(t, args, actor, &pre), t)
     }
 
-    /// [`must_reject`] against this example's rules.
+    /// [`must_reject`] against this example.
     pub fn must_reject(
         &self,
         t: &Transformation,
         args: Vec<EvalValue>,
         pre: &State,
     ) -> RejectionReason {
-        must_reject(t, args, pre, &self.invariants, &self.definitions)
+        rejected(self.propose(t, args, pre), t)
     }
 
-    /// [`must_reject_as`] against this example's rules.
+    /// [`must_reject_as`] against this example.
     pub fn must_reject_as(
         &self,
         t: &Transformation,
@@ -347,7 +452,7 @@ impl Example {
         actor: impl Into<Subject>,
         pre: &State,
     ) -> RejectionReason {
-        must_reject_as(t, args, actor, pre, &self.invariants, &self.definitions)
+        rejected(self.propose_as(t, args, actor, pre), t)
     }
 }
 

@@ -19,17 +19,18 @@ use crate::ir::{Definition, Invariant};
 use crate::state::{ClaimInstance, State};
 
 /// The rules a transition is admitted under, with each invariant's
-/// impact plan built once beside it. A programme object holds its
-/// plans and lends them; a caller with bare slices builds them.
+/// impact plan built once beside it. Only a [`crate::PreparedProgram`]
+/// hands one out, so its rules are always a validated programme's: a
+/// caller may read them, never replace them.
 pub struct Admission<'a> {
-    pub invariants: &'a [Invariant],
-    pub definitions: &'a [Definition],
+    invariants: &'a [Invariant],
+    definitions: &'a [Definition],
     plans: Cow<'a, [ImpactPlan]>,
 }
 
 impl<'a> Admission<'a> {
     /// Rules from bare slices, planning each invariant now.
-    pub fn of(invariants: &'a [Invariant], definitions: &'a [Definition]) -> Self {
+    pub(crate) fn of(invariants: &'a [Invariant], definitions: &'a [Definition]) -> Self {
         Self {
             invariants,
             definitions,
@@ -58,6 +59,16 @@ impl<'a> Admission<'a> {
             definitions,
             plans: Cow::Borrowed(plans),
         }
+    }
+
+    /// The invariants this admission checks, in programme order.
+    pub fn invariants(&self) -> &'a [Invariant] {
+        self.invariants
+    }
+
+    /// The definitions those invariants call.
+    pub fn definitions(&self) -> &'a [Definition] {
+        self.definitions
     }
 
     pub(crate) fn plans(&self) -> &[ImpactPlan] {

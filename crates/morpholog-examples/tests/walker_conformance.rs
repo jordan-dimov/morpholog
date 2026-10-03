@@ -521,8 +521,14 @@ fn every_fragment_survives_every_walker_deterministically() {
         // CoverageReport is a pinned envelope without PartialEq; its
         // serialization is the comparable form.
         assert_eq!(
-            serde_json::to_value(CoverageTracker::new(&program).into_report()).unwrap(),
-            serde_json::to_value(CoverageTracker::new(&program).into_report()).unwrap(),
+            serde_json::to_value(
+                CoverageTracker::new(morpholog_test_support::validated(&program)).into_report()
+            )
+            .unwrap(),
+            serde_json::to_value(
+                CoverageTracker::new(morpholog_test_support::validated(&program)).into_report()
+            )
+            .unwrap(),
             "`{name}`: coverage shapes drift"
         );
 
@@ -661,7 +667,7 @@ fn the_pre_detector_sees_through_the_wrapping() {
     // `invariants_using_pre` scans whole bodies and sees both positions.
     // The xor fragment has no `pre` at all.
     let program = parsed("pre_around_defined", PRE_AROUND_DEFINED);
-    assert!(CoverageTracker::new(&program).needs_pre_state());
+    assert!(CoverageTracker::new(morpholog_test_support::validated(&program)).needs_pre_state());
     assert_eq!(
         morpholog_core::invariants_using_pre(&program),
         vec![
@@ -670,7 +676,7 @@ fn the_pre_detector_sees_through_the_wrapping() {
         ]
     );
     let no_pre = parsed("xor_in_implies", XOR_IN_IMPLIES);
-    assert!(!CoverageTracker::new(&no_pre).needs_pre_state());
+    assert!(!CoverageTracker::new(morpholog_test_support::validated(&no_pre)).needs_pre_state());
 }
 
 #[test]
@@ -728,7 +734,7 @@ fn the_implication_shape_is_recognised_through_the_xor_consequent() {
     // through its xor consequent would classify it always-on.
     use morpholog_core::CoverageVerdict;
     let program = parsed("xor_in_implies", XOR_IN_IMPLIES);
-    let report = CoverageTracker::new(&program).into_report();
+    let report = CoverageTracker::new(morpholog_test_support::validated(&program)).into_report();
     let inv = report
         .invariants
         .iter()
