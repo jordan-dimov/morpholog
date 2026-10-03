@@ -157,6 +157,10 @@ AuditRecord
                                     the stable total replay order every audit read
                                     (verify, coverage, as-of, the inspect-audit tail)
                                     orders by
+  attestation                    -- how the actor identity was established
+  parameters                     -- the transformation's parameter names, one per argument
+  model_hash                     -- the canonical hash of the whole programme that
+                                    admitted the row (`morpholog hash`)
 ```
 
 ## Surface-to-IR mapping
@@ -433,7 +437,10 @@ the same directly-missing claims its inline form would.
 invariant that calls it without changing the invariant's own text, so
 the audit row's `invariants_checked` list under-describes by itself.
 The programme hash (`morpholog hash`) is what names the full rules in
-force, definitions included; a definition edit is a rules change.
+force, definitions included; a definition edit is a rules change. Every
+row therefore also records `model_hash`, the hash of the whole programme
+that admitted it: the join key from a historical commit back to the
+exact rulebook, which `invariants_checked` alone cannot be.
 
 ## Claim disciplines: declared properties of claim shapes
 
