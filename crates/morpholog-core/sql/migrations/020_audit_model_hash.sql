@@ -17,34 +17,57 @@
 -- every NEW unstamped insert. See crates/morpholog-core/sql/schema.sql
 -- for the fresh-database definition, where the same named constraint is
 -- validated outright.
-
-ALTER TABLE morpholog.audit
-    ADD COLUMN IF NOT EXISTS model_hash text;
+--
+-- Guarded like 012: the pre-migration shape migrates, the exact head
+-- shape is left alone, and any other shape (a column of another type, a
+-- same-named constraint saying something else) is refused rather than
+-- declared current, since the runtime and the activation boundary both
+-- rest on these exact definitions.
 
 DO $$
+DECLARE
+    column_type text;
+    column_not_null boolean;
+    shape text;
+    required text;
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'audit_model_hash_shape'
-          AND conrelid = 'morpholog.audit'::regclass
-    ) THEN
-        ALTER TABLE morpholog.audit
-            ADD CONSTRAINT audit_model_hash_shape CHECK (
-                model_hash IS NULL
-                OR (model_hash ~ '^sha256:[0-9a-f]{64}$'
-                    AND attestation IS NOT NULL
-                    AND parameters IS NOT NULL)
-            );
+    -- Catalogue renderings qualify names not on the search path, so pin
+    -- it: the comparisons below are then exact, whatever the session's.
+    PERFORM set_config('search_path', 'pg_catalog', true);
+    SELECT format_type(atttypid, atttypmod), attnotnull INTO column_type, column_not_null
+    FROM pg_attribute
+    WHERE attrelid = 'morpholog.audit'::regclass
+      AND attname = 'model_hash' AND NOT attisdropped;
+    SELECT pg_get_constraintdef(oid) INTO shape FROM pg_constraint
+    WHERE conrelid = 'morpholog.audit'::regclass AND conname = 'audit_model_hash_shape';
+    SELECT pg_get_constraintdef(oid) INTO required FROM pg_constraint
+    WHERE conrelid = 'morpholog.audit'::regclass AND conname = 'audit_model_hash_required';
+
+    -- Either constraint may carry NOT VALID: it then checks only rows
+    -- written after it was added, which is exactly the rule for new rows.
+    IF column_type = 'text' AND NOT column_not_null
+       AND regexp_replace(shape, ' NOT VALID$', '') = 'CHECK (((model_hash IS NULL) OR ((model_hash ~ ''^sha256:[0-9a-f]{64}$''::text) AND (attestation IS NOT NULL) AND (parameters IS NOT NULL))))'
+       AND regexp_replace(required, ' NOT VALID$', '') = 'CHECK ((model_hash IS NOT NULL))' THEN
+        RETURN;
     END IF;
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'audit_model_hash_required'
-          AND conrelid = 'morpholog.audit'::regclass
-    ) THEN
-        ALTER TABLE morpholog.audit
-            ADD CONSTRAINT audit_model_hash_required
-            CHECK (model_hash IS NOT NULL)
-            NOT VALID;
+    IF column_type IS NOT NULL OR shape IS NOT NULL OR required IS NOT NULL THEN
+        RAISE EXCEPTION 'morpholog.audit is neither the pre-model-hash nor the model-hash shape '
+            '(column %, audit_model_hash_shape %, audit_model_hash_required %); refusing to guess',
+            coalesce(column_type || CASE WHEN column_not_null THEN ' not null' ELSE '' END, 'absent'),
+            coalesce(shape, 'absent'), coalesce(required, 'absent');
     END IF;
+
+    ALTER TABLE morpholog.audit ADD COLUMN model_hash text;
+    ALTER TABLE morpholog.audit
+        ADD CONSTRAINT audit_model_hash_shape CHECK (
+            model_hash IS NULL
+            OR (model_hash ~ '^sha256:[0-9a-f]{64}$'
+                AND attestation IS NOT NULL
+                AND parameters IS NOT NULL)
+        );
+    ALTER TABLE morpholog.audit
+        ADD CONSTRAINT audit_model_hash_required
+        CHECK (model_hash IS NOT NULL)
+        NOT VALID;
 END
 $$;

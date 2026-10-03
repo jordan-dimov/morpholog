@@ -23,6 +23,8 @@ const WITNESS_MIGRATION: &str =
     include_str!("../../morpholog-core/sql/migrations/010_rejections_witness.sql");
 const CLAIMS_KEY_MIGRATION: &str =
     include_str!("../../morpholog-core/sql/migrations/012_claims_hash_key.sql");
+const MODEL_HASH_MIGRATION: &str =
+    include_str!("../../morpholog-core/sql/migrations/020_audit_model_hash.sql");
 
 /// Run one statement whose text this test owns. The scratch schema name is a
 /// literal here, never external input.
@@ -1681,4 +1683,96 @@ async fn key_function_probe(url: &str) -> Result<(), String> {
         return Err("the marked guard must be dropped".to_string());
     }
     Ok(())
+}
+
+/// The model-hash migration takes the audit table from before it to the
+/// head shape, leaves the head shape alone (fresh or migrated), and
+/// refuses any other shape by name: a column of another type, or a
+/// same-named constraint that says something else, would leave the
+/// runtime or the activation boundary resting on a definition it never
+/// checked.
+#[tokio::test]
+async fn the_model_hash_migration_accepts_two_shapes_and_refuses_the_rest() {
+    let pool = test_pool().await;
+    let scratch = "morpholog_model_hash_probe";
+    ddl(&pool, format!("DROP SCHEMA IF EXISTS {scratch} CASCADE"))
+        .await
+        .unwrap();
+    ddl(&pool, format!("CREATE SCHEMA {scratch}"))
+        .await
+        .unwrap();
+    ddl(
+        &pool,
+        format!("CREATE TABLE {scratch}.audit (LIKE morpholog.audit INCLUDING ALL)"),
+    )
+    .await
+    .unwrap();
+    let migration = MODEL_HASH_MIGRATION.replace("morpholog.audit", &format!("{scratch}.audit"));
+    let refused = |result: &Result<(), sqlx::Error>| {
+        result
+            .as_ref()
+            .is_err_and(|e| e.to_string().contains("refusing to guess"))
+    };
+
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the fresh head shape is current");
+    ddl(
+        &pool,
+        format!("ALTER TABLE {scratch}.audit DROP COLUMN model_hash"),
+    )
+    .await
+    .unwrap();
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the pre-migration shape migrates");
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the migrated head shape is current");
+    ddl(
+        &pool,
+        format!(
+            "ALTER TABLE {scratch}.audit DROP CONSTRAINT audit_model_hash_shape;
+             ALTER TABLE {scratch}.audit ADD CONSTRAINT audit_model_hash_shape CHECK (
+                 model_hash IS NULL
+                 OR (model_hash ~ '^sha256:[0-9a-f]{{64}}$'
+                     AND attestation IS NOT NULL
+                     AND parameters IS NOT NULL)
+             ) NOT VALID"
+        ),
+    )
+    .await
+    .unwrap();
+    ddl(&pool, migration.clone())
+        .await
+        .expect("a head shape whose shape check is NOT VALID is current");
+
+    ddl(
+        &pool,
+        format!(
+            "ALTER TABLE {scratch}.audit DROP COLUMN model_hash;
+             ALTER TABLE {scratch}.audit ADD COLUMN model_hash jsonb"
+        ),
+    )
+    .await
+    .unwrap();
+    let result = ddl(&pool, migration.clone()).await;
+    assert!(refused(&result), "a column of another type: {result:?}");
+
+    ddl(
+        &pool,
+        format!(
+            "ALTER TABLE {scratch}.audit DROP COLUMN model_hash;
+             ALTER TABLE {scratch}.audit ADD COLUMN model_hash text;
+             ALTER TABLE {scratch}.audit ADD CONSTRAINT audit_model_hash_shape CHECK (true)"
+        ),
+    )
+    .await
+    .unwrap();
+    let result = ddl(&pool, migration.clone()).await;
+    assert!(refused(&result), "an impostor constraint: {result:?}");
+
+    ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
+        .await
+        .unwrap();
 }

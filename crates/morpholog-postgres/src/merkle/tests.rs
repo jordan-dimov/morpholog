@@ -582,6 +582,22 @@ fn model_hash_presence_selects_the_encoding() {
 
 /// A field this build cannot place in the leaf makes the row malformed: an
 /// older reader must never drop it and hash what is left.
+/// One spelling for "no hash": absent. A present null is malformed, as the
+/// schema and the generated client already hold.
+#[test]
+fn a_null_model_hash_is_malformed_not_absent() {
+    let mut value = serde_json::to_value(stamped_fixed_row()).unwrap();
+    value["model_hash"] = serde_json::Value::Null;
+    assert!(serde_json::from_value::<AuditRow>(value).is_err());
+    let absent = serde_json::to_value(stamped_fixed_row()).unwrap();
+    assert!(
+        serde_json::from_value::<AuditRow>(absent)
+            .unwrap()
+            .model_hash
+            .is_none()
+    );
+}
+
 #[test]
 fn an_unknown_audit_row_field_is_malformed() {
     let mut value = serde_json::to_value(hashed_fixed_row()).unwrap();

@@ -46,8 +46,19 @@ pub struct AuditRow {
     /// as `morpholog hash` prints it. Absent on older rows; presence on a
     /// row that also carries an attestation and parameter names selects
     /// the leaf encoding that commits to it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_string"
+    )]
     pub model_hash: Option<String>,
+}
+
+/// An optional field that, when present, must be a string: absent is
+/// `None`, and a JSON `null` is refused rather than read as absent, so a
+/// row has one spelling for "no hash".
+fn present_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(d).map(Some)
 }
 
 impl AuditRow {

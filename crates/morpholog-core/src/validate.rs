@@ -599,6 +599,15 @@ pub enum ValidationError {
         predicate: String,
         invariant: String,
     },
+    /// A generated invariant or definition is not exactly what the
+    /// declared disciplines lower to: altered, or implied by no
+    /// declaration. Generated items stay out of the programme hash
+    /// because reparsing regenerates them, so one that differs would
+    /// change the rules a programme enforces without changing its hash.
+    #[error(
+        "the generated {kind} `{name}` is not what the declared disciplines lower to; change the declaration, not the generated {kind}, so the programme's hash names the rules it enforces"
+    )]
+    GeneratedNotFaithful { kind: String, name: String },
 }
 
 impl std::fmt::Display for ValidationContext {
@@ -1088,6 +1097,32 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
             errors.push(ValidationError::DisciplineNotLowered {
                 predicate: predicate.to_string(),
                 invariant,
+            });
+        }
+    }
+
+    let (lowered_invariants, lowered_definitions) = crate::disciplines::exact_lowering(p);
+    for inv in p
+        .invariants
+        .iter()
+        .filter(|inv| inv.origin == crate::ir::InvariantOrigin::Discipline)
+    {
+        if !lowered_invariants.iter().any(|exact| exact == inv) {
+            errors.push(ValidationError::GeneratedNotFaithful {
+                kind: "invariant".to_string(),
+                name: inv.name.to_string(),
+            });
+        }
+    }
+    for def in p
+        .definitions
+        .iter()
+        .filter(|def| def.origin == crate::ir::DefinitionOrigin::Discipline)
+    {
+        if !lowered_definitions.iter().any(|exact| exact == def) {
+            errors.push(ValidationError::GeneratedNotFaithful {
+                kind: "definition".to_string(),
+                name: def.name.to_string(),
             });
         }
     }

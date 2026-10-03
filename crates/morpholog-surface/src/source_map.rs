@@ -149,6 +149,8 @@ impl SourceMap {
             ValidationError::DisciplineLineageUnfit { pointer, .. } => {
                 self.decl_span(DeclKind::Predicate, pointer)
             }
+            // Generated items have no source; only hand-built IR alters one.
+            ValidationError::GeneratedNotFaithful { .. } => None,
             // Only hand-built IR can declare a CalendarSpan argument; point at the declaration.
             ValidationError::CalendarSpanNotDeclarable { declaration, .. } => self
                 .decl_span(DeclKind::Predicate, declaration)

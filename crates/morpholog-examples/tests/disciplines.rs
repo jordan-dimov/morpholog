@@ -1265,3 +1265,77 @@ transformation record(meter, partial):
     let program = parse_program(source).expect("`partial` must remain usable as a name");
     program.validate().expect("validates");
 }
+
+const RATES: &str = r"
+program rates
+predicate Account(account: Subject, holder: Subject)
+    unique by (account)
+predicate Rate(charge: Subject, effective_from: Date, amount: Decimal)
+    effective by (charge) on (effective_from) partial
+invariant accounts_have_holders:
+    Account(a, h) implies Account(a, h)
+";
+
+/// Generated items stay out of the programme hash, because reparsing
+/// regenerates them from the declarations. One that differs from that
+/// lowering would change the rules without changing the hash, so the
+/// validator holds every generated item to the exact lowering.
+#[test]
+fn a_generated_item_that_is_not_the_exact_lowering_is_refused() {
+    let base = parsed(RATES);
+    let hash = morpholog_core::format::canonical_hash(&base);
+    let refused = |program: &Program, name: &str| {
+        assert_eq!(
+            morpholog_core::format::canonical_hash(program),
+            hash,
+            "the hash cannot see it"
+        );
+        let errors = program
+            .validate()
+            .expect_err("an unfaithful generated item must be refused");
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                ValidationError::GeneratedNotFaithful { name: n, .. } if n == name
+            )),
+            "{errors:?}"
+        );
+    };
+
+    // An altered generated invariant: same name, another body.
+    let mut altered = base.clone();
+    let generated = altered
+        .invariants
+        .iter()
+        .position(|i| i.origin == morpholog_core::InvariantOrigin::Discipline)
+        .unwrap();
+    let authored_body = altered
+        .invariants
+        .iter()
+        .find(|i| i.origin == morpholog_core::InvariantOrigin::Authored)
+        .unwrap()
+        .body
+        .clone();
+    altered.invariants[generated].body = authored_body.clone();
+    let name = altered.invariants[generated].name.to_string();
+    refused(&altered, &name);
+
+    // A generated invariant no declaration implies.
+    let mut extra = base.clone();
+    let mut smuggled = extra.invariants[generated].clone();
+    smuggled.name = "smuggled_rule".into();
+    smuggled.body = authored_body;
+    extra.invariants.push(smuggled);
+    refused(&extra, "smuggled_rule");
+
+    // An altered generated selector, the `effective by` definition.
+    let mut selector = base.clone();
+    let position = selector
+        .definitions
+        .iter()
+        .position(|d| d.origin == morpholog_core::DefinitionOrigin::Discipline)
+        .expect("effective by generates a selector");
+    selector.definitions[position].parameters.reverse();
+    let name = selector.definitions[position].name.to_string();
+    refused(&selector, &name);
+}

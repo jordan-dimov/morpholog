@@ -1246,6 +1246,9 @@ pub morpholog_core::ValidationError::EqualityKindMismatch::context: morpholog_co
 pub morpholog_core::ValidationError::EqualityKindMismatch::left: morpholog_core::PredicateArgKind
 pub morpholog_core::ValidationError::EqualityKindMismatch::operator: &'static str
 pub morpholog_core::ValidationError::EqualityKindMismatch::right: morpholog_core::PredicateArgKind
+pub morpholog_core::ValidationError::GeneratedNotFaithful
+pub morpholog_core::ValidationError::GeneratedNotFaithful::kind: alloc::string::String
+pub morpholog_core::ValidationError::GeneratedNotFaithful::name: alloc::string::String
 pub morpholog_core::ValidationError::InvalidValueExtraction
 pub morpholog_core::ValidationError::InvalidValueExtraction::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::InvalidValueExtraction::extract: usize
