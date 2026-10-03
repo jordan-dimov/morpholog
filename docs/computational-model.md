@@ -28,10 +28,12 @@ The same programme, admitted state, proposal and subject input give the same dec
 
 ### 3. Pure decisions
 
-Evaluating a rule reads no file, network, process, environment or clock, runs no SQL of its own and calls back into no host code a rule can choose. External computation produces proposals and claims; it never runs inside a decision. Fresh subjects are the one input taken during execution, through one explicit boundary.
+A decision's meaning has no ambient inputs. The kernel reads no file, standard input, network, process, environment or clock, runs no SQL of its own and calls no host function a rule can choose. External computation produces proposals and claims; it never runs inside a decision.
+
+Fresh subjects are the one input taken during execution, through one explicit boundary, the subject source. A runtime may produce that input from the clock and randomness, as the shipped one does (UUIDv7): the subject sequence is the semantic input, never the way it was generated.
 
 - **Holds by:** `morpholog-core` has no I/O dependency; `new Subject()` draws from a source the caller supplies.
-- **Checked by:** `scripts/kernel_purity.sh` (in precommit and CI): no randomness crate among the kernel's dependencies, and no clock, randomness, file, network, process, environment or thread access in its source. A tripwire, not a proof.
+- **Checked by:** `scripts/kernel_purity.sh` (in precommit and CI): no randomness crate among the kernel's dependencies, and no clock, randomness, file, standard I/O, network, process, environment or thread access, and no printing, in its source. A tripwire, not a proof.
 - **Gap:** a subject source is caller code, so termination assumes it answers (see premise T6).
 
 ### 4. Explicit state
@@ -109,7 +111,7 @@ At each node, any repeated work ranges over something finite and already materia
 
 So, by induction on rank, every evaluation is finite. A transformation reaches `new Subject()` finitely often, so it consumes a finite prefix of the subject input.
 
-A few loops iterate no finite container, and each carries its own ranking argument:
+The argument works at the level of the language's own operations. Library operations over finite scalar values, such as parsing a decimal or a date literal or multiplying two decimals, are assumed to terminate. A few loops the kernel writes itself iterate no finite container, and each carries its own ranking argument:
 
 - `period_index` searches by halving: its bounds start a fixed distance apart (twice the number of days in the calendar, plus four) and the gap halves each step;
 - an exact sum's total sheds one trailing zero per step, and its scale strictly falls;

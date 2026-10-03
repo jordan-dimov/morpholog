@@ -33,7 +33,9 @@ enum Draws {
     MaterialisedCollection,
     /// Takes one subject from the supplied subject input.
     SubjectInput,
-    /// Runs a loop of its own, with its own ranking argument.
+    /// Runs a loop the kernel writes itself, with its own ranking
+    /// argument. Library operations on finite scalars (parsing a decimal,
+    /// multiplying two) are assumed to terminate and are not counted.
     InternallyBounded,
 }
 use Draws::*;

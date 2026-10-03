@@ -3,15 +3,16 @@
 # decision in the kernel: `new Subject()` takes its subjects from a source
 # the caller supplies, and nothing else in `morpholog-core` may source a
 # value from the outside world. (Its hash maps still seed from host
-# randomness, which changes no result.) Nor does a decision touch files,
-# the network, other processes, the environment or threads. A mechanical
-# tripwire, not a proof - Rust can always reach `std::time` - in three
-# parts:
+# randomness, which changes no result.) Nor does the kernel touch files,
+# standard input or output, the network, other processes, the environment
+# or threads. A mechanical tripwire, not a proof - Rust can always reach
+# `std::time` - in three parts:
 #
 #   1. no randomness crate among the kernel's normal dependencies
 #      (dev-dependencies such as proptest are free to bring their own);
 #   2. no known ambient clock or randomness read in the kernel's source;
-#   3. no file, network, process, environment or thread access in it.
+#   3. no file, standard I/O, network, process, environment or thread
+#      access in it, and no printing.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -30,18 +31,18 @@ if git grep -nE 'SystemTime::now|Instant::now|Timestamp::now|Zoned::now|Uuid::no
 fi
 # A path (`std::fs`), a grouped import (`use std::{fs, io}`, possibly
 # across lines, so `fs::read` after it is caught too), or `std` itself
-# under another name.
+# under another name; and the printing macros.
 # Exit 0 = found, 1 = none; anything else means the check itself broke.
 outside_world() {
     git ls-files -z -- 'crates/morpholog-core/src/*.rs' | perl -e '
-        my $mods = qr/\b(?:fs|net|process|env|thread)\b/;
+        my $mods = qr/\b(?:fs|io|net|process|env|thread)\b/;
         my $found = 0;
         local $/ = "\0";
         for my $file (<STDIN>) {
             chomp $file;
             open(my $fh, "<", $file) or die "cannot read $file: $!";
             my $src = do { local $/; <$fh> };
-            while ($src =~ /std\s*::\s*(?:$mods|\{((?:[^{}]|\{[^{}]*\})*)\})|\bstd\s+as\b/g) {
+            while ($src =~ /std\s*::\s*(?:$mods|\{((?:[^{}]|\{[^{}]*\})*)\})|\bstd\s+as\b|\b(?:e?print(?:ln)?|dbg)!/g) {
                 my ($at, $text, $group) = ($-[0], $&, $1);
                 next if defined $group && $group !~ $mods;
                 my $line = 1 + (substr($src, 0, $at) =~ tr/\n//);
