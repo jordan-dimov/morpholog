@@ -63,6 +63,7 @@ fn subject_input() -> Vec<Subject> {
 /// diagnostic strings are left out, so rewording one changes nothing.
 fn error(e: &EvalError) -> Value {
     match e {
+        // Not always a name: an unbound derived key carries a sentence here.
         EvalError::UnboundVariable(_) => json!({"error": "unbound_variable"}),
         EvalError::TypeMismatch(_) => json!({"error": "type_mismatch"}),
         EvalError::ValueOfZeroMatches(predicate) => {
@@ -166,9 +167,15 @@ fn proposal_case(
 fn proposals(program: &Program, out: &mut BTreeMap<String, Fingerprints>) {
     for t in &program.transformations {
         for salt in 0..3u64 {
-            let Some(args) = sample_args(program, t, salt) else {
-                continue;
-            };
+            // Every transformation is asked: one the generator cannot
+            // give arguments to would otherwise leave the corpus unseen.
+            let args = sample_args(program, t, salt).unwrap_or_else(|| {
+                panic!(
+                    "no sampled arguments for `{}::{}`: extend the generator so the \
+                     corpus covers it",
+                    program.name, t.name
+                )
+            });
             let (input, decided) = proposal_case(program, t, args, &sample_state(program, 2, salt));
             record(
                 out,
