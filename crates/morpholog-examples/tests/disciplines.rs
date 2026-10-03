@@ -66,8 +66,7 @@ fn registry_with_figure() -> (Program, State) {
         p.transformation("record").unwrap(),
         vec![subj("f1"), subj("acme"), common::dec(100)],
         State::default(),
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     (p, state)
 }
@@ -88,8 +87,7 @@ fn a_duplicate_under_unique_by_is_refused_with_the_generated_name() {
         p.transformation("record").unwrap(),
         vec![subj("f1"), subj("acme"), common::dec(999)],
         &state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     assert!(
         reason.to_string().contains("figure_unique_by_figure_id"),
@@ -107,8 +105,7 @@ fn the_pointer_moves_atomically_and_its_singleton_holds() {
         p.transformation("correct").unwrap(),
         vec![subj("acme"), subj("f2"), subj("f1"), common::dec(95)],
         state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     // A second `record` for the same owner would admit a second
     // pointer beside the moved one.
@@ -116,8 +113,7 @@ fn the_pointer_moves_atomically_and_its_singleton_holds() {
         p.transformation("record").unwrap(),
         vec![subj("f3"), subj("acme"), common::dec(80)],
         &state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     assert!(
         reason
@@ -136,15 +132,13 @@ fn the_lineage_cannot_fork() {
         p.transformation("correct").unwrap(),
         vec![subj("acme"), subj("f2"), subj("f1"), common::dec(95)],
         state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     let reason = must_reject(
         p.transformation("fork_history").unwrap(),
         vec![subj("f9"), subj("f1")],
         &state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     assert!(
         reason
@@ -431,7 +425,7 @@ fn the_same_nor_at_two_instants_now_violates_the_declared_uniqueness() {
             args: vec![subj("nor1"), subj("v1"), ts("2026-10-24T18:00:00Z")],
         },
     ]);
-    let holds = morpholog_core::eval_invariant(strengthened, &two_instants, None, &p.definitions)
+    let holds = morpholog_test_support::eval_invariant(&p, strengthened, &two_instants, None)
         .expect("evaluation should not error");
     assert!(
         !holds,
@@ -447,8 +441,8 @@ fn a_decision_id_with_a_second_outcome_is_refused() {
     let p = bio::program();
     // Deploy, oversee, start, match, verify twice, decide.
     let state = bio_state_with_decision();
-    let outcome = morpholog_core::propose(
-        p.transformation("decide_on_identification").unwrap(),
+    let outcome = morpholog_test_support::propose(
+        &p,
         &morpholog_core::Transition {
             transformation_name: "decide_on_identification".into(),
             args: vec![
@@ -460,8 +454,6 @@ fn a_decision_id_with_a_second_outcome_is_refused() {
             actor: morpholog_core::Subject::from("anna"),
         },
         &state,
-        &p.invariants,
-        &p.definitions,
         &mut morpholog_test_support::fresh(),
     )
     .expect("kernel must not error");
@@ -473,8 +465,6 @@ fn a_decision_id_with_a_second_outcome_is_refused() {
 
 fn bio_state_with_decision() -> State {
     let p = bio::program();
-    let invs = &p.invariants;
-    let defs = &p.definitions;
     let mut state = State::default();
     for (t, args, actor) in [
         (
@@ -537,7 +527,7 @@ fn bio_state_with_decision() -> State {
             "anna",
         ),
     ] {
-        state = must_accept_as(p.transformation(t).unwrap(), args, actor, state, invs, defs);
+        state = must_accept_as(p.transformation(t).unwrap(), args, actor, state, &p);
     }
     state
 }
@@ -632,7 +622,8 @@ transformation restate(owner, successor, prior):
     admit Supersedes(successor, prior)
 "#,
     );
-    let report = morpholog_core::CoverageTracker::new(&program).into_report();
+    let report = morpholog_core::CoverageTracker::new(morpholog_test_support::validated(&program))
+        .into_report();
     let lineage_entry = report
         .invariants
         .iter()
@@ -738,8 +729,7 @@ fn the_generated_selector_admits_only_the_rate_in_force() {
             &add,
             vec![subj("c1"), common::date(from), common::dec_str(amount)],
             state,
-            &p.invariants,
-            &p.definitions,
+            &p,
         );
     }
 
@@ -748,8 +738,7 @@ fn the_generated_selector_admits_only_the_rate_in_force() {
         &price,
         vec![subj("c1"), common::dec_str("12.00")],
         state.clone(),
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     assert!(common::has_claim(
         &ok,
@@ -758,13 +747,7 @@ fn the_generated_selector_admits_only_the_rate_in_force() {
     ));
 
     for wrong in ["10.00", "99.00"] {
-        must_reject(
-            &price,
-            vec![subj("c1"), common::dec_str(wrong)],
-            &state,
-            &p.invariants,
-            &p.definitions,
-        );
+        must_reject(&price, vec![subj("c1"), common::dec_str(wrong)], &state, &p);
     }
 }
 
@@ -884,12 +867,11 @@ transformation see(charge):
             common::dec_str("2"),
         ],
         State::default(),
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     // And the selector still selects: a version is in force, so this is
     // admitted rather than refused by the invariant above.
-    must_accept(&see, vec![subj("c1")], state, &p.invariants, &p.definitions);
+    must_accept(&see, vec![subj("c1")], state, &p);
 }
 
 /// The clause claims one version per key per date, so it owes the
@@ -910,8 +892,7 @@ fn two_versions_at_one_effective_date_cannot_both_stand() {
             common::dec_str("10.00"),
         ],
         State::default(),
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     must_reject(
         &add,
@@ -921,8 +902,7 @@ fn two_versions_at_one_effective_date_cannot_both_stand() {
             common::dec_str("12.00"),
         ],
         &state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
 }
 

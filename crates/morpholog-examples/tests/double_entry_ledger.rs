@@ -12,8 +12,9 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, dec, has_claim, subj};
-use morpholog_core::{State, eval_invariant};
+use morpholog_core::State;
 use morpholog_examples::double_entry_ledger;
+use morpholog_test_support::eval_invariant;
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
@@ -276,7 +277,8 @@ fn lone_journal_entry_without_lines_violates_invariant() {
         &[subj("orphan"), subj("d_2026_04_15"), subj("p_2026_04")],
     )]);
     let inv = double_entry_ledger::journal_entry_has_lines();
-    let holds = eval_invariant(&inv, &state, None, &[]).expect("evaluation should not error");
+    let holds = eval_invariant(&double_entry_ledger::program(), &inv, &state, None)
+        .expect("evaluation should not error");
     assert!(
         !holds,
         "a JournalEntry with no matching JournalLine must violate journal_entry_has_lines"

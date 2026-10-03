@@ -15,7 +15,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{EvalError, State, enumerate_derived, ir_builder as b};
+use morpholog_core::{State, ir_builder as b};
+use morpholog_test_support::enumerate_derived;
 use morpholog_test_support::{claim_instance, dec, subj};
 
 fn line_program_predicates() -> Vec<morpholog_core::PredicateDecl> {
@@ -68,7 +69,8 @@ fn subset_head_collapses_witnesses_and_orders_rows() {
         .validate()
         .expect("a subset head is lawful: no head-totality rule exists");
 
-    let rows = enumerate_derived(&derived, &line_state(), &[]).expect("enumerate should succeed");
+    let rows =
+        enumerate_derived(&program, &derived, &line_state()).expect("enumerate should succeed");
     assert_eq!(
         rows,
         vec![
@@ -80,7 +82,7 @@ fn subset_head_collapses_witnesses_and_orders_rows() {
 }
 
 #[test]
-fn non_key_value_reference_refuses_at_both_tiers() {
+fn non_key_value_reference_is_refused_by_validation() {
     let derived = morpholog_core::DerivedClaim {
         predicate: "InvoiceLineEcho".into(),
         keys: vec!["invoice".into()],
@@ -117,10 +119,6 @@ fn non_key_value_reference_refuses_at_both_tiers() {
         msg.contains("line") && msg.contains("head") && msg.contains("field: _"),
         "the refusal names the variable and both remedies, got: {msg}"
     );
-
-    let eval_err = enumerate_derived(&derived, &line_state(), &[])
-        .expect_err("eval remains the second tier for hand-built IR");
-    assert!(matches!(eval_err, EvalError::UnboundVariable(_)));
 }
 
 #[test]
@@ -142,7 +140,21 @@ fn positional_lookup_extracts_the_first_wildcard_only() {
         &[subj("march"), subj("s1"), dec(42)],
     )]);
 
-    let rows = enumerate_derived(&derived, &state, &[]).expect("enumerate should succeed");
+    let program = b::program("probe")
+        .predicates(vec![
+            b::predicate("Sheet")
+                .subject("period_end")
+                .subject("sheet")
+                .decimal("rate")
+                .build(),
+            b::predicate("SheetPeriod")
+                .subject("sheet")
+                .subject("extracted")
+                .build(),
+        ])
+        .derived_claims(vec![derived.clone()])
+        .build();
+    let rows = enumerate_derived(&program, &derived, &state).expect("enumerate should succeed");
     assert_eq!(
         rows,
         vec![claim_instance("SheetPeriod", &[subj("s1"), subj("march")])],

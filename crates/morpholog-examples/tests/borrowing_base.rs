@@ -11,8 +11,9 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, dec, dec_str, has_claim, subj};
-use morpholog_core::{EvalValue, RejectionReason, State, enumerate_derived};
+use morpholog_core::{EvalValue, RejectionReason, State};
 use morpholog_examples::borrowing_base;
+use morpholog_test_support::enumerate_derived;
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
@@ -90,9 +91,9 @@ fn facility_utilisation_reports_drawn_over_collateral() {
         pre,
     );
     let rows = enumerate_derived(
+        &borrowing_base::program(),
         &borrowing_base::facility_utilisation(),
         &state,
-        &borrowing_base::definitions(),
     )
     .expect("enumerate_derived should not error");
     assert!(
@@ -121,9 +122,9 @@ fn the_asset_register_is_keyed_by_the_asset_alone() {
         pre,
     );
     let rows = enumerate_derived(
+        &borrowing_base::program(),
         &borrowing_base::asset_value(),
         &state,
-        &borrowing_base::definitions(),
     )
     .expect("enumerate_derived should not error");
     assert_eq!(

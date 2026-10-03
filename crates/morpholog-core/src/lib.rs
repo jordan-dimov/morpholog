@@ -2,9 +2,10 @@
 //!
 //! The synchronous, pure heart of Morpholog. It defines the IR
 //! (invariants, transformations, claims, statements, expressions),
-//! evaluates invariants against in-memory state, and exposes [`propose`],
-//! the function that turns a proposed transformation into either an
-//! accepted post-state or a rejected attempt.
+//! evaluates invariants against in-memory state, and exposes
+//! [`PreparedProgram::propose`], which turns a proposed transformation into
+//! either an accepted post-state or a rejected attempt. Evaluation takes a
+//! validated programme: [`PreparedProgram`] or [`ValidatedProgram`].
 //!
 //! Does no I/O. The PostgreSQL persistence adapter lives in the separate
 //! `morpholog-postgres` crate and wraps this kernel as an async boundary;
@@ -63,12 +64,11 @@ pub use coverage::{
     render_coverage,
 };
 pub use definitions::resolve_defined_calls;
-pub use derive::{enumerate_derived, eval_invariant, invariant_witness};
 pub use disciplines::{in_force_define_name, lower_discipline_definitions, lower_disciplines};
 pub use eval::{EvalError, RenderedClaim, literal_value, ordered_compare_error};
 pub use explain::{
     ErrorRejection, Explanation, GateKind, GateRejection, InvariantRejection, MissingClaim,
-    Rejection, TransitionRef, Verdict, explain,
+    Rejection, TransitionRef, Verdict,
 };
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use impact::{Impact, ImpactPlan};
@@ -84,7 +84,7 @@ pub use prepared::PreparedProgram;
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RejectionReason, RequireOutcome, StagedDelta,
     SubjectSource, TraceEntry, TracedProposal, Transition, WitnessBinding,
-    finish_staged_delta_with, propose, propose_stage_delta, propose_with, propose_with_trace,
+    finish_staged_delta_with,
 };
 pub use reads::{KeyedPattern, KnownTerm, ReadFilter, ReadPlan};
 pub use schema::{intent_arg_schema, transformation_arg_schema};

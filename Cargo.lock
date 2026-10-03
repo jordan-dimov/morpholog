@@ -1256,6 +1256,7 @@ dependencies = [
  "morpholog-examples",
  "morpholog-postgres",
  "morpholog-surface",
+ "morpholog-test-support",
  "morpholog-witness",
  "rust_decimal",
  "serde",

@@ -115,18 +115,30 @@ async fn backdated_amendment_changes_the_effective_answer_across_transaction_tim
     let t1 = subj("t1");
     let target = date("2026-02-20");
 
-    let at_tid1 = list_derived_at(&pool, &timeline, &trade_lifecycle::definitions(), tid1)
-        .await
-        .unwrap();
+    let at_tid1 = list_derived_at(
+        &pool,
+        morpholog_test_support::validated(&trade_lifecycle::program()),
+        timeline.predicate.as_str(),
+        tid1,
+    )
+    .await
+    .unwrap()
+    .expect("the programme derives it");
     assert_eq!(
         quantity_effective_on(&at_tid1, &t1, &target),
         Some(Decimal::new(100, 0)),
         "as of tid1 the quantity effective on 2026-02-20 was 100 - tv2 not yet recorded"
     );
 
-    let at_tid2 = list_derived_at(&pool, &timeline, &trade_lifecycle::definitions(), tid2)
-        .await
-        .unwrap();
+    let at_tid2 = list_derived_at(
+        &pool,
+        morpholog_test_support::validated(&trade_lifecycle::program()),
+        timeline.predicate.as_str(),
+        tid2,
+    )
+    .await
+    .unwrap()
+    .expect("the programme derives it");
     assert_eq!(
         quantity_effective_on(&at_tid2, &t1, &target),
         Some(Decimal::new(120, 0)),
@@ -134,9 +146,14 @@ async fn backdated_amendment_changes_the_effective_answer_across_transaction_tim
     );
 
     // Current state agrees with the latest transaction-time coordinate.
-    let current = list_derived(&pool, &timeline, &trade_lifecycle::definitions())
-        .await
-        .unwrap();
+    let current = list_derived(
+        &pool,
+        morpholog_test_support::validated(&trade_lifecycle::program()),
+        timeline.predicate.as_str(),
+    )
+    .await
+    .unwrap()
+    .expect("the programme derives it");
     assert_eq!(
         quantity_effective_on(&current, &t1, &target),
         Some(Decimal::new(120, 0)),
@@ -155,9 +172,15 @@ async fn as_of_tid1_timeline_omits_the_later_amendment() {
     let timeline = trade_lifecycle::terms_timeline();
     let t1 = subj("t1");
 
-    let at_tid1 = list_derived_at(&pool, &timeline, &trade_lifecycle::definitions(), tid1)
-        .await
-        .unwrap();
+    let at_tid1 = list_derived_at(
+        &pool,
+        morpholog_test_support::validated(&trade_lifecycle::program()),
+        timeline.predicate.as_str(),
+        tid1,
+    )
+    .await
+    .unwrap()
+    .expect("the programme derives it");
     let rows_t1: Vec<_> = at_tid1
         .iter()
         .filter(|r| r.predicate.as_str() == "TermsTimeline" && r.args.first() == Some(&t1))
@@ -168,9 +191,15 @@ async fn as_of_tid1_timeline_omits_the_later_amendment() {
         "as of tid1 only the original terms version exists: {at_tid1:?}"
     );
 
-    let at_tid2 = list_derived_at(&pool, &timeline, &trade_lifecycle::definitions(), tid2)
-        .await
-        .unwrap();
+    let at_tid2 = list_derived_at(
+        &pool,
+        morpholog_test_support::validated(&trade_lifecycle::program()),
+        timeline.predicate.as_str(),
+        tid2,
+    )
+    .await
+    .unwrap()
+    .expect("the programme derives it");
     let rows_t2: Vec<_> = at_tid2
         .iter()
         .filter(|r| r.predicate.as_str() == "TermsTimeline" && r.args.first() == Some(&t1))

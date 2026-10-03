@@ -14,9 +14,10 @@
 mod common;
 
 use common::{claim_instance, dec, subj};
-use morpholog_core::{GateKind, Rejection, State, Subject, Transition, Verdict, explain};
+use morpholog_core::{GateKind, Rejection, State, Subject, Transition, Verdict};
 use morpholog_examples::approval_controls;
 use morpholog_surface::parse_program;
+use morpholog_test_support::explain;
 
 fn transition(name: &str, args: Vec<morpholog_core::EvalValue>, actor: &str) -> Transition {
     Transition {

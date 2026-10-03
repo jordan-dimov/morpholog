@@ -7,8 +7,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{EvalError, Outcome, State, Subject, TraceEntry, propose_with_trace};
+use morpholog_core::{EvalError, Outcome, State, Subject, TraceEntry};
 use morpholog_surface::parse_program;
+use morpholog_test_support::propose_with_trace;
 use morpholog_test_support::{claim_instance, coll, subj, test_transition};
 
 const DRAWS: &str = "
@@ -67,14 +68,7 @@ fn subjects_are_drawn_in_statement_and_collection_order_depth_first() {
             coll(vec![subj("j1"), subj("j2")]),
         ],
     );
-    let traced = propose_with_trace(
-        t,
-        &transition,
-        &State::default(),
-        &p.invariants,
-        &p.definitions,
-        &mut sequence(7),
-    );
+    let traced = propose_with_trace(&p, &transition, &State::default(), &mut sequence(7));
     let morpholog_core::TracedProposal::Completed {
         outcome: Outcome::Accepted {
             asserted_claims, ..
@@ -126,14 +120,8 @@ fn a_source_that_runs_out_is_a_typed_error() {
             coll(vec![subj("j1"), subj("j2")]),
         ],
     );
-    let result = morpholog_core::propose(
-        t,
-        &transition,
-        &State::default(),
-        &p.invariants,
-        &p.definitions,
-        &mut sequence(3),
-    );
+    let result =
+        morpholog_test_support::propose(&p, &transition, &State::default(), &mut sequence(3));
     assert!(
         matches!(result, Err(EvalError::SubjectSourceExhausted)),
         "{result:?}"
@@ -146,12 +134,10 @@ fn a_refusal_draws_nothing_after_it_stops() {
     let p = parse_program(DRAWS).unwrap();
     let t = p.transformation("stops").unwrap();
     let mut source = sequence(3);
-    let result = morpholog_core::propose(
-        t,
+    let result = morpholog_test_support::propose(
+        &p,
         &test_transition(t, vec![subj("x")]),
         &State::default(),
-        &p.invariants,
-        &p.definitions,
         &mut source,
     );
     assert!(matches!(result, Ok(Outcome::Rejected { .. })), "{result:?}");

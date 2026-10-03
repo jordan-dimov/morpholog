@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use anyhow::Context;
-use morpholog_core::{BatchScore, CandidateScore, Program, invariants_using_pre};
+use morpholog_core::{BatchScore, CandidateScore, ValidatedProgram, invariants_using_pre};
 use morpholog_postgres::{
     EvidencePack, SplitBoundary, read_prefix_stream, score_candidate, score_candidate_against_pack,
     score_candidate_against_packs_lazily,
@@ -21,7 +21,7 @@ use crate::commands::{
 
 pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
-    validate_or_report(&parsed)?;
+    let validated = validate_or_report(&parsed)?;
 
     // Only state invariants can be scored, so refuse `pre(...)` before
     // any database or pack work.
@@ -43,17 +43,14 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
 
     // Batch over a directory of packs: a single JSON report, offline.
     if let Some(dir) = &args.packs {
-        let report = score_against_packs(&parsed.program, dir)?;
+        let report = score_against_packs(validated, dir)?;
         return print_json(&report);
     }
 
     let report = match &args.pack {
-        Some(pack_path) => score_against_pack(
-            &parsed.program,
-            pack_path,
-            args.anchor_file.as_deref(),
-            split,
-        )?,
+        Some(pack_path) => {
+            score_against_pack(validated, pack_path, args.anchor_file.as_deref(), split)?
+        }
         None => {
             let url = args.database_url.as_deref().ok_or_else(|| {
                 anyhow::anyhow!(
@@ -62,7 +59,7 @@ pub(crate) async fn run(args: EvaluateArgs) -> anyhow::Result<()> {
                 )
             })?;
             let pool = connect(url).await?;
-            score_candidate(&pool, &parsed.program, split)
+            score_candidate(&pool, validated, split)
                 .await
                 .context("score_candidate failed")?
         }
@@ -90,7 +87,7 @@ fn parse_boundary(raw: &str) -> anyhow::Result<SplitBoundary> {
 /// reading one pack at a time. An unreadable or unparseable file aborts
 /// the batch, since the directory is controlled input. A pack that parses
 /// but does not verify is a per-case failure in the report.
-fn score_against_packs(program: &Program, dir: &Path) -> anyhow::Result<BatchScore> {
+fn score_against_packs(program: ValidatedProgram<'_>, dir: &Path) -> anyhow::Result<BatchScore> {
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
     for entry in std::fs::read_dir(dir)
         .with_context(|| format!("reading packs directory {}", dir.display()))?
@@ -141,7 +138,7 @@ fn read_complete_prefix(path: &Path) -> anyhow::Result<EvidencePack> {
 /// Read an evidence pack (and optional external anchor) and score the
 /// candidate against it, offline. File handling mirrors `audit verify-pack`.
 fn score_against_pack(
-    program: &Program,
+    program: ValidatedProgram<'_>,
     pack_path: &Path,
     anchor_path: Option<&Path>,
     split: Option<SplitBoundary>,

@@ -44,7 +44,7 @@ use serde::Serialize;
 use crate::definitions::DefinitionTable;
 use crate::eval::{EvalContext, EvalError, definition_call_frame, find_matches};
 use crate::fold::mentions_pre;
-use crate::ir::{Definition, InvariantOrigin, PredicateName, Program, Prop};
+use crate::ir::{Definition, InvariantOrigin, PredicateName, Prop};
 use crate::lint::implications_of;
 use crate::predicates_referenced_by_prop;
 use crate::state::{Bindings, State};
@@ -210,7 +210,8 @@ impl<'p> CoverageTracker<'p> {
     /// Classify every invariant of `program` and seed the usage table
     /// with its declared transformations (so dead ones appear at
     /// zero).
-    pub fn new(program: &'p Program) -> Self {
+    pub fn new(program: crate::ValidatedProgram<'p>) -> Self {
+        let program = program.as_program();
         let provenance = crate::disciplines::discipline_provenance(program);
         let entries: Vec<Entry<'p>> = program
             .invariants

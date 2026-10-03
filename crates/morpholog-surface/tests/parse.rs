@@ -1588,22 +1588,18 @@ fn a_sum_reached_through_many_definitions_keeps_its_unit() {
 
     let program = parse_program(&source).expect("the chain should parse");
     let prepared = morpholog_core::PreparedProgram::new(program).expect("and validate");
-    let transformation = prepared
-        .transformation(&"check_total".into())
+    let outcome = prepared
+        .propose(
+            &morpholog_core::Transition {
+                transformation_name: "check_total".into(),
+                args: vec![],
+                actor: morpholog_core::Subject::from("tester"),
+            },
+            &morpholog_core::State::default(),
+            &mut (0u64..).map(|n| morpholog_core::Subject::from(format!("fresh-{n}"))),
+        )
+        .expect("an empty sum through the chain must evaluate, not raise on kinds")
         .expect("the transformation is declared");
-    let outcome = morpholog_core::propose(
-        transformation,
-        &morpholog_core::Transition {
-            transformation_name: "check_total".into(),
-            args: vec![],
-            actor: morpholog_core::Subject::from("tester"),
-        },
-        &morpholog_core::State::default(),
-        &[],
-        prepared.program().definitions.as_slice(),
-        &mut (0u64..).map(|n| morpholog_core::Subject::from(format!("fresh-{n}"))),
-    )
-    .expect("an empty sum through the chain must evaluate, not raise on kinds");
     assert!(
         matches!(outcome, morpholog_core::Outcome::Accepted { .. }),
         "the empty sum should be the typed zero 0 t: {outcome:?}"

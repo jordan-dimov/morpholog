@@ -6,11 +6,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::ir_builder::{
-    date, dec, eq, params, period_index, require, span, term, transformation,
-};
-use morpholog_core::{Outcome, Prop, State};
-use morpholog_test_support::propose_with_test_actor;
+use crate::ir_builder::{date, dec, eq, params, period_index, require, span, term, transformation};
+use crate::kernel_tests::support::propose_with_test_actor;
+use crate::{Outcome, Prop, State};
 
 fn holds(prop: Prop) {
     let t = transformation("probe", params(&[]), vec![require(prop)]);
@@ -30,25 +28,22 @@ fn index_of(anchor: &str, sp: &str, at: &str, expected: &str) {
     // The defining property, checked through the IR for every row:
     // boundary(n) <= at < boundary(n+1), with an unrepresentable
     // boundary standing in as the clipped infinity.
-    let parsed = morpholog_core::calendar::parse_calendar_span(sp).expect("test span parses");
+    let parsed = crate::calendar::parse_calendar_span(sp).expect("test span parses");
     let n: i64 = expected.parse().expect("test index parses");
     for (k, upper) in [(n, false), (n + 1, true)] {
         let months = k * i64::from(parsed.months);
         let days = k * i64::from(parsed.days);
         let magnitude = format!("P{}M{}D", months.abs(), days.abs());
         let boundary = if k >= 0 {
-            morpholog_core::ir_builder::add(term(date(anchor)), term(span(&magnitude)))
+            crate::ir_builder::add(term(date(anchor)), term(span(&magnitude)))
         } else {
-            morpholog_core::ir_builder::sub(term(date(anchor)), term(span(&magnitude)))
+            crate::ir_builder::sub(term(date(anchor)), term(span(&magnitude)))
         };
         let prop = if upper {
             // boundary(n+1) > at, i.e. NOT (boundary <= at).
-            morpholog_core::ir_builder::not(morpholog_core::ir_builder::date_le(
-                boundary,
-                term(date(at)),
-            ))
+            crate::ir_builder::not(crate::ir_builder::date_le(boundary, term(date(at))))
         } else {
-            morpholog_core::ir_builder::date_le(boundary, term(date(at)))
+            crate::ir_builder::date_le(boundary, term(date(at)))
         };
         let t = transformation("bound", params(&[]), vec![require(prop)]);
         match propose_with_test_actor(&t, vec![], &State::default(), &[], &[]) {
@@ -170,7 +165,7 @@ fn day_only_spans_floor_toward_negative_infinity() {
 
 #[test]
 fn a_literal_zero_span_is_refused_at_validation_by_name() {
-    use morpholog_core::ir_builder::{invariant, program};
+    use crate::ir_builder::{invariant, program};
     let p = program("zero_span")
         .invariants(vec![invariant(
             "z",
@@ -216,7 +211,7 @@ fn a_literal_zero_span_is_refused_at_validation_by_name() {
 
 #[test]
 fn a_zero_span_through_a_variable_is_refused_at_evaluation_by_name() {
-    use morpholog_core::ir_builder::var;
+    use crate::ir_builder::var;
     // The span arrives through a binding, so the literal-zero
     // validation cannot see it; the runtime backstop names the
     // refusal.
@@ -224,8 +219,8 @@ fn a_zero_span_through_a_variable_is_refused_at_evaluation_by_name() {
         "probe",
         params(&[]),
         vec![
-            morpholog_core::ir_builder::let_("sp", term(span("P0D"))),
-            morpholog_core::ir_builder::let_(
+            crate::ir_builder::let_("sp", term(span("P0D"))),
+            crate::ir_builder::let_(
                 "n",
                 period_index(
                     term(date("2000-04-01")),
@@ -243,8 +238,8 @@ fn a_zero_span_through_a_variable_is_refused_at_evaluation_by_name() {
 
 #[test]
 fn every_slot_kind_mismatch_is_refused() {
-    use morpholog_core::ValueExpr;
-    use morpholog_core::ir_builder::{invariant, program};
+    use crate::ValueExpr;
+    use crate::ir_builder::{invariant, program};
     // One wrong slot per row: decimal anchor, date span, decimal
     // position - the whole (Date, CalendarSpan, Date) contract.
     let cases: Vec<(&str, ValueExpr)> = vec![
@@ -279,8 +274,8 @@ fn every_slot_kind_mismatch_is_refused() {
 
 #[test]
 fn a_bare_variable_in_each_slot_refines_to_its_kind() {
-    use morpholog_core::ir_builder::{assert_, let_, predicate, program, var};
-    use morpholog_core::{ParamKind, PredicateArgKind, transformation_param_kinds};
+    use crate::ir_builder::{assert_, let_, predicate, program, var};
+    use crate::{ParamKind, PredicateArgKind, transformation_param_kinds};
     // Parameters whose only use is a date slot land on Date: each
     // slot refines a bare variable toward its contract.
     let p = program("refines")
@@ -315,7 +310,7 @@ fn a_bare_variable_in_each_slot_refines_to_its_kind() {
 
 #[test]
 fn a_parameter_refined_by_the_span_slot_cannot_escape_the_expression() {
-    use morpholog_core::ir_builder::{assert_, let_, predicate, program, var};
+    use crate::ir_builder::{assert_, let_, predicate, program, var};
     // The span slot refines a bare parameter to CalendarSpan - and a
     // CalendarSpan parameter has no lawful argument vector, so the
     // programme is refused at the boundary, not at runtime.
@@ -349,7 +344,7 @@ fn a_parameter_refined_by_the_span_slot_cannot_escape_the_expression() {
 
 #[test]
 fn the_extractor_round_trips_through_the_formatter() {
-    use morpholog_core::ir_builder::{invariant, program};
+    use crate::ir_builder::{invariant, program};
     let p = program("fmt")
         .invariants(vec![invariant(
             "idx",
@@ -363,7 +358,7 @@ fn the_extractor_round_trips_through_the_formatter() {
             ),
         )])
         .build();
-    let rendered = morpholog_core::format::format_program(&p);
+    let rendered = crate::format::format_program(&p);
     assert!(
         rendered.contains("period_index(@2000-04-01, span(P1Y), @2026-07-01)"),
         "{rendered}"
@@ -377,8 +372,8 @@ fn the_extractor_round_trips_through_the_formatter() {
 /// names the real mistake rather than whatever a surplus argument hit.
 #[test]
 fn a_builtin_called_with_the_wrong_arity_is_refused_at_both_tiers() {
-    use morpholog_core::Builtin;
-    use morpholog_core::ir_builder::{call, invariant, program, var};
+    use crate::Builtin;
+    use crate::ir_builder::{call, invariant, program, var};
 
     let p = program("bad_arity")
         .invariants(vec![invariant(
@@ -418,7 +413,7 @@ fn a_builtin_called_with_the_wrong_arity_is_refused_at_both_tiers() {
 /// handle.
 #[test]
 fn min_and_max_compute_over_every_ordered_kind() {
-    use morpholog_core::ir_builder::{max, min};
+    use crate::ir_builder::{max, min};
 
     // Dates: the earlier and later of two.
     holds(eq(

@@ -219,24 +219,26 @@ async fn list_derived_at_recovers_historical_trial_balance() {
     // At tid1: only entry_001 with amount 100. Cash 100, revenue -100.
     let at_tid1 = list_derived_at(
         &pool,
-        &trial_balance,
-        &double_entry_ledger::definitions(),
+        morpholog_test_support::validated(&double_entry_ledger::program()),
+        trial_balance.predicate.as_str(),
         tid1,
     )
     .await
-    .unwrap();
+    .unwrap()
+    .expect("the programme derives it");
     assert_balance(&at_tid1, "account_cash", 100);
     assert_balance(&at_tid1, "account_revenue", -100);
 
     // At tid2: entry_001 (100) + entry_002 (200). Cash 300, revenue -300.
     let at_tid2 = list_derived_at(
         &pool,
-        &trial_balance,
-        &double_entry_ledger::definitions(),
+        morpholog_test_support::validated(&double_entry_ledger::program()),
+        trial_balance.predicate.as_str(),
         tid2,
     )
     .await
-    .unwrap();
+    .unwrap()
+    .expect("the programme derives it");
     assert_balance(&at_tid2, "account_cash", 300);
     assert_balance(&at_tid2, "account_revenue", -300);
 }
@@ -251,15 +253,21 @@ async fn list_derived_at_at_latest_equals_list_derived() {
     let trial_balance = double_entry_ledger::trial_balance_row();
     let at_tid3 = list_derived_at(
         &pool,
-        &trial_balance,
-        &double_entry_ledger::definitions(),
+        morpholog_test_support::validated(&double_entry_ledger::program()),
+        trial_balance.predicate.as_str(),
         tid3,
     )
     .await
-    .unwrap();
-    let current = list_derived(&pool, &trial_balance, &double_entry_ledger::definitions())
-        .await
-        .unwrap();
+    .unwrap()
+    .expect("the programme derives it");
+    let current = list_derived(
+        &pool,
+        morpholog_test_support::validated(&double_entry_ledger::program()),
+        trial_balance.predicate.as_str(),
+    )
+    .await
+    .unwrap()
+    .expect("the programme derives it");
 
     assert_eq!(
         at_tid3, current,
@@ -278,12 +286,13 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
     let trial_balance = double_entry_ledger::trial_balance_row();
     let baseline = list_derived_at(
         &pool,
-        &trial_balance,
-        &double_entry_ledger::definitions(),
+        morpholog_test_support::validated(&double_entry_ledger::program()),
+        trial_balance.predicate.as_str(),
         tid3,
     )
     .await
-    .unwrap();
+    .unwrap()
+    .expect("the programme derives it");
 
     // An IndependentlyVerifiedRevenue claim, which the trial balance
     // does not read.
@@ -305,12 +314,13 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
 
     let after_noise = list_derived_at(
         &pool,
-        &trial_balance,
-        &double_entry_ledger::definitions(),
+        morpholog_test_support::validated(&double_entry_ledger::program()),
+        trial_balance.predicate.as_str(),
         new_tid,
     )
     .await
-    .unwrap();
+    .unwrap()
+    .expect("the programme derives it");
     assert_eq!(
         baseline, after_noise,
         "an unrelated transformation must not change the trial balance, \
@@ -342,12 +352,13 @@ async fn list_derived_at_returns_correct_output_under_mixed_predicate_history() 
     let trial_balance = double_entry_ledger::trial_balance_row();
     let rows = list_derived_at(
         &pool,
-        &trial_balance,
-        &double_entry_ledger::definitions(),
+        morpholog_test_support::validated(&double_entry_ledger::program()),
+        trial_balance.predicate.as_str(),
         tid3,
     )
     .await
-    .unwrap();
+    .unwrap()
+    .expect("the programme derives it");
     // Current state: entry_001 (100) + entry_002 (200) + entry_001_v2 (150) = 450 on cash.
     assert_balance(&rows, "account_cash", 450);
     assert_balance(&rows, "account_revenue", -450);

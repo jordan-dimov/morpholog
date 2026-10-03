@@ -26,7 +26,7 @@ use morpholog_core::ir_builder::{
 use morpholog_core::{
     BatchScore, CandidateScorer, CaseOutcome, CaseResult, ClaimInstance, CoverageTracker,
     EvalValue, IntentInstance, SplitBoundaryReport, State, Subject, Transition, WitnessBinding,
-    effective_delta, explain,
+    effective_delta,
 };
 use morpholog_postgres::{
     AtomicAct, AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, CheckpointWitnesses,
@@ -37,6 +37,7 @@ use morpholog_postgres::{
     WindowPackManifest, WindowVerification, WitnessScheme, WitnessStanding, WitnessVerdict,
     WitnessesReport,
 };
+use morpholog_test_support::explain;
 use rust_decimal::Decimal;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -357,7 +358,8 @@ fn traced_run(
     args: Vec<EvalValue>,
     pre: &State,
 ) -> (PgProposalOutcome, Vec<morpholog_core::TraceEntry>) {
-    use morpholog_core::{Outcome, RejectionReason, TracedProposal, propose_with_trace};
+    use morpholog_core::{Outcome, RejectionReason, TracedProposal};
+    use morpholog_test_support::propose_with_trace;
     let p = traced_program();
     let t = p.transformations.iter().find(|t| t.name == *name).unwrap();
     let transition = Transition {
@@ -366,11 +368,9 @@ fn traced_run(
         actor: Subject::from("alex"),
     };
     match propose_with_trace(
-        t,
+        &p,
         &transition,
         pre,
-        &p.invariants,
-        &p.definitions,
         &mut morpholog_postgres::runtime_subjects(),
     ) {
         TracedProposal::Completed { outcome, trace } => {
@@ -414,7 +414,8 @@ fn traced_run(
 /// The kernel-error path, which carries a trace of its own: the statements
 /// that ran before the error, ending in the ambiguous lookup.
 fn errored_run() -> (String, Vec<morpholog_core::TraceEntry>) {
-    use morpholog_core::{TracedProposal, propose_with_trace};
+    use morpholog_core::TracedProposal;
+    use morpholog_test_support::propose_with_trace;
     let p = traced_program();
     let t = p
         .transformations
@@ -437,11 +438,9 @@ fn errored_run() -> (String, Vec<morpholog_core::TraceEntry>) {
         },
     ]);
     match propose_with_trace(
-        t,
+        &p,
         &transition,
         &pre,
-        &p.invariants,
-        &p.definitions,
         &mut morpholog_postgres::runtime_subjects(),
     ) {
         TracedProposal::Errored { error, trace } => (error.to_string(), trace),
@@ -1167,7 +1166,7 @@ fn coverage_report_serializes_as_pinned() {
     let p = morpholog_surface::parse_program(source).unwrap();
     p.validate().unwrap();
 
-    let mut tracker = CoverageTracker::new(&p);
+    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&p));
     let empty = State::from_claims(vec![]);
     let with_ref = State::from_claims(vec![ClaimInstance {
         predicate: "CurrentRef".into(),
@@ -1394,6 +1393,7 @@ fn refresh_derived_report_rejects_one_sided_snapshot() {
 #[test]
 fn score_reports_serialize_as_pinned() {
     let candidate = program("candidate")
+        .predicates(vec![predicate("Flagged").subject("x").build()])
         .invariants(vec![invariant(
             "no_flagged",
             not(claim("Flagged", vec![var("x")])),
@@ -1411,12 +1411,12 @@ fn score_reports_serialize_as_pinned() {
     let admitted = effective_delta(&empty, std::slice::from_ref(&flag_claim), &[]);
     let retracted = effective_delta(&flagged, &[], std::slice::from_ref(&flag_claim));
 
-    let mut scorer = CandidateScorer::new(&candidate).unwrap();
+    let mut scorer = CandidateScorer::new(morpholog_test_support::validated(&candidate)).unwrap();
     scorer.observe_transition(&flagged, &admitted, t1).unwrap();
     let report = scorer.into_report();
     assert_golden_bytes("score_report.json", &report);
 
-    let mut scorer = CandidateScorer::new(&candidate).unwrap();
+    let mut scorer = CandidateScorer::new(morpholog_test_support::validated(&candidate)).unwrap();
     scorer.observe_transition(&flagged, &admitted, t1).unwrap();
     // Render the boundaries as the scorer does, not typed by hand.
     let split_at = morpholog_postgres::wire_time::parse("2026-06-01T12:00:00Z").unwrap();

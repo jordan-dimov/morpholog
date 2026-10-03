@@ -11,7 +11,7 @@ use crate::witnesses::WitnessesReport;
 use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
 use morpholog_core::{
-    ClaimInstance, CoverageReport, CoverageTracker, PredicateName, Program, State,
+    ClaimInstance, CoverageReport, CoverageTracker, PredicateName, State, ValidatedProgram,
 };
 use serde::Serialize;
 use sqlx::PgPool;
@@ -216,7 +216,10 @@ async fn live_view_hash(
 /// Cost: one pass over the log, plus a state snapshot and antecedent
 /// evaluation for each transition whose delta touches a tracked
 /// antecedent. An offline auditor command, not a hot path.
-pub async fn coverage_replay(pool: &PgPool, program: &Program) -> Result<CoverageReport, PgError> {
+pub async fn coverage_replay(
+    pool: &PgPool,
+    program: ValidatedProgram<'_>,
+) -> Result<CoverageReport, PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
     let mut tracker = CoverageTracker::new(program);
     let needs_pre = tracker.needs_pre_state();

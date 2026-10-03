@@ -10,7 +10,6 @@
 
 use crate::eval::EvalError;
 use crate::ir::{DefinitionName, PredicateArgKind, Program, Prop, Stmt, ValueExpr};
-use crate::propose::WitnessBinding;
 use crate::state::{ClaimInstance, State};
 use std::collections::HashMap;
 
@@ -52,20 +51,6 @@ impl<'a> ValidatedProgram<'a> {
             return Ok(None);
         };
         crate::derive::eval_invariant(inv, state, pre_state, &self.0.definitions).map(Some)
-    }
-
-    /// The bindings that make the invariant named `name` fail in `state`,
-    /// empty when it holds. `Ok(None)` when no invariant has that name.
-    pub fn invariant_witness(
-        self,
-        name: &str,
-        state: &State,
-        pre_state: Option<&State>,
-    ) -> Result<Option<Vec<WitnessBinding>>, EvalError> {
-        let Some(inv) = self.0.invariant(name) else {
-            return Ok(None);
-        };
-        crate::derive::invariant_witness(inv, state, pre_state, &self.0.definitions).map(Some)
     }
 
     /// The rows of the derived claim computing `predicate`, in a

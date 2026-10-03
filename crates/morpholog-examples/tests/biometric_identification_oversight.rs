@@ -13,8 +13,9 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, subj, ts};
-use morpholog_core::{Rejection, State, Subject, Transition, Verdict, enumerate_derived};
+use morpholog_core::{Rejection, State, Subject, Transition, Verdict};
 use morpholog_examples::biometric_identification_oversight as bio;
+use morpholog_test_support::enumerate_derived;
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
@@ -177,7 +178,7 @@ fn the_refused_decision_explains_itself_in_the_statutes_terms() {
         ],
         actor: Subject::from("anna"),
     };
-    let explanation = morpholog_core::explain(
+    let explanation = morpholog_test_support::explain(
         &bio::program(),
         &transition,
         &state,
@@ -225,7 +226,7 @@ fn one_verification_names_the_gate_but_distinctness_is_not_a_missing_claim() {
         ],
         actor: Subject::from("anna"),
     };
-    let explanation = morpholog_core::explain(
+    let explanation = morpholog_test_support::explain(
         &bio::program(),
         &transition,
         &state,
@@ -298,7 +299,7 @@ fn two_distinct_verifications_admit_the_decision() {
         "cam_system",
         state,
     );
-    let rows = enumerate_derived(&bio::use_period(), &state, &bio::definitions()).unwrap();
+    let rows = enumerate_derived(&bio::program(), &bio::use_period(), &state).unwrap();
     assert_eq!(rows.len(), 1, "one completed use: {rows:?}");
     assert_eq!(rows[0].args[3], common::dur("PT8H30M"));
 }

@@ -119,7 +119,7 @@ pub struct MissingClaim {
 /// `pre_state`. Pure: it runs the kernel in memory and reads the trace,
 /// so for the same state, transition and sequence of `subjects` it gives
 /// one explanation.
-pub fn explain(
+pub(crate) fn explain(
     program: &Program,
     transition: &Transition,
     pre_state: &State,

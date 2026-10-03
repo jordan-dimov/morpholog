@@ -188,15 +188,7 @@ transformation admit_then_read(x):
     let t = p.transformation("admit_then_read").unwrap();
     let transition = test_transition(t, vec![subj("a")]);
     let run = |state: &State| {
-        morpholog_core::propose(
-            t,
-            &transition,
-            state,
-            &p.invariants,
-            &p.definitions,
-            &mut fresh(),
-        )
-        .unwrap()
+        morpholog_test_support::propose(&p, &transition, state, &mut fresh()).unwrap()
     };
 
     let outcome = run(&State::default());

@@ -2,7 +2,7 @@
   "score_format_version": 3,
   "semantics": "case_bound_admission_v3",
   "program": "candidate",
-  "program_hash": "sha256:e69aa18def1afcc3a76c26d2bf458fca6f4955c32852bfc85b2a37e47a1b98f4",
+  "program_hash": "sha256:f174ba2fc4b95b609d39b6436135f2161bc83db73e23be48200dd0e356ac1aa6",
   "cases": [
     {
       "pack": "case_1.json",

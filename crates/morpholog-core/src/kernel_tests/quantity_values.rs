@@ -7,15 +7,15 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::ir_builder::{
+use crate::ir_builder::{
     and, assert_, claim, div, duration, implies, invariant, le, mul, params, predicate, program,
     qty, sum, term, transformation, var,
 };
-use morpholog_core::{
+use crate::kernel_tests::support::{dur, must_accept, propose_with_test_actor, qty as q, subj};
+use crate::{
     Definition, EvalError, EvalValue, Invariant, Outcome, Program, State, Transformation,
     ValidationError,
 };
-use morpholog_test_support::{dur, must_accept, propose_with_test_actor, qty as q, subj};
 
 /// Propose and require a business rejection (not a kernel error).
 fn must_reject(
@@ -192,7 +192,7 @@ fn unlowered_quantity_sums_are_refused_and_lowering_restores_validity() {
     // The same programme through the seed pass is exactly lawful: the
     // summed variables' declared kinds type every empty sum.
     let mut lowered = mini_demurrage();
-    morpholog_core::lower_sum_seeds(&mut lowered);
+    crate::lower_sum_seeds(&mut lowered);
     assert!(lowered.validate().is_ok(), "{:?}", lowered.validate());
 }
 
@@ -315,7 +315,7 @@ fn quantity_arithmetic_is_same_unit_only_and_scaling_is_exact() {
             implies(
                 and(vec![claim("A", vec![var("a")]), claim("B", vec![var("b")])]),
                 le(
-                    morpholog_core::ir_builder::add(term(var("a")), term(var("b"))),
+                    crate::ir_builder::add(term(var("a")), term(var("b"))),
                     term(var("a")),
                 ),
             ),
@@ -418,6 +418,6 @@ fn same_unit_ratio_is_a_bare_decimal() {
 }
 
 /// A bare decimal literal as a `Term` wrapped for value position.
-fn dec_lit(s: &str) -> morpholog_core::Term {
-    morpholog_core::ir_builder::dec(s)
+fn dec_lit(s: &str) -> crate::Term {
+    crate::ir_builder::dec(s)
 }

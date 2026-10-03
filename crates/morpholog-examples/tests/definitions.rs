@@ -74,15 +74,13 @@ fn club_with_sponsor() -> (Program, State) {
         p.transformation("join").unwrap(),
         vec![subj("alice"), subj("chess_club")],
         State::default(),
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     let state = must_accept(
         p.transformation("sponsor").unwrap(),
         vec![subj("alice"), subj("nina")],
         state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     (p, state)
 }
@@ -103,8 +101,7 @@ fn bind_through_a_call_projects_the_generator_argument_out() {
         p.transformation("enrol").unwrap(),
         vec![subj("nina"), subj("chess_club")],
         state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     assert!(has_claim(
         &state,
@@ -123,15 +120,13 @@ fn a_suspended_sponsor_fails_the_nested_condition() {
         p.transformation("suspend").unwrap(),
         vec![subj("alice")],
         state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     must_reject(
         p.transformation("enrol").unwrap(),
         vec![subj("nina"), subj("chess_club")],
         &state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
 }
 
@@ -145,22 +140,19 @@ fn two_distinct_projections_make_bind_a_multi_match_error() {
         p.transformation("join").unwrap(),
         vec![subj("bob"), subj("chess_club")],
         state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     let state = must_accept(
         p.transformation("sponsor").unwrap(),
         vec![subj("bob"), subj("nina")],
         state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     let err = propose_with_test_actor(
         p.transformation("enrol").unwrap(),
         vec![subj("nina"), subj("chess_club")],
         &state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     )
     .expect_err("two projections must surface as a kernel error at bind");
     assert!(matches!(err, EvalError::TypeMismatch(_)), "got {err:?}");
@@ -200,15 +192,13 @@ fn a_call_counts_distinct_projections_while_the_inline_body_counts_witnesses() {
         p.transformation("observe").unwrap(),
         vec![subj("deal"), subj("v1")],
         State::default(),
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     let state = must_accept(
         p.transformation("observe").unwrap(),
         vec![subj("deal"), subj("v2")],
         state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     // Through the call, "is the deal vouched?" has one answer, however
     // many matches the body has inside.
@@ -216,8 +206,7 @@ fn a_call_counts_distinct_projections_while_the_inline_body_counts_witnesses() {
         p.transformation("count_through_call").unwrap(),
         vec![subj("deal")],
         state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     assert!(has_claim(&state, "VouchedCount", &[subj("deal"), dec(1)]));
     // Inlined, the same proposition counts both matching claims.
@@ -225,8 +214,7 @@ fn a_call_counts_distinct_projections_while_the_inline_body_counts_witnesses() {
         p.transformation("count_inline").unwrap(),
         vec![subj("deal")],
         state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     assert!(has_claim(&state, "RawCount", &[subj("deal"), dec(2)]));
 }
@@ -262,8 +250,7 @@ fn a_call_wrapped_in_pre_reads_the_pre_state() {
         p.transformation("set_first_tally").unwrap(),
         vec![dec(5)],
         State::default(),
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     // Raising the tally satisfies the transition invariant: the
     // pre-state call sees 5, the candidate sees 10.
@@ -271,16 +258,14 @@ fn a_call_wrapped_in_pre_reads_the_pre_state() {
         p.transformation("move_tally").unwrap(),
         vec![dec(5), dec(10)],
         state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
     // Lowering it is refused by the same invariant.
     must_reject(
         p.transformation("move_tally").unwrap(),
         vec![dec(10), dec(3)],
         &state,
-        &p.invariants,
-        &p.definitions,
+        &p,
     );
 }
 

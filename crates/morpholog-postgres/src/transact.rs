@@ -12,7 +12,7 @@
 
 use morpholog_core::{
     ClaimInstance, IntentInstance, Outcome, RejectionReason, StagedDelta, Subject, Transformation,
-    Transition, WitnessBinding, propose_stage_delta, propose_with,
+    Transition, WitnessBinding,
 };
 use serde::Serialize;
 use sqlx::{Postgres, Transaction};
@@ -87,7 +87,6 @@ pub async fn propose_all_against_pg(
         .map(|p| resolve(prepared, &p.transformation_name).map(|(t, _, _)| (t, p.transition())))
         .collect::<Result<_, _>>()?;
     let admission = prepared.admission();
-    let definitions = admission.definitions;
     let route = program.route();
 
     let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &acts[0].1.actor).await?;
@@ -117,12 +116,13 @@ pub async fn propose_all_against_pg(
         let transition_id = Uuid::now_v7();
         let (asserted_claims, retracted_claims, emitted_intents) = match route {
             Route::Interpreted => {
-                match propose_with(
-                    transformation,
+                match crate::propose::named(
+                    prepared.propose(
+                        transition,
+                        &state,
+                        &mut crate::propose::runtime_subjects(),
+                    )?,
                     transition,
-                    &state,
-                    &admission,
-                    &mut crate::propose::runtime_subjects(),
                 )? {
                     Outcome::Accepted {
                         asserted_claims,
@@ -151,12 +151,13 @@ pub async fn propose_all_against_pg(
                 }
             }
             Route::Compiled(_) | Route::Mixed(_) => {
-                match propose_stage_delta(
-                    transformation,
+                match crate::propose::named(
+                    prepared.stage_delta(
+                        transition,
+                        &state,
+                        &mut crate::propose::runtime_subjects(),
+                    )?,
                     transition,
-                    &state,
-                    definitions,
-                    &mut crate::propose::runtime_subjects(),
                 )? {
                     StagedDelta::Rejected { reason } => {
                         return refuse(pool, tx, transformation, transition, reason, row).await;

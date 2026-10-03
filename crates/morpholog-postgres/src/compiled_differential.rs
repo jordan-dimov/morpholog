@@ -31,7 +31,7 @@ use std::fmt::Write as _;
 
 use morpholog_core::{
     EvalError, EvalValue, Outcome, PreparedProgram, Program, Prop, RejectionReason, StagedDelta,
-    Subject, Transition, WitnessBinding, finish_staged_delta_with, propose_stage_delta,
+    Subject, Transition, WitnessBinding, finish_staged_delta_with,
 };
 use uuid::Uuid;
 
@@ -118,14 +118,10 @@ async fn probe_raw(
         .await
         .map_err(ProbeFailure::Pg)?;
 
-    let staged = propose_stage_delta(
-        transformation,
-        &transition,
-        &state,
-        definitions,
-        &mut crate::propose::runtime_subjects(),
-    )
-    .map_err(ProbeFailure::Kernel)?;
+    let staged = prepared
+        .stage_delta(&transition, &state, &mut crate::propose::runtime_subjects())
+        .map_err(ProbeFailure::Kernel)?
+        .expect("the probe's transformation is declared");
     let StagedDelta::Staged {
         asserted,
         retracted,

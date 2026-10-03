@@ -7,15 +7,14 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::ir_builder::{
+use crate::derive::eval_invariant;
+use crate::ir_builder::{
     assert_, claim, eq, implies, invariant, params, predicate, program, retract, sum, term,
     transformation, var, wildcard,
 };
-use morpholog_core::{
-    Outcome, Program, RejectionReason, State, TraceEntry, TracedProposal, Transition,
-    eval_invariant, propose, propose_with_trace,
-};
-use morpholog_test_support::{claim_instance, dec, subj, test_actor};
+use crate::kernel_tests::support::{claim_instance, dec, subj, test_actor};
+use crate::propose::{propose, propose_with_trace};
+use crate::{Outcome, Program, RejectionReason, State, TraceEntry, TracedProposal, Transition};
 
 /// A ledger of entries whose lines must balance, with a posting that
 /// adds one line and a retraction that removes one.
@@ -67,7 +66,7 @@ fn ledger() -> Program {
         .build()
 }
 
-fn transition(name: &str, args: Vec<morpholog_core::EvalValue>) -> Transition {
+fn transition(name: &str, args: Vec<crate::EvalValue>) -> Transition {
     Transition {
         transformation_name: name.into(),
         args,
@@ -95,7 +94,7 @@ fn run(p: &Program, t: &Transition, state: &State) -> Outcome {
         state,
         &p.invariants,
         &p.definitions,
-        &mut morpholog_test_support::fresh(),
+        &mut crate::kernel_tests::support::fresh(),
     )
     .unwrap()
 }
@@ -202,7 +201,7 @@ fn the_trace_records_only_the_obligations_evaluated() {
         &state,
         &p.invariants,
         &p.definitions,
-        &mut morpholog_test_support::fresh(),
+        &mut crate::kernel_tests::support::fresh(),
     ) else {
         panic!("completes");
     };
@@ -228,7 +227,7 @@ fn the_trace_records_only_the_obligations_evaluated() {
         &state,
         &p.invariants,
         &p.definitions,
-        &mut morpholog_test_support::fresh(),
+        &mut crate::kernel_tests::support::fresh(),
     ) else {
         panic!("completes");
     };

@@ -14,8 +14,9 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, dec_str, has_claim, subj, test_actor};
-use morpholog_core::{EvalError, EvalValue, Outcome, RejectionReason, State, enumerate_derived};
+use morpholog_core::{EvalError, EvalValue, Outcome, RejectionReason, State};
 use morpholog_examples::operational_information as op;
+use morpholog_test_support::enumerate_derived;
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
@@ -191,7 +192,8 @@ fn the_xor_experiment_certifies_end_to_end() {
 
     // Each source alone is worth nothing and the pair is worth the whole
     // half, so the excess IS the joint value.
-    let rows = enumerate_derived(&op::pair_synergy(), &state, &[]).expect("synergy enumerates");
+    let rows =
+        enumerate_derived(&op::program(), &op::pair_synergy(), &state).expect("synergy enumerates");
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows[0].args,
@@ -205,8 +207,8 @@ fn the_xor_experiment_certifies_end_to_end() {
     );
 
     // The summary recomputes each gain from certified risks.
-    let rows =
-        enumerate_derived(&op::information_summary(), &state, &[]).expect("summary enumerates");
+    let rows = enumerate_derived(&op::program(), &op::information_summary(), &state)
+        .expect("summary enumerates");
     assert_eq!(rows.len(), 4);
     for row in rows {
         let coalition = row.args[1].clone();
@@ -615,7 +617,7 @@ fn a_joint_that_forgets_member_information_is_refused() {
 fn pair_synergy_is_empty_until_every_value_is_certified() {
     // A half-certified experiment yields no synergy row - lawfully
     // empty, not an evaluation error.
-    let rows = enumerate_derived(&op::pair_synergy(), &xor_sealed(), &[])
+    let rows = enumerate_derived(&op::program(), &op::pair_synergy(), &xor_sealed())
         .expect("an uncertified experiment reads as empty, not as an error");
     assert!(rows.is_empty());
 }

@@ -12,10 +12,9 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, dec, dec_str, has_claim, subj};
-use morpholog_core::{
-    ClaimInstance, Outcome, RejectionReason, State, enumerate_derived, eval_invariant,
-};
+use morpholog_core::{ClaimInstance, Outcome, RejectionReason, State};
 use morpholog_examples::insurance_claim_settlement;
+use morpholog_test_support::{enumerate_derived, eval_invariant};
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
@@ -177,8 +176,8 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
     // `reason.contains(...)`.
     use morpholog_core::{
         BindOneOutcome, RequireOutcome, Subject, TraceEntry, TracedProposal, Transition,
-        propose_with_trace,
     };
+    use morpholog_test_support::propose_with_trace;
     let pre = {
         let s = issue(State::default(), "policy_001", 100_000);
         report(s, "claim_001", "policy_001", 20_000)
@@ -190,11 +189,9 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
         actor: Subject::from("alex"),
     };
     let TracedProposal::Completed { outcome, trace } = propose_with_trace(
-        &t,
+        &insurance_claim_settlement::program(),
         &transition,
         &pre,
-        &insurance_claim_settlement::all_invariants(),
-        &insurance_claim_settlement::definitions(),
         &mut morpholog_test_support::fresh(),
     ) else {
         panic!("expected Completed");
@@ -351,9 +348,8 @@ fn second_settlement_at_aggregate_boundary_admits() {
 fn second_settlement_over_aggregate_is_rejected_at_require() {
     // 60 + 50 = 110 > 100. The trace shows the authority gate held (alex's
     // 100k limit covers 50k) and the aggregate gate rejected.
-    use morpholog_core::{
-        RequireOutcome, Subject, TraceEntry, TracedProposal, Transition, propose_with_trace,
-    };
+    use morpholog_core::{RequireOutcome, Subject, TraceEntry, TracedProposal, Transition};
+    use morpholog_test_support::propose_with_trace;
     let pre = after_first_settlement(60_000);
     let pre = report(pre, "claim_002", "policy_001", 50_000);
     let t = insurance_claim_settlement::authorise_settlement();
@@ -363,11 +359,9 @@ fn second_settlement_over_aggregate_is_rejected_at_require() {
         actor: Subject::from("alex"),
     };
     let TracedProposal::Completed { outcome, trace } = propose_with_trace(
-        &t,
+        &insurance_claim_settlement::program(),
         &transition,
         &pre,
-        &insurance_claim_settlement::all_invariants(),
-        &insurance_claim_settlement::definitions(),
         &mut morpholog_test_support::fresh(),
     ) else {
         panic!("expected Completed");
@@ -488,7 +482,8 @@ fn paid_without_authorised_violates_invariant() {
     );
     let state = State::from_claims(vec![orphan_payment]);
     let inv = insurance_claim_settlement::paid_implies_authorised();
-    let holds = eval_invariant(&inv, &state, None, &[]).expect("eval should not error");
+    let holds = eval_invariant(&insurance_claim_settlement::program(), &inv, &state, None)
+        .expect("eval should not error");
     assert!(
         !holds,
         "paid_implies_authorised should not hold when an orphan payment is admitted"
@@ -510,7 +505,8 @@ fn paid_without_headroom_violates_invariant() {
     );
     let state = State::from_claims(vec![orphan_payment]);
     let inv = insurance_claim_settlement::paid_implies_headroom();
-    let holds = eval_invariant(&inv, &state, None, &[]).expect("eval should not error");
+    let holds = eval_invariant(&insurance_claim_settlement::program(), &inv, &state, None)
+        .expect("eval should not error");
     assert!(
         !holds,
         "paid_implies_headroom should not hold when a payment exists with no PolicyHeadroom for that policy"
@@ -550,9 +546,9 @@ fn policy_limit_usage_sums_admitted_settlements_per_policy() {
     );
 
     let rows = enumerate_derived(
+        &insurance_claim_settlement::program(),
         &insurance_claim_settlement::policy_limit_usage(),
         &s,
-        &insurance_claim_settlement::definitions(),
     )
     .expect("enumerate_derived should not error");
 
@@ -574,9 +570,9 @@ fn policy_limit_usage_empty_when_no_settlements_paid() {
     let s = issue(State::default(), "policy_001", 100_000);
     let s = report(s, "claim_001", "policy_001", 20_000);
     let rows = enumerate_derived(
+        &insurance_claim_settlement::program(),
         &insurance_claim_settlement::policy_limit_usage(),
         &s,
-        &insurance_claim_settlement::definitions(),
     )
     .expect("enumerate_derived should not error");
     assert!(rows.is_empty(), "expected no rows, got {rows:?}");

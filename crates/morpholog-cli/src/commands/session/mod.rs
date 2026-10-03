@@ -368,9 +368,15 @@ async fn handle_derived(
         prepared,
     )?;
     let as_of = parse_as_of(pool, &body.as_of).await?;
-    let rows = derived_rows(pool, &program.definitions, derived, as_of, &filters)
-        .await
-        .map_err(SessionFailure::Operational)?;
+    let rows = derived_rows(
+        pool,
+        prepared.validated(),
+        derived.predicate.as_str(),
+        as_of,
+        &filters,
+    )
+    .await
+    .map_err(SessionFailure::Operational)?;
     if body.named {
         let rows =
             decode_claims_named(program, &args.file, &rows).map_err(SessionFailure::Operational)?;

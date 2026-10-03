@@ -1,6 +1,6 @@
 use crate::error::{PgError, classify_checked_query};
 use crate::propose::{Reads, compute_load_scope};
-use morpholog_core::{ClaimInstance, PredicateName, PreparedProgram, State, Transformation};
+use morpholog_core::{ClaimInstance, PredicateName, PreparedProgram, State, TransformationName};
 use sqlx::PgPool;
 /// Return every currently-admitted claim from `morpholog.claims`.
 ///
@@ -151,14 +151,17 @@ pub async fn list_claims_where(
 /// what would happen and commits nothing, so a point-in-time snapshot is
 /// enough.
 ///
-/// `transformation` must belong to `prepared`: the scope comes from its
-/// body plus `prepared`'s invariants and definitions, so a foreign
-/// transformation would load the wrong predicates.
+/// The transformation is `prepared`'s own, by name, so the scope always
+/// comes from the same programme's rules. `Ok(None)` when no
+/// transformation has that name.
 pub async fn load_scoped_state(
     pool: &PgPool,
     prepared: &PreparedProgram,
-    transformation: &Transformation,
-) -> Result<State, PgError> {
+    name: &TransformationName,
+) -> Result<Option<State>, PgError> {
+    let Some(transformation) = prepared.transformation(name) else {
+        return Ok(None);
+    };
     let program = prepared.program();
     // A diagnostic read: the explanation runs the interpreter, so the
     // invariants' predicates are loaded whatever the programme's plan.
@@ -174,5 +177,5 @@ pub async fn load_scoped_state(
     .map(|p| p.to_string())
     .collect();
     let claims = list_claims_for_predicates(pool, &scope).await?;
-    Ok(State::from_claims(claims))
+    Ok(Some(State::from_claims(claims)))
 }

@@ -7,14 +7,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::ir_builder::{
+use crate::ir_builder::{
     add, assert_, claim, defined, div, duration, eq, mul, params, predicate, program, qty, require,
     sum, term, timestamp, transformation, var,
 };
-use morpholog_core::{
-    Definition, EvalError, Outcome, Prop, State, Term, Var, propose as kernel_propose,
-};
-use morpholog_test_support::{propose_with_test_actor, test_transition};
+use crate::kernel_tests::support::{propose_with_test_actor, test_transition};
+use crate::propose::propose as kernel_propose;
+use crate::{Definition, EvalError, Outcome, Prop, State, Term, Var};
 
 /// Evaluate one requirement against an empty state with no rules: an
 /// acceptance means the proposition held exactly.
@@ -53,21 +52,18 @@ fn quantity_arithmetic_is_exact_in_every_arm() {
     // A same-unit ratio is a bare decimal, exact.
     holds(eq(
         div(term(qty("7", "t")), term(qty("2", "t"))),
-        term(morpholog_core::ir_builder::dec("3.5")),
+        term(crate::ir_builder::dec("3.5")),
     ));
     // Scaling multiplies, never adds or divides.
     holds(eq(
-        mul(
-            term(qty("2.5", "t")),
-            term(morpholog_core::ir_builder::dec("4")),
-        ),
+        mul(term(qty("2.5", "t")), term(crate::ir_builder::dec("4"))),
         term(qty("10", "t")),
     ));
     // A zero divisor is refused by name, not computed around.
     errs(
         eq(
             div(term(qty("7", "t")), term(qty("0", "t"))),
-            term(morpholog_core::ir_builder::dec("0")),
+            term(crate::ir_builder::dec("0")),
         ),
         &["DivisionByZero"],
     );
@@ -75,25 +71,16 @@ fn quantity_arithmetic_is_exact_in_every_arm() {
     // scales too, and dividing a quantity BY a scalar divides exactly
     // - with its own zero refusal.
     holds(eq(
-        mul(
-            term(morpholog_core::ir_builder::dec("4")),
-            term(qty("2.5", "t")),
-        ),
+        mul(term(crate::ir_builder::dec("4")), term(qty("2.5", "t"))),
         term(qty("10", "t")),
     ));
     holds(eq(
-        div(
-            term(qty("10", "t")),
-            term(morpholog_core::ir_builder::dec("4")),
-        ),
+        div(term(qty("10", "t")), term(crate::ir_builder::dec("4"))),
         term(qty("2.5", "t")),
     ));
     errs(
         eq(
-            div(
-                term(qty("10", "t")),
-                term(morpholog_core::ir_builder::dec("0")),
-            ),
+            div(term(qty("10", "t")), term(crate::ir_builder::dec("0"))),
             term(qty("0", "t")),
         ),
         &["DivisionByZero"],
@@ -111,7 +98,7 @@ fn duration_arithmetic_is_exact_including_subsecond_parts() {
     // subsecond component is ADDED to the whole-second count.
     holds(eq(
         div(term(duration("PT1.5S")), term(duration("PT0.5S"))),
-        term(morpholog_core::ir_builder::dec("3")),
+        term(crate::ir_builder::dec("3")),
     ));
 }
 
@@ -120,7 +107,7 @@ fn a_malformed_timestamp_literal_is_an_error_not_a_default() {
     // Hand-built IR can carry an unparseable instant; evaluation must
     // refuse it by name, never quietly substitute some default epoch.
     errs(
-        morpholog_core::ir_builder::timestamp_le(
+        crate::ir_builder::timestamp_le(
             term(timestamp("not-a-timestamp")),
             term(timestamp("2026-07-01T12:00:00Z")),
         ),
@@ -146,7 +133,7 @@ fn literal_time_arguments_match_exactly() {
             vec![assert_(
                 "Stamp",
                 vec![
-                    morpholog_core::ir_builder::date("2026-07-01"),
+                    crate::ir_builder::date("2026-07-01"),
                     timestamp("2026-07-01T12:00:00Z"),
                     duration("PT1H"),
                 ],
@@ -168,7 +155,7 @@ fn literal_time_arguments_match_exactly() {
         vec![require(claim(
             "Stamp",
             vec![
-                morpholog_core::ir_builder::date("2026-07-01"),
+                crate::ir_builder::date("2026-07-01"),
                 timestamp("2026-07-01T12:00:00Z"),
                 duration("PT1H"),
             ],
@@ -179,7 +166,7 @@ fn literal_time_arguments_match_exactly() {
     assert!(matches!(outcome, Outcome::Accepted { .. }));
 
     for (i, wrong) in [
-        morpholog_core::ir_builder::date("2026-07-02"),
+        crate::ir_builder::date("2026-07-02"),
         timestamp("2026-07-01T12:00:01Z"),
         duration("PT2H"),
     ]
@@ -187,7 +174,7 @@ fn literal_time_arguments_match_exactly() {
     .enumerate()
     {
         let mut args = vec![
-            morpholog_core::ir_builder::date("2026-07-01"),
+            crate::ir_builder::date("2026-07-01"),
             timestamp("2026-07-01T12:00:00Z"),
             duration("PT1H"),
         ];
@@ -216,17 +203,11 @@ fn a_value_lookup_with_two_matches_is_refused_on_both_candidate_paths() {
             vec![
                 assert_(
                     "Reading",
-                    vec![
-                        morpholog_core::ir_builder::subj("s1"),
-                        morpholog_core::ir_builder::dec("1"),
-                    ],
+                    vec![crate::ir_builder::subj("s1"), crate::ir_builder::dec("1")],
                 ),
                 assert_(
                     "Reading",
-                    vec![
-                        morpholog_core::ir_builder::subj("s1"),
-                        morpholog_core::ir_builder::dec("2"),
-                    ],
+                    vec![crate::ir_builder::subj("s1"), crate::ir_builder::dec("2")],
                 ),
             ],
         )])
@@ -244,11 +225,11 @@ fn a_value_lookup_with_two_matches_is_refused_on_both_candidate_paths() {
         "probe",
         params(&[]),
         vec![require(eq(
-            morpholog_core::ir_builder::value_of(
+            crate::ir_builder::value_of(
                 "Reading",
-                vec![morpholog_core::ir_builder::subj("s1"), Term::Wildcard],
+                vec![crate::ir_builder::subj("s1"), Term::Wildcard],
             ),
-            term(morpholog_core::ir_builder::dec("1")),
+            term(crate::ir_builder::dec("1")),
         ))],
     );
     let err = propose_with_test_actor(&by_subject, vec![], &candidate_state, &[], &[]).unwrap_err();
@@ -259,8 +240,8 @@ fn a_value_lookup_with_two_matches_is_refused_on_both_candidate_paths() {
         "probe",
         params(&[]),
         vec![require(eq(
-            morpholog_core::ir_builder::value_of("Reading", vec![Term::Wildcard, Term::Wildcard]),
-            term(morpholog_core::ir_builder::dec("1")),
+            crate::ir_builder::value_of("Reading", vec![Term::Wildcard, Term::Wildcard]),
+            term(crate::ir_builder::dec("1")),
         ))],
     );
     let err = propose_with_test_actor(&all_wild, vec![], &candidate_state, &[], &[]).unwrap_err();
@@ -273,7 +254,7 @@ fn a_defined_call_projects_each_witness_once() {
     // distinct projection once, so counting the call counts
     // projections, never internal multiplicity.
     let definition = Definition {
-        origin: morpholog_core::DefinitionOrigin::Authored,
+        origin: crate::DefinitionOrigin::Authored,
         name: "sensed".into(),
         parameters: vec![Var::from("s")],
         body: claim("Reading", vec![var("s"), Term::Wildcard]),
@@ -292,17 +273,11 @@ fn a_defined_call_projects_each_witness_once() {
                 vec![
                     assert_(
                         "Reading",
-                        vec![
-                            morpholog_core::ir_builder::subj("s1"),
-                            morpholog_core::ir_builder::dec("1"),
-                        ],
+                        vec![crate::ir_builder::subj("s1"), crate::ir_builder::dec("1")],
                     ),
                     assert_(
                         "Reading",
-                        vec![
-                            morpholog_core::ir_builder::subj("s1"),
-                            morpholog_core::ir_builder::dec("2"),
-                        ],
+                        vec![crate::ir_builder::subj("s1"), crate::ir_builder::dec("2")],
                     ),
                 ],
             ),
@@ -311,10 +286,10 @@ fn a_defined_call_projects_each_witness_once() {
                 params(&[]),
                 vec![require(eq(
                     sum(
-                        morpholog_core::ir_builder::dec("1"),
+                        crate::ir_builder::dec("1"),
                         defined("sensed", vec![Term::Wildcard]),
                     ),
-                    term(morpholog_core::ir_builder::dec("1")),
+                    term(crate::ir_builder::dec("1")),
                 ))],
             ),
         ])
@@ -353,10 +328,7 @@ fn a_defined_call_projects_each_witness_once() {
         params(&[]),
         vec![assert_(
             "Reading",
-            vec![
-                morpholog_core::ir_builder::subj("s2"),
-                morpholog_core::ir_builder::dec("3"),
-            ],
+            vec![crate::ir_builder::subj("s2"), crate::ir_builder::dec("3")],
         )],
     );
     let Outcome::Accepted {
@@ -371,10 +343,10 @@ fn a_defined_call_projects_each_witness_once() {
         params(&[]),
         vec![require(eq(
             sum(
-                morpholog_core::ir_builder::dec("1"),
+                crate::ir_builder::dec("1"),
                 defined("sensed", vec![var("s")]),
             ),
-            term(morpholog_core::ir_builder::dec("2")),
+            term(crate::ir_builder::dec("2")),
         ))],
     );
     let outcome = propose_with_test_actor(&count_two, vec![], &wider, &[], &definitions).unwrap();
@@ -406,14 +378,14 @@ fn the_missing_claim_diagnosis_descends_a_defined_gate() {
         .build();
     let mut p = p;
     p.definitions = vec![Definition {
-        origin: morpholog_core::DefinitionOrigin::Authored,
+        origin: crate::DefinitionOrigin::Authored,
         name: "is_approved".into(),
         parameters: vec![Var::from("i")],
         body: claim("Approved", vec![var("i")]),
     }];
 
     let ship = p.transformations[1].clone();
-    let transition = test_transition(&ship, vec![morpholog_test_support::subj("box_1")]);
+    let transition = test_transition(&ship, vec![crate::kernel_tests::support::subj("box_1")]);
     // The kernel refuses first (the gate fails), then the explanation
     // diagnoses the same snapshot.
     let outcome = kernel_propose(
@@ -422,15 +394,15 @@ fn the_missing_claim_diagnosis_descends_a_defined_gate() {
         &State::default(),
         &[],
         &p.definitions,
-        &mut morpholog_test_support::fresh(),
+        &mut crate::kernel_tests::support::fresh(),
     )
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
-    let explanation = morpholog_core::explain(
+    let explanation = crate::explain::explain(
         &p,
         &transition,
         &State::default(),
-        &mut morpholog_test_support::fresh(),
+        &mut crate::kernel_tests::support::fresh(),
     );
     let rendered = serde_json::to_string(&explanation).unwrap();
     assert!(
@@ -445,10 +417,10 @@ fn literal_time_patterns_govern_retraction_too() {
     // arguments through the same parsed comparisons as reads: the
     // exact literal removes the claim, a near-miss in any position
     // fails the retraction of that specific claim.
-    use morpholog_core::ir_builder::retract;
+    use crate::ir_builder::retract;
     let stamp_args = || {
         vec![
-            morpholog_core::ir_builder::date("2026-07-01"),
+            crate::ir_builder::date("2026-07-01"),
             timestamp("2026-07-01T12:00:00Z"),
             duration("PT1H"),
         ]
@@ -476,7 +448,7 @@ fn literal_time_patterns_govern_retraction_too() {
     };
 
     for (i, wrong) in [
-        morpholog_core::ir_builder::date("2026-07-02"),
+        crate::ir_builder::date("2026-07-02"),
         timestamp("2026-07-01T12:00:01Z"),
         duration("PT2H"),
     ]
@@ -533,17 +505,11 @@ fn a_value_lookup_matching_one_of_two_claims_reads_it() {
             vec![
                 assert_(
                     "Reading",
-                    vec![
-                        morpholog_core::ir_builder::subj("s1"),
-                        morpholog_core::ir_builder::dec("1"),
-                    ],
+                    vec![crate::ir_builder::subj("s1"), crate::ir_builder::dec("1")],
                 ),
                 assert_(
                     "Reading",
-                    vec![
-                        morpholog_core::ir_builder::subj("s2"),
-                        morpholog_core::ir_builder::dec("2"),
-                    ],
+                    vec![crate::ir_builder::subj("s2"), crate::ir_builder::dec("2")],
                 ),
             ],
         )])
@@ -559,11 +525,11 @@ fn a_value_lookup_matching_one_of_two_claims_reads_it() {
         "probe",
         params(&[]),
         vec![require(eq(
-            morpholog_core::ir_builder::value_of(
+            crate::ir_builder::value_of(
                 "Reading",
-                vec![morpholog_core::ir_builder::subj("s1"), Term::Wildcard],
+                vec![crate::ir_builder::subj("s1"), Term::Wildcard],
             ),
-            term(morpholog_core::ir_builder::dec("1")),
+            term(crate::ir_builder::dec("1")),
         ))],
     );
     let outcome = propose_with_test_actor(&probe, vec![], &candidate_state, &[], &[]).unwrap();
@@ -578,7 +544,7 @@ fn a_repeated_call_variable_must_project_consistently() {
     // `pair(z, z)`: a witness whose two projected arguments differ is
     // discarded - the repeated variable is one binding, not two.
     let definition = Definition {
-        origin: morpholog_core::DefinitionOrigin::Authored,
+        origin: crate::DefinitionOrigin::Authored,
         name: "pair".into(),
         parameters: vec![Var::from("p"), Var::from("q")],
         body: claim("Link", vec![var("p"), var("q")]),
@@ -592,17 +558,11 @@ fn a_repeated_call_variable_must_project_consistently() {
                 vec![
                     assert_(
                         "Link",
-                        vec![
-                            morpholog_core::ir_builder::subj("x1"),
-                            morpholog_core::ir_builder::subj("x2"),
-                        ],
+                        vec![crate::ir_builder::subj("x1"), crate::ir_builder::subj("x2")],
                     ),
                     assert_(
                         "Link",
-                        vec![
-                            morpholog_core::ir_builder::subj("x3"),
-                            morpholog_core::ir_builder::subj("x3"),
-                        ],
+                        vec![crate::ir_builder::subj("x3"), crate::ir_builder::subj("x3")],
                     ),
                 ],
             ),
@@ -611,10 +571,10 @@ fn a_repeated_call_variable_must_project_consistently() {
                 params(&[]),
                 vec![require(eq(
                     sum(
-                        morpholog_core::ir_builder::dec("1"),
+                        crate::ir_builder::dec("1"),
                         defined("pair", vec![var("z"), var("z")]),
                     ),
-                    term(morpholog_core::ir_builder::dec("1")),
+                    term(crate::ir_builder::dec("1")),
                 ))],
             ),
         ])
@@ -668,17 +628,17 @@ fn a_lookup_excludes_a_bucket_mate_the_pattern_rules_out() {
                 assert_(
                     "Reading",
                     vec![
-                        morpholog_core::ir_builder::subj("s1"),
-                        morpholog_core::ir_builder::subj("c1"),
-                        morpholog_core::ir_builder::dec("1"),
+                        crate::ir_builder::subj("s1"),
+                        crate::ir_builder::subj("c1"),
+                        crate::ir_builder::dec("1"),
                     ],
                 ),
                 assert_(
                     "Reading",
                     vec![
-                        morpholog_core::ir_builder::subj("s1"),
-                        morpholog_core::ir_builder::subj("c2"),
-                        morpholog_core::ir_builder::dec("2"),
+                        crate::ir_builder::subj("s1"),
+                        crate::ir_builder::subj("c2"),
+                        crate::ir_builder::dec("2"),
                     ],
                 ),
             ],
@@ -695,15 +655,15 @@ fn a_lookup_excludes_a_bucket_mate_the_pattern_rules_out() {
         "probe",
         params(&[]),
         vec![require(eq(
-            morpholog_core::ir_builder::value_of(
+            crate::ir_builder::value_of(
                 "Reading",
                 vec![
-                    morpholog_core::ir_builder::subj("s1"),
-                    morpholog_core::ir_builder::subj("c1"),
+                    crate::ir_builder::subj("s1"),
+                    crate::ir_builder::subj("c1"),
                     Term::Wildcard,
                 ],
             ),
-            term(morpholog_core::ir_builder::dec("1")),
+            term(crate::ir_builder::dec("1")),
         ))],
     );
     let outcome = propose_with_test_actor(&probe, vec![], &candidate_state, &[], &[]).unwrap();
@@ -730,10 +690,7 @@ fn three_equal_readings() -> State {
                 .map(|s| {
                     assert_(
                         "Reading",
-                        vec![
-                            morpholog_core::ir_builder::subj(s),
-                            morpholog_core::ir_builder::dec("1"),
-                        ],
+                        vec![crate::ir_builder::subj(s), crate::ir_builder::dec("1")],
                     )
                 })
                 .collect(),
@@ -759,13 +716,10 @@ fn an_expression_target_evaluates_once_per_witness() {
         params(&[]),
         vec![require(eq(
             sum(
-                mul(
-                    term(var("level")),
-                    term(morpholog_core::ir_builder::dec("2")),
-                ),
+                mul(term(var("level")), term(crate::ir_builder::dec("2"))),
                 claim("Reading", vec![Term::Wildcard, var("level")]),
             ),
-            term(morpholog_core::ir_builder::dec("6")),
+            term(crate::ir_builder::dec("6")),
         ))],
     );
     let outcome =
@@ -782,13 +736,10 @@ fn a_failing_expression_target_fails_the_whole_sum() {
         params(&[]),
         vec![require(eq(
             sum(
-                div(
-                    term(morpholog_core::ir_builder::dec("1")),
-                    term(var("level")),
-                ),
+                div(term(crate::ir_builder::dec("1")), term(var("level"))),
                 claim("Reading", vec![Term::Wildcard, var("level")]),
             ),
-            term(morpholog_core::ir_builder::dec("0")),
+            term(crate::ir_builder::dec("0")),
         ))],
     );
     let p = program("zeroed")
@@ -803,10 +754,7 @@ fn a_failing_expression_target_fails_the_whole_sum() {
             params(&[]),
             vec![assert_(
                 "Reading",
-                vec![
-                    morpholog_core::ir_builder::subj("s1"),
-                    morpholog_core::ir_builder::dec("0"),
-                ],
+                vec![crate::ir_builder::subj("s1"), crate::ir_builder::dec("0")],
             )],
         )])
         .build();

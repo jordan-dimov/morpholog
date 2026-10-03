@@ -3,10 +3,7 @@ use crate::claims::{decode_claim_rows, list_claims_for_predicates};
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use jiff::Timestamp;
-use morpholog_core::{
-    ClaimInstance, Definition, DerivedClaim, State, ValidatedProgram, enumerate_derived,
-    predicates_referenced_by_derived,
-};
+use morpholog_core::{ClaimInstance, State, ValidatedProgram, predicates_referenced_by_derived};
 use sqlx::PgPool;
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
@@ -14,8 +11,9 @@ use uuid::Uuid;
 /// Enumerate a derived claim's extension against the current durable state.
 ///
 /// Loads only the claims of predicates the body references (see
-/// [`morpholog_core::predicates_referenced_by_derived`]) and runs
-/// [`enumerate_derived`] over them. Returns one [`ClaimInstance`] per
+/// [`morpholog_core::predicates_referenced_by_derived`]) and enumerates
+/// the derived claim over them. `Ok(None)` when nothing derives
+/// `predicate`. Returns one [`ClaimInstance`] per
 /// distinct key binding, with each computed value appended to the keys.
 ///
 /// Read-only, and recomputed from scratch on every call.
@@ -34,17 +32,28 @@ use uuid::Uuid;
 /// deterministic for a given state.
 pub async fn list_derived(
     pool: &PgPool,
-    derived: &DerivedClaim,
-    definitions: &[Definition],
-) -> Result<Vec<ClaimInstance>, PgError> {
-    let footprint: Vec<String> = predicates_referenced_by_derived(derived, definitions)
-        .into_iter()
-        .map(|p| p.to_string())
-        .collect();
+    program: ValidatedProgram<'_>,
+    predicate: &str,
+) -> Result<Option<Vec<ClaimInstance>>, PgError> {
+    let Some(footprint) = derived_footprint(program, predicate) else {
+        return Ok(None);
+    };
     let claims = list_claims_for_predicates(pool, &footprint).await?;
     let state = State::from_claims(claims);
-    let rows = enumerate_derived(derived, &state, definitions)?;
-    Ok(rows)
+    Ok(program.enumerate_derived(predicate, &state)?)
+}
+
+/// The predicates the derived claim computing `predicate` reads, or
+/// `None` when nothing derives it.
+fn derived_footprint(program: ValidatedProgram<'_>, predicate: &str) -> Option<Vec<String>> {
+    let p = program.as_program();
+    let derived = p.derived_claim(predicate)?;
+    Some(
+        predicates_referenced_by_derived(derived, &p.definitions)
+            .into_iter()
+            .map(|p| p.to_string())
+            .collect(),
+    )
 }
 /// The outcome of [`refresh_derived`]: what was written, the audit point
 /// the projection reflects, and per-phase timings.
@@ -91,7 +100,8 @@ pub async fn refresh_derived(
     program: ValidatedProgram<'_>,
     model_hash: &str,
 ) -> Result<RefreshSummary, PgError> {
-    let program = program.as_program();
+    let validated = program;
+    let program = validated.as_program();
     let definitions = &program.definitions;
     let deriveds = &program.derived_claims;
     let footprint: Vec<String> = deriveds
@@ -137,7 +147,11 @@ pub async fn refresh_derived(
     let state = State::from_claims(decode_claim_rows(claim_rows)?);
     let mut rows: Vec<ClaimInstance> = Vec::new();
     for derived in deriveds {
-        rows.extend(enumerate_derived(derived, &state, definitions)?);
+        rows.extend(
+            validated
+                .enumerate_derived(derived.predicate.as_str(), &state)?
+                .unwrap_or_default(),
+        );
     }
     let compute = compute_start.elapsed();
     // Write: one short transaction, no kernel work.
@@ -219,15 +233,13 @@ pub async fn refresh_derived(
 /// unknown id is [`PgError::TransitionNotFound`], never current state.
 pub async fn list_derived_at(
     pool: &PgPool,
-    derived: &DerivedClaim,
-    definitions: &[Definition],
+    program: ValidatedProgram<'_>,
+    predicate: &str,
     transition_id: Uuid,
-) -> Result<Vec<ClaimInstance>, PgError> {
-    let footprint: Vec<String> = predicates_referenced_by_derived(derived, definitions)
-        .into_iter()
-        .map(|p| p.to_string())
-        .collect();
+) -> Result<Option<Vec<ClaimInstance>>, PgError> {
+    let Some(footprint) = derived_footprint(program, predicate) else {
+        return Ok(None);
+    };
     let state = reconstruct_state_at_for_predicates(pool, transition_id, &footprint).await?;
-    let rows = enumerate_derived(derived, &state, definitions)?;
-    Ok(rows)
+    Ok(program.enumerate_derived(predicate, &state)?)
 }

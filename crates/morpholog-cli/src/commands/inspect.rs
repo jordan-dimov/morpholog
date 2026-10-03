@@ -85,19 +85,20 @@ pub(crate) async fn claims_rows(
 /// not stored.
 pub(crate) async fn derived_rows(
     pool: &PgPool,
-    definitions: &[morpholog_core::Definition],
-    derived: &morpholog_core::DerivedClaim,
+    program: morpholog_core::ValidatedProgram<'_>,
+    predicate: &str,
     as_of: Option<Uuid>,
     filters: &[FieldFilter],
 ) -> anyhow::Result<Vec<ClaimInstance>> {
     let rows = match as_of {
-        Some(tid) => list_derived_at(pool, derived, definitions, tid)
+        Some(tid) => list_derived_at(pool, program, predicate, tid)
             .await
             .context("list_derived_at failed")?,
-        None => list_derived(pool, derived, definitions)
+        None => list_derived(pool, program, predicate)
             .await
             .context("list_derived failed")?,
-    };
+    }
+    .ok_or_else(|| anyhow!("derived claim `{predicate}` is not declared in the programme"))?;
     Ok(if filters.is_empty() {
         rows
     } else {
@@ -241,9 +242,9 @@ fn audit_row_named_json(
 /// since it answers a question rather than enforcing.
 async fn inspect_coverage(args: crate::InspectCoverageArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
-    validate_or_report(&parsed)?;
+    let validated = validate_or_report(&parsed)?;
     let pool = connect(&args.db.database_url).await?;
-    let report = morpholog_postgres::coverage_replay(&pool, &parsed.program)
+    let report = morpholog_postgres::coverage_replay(&pool, validated)
         .await
         .context("coverage_replay failed")?;
     emit(args.json, &report, || {
@@ -321,7 +322,7 @@ pub(crate) fn decode_claims_named(
 /// - Connection failure or kernel error: propagated with context.
 async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
-    validate_or_report(&parsed)?;
+    let validated = validate_or_report(&parsed)?;
     let program = &parsed.program;
 
     let derived = program.derived_claim(&args.derived).ok_or_else(|| {
@@ -352,7 +353,14 @@ async fn inspect_derived(args: crate::InspectDerivedArgs) -> anyhow::Result<()> 
     )?;
     let pool = connect(&args.db.database_url).await?;
     let as_of = resolve_as_of(&pool, args.as_of).await?;
-    let rows = derived_rows(&pool, &program.definitions, derived, as_of, &filters).await?;
+    let rows = derived_rows(
+        &pool,
+        validated,
+        derived.predicate.as_str(),
+        as_of,
+        &filters,
+    )
+    .await?;
     if args.named {
         print_json(&decode_claims_named(program, &args.file, &rows)?)
     } else {

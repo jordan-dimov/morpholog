@@ -14,8 +14,9 @@ use crate::pack::{EvidencePack, verify_pack};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use jiff::Timestamp;
 use morpholog_core::{
-    BatchScore, CandidateScore, CandidateScorer, CaseOutcome, CaseResult, EvalError, Program,
-    SCORE_FORMAT_VERSION, SCORE_SEMANTICS, ScoreError, SplitBoundaryReport, State, effective_delta,
+    BatchScore, CandidateScore, CandidateScorer, CaseOutcome, CaseResult, EvalError,
+    SCORE_FORMAT_VERSION, SCORE_SEMANTICS, ScoreError, SplitBoundaryReport, State,
+    ValidatedProgram, effective_delta,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -63,7 +64,7 @@ fn pending_split(boundary: SplitBoundary, cursor: (Timestamp, Uuid)) -> PendingS
 
 /// Construct the scorer. A `pre(...)` candidate is refused as
 /// `InvalidState`; kernel faults pass through.
-fn build_scorer(program: &Program) -> Result<CandidateScorer<'_>, PgError> {
+fn build_scorer(program: ValidatedProgram<'_>) -> Result<CandidateScorer<'_>, PgError> {
     match CandidateScorer::new(program) {
         Ok(scorer) => Ok(scorer),
         Err(e @ ScoreError::PreUnsupported(_)) => Err(PgError::InvalidState(e.to_string())),
@@ -100,7 +101,7 @@ fn fold_rows<'a>(
 /// under `SERIALIZABLE READ ONLY DEFERRABLE`. Writes nothing.
 pub async fn score_candidate(
     pool: &PgPool,
-    program: &Program,
+    program: ValidatedProgram<'_>,
     split: Option<SplitBoundary>,
 ) -> Result<CandidateScore, PgError> {
     // Reject an unscorable candidate before opening any transaction.
@@ -146,7 +147,7 @@ pub async fn score_candidate(
 /// catches a coordinated rewrite. A genuine pack reproduces the live score
 /// exactly.
 pub fn score_candidate_against_pack(
-    program: &Program,
+    program: ValidatedProgram<'_>,
     pack: &EvidencePack,
     anchor: Option<&Checkpoint>,
     split: Option<SplitBoundary>,
@@ -207,7 +208,7 @@ pub fn score_candidate_against_pack(
 /// does; a pack that fails becomes a `Failed` case and the batch goes on.
 /// An unscorable candidate fails the whole call once, up front. Offline.
 pub fn score_candidate_against_packs(
-    program: &Program,
+    program: ValidatedProgram<'_>,
     named_packs: &[(String, EvidencePack)],
 ) -> Result<BatchScore, PgError> {
     score_candidate_against_packs_lazily(
@@ -222,7 +223,7 @@ pub fn score_candidate_against_packs(
 /// they are loaded, so only one is held at once. An error loading one ends
 /// the call.
 pub fn score_candidate_against_packs_lazily<E, P>(
-    program: &Program,
+    program: ValidatedProgram<'_>,
     named_packs: impl IntoIterator<Item = Result<(String, P), E>>,
 ) -> Result<BatchScore, E>
 where
@@ -250,8 +251,8 @@ where
     Ok(BatchScore {
         score_format_version: SCORE_FORMAT_VERSION,
         semantics: SCORE_SEMANTICS.to_string(),
-        program: program.name.clone(),
-        program_hash: morpholog_core::format::canonical_hash(program),
+        program: program.as_program().name.clone(),
+        program_hash: morpholog_core::format::canonical_hash(program.as_program()),
         cases,
     })
 }
