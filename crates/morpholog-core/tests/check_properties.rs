@@ -503,3 +503,80 @@ fn deeply_nested_for_statements_are_rejected_not_overflowed() {
         "expected NestingTooDeep, got {errs:?}"
     );
 }
+
+/// A body nested deeper than any stack holds is refused before anything
+/// walks it without a cap: the cycle search over definitions, or the
+/// depth measure itself on `xor`, whose lowering copies its operands. It
+/// runs on a fixed stack so the verdict does not depend on the
+/// platform's, and every programme is leaked before validation because
+/// dropping one is itself recursive.
+#[test]
+fn a_body_too_deep_for_any_stack_is_refused_before_it_is_walked() {
+    const HOSTILE: usize = 200_000;
+    let leaf = || Prop::Claim {
+        predicate: "A".into(),
+        args: vec![],
+    };
+    let deep_xor = || Prop::Xor(Box::new(nest_prop(0, HOSTILE, leaf())), Box::new(leaf()));
+    let leak = |p: Program| -> &'static Program { Box::leak(Box::new(p)) };
+    let cases = [
+        (
+            "definition `d`",
+            leak(
+                program("deep")
+                    .definitions(vec![definition("d", vec![], nest_prop(0, HOSTILE, leaf()))])
+                    .build(),
+            ),
+        ),
+        (
+            "definition `d`",
+            leak(
+                program("deep")
+                    .definitions(vec![definition("d", vec![], deep_xor())])
+                    .build(),
+            ),
+        ),
+        (
+            "invariant `i`",
+            leak(
+                program("deep")
+                    .invariants(vec![invariant("i", deep_xor())])
+                    .build(),
+            ),
+        ),
+    ];
+    for (context, p) in cases {
+        let errs = std::thread::Builder::new()
+            .stack_size(4 << 20)
+            .spawn(move || p.validate().expect_err("hostile nesting must be refused"))
+            .unwrap()
+            .join()
+            .unwrap();
+        let messages: Vec<String> = errs.iter().map(ToString::to_string).collect();
+        assert!(
+            matches!(errs.as_slice(), [ValidationError::NestingTooDeep { .. }])
+                && messages[0].contains(context),
+            "expected one depth refusal for {context}, got {messages:?}"
+        );
+    }
+}
+
+/// Local depth is refused before cycles are looked for, because the
+/// cycle search would walk the too-deep body: a cyclic programme with a
+/// body nested past the limit gets the depth refusal, not the cycle.
+#[test]
+fn a_definition_too_deep_on_its_own_is_refused_before_cycles_are_searched() {
+    let p = program("deep_cycle")
+        .definitions(vec![
+            definition("f", vec![], nest_prop(0, 1024, defined("g", vec![]))),
+            definition("g", vec![], defined("f", vec![])),
+        ])
+        .build();
+    let errs = p.validate().expect_err("a too-deep body must be refused");
+    let messages: Vec<String> = errs.iter().map(ToString::to_string).collect();
+    assert!(
+        matches!(errs.as_slice(), [ValidationError::NestingTooDeep { .. }])
+            && messages[0].contains("definition `f`"),
+        "expected only f's depth refusal, got {messages:?}"
+    );
+}
