@@ -28,8 +28,42 @@ if git grep -nE 'SystemTime::now|Instant::now|Timestamp::now|Zoned::now|Uuid::no
     echo 'morpholog-core reads the clock or randomness above; take the value as an input instead' >&2
     status=1
 fi
-if git grep -nE 'std::(fs|net|process|env|thread)\b' -- crates/morpholog-core/src; then
-    echo 'morpholog-core reaches the outside world above; a decision may read only what it is given' >&2
-    status=1
-fi
+# A path (`std::fs`) or a grouped import (`use std::{fs, io}`, possibly
+# across lines), so `fs::read` after a grouped import is caught too.
+# Exit 0 = found, 1 = none; anything else means the check itself broke.
+outside_world() {
+    git ls-files -z -- 'crates/morpholog-core/src/*.rs' | perl -e '
+        my $mods = qr/\b(?:fs|net|process|env|thread)\b/;
+        my $found = 0;
+        local $/ = "\0";
+        for my $file (<STDIN>) {
+            chomp $file;
+            open(my $fh, "<", $file) or die "cannot read $file: $!";
+            my $src = do { local $/; <$fh> };
+            while ($src =~ /std\s*::\s*(?:$mods|\{((?:[^{}]|\{[^{}]*\})*)\})/g) {
+                my ($at, $text, $group) = ($-[0], $&, $1);
+                next if defined $group && $group !~ $mods;
+                my $line = 1 + (substr($src, 0, $at) =~ tr/\n//);
+                $text =~ s/\s+/ /g;
+                print "$file:$line: $text\n";
+                $found = 1;
+            }
+        }
+        exit($found ? 0 : 1);'
+}
+set +e
+outside_world
+found=$?
+set -e
+case "$found" in
+    0)
+        echo 'morpholog-core reaches the outside world above; a decision may read only what it is given' >&2
+        status=1
+        ;;
+    1) ;;
+    *)
+        echo "the outside-world check failed to run (exit $found)" >&2
+        status=1
+        ;;
+esac
 exit "$status"

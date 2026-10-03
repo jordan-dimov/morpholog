@@ -36,9 +36,9 @@ Evaluating a rule reads no file, network, process, environment or clock, runs no
 
 ### 4. Explicit state
 
-A rule's truth depends only on the programme, the proposal and the state it is given. A transformation reads one fixed snapshot of the state before it; its admissions are staged and become visible only to the invariant check that follows, never to the body itself.
+A rule's truth depends only on the programme, the proposal, the state and the subject input it is given. A transformation reads one fixed snapshot of the state before it; its admissions are staged and become visible only to the invariant check that follows, never to the body itself.
 
-- **Holds by:** every body statement evaluates against the pre-state; `pre(...)` in a body is an error, because the body already reads only the pre-state; a `for` collection is evaluated once, before its body runs.
+- **Holds by:** every body statement evaluates against the pre-state; a subject drawn by `new Subject()` is an input like the proposal's arguments, and running out of subjects is a typed error; `pre(...)` in a body is an error, because the body already reads only the pre-state; a `for` collection is evaluated once, before its body runs.
 - **Checked by:** `crates/morpholog-examples/tests/computational_model.rs` (`a_transformation_never_reads_what_it_admits`).
 
 ### 5. Replay
