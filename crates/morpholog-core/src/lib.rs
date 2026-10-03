@@ -97,5 +97,18 @@ pub use state::{ClaimInstance, Claims, EvalValue, IntentInstance, State};
 pub use sums::lower_sum_seeds;
 pub use validate::{ValidatedProgram, ValidationContext, ValidationError, VocabularyKind};
 
+/// The version of the kernel's semantics: what a validated programme means
+/// when it is evaluated. It moves when the result of any public semantic
+/// evaluation can change for the same programme, state and inputs: a
+/// proposal's admitted change, emitted intents, rejection (rule, version,
+/// witness) or error; an invariant's truth or error; a derived claim's rows
+/// or error. Cost, plans, the compiled route, diagnostics, explanation
+/// wording and wire formats are not semantics, and never move it.
+///
+/// Version 1 is the first semantics recorded, not the semantics of
+/// everything before it. `runtime-semantics.md` lists what each version
+/// changed.
+pub const SEMANTICS_VERSION: u32 = 1;
+
 #[cfg(test)]
 mod kernel_tests;
