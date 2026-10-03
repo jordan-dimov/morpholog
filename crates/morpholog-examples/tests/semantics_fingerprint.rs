@@ -14,10 +14,14 @@
 //! - a new version starts its own golden, and keeps the old ones as the
 //!   record of what each version decided.
 //!
-//! Results are encoded by meaning, not by `Debug` or `Display`: error prose
-//! can change freely, an error's kind and the names and values it carries
-//! cannot. This catches a change the corpus can see; it does not prove
-//! nothing else changed.
+//! Results are encoded by meaning, not by `Debug` or `Display`. A refusal
+//! counts by its kind and stable identity (an invariant's name, version and
+//! witness; a gate's kind and rule name, when it has one), never by how the
+//! refusing expression renders. An error counts by its typed kind and its
+//! structured payload (a predicate, a value); free-form diagnostic strings
+//! do not. Every input a decision reads is in its question, the subjects
+//! `new Subject()` draws included. This catches a change the corpus can
+//! see; it does not prove nothing else changed.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -25,9 +29,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use morpholog_core::{
-    EvalError, EvalValue, Outcome, Program, RejectionReason, SEMANTICS_VERSION, State,
+    EvalError, EvalValue, Outcome, Program, RejectionReason, SEMANTICS_VERSION, State, Subject,
+    Transformation,
 };
-use morpholog_test_support::differential::{same_subjects, sample_args, sample_state};
+use morpholog_test_support::differential::{sample_args, sample_state};
 use morpholog_test_support::{propose, test_transition, validated};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -45,8 +50,17 @@ fn claims(state: &State) -> Value {
     serde_json::to_value(state.claims().iter().collect::<Vec<_>>()).unwrap()
 }
 
-/// What an error means: its kind, and the names and values it carries.
-/// Prose payloads are left out, so rewording a message changes nothing.
+/// The subjects every proposal in the corpus draws from, in order: a finite
+/// transcript, as a replay will hand over, comfortably longer than any case
+/// consumes.
+fn subject_input() -> Vec<Subject> {
+    (0..1024)
+        .map(|n| Subject::from(format!("semantics-{n}")))
+        .collect()
+}
+
+/// What an error means: its typed kind and its structured payload. Free-form
+/// diagnostic strings are left out, so rewording one changes nothing.
 fn error(e: &EvalError) -> Value {
     match e {
         EvalError::UnboundVariable(_) => json!({"error": "unbound_variable"}),
@@ -100,13 +114,10 @@ fn decision(result: &Result<Outcome, EvalError>) -> Value {
                 version,
                 witness,
             } => json!({"invariant": {"name": name, "version": version, "witness": witness}}),
-            // The rendered gate stands for the statement that refused.
-            RejectionReason::Require { name, rendered } => {
-                json!({"require": {"name": name, "gate": rendered}})
-            }
-            RejectionReason::BindNone { name, rendered } => {
-                json!({"bind": {"name": name, "gate": rendered}})
-            }
+            // A gate's stable identity is its rule name; how the refusing
+            // expression renders is diagnosis, not meaning.
+            RejectionReason::Require { name, rendered: _ } => json!({"require": {"rule": name}}),
+            RejectionReason::BindNone { name, rendered: _ } => json!({"bind": {"rule": name}}),
         },
         Err(e) => error(e),
     }
@@ -123,25 +134,47 @@ fn answer(result: &Result<Value, EvalError>) -> Value {
 /// One case: its inputs and its result, each fingerprinted.
 type Fingerprints = (String, String);
 
+fn record(out: &mut BTreeMap<String, Fingerprints>, case: String, input: &Value, result: &Value) {
+    let fingerprints = (digest(input), digest(result));
+    assert!(
+        out.insert(case.clone(), fingerprints).is_none(),
+        "duplicate semantics case id: {case}"
+    );
+}
+
+/// A proposal's question: every input its decision reads.
+fn proposal_case(
+    program: &Program,
+    t: &Transformation,
+    args: Vec<EvalValue>,
+    state: &State,
+) -> (Value, Value) {
+    let transition = test_transition(t, args);
+    let subjects = subject_input();
+    let input = json!({
+        "propose": morpholog_core::format::canonical_hash(program),
+        "transformation": t.name,
+        "args": values(&transition.args),
+        "actor": transition.actor,
+        "state": claims(state),
+        "subjects": subjects,
+    });
+    let result = propose(program, &transition, state, &mut subjects.into_iter());
+    (input, decision(&result))
+}
+
 fn proposals(program: &Program, out: &mut BTreeMap<String, Fingerprints>) {
     for t in &program.transformations {
         for salt in 0..3u64 {
             let Some(args) = sample_args(program, t, salt) else {
                 continue;
             };
-            let state = sample_state(program, 2, salt);
-            let transition = test_transition(t, args);
-            let input = json!({
-                "propose": morpholog_core::format::canonical_hash(program),
-                "transformation": t.name,
-                "args": values(&transition.args),
-                "actor": transition.actor,
-                "state": claims(&state),
-            });
-            let result = propose(program, &transition, &state, &mut same_subjects());
-            out.insert(
+            let (input, decided) = proposal_case(program, t, args, &sample_state(program, 2, salt));
+            record(
+                out,
                 format!("gallery/{}/propose/{}/salt={salt}", program.name, t.name),
-                (digest(&input), digest(&decision(&result))),
+                &input,
+                &decided,
             );
         }
     }
@@ -162,12 +195,14 @@ fn reads(program: &Program, out: &mut BTreeMap<String, Fingerprints>) {
             let result = v
                 .eval_invariant(inv.name.as_str(), &state, Some(&pre))
                 .map(|held| json!(held.expect("the programme declares it")));
-            out.insert(
+            record(
+                out,
                 format!(
                     "gallery/{}/invariant/{}/salt={salt}",
                     program.name, inv.name
                 ),
-                (digest(&input), digest(&answer(&result))),
+                &input,
+                &answer(&result),
             );
         }
         for d in &program.derived_claims {
@@ -179,12 +214,14 @@ fn reads(program: &Program, out: &mut BTreeMap<String, Fingerprints>) {
             let result = v
                 .enumerate_derived(d.predicate.as_str(), &state)
                 .map(|rows| json!(rows.expect("the programme derives it")));
-            out.insert(
+            record(
+                out,
                 format!(
                     "gallery/{}/derived/{}/salt={salt}",
                     program.name, d.predicate
                 ),
-                (digest(&input), digest(&answer(&result))),
+                &input,
+                &answer(&result),
             );
         }
     }
@@ -204,21 +241,12 @@ transformation share(amount, parts):
     )
     .unwrap();
     let t = program.transformation("share").unwrap();
-    let transition = test_transition(t, vec![dec(10), dec(0)]);
-    let input = json!({
-        "propose": morpholog_core::format::canonical_hash(&program),
-        "transformation": t.name,
-        "args": values(&transition.args),
-    });
-    let result = propose(
-        &program,
-        &transition,
-        &State::default(),
-        &mut same_subjects(),
-    );
-    out.insert(
+    let (input, decided) = proposal_case(&program, t, vec![dec(10), dec(0)], &State::default());
+    record(
+        out,
         "fixture/division_by_zero".to_string(),
-        (digest(&input), digest(&decision(&result))),
+        &input,
+        &decided,
     );
 }
 
