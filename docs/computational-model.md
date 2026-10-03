@@ -46,8 +46,8 @@ A rule's truth depends only on the programme, the proposal, the state and the su
 
 A committed decision can be reconstructed from its recorded inputs under its recorded rules, and its meaning never depends on today's clock, mutable host code or a remote service.
 
-- **Holds by:** the audit record carries the proposal's arguments, the attested actor and the hash of the whole programme that admitted it, inside the tamper-evident tree.
-- **Gap:** the record does not hold the subjects a decision drew, so exact re-execution needs them supplied ([#403](https://github.com/jordan-dimov/morpholog/issues/403)); the kernel names its semantics version, but a commit does not yet record the version that decided it ([#451](https://github.com/jordan-dimov/morpholog/issues/451)).
+- **Holds by:** the audit record carries the proposal's arguments, the attested actor, the hash of the whole programme that admitted it and the semantics version that decided it, inside the tamper-evident tree.
+- **Gap:** the record does not hold the subjects a decision drew, so exact re-execution needs them supplied ([#403](https://github.com/jordan-dimov/morpholog/issues/403)).
 
 ### 6. Semantic identity
 
@@ -55,7 +55,7 @@ The programme hash names what the rules mean, not how they run: plans, indexes, 
 
 - **Holds by:** the canonical hash covers the programme; a prepared programme and its execution plan are caches ([runtime semantics](runtime-semantics.md#programme-preparation-execution)); generated machinery is left out of the hash only where validation proves it derives from what the hash covers.
 - **Checked by:** `crates/morpholog-examples/tests/semantics_fingerprint.rs`: `SEMANTICS_VERSION` names the interpreter contract, and a change of answer over a fixed corpus fails until it moves ([runtime semantics](runtime-semantics.md#semantics-versions)).
-- **Gap:** a commit records the rules that admitted it, but not yet the semantics version they ran under ([#451](https://github.com/jordan-dimov/morpholog/issues/451)).
+- **Recorded:** each commit carries both identities, the programme hash and the semantics version, in its Merkle leaf ([runtime semantics](runtime-semantics.md#semantics-versions)).
 
 ### 7. One reference semantics
 

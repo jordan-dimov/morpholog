@@ -631,7 +631,7 @@ A test holds the version to its meaning. It asks a fixed corpus of questions (ev
 |---|---|
 | 1 | The first semantics recorded. It is not a claim about anything decided before it was named. |
 
-A commit does not yet record which version decided it.
+Every commit records the version that decided it, beside the programme hash, inside its Merkle leaf: these rules, under this contract, admitted this transition. Rows from before the version was recorded carry none, and none is ever backfilled; an absent version means it was not recorded, not version 1. The recorded version is evidence of which contract made the decision, not a compatibility requirement for integrity: a verifier that cannot execute that contract may still prove the record authentic. It may not confirm or contradict the recorded decision by re-execution, and anything that re-executes says so ("not re-evaluated: decided under Morpholog semantics N; this verifier implements M") instead of reporting a mismatch, because no comparison was lawfully made.
 
 ## Admission: case-local revalidation
 
