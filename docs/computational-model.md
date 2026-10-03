@@ -20,11 +20,10 @@ A decision over a validated programme, finite admitted state and a finite propos
 
 ### 2. Deterministic decisions
 
-The same programme, admitted state, proposal and subject input give the same decision: the same admitted change and intents, or the same rejection (rule, version, witness), or the same error, and the same trace.
+The same programme, admitted state, proposal and subject input give the same decision: the same admitted change and intents, or the same rejection (rule, version, witness), or the same error, and the same trace and explanation.
 
 - **Holds by:** the kernel takes fresh subjects as an input ([runtime semantics](runtime-semantics.md#fresh-subjects-an-input-not-a-side-effect)), in a fixed draw order; evaluation visits claims in the order of the state it is given, and the proposal loader orders claims by content, so a refusal names the same first violating match between runs.
-- **Checked by:** `crates/morpholog-examples/tests/subject_source.rs` (draw order), `crates/morpholog-examples/tests/trace_differential.rs` and `crates/morpholog-postgres/src/scope_differential.rs` (executions compared exactly, with differently seeded hash maps).
-- **Gap:** explanations are under no differential ([#452](https://github.com/jordan-dimov/morpholog/issues/452)).
+- **Checked by:** `crates/morpholog-examples/tests/subject_source.rs` (draw order), `crates/morpholog-examples/tests/trace_differential.rs` and `crates/morpholog-postgres/src/scope_differential.rs` (executions compared exactly, with differently seeded hash maps; the trace differential also holds each explanation equal across runs and to the decision it explains), and the refusal-replay test in `crates/morpholog-postgres/tests/integration.rs` (an explanation after a refusal is the explanation of that execution's own state and draws).
 
 ### 3. Pure decisions
 
