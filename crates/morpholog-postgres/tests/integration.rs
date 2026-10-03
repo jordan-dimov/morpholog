@@ -2271,3 +2271,91 @@ async fn an_accepted_traced_proposal_shows_the_subject_it_committed() {
         "and the record holds it"
     );
 }
+
+/// The runtimes' own source: UUIDv7, and new subjects for independent
+/// executions, so one execution never reserves or predicts another's.
+#[test]
+fn the_runtime_source_mints_new_uuid_v7_subjects() {
+    use morpholog_core::SubjectSource;
+    let a = morpholog_postgres::runtime_subjects()
+        .next_subject()
+        .unwrap();
+    let b = morpholog_postgres::runtime_subjects()
+        .next_subject()
+        .unwrap();
+    assert_ne!(a, b);
+    for subject in [a, b] {
+        let id = uuid::Uuid::parse_str(subject.as_str()).expect("a UUID");
+        assert_eq!(id.get_version_num(), 7, "{subject:?}");
+    }
+}
+
+/// A refusal is explained by the execution that refused: replaying its
+/// recorded draws names the very subject its failing gate tested, where a
+/// second run with new subjects would describe an execution that never
+/// happened.
+#[tokio::test]
+async fn a_refusal_is_explained_by_the_draws_that_refused() {
+    use morpholog_core::ir_builder::{
+        assert_, claim, let_new_subject, params, predicate, program, require, transformation, var,
+    };
+    use morpholog_postgres::{PgProposalOutcome, RejectionStateOutcome};
+
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let t = transformation(
+        "try_it",
+        params(&[]),
+        vec![
+            let_new_subject("fresh"),
+            require(claim("Missing", vec![var("fresh")])),
+            assert_("Done", vec![var("fresh")]),
+        ],
+    );
+    let p = program("mint_gate")
+        .predicates(vec![
+            predicate("Missing").subject("s").build(),
+            predicate("Done").subject("s").build(),
+        ])
+        .transformations(vec![t.clone()])
+        .build();
+    let pg = common::pg_program(p.clone());
+    let transition = common::test_transition(&t, vec![]);
+    let RejectionStateOutcome {
+        outcome,
+        rejection_state,
+        drawn_subjects,
+    } = morpholog_postgres::propose_against_pg_with_rejection_state(
+        &pool,
+        &pg,
+        &common::attested(&transition),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    assert_eq!(drawn_subjects.len(), 1, "the refusing execution drew once");
+    let refused = RejectionStateOutcome {
+        outcome,
+        rejection_state,
+        drawn_subjects: drawn_subjects.clone(),
+    };
+    let replayed = refused
+        .explanation(&p, &transition)
+        .expect("a refusal is explained");
+    let state = refused
+        .rejection_state
+        .clone()
+        .expect("a refusal carries its state");
+    let rendered = format!("{replayed:?}");
+    assert!(rendered.contains(drawn_subjects[0].as_str()), "{rendered}");
+    let rerun = morpholog_core::explain(
+        &p,
+        &transition,
+        &state,
+        &mut morpholog_postgres::runtime_subjects(),
+    );
+    assert!(
+        !format!("{rerun:?}").contains(drawn_subjects[0].as_str()),
+        "a run with new subjects describes another execution"
+    );
+}

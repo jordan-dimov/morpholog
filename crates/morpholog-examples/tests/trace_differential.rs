@@ -135,35 +135,6 @@ fn minting_programme() -> (morpholog_core::Transformation, morpholog_core::Progr
     (t, p)
 }
 
-/// The runtimes' source mints different subjects for two independent
-/// executions, so one execution never reserves or predicts another's.
-#[test]
-fn the_production_source_mints_new_subjects_per_execution() {
-    let (t, p) = minting_programme();
-    let transition = test_transition(&t, vec![]);
-    let minted: Vec<String> = (0..2)
-        .map(|_| {
-            let outcome = propose(
-                &t,
-                &transition,
-                &morpholog_core::State::default(),
-                &p.invariants,
-                &p.definitions,
-                &mut morpholog_test_support::fresh(),
-            )
-            .expect("minting evaluates");
-            let morpholog_core::Outcome::Accepted {
-                asserted_claims, ..
-            } = outcome
-            else {
-                panic!("minting is unconditional");
-            };
-            format!("{:?}", asserted_claims[0].args[0])
-        })
-        .collect();
-    assert_ne!(minted[0], minted[1]);
-}
-
 /// The same subjects give the same execution: outcome and trace alike, with
 /// nothing renamed away.
 #[test]

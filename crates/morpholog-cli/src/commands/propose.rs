@@ -5,7 +5,7 @@
 //! without compiling Rust.
 
 use anyhow::Context;
-use morpholog_core::{Subject, Transition, explain};
+use morpholog_core::{Subject, Transition};
 use morpholog_postgres::{
     PgProgram, PgProposalOutcome, PgTracedOutcome, Proposal, propose_against_pg,
     propose_against_pg_with_rejection_state, propose_against_pg_with_trace,
@@ -62,28 +62,21 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
     } else if args.explain_on_reject {
         // Explain against the exact state that refused, not a second
         // read that could have moved on.
-        let morpholog_postgres::RejectionStateOutcome {
-            outcome,
-            rejection_state,
-        } = match propose_against_pg_with_rejection_state(&pool, &program, &proposal).await {
-            Ok(outcome) => outcome,
-            Err(err) => return report_request_failure(classify_pg_error(err)),
-        };
-        match (&outcome, rejection_state) {
+        let refused =
+            match propose_against_pg_with_rejection_state(&pool, &program, &proposal).await {
+                Ok(outcome) => outcome,
+                Err(err) => return report_request_failure(classify_pg_error(err)),
+            };
+        let explanation = refused.explanation(program.prepared().program(), &transition);
+        match (&refused.outcome, explanation) {
             (
                 PgProposalOutcome::Rejected {
                     reason,
                     rule,
                     witness,
                 },
-                Some(state),
+                Some(explanation),
             ) => {
-                let explanation = explain(
-                    program.prepared().program(),
-                    &transition,
-                    &state,
-                    &mut morpholog_postgres::runtime_subjects(),
-                );
                 print_json(&envelopes::RejectedWithExplanation::new(
                     reason,
                     rule.as_deref(),
@@ -92,7 +85,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                 ))?;
                 return report_rejection(reason, &parsed);
             }
-            _ => print_json(&outcome)?,
+            _ => print_json(&refused.outcome)?,
         }
     } else {
         let outcome = match propose_against_pg(&pool, &program, &proposal).await {
@@ -496,27 +489,21 @@ pub(crate) async fn propose_row_outcome(
     let prepared = program.prepared();
     let transition = decode_row(file, prepared, row)?;
     if explain_on_reject {
-        let morpholog_postgres::RejectionStateOutcome {
-            outcome,
-            rejection_state,
-        } = propose_against_pg_with_rejection_state(pool, program, &Proposal::gateway(&transition))
-            .await
-            .map_err(classify_pg_error)?;
+        let refused =
+            propose_against_pg_with_rejection_state(pool, program, &Proposal::gateway(&transition))
+                .await
+                .map_err(classify_pg_error)?;
         if let (
             PgProposalOutcome::Rejected {
                 reason,
                 rule,
                 witness,
             },
-            Some(state),
-        ) = (&outcome, rejection_state)
-        {
-            let explanation = explain(
-                prepared.program(),
-                &transition,
-                &state,
-                &mut morpholog_postgres::runtime_subjects(),
-            );
+            Some(explanation),
+        ) = (
+            &refused.outcome,
+            refused.explanation(prepared.program(), &transition),
+        ) {
             return serde_json::to_value(envelopes::RejectedWithExplanation::new(
                 reason,
                 rule.as_deref(),
@@ -526,7 +513,7 @@ pub(crate) async fn propose_row_outcome(
             .context("serialising the receipt")
             .map_err(RowError::after_decision);
         }
-        serde_json::to_value(&outcome)
+        serde_json::to_value(&refused.outcome)
             .context("serialising the receipt")
             .map_err(RowError::after_decision)
     } else {

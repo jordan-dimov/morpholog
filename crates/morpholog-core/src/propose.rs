@@ -388,10 +388,6 @@ pub fn propose_with(
     finish_staged_inner(staged, pre_state, admission, None, &mut trace)
 }
 
-/// A transformation body's result before any invariant is checked: a
-/// gate rejection, or the claims it would admit and retract and the
-/// intents it would emit. Lets an adapter run a body once and then check
-/// the invariants its own way.
 /// Where `new Subject()` gets its subjects: an input to execution, like
 /// the state and the proposal. The kernel neither makes nor inspects
 /// identifiers; the PostgreSQL and CLI runtimes supply UUIDv7.
@@ -401,6 +397,9 @@ pub fn propose_with(
 /// nested bodies depth-first, and nothing after execution stops. So the
 /// same state, proposal and sequence of subjects give one result, trace
 /// included.
+///
+/// The caller owes fresh subjects: none already in the state or drawn
+/// before, unless it is replaying a recorded execution on purpose.
 ///
 /// Any iterator of subjects is a source, so a recorded sequence is
 /// `ids.into_iter()` and a stream is `std::iter::repeat_with(..)`.
@@ -415,6 +414,10 @@ impl<I: Iterator<Item = Subject>> SubjectSource for I {
     }
 }
 
+/// A transformation body's result before any invariant is checked: a
+/// gate rejection, or the claims it would admit and retract and the
+/// intents it would emit. Lets an adapter run a body once and then check
+/// the invariants its own way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StagedDelta {
     Rejected {

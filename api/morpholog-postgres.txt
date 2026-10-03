@@ -1562,8 +1562,11 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::RejectionRow
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RejectionRow
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RejectionRow
 pub struct morpholog_postgres::RejectionStateOutcome
+pub morpholog_postgres::RejectionStateOutcome::drawn_subjects: alloc::vec::Vec<morpholog_core::ir::Subject>
 pub morpholog_postgres::RejectionStateOutcome::outcome: morpholog_postgres::PgProposalOutcome
 pub morpholog_postgres::RejectionStateOutcome::rejection_state: core::option::Option<morpholog_core::state::State>
+impl morpholog_postgres::RejectionStateOutcome
+pub fn morpholog_postgres::RejectionStateOutcome::explanation(&self, &morpholog_core::ir::Program, &morpholog_core::propose::Transition) -> core::option::Option<morpholog_core::explain::Explanation>
 impl core::marker::Freeze for morpholog_postgres::RejectionStateOutcome
 impl core::marker::Send for morpholog_postgres::RejectionStateOutcome
 impl core::marker::Sync for morpholog_postgres::RejectionStateOutcome
