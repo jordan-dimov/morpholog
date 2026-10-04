@@ -640,6 +640,21 @@ A test holds the version to its meaning. It asks a fixed corpus of questions (ev
 
 Every commit records the version that decided it, beside the programme hash, inside its Merkle leaf: these rules, under this contract, admitted this transition. Rows from before the version was recorded carry none, and none is ever backfilled; an absent version means it was not recorded, not version 1. The recorded version is evidence of which contract made the decision, not a compatibility requirement for integrity: a verifier that cannot execute that contract may still prove the record authentic. It may not confirm or contradict the recorded decision by re-execution, and anything that re-executes says so ("not re-evaluated: decided under Morpholog semantics N; this verifier implements M") instead of reporting a mismatch, because no comparison was lawfully made.
 
+## Evaluation receipts
+
+A receipt says: under this programme and semantics version, over the history this checkpoint commits to, this derived read gives this answer. `audit receipt` writes one from a complete-prefix evidence pack. `audit verify-receipt` checks it offline: it rebuilds the state from the pack and evaluates the read again. The answer is never trusted for being written down.
+
+Verification keeps its layers apart and reports each one:
+
+- **Evidence**: the pack's own verdict, exactly as `audit verify-pack` gives it, under the same trust (an anchor, a signature policy, witnesses). A witness judged invalid fails the receipt, as it fails `verify-pack`, but never subtracts from the tree's own verdict, so the layers after it are still judged.
+- **Completeness**: whether that evidence is the whole history up to its checkpoint. Only an intact complete prefix is. A window or selective pack proves its rows genuine, not that none are missing.
+- **Checkpoint** and **programme**: whether the pack covers exactly the history the receipt names, and whether the supplied programme means what the receipt names. Its source may differ in comments, formatting or surface spelling.
+- **Evaluation**: whether the answer recomputes. It runs when the receipt is well formed, the evidence is an intact complete prefix, and the checkpoint and programme match. A trust finding such as an invalid witness fails the verification without suppressing it. A receipt computed under a semantics version this binary does not implement is `not_re_evaluated`, never a mismatch.
+
+Two identities stay separate. The receipt's programme hash and semantics version name what computed the answer; each audit row's own name what admitted that row. A reporting programme may read history another programme admitted, and a later semantics may read rows an earlier one decided, without either pretending otherwise.
+
+A receipt proves its statement, not its origin. It is unsigned, so a receipt rewritten into another statement that is also true over the same history still verifies. What verification catches is any disagreement between what a receipt states and what recomputes. Nor does a receipt say the history holds every claim the outside world does: that is outside what Morpholog can witness.
+
 ## Admission: case-local revalidation
 
 An invariant says what lawful state means, and `explain` and the verifiers ask exactly that of a whole state. Admitting a transition asks less, on purpose, and `evaluate` asks the same as admission: it charges a candidate invariant exactly where the commit gate would have refused, case-local, never the whole state. The runtime computes the transition's effective delta - what the candidate holds that the pre-state did not, and the reverse, so a duplicate admit, a retract of what is absent, or a retract followed by a re-admit change nothing - and revalidates each invariant over the cases that delta could affect: untouched cases may remain as history left them; every touched case must satisfy the invariant afterwards; where the impact cannot be bounded safely, the whole invariant is checked. A transition that changes nothing is admitted whatever the history holds. Inherited dirt therefore blocks only the transitions that touch it, which is what adopting a stricter rule version on a live ledger and admitting exception claims both need, and touching a dirty case without fully repairing it still refuses.

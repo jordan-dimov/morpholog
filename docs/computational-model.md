@@ -47,7 +47,7 @@ A rule's truth depends only on the programme, the proposal, the state and the su
 A committed decision can be reconstructed from its recorded inputs under its recorded rules, and its meaning never depends on today's clock, mutable host code or a remote service.
 
 - **Holds by:** the audit record carries the proposal's arguments, the attested actor, the hash of the whole programme that admitted it and the semantics version that decided it, inside the tamper-evident tree.
-- **Gap:** the record does not hold the subjects a decision drew, so exact re-execution needs them supplied ([#403](https://github.com/jordan-dimov/morpholog/issues/403)).
+- **Gap:** the record does not hold the subjects a decision drew, so exact re-execution needs them supplied ([#461](https://github.com/jordan-dimov/morpholog/issues/461)).
 
 ### 6. Semantic identity
 
