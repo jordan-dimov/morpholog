@@ -1,0 +1,55 @@
+program encoding_v1_carrier
+
+predicate Account(id: Subject, balance: Decimal)
+  unique by (id)
+predicate Entry(id: Subject, on: Date)
+  append only
+predicate Ping(id: Subject, at: Timestamp, gap: Duration)
+predicate Charge(id: Subject, amount: Decimal[USD])
+predicate Rate(id: Subject, rate: Decimal)
+  current pointer by (id)
+  superseded via Supersedes
+predicate Supersedes(successor: Subject, prior: Subject)
+predicate Window(id: Subject, from: Date, value: Decimal)
+  effective by (id) on (from) partial
+predicate Tariff(id: Subject, from: Date, value: Decimal)
+  effective by (id) on (from)
+predicate Flag(id: Subject, ok: Bool)
+predicate Bag(id: Subject, items: Collection, tag: Any)
+predicate Total(id: Subject, sum: Decimal)
+
+intent Notify(id: Subject, amount: Decimal)
+
+define funded(a):
+  exists b: Account(a, b) and (0 <= b)
+
+invariant propositions:
+  (Flag(f, _) or (not Entry(f, _))) and (Account(a, n) implies (forall e in Entry(e, _): (exists p: Ping(p, _, _)) xor pre(Rate(a, _)))) and (n = 1.50) and (n != -2) and (a in bag) and funded(a)
+
+invariant tariffs total over Tariff:
+  forall t in Account(t, _): exists d: Tariff(t, d, _)
+
+invariant orderings:
+  (x <= 10) and (d before @2026-04-01) and (t at_or_after @2026-04-01T00:00:00Z) and (g longer_than duration(PT1H))
+
+invariant values:
+  ((x + (y - z)) = ((x / y) * (y % 2))) and (sum(g | Ping(_, _, g)) = sum(q | Charge(_, q))) and (max(n | Account(_, n)) = min(n | Account(_, n))) and (value Account(#acct, _) = value Rate(a, _) default 0) and (value Window(id: a, value: _, ..) = if(Flag(a, _), abs(x), round(x, 0.01))) and (period_index(@2026-04-01, span(P1Y), d) = min(x, max(y, z))) and (period_start_of(@2026-04-01, span(P3M), i) = 12.5 USD)
+
+transformation statements(id, items, amount):
+  require Account(id, _)
+  require authorised: Flag(actor, _)
+  bind Rate(id, rate)
+  bind current: Window(id, from, value)
+  let next = rate + amount
+  let fresh = new Subject()
+  admit Account(fresh, next)
+  retract Flag(id, _)
+  for item in items:
+    admit Bag(item, items, #tagged)
+    for inner in items:
+      emit Notify(inner, amount)
+  emit Notify(id, amount)
+
+derived Total(id):
+  over Account(id, _)
+  value sum = sum(x | Account(id, x))

@@ -3,6 +3,7 @@
 //! shared helpers live here.
 
 mod admission;
+mod canonical;
 mod checked_arith;
 mod cond_semantics;
 mod date_arithmetic;
