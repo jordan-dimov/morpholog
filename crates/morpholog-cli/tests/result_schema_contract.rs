@@ -2066,6 +2066,23 @@ fn validate(
     if !matches_type {
         return Err(format!("{path}: {value} is not of type {types:?}"));
     }
+    let as_int = |v: &serde_json::Value| {
+        v.as_i64()
+            .map(i128::from)
+            .or_else(|| v.as_u64().map(i128::from))
+    };
+    if let Some(n) = as_int(value) {
+        if let Some(min) = schema.get("minimum").and_then(as_int)
+            && n < min
+        {
+            return Err(format!("{path}: {n} is below the minimum {min}"));
+        }
+        if let Some(max) = schema.get("maximum").and_then(as_int)
+            && n > max
+        {
+            return Err(format!("{path}: {n} is above the maximum {max}"));
+        }
+    }
     if value.is_object() && types.contains(&"object") {
         let object = value.as_object().unwrap();
         let properties = schema.get("properties").and_then(|p| p.as_object());
@@ -2346,6 +2363,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("audit_row_attested_with_role_oid.json", "audit_row"),
         ("audit_row_self_describing.json", "audit_row"),
         ("audit_row_model_hash.json", "audit_row"),
+        ("audit_row_semantics_version.json", "audit_row"),
         ("audit_row_named.json", "audit_row_named"),
         ("check_report.json", "check_report"),
         ("check_report_routes.json", "check_report"),
