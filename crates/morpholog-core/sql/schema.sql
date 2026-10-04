@@ -281,7 +281,19 @@ CREATE TABLE audit (
             AND attestation IS NOT NULL
             AND parameters IS NOT NULL)
     ),
-    CONSTRAINT audit_model_hash_required CHECK (model_hash IS NOT NULL)
+    CONSTRAINT audit_model_hash_required CHECK (model_hash IS NOT NULL),
+    -- The version of the kernel's semantics that decided the row
+    -- (`SEMANTICS_VERSION`): with `model_hash`, which rules under which
+    -- contract. A u32, so bigint holds its whole range. Part of the leaf,
+    -- chosen by presence, and only on a row that names its programme.
+    -- Nullable for the same reason: never backfill.
+    semantics_version    bigint,
+    CONSTRAINT audit_semantics_version_shape CHECK (
+        semantics_version IS NULL
+        OR (semantics_version BETWEEN 1 AND 4294967295
+            AND model_hash IS NOT NULL)
+    ),
+    CONSTRAINT audit_semantics_version_required CHECK (semantics_version IS NOT NULL)
 );
 
 -- Keyset replay order: every audit read (the blessed tail, verify,
@@ -596,4 +608,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (17, 'value_key_v1'),
     (18, 'date_ordinal'),
     (19, 'requirement_position'),
-    (20, 'audit_model_hash');
+    (20, 'audit_model_hash'),
+    (21, 'audit_semantics_version');

@@ -118,6 +118,7 @@ mod tests {
             attestation: None,
             parameters: None,
             model_hash: None,
+            semantics_version: None,
         }
     }
 

@@ -14,10 +14,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
 
 use super::{
-    DOCUMENT_FORMATS, EvidencePack, FormatPair, PackError, PackManifest, covering_checkpoint,
+    DOCUMENT_FORMATS, EvidencePack, FormatLadder, PackError, PackManifest, covering_checkpoint,
     manifest_agrees, row_count_disagrees, validate_prefix_chain,
 };
-use crate::audit::AuditRow;
+use crate::audit::{AuditRow, RowRung};
 use crate::audit_pages::AuditPages;
 use crate::checkpoints::{Checkpoint, TreeVerification, load_checkpoint_chain};
 use crate::error::{PgError, classify_checked_query};
@@ -28,11 +28,12 @@ use crate::txn::{TxIsolation, begin_isolated_tx};
 
 pub(crate) const PACK_FORMAT_V4: u32 = 4;
 const PACK_KIND_PREFIX: &str = "prefix";
-/// The streamed prefix's versions: 4, or 5 once a covered row names its
-/// programme. See [`FormatPair`].
-pub(crate) const PREFIX_FORMATS: FormatPair = FormatPair {
-    unstamped: PACK_FORMAT_V4,
-    stamped: 5,
+/// The streamed prefix's versions: 4, 5 once a covered row names its
+/// programme, 9 once one names its semantics. See [`FormatLadder`].
+pub(crate) const PREFIX_FORMATS: FormatLadder = FormatLadder {
+    legacy: PACK_FORMAT_V4,
+    model: 5,
+    semantics: 9,
 };
 
 /// Line 1 of a complete-prefix pack.
@@ -79,30 +80,33 @@ pub async fn begin_prefix_export(
             rows_present,
         });
     }
-    // The manifest goes out before the rows, so whether any covered row
-    // names its programme is asked first, in the same snapshot and order.
-    let stamped = sqlx::query_scalar!(
-        r#"SELECT EXISTS (
-               SELECT 1 FROM (
-                   SELECT model_hash FROM morpholog.audit
-                   ORDER BY committed_at, transition_id
-                   LIMIT $1
-               ) AS prefix
-               WHERE prefix.model_hash IS NOT NULL
-           ) AS "stamped!""#,
+    // The manifest goes out before the rows, so the highest rung among the
+    // covered rows is asked first, in the same snapshot and order.
+    let rung = sqlx::query_scalar!(
+        r#"SELECT coalesce(max(CASE
+                   WHEN prefix.semantics_version IS NOT NULL THEN 2
+                   WHEN prefix.model_hash IS NOT NULL THEN 1
+                   ELSE 0
+               END), 0) AS "rung!"
+           FROM (
+               SELECT model_hash, semantics_version FROM morpholog.audit
+               ORDER BY committed_at, transition_id
+               LIMIT $1
+           ) AS prefix"#,
         covering.tree_size
     )
     .fetch_one(&mut *tx)
     .await
     .map_err(classify_checked_query)?;
+    let highest = match rung {
+        0 => RowRung::Legacy,
+        1 => RowRung::Model,
+        _ => RowRung::Semantics,
+    };
 
     Ok(PrefixExport {
         manifest: PrefixPackManifest {
-            pack_format_version: if stamped {
-                PREFIX_FORMATS.stamped
-            } else {
-                PREFIX_FORMATS.unstamped
-            },
+            pack_format_version: PREFIX_FORMATS.version(highest),
             pack_kind: PACK_KIND_PREFIX.to_string(),
             tree_size: covering.tree_size,
             root_hash: covering.root_hash,
@@ -209,9 +213,9 @@ struct RowStream<R> {
     manifest: PrefixPackManifest,
     fed: usize,
     previous: Option<(jiff::Timestamp, uuid::Uuid)>,
-    /// Whether a row read so far names its programme, held to the
+    /// The highest rung among the rows read so far, held to the
     /// manifest's version once the last row is in.
-    stamped_seen: bool,
+    highest_seen: RowRung,
 }
 
 impl<R: BufRead> RowStream<R> {
@@ -244,7 +248,7 @@ impl<R: BufRead> RowStream<R> {
             manifest,
             fed: 0,
             previous: None,
-            stamped_seen: false,
+            highest_seen: RowRung::Legacy,
         };
         Ok((stream, checkpoints))
     }
@@ -260,7 +264,7 @@ impl<R: BufRead> RowStream<R> {
                     ),
                 });
             }
-            PREFIX_FORMATS.check(self.manifest.pack_format_version, self.stamped_seen)?;
+            PREFIX_FORMATS.check(self.manifest.pack_format_version, self.highest_seen)?;
             return Ok(None);
         }
         if self.lines.at_end()? {
@@ -280,11 +284,17 @@ impl<R: BufRead> RowStream<R> {
         }
         self.previous = Some(here);
         self.fed += 1;
-        if row.model_hash.is_some() {
-            self.stamped_seen = true;
-            // Refused at the row, not after the stream: a version-4 reader
-            // must never have been handed it.
-            PREFIX_FORMATS.check(self.manifest.pack_format_version, true)?;
+        let rung = row.rung();
+        if rung > self.highest_seen {
+            self.highest_seen = rung;
+            // Refused at the row, not after the stream: a reader of the
+            // announced version must never have been handed it.
+            if PREFIX_FORMATS
+                .rung(self.manifest.pack_format_version)
+                .is_some_and(|announced| rung > announced)
+            {
+                PREFIX_FORMATS.check(self.manifest.pack_format_version, rung)?;
+            }
         }
         Ok(Some(row))
     }

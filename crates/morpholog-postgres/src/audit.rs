@@ -60,6 +60,32 @@ pub struct AuditRow {
         deserialize_with = "present"
     )]
     pub model_hash: Option<String>,
+    /// The version of the kernel's semantics that decided the row
+    /// (`morpholog_core::SEMANTICS_VERSION` when it committed). Absent on
+    /// older rows; presence on a row that names its programme selects the
+    /// leaf encoding that commits to it. Evidence of which contract made
+    /// the decision, not something an integrity check compares with its
+    /// own version.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub semantics_version: Option<u32>,
+}
+
+/// How far up the leaf-format ladder a row reaches. A pack is versioned
+/// by the highest rung among the rows it discloses, so a verifier from
+/// before a rung refuses the pack by its version before reading a row it
+/// could not hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum RowRung {
+    /// Names no programme.
+    Legacy,
+    /// Names the programme that admitted it.
+    Model,
+    /// Names the programme and the semantics that decided it.
+    Semantics,
 }
 
 /// A leaf-rung field that is optional by omission only: absent is
@@ -75,13 +101,39 @@ where
 }
 
 impl AuditRow {
+    /// How far up the leaf-format ladder this row reaches.
+    pub(crate) fn rung(&self) -> RowRung {
+        if self.semantics_version.is_some() {
+            RowRung::Semantics
+        } else if self.model_hash.is_some() {
+            RowRung::Model
+        } else {
+            RowRung::Legacy
+        }
+    }
+
     /// Check the row is a shape the runtime writes: nothing extra, an
-    /// attestation, an attestation plus one name per argument, or those
-    /// plus the model hash. Each rung needs the one below it.
+    /// attestation, an attestation plus one name per argument, those plus
+    /// the model hash, or those plus the semantics version. Each rung needs
+    /// the one below it.
     ///
     /// Checked at the database boundary and before hashing, because packs
     /// carry rows as hostile input.
     pub fn validate_shape(&self) -> Result<(), String> {
+        if let Some(version) = self.semantics_version {
+            if self.model_hash.is_none() {
+                return Err(format!(
+                    "audit row {} carries a semantics version without a model hash",
+                    self.transition_id
+                ));
+            }
+            if version == 0 {
+                return Err(format!(
+                    "audit row {} carries semantics version 0; versions start at 1",
+                    self.transition_id
+                ));
+            }
+        }
         if let Some(hash) = &self.model_hash {
             if self.attestation.is_none() || self.parameters.is_none() {
                 return Err(format!(
@@ -136,13 +188,15 @@ pub(crate) struct AuditRowRaw {
     parameters: Option<serde_json::Value>,
     // Nullable for the same reason: historical rows name no programme.
     model_hash: Option<String>,
+    // Nullable for the same reason; bigint holds the whole u32 range.
+    semantics_version: Option<i64>,
 }
 // The canonical column order, shared by `AuditRowRaw` and every listing
 // SELECT (each `query_as!` must spell it out literally):
 //   transition_id, transformation_name, arguments, actor,
 //   invariant_epoch, invariants_checked,
 //   asserted_claims, retracted_claims, emitted_intents, committed_at,
-//   attestation, parameters, model_hash
+//   attestation, parameters, model_hash, semantics_version
 pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
     let decoded = AuditRow {
         transition_id: row.transition_id,
@@ -173,6 +227,14 @@ pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
             .map(serde_json::from_value::<Vec<String>>)
             .transpose()?,
         model_hash: row.model_hash,
+        semantics_version: row
+            .semantics_version
+            .map(|v| {
+                u32::try_from(v).map_err(|_| {
+                    PgError::InvalidState(format!("audit semantics version {v} is not a u32"))
+                })
+            })
+            .transpose()?,
     };
     decoded.validate_shape().map_err(PgError::InvalidState)?;
     Ok(decoded)
@@ -211,7 +273,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash
+                attestation, parameters, model_hash, semantics_version
                  FROM morpholog.audit
                  ORDER BY committed_at, transition_id
                  LIMIT $1",
@@ -226,7 +288,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash
+                attestation, parameters, model_hash, semantics_version
                  FROM morpholog.audit
                  WHERE (committed_at, transition_id) > ($2, $3)
                  ORDER BY committed_at, transition_id
@@ -244,7 +306,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash
+                attestation, parameters, model_hash, semantics_version
                  FROM morpholog.audit
                  WHERE committed_at < $2
                  ORDER BY committed_at, transition_id
@@ -261,7 +323,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash
+                attestation, parameters, model_hash, semantics_version
                  FROM morpholog.audit
                  WHERE (committed_at, transition_id) > ($2, $3)
                    AND committed_at < $4

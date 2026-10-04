@@ -96,12 +96,12 @@ pub use outbox::{
     process_one_outbox_row, record_compensation, release_outbox_claim,
 };
 pub use pack::{
-    EvidencePack, PackError, PackManifest, PrefixExport, PrefixPackManifest, PrefixStreamReport,
-    RowInclusionProof, SelectiveEvidencePack, SelectivePackManifest, SelectiveVerification,
-    WindowEvidencePack, WindowPackManifest, WindowStart, WindowVerification, begin_prefix_export,
-    export_pack, export_selective, export_window, pack_format_version, pack_role_rebindings,
-    read_prefix_stream, streamed_pack_version, verify_pack, verify_prefix_stream, verify_selective,
-    verify_window,
+    EvidencePack, NEWEST_PACK_FORMAT, PackError, PackKind, PackManifest, PrefixExport,
+    PrefixPackManifest, PrefixStreamReport, RowInclusionProof, SelectiveEvidencePack,
+    SelectivePackManifest, SelectiveVerification, WindowEvidencePack, WindowPackManifest,
+    WindowStart, WindowVerification, begin_prefix_export, export_pack, export_selective,
+    export_window, pack_format_version, pack_kind, pack_role_rebindings, read_prefix_stream,
+    streamed_pack_version, verify_pack, verify_prefix_stream, verify_selective, verify_window,
 };
 pub use program::{InvariantPlan, PgProgram};
 pub use propose::{

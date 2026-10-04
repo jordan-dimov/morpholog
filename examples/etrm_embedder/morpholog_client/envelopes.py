@@ -1002,7 +1002,7 @@ _AUDIT_ROW_KEYS = {
     "committed_at",
 }
 
-_AUDIT_ROW_OPTIONAL_KEYS = {"attestation", "parameters", "model_hash"}
+_AUDIT_ROW_OPTIONAL_KEYS = {"attestation", "parameters", "model_hash", "semantics_version"}
 
 
 def _parameters_of(data: dict[str, object]) -> list[str] | None:
@@ -1044,6 +1044,19 @@ def _model_hash_of(data: dict[str, object]) -> str | None:
         raise EnvelopeError(
             "an audit row carries a model hash without an attestation and parameter names"
         )
+    return raw
+
+
+def _semantics_version_of(data: dict[str, object]) -> int | None:
+    """The semantics version a row names, held to its shape: an integer in
+    the u32 range from 1, only on a row that also names its programme."""
+    raw = data.get("semantics_version", _ABSENT)
+    if raw is _ABSENT:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int) or not 1 <= raw <= 0xFFFFFFFF:
+        raise EnvelopeError(f"an audit row carries a malformed semantics version {raw!r}")
+    if data.get("model_hash") is None:
+        raise EnvelopeError("an audit row carries a semantics version without a model hash")
     return raw
 
 
@@ -1119,6 +1132,9 @@ class AuditRow:
     # The canonical hash of the whole programme that admitted the row, as
     # `morpholog hash` prints it. None on rows from before it was stamped.
     model_hash: str | None = None
+    # The version of the kernel's semantics that decided the row. None on
+    # rows from before it was stamped.
+    semantics_version: int | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRow:
@@ -1139,6 +1155,7 @@ class AuditRow:
             attestation=_attestation_of(data),
             parameters=_parameters_of(data),
             model_hash=_model_hash_of(data),
+            semantics_version=_semantics_version_of(data),
         )
 
 
@@ -1168,6 +1185,9 @@ class AuditRowNamed:
     # The canonical hash of the whole programme that admitted the row, as
     # `morpholog hash` prints it. None on rows from before it was stamped.
     model_hash: str | None = None
+    # The version of the kernel's semantics that decided the row. None on
+    # rows from before it was stamped.
+    semantics_version: int | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRowNamed:
@@ -1188,6 +1208,7 @@ class AuditRowNamed:
             attestation=_attestation_of(data),
             parameters=_parameters_of(data),
             model_hash=_model_hash_of(data),
+            semantics_version=_semantics_version_of(data),
         )
 
 
