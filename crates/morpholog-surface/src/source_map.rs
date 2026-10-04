@@ -77,6 +77,8 @@ impl SourceMap {
             | ValidationError::InvalidValueExtraction { context, .. }
             | ValidationError::DerivedValueNotAKey { context, .. }
             | ValidationError::EmptySumUntyped { context, .. }
+            | ValidationError::SumSeedNotFaithful { context }
+            | ValidationError::InvariantVersionNotOne { context, .. }
             | ValidationError::DerivedInRule { context, .. }
             | ValidationError::NoArithRule { context, .. }
             | ValidationError::CondBranchKindMismatch { context, .. }

@@ -1254,6 +1254,9 @@ pub morpholog_core::ValidationError::InvalidValueExtraction
 pub morpholog_core::ValidationError::InvalidValueExtraction::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::InvalidValueExtraction::extract: usize
 pub morpholog_core::ValidationError::InvalidValueExtraction::predicate: alloc::string::String
+pub morpholog_core::ValidationError::InvariantVersionNotOne
+pub morpholog_core::ValidationError::InvariantVersionNotOne::context: morpholog_core::ValidationContext
+pub morpholog_core::ValidationError::InvariantVersionNotOne::version: u32
 pub morpholog_core::ValidationError::MultipleEffectiveClauses
 pub morpholog_core::ValidationError::MultipleEffectiveClauses::predicate: alloc::string::String
 pub morpholog_core::ValidationError::NestingTooDeep
@@ -1290,6 +1293,8 @@ pub morpholog_core::ValidationError::RetractsAppendOnly::predicate: alloc::strin
 pub morpholog_core::ValidationError::RoundQuantumNotPositive
 pub morpholog_core::ValidationError::RoundQuantumNotPositive::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::RoundQuantumNotPositive::quantum: alloc::string::String
+pub morpholog_core::ValidationError::SumSeedNotFaithful
+pub morpholog_core::ValidationError::SumSeedNotFaithful::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::UnboundVariable
 pub morpholog_core::ValidationError::UnboundVariable::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::UnboundVariable::variable: alloc::string::String

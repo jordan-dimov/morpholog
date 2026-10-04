@@ -164,8 +164,9 @@ pub enum SumSeed {
 /// [`Transformation`] is admitted only if every case it touches satisfies
 /// the rule afterwards; otherwise the whole transformation is rejected.
 ///
-/// `version` (always 1 for now) lets audit rows record exactly which
-/// invariant versions governed each commit.
+/// `version` lets audit rows record exactly which invariant versions
+/// governed each commit. It is always 1 for now: the programme hash does
+/// not carry it, so validation refuses another.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invariant {
     pub name: InvariantName,
@@ -308,9 +309,9 @@ pub enum ValueExpr {
     ///
     /// `seed` is what an empty sum returns, set by
     /// [`crate::lower_sum_seeds`] from declared kinds: an empty sum over a
-    /// `Decimal[t]` position is `0 t`. Hand-built IR that skips lowering
-    /// keeps the decimal zero, and validation refuses it
-    /// (`EmptySumUntyped`) wherever the target is a duration or quantity.
+    /// `Decimal[t]` position is `0 t`. The programme hash leaves it out,
+    /// so validation refuses any seed other than the one lowering gives
+    /// (`SumSeedNotFaithful`); hand-built IR lowers, or builds that seed.
     Sum {
         value: Box<ValueExpr>,
         body: Box<Prop>,

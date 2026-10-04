@@ -638,6 +638,24 @@ pub enum ValidationError {
         "the generated {kind} `{name}` is not what the declared disciplines lower to; change the declaration, not the generated {kind}, so the programme's hash names the rules it enforces"
     )]
     GeneratedNotFaithful { kind: String, name: String },
+    /// A sum's empty-case seed is not what lowering derives from the
+    /// declarations. Seeds stay out of the programme hash for that reason,
+    /// so one set by hand would change what an empty sum returns without
+    /// changing the hash.
+    #[error(
+        "a sum in {context} carries an empty-case value its declarations do not give it; lower the programme with `lower_sum_seeds` instead of setting seeds by hand, so the programme's hash names what an empty sum returns"
+    )]
+    SumSeedNotFaithful { context: ValidationContext },
+    /// An invariant carries a version other than 1, which no source can
+    /// write. The programme hash carries no version, so another would
+    /// share version 1's identity while rejections name it.
+    #[error(
+        "{context} has version {version}, but only version 1 can be written yet, and the programme's hash does not record a version"
+    )]
+    InvariantVersionNotOne {
+        version: u32,
+        context: ValidationContext,
+    },
 }
 
 impl std::fmt::Display for ValidationContext {
@@ -722,12 +740,68 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
     }
     let mut errors = collect_duplicate_decl_errors(p);
     errors.extend(collect_discipline_errors(p));
+    errors.extend(collect_unhashed_errors(p));
     errors.extend(crate::check::check_program(p));
     if errors.is_empty() {
         Ok(())
     } else {
         Err(errors)
     }
+}
+
+/// The programme hash leaves out each sum's seed and each invariant's
+/// version, so validation fixes them: a seed must be what lowering
+/// derives, as generated invariants must be, and a version must be 1.
+fn collect_unhashed_errors(p: &Program) -> Vec<ValidationError> {
+    let mut errors: Vec<ValidationError> = p
+        .invariants
+        .iter()
+        .filter(|inv| inv.version != 1)
+        .map(|inv| ValidationError::InvariantVersionNotOne {
+            version: inv.version,
+            context: ValidationContext::Invariant {
+                name: inv.name.to_string(),
+            },
+        })
+        .collect();
+    let mut lowered = p.clone();
+    crate::lower_sum_seeds(&mut lowered);
+    let mut contexts = Vec::new();
+    for (was, now) in p.definitions.iter().zip(&lowered.definitions) {
+        if was != now {
+            contexts.push(ValidationContext::Definition {
+                name: was.name.to_string(),
+            });
+        }
+    }
+    for (was, now) in p.invariants.iter().zip(&lowered.invariants) {
+        if was != now {
+            contexts.push(ValidationContext::Invariant {
+                name: was.name.to_string(),
+            });
+        }
+    }
+    for (was, now) in p.transformations.iter().zip(&lowered.transformations) {
+        if let Some(statement) = was.body.iter().zip(&now.body).position(|(a, b)| a != b) {
+            contexts.push(ValidationContext::Transformation {
+                name: was.name.to_string(),
+                statement: Some(statement),
+            });
+        }
+    }
+    for (was, now) in p.derived_claims.iter().zip(&lowered.derived_claims) {
+        if was != now {
+            contexts.push(ValidationContext::DerivedClaim {
+                predicate: was.predicate.to_string(),
+            });
+        }
+    }
+    errors.extend(
+        contexts
+            .into_iter()
+            .map(|context| ValidationError::SumSeedNotFaithful { context }),
+    );
+    errors
 }
 
 /// Nesting depth of `prop` (at least 1), counting a definition call at

@@ -8,9 +8,9 @@
 //!
 //! Runs in `parse_program` after `resolve_defined_calls`, since a
 //! variable bound inside a definition call takes its kind from the
-//! definition's body. Idempotent. Hand-built IR that skips it keeps the
-//! decimal zero, and validation refuses it (`EmptySumUntyped`) wherever
-//! the checker sees a duration or quantity target.
+//! definition's body. Idempotent. The programme hash leaves seeds out, so
+//! validation refuses any seed this pass would not give
+//! (`SumSeedNotFaithful`), and hand-built IR must lower too.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -110,9 +110,7 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
         ValueExpr::Sum { value, body, seed } => {
             lower_in_prop(body, ctx);
             lower_in_value(value, ctx);
-            if let Some(resolved) = value_seed(value, body, ctx) {
-                *seed = resolved;
-            }
+            *seed = value_seed(value, body, ctx).unwrap_or_default();
         }
         // Nothing of its own to type, but a sum can sit in the
         // condition or either branch.

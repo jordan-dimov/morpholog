@@ -53,8 +53,8 @@ A committed decision can be reconstructed from its recorded inputs under its rec
 
 The programme hash names what the rules mean, not how they run: plans, indexes, compilation and deployment never become part of it.
 
-- **Holds by:** the canonical hash covers the programme; a prepared programme and its execution plan are caches ([runtime semantics](runtime-semantics.md#programme-preparation-execution)); generated machinery is left out of the hash only where validation proves it derives from what the hash covers.
-- **Checked by:** `crates/morpholog-examples/tests/semantics_fingerprint.rs`: `SEMANTICS_VERSION` names the interpreter contract, and a change of answer over a fixed corpus fails until it moves ([runtime semantics](runtime-semantics.md#semantics-versions)).
+- **Holds by:** the canonical hash covers the programme; a prepared programme and its execution plan are caches ([runtime semantics](runtime-semantics.md#programme-preparation-execution)); anything left out of the hash is irrelevant to meaning or fixed by validation (generated machinery and sum seeds derive from what the hash covers; an invariant's version must be 1).
+- **Checked by:** `crates/morpholog-core/src/kernel_tests/canonical.rs` freezes the encoding the hash covers over a carrier of every construct, and `crates/morpholog-examples/tests/canonical_identity.rs` refuses a moved hash for an unchanged gallery source ([runtime semantics](runtime-semantics.md#programme-preparation-execution)); `crates/morpholog-examples/tests/semantics_fingerprint.rs`: `SEMANTICS_VERSION` names the interpreter contract, and a change of answer over a fixed corpus fails until it moves ([runtime semantics](runtime-semantics.md#semantics-versions)).
 - **Recorded:** each commit carries both identities, the programme hash and the semantics version, in its Merkle leaf ([runtime semantics](runtime-semantics.md#semantics-versions)).
 
 ### 7. One reference semantics

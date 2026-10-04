@@ -61,28 +61,18 @@ pub(crate) fn arith_token(op: ArithOp) -> &'static str {
     }
 }
 
-/// The content hash of a programme: `sha256:<hex>` over a stable
-/// positional rendering of the parsed IR, not [`format_program`], whose
-/// output may evolve. It identifies the rules, not the file: formatting,
-/// comments, and equivalent sugar (named vs positional patterns) do not
-/// change it. The prefix names the algorithm.
+/// The content hash of a programme: `sha256:<hex>`, where the prefix
+/// names SHA-256 over canonical encoding 1, a stable positional rendering
+/// of the IR, not [`format_program`], whose output may evolve. It
+/// identifies the rules, not the file: formatting, comments, and surface
+/// spellings that lower to the same IR (named vs positional patterns) do
+/// not change it. Whatever the encoding leaves out is either irrelevant to
+/// meaning or fixed by validation, so the identity is a promise about
+/// validated programmes; an invalid one may share a valid one's hash.
 pub fn canonical_hash(p: &Program) -> String {
     use sha2::{Digest, Sha256};
     use std::fmt::Write;
-    // Positional, so a nicer spelling in the formatter never moves the
-    // hash. The declaration table is still needed for a `value` lookup
-    // whose hole is not its first wildcard, which has no positional form.
-    let naming = claim_naming(p);
-    let digest = Sha256::digest(
-        render_program(
-            p,
-            FormatContext {
-                predicates: Some(&naming),
-                named_canonical: false,
-            },
-        )
-        .as_bytes(),
-    );
+    let digest = Sha256::digest(canonical_preimage(p).as_bytes());
     let mut out = String::with_capacity(7 + digest.len() * 2);
     out.push_str("sha256:");
     for b in digest {
@@ -90,6 +80,23 @@ pub fn canonical_hash(p: &Program) -> String {
         let _ = write!(out, "{b:02x}");
     }
     out
+}
+
+/// The bytes `canonical_hash` digests: canonical encoding 1, which
+/// `sha256:` names. Frozen for every programme it can already express; a
+/// new construct may only add rendering for itself.
+pub(crate) fn canonical_preimage(p: &Program) -> String {
+    // Positional, so a nicer spelling in the formatter never moves the
+    // hash. The declaration table is still needed for a `value` lookup
+    // whose hole is not its first wildcard, which has no positional form.
+    let naming = claim_naming(p);
+    render_program(
+        p,
+        FormatContext {
+            predicates: Some(&naming),
+            named_canonical: false,
+        },
+    )
 }
 
 /// The declaration table the named forms resolve field names from,
