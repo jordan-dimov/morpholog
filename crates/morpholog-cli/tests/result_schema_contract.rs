@@ -37,6 +37,10 @@ use morpholog_postgres::{
     WindowPackManifest, WindowVerification, WitnessScheme, WitnessStanding, WitnessVerdict,
     WitnessesReport,
 };
+use morpholog_postgres::{
+    CheckpointMatch, Completeness, Evaluation, EvaluationReceipt, ProgramMatch, ReceiptCheckpoint,
+    ReceiptForm, ReceiptQuery, ReceiptVerificationReport, VerdictKind,
+};
 use morpholog_test_support::explain;
 use rust_decimal::Decimal;
 use std::path::PathBuf;
@@ -1999,6 +2003,169 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
     );
 }
 
+fn sample_receipt() -> EvaluationReceipt {
+    let utilisation = |facility: &str, figure: &str| ClaimInstance {
+        predicate: "FacilityUtilisation".into(),
+        args: vec![
+            EvalValue::Subject(Subject::from(facility)),
+            EvalValue::Decimal(Decimal::from_str(figure).unwrap()),
+        ],
+    };
+    let checkpoint = sample_checkpoint();
+    EvaluationReceipt {
+        receipt_format_version: 1,
+        program_hash: format!("sha256:{}", "c".repeat(64)),
+        semantics_version: 1,
+        checkpoint: ReceiptCheckpoint {
+            tree_size: checkpoint.tree_size,
+            root_hash: checkpoint.root_hash,
+            checkpoint_hash: checkpoint.checkpoint_hash,
+        },
+        query: ReceiptQuery::Derived {
+            predicate: "FacilityUtilisation".into(),
+        },
+        answer: vec![utilisation("f1", "0.4"), utilisation("f2", "0.25")],
+    }
+}
+
+/// A report on a receipt over an intact complete prefix.
+fn receipt_report(
+    receipt: ReceiptForm,
+    verdict: TreeVerification,
+    checkpoint: CheckpointMatch,
+    program: ProgramMatch,
+    evaluation: Evaluation,
+) -> ReceiptVerificationReport {
+    let intact = matches!(verdict, TreeVerification::Intact { .. });
+    ReceiptVerificationReport {
+        receipt,
+        verdict_kind: VerdictKind::Prefix,
+        evidence: PackVerificationReport {
+            verdict: PackVerdict::Prefix(verdict),
+            witnesses: None,
+            role_rebindings: if intact {
+                no_rebindings()
+            } else {
+                RoleRebindings::NotEvaluated
+            },
+        },
+        completeness: if intact {
+            Completeness::Complete
+        } else {
+            Completeness::NotChecked
+        },
+        checkpoint,
+        program,
+        evaluation,
+    }
+}
+
+#[test]
+fn receipt_envelopes_serialize_as_pinned() {
+    let intact = || TreeVerification::Intact {
+        checkpoints: 1,
+        tree_size: 2,
+    };
+    let receipt = sample_receipt();
+    assert_golden_bytes("evaluation_receipt.json", &receipt);
+    // Every evaluation outcome, each behind the layers that let it run.
+    for (name, evaluation) in [
+        ("reproduced", Evaluation::Reproduced),
+        (
+            "differs",
+            Evaluation::Differs {
+                missing: 1,
+                unexpected: 0,
+            },
+        ),
+        (
+            "query_unknown",
+            Evaluation::QueryUnknown {
+                predicate: "Wibble".into(),
+            },
+        ),
+        (
+            "errored",
+            Evaluation::Errored {
+                detail: "division by zero".into(),
+            },
+        ),
+        (
+            "not_re_evaluated",
+            Evaluation::NotReEvaluated {
+                receipt_semantics: 2,
+                binary_semantics: 1,
+            },
+        ),
+    ] {
+        assert_golden_bytes(
+            &format!("receipt_verification_report_{name}.json"),
+            &receipt_report(
+                ReceiptForm::WellFormed,
+                intact(),
+                CheckpointMatch::Matches,
+                ProgramMatch::Matches,
+                evaluation,
+            ),
+        );
+    }
+    let other = ReceiptCheckpoint {
+        tree_size: 3,
+        ..receipt.checkpoint.clone()
+    };
+    assert_golden_bytes(
+        "receipt_verification_report_mismatched.json",
+        &receipt_report(
+            ReceiptForm::WellFormed,
+            intact(),
+            CheckpointMatch::Differs {
+                receipt: receipt.checkpoint.clone(),
+                pack: other,
+            },
+            ProgramMatch::Differs {
+                receipt: receipt.program_hash.clone(),
+                supplied: format!("sha256:{}", "d".repeat(64)),
+            },
+            Evaluation::NotEvaluated,
+        ),
+    );
+    assert_golden_bytes(
+        "receipt_verification_report_malformed.json",
+        &receipt_report(
+            ReceiptForm::Malformed {
+                detail: "the answer is not in canonical order, or repeats a row".into(),
+            },
+            TreeVerification::MalformedPack {
+                detail: "the pack could not be read".into(),
+            },
+            CheckpointMatch::NotChecked,
+            ProgramMatch::NotChecked,
+            Evaluation::NotEvaluated,
+        ),
+    );
+    let mut window = receipt_report(
+        ReceiptForm::WellFormed,
+        intact(),
+        CheckpointMatch::NotChecked,
+        ProgramMatch::Matches,
+        Evaluation::NotEvaluated,
+    );
+    window.evidence.verdict = PackVerdict::Window(WindowVerification::Intact {
+        from_tree_size: 2,
+        to_tree_size: 3,
+        rows: 1,
+    });
+    window.verdict_kind = VerdictKind::Window;
+    window.evidence.role_rebindings = RoleRebindings::Evaluated {
+        scope: RebindingScope::Window,
+        rows_with_oid: 1,
+        rows_without_oid: 0,
+        changes: Vec::new(),
+    };
+    window.completeness = Completeness::NotComplete;
+    assert_golden_bytes("receipt_verification_report_not_complete.json", &window);
+}
+
 // ============================================================
 // Pin layer: every golden validates against its $defs entry in the
 // embedded result.json.
@@ -2394,6 +2561,39 @@ fn every_golden_validates_against_its_defs_entry() {
         ("checkpoint_witnessed.json", "checkpoint"),
         ("verify_report_witnessed.json", "verify_report"),
         ("pack_verification_report.json", "pack_verification_report"),
+        ("evaluation_receipt.json", "evaluation_receipt"),
+        (
+            "receipt_verification_report_reproduced.json",
+            "receipt_verification_report",
+        ),
+        (
+            "receipt_verification_report_differs.json",
+            "receipt_verification_report",
+        ),
+        (
+            "receipt_verification_report_mismatched.json",
+            "receipt_verification_report",
+        ),
+        (
+            "receipt_verification_report_query_unknown.json",
+            "receipt_verification_report",
+        ),
+        (
+            "receipt_verification_report_errored.json",
+            "receipt_verification_report",
+        ),
+        (
+            "receipt_verification_report_not_re_evaluated.json",
+            "receipt_verification_report",
+        ),
+        (
+            "receipt_verification_report_malformed.json",
+            "receipt_verification_report",
+        ),
+        (
+            "receipt_verification_report_not_complete.json",
+            "receipt_verification_report",
+        ),
         (
             "pack_verification_report_selective_rebinding.json",
             "pack_verification_report",

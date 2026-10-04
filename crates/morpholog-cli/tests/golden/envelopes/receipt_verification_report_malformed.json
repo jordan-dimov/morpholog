@@ -1,0 +1,28 @@
+{
+  "receipt": {
+    "status": "malformed",
+    "detail": "the answer is not in canonical order, or repeats a row"
+  },
+  "verdict_kind": "prefix",
+  "evidence": {
+    "verdict": {
+      "status": "malformed_pack",
+      "detail": "the pack could not be read"
+    },
+    "role_rebindings": {
+      "status": "not_evaluated"
+    }
+  },
+  "completeness": {
+    "status": "not_checked"
+  },
+  "checkpoint": {
+    "status": "not_checked"
+  },
+  "program": {
+    "status": "not_checked"
+  },
+  "evaluation": {
+    "status": "not_evaluated"
+  }
+}

@@ -41,6 +41,7 @@ mod prefix_verify;
 mod program;
 mod propose;
 mod provision;
+mod receipt;
 mod rejections;
 mod role_rebindings;
 #[cfg(test)]
@@ -115,6 +116,11 @@ pub use provision::{
     InitOutcome, READER_ROLE, WRITER_ROLE, drop_schema, initialise_schema,
     provision_least_privilege, redact_database_url, single_connection_pool, with_default_user,
     with_user,
+};
+pub use receipt::{
+    CheckpointMatch, Completeness, Evaluation, EvaluationReceipt, ParsedReceipt, ProgramMatch,
+    ReceiptCheckpoint, ReceiptForm, ReceiptQuery, ReceiptVerificationReport, VerdictKind,
+    issue_receipt, parse_receipt, reproduce,
 };
 pub use rejections::{RejectionRow, list_rejection_rows};
 pub use role_rebindings::{RebindingScope, RoleRebinding, RoleRebindings};

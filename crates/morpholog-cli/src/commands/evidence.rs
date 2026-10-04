@@ -13,15 +13,16 @@ use morpholog_postgres::{
     PackVerificationReport, RoleRebindings, SelectiveEvidencePack, SelectiveVerification,
     SignaturePolicy, TreeVerification, WindowEvidencePack, WindowStart, WindowVerification,
     WitnessesReport, begin_prefix_export, export_selective, export_window, pack_format_version,
-    pack_kind, pack_role_rebindings, streamed_pack_version, verify_pack, verify_prefix_stream,
-    verify_selective, verify_window, with_anchor_signatures, witnesses_report,
+    pack_kind, pack_role_rebindings, read_prefix_stream, streamed_pack_version, verify_pack,
+    verify_prefix_stream, verify_selective, verify_window, with_anchor_signatures,
+    witnesses_report,
 };
 
 use anyhow::Context;
 
 use crate::commands::verify::{signature_policy, witness_anchors};
 use crate::commands::{AlreadyReported, connect, print_json, read_anchor, read_json};
-use crate::{EvidenceExportArgs, EvidenceVerifyArgs};
+use crate::{EvidenceExportArgs, EvidenceVerifyArgs, PackTrustArgs};
 
 /// `audit export`: a complete-prefix pack by default, a window between two
 /// checkpoints with a `--from-*` start, or, with `--transition`, a
@@ -104,18 +105,43 @@ fn write_line(out: &mut impl Write, value: &impl serde::Serialize) -> anyhow::Re
 /// JSON report and exits 1 on any tamper, divergence or malformed pack,
 /// like `audit verify`.
 pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
-    let anchor = read_anchor(args.anchor_file.as_deref())?;
+    let report = pack_report(&args.pack_file, &args.trust)?;
+    print_json(&report)?;
+    let witness_invalid = report
+        .witnesses
+        .as_ref()
+        .is_some_and(WitnessesReport::any_invalid);
+    if !report.verdict.is_intact() || witness_invalid {
+        return Err(AlreadyReported.into());
+    }
+    Ok(())
+}
+
+/// What `verify-pack` reports for a pack file under the given trust.
+pub(crate) fn pack_report(
+    pack_file: &Path,
+    trust: &PackTrustArgs,
+) -> anyhow::Result<PackVerificationReport> {
+    pack_report_of(open_pack(pack_file)?, trust)
+}
+
+/// What `verify-pack` reports for an opened pack under the given trust.
+pub(crate) fn pack_report_of(
+    input: PackInput<'_>,
+    trust: &PackTrustArgs,
+) -> anyhow::Result<PackVerificationReport> {
+    let anchor = read_anchor(trust.anchor_file.as_deref())?;
     let policy = signature_policy(
-        args.require_signatures,
-        args.require_signatures_from,
-        args.require_signing_key.as_deref(),
+        trust.require_signatures,
+        trust.require_signatures_from,
+        trust.require_signing_key.as_deref(),
     )?;
 
     // Each pack kind has its own verifier and verdict shape, chosen by the
     // format version. An unknown future version is named as such, not read
     // as a malformed v1. A file that is not a pack is still a verdict, not
     // an operational error.
-    let (verdict, checkpoints, role_rebindings) = match open_pack(&args.pack_file)? {
+    let (verdict, checkpoints, role_rebindings) = match input {
         PackInput::Stream(input) => verify_streamed(input, anchor.as_ref(), policy.as_ref())?,
         PackInput::Newer(n) => (
             newer_than_this_binary(n),
@@ -129,30 +155,44 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
         ),
         PackInput::Document(bytes) => verify_document(bytes, anchor.as_ref(), policy.as_ref())?,
     };
-    let intact = verdict.is_intact();
-
     // Witnesses are judged apart from the verdict, and only when asked for.
     // Role rebindings are read from the rows only an intact verdict
     // established, and never fail the check.
-    let mut witness_invalid = false;
-    let witnesses = if args.witnesses || args.trusted_tsa_file.is_some() {
-        let anchors = witness_anchors(args.trusted_tsa_file.as_deref())?;
-        let witnesses = witnesses_report(&checkpoints, anchors.as_ref());
-        witness_invalid = witnesses.as_ref().is_some_and(WitnessesReport::any_invalid);
-        witnesses
+    let witnesses = if trust.witnesses || trust.trusted_tsa_file.is_some() {
+        let anchors = witness_anchors(trust.trusted_tsa_file.as_deref())?;
+        witnesses_report(&checkpoints, anchors.as_ref())
     } else {
         None
     };
-    print_json(&PackVerificationReport {
+    Ok(PackVerificationReport {
         verdict,
         witnesses,
         role_rebindings,
-    })?;
+    })
+}
 
-    if !intact || witness_invalid {
-        return Err(AlreadyReported.into());
+/// A complete-prefix pack in either form, whole in memory, for a caller
+/// that replays every row.
+pub(crate) fn read_complete_prefix(path: &Path) -> anyhow::Result<EvidencePack> {
+    complete_prefix_of(open_pack(path)?, path)
+}
+
+/// An opened pack as a complete prefix, whole in memory; `path` names it
+/// in an error.
+pub(crate) fn complete_prefix_of(
+    input: PackInput<'_>,
+    path: &Path,
+) -> anyhow::Result<EvidencePack> {
+    let not_a_pack = || format!("{} is not a complete-prefix evidence pack", path.display());
+    match input {
+        PackInput::Stream(input) => read_prefix_stream(input).with_context(not_a_pack),
+        PackInput::Document(bytes) => serde_json::from_slice(&bytes).with_context(not_a_pack),
+        PackInput::Newer(n) => Err(anyhow::anyhow!(
+            "pack_format_version {n} is newer than this binary understands"
+        ))
+        .with_context(not_a_pack),
+        PackInput::Unreadable(detail) => Err(anyhow::anyhow!(detail)).with_context(not_a_pack),
     }
-    Ok(())
 }
 
 /// The largest first line read to tell a line-oriented pack from a single
@@ -160,8 +200,8 @@ pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
 /// document's first line can be the whole file.
 const MANIFEST_LINE_LIMIT: u64 = 4096;
 
-pub(crate) enum PackInput {
-    Stream(Box<dyn BufRead>),
+pub(crate) enum PackInput<'a> {
+    Stream(Box<dyn BufRead + 'a>),
     Newer(u32),
     Unreadable(String),
     Document(Vec<u8>),
@@ -169,14 +209,24 @@ pub(crate) enum PackInput {
 
 /// Open a pack, decompressing it if it is gzip, and tell its kind from at
 /// most its first line, so a streamed pack is never read whole.
-pub(crate) fn open_pack(path: &Path) -> anyhow::Result<PackInput> {
+pub(crate) fn open_pack(path: &Path) -> anyhow::Result<PackInput<'static>> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("reading pack file {}", path.display()))?;
+    open_pack_from(BufReader::new(file), path)
+}
+
+/// As [`open_pack`], over bytes already read; `path` names them in an
+/// error.
+pub(crate) fn open_pack_from<'a>(
+    mut raw: impl BufRead + 'a,
+    path: &Path,
+) -> anyhow::Result<PackInput<'a>> {
     let reading = || format!("reading pack file {}", path.display());
-    let mut raw = BufReader::new(std::fs::File::open(path).with_context(reading)?);
     let gzip = raw
         .fill_buf()
         .with_context(reading)?
         .starts_with(&[0x1f, 0x8b]);
-    let mut input: Box<dyn BufRead> = if gzip {
+    let mut input: Box<dyn BufRead + 'a> = if gzip {
         Box::new(BufReader::new(flate2::bufread::MultiGzDecoder::new(raw)))
     } else {
         Box::new(raw)
@@ -206,7 +256,7 @@ pub(crate) fn open_pack(path: &Path) -> anyhow::Result<PackInput> {
 
 /// Compressed bytes that do not decode are a malformed pack, a verdict;
 /// any other read failure is operational.
-fn undecodable(e: std::io::Error) -> anyhow::Result<PackInput> {
+fn undecodable<'a>(e: std::io::Error) -> anyhow::Result<PackInput<'a>> {
     use std::io::ErrorKind;
     match e.kind() {
         ErrorKind::InvalidData | ErrorKind::InvalidInput | ErrorKind::UnexpectedEof => Ok(

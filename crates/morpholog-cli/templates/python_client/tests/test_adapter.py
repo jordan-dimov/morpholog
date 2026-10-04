@@ -970,6 +970,66 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertEqual((change.role, change.previous_oid, change.new_oid),
                              ("gm_human", 16384, 16391))
 
+    def test_a_receipt_is_written_as_issued_and_a_refused_one_is_a_report(self):
+        self._mode("record_argv_stdout")
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "evaluation_receipt.json").read_text()
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with tempfile.TemporaryDirectory() as tmp, recording_argv() as argv_after:
+            path = os.path.join(tmp, "receipt.json")
+            argv = argv_after(
+                lambda: self.client.audit_receipt("FacilityUtilisation", "pack.ndjson", path)
+            )
+            self.assertEqual(
+                argv,
+                [
+                    "audit",
+                    "receipt",
+                    "model.morph",
+                    "--pack",
+                    "pack.ndjson",
+                    "--derived",
+                    "FacilityUtilisation",
+                ],
+            )
+            with open(path, encoding="utf-8") as written:
+                self.assertEqual(written.read(), os.environ["STUB_STDOUT"] + "\n")
+            receipt = self.client.audit_receipt("FacilityUtilisation", "pack.ndjson", path)
+            self.assertEqual(receipt.checkpoint.tree_size, 2)
+
+            os.environ["STUB_STDOUT"] = (
+                GOLDEN_DIR / "receipt_verification_report_reproduced.json"
+            ).read_text()
+            argv = argv_after(
+                lambda: self.client.audit_verify_receipt(
+                    "receipt.json", "pack.ndjson", anchor_file="cp.json", witnesses=True
+                )
+            )
+            self.assertEqual(
+                argv[:7],
+                [
+                    "audit",
+                    "verify-receipt",
+                    "model.morph",
+                    "--receipt",
+                    "receipt.json",
+                    "--pack",
+                    "pack.ndjson",
+                ],
+            )
+            self.assertEqual(argv[argv.index("--anchor-file") + 1], "cp.json")
+            self.assertIn("--witnesses", argv)
+
+        # Refused at exit 1, the report is still the decided result.
+        self._mode("stdout_then_exit")
+        os.environ["STUB_STDOUT"] = (
+            GOLDEN_DIR / "receipt_verification_report_mismatched.json"
+        ).read_text()
+        os.environ["STUB_EXIT"] = "1"
+        self.addCleanup(os.environ.pop, "STUB_EXIT", None)
+        report = self.client.audit_verify_receipt("receipt.json", "pack.ndjson")
+        self.assertIsInstance(report.program, envelopes.ProgramDiffers)
+        self.assertEqual(report.evaluation, "not_evaluated")
+
     def test_audit_empty_tail_is_a_lawful_empty_list(self):
         self._mode("record_argv_empty")
         with tempfile.NamedTemporaryFile(mode="r", suffix=".argv") as record:

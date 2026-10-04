@@ -1,0 +1,32 @@
+{
+  "receipt": {
+    "status": "well_formed"
+  },
+  "verdict_kind": "prefix",
+  "evidence": {
+    "verdict": {
+      "status": "intact",
+      "checkpoints": 1,
+      "tree_size": 2
+    },
+    "role_rebindings": {
+      "status": "evaluated",
+      "scope": "complete_prefix",
+      "rows_with_oid": 2,
+      "rows_without_oid": 0,
+      "changes": []
+    }
+  },
+  "completeness": {
+    "status": "complete"
+  },
+  "checkpoint": {
+    "status": "matches"
+  },
+  "program": {
+    "status": "matches"
+  },
+  "evaluation": {
+    "status": "reproduced"
+  }
+}

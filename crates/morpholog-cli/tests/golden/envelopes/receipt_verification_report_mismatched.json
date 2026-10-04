@@ -1,0 +1,44 @@
+{
+  "receipt": {
+    "status": "well_formed"
+  },
+  "verdict_kind": "prefix",
+  "evidence": {
+    "verdict": {
+      "status": "intact",
+      "checkpoints": 1,
+      "tree_size": 2
+    },
+    "role_rebindings": {
+      "status": "evaluated",
+      "scope": "complete_prefix",
+      "rows_with_oid": 2,
+      "rows_without_oid": 0,
+      "changes": []
+    }
+  },
+  "completeness": {
+    "status": "complete"
+  },
+  "checkpoint": {
+    "status": "differs",
+    "receipt": {
+      "tree_size": 2,
+      "root_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "checkpoint_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "pack": {
+      "tree_size": 3,
+      "root_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "checkpoint_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "program": {
+    "status": "differs",
+    "receipt": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "supplied": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "evaluation": {
+    "status": "not_evaluated"
+  }
+}

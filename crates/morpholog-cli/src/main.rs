@@ -659,6 +659,24 @@ pub(crate) enum AuditCmd {
     /// pack. Reads a gzip-compressed pack as it is.
     VerifyPack(EvidenceVerifyArgs),
 
+    /// State, as a receipt, what a derived read gives over a pack.
+    ///
+    /// Evaluates the derived claim over a complete-prefix pack, offline,
+    /// and prints a receipt naming the programme's hash, the semantics
+    /// version, the pack's checkpoint, the question and the answer.
+    /// Refuses a pack that does not verify as intact, or one that is not
+    /// a complete prefix.
+    Receipt(ReceiptArgs),
+
+    /// Check a receipt offline by recomputing its answer.
+    ///
+    /// Verifies the pack as `verify-pack` does, then that it is the
+    /// complete history the receipt names, that the programme means what
+    /// the receipt names, and that the derived read over that history
+    /// gives the receipt's answer. Reports each layer apart; exits one if
+    /// any fails.
+    VerifyReceipt(ReceiptVerifyArgs),
+
     /// Generate an Ed25519 audit-signing keypair.
     ///
     /// Writes the private key as PKCS#8 PEM (keep it secret) and the
@@ -712,6 +730,49 @@ pub(crate) struct EvidenceVerifyArgs {
     /// gzip-compressed.
     pub(crate) pack_file: std::path::PathBuf,
 
+    #[command(flatten)]
+    pub(crate) trust: PackTrustArgs,
+}
+
+/// Arguments for `audit receipt`.
+#[derive(clap::Args, Debug)]
+pub(crate) struct ReceiptArgs {
+    /// The `.morph` programme to evaluate under.
+    pub(crate) file: std::path::PathBuf,
+
+    /// A complete-prefix pack (as written by `audit export`), plain or
+    /// gzip-compressed.
+    #[arg(long)]
+    pub(crate) pack: std::path::PathBuf,
+
+    /// The derived claim to read.
+    #[arg(long)]
+    pub(crate) derived: String,
+}
+
+/// Arguments for `audit verify-receipt`. No connection string: the check
+/// is offline.
+#[derive(clap::Args, Debug)]
+pub(crate) struct ReceiptVerifyArgs {
+    /// The `.morph` programme the receipt names, by its hash.
+    pub(crate) file: std::path::PathBuf,
+
+    /// The receipt, as `audit receipt` printed it.
+    #[arg(long)]
+    pub(crate) receipt: std::path::PathBuf,
+
+    /// A complete-prefix pack covering exactly the receipt's checkpoint.
+    #[arg(long)]
+    pub(crate) pack: std::path::PathBuf,
+
+    #[command(flatten)]
+    pub(crate) trust: PackTrustArgs,
+}
+
+/// What a pack verification trusts beyond the pack itself: an anchor held
+/// outside it, a signature policy, and the witnesses' authorities.
+#[derive(clap::Args, Debug)]
+pub(crate) struct PackTrustArgs {
     /// Path to a checkpoint JSON file (as printed by `audit checkpoint`), held
     /// outside the database - the check a coordinated rewrite cannot pass.
     /// For a prefix pack the checkpoint at the anchor's `tree_size` in the
@@ -1540,6 +1601,8 @@ async fn run() -> anyhow::Result<()> {
             AuditCmd::Witness(args) => commands::witness::run(args).await,
             AuditCmd::Export(args) => commands::evidence::export(args).await,
             AuditCmd::VerifyPack(args) => commands::evidence::verify(args),
+            AuditCmd::Receipt(args) => commands::receipt::issue(&args),
+            AuditCmd::VerifyReceipt(args) => commands::receipt::verify(&args),
             AuditCmd::Keygen(args) => commands::keygen::run(&args),
         },
         Command::Generate {
