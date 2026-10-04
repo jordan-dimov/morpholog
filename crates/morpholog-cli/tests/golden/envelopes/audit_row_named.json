@@ -18,6 +18,10 @@
       "predicate": "Account"
     }
   ],
+  "attestation": {
+    "authenticated_by": "morpholog_writer",
+    "mode": "gateway"
+  },
   "committed_at": "2026-06-01T12:00:00Z",
   "emitted_intents": [
     {
@@ -37,7 +41,12 @@
       "version": 1
     }
   ],
+  "model_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "parameters": [
+    "account_id"
+  ],
   "retracted_claims": [],
+  "semantics_version": 1,
   "transformation_name": "open_account",
   "transition_id": "01900000-0000-7000-8000-000000000001"
 }

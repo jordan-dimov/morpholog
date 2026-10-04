@@ -1016,9 +1016,11 @@ fn audit_rows_serialize_as_pinned() {
     );
 
     // The --named form replaces the claim arrays with named claims and
-    // leaves the rest unchanged, via the binary's own projection.
+    // leaves the rest unchanged, via the binary's own projection. Built
+    // from the row as written now, so the named schema is held to every
+    // rung.
     let named = morpholog_cli::envelopes::audit_row_named(
-        &row,
+        &semantics_naming,
         vec![morpholog_cli::envelopes::NamedClaim {
             args: [
                 ("account_id".to_string(), serde_json::json!("acct_1")),

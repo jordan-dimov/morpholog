@@ -712,8 +712,10 @@ class TamperEvidence(unittest.TestCase):
         # Rows from before names were stamped carry none.
         older = envelopes.AuditRow.from_json(golden("audit_row_attested.json"))
         self.assertIsNone(older.parameters)
+        # The named tail carries every rung the bare row does.
         named = envelopes.AuditRowNamed.from_json(golden("audit_row_named.json"))
-        self.assertIsNone(named.parameters)
+        self.assertEqual(named.parameters, ["account_id"])
+        self.assertEqual(named.semantics_version, 1)
         # Evidence is never coerced, and the row's shapes hold: names
         # are strings, only an attested row carries them, one per
         # argument.
