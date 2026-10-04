@@ -1133,6 +1133,62 @@ class Morpholog:
             args.extend(["--require-signing-key", str(require_signing_key)])
         return args
 
+    def audit_receipt(
+        self, derived: str, pack_file: str, path: str
+    ) -> envelopes.EvaluationReceipt:
+        """State what the derived read ``derived`` gives under this
+        client's programme over a complete-prefix pack, as a receipt
+        written to ``path`` - offline, no database. The file holds the
+        binary's output byte for byte and is written only once a receipt
+        was issued. A pack that does not verify as intact or is not a
+        complete prefix, or a read the programme does not derive, is an
+        operational error."""
+        text = self._invoke(
+            "audit", "receipt", self.file, "--pack", str(pack_file), "--derived", derived
+        )
+        receipt = envelopes.EvaluationReceipt.from_json(json.loads(text))
+        with open(path, "w", encoding="utf-8") as out:
+            out.write(text)
+        return receipt
+
+    def audit_verify_receipt(
+        self,
+        receipt_file: str,
+        pack_file: str,
+        anchor_file: str | None = None,
+        require_signatures: bool = False,
+        *,
+        require_signatures_from: int | None = None,
+        require_signing_key: str | None = None,
+        witnesses: bool = False,
+        trusted_tsa_file: str | None = None,
+    ) -> envelopes.ReceiptVerificationReport:
+        """Check a receipt offline by recomputing it under this client's
+        programme over a complete-prefix pack covering exactly the
+        receipt's checkpoint. The pack is verified as by
+        ``audit_verify_pack``, with the same trust arguments; a refused
+        receipt is a decided report, layer by layer, not an exception. It
+        proves the receipt's statement follows from that history and
+        programme, not that the receipt is the one originally issued."""
+        args = [
+            "audit",
+            "verify-receipt",
+            self.file,
+            "--receipt",
+            str(receipt_file),
+            "--pack",
+            str(pack_file),
+        ]
+        args += self._pack_trust_args(
+            anchor_file,
+            require_signatures,
+            require_signatures_from,
+            require_signing_key,
+            witnesses,
+            trusted_tsa_file,
+        )
+        return envelopes.ReceiptVerificationReport.from_json(self._json(*args))
+
     def _verify_pack(
         self,
         parse_verdict: Callable[[object], _Verdict],
@@ -1145,6 +1201,26 @@ class Morpholog:
         trusted_tsa_file: str | None,
     ) -> envelopes.PackVerificationReport[_Verdict]:
         args = ["audit", "verify-pack", str(pack_file)]
+        args += self._pack_trust_args(
+            anchor_file,
+            require_signatures,
+            require_signatures_from,
+            require_signing_key,
+            witnesses,
+            trusted_tsa_file,
+        )
+        return envelopes.PackVerificationReport.from_json(self._json(*args), parse_verdict)
+
+    def _pack_trust_args(
+        self,
+        anchor_file: str | None,
+        require_signatures: bool,
+        require_signatures_from: int | None,
+        require_signing_key: str | None,
+        witnesses: bool,
+        trusted_tsa_file: str | None,
+    ) -> list[str]:
+        args = []
         if anchor_file is not None:
             args.extend(["--anchor-file", str(anchor_file)])
         args.extend(
@@ -1156,7 +1232,7 @@ class Morpholog:
             args.append("--witnesses")
         if trusted_tsa_file is not None:
             args.extend(["--trusted-tsa-file", str(trusted_tsa_file)])
-        return envelopes.PackVerificationReport.from_json(self._json(*args), parse_verdict)
+        return args
 
     # ------------------------------------------------------------
     # The outbox lease protocol.

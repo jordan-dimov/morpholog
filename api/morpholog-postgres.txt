@@ -126,6 +126,30 @@ impl core::marker::Unpin for morpholog_postgres::AuditAttestation
 impl core::marker::UnsafeUnpin for morpholog_postgres::AuditAttestation
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::AuditAttestation
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::AuditAttestation
+pub enum morpholog_postgres::CheckpointMatch
+pub morpholog_postgres::CheckpointMatch::Differs
+pub morpholog_postgres::CheckpointMatch::Differs::pack: morpholog_postgres::ReceiptCheckpoint
+pub morpholog_postgres::CheckpointMatch::Differs::receipt: morpholog_postgres::ReceiptCheckpoint
+pub morpholog_postgres::CheckpointMatch::Matches
+pub morpholog_postgres::CheckpointMatch::NotChecked
+impl core::clone::Clone for morpholog_postgres::CheckpointMatch
+pub fn morpholog_postgres::CheckpointMatch::clone(&self) -> morpholog_postgres::CheckpointMatch
+impl core::cmp::Eq for morpholog_postgres::CheckpointMatch
+pub fn morpholog_postgres::CheckpointMatch::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::CheckpointMatch
+pub fn morpholog_postgres::CheckpointMatch::eq(&self, &morpholog_postgres::CheckpointMatch) -> bool
+impl core::fmt::Debug for morpholog_postgres::CheckpointMatch
+pub fn morpholog_postgres::CheckpointMatch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::CheckpointMatch
+impl serde_core::ser::Serialize for morpholog_postgres::CheckpointMatch
+pub fn morpholog_postgres::CheckpointMatch::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::CheckpointMatch
+impl core::marker::Send for morpholog_postgres::CheckpointMatch
+impl core::marker::Sync for morpholog_postgres::CheckpointMatch
+impl core::marker::Unpin for morpholog_postgres::CheckpointMatch
+impl core::marker::UnsafeUnpin for morpholog_postgres::CheckpointMatch
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::CheckpointMatch
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::CheckpointMatch
 pub enum morpholog_postgres::CheckpointOutcome
 pub morpholog_postgres::CheckpointOutcome::Created(morpholog_postgres::Checkpoint)
 pub morpholog_postgres::CheckpointOutcome::NoNewRows(morpholog_postgres::Checkpoint)
@@ -180,6 +204,27 @@ impl core::marker::Unpin for morpholog_postgres::CompileReason
 impl core::marker::UnsafeUnpin for morpholog_postgres::CompileReason
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::CompileReason
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::CompileReason
+pub enum morpholog_postgres::Completeness
+pub morpholog_postgres::Completeness::Complete
+pub morpholog_postgres::Completeness::NotChecked
+pub morpholog_postgres::Completeness::NotComplete
+impl core::clone::Clone for morpholog_postgres::Completeness
+pub fn morpholog_postgres::Completeness::clone(&self) -> morpholog_postgres::Completeness
+impl core::cmp::Eq for morpholog_postgres::Completeness
+impl core::cmp::PartialEq for morpholog_postgres::Completeness
+pub fn morpholog_postgres::Completeness::eq(&self, &morpholog_postgres::Completeness) -> bool
+impl core::fmt::Debug for morpholog_postgres::Completeness
+pub fn morpholog_postgres::Completeness::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::Completeness
+impl serde_core::ser::Serialize for morpholog_postgres::Completeness
+pub fn morpholog_postgres::Completeness::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::Completeness
+impl core::marker::Send for morpholog_postgres::Completeness
+impl core::marker::Sync for morpholog_postgres::Completeness
+impl core::marker::Unpin for morpholog_postgres::Completeness
+impl core::marker::UnsafeUnpin for morpholog_postgres::Completeness
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::Completeness
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::Completeness
 pub enum morpholog_postgres::DeliveryOutcome
 pub morpholog_postgres::DeliveryOutcome::Delivered
 pub morpholog_postgres::DeliveryOutcome::NonRetryable
@@ -202,6 +247,37 @@ impl core::marker::Unpin for morpholog_postgres::DeliveryOutcome
 impl core::marker::UnsafeUnpin for morpholog_postgres::DeliveryOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::DeliveryOutcome
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::DeliveryOutcome
+pub enum morpholog_postgres::Evaluation
+pub morpholog_postgres::Evaluation::Differs
+pub morpholog_postgres::Evaluation::Differs::missing: usize
+pub morpholog_postgres::Evaluation::Differs::unexpected: usize
+pub morpholog_postgres::Evaluation::Errored
+pub morpholog_postgres::Evaluation::Errored::detail: alloc::string::String
+pub morpholog_postgres::Evaluation::NotEvaluated
+pub morpholog_postgres::Evaluation::NotReEvaluated
+pub morpholog_postgres::Evaluation::NotReEvaluated::binary_semantics: u32
+pub morpholog_postgres::Evaluation::NotReEvaluated::receipt_semantics: u32
+pub morpholog_postgres::Evaluation::QueryUnknown
+pub morpholog_postgres::Evaluation::QueryUnknown::predicate: alloc::string::String
+pub morpholog_postgres::Evaluation::Reproduced
+impl core::clone::Clone for morpholog_postgres::Evaluation
+pub fn morpholog_postgres::Evaluation::clone(&self) -> morpholog_postgres::Evaluation
+impl core::cmp::Eq for morpholog_postgres::Evaluation
+pub fn morpholog_postgres::Evaluation::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::Evaluation
+pub fn morpholog_postgres::Evaluation::eq(&self, &morpholog_postgres::Evaluation) -> bool
+impl core::fmt::Debug for morpholog_postgres::Evaluation
+pub fn morpholog_postgres::Evaluation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::Evaluation
+impl serde_core::ser::Serialize for morpholog_postgres::Evaluation
+pub fn morpholog_postgres::Evaluation::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::Evaluation
+impl core::marker::Send for morpholog_postgres::Evaluation
+impl core::marker::Sync for morpholog_postgres::Evaluation
+impl core::marker::Unpin for morpholog_postgres::Evaluation
+impl core::marker::UnsafeUnpin for morpholog_postgres::Evaluation
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::Evaluation
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::Evaluation
 pub enum morpholog_postgres::IndexAction
 pub morpholog_postgres::IndexAction::Conflict
 pub morpholog_postgres::IndexAction::Create
@@ -548,6 +624,30 @@ impl core::marker::Unpin for morpholog_postgres::ProcessOutcome
 impl core::marker::UnsafeUnpin for morpholog_postgres::ProcessOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ProcessOutcome
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ProcessOutcome
+pub enum morpholog_postgres::ProgramMatch
+pub morpholog_postgres::ProgramMatch::Differs
+pub morpholog_postgres::ProgramMatch::Differs::receipt: alloc::string::String
+pub morpholog_postgres::ProgramMatch::Differs::supplied: alloc::string::String
+pub morpholog_postgres::ProgramMatch::Matches
+pub morpholog_postgres::ProgramMatch::NotChecked
+impl core::clone::Clone for morpholog_postgres::ProgramMatch
+pub fn morpholog_postgres::ProgramMatch::clone(&self) -> morpholog_postgres::ProgramMatch
+impl core::cmp::Eq for morpholog_postgres::ProgramMatch
+pub fn morpholog_postgres::ProgramMatch::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::ProgramMatch
+pub fn morpholog_postgres::ProgramMatch::eq(&self, &morpholog_postgres::ProgramMatch) -> bool
+impl core::fmt::Debug for morpholog_postgres::ProgramMatch
+pub fn morpholog_postgres::ProgramMatch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::ProgramMatch
+impl serde_core::ser::Serialize for morpholog_postgres::ProgramMatch
+pub fn morpholog_postgres::ProgramMatch::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::ProgramMatch
+impl core::marker::Send for morpholog_postgres::ProgramMatch
+impl core::marker::Sync for morpholog_postgres::ProgramMatch
+impl core::marker::Unpin for morpholog_postgres::ProgramMatch
+impl core::marker::UnsafeUnpin for morpholog_postgres::ProgramMatch
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ProgramMatch
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ProgramMatch
 pub enum morpholog_postgres::RebindingScope
 pub morpholog_postgres::RebindingScope::CompletePrefix
 pub morpholog_postgres::RebindingScope::Selective
@@ -571,6 +671,51 @@ impl core::marker::Unpin for morpholog_postgres::RebindingScope
 impl core::marker::UnsafeUnpin for morpholog_postgres::RebindingScope
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RebindingScope
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RebindingScope
+pub enum morpholog_postgres::ReceiptForm
+pub morpholog_postgres::ReceiptForm::Malformed
+pub morpholog_postgres::ReceiptForm::Malformed::detail: alloc::string::String
+pub morpholog_postgres::ReceiptForm::WellFormed
+impl core::clone::Clone for morpholog_postgres::ReceiptForm
+pub fn morpholog_postgres::ReceiptForm::clone(&self) -> morpholog_postgres::ReceiptForm
+impl core::cmp::Eq for morpholog_postgres::ReceiptForm
+pub fn morpholog_postgres::ReceiptForm::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::ReceiptForm
+pub fn morpholog_postgres::ReceiptForm::eq(&self, &morpholog_postgres::ReceiptForm) -> bool
+impl core::fmt::Debug for morpholog_postgres::ReceiptForm
+pub fn morpholog_postgres::ReceiptForm::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::ReceiptForm
+impl serde_core::ser::Serialize for morpholog_postgres::ReceiptForm
+pub fn morpholog_postgres::ReceiptForm::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::ReceiptForm
+impl core::marker::Send for morpholog_postgres::ReceiptForm
+impl core::marker::Sync for morpholog_postgres::ReceiptForm
+impl core::marker::Unpin for morpholog_postgres::ReceiptForm
+impl core::marker::UnsafeUnpin for morpholog_postgres::ReceiptForm
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ReceiptForm
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ReceiptForm
+pub enum morpholog_postgres::ReceiptQuery
+pub morpholog_postgres::ReceiptQuery::Derived
+pub morpholog_postgres::ReceiptQuery::Derived::predicate: alloc::string::String
+impl core::clone::Clone for morpholog_postgres::ReceiptQuery
+pub fn morpholog_postgres::ReceiptQuery::clone(&self) -> morpholog_postgres::ReceiptQuery
+impl core::cmp::Eq for morpholog_postgres::ReceiptQuery
+pub fn morpholog_postgres::ReceiptQuery::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::ReceiptQuery
+pub fn morpholog_postgres::ReceiptQuery::eq(&self, &morpholog_postgres::ReceiptQuery) -> bool
+impl core::fmt::Debug for morpholog_postgres::ReceiptQuery
+pub fn morpholog_postgres::ReceiptQuery::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::ReceiptQuery
+impl serde_core::ser::Serialize for morpholog_postgres::ReceiptQuery
+pub fn morpholog_postgres::ReceiptQuery::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for morpholog_postgres::ReceiptQuery
+pub fn morpholog_postgres::ReceiptQuery::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for morpholog_postgres::ReceiptQuery
+impl core::marker::Send for morpholog_postgres::ReceiptQuery
+impl core::marker::Sync for morpholog_postgres::ReceiptQuery
+impl core::marker::Unpin for morpholog_postgres::ReceiptQuery
+impl core::marker::UnsafeUnpin for morpholog_postgres::ReceiptQuery
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ReceiptQuery
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ReceiptQuery
 pub enum morpholog_postgres::RoleRebindings
 pub morpholog_postgres::RoleRebindings::Evaluated
 pub morpholog_postgres::RoleRebindings::Evaluated::changes: alloc::vec::Vec<morpholog_postgres::RoleRebinding>
@@ -766,6 +911,29 @@ impl core::marker::Unpin for morpholog_postgres::TreeVerification
 impl core::marker::UnsafeUnpin for morpholog_postgres::TreeVerification
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::TreeVerification
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::TreeVerification
+pub enum morpholog_postgres::VerdictKind
+pub morpholog_postgres::VerdictKind::Prefix
+pub morpholog_postgres::VerdictKind::Selective
+pub morpholog_postgres::VerdictKind::Window
+impl core::clone::Clone for morpholog_postgres::VerdictKind
+pub fn morpholog_postgres::VerdictKind::clone(&self) -> morpholog_postgres::VerdictKind
+impl core::clone::TrivialClone for morpholog_postgres::VerdictKind
+impl core::cmp::Eq for morpholog_postgres::VerdictKind
+impl core::cmp::PartialEq for morpholog_postgres::VerdictKind
+pub fn morpholog_postgres::VerdictKind::eq(&self, &morpholog_postgres::VerdictKind) -> bool
+impl core::fmt::Debug for morpholog_postgres::VerdictKind
+pub fn morpholog_postgres::VerdictKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_postgres::VerdictKind
+impl core::marker::StructuralPartialEq for morpholog_postgres::VerdictKind
+impl serde_core::ser::Serialize for morpholog_postgres::VerdictKind
+pub fn morpholog_postgres::VerdictKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::VerdictKind
+impl core::marker::Send for morpholog_postgres::VerdictKind
+impl core::marker::Sync for morpholog_postgres::VerdictKind
+impl core::marker::Unpin for morpholog_postgres::VerdictKind
+impl core::marker::UnsafeUnpin for morpholog_postgres::VerdictKind
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::VerdictKind
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::VerdictKind
 pub enum morpholog_postgres::VerifyOutcome
 pub morpholog_postgres::VerifyOutcome::Consistent
 pub morpholog_postgres::VerifyOutcome::Consistent::claims: usize
@@ -1183,6 +1351,33 @@ impl core::marker::Unpin for morpholog_postgres::DigestError
 impl core::marker::UnsafeUnpin for morpholog_postgres::DigestError
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::DigestError
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::DigestError
+pub struct morpholog_postgres::EvaluationReceipt
+pub morpholog_postgres::EvaluationReceipt::answer: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
+pub morpholog_postgres::EvaluationReceipt::checkpoint: morpholog_postgres::ReceiptCheckpoint
+pub morpholog_postgres::EvaluationReceipt::program_hash: alloc::string::String
+pub morpholog_postgres::EvaluationReceipt::query: morpholog_postgres::ReceiptQuery
+pub morpholog_postgres::EvaluationReceipt::receipt_format_version: u32
+pub morpholog_postgres::EvaluationReceipt::semantics_version: u32
+impl core::clone::Clone for morpholog_postgres::EvaluationReceipt
+pub fn morpholog_postgres::EvaluationReceipt::clone(&self) -> morpholog_postgres::EvaluationReceipt
+impl core::cmp::Eq for morpholog_postgres::EvaluationReceipt
+pub fn morpholog_postgres::EvaluationReceipt::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::EvaluationReceipt
+pub fn morpholog_postgres::EvaluationReceipt::eq(&self, &morpholog_postgres::EvaluationReceipt) -> bool
+impl core::fmt::Debug for morpholog_postgres::EvaluationReceipt
+pub fn morpholog_postgres::EvaluationReceipt::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::EvaluationReceipt
+impl serde_core::ser::Serialize for morpholog_postgres::EvaluationReceipt
+pub fn morpholog_postgres::EvaluationReceipt::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for morpholog_postgres::EvaluationReceipt
+pub fn morpholog_postgres::EvaluationReceipt::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for morpholog_postgres::EvaluationReceipt
+impl core::marker::Send for morpholog_postgres::EvaluationReceipt
+impl core::marker::Sync for morpholog_postgres::EvaluationReceipt
+impl core::marker::Unpin for morpholog_postgres::EvaluationReceipt
+impl core::marker::UnsafeUnpin for morpholog_postgres::EvaluationReceipt
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::EvaluationReceipt
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::EvaluationReceipt
 pub struct morpholog_postgres::EvidencePack
 pub morpholog_postgres::EvidencePack::checkpoints: alloc::vec::Vec<morpholog_postgres::Checkpoint>
 pub morpholog_postgres::EvidencePack::manifest: morpholog_postgres::PackManifest
@@ -1357,6 +1552,25 @@ impl core::marker::Unpin for morpholog_postgres::PackVerificationReport
 impl core::marker::UnsafeUnpin for morpholog_postgres::PackVerificationReport
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::PackVerificationReport
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::PackVerificationReport
+pub struct morpholog_postgres::ParsedReceipt(_)
+impl morpholog_postgres::ParsedReceipt
+pub fn morpholog_postgres::ParsedReceipt::receipt(&self) -> &morpholog_postgres::EvaluationReceipt
+impl core::clone::Clone for morpholog_postgres::ParsedReceipt
+pub fn morpholog_postgres::ParsedReceipt::clone(&self) -> morpholog_postgres::ParsedReceipt
+impl core::cmp::Eq for morpholog_postgres::ParsedReceipt
+pub fn morpholog_postgres::ParsedReceipt::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::ParsedReceipt
+pub fn morpholog_postgres::ParsedReceipt::eq(&self, &morpholog_postgres::ParsedReceipt) -> bool
+impl core::fmt::Debug for morpholog_postgres::ParsedReceipt
+pub fn morpholog_postgres::ParsedReceipt::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::ParsedReceipt
+impl core::marker::Freeze for morpholog_postgres::ParsedReceipt
+impl core::marker::Send for morpholog_postgres::ParsedReceipt
+impl core::marker::Sync for morpholog_postgres::ParsedReceipt
+impl core::marker::Unpin for morpholog_postgres::ParsedReceipt
+impl core::marker::UnsafeUnpin for morpholog_postgres::ParsedReceipt
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ParsedReceipt
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ParsedReceipt
 pub struct morpholog_postgres::PgProgram
 impl morpholog_postgres::PgProgram
 pub fn morpholog_postgres::PgProgram::interpreted(morpholog_core::prepared::PreparedProgram) -> Self
@@ -1528,6 +1742,51 @@ impl core::marker::Unpin for morpholog_postgres::ProvisionedProgram
 impl core::marker::UnsafeUnpin for morpholog_postgres::ProvisionedProgram
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ProvisionedProgram
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ProvisionedProgram
+pub struct morpholog_postgres::ReceiptCheckpoint
+pub morpholog_postgres::ReceiptCheckpoint::checkpoint_hash: morpholog_postgres::Digest
+pub morpholog_postgres::ReceiptCheckpoint::root_hash: morpholog_postgres::Digest
+pub morpholog_postgres::ReceiptCheckpoint::tree_size: i64
+impl core::clone::Clone for morpholog_postgres::ReceiptCheckpoint
+pub fn morpholog_postgres::ReceiptCheckpoint::clone(&self) -> morpholog_postgres::ReceiptCheckpoint
+impl core::cmp::Eq for morpholog_postgres::ReceiptCheckpoint
+pub fn morpholog_postgres::ReceiptCheckpoint::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::ReceiptCheckpoint
+pub fn morpholog_postgres::ReceiptCheckpoint::eq(&self, &morpholog_postgres::ReceiptCheckpoint) -> bool
+impl core::fmt::Debug for morpholog_postgres::ReceiptCheckpoint
+pub fn morpholog_postgres::ReceiptCheckpoint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::ReceiptCheckpoint
+impl serde_core::ser::Serialize for morpholog_postgres::ReceiptCheckpoint
+pub fn morpholog_postgres::ReceiptCheckpoint::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for morpholog_postgres::ReceiptCheckpoint
+pub fn morpholog_postgres::ReceiptCheckpoint::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for morpholog_postgres::ReceiptCheckpoint
+impl core::marker::Send for morpholog_postgres::ReceiptCheckpoint
+impl core::marker::Sync for morpholog_postgres::ReceiptCheckpoint
+impl core::marker::Unpin for morpholog_postgres::ReceiptCheckpoint
+impl core::marker::UnsafeUnpin for morpholog_postgres::ReceiptCheckpoint
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ReceiptCheckpoint
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ReceiptCheckpoint
+pub struct morpholog_postgres::ReceiptVerificationReport
+pub morpholog_postgres::ReceiptVerificationReport::checkpoint: morpholog_postgres::CheckpointMatch
+pub morpholog_postgres::ReceiptVerificationReport::completeness: morpholog_postgres::Completeness
+pub morpholog_postgres::ReceiptVerificationReport::evaluation: morpholog_postgres::Evaluation
+pub morpholog_postgres::ReceiptVerificationReport::evidence: morpholog_postgres::PackVerificationReport
+pub morpholog_postgres::ReceiptVerificationReport::program: morpholog_postgres::ProgramMatch
+pub morpholog_postgres::ReceiptVerificationReport::receipt: morpholog_postgres::ReceiptForm
+pub morpholog_postgres::ReceiptVerificationReport::verdict_kind: morpholog_postgres::VerdictKind
+impl core::clone::Clone for morpholog_postgres::ReceiptVerificationReport
+pub fn morpholog_postgres::ReceiptVerificationReport::clone(&self) -> morpholog_postgres::ReceiptVerificationReport
+impl core::fmt::Debug for morpholog_postgres::ReceiptVerificationReport
+pub fn morpholog_postgres::ReceiptVerificationReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_postgres::ReceiptVerificationReport
+pub fn morpholog_postgres::ReceiptVerificationReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::ReceiptVerificationReport
+impl core::marker::Send for morpholog_postgres::ReceiptVerificationReport
+impl core::marker::Sync for morpholog_postgres::ReceiptVerificationReport
+impl core::marker::Unpin for morpholog_postgres::ReceiptVerificationReport
+impl core::marker::UnsafeUnpin for morpholog_postgres::ReceiptVerificationReport
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ReceiptVerificationReport
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ReceiptVerificationReport
 pub struct morpholog_postgres::RefreshSummary
 pub morpholog_postgres::RefreshSummary::compute: core::time::Duration
 pub morpholog_postgres::RefreshSummary::derived_claim_count: usize
@@ -2001,6 +2260,7 @@ pub async fn morpholog_postgres::export_window(&sqlx_postgres::PgPool, morpholog
 pub fn morpholog_postgres::generate_signing_key() -> ed25519_dalek::signing::SigningKey
 pub fn morpholog_postgres::head_version() -> i32
 pub async fn morpholog_postgres::initialise_schema(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::InitOutcome, morpholog_postgres::PgError>
+pub fn morpholog_postgres::issue_receipt(morpholog_core::validate::ValidatedProgram<'_>, &morpholog_postgres::EvidencePack, morpholog_postgres::ReceiptQuery) -> core::result::Result<morpholog_postgres::EvaluationReceipt, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_audit_rows(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_audit_rows_page(&mut sqlx_postgres::connection::PgConnection, core::option::Option<(jiff::timestamp::Timestamp, uuid::Uuid)>, core::option::Option<jiff::timestamp::Timestamp>, i64) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_claims(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_core::state::ClaimInstance>, morpholog_postgres::PgError>
@@ -2024,6 +2284,7 @@ pub fn morpholog_postgres::pack_format_version(&[u8]) -> core::option::Option<u6
 pub fn morpholog_postgres::pack_kind(u64) -> core::option::Option<morpholog_postgres::PackKind>
 pub fn morpholog_postgres::pack_role_rebindings(&[morpholog_postgres::AuditRow], &morpholog_postgres::PackVerdict) -> morpholog_postgres::RoleRebindings
 pub fn morpholog_postgres::parse_public_key(&str) -> core::result::Result<ed25519_dalek::verifying::VerifyingKey, morpholog_postgres::SigningError>
+pub fn morpholog_postgres::parse_receipt(&[u8]) -> core::result::Result<morpholog_postgres::ParsedReceipt, alloc::string::String>
 pub fn morpholog_postgres::parse_signature(&str) -> core::result::Result<ed25519::Signature, morpholog_postgres::SigningError>
 pub async fn morpholog_postgres::plan_indexes(&sqlx_postgres::PgPool, &[&morpholog_postgres::PgProgram], bool) -> core::result::Result<morpholog_postgres::ProvisionReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::process_one_outbox_row<D>(&sqlx_postgres::PgPool, &str, &str, core::time::Duration, &D, core::option::Option<&morpholog_postgres::CompensationSpec>, jiff::timestamp::Timestamp) -> core::result::Result<morpholog_postgres::ProcessOutcome, morpholog_postgres::PgError> where D: morpholog_postgres::Deliverer
@@ -2043,6 +2304,7 @@ pub async fn morpholog_postgres::release_outbox_claim(&sqlx_postgres::PgPool, uu
 pub fn morpholog_postgres::render_public_key(&ed25519_dalek::verifying::VerifyingKey) -> alloc::string::String
 pub fn morpholog_postgres::render_signature(&ed25519::Signature) -> alloc::string::String
 pub fn morpholog_postgres::render_views(morpholog_core::validate::ValidatedProgram<'_>, &str, &str) -> core::result::Result<morpholog_postgres::RenderedViews, alloc::vec::Vec<morpholog_postgres::ViewRefusal>>
+pub fn morpholog_postgres::reproduce(morpholog_core::validate::ValidatedProgram<'_>, &morpholog_postgres::ParsedReceipt, &morpholog_postgres::EvidencePack) -> (morpholog_postgres::CheckpointMatch, morpholog_postgres::Evaluation)
 pub async fn morpholog_postgres::require_current_schema(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::resolve_transition_at_or_before<'e, E>(E, jiff::timestamp::Timestamp) -> core::result::Result<uuid::Uuid, morpholog_postgres::PgError> where E: sqlx_core::executor::Executor<'e, Database = sqlx_postgres::database::Postgres>
 pub fn morpholog_postgres::runtime_subjects() -> impl morpholog_core::propose::SubjectSource

@@ -671,6 +671,44 @@ class TamperEvidence(unittest.TestCase):
         unsealed = envelopes.parse_views_verification(golden("views_verification_not_sealed.json"))
         self.assertIsInstance(unsealed, envelopes.ViewsNotSealed)
 
+    def test_a_receipt_and_each_layer_of_its_verification_parse_by_status(self):
+        receipt = envelopes.EvaluationReceipt.from_json(golden("evaluation_receipt.json"))
+        self.assertEqual(receipt.query, envelopes.ReceiptQuery("derived", "FacilityUtilisation"))
+        self.assertEqual(receipt.answer[0].args[1], Decimal("0.4"))
+        self.assertEqual(receipt.checkpoint.tree_size, 2)
+
+        def report(name):
+            return envelopes.ReceiptVerificationReport.from_json(
+                golden(f"receipt_verification_report_{name}.json")
+            )
+
+        reproduced = report("reproduced")
+        self.assertEqual(
+            (reproduced.receipt, reproduced.completeness, reproduced.checkpoint,
+             reproduced.program, reproduced.evaluation),
+            ("well_formed", "complete", "matches", "matches", "reproduced"),
+        )
+        self.assertIsInstance(reproduced.evidence.verdict, envelopes.TreeIntact)
+        self.assertEqual(report("differs").evaluation, envelopes.AnswerDiffers(1, 0))
+        self.assertEqual(report("query_unknown").evaluation, envelopes.QueryUnknown("Wibble"))
+        self.assertIsInstance(report("errored").evaluation, envelopes.EvaluationErrored)
+        self.assertEqual(report("not_re_evaluated").evaluation, envelopes.NotReEvaluated(2, 1))
+        mismatched = report("mismatched")
+        self.assertEqual(mismatched.checkpoint.pack.tree_size, 3)
+        self.assertIsInstance(mismatched.program, envelopes.ProgramDiffers)
+        malformed = report("malformed")
+        self.assertIsInstance(malformed.receipt, envelopes.ReceiptMalformed)
+        self.assertIsInstance(malformed.evidence.verdict, envelopes.TreeMalformedPack)
+        not_complete = report("not_complete")
+        self.assertEqual((not_complete.verdict_kind, not_complete.completeness),
+                         ("window", "not_complete"))
+        self.assertIsInstance(not_complete.evidence.verdict, envelopes.WindowIntact)
+
+        drifted = golden("receipt_verification_report_reproduced.json")
+        drifted["evaluation"] = {"status": "certified"}
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.ReceiptVerificationReport.from_json(drifted)
+
     def test_the_witness_axis_on_the_live_and_pack_reports(self):
         report = envelopes.VerifyReport.from_json(golden("verify_report_witnessed.json"))
         axis = report.witnesses

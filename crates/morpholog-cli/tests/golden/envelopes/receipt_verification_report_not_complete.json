@@ -1,0 +1,33 @@
+{
+  "receipt": {
+    "status": "well_formed"
+  },
+  "verdict_kind": "window",
+  "evidence": {
+    "verdict": {
+      "status": "intact",
+      "from_tree_size": 2,
+      "to_tree_size": 3,
+      "rows": 1
+    },
+    "role_rebindings": {
+      "status": "evaluated",
+      "scope": "window",
+      "rows_with_oid": 1,
+      "rows_without_oid": 0,
+      "changes": []
+    }
+  },
+  "completeness": {
+    "status": "not_complete"
+  },
+  "checkpoint": {
+    "status": "not_checked"
+  },
+  "program": {
+    "status": "matches"
+  },
+  "evaluation": {
+    "status": "not_evaluated"
+  }
+}

@@ -9,12 +9,12 @@ use std::path::Path;
 use anyhow::Context;
 use morpholog_core::{BatchScore, CandidateScore, ValidatedProgram, invariants_using_pre};
 use morpholog_postgres::{
-    EvidencePack, SplitBoundary, read_prefix_stream, score_candidate, score_candidate_against_pack,
+    SplitBoundary, score_candidate, score_candidate_against_pack,
     score_candidate_against_packs_lazily,
 };
 
 use crate::EvaluateArgs;
-use crate::commands::evidence::{PackInput, open_pack};
+use crate::commands::evidence::read_complete_prefix;
 use crate::commands::{
     AlreadyReported, connect, parse_or_report, print_json, read_anchor, validate_or_report,
 };
@@ -118,21 +118,6 @@ fn score_against_packs(program: ValidatedProgram<'_>, dir: &Path) -> anyhow::Res
         Ok::<_, anyhow::Error>((name, read_complete_prefix(path)?))
     });
     score_candidate_against_packs_lazily(program, named).context("scoring against the packs failed")
-}
-
-/// A complete-prefix pack in either form, whole in memory, since scoring
-/// replays every row.
-fn read_complete_prefix(path: &Path) -> anyhow::Result<EvidencePack> {
-    let not_a_pack = || format!("{} is not a complete-prefix evidence pack", path.display());
-    match open_pack(path)? {
-        PackInput::Stream(input) => read_prefix_stream(input).with_context(not_a_pack),
-        PackInput::Document(bytes) => serde_json::from_slice(&bytes).with_context(not_a_pack),
-        PackInput::Newer(n) => Err(anyhow::anyhow!(
-            "pack_format_version {n} is newer than this binary understands"
-        ))
-        .with_context(not_a_pack),
-        PackInput::Unreadable(detail) => Err(anyhow::anyhow!(detail)).with_context(not_a_pack),
-    }
 }
 
 /// Read an evidence pack (and optional external anchor) and score the

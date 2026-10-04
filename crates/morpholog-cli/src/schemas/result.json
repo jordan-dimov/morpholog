@@ -1536,6 +1536,82 @@
         "role_rebindings": { "$ref": "#/$defs/role_rebindings" }
       }
     },
+    "evaluation_receipt": {
+      "description": "Printed by `audit receipt`: under the programme `program_hash` names and semantics `semantics_version`, over the history `checkpoint` commits to, `query` gives `answer`. `audit verify-receipt` recomputes it; the answer is never trusted for being stated. `answer` is in canonical order, each row once.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt_format_version", "program_hash", "semantics_version", "checkpoint", "query", "answer"],
+      "properties": {
+        "receipt_format_version": { "type": "integer", "minimum": 1 },
+        "program_hash": { "type": "string" },
+        "semantics_version": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "checkpoint": { "$ref": "#/$defs/receipt_checkpoint" },
+        "query": {
+          "oneOf": [
+            { "type": "object", "additionalProperties": false, "required": ["kind", "predicate"], "properties": { "kind": { "const": "derived" }, "predicate": { "type": "string" } } }
+          ]
+        },
+        "answer": { "$ref": "#/$defs/claim_instance_array" }
+      }
+    },
+    "receipt_checkpoint": {
+      "description": "The history a receipt names: what a checkpoint commits to. Signatures and witnesses are outside it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tree_size", "root_hash", "checkpoint_hash"],
+      "properties": {
+        "tree_size": { "type": "integer", "minimum": 0 },
+        "root_hash": { "type": "string" },
+        "checkpoint_hash": { "type": "string" }
+      }
+    },
+    "receipt_verification_report": {
+      "description": "Printed by `audit verify-receipt`, one layer per field. `evidence` is the pack's own report, exactly as `audit verify-pack` prints it, and `verdict_kind` says which kind of verdict it carries. Evaluation runs only when the evidence is an intact complete prefix and the checkpoint and programme match; a witness judged invalid fails the receipt without stopping it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt", "verdict_kind", "evidence", "completeness", "checkpoint", "program", "evaluation"],
+      "properties": {
+        "receipt": {
+          "oneOf": [
+            { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "well_formed" } } },
+            { "type": "object", "additionalProperties": false, "required": ["status", "detail"], "properties": { "status": { "const": "malformed" }, "detail": { "type": "string" } } }
+          ]
+        },
+        "verdict_kind": { "enum": ["prefix", "window", "selective"] },
+        "evidence": { "$ref": "#/$defs/pack_verification_report" },
+        "completeness": {
+          "oneOf": [
+            { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "complete" } } },
+            { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "not_complete" } } },
+            { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "not_checked" } } }
+          ]
+        },
+        "checkpoint": {
+          "oneOf": [
+            { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "matches" } } },
+            { "type": "object", "additionalProperties": false, "required": ["status", "receipt", "pack"], "properties": { "status": { "const": "differs" }, "receipt": { "$ref": "#/$defs/receipt_checkpoint" }, "pack": { "$ref": "#/$defs/receipt_checkpoint" } } },
+            { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "not_checked" } } }
+          ]
+        },
+        "program": {
+          "oneOf": [
+            { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "matches" } } },
+            { "type": "object", "additionalProperties": false, "required": ["status", "receipt", "supplied"], "properties": { "status": { "const": "differs" }, "receipt": { "type": "string" }, "supplied": { "type": "string" } } },
+            { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "not_checked" } } }
+          ]
+        },
+        "evaluation": {
+          "oneOf": [
+            { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "reproduced" } } },
+            { "type": "object", "additionalProperties": false, "required": ["status", "missing", "unexpected"], "properties": { "status": { "const": "differs" }, "missing": { "type": "integer", "minimum": 0 }, "unexpected": { "type": "integer", "minimum": 0 } } },
+            { "type": "object", "additionalProperties": false, "required": ["status", "predicate"], "properties": { "status": { "const": "query_unknown" }, "predicate": { "type": "string" } } },
+            { "type": "object", "additionalProperties": false, "required": ["status", "detail"], "properties": { "status": { "const": "errored" }, "detail": { "type": "string" } } },
+            { "type": "object", "additionalProperties": false, "required": ["status", "receipt_semantics", "binary_semantics"], "properties": { "status": { "const": "not_re_evaluated" }, "receipt_semantics": { "type": "integer", "minimum": 0, "maximum": 4294967295 }, "binary_semantics": { "type": "integer", "minimum": 0, "maximum": 4294967295 } } },
+            { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "not_evaluated" } } }
+          ]
+        }
+      }
+    },
     "prefix_pack_manifest": {
       "description": "Line 1 of a complete-prefix pack written by `audit export`. The next `checkpoint_count` lines are `checkpoint`s; then exactly `tree_size` lines, each an `audit_row`, in log order.",
       "type": "object",

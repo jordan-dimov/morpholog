@@ -2921,3 +2921,290 @@ class PackVerificationReport(Generic[_PackVerdict]):
             role_rebindings=parse_role_rebindings(data["role_rebindings"]),
             witnesses=None if witnesses is None else WitnessesReport.from_json(witnesses),
         )
+
+
+@dataclass(frozen=True)
+class ReceiptCheckpoint:
+    """The history a receipt names: what a checkpoint commits to.
+    Signatures and witnesses are outside it."""
+
+    tree_size: int
+    root_hash: str
+    checkpoint_hash: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> ReceiptCheckpoint:
+        data = _strict(
+            "receipt checkpoint", payload, {"tree_size", "root_hash", "checkpoint_hash"}
+        )
+        return cls(
+            tree_size=int(str(data["tree_size"])),
+            root_hash=str(data["root_hash"]),
+            checkpoint_hash=str(data["checkpoint_hash"]),
+        )
+
+
+@dataclass(frozen=True)
+class ReceiptQuery:
+    """The question a receipt answers: every row of a derived claim."""
+
+    kind: str
+    predicate: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> ReceiptQuery:
+        data = _strict("receipt query", payload, {"kind", "predicate"})
+        if data["kind"] != "derived":
+            raise EnvelopeError(f"not a receipt query: {payload!r}")
+        return cls(kind="derived", predicate=str(data["predicate"]))
+
+
+@dataclass(frozen=True)
+class EvaluationReceipt:
+    """The `audit receipt` envelope: under the programme `program_hash`
+    names and semantics `semantics_version`, over the history `checkpoint`
+    commits to, `query` gives `answer`. `audit_verify_receipt` recomputes
+    it; the answer is never trusted for being stated."""
+
+    receipt_format_version: int
+    program_hash: str
+    semantics_version: int
+    checkpoint: ReceiptCheckpoint
+    query: ReceiptQuery
+    answer: list[ClaimInstance]
+
+    @classmethod
+    def from_json(cls, payload: object) -> EvaluationReceipt:
+        data = _strict(
+            "evaluation receipt",
+            payload,
+            {
+                "receipt_format_version",
+                "program_hash",
+                "semantics_version",
+                "checkpoint",
+                "query",
+                "answer",
+            },
+        )
+        answer = data["answer"]
+        if not isinstance(answer, list):
+            raise EnvelopeError(f"evaluation receipt: answer is not a list: {answer!r}")
+        return cls(
+            receipt_format_version=int(str(data["receipt_format_version"])),
+            program_hash=str(data["program_hash"]),
+            semantics_version=int(str(data["semantics_version"])),
+            checkpoint=ReceiptCheckpoint.from_json(data["checkpoint"]),
+            query=ReceiptQuery.from_json(data["query"]),
+            answer=[ClaimInstance.from_json(c) for c in answer],
+        )
+
+
+def _status_only(label: str) -> Callable[[object], str]:
+    """A variant that carries nothing but its status, read as that
+    status."""
+
+    def parse(payload: object) -> str:
+        return str(_strict(label, payload, {"status"})["status"])
+
+    return parse
+
+
+@dataclass(frozen=True)
+class ReceiptMalformed:
+    """The receipt does not parse, or is not in its one canonical form."""
+
+    detail: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> ReceiptMalformed:
+        data = _strict("malformed receipt", payload, {"status", "detail"})
+        return cls(detail=str(data["detail"]))
+
+
+@dataclass(frozen=True)
+class CheckpointDiffers:
+    """The pack covers another history than the receipt names."""
+
+    receipt: ReceiptCheckpoint
+    pack: ReceiptCheckpoint
+
+    @classmethod
+    def from_json(cls, payload: object) -> CheckpointDiffers:
+        data = _strict("differing checkpoint", payload, {"status", "receipt", "pack"})
+        return cls(
+            receipt=ReceiptCheckpoint.from_json(data["receipt"]),
+            pack=ReceiptCheckpoint.from_json(data["pack"]),
+        )
+
+
+@dataclass(frozen=True)
+class ProgramDiffers:
+    """The supplied programme means something other than the receipt
+    names; comments, formatting and surface spelling never cause this."""
+
+    receipt: str
+    supplied: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProgramDiffers:
+        data = _strict("differing programme", payload, {"status", "receipt", "supplied"})
+        return cls(receipt=str(data["receipt"]), supplied=str(data["supplied"]))
+
+
+@dataclass(frozen=True)
+class AnswerDiffers:
+    """Rows the recomputation gives that the receipt lacks (`missing`),
+    and rows the receipt states that it does not give (`unexpected`)."""
+
+    missing: int
+    unexpected: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> AnswerDiffers:
+        data = _strict("differing answer", payload, {"status", "missing", "unexpected"})
+        return cls(missing=int(str(data["missing"])), unexpected=int(str(data["unexpected"])))
+
+
+@dataclass(frozen=True)
+class QueryUnknown:
+    """The programme derives no such predicate: not an empty answer."""
+
+    predicate: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> QueryUnknown:
+        data = _strict("unknown query", payload, {"status", "predicate"})
+        return cls(predicate=str(data["predicate"]))
+
+
+@dataclass(frozen=True)
+class EvaluationErrored:
+    """Recomputing the answer raised an evaluation error."""
+
+    detail: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> EvaluationErrored:
+        data = _strict("errored evaluation", payload, {"status", "detail"})
+        return cls(detail=str(data["detail"]))
+
+
+@dataclass(frozen=True)
+class NotReEvaluated:
+    """Every other layer holds, but the receipt was computed under
+    semantics this binary does not implement."""
+
+    receipt_semantics: int
+    binary_semantics: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> NotReEvaluated:
+        data = _strict(
+            "evaluation not re-run",
+            payload,
+            {"status", "receipt_semantics", "binary_semantics"},
+        )
+        return cls(
+            receipt_semantics=int(str(data["receipt_semantics"])),
+            binary_semantics=int(str(data["binary_semantics"])),
+        )
+
+
+_PACK_VERDICT_PARSERS: dict[str, Callable[[object], object]] = {
+    "prefix": lambda v: parse_tree_verification(v),
+    "window": lambda v: parse_window_verification(v),
+    "selective": lambda v: parse_selective_verification(v),
+}
+
+
+@dataclass(frozen=True)
+class ReceiptVerificationReport:
+    """The `audit verify-receipt` envelope, one layer per field. A layer
+    that carries nothing but its status reads as that status (`complete`,
+    `matches`, `reproduced`, `not_checked`, `not_evaluated`...).
+    `evidence` is the pack's own report, with a verdict of the kind
+    `verdict_kind` names. Evaluation runs only when the evidence is an
+    intact complete prefix and the checkpoint and programme match; a
+    witness judged invalid in `evidence` fails the receipt without
+    stopping it, so `evaluation == "reproduced"` alone is not a pass."""
+
+    receipt: str | ReceiptMalformed
+    verdict_kind: str
+    evidence: PackVerificationReport[TreeVerification | WindowVerification | SelectiveVerification]
+    completeness: str
+    checkpoint: str | CheckpointDiffers
+    program: str | ProgramDiffers
+    evaluation: str | AnswerDiffers | QueryUnknown | EvaluationErrored | NotReEvaluated
+
+    @classmethod
+    def from_json(cls, payload: object) -> ReceiptVerificationReport:
+        data = _strict(
+            "receipt verification report",
+            payload,
+            {
+                "receipt",
+                "verdict_kind",
+                "evidence",
+                "completeness",
+                "checkpoint",
+                "program",
+                "evaluation",
+            },
+        )
+        verdict_kind = data["verdict_kind"]
+        parse_verdict = (
+            _PACK_VERDICT_PARSERS.get(verdict_kind) if isinstance(verdict_kind, str) else None
+        )
+        if parse_verdict is None:
+            raise EnvelopeError(f"not a verdict kind: {verdict_kind!r}")
+        return cls(
+            receipt=_by_status(
+                data["receipt"],
+                "a receipt form",
+                {
+                    "well_formed": _status_only("well-formed receipt"),
+                    "malformed": ReceiptMalformed.from_json,
+                },
+            ),
+            verdict_kind=verdict_kind,
+            evidence=PackVerificationReport.from_json(data["evidence"], parse_verdict),
+            completeness=_by_status(
+                data["completeness"],
+                "a completeness finding",
+                {
+                    status: _status_only("completeness")
+                    for status in ("complete", "not_complete", "not_checked")
+                },
+            ),
+            checkpoint=_by_status(
+                data["checkpoint"],
+                "a checkpoint finding",
+                {
+                    "matches": _status_only("matching checkpoint"),
+                    "differs": CheckpointDiffers.from_json,
+                    "not_checked": _status_only("unchecked checkpoint"),
+                },
+            ),
+            program=_by_status(
+                data["program"],
+                "a programme finding",
+                {
+                    "matches": _status_only("matching programme"),
+                    "differs": ProgramDiffers.from_json,
+                    "not_checked": _status_only("unchecked programme"),
+                },
+            ),
+            evaluation=_by_status(
+                data["evaluation"],
+                "an evaluation finding",
+                {
+                    "reproduced": _status_only("reproduced answer"),
+                    "differs": AnswerDiffers.from_json,
+                    "query_unknown": QueryUnknown.from_json,
+                    "errored": EvaluationErrored.from_json,
+                    "not_re_evaluated": NotReEvaluated.from_json,
+                    "not_evaluated": _status_only("unevaluated answer"),
+                },
+            ),
+        )

@@ -1,0 +1,42 @@
+{
+  "receipt_format_version": 1,
+  "program_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "semantics_version": 1,
+  "checkpoint": {
+    "tree_size": 2,
+    "root_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "checkpoint_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "query": {
+    "kind": "derived",
+    "predicate": "FacilityUtilisation"
+  },
+  "answer": [
+    {
+      "predicate": "FacilityUtilisation",
+      "args": [
+        {
+          "type": "subject",
+          "value": "f1"
+        },
+        {
+          "type": "decimal",
+          "value": "0.4"
+        }
+      ]
+    },
+    {
+      "predicate": "FacilityUtilisation",
+      "args": [
+        {
+          "type": "subject",
+          "value": "f2"
+        },
+        {
+          "type": "decimal",
+          "value": "0.25"
+        }
+      ]
+    }
+  ]
+}
