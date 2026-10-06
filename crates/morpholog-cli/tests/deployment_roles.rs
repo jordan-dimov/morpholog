@@ -167,3 +167,106 @@ async fn init_refuses_held_roles_and_migrate_warns_about_shared_ones() {
 
     clean(&admin).await;
 }
+
+/// `init --reset --least-privilege` binds the roles the database recorded
+/// before the reset again. Another prefix is refused before anything is
+/// dropped, and a database that recorded nothing still adopts nothing.
+#[tokio::test]
+async fn a_reset_binds_again_only_the_roles_the_database_recorded() {
+    let Ok(base) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let base = morpholog_postgres::with_default_user(&base);
+    let admin = PgPool::connect(&with_database(&base, "postgres"))
+        .await
+        .unwrap();
+    let (kept, bare) = ("morpholog_ci_cli_reset_a", "morpholog_ci_cli_reset_b");
+    let roles = [
+        "morpholog_ci_cli_reset_writer",
+        "morpholog_ci_cli_reset_reader",
+        "morpholog_ci_cli_loose_writer",
+    ];
+    let clean = || async {
+        for db in [kept, bare] {
+            run(
+                &admin,
+                &format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"),
+            )
+            .await;
+        }
+        for role in roles {
+            run(&admin, &format!("DROP ROLE IF EXISTS {role}")).await;
+        }
+    };
+    clean().await;
+    for db in [kept, bare] {
+        run(&admin, &format!("CREATE DATABASE {db}")).await;
+    }
+    let (kept_url, bare_url) = (with_database(&base, kept), with_database(&base, bare));
+    let reset = |url: &str, prefix: &str| {
+        cli(&[
+            "init",
+            "--reset",
+            "--i-know-this-deletes-data",
+            "--least-privilege",
+            "--role-prefix",
+            prefix,
+            "--database-url",
+            url,
+        ])
+    };
+    let recorded = |url: String| async move {
+        let pool = PgPool::connect(&url).await.unwrap();
+        let row =
+            sqlx::query_scalar::<_, String>("SELECT writer_role FROM morpholog.deployment_roles")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        let can_append = sqlx::query_scalar::<_, bool>(
+            "SELECT has_table_privilege('morpholog_ci_cli_reset_writer', 'morpholog.audit', 'INSERT')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap_or(false);
+        pool.close().await;
+        (row, can_append)
+    };
+
+    let (status, _, stderr) = cli(&[
+        "init",
+        "--least-privilege",
+        "--role-prefix",
+        "morpholog_ci_cli_reset_",
+        "--database-url",
+        &kept_url,
+    ]);
+    assert!(status.success(), "{stderr}");
+
+    let (status, stdout, stderr) = reset(&kept_url, "morpholog_ci_cli_reset_");
+    assert!(status.success(), "the same prefix binds again: {stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(report["least_privilege"]["writer_role"], roles[0]);
+    assert_eq!(
+        recorded(kept_url.clone()).await,
+        (Some(roles[0].to_string()), true)
+    );
+
+    let (status, _, stderr) = reset(&kept_url, "morpholog_ci_cli_other_");
+    assert!(!status.success());
+    assert!(stderr.contains("Nothing was dropped"), "{stderr}");
+    assert_eq!(
+        recorded(kept_url.clone()).await,
+        (Some(roles[0].to_string()), true),
+        "the refused reset left the schema and its floor in place"
+    );
+
+    // A database that recorded nothing adopts nothing on a reset either.
+    let (status, _, stderr) = cli(&["init", "--database-url", &bare_url]);
+    assert!(status.success(), "{stderr}");
+    run(&admin, &format!("CREATE ROLE {} NOLOGIN", roles[2])).await;
+    let (status, _, stderr) = reset(&bare_url, "morpholog_ci_cli_loose_");
+    assert!(!status.success());
+    assert!(stderr.contains("already exists"), "{stderr}");
+
+    clean().await;
+}

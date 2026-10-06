@@ -11,8 +11,8 @@
 
 use anyhow::{Context, anyhow};
 use morpholog_postgres::{
-    DeploymentRoles, InitOutcome, drop_schema, initialise_schema, provision_least_privilege,
-    redact_database_url,
+    DeploymentRoles, InitOutcome, deployment_roles, drop_schema, initialise_schema,
+    provision_least_privilege, rebind_least_privilege, redact_database_url,
 };
 
 use crate::InitArgs;
@@ -40,7 +40,22 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
 
     // Unchecked: this is the command that provisions a database.
     let pool = connect_unchecked(&args.db.database_url).await?;
-    let dropped = if args.reset {
+    let mut dropped = if args.reset {
+        // A reset binds the roles this database recorded again, so another
+        // prefix is refused while there is still something to keep.
+        if args.least_privilege
+            && let Some(recorded) = deployment_roles(&pool).await?
+            && recorded != roles
+        {
+            return Err(anyhow!(
+                "this database records `{}` and `{}` as its least-privilege roles; \
+                 --reset --least-privilege binds them again, so pass their prefix, or \
+                 move the deployment to new roles first (docs/install.md, \"Several \
+                 deployments on one cluster\"). Nothing was dropped",
+                recorded.writer(),
+                recorded.reader()
+            ));
+        }
         Some(drop_schema(&pool).await.context("schema drop failed")?)
     } else {
         None
@@ -66,19 +81,29 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
         if status == "already-initialised" {
             morpholog_postgres::require_current_schema(&pool).await?;
         }
-        provision_least_privilege(&pool, &roles)
-            .await
-            .context("least-privilege provisioning failed")?;
+        let recorded = dropped
+            .as_mut()
+            .and_then(|d| d.roles.take())
+            .filter(|r| *r.roles() == roles);
+        match recorded {
+            Some(recorded) => rebind_least_privilege(&pool, recorded).await,
+            None => provision_least_privilege(&pool, &roles).await,
+        }
+        .context("least-privilege provisioning failed")?;
         warn_if_roles_shared(&pool, &roles).await?;
         Some(LeastPrivilegeReport::applied(&roles))
     } else {
         None
     };
     // Say whether there was actually a schema to drop.
-    if let Some(existed) = dropped {
+    if let Some(dropped) = dropped {
         eprintln!(
             "{} the pre-existing `morpholog` schema before provisioning",
-            if existed { "dropped" } else { "found no" }
+            if dropped.existed {
+                "dropped"
+            } else {
+                "found no"
+            }
         );
     }
     print_json(&InitReport {

@@ -211,7 +211,9 @@ and it refuses if a recorded role is gone.
 
 `init` creates a deployment's roles itself and refuses a role name that
 already exists, unless this database already records it: choose another
-prefix. `migrate` warns when this deployment's roles also hold privileges
+prefix. `init --reset --least-privilege` binds the roles the database
+recorded before the reset again, and refuses another prefix before
+dropping anything. `migrate` warns when this deployment's roles also hold privileges
 in, or on, another database. Deployments provisioned
 before this check existed can be in that state.
 

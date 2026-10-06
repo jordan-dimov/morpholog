@@ -160,22 +160,45 @@ pub fn redact_database_url(url: &str) -> String {
 ///
 /// Destructive and deliberately dumb: the caller owns the confirmation,
 /// because a library cannot tell a scratch database from production.
-/// Returns whether there was a schema to drop.
+/// Returns whether there was a schema to drop, and the least-privilege
+/// roles it recorded, which [`rebind_least_privilege`] can bind again.
 ///
 /// Not atomic with the [`initialise_schema`] that follows; a failure in
 /// between leaves an unprovisioned database, which re-running `init`
 /// recovers.
-pub async fn drop_schema(pool: &PgPool) -> Result<bool, PgError> {
+pub async fn drop_schema(pool: &PgPool) -> Result<DroppedSchema, PgError> {
+    let mut tx = pool.begin().await.map_err(classify)?;
     let existed = sqlx::query!("SELECT 1 AS one FROM pg_namespace WHERE nspname = 'morpholog'")
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(classify)?
         .is_some();
+    let roles = recorded_roles(&mut tx).await?.map(RecordedRoles);
     sqlx::raw_sql("DROP SCHEMA IF EXISTS morpholog CASCADE")
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify)?;
-    Ok(existed)
+    tx.commit().await.map_err(classify)?;
+    Ok(DroppedSchema { existed, roles })
+}
+
+/// What [`drop_schema`] dropped.
+#[derive(Debug)]
+pub struct DroppedSchema {
+    pub existed: bool,
+    pub roles: Option<RecordedRoles>,
+}
+
+/// The least-privilege roles a database recorded when its schema was
+/// dropped. Only [`drop_schema`] makes one, so binding it again restores
+/// what that same database had and never adopts a role chosen afterwards.
+#[derive(Debug)]
+pub struct RecordedRoles(DeploymentRoles);
+
+impl RecordedRoles {
+    pub fn roles(&self) -> &DeploymentRoles {
+        &self.0
+    }
 }
 
 /// The prefix of the default role names, `morpholog_writer` and
@@ -382,6 +405,18 @@ pub async fn provision_least_privilege(
     pool: &PgPool,
     roles: &DeploymentRoles,
 ) -> Result<(), PgError> {
+    provision(pool, roles, false).await
+}
+
+/// Provision the floor again for the roles this database recorded before
+/// its schema was dropped, as a reset does: those roles still exist, and
+/// they are bound again rather than refused as unrecorded. Any other
+/// existing role is still refused.
+pub async fn rebind_least_privilege(pool: &PgPool, recorded: RecordedRoles) -> Result<(), PgError> {
+    provision(pool, &recorded.0, true).await
+}
+
+async fn provision(pool: &PgPool, roles: &DeploymentRoles, rebinding: bool) -> Result<(), PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     match recorded_roles(&mut tx).await? {
         Some(recorded) if recorded != *roles => {
@@ -396,6 +431,9 @@ pub async fn provision_least_privilege(
         None => {
             for role in roles.both() {
                 if role_exists(&mut tx, role).await? {
+                    if rebinding {
+                        continue;
+                    }
                     return Err(existing_role(&mut tx, role).await?);
                 }
                 // Audited for AssertSqlSafe: `role` is a validated prefix
