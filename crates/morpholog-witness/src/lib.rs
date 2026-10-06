@@ -19,7 +19,7 @@ use cryptographic_message_syntax::asn1::rfc3161::{
     MessageImprint, OID_CONTENT_TYPE_TST_INFO, PkiStatus, TimeStampReq, TimeStampResp, TstInfo,
 };
 use cryptographic_message_syntax::asn1::rfc5652::{
-    OID_ID_SIGNED_DATA, SignedData as Asn1SignedData,
+    OID_ID_SIGNED_DATA, SignedData as Asn1SignedData, SignerInfo as Asn1SignerInfo,
 };
 use cryptographic_message_syntax::{CmsError, SignedData, SignerInfo};
 use jiff::Timestamp;
@@ -49,6 +49,14 @@ const OID_AA_SIGNING_CERTIFICATE: &[u8] = &[
 const OID_AA_SIGNING_CERTIFICATE_V2: &[u8] = &[
     0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x10, 0x02, 0x2f,
 ];
+/// ecdsa-with-SHA512 (RFC 5758 section 3.2), which the CMS crate cannot parse, and its
+/// SHA-384 sibling, used only as a stand-in so it can parse the rest of such a token.
+const OID_ECDSA_WITH_SHA512: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x04];
+const OID_ECDSA_WITH_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03];
+/// id-ecPublicKey and the named curves the SHA-512 fallback verifies on (RFC 5480).
+const OID_EC_PUBLIC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+const OID_P256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+const OID_P384: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x22];
 /// keyUsage bits, RFC 5280 section 4.2.1.3.
 const KU_DIGITAL_SIGNATURE: usize = 0;
 const KU_NON_REPUDIATION: usize = 1;
@@ -316,7 +324,12 @@ fn examine(
         detail: format!("the token's time `{validity_at}` is not a representable instant"),
     })?;
 
-    let sd = SignedData::try_from(&asn1_sd).map_err(classify_cms)?;
+    let route = signature_route(&asn1_sd);
+    let sd = match route {
+        SignatureRoute::Cms => SignedData::try_from(&asn1_sd),
+        SignatureRoute::EcdsaSha512 => cms_view_without_signature_verification(&asn1_sd),
+    }
+    .map_err(classify_cms)?;
     // RFC 3161 section 2.4.2: the token carries the authority's signature
     // and no other.
     let mut signers = sd.signers();
@@ -329,9 +342,11 @@ fn examine(
              the authority's",
         ));
     }
-    signer_info
-        .verify_signature_with_signed_data(&sd)
-        .map_err(classify_cms)?;
+    if route == SignatureRoute::Cms {
+        signer_info
+            .verify_signature_with_signed_data(&sd)
+            .map_err(classify_cms)?;
+    }
     signer_info
         .verify_message_digest_with_signed_data(&sd)
         .map_err(classify_cms)?;
@@ -350,6 +365,14 @@ fn examine(
         .find(|c| c.issuer_name() == issuer && c.serial_number_asn1() == serial)
         .ok_or_else(|| invalid("the signer's certificate is not carried in the token"))?
         .clone();
+    if route == SignatureRoute::EcdsaSha512 {
+        // One signer, checked on the view above, so the raw one is it.
+        let raw = asn1_sd
+            .signer_infos
+            .first()
+            .ok_or_else(|| invalid("the token has no signer"))?;
+        verify_ecdsa_sha512(&signer, raw)?;
+    }
     check_signing_certificate(signer_info, &signer)?;
     if !has_exact_critical_timestamping_eku(&signer) {
         return Err(invalid(
@@ -363,6 +386,117 @@ fn examine(
         signer,
         carried: sd.certificates().cloned().collect(),
     })
+}
+
+/// Who judges a token's signature: the CMS crate, for every algorithm it knows, or this crate,
+/// for ecdsa-with-SHA512, which the CMS crate cannot parse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignatureRoute {
+    Cms,
+    EcdsaSha512,
+}
+
+fn signature_route(token: &Asn1SignedData) -> SignatureRoute {
+    if token
+        .signer_infos
+        .iter()
+        .any(|s| s.signature_algorithm.algorithm.as_ref() == OID_ECDSA_WITH_SHA512)
+    {
+        SignatureRoute::EcdsaSha512
+    } else {
+        SignatureRoute::Cms
+    }
+}
+
+/// The CMS crate's reading of a token signed with ecdsa-with-SHA512, for every check but the
+/// signature: each such signer's algorithm is replaced by ecdsa-with-SHA384 so the crate parses
+/// it, and nothing else changes. The stand-in is not evidence. The view's signatures must never
+/// be verified; `verify_ecdsa_sha512` judges the untouched raw signer instead.
+fn cms_view_without_signature_verification(token: &Asn1SignedData) -> Result<SignedData, CmsError> {
+    SignedData::try_from(&with_stand_in_algorithm(token))
+}
+
+/// `token` with each ecdsa-with-SHA512 signer's algorithm replaced by the stand-in.
+fn with_stand_in_algorithm(token: &Asn1SignedData) -> Asn1SignedData {
+    let mut view = token.clone();
+    for signer in view.signer_infos.iter_mut() {
+        if signer.signature_algorithm.algorithm.as_ref() == OID_ECDSA_WITH_SHA512 {
+            signer.signature_algorithm.algorithm = Oid(Bytes::from_static(OID_ECDSA_WITH_SHA384));
+        }
+    }
+    view
+}
+
+/// The signature of a raw signer whose algorithm is ecdsa-with-SHA512, over the exact bytes CMS
+/// signs (the DER `SET OF` of its signed attributes), with the signer certificate's key.
+fn verify_ecdsa_sha512(
+    signer: &CapturedX509Certificate,
+    raw: &Asn1SignerInfo,
+) -> Result<(), WitnessStatus> {
+    let signed = raw
+        .signed_attributes_digested_content()
+        .map_err(|e| invalid(format!("the signed attributes cannot be encoded: {e}")))?
+        .ok_or_else(|| invalid("the signature covers no attributes"))?;
+    let key = &signer.tbs_certificate().subject_public_key_info;
+    if key.algorithm.algorithm.as_ref() != OID_EC_PUBLIC_KEY {
+        return Err(invalid(
+            "an ECDSA signature by a certificate whose key is not an elliptic-curve key",
+        ));
+    }
+    let curve = key
+        .algorithm
+        .parameters
+        .as_ref()
+        .and_then(|p| p.decode_oid().ok())
+        .ok_or_else(|| invalid("the signer's elliptic-curve key names no curve"))?;
+    check_ecdsa_sha512(
+        curve.as_ref(),
+        &signer.public_key_data(),
+        &Sha512::digest(&signed),
+        raw.signature.to_bytes().as_ref(),
+    )
+}
+
+/// ECDSA over a SHA-512 digest on P-256 or P-384, the digest truncated to the curve order's
+/// length as FIPS 186 specifies. Another curve is `unsupported`; a malformed key or signature,
+/// or one that does not verify, is `invalid`.
+fn check_ecdsa_sha512(
+    curve: &[u8],
+    public_key: &[u8],
+    digest: &[u8],
+    der_signature: &[u8],
+) -> Result<(), WitnessStatus> {
+    use ecdsa::signature::hazmat::PrehashVerifier as _;
+    let wrong = |what: &str| invalid(format!("the token's signature does not verify: {what}"));
+    let verified = match curve {
+        OID_P256 => {
+            let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(public_key)
+                .map_err(|_| wrong("malformed P-256 key"))?;
+            let signature = p256::ecdsa::Signature::from_der(der_signature)
+                .map_err(|_| wrong("malformed signature"))?;
+            key.verify_prehash(digest, &signature).is_ok()
+        }
+        OID_P384 => {
+            let key = p384::ecdsa::VerifyingKey::from_sec1_bytes(public_key)
+                .map_err(|_| wrong("malformed P-384 key"))?;
+            let signature = p384::ecdsa::Signature::from_der(der_signature)
+                .map_err(|_| wrong("malformed signature"))?;
+            key.verify_prehash(digest, &signature).is_ok()
+        }
+        other => {
+            return Err(WitnessStatus::Unsupported {
+                detail: format!(
+                    "signature algorithm not implemented here: ecdsa-with-SHA512 on curve {}",
+                    Oid(Bytes::copy_from_slice(other))
+                ),
+            });
+        }
+    };
+    if verified {
+        Ok(())
+    } else {
+        Err(wrong("ecdsa-with-SHA512"))
+    }
 }
 
 /// A CMS failure is `unsupported` when the implementation lacks the
@@ -699,6 +833,161 @@ mod tests {
         assert!(key_usage(&chain[1]).unwrap().bit(KU_KEY_CERT_SIGN));
         assert!(!key_usage(&chain[0]).unwrap().bit(KU_KEY_CERT_SIGN));
         assert!(key_usage(&chain[0]).unwrap().bit(KU_DIGITAL_SIGNATURE));
+    }
+
+    fn raw_token(name: &str) -> Asn1SignedData {
+        let response = fixture(name);
+        let resp =
+            Constructed::decode(response.as_slice(), Mode::Ber, TimeStampResp::take_from).unwrap();
+        resp.time_stamp_token
+            .unwrap()
+            .content
+            .decode(Asn1SignedData::take_from)
+            .unwrap()
+    }
+
+    fn der(token: &Asn1SignedData) -> Vec<u8> {
+        token
+            .encode_ref()
+            .to_captured(Mode::Ber)
+            .into_bytes()
+            .to_vec()
+    }
+
+    /// The stand-in changes one OID and nothing else: restore it and the
+    /// token re-encodes exactly as the original.
+    #[test]
+    fn the_stand_in_view_changes_only_the_signature_algorithm() {
+        let raw = raw_token("genesis_freetsa.tsr");
+        let view = with_stand_in_algorithm(&raw);
+        assert_eq!(
+            view.signer_infos[0].signature_algorithm.algorithm.as_ref(),
+            OID_ECDSA_WITH_SHA384
+        );
+        assert_ne!(der(&view), der(&raw));
+        let mut restored = view.clone();
+        restored.signer_infos[0].signature_algorithm.algorithm =
+            raw.signer_infos[0].signature_algorithm.algorithm.clone();
+        assert_eq!(der(&restored), der(&raw));
+    }
+
+    /// Every token the CMS crate already judges stays on its route.
+    #[test]
+    fn only_ecdsa_with_sha512_leaves_the_cms_route() {
+        for name in ["genesis_digicert.tsr", "chained_digicert.tsr"] {
+            assert_eq!(
+                signature_route(&raw_token(name)),
+                SignatureRoute::Cms,
+                "{name}"
+            );
+        }
+        for name in [
+            "genesis_freetsa.tsr",
+            "ecdsa_sha512_prime256v1.tsr",
+            "ecdsa_sha512_secp521r1.tsr",
+        ] {
+            assert_eq!(
+                signature_route(&raw_token(name)),
+                SignatureRoute::EcdsaSha512,
+                "{name}"
+            );
+        }
+    }
+
+    /// What the SHA-512 check is handed for a token's one signer: the
+    /// signer's curve and key, the digest of the exact signed bytes, and
+    /// the raw signature.
+    fn sha512_inputs(name: &str) -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+        let raw = raw_token(name);
+        let sd = cms_view_without_signature_verification(&raw).unwrap();
+        let (issuer, serial) = sd
+            .signers()
+            .next()
+            .unwrap()
+            .certificate_issuer_and_serial()
+            .unwrap();
+        let signer = sd
+            .certificates()
+            .find(|c| c.issuer_name() == issuer && c.serial_number_asn1() == serial)
+            .unwrap();
+        let key = &signer.tbs_certificate().subject_public_key_info;
+        let curve = key
+            .algorithm
+            .parameters
+            .as_ref()
+            .unwrap()
+            .decode_oid()
+            .unwrap();
+        let signed = raw.signer_infos[0]
+            .signed_attributes_digested_content()
+            .unwrap()
+            .unwrap();
+        (
+            curve.as_ref().to_vec(),
+            signer.public_key_data().to_vec(),
+            Sha512::digest(&signed).to_vec(),
+            raw.signer_infos[0].signature.to_bytes().to_vec(),
+        )
+    }
+
+    #[test]
+    fn the_sha512_check_judges_the_exact_digest_and_signature() {
+        let (curve, key, digest, signature) = sha512_inputs("genesis_freetsa.tsr");
+        assert_eq!(curve, OID_P384);
+        assert_eq!(
+            check_ecdsa_sha512(&curve, &key, &digest, &signature),
+            Ok(())
+        );
+
+        let mut other_digest = digest.clone();
+        other_digest[0] ^= 1;
+        assert!(matches!(
+            check_ecdsa_sha512(&curve, &key, &other_digest, &signature),
+            Err(WitnessStatus::Invalid { .. })
+        ));
+        // A byte inside `r`, still well-formed DER.
+        let mut other_signature = signature.clone();
+        other_signature[6] ^= 1;
+        assert!(matches!(
+            check_ecdsa_sha512(&curve, &key, &digest, &other_signature),
+            Err(WitnessStatus::Invalid { .. })
+        ));
+        assert!(matches!(
+            check_ecdsa_sha512(&curve, &key, &digest, b"not der"),
+            Err(WitnessStatus::Invalid { .. })
+        ));
+    }
+
+    /// One byte of the stored signature changed, found by its own bytes in
+    /// the token, makes the token wrong, not unsupported.
+    #[test]
+    fn a_freetsa_token_with_a_changed_signature_is_invalid() {
+        let proof = fixture("genesis_freetsa.tsr");
+        let signature = raw_token("genesis_freetsa.tsr").signer_infos[0]
+            .signature
+            .to_bytes();
+        let at = proof
+            .windows(signature.len())
+            .position(|w| w == signature.as_ref())
+            .expect("the signature is in the token as stored");
+        let mut changed = proof.clone();
+        changed[at + 6] ^= 1;
+        assert!(matches!(
+            verify_rfc3161(&changed, &fixture("genesis_payload.bin"), None),
+            WitnessStatus::Invalid { .. }
+        ));
+    }
+
+    /// A curve this crate does not implement is `unsupported`, with a
+    /// well-formed key and signature: not a judgement against them.
+    #[test]
+    fn sha512_on_another_curve_is_unsupported_not_wrong() {
+        let (curve, key, digest, signature) = sha512_inputs("ecdsa_sha512_secp521r1.tsr");
+        assert_eq!(curve, [0x2b, 0x81, 0x04, 0x00, 0x23], "P-521");
+        assert!(matches!(
+            check_ecdsa_sha512(&curve, &key, &digest, &signature),
+            Err(WitnessStatus::Unsupported { detail }) if detail.contains("1.3.132.0.35")
+        ));
     }
 
     #[test]

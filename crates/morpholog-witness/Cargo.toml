@@ -13,6 +13,11 @@ x509-certificate = "0.25"
 bcder = "0.7"
 bytes = "1"
 sha1 = "0.11"
+# ECDSA with SHA-512, which the CMS crate's signature backend lacks:
+# verification only, never a secret-key operation.
+p256 = { version = "0.14", default-features = false, features = ["ecdsa"] }
+p384 = { version = "0.14", default-features = false, features = ["ecdsa"] }
+ecdsa = { version = "0.17", default-features = false, features = ["der"] }
 sha2 = { workspace = true }
 chrono = { workspace = true }
 jiff = { workspace = true }
