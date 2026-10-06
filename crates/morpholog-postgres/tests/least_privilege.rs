@@ -804,3 +804,69 @@ async fn a_rebind_never_recreates_a_missing_role() {
     pool.close().await;
     scratch.clean().await;
 }
+
+/// What a dropped schema hands back binds again only in the database it
+/// came from: another database cannot take its roles with it.
+#[tokio::test]
+async fn recorded_roles_bind_again_only_where_they_were_recorded() {
+    let Some(base) = base_url() else { return };
+    let (a, b) = ("morpholog_ci_lp_carry_a", "morpholog_ci_lp_carry_b");
+    let scratch = Scratch::new(
+        &base,
+        &[a, b],
+        &[
+            "morpholog_ci_lp_carry_writer",
+            "morpholog_ci_lp_carry_reader",
+        ],
+    )
+    .await;
+    let (pool_a, pool_b) = (scratch.deployment(a).await, scratch.deployment(b).await);
+    let own = roles("morpholog_ci_lp_carry_");
+    provision_least_privilege(&pool_a, &own).await.unwrap();
+    let recorded = morpholog_postgres::drop_schema(&pool_a)
+        .await
+        .unwrap()
+        .roles
+        .expect("A recorded its roles");
+
+    let refused = morpholog_postgres::rebind_least_privilege(&pool_b, recorded)
+        .await
+        .expect_err("A's roles are not B's to bind")
+        .to_string();
+    assert!(
+        refused.contains("recorded by another database"),
+        "{refused}"
+    );
+    assert_eq!(deployment_roles(&pool_b).await.unwrap(), None);
+    assert_eq!(probes(&pool_b, &own).await, all(Some("42501")));
+    assert!(
+        databases_also_reached(&pool_a, &own)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // From the database it describes, the value binds again. A's schema
+    // went with its record, so give A back the record it had and reset it.
+    initialise_schema(&pool_a).await.unwrap();
+    run(
+        &pool_a,
+        "INSERT INTO morpholog.deployment_roles (writer_role, reader_role)
+         VALUES ('morpholog_ci_lp_carry_writer', 'morpholog_ci_lp_carry_reader')",
+    )
+    .await;
+    let recorded = morpholog_postgres::drop_schema(&pool_a)
+        .await
+        .unwrap()
+        .roles
+        .unwrap();
+    initialise_schema(&pool_a).await.unwrap();
+    morpholog_postgres::rebind_least_privilege(&pool_a, recorded)
+        .await
+        .expect("A binds its own roles again");
+    assert_eq!(probes(&pool_a, &own).await, all(None));
+
+    pool_a.close().await;
+    pool_b.close().await;
+    scratch.clean().await;
+}

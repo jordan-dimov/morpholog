@@ -173,7 +173,10 @@ pub async fn drop_schema(pool: &PgPool) -> Result<DroppedSchema, PgError> {
         .await
         .map_err(classify)?
         .is_some();
-    let roles = recorded_roles(&mut tx).await?.map(RecordedRoles);
+    let database = this_database(&mut tx).await?;
+    let roles = recorded_roles(&mut tx)
+        .await?
+        .map(|roles| RecordedRoles { roles, database });
     sqlx::raw_sql("DROP SCHEMA IF EXISTS morpholog CASCADE")
         .execute(&mut *tx)
         .await
@@ -190,15 +193,30 @@ pub struct DroppedSchema {
 }
 
 /// The least-privilege roles a database recorded when its schema was
-/// dropped. Only [`drop_schema`] makes one, so binding it again restores
-/// what that same database had and never adopts a role chosen afterwards.
+/// dropped, and which database that was. Only [`drop_schema`] makes one,
+/// so binding it again restores what that same database had: never a
+/// role chosen afterwards, and never another database's roles.
 #[derive(Debug)]
-pub struct RecordedRoles(DeploymentRoles);
+pub struct RecordedRoles {
+    roles: DeploymentRoles,
+    database: i64,
+}
 
 impl RecordedRoles {
     pub fn roles(&self) -> &DeploymentRoles {
-        &self.0
+        &self.roles
     }
+}
+
+/// The current database's OID: unlike its name, never shared with a
+/// database dropped and created again.
+async fn this_database(conn: &mut sqlx::PgConnection) -> Result<i64, PgError> {
+    sqlx::query_scalar!(
+        r#"SELECT oid::int8 AS "oid!" FROM pg_database WHERE datname = current_database()"#
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(classify_checked_query)
 }
 
 /// The prefix of the default role names, `morpholog_writer` and
@@ -411,9 +429,19 @@ pub async fn provision_least_privilege(
 /// Provision the floor again for the roles this database recorded before
 /// its schema was dropped, as a reset does: they are bound again rather
 /// than refused as unrecorded. A recorded role that no longer exists is
-/// refused, never recreated.
+/// refused, never recreated, and roles another database recorded are
+/// refused here.
 pub async fn rebind_least_privilege(pool: &PgPool, recorded: RecordedRoles) -> Result<(), PgError> {
-    provision(pool, &recorded.0, true).await
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    if this_database(&mut conn).await? != recorded.database {
+        return Err(PgError::InvalidState(format!(
+            "`{}` and `{}` were recorded by another database; a reset binds again only \
+             the roles of the database it reset",
+            recorded.roles.writer, recorded.roles.reader
+        )));
+    }
+    drop(conn);
+    provision(pool, &recorded.roles, true).await
 }
 
 async fn provision(pool: &PgPool, roles: &DeploymentRoles, rebinding: bool) -> Result<(), PgError> {

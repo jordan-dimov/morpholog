@@ -1828,7 +1828,7 @@ impl core::marker::Unpin for morpholog_postgres::ReceiptVerificationReport
 impl core::marker::UnsafeUnpin for morpholog_postgres::ReceiptVerificationReport
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ReceiptVerificationReport
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ReceiptVerificationReport
-pub struct morpholog_postgres::RecordedRoles(_)
+pub struct morpholog_postgres::RecordedRoles
 impl morpholog_postgres::RecordedRoles
 pub fn morpholog_postgres::RecordedRoles::roles(&self) -> &morpholog_postgres::DeploymentRoles
 impl core::fmt::Debug for morpholog_postgres::RecordedRoles
