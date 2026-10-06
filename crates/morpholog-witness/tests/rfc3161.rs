@@ -121,11 +121,22 @@ fn a_genuine_token_this_implementation_cannot_judge_is_unsupported_never_invalid
     }
 }
 
-/// FreeTSA signs with ECDSA on P-384 over SHA-512. The token's signature is judged; with no
-/// trust material it is genuine and unverified.
+/// FreeTSA signs with ECDSA on P-384 over SHA-512, under an RSA root. Under that root as the
+/// anchor the token is verified; with no trust material it is genuine and unverified.
 #[test]
 fn a_freetsa_token_is_judged() {
     let freetsa = "2026-09-16T10:20:06Z".parse::<jiff::Timestamp>().unwrap();
+    let root = Anchors::from_pem(&fixture("freetsa_ca.pem")).unwrap();
+    assert_eq!(
+        verify_rfc3161(
+            &fixture("genesis_freetsa.tsr"),
+            &fixture("genesis_payload.bin"),
+            Some(&root)
+        ),
+        WitnessStatus::Verified {
+            attested_at: freetsa
+        }
+    );
     assert_eq!(
         verify_rfc3161(
             &fixture("genesis_freetsa.tsr"),

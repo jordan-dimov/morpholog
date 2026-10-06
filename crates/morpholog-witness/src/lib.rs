@@ -698,7 +698,7 @@ fn validate_path(
     let issued_by = |cert: &CapturedX509Certificate, issuer: &CapturedX509Certificate| {
         !same(cert, issuer)
             && issuer.subject_name() == cert.issuer_name()
-            && cert.verify_signed_by_certificate(issuer).is_ok()
+            && signed_by(cert, issuer)
     };
     let mut current = signer.clone();
     for below in 0..MAX_PATH_LENGTH {
@@ -743,6 +743,28 @@ fn validate_path(
         current = issuer.clone();
     }
     Err("the certification path is longer than this verifier follows".to_string())
+}
+
+/// Whether `issuer`'s key signed `cert`, checked with the algorithm `cert` names for its
+/// signature and the issuer's key type. The certificate library's own shortcut pairs that
+/// algorithm with `cert`'s key type instead, so an RSA issuer of an ECDSA certificate (FreeTSA's
+/// chain) could never verify.
+fn signed_by(cert: &CapturedX509Certificate, issuer: &CapturedX509Certificate) -> bool {
+    let (Some(signature_algorithm), Some(key_algorithm)) =
+        (cert.signature_signature_algorithm(), issuer.key_algorithm())
+    else {
+        return false;
+    };
+    let Ok(algorithm) = signature_algorithm.resolve_verification_algorithm(key_algorithm) else {
+        return false;
+    };
+    let raw: &x509_certificate::rfc5280::Certificate = cert.as_ref();
+    let Some(tbs) = raw.tbs_certificate.raw_data.as_ref() else {
+        return false;
+    };
+    issuer
+        .verify_signed_data_with_algorithm(tbs, raw.signature.octet_bytes(), algorithm)
+        .is_ok()
 }
 
 /// Test helpers: rebuild a `Request` from recorded DER, so a recorded response can be
@@ -822,6 +844,26 @@ mod tests {
         // Without the intermediate in hand, the root is unreachable.
         let err = validate_path(leaf, &chain[..1], &root, attested).unwrap_err();
         assert!(err.contains("no certification path"), "{err}");
+    }
+
+    /// A certificate's signature is checked with its issuer's key type: an
+    /// RSA issuer signing an ECDSA certificate verifies, where the library's
+    /// shortcut, keyed on the subject's key, cannot.
+    #[test]
+    fn a_certificate_is_checked_with_its_issuers_key() {
+        let pair =
+            CapturedX509Certificate::from_pem_multiple(fixture("rsa_issuer_ecdsa_subject.pem"))
+                .unwrap();
+        let (issuer, subject) = (&pair[0], &pair[1]);
+        assert!(signed_by(subject, issuer));
+        assert!(subject.verify_signed_by_certificate(issuer).is_err());
+        // Not signed by itself, and not by the other way round.
+        assert!(!signed_by(subject, subject));
+        assert!(!signed_by(issuer, subject));
+        // DigiCert's all-RSA chain still links.
+        let chain = digicert();
+        assert!(signed_by(&chain[0], &chain[1]));
+        assert!(signed_by(&chain[1], &chain[2]));
     }
 
     #[test]
