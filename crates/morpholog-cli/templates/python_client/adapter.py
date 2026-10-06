@@ -8,10 +8,11 @@ and raises ``MorphologError``. For a proposal, only the binary's own
 statement - a decided envelope or a coded error object - settles the
 outcome; anything else raises ``MorphologOutcomeUnknown``.
 
-This module never imports the generated ``models``; ``submit`` is
-duck-typed on the two class attributes every generated request model
-carries (``TRANSFORMATION`` and ``to_args_named``), so the static and
-generated halves of the package meet only at that seam.
+This module never imports the generated ``models``; ``submit`` and
+``submit_all`` take any ``Request``, the protocol naming what every
+generated request model carries (the ``TRANSFORMATION`` class attribute
+and the ``to_args_named`` method), so the static and generated halves
+of the package meet only at that seam.
 """
 
 from __future__ import annotations
@@ -22,12 +23,21 @@ import os
 import subprocess
 import threading
 import tempfile
-from typing import IO, Callable, TypeVar
+from typing import IO, Callable, ClassVar, Protocol, Sequence, TypeVar, cast
 
 from . import envelopes
 
 _Verdict = TypeVar("_Verdict")
 _T = TypeVar("_T")
+
+
+class Request(Protocol):
+    """A generated request model: its class names the transformation,
+    its fields encode themselves."""
+
+    TRANSFORMATION: ClassVar[str]
+
+    def to_args_named(self) -> dict[str, object]: ...
 
 
 # Flags whose VALUE is a credential. It must never appear in a raised
@@ -48,6 +58,18 @@ def _redact_argv(args: list[str]) -> str:
             parts.append(arg)
             redact_next = arg in _CREDENTIAL_FLAGS
     return " ".join(parts)
+
+
+def _act_rows(acts: Sequence[tuple[Request, str]]) -> list[dict[str, object]]:
+    """The batch rows ``transact`` takes, one per (request, actor)."""
+    return [
+        {
+            "transformation": request.TRANSFORMATION,
+            "actor": actor,
+            "args_named": request.to_args_named(),
+        }
+        for request, actor in acts
+    ]
 
 
 def _text(output: str | bytes | None) -> str:
@@ -479,14 +501,14 @@ class Morpholog:
         return self._commit(args, None, self.timeout, envelopes.parse_run_outcome)
 
     def submit(
-        self, request: object, actor: str, explain_on_reject: bool = False
+        self, request: Request, actor: str, explain_on_reject: bool = False
     ) -> envelopes.Committed | envelopes.Rejected:
         """Commit a generated request model: its class names the
         transformation, its fields encode themselves."""
         return self.propose(
-            request.TRANSFORMATION,  # type: ignore[attr-defined]
+            request.TRANSFORMATION,
             actor,
-            request.to_args_named(),  # type: ignore[attr-defined]
+            request.to_args_named(),
             explain_on_reject=explain_on_reject,
         )
 
@@ -606,6 +628,13 @@ class Morpholog:
         args = ["transact", self.file, "--acts", "-", "--database-url", self.database_url]
         return self._commit(args, ndjson, timeout, envelopes.parse_atomic_outcome)
 
+    def submit_all(
+        self, acts: Sequence[tuple[Request, str]], timeout: float | None = None
+    ) -> envelopes.AtomicCommitted | envelopes.AtomicRejected:
+        """``transact`` over generated request models, each with the
+        actor who proposes it: every act commits or none does."""
+        return self.transact(_act_rows(acts), timeout)
+
     def _commit(
         self,
         args: list[str],
@@ -678,7 +707,7 @@ class Morpholog:
         transition id, or an RFC 3339 timestamp resolved to the last
         transition committed at or before it.
         """
-        return self._claims(predicates, named=False, as_of=as_of)
+        return self._claims(predicates, envelopes.ClaimInstance.from_json, named=False, as_of=as_of)
 
     def claims_named(
         self,
@@ -700,24 +729,26 @@ class Morpholog:
         an empty list. Filtering runs in the database except under
         `as_of`, where the state is replayed first.
         """
-        return self._claims(predicates, named=True, as_of=as_of, where=where)
+        return self._claims(
+            predicates, envelopes.NamedClaim.from_json, named=True, as_of=as_of, where=where
+        )
 
     def _claims(
         self,
         predicates: tuple[str, ...],
+        parse: Callable[[object], _T],
         named: bool,
         as_of: str | None,
         where: dict[str, str] | None = None,
-    ) -> list[envelopes.ClaimInstance | envelopes.NamedClaim]:
+    ) -> list[_T]:
         argv = ["inspect", "claims"]
         argv += self._repeat("--predicate", list(predicates))
         argv += self._opt("--as-of", as_of)
         argv += self._repeat("--where", [f"{k}={v}" for k, v in (where or {}).items()])
-        cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
         if named:
             argv += ["--named", self.file]
         payload = self._json(*argv, "--database-url", self.database_url)
-        return [cls.from_json(c) for c in payload]
+        return [parse(c) for c in cast("list[object]", payload)]
 
     def rejections(self, *, limit: int = 100) -> list[envelopes.RejectionRow]:
         """The most recent refusals, newest first, with the values the refused
@@ -741,7 +772,7 @@ class Morpholog:
             "--database-url",
             self.database_url,
         )
-        return [envelopes.RejectionRow.from_json(r) for r in payload]
+        return [envelopes.RejectionRow.from_json(r) for r in cast("list[object]", payload)]
 
     def derived(self, name: str, *, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
         """Compute a read-side view (a derived claim) directly from the
@@ -754,7 +785,7 @@ class Morpholog:
         the last transition committed at or before it. Diffing the same
         view at two coordinates is the correction blast-radius read.
         """
-        return self._derived(name, named=False, as_of=as_of)
+        return self._derived(name, envelopes.ClaimInstance.from_json, named=False, as_of=as_of)
 
     def derived_named(
         self, name: str, *, as_of: str | None = None, where: dict[str, str] | None = None
@@ -768,23 +799,25 @@ class Morpholog:
         the work - unlike the claims read, which pushes the comparison
         into the database.
         """
-        return self._derived(name, named=True, as_of=as_of, where=where)
+        return self._derived(
+            name, envelopes.NamedClaim.from_json, named=True, as_of=as_of, where=where
+        )
 
     def _derived(
         self,
         name: str,
+        parse: Callable[[object], _T],
         named: bool,
         as_of: str | None,
         where: dict[str, str] | None = None,
-    ) -> list[envelopes.ClaimInstance | envelopes.NamedClaim]:
+    ) -> list[_T]:
         argv = ["inspect", "derived", self.file, name]
-        cls = envelopes.NamedClaim if named else envelopes.ClaimInstance
         if named:
             argv.append("--named")
         argv += self._opt("--as-of", as_of)
         argv += self._repeat("--where", [f"{k}={v}" for k, v in (where or {}).items()])
         payload = self._json(*argv, "--database-url", self.database_url)
-        return [cls.from_json(c) for c in payload]
+        return [parse(c) for c in cast("list[object]", payload)]
 
     def audit(
         self, after: str | None = None, *, writer_roles: list[str] | None = None

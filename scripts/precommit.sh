@@ -181,4 +181,8 @@ else
     fi
 fi
 
+# The client seam's types, under the mypy version the script pins.
+step 'generated Python client types (mypy)'
+./scripts/python_types.sh
+
 printf '\n=== All checks passed. ===\n'

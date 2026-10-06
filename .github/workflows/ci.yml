@@ -293,6 +293,11 @@ jobs:
             --out examples/etrm_embedder
           git diff --exit-code examples/etrm_embedder/morpholog_client
 
+      - name: Client seam types (pinned mypy, as scripts/python_types.sh names it)
+        run: |
+          python -m pip install "mypy==$(sed -n 's/^MYPY_VERSION=//p' scripts/python_types.sh)"
+          ./scripts/python_types.sh
+
       - name: Template unit tests (same goldens as the Rust contract test)
         run: python -m unittest discover crates/morpholog-cli/templates/python_client/tests
 
