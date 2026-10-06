@@ -360,8 +360,9 @@ fn examine(
                          verifier does not resolve"
                     .to_string(),
             })?;
-    let signer = sd
-        .certificates()
+    let carried = carried_certificates(&token.content)?;
+    let signer = carried
+        .iter()
         .find(|c| c.issuer_name() == issuer && c.serial_number_asn1() == serial)
         .ok_or_else(|| invalid("the signer's certificate is not carried in the token"))?
         .clone();
@@ -384,8 +385,45 @@ fn examine(
         attested_at,
         validity_at,
         signer,
-        carried: sd.certificates().cloned().collect(),
+        carried,
     })
+}
+
+/// The certificates a token carries, each kept as the exact bytes the token holds and parsed
+/// from them. The CMS crate re-encodes carried certificates, and its encoding is not always the
+/// one signed (an ECDSA signature algorithm gains a NULL parameter), so a hash or signature
+/// over its copy judges bytes nobody signed. Entries that are not X.509 certificates are
+/// skipped, as the CMS crate skips them.
+fn carried_certificates(
+    signed_data: &bcder::Captured,
+) -> Result<Vec<CapturedX509Certificate>, WitnessStatus> {
+    let elements = signed_data
+        .clone()
+        .decode(|cons| {
+            cons.take_sequence(|sd| {
+                // version, digestAlgorithms, encapContentInfo
+                for _ in 0..3 {
+                    sd.capture_one()?;
+                }
+                let mut elements = Vec::new();
+                sd.take_opt_constructed_if(bcder::Tag::CTX_0, |set| {
+                    loop {
+                        let element = set.capture(|c| c.skip_one().map(|_| ()))?;
+                        if element.as_slice().is_empty() {
+                            return Ok(());
+                        }
+                        elements.push(element);
+                    }
+                })?;
+                sd.skip_all()?;
+                Ok(elements)
+            })
+        })
+        .map_err(|e| invalid(format!("malformed SignedData certificates: {e}")))?;
+    Ok(elements
+        .into_iter()
+        .filter_map(|element| CapturedX509Certificate::from_ber(element.as_slice().to_vec()).ok())
+        .collect())
 }
 
 /// Who judges a token's signature: the CMS crate, for every algorithm it knows, or this crate,
@@ -1018,6 +1056,49 @@ mod tests {
             verify_rfc3161(&changed, &fixture("genesis_payload.bin"), None),
             WitnessStatus::Invalid { .. }
         ));
+    }
+
+    /// The signature names its certificate by a hash of the bytes the token
+    /// carries. The CMS crate's re-encoded copy of an ECDSA-signed
+    /// certificate is other bytes, so the name matches only the carried one.
+    #[test]
+    fn the_signature_names_the_carried_bytes_not_a_reencoding() {
+        let raw = raw_token("ecdsa_sha512_prime256v1.tsr");
+        let response = fixture("ecdsa_sha512_prime256v1.tsr");
+        let token = Constructed::decode(response.as_slice(), Mode::Ber, TimeStampResp::take_from)
+            .unwrap()
+            .time_stamp_token
+            .unwrap();
+        let sd = cms_view_without_signature_verification(&raw).unwrap();
+        let signer_info = sd.signers().next().unwrap();
+        let (issuer, serial) = signer_info.certificate_issuer_and_serial().unwrap();
+        let is_signer = |c: &&CapturedX509Certificate| {
+            c.issuer_name() == issuer && c.serial_number_asn1() == serial
+        };
+        let carried = carried_certificates(&token.content).unwrap();
+        let carried_signer = carried.iter().find(is_signer).unwrap();
+        let reencoded_signer = sd.certificates().find(is_signer).unwrap();
+        assert_ne!(
+            carried_signer.constructed_data(),
+            reencoded_signer.constructed_data(),
+            "the CMS crate re-encodes this certificate"
+        );
+        assert_eq!(
+            check_signing_certificate(signer_info, carried_signer),
+            Ok(())
+        );
+        assert!(matches!(
+            check_signing_certificate(signer_info, reencoded_signer),
+            Err(WitnessStatus::Invalid { detail }) if detail.contains("ESSCertID")
+        ));
+        // The carried bytes are the token's own: each is a slice of it.
+        for certificate in &carried {
+            assert!(
+                response
+                    .windows(certificate.constructed_data().len())
+                    .any(|w| w == certificate.constructed_data())
+            );
+        }
     }
 
     /// A curve this crate does not implement is `unsupported`, with a
