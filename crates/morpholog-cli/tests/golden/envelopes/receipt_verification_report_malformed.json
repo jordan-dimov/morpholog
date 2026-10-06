@@ -1,10 +1,12 @@
 {
+  "passes": false,
   "receipt": {
     "status": "malformed",
     "detail": "the answer is not in canonical order, or repeats a row"
   },
   "verdict_kind": "prefix",
   "evidence": {
+    "passes": false,
     "verdict": {
       "status": "malformed_pack",
       "detail": "the pack could not be read"

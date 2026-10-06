@@ -1100,6 +1100,72 @@ async fn evidence_selective_export_then_verify_offline() {
     );
 }
 
+/// Every verification report states whether that invocation passed, and
+/// the exit code is the same answer: intact and failing cases of both
+/// `audit verify` and `audit verify-pack`.
+#[tokio::test(flavor = "current_thread")]
+async fn every_verification_report_says_what_its_exit_code_says() {
+    let says = |status: std::process::ExitStatus, stdout: &str, expected: bool| {
+        let report: Value = serde_json::from_str(stdout)
+            .unwrap_or_else(|e| panic!("a report on stdout ({e}): {stdout:?}"));
+        assert_eq!(report["passes"], expected, "{stdout}");
+        assert_eq!(status.success(), expected, "{stdout}");
+    };
+    reset_db().await;
+    post_balanced_entry("p1", 100);
+    let (status, _, stderr) = run_cli(&["audit", "checkpoint"]);
+    assert!(status.success(), "{stderr}");
+
+    let (status, stdout, _) = run_cli(&["audit", "verify"]);
+    says(status, &stdout, true);
+    let (status, pack, stderr) = run_cli(&["audit", "export"]);
+    assert!(status.success(), "{stderr}");
+    let file = temp_file(pack.as_bytes());
+    let path = file.path().to_str().unwrap();
+    let (status, stdout, _) = run_cli_no_db(&["audit", "verify-pack", path]);
+    says(status, &stdout, true);
+
+    // A tampered row fails the pack.
+    let mut lines = pack_lines(&pack);
+    let row = first_row(&lines);
+    let tampered_row = lines[row].to_string().replace("\"100\"", "\"999\"");
+    assert_ne!(
+        tampered_row,
+        lines[row].to_string(),
+        "the amount is in the row"
+    );
+    lines[row] = serde_json::from_str(&tampered_row).unwrap();
+    let tampered = temp_file(pack_from_lines(&lines).as_bytes());
+    let (status, stdout, _) =
+        run_cli_no_db(&["audit", "verify-pack", tampered.path().to_str().unwrap()]);
+    says(status, &stdout, false);
+
+    // A witness that vouches for nothing fails an intact pack, when judged.
+    let mut lines = pack_lines(&pack);
+    lines[1]["witnesses"] = serde_json::json!([{
+        "scheme": "rfc3161",
+        "proof": "not base64!",
+        "submitted_to": "https://tsa.example",
+    }]);
+    let witnessed = temp_file(pack_from_lines(&lines).as_bytes());
+    let witnessed = witnessed.path().to_str().unwrap();
+    let (status, stdout, _) = run_cli_no_db(&["audit", "verify-pack", witnessed]);
+    says(status, &stdout, true);
+    let (status, stdout, _) = run_cli_no_db(&["audit", "verify-pack", witnessed, "--witnesses"]);
+    says(status, &stdout, false);
+    assert_eq!(pack_verdict(&stdout)["status"], "intact", "{stdout}");
+
+    // Claims edited out of band fail the live verify.
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    sqlx::query("DELETE FROM morpholog.claims")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, stdout, _) = run_cli(&["audit", "verify"]);
+    says(status, &stdout, false);
+    reset_db().await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn evidence_verify_names_an_unknown_future_pack_version() {
     // A pack newer than this binary must be named as too new, never

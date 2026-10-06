@@ -58,10 +58,32 @@ pub struct WitnessesReport {
     pub earliest_attested_at: Option<Timestamp>,
 }
 
+/// A witness report holding one witness of `standing`, for tests of the
+/// reports that carry one.
+#[cfg(test)]
+pub(crate) fn witnesses_judged(standing: WitnessStanding) -> WitnessesReport {
+    WitnessesReport {
+        checkpoints: vec![CheckpointWitnesses {
+            tree_size: 1,
+            witnesses: vec![WitnessVerdict {
+                scheme: crate::checkpoints::WitnessScheme::Rfc3161,
+                submitted_to: "https://tsa.example".to_string(),
+                status: standing,
+                attested_at: None,
+                detail: None,
+            }],
+        }],
+        earliest_attested_at: None,
+    }
+}
+
 impl WitnessesReport {
-    /// Whether any witness was judged and found wrong.
-    pub fn any_invalid(&self) -> bool {
-        self.checkpoints
+    /// Whether no witness was judged and found wrong. Only `invalid`
+    /// fails: `verified`, `untrusted`, `unverified` and `unsupported` say
+    /// what could and could not be established.
+    pub fn passes(&self) -> bool {
+        !self
+            .checkpoints
             .iter()
             .flat_map(|c| &c.witnesses)
             .any(|w| w.status == WitnessStanding::Invalid)
@@ -164,15 +186,44 @@ fn judge(
 
 /// `audit verify-pack`'s report: the pack's own verdict, the role
 /// rebindings among its rows, and, only on request, what its checkpoints'
-/// witnesses prove.
-#[derive(Debug, Clone, Serialize)]
+/// witnesses prove. Serialised with [`Self::passes`] first.
+#[derive(Debug, Clone)]
 pub struct PackVerificationReport {
     pub verdict: PackVerdict,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub witnesses: Option<WitnessesReport>,
     /// Login-role names seen under a new OID among the pack's rows.
     /// Reported only when the verdict is intact, and never a failure.
     pub role_rebindings: RoleRebindings,
+}
+
+impl PackVerificationReport {
+    /// Whether this verification passed under the checks it was asked
+    /// for: an intact verdict, and no witness judged invalid. Witnesses not
+    /// asked for were not judged and cannot fail it. The exit code and the
+    /// serialised `passes` are both this.
+    pub fn passes(&self) -> bool {
+        self.verdict.is_intact() && self.witnesses.as_ref().is_none_or(WitnessesReport::passes)
+    }
+}
+
+impl Serialize for PackVerificationReport {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            passes: bool,
+            verdict: &'a PackVerdict,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            witnesses: Option<&'a WitnessesReport>,
+            role_rebindings: &'a RoleRebindings,
+        }
+        Wire {
+            passes: self.passes(),
+            verdict: &self.verdict,
+            witnesses: self.witnesses.as_ref(),
+            role_rebindings: &self.role_rebindings,
+        }
+        .serialize(serializer)
+    }
 }
 
 /// One of the three pack verdicts, serialised as itself.
@@ -198,6 +249,44 @@ impl PackVerdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Passing is an intact verdict and no witness judged invalid;
+    /// witnesses not asked for were not judged and cannot fail it.
+    #[test]
+    fn a_pack_report_passes_when_intact_and_no_witness_is_invalid() {
+        let report = |verdict: TreeVerification, witnesses: Option<WitnessStanding>| {
+            PackVerificationReport {
+                verdict: PackVerdict::Prefix(verdict),
+                witnesses: witnesses.map(witnesses_judged),
+                role_rebindings: RoleRebindings::NotEvaluated,
+            }
+        };
+        let intact = || TreeVerification::Intact {
+            checkpoints: 1,
+            tree_size: 1,
+        };
+        assert!(report(intact(), None).passes());
+        for standing in [
+            WitnessStanding::Verified,
+            WitnessStanding::Untrusted,
+            WitnessStanding::Unverified,
+            WitnessStanding::Unsupported,
+        ] {
+            assert!(report(intact(), Some(standing)).passes(), "{standing:?}");
+        }
+        assert!(!report(intact(), Some(WitnessStanding::Invalid)).passes());
+        let broken = TreeVerification::ChainBroken {
+            detail: "a prev link is broken".to_string(),
+        };
+        assert!(!report(broken, Some(WitnessStanding::Verified)).passes());
+        // The serialised answer is the same predicate, first.
+        let wire = serde_json::to_value(report(intact(), Some(WitnessStanding::Invalid))).unwrap();
+        assert_eq!(wire["passes"], false);
+        assert_eq!(
+            serde_json::to_string(&report(intact(), None)).unwrap()[..15].to_string(),
+            r#"{"passes":true,"#
+        );
+    }
     use crate::checkpoints::Witness;
     use base64::Engine as _;
 
@@ -244,7 +333,7 @@ mod tests {
         assert_eq!(cp.witnesses[0].status, WitnessStanding::Verified);
         assert!(cp.witnesses[0].attested_at.is_some());
         assert_eq!(report.earliest_attested_at, cp.witnesses[0].attested_at);
-        assert!(!report.any_invalid());
+        assert!(report.passes());
 
         let report = witnesses_report(&chain, Some(&anchors("unrelated.pem"))).unwrap();
         assert_eq!(
@@ -275,7 +364,7 @@ mod tests {
         let verdict = &report.checkpoints[0].witnesses[0];
         assert_eq!(verdict.status, WitnessStanding::Invalid);
         assert_eq!(verdict.attested_at, None);
-        assert!(report.any_invalid());
+        assert!(!report.passes());
 
         let mut garbled = witnessed_head();
         garbled.witnesses[0].proof = "not base64!".into();

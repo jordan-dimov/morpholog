@@ -3,8 +3,7 @@
 
 use anyhow::Context;
 use morpholog_postgres::{
-    SignaturePolicy, TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification,
-    WitnessAnchors, WitnessesReport, parse_public_key, render_public_key,
+    SignaturePolicy, VerifyReport, WitnessAnchors, parse_public_key, render_public_key,
     verify_audit_tree_with_chain, verify_replay, verify_views, witnesses_report,
 };
 
@@ -58,18 +57,7 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
     };
     print_json(&report)?;
 
-    let diverged = matches!(report.replay, VerifyOutcome::Divergent { .. });
-    let tampered = !matches!(report.tree, TreeVerification::Intact { .. });
-    // NotSealed is visible in the JSON but not a failure: an unsealed
-    // surface has nothing to contradict.
-    let surface_tampered = matches!(report.views, Some(ViewsVerification::Tampered { .. }));
-    // Only an `invalid` witness fails; the other standings say what could
-    // and could not be established.
-    let witness_invalid = report
-        .witnesses
-        .as_ref()
-        .is_some_and(WitnessesReport::any_invalid);
-    if diverged || tampered || surface_tampered || witness_invalid {
+    if !report.passes() {
         return Err(AlreadyReported.into());
     }
     Ok(())

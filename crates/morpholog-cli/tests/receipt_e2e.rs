@@ -140,8 +140,13 @@ fn verify(program: &Path, receipt: &Path, pack: &Path, extra: &[&str]) -> (bool,
     ];
     args.extend_from_slice(extra);
     let (status, stdout, stderr) = run(&args, false);
-    let report = serde_json::from_str(&stdout)
+    let report: Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("a report on stdout ({e}): {stdout:?}; {stderr}"));
+    assert_eq!(
+        report["passes"],
+        status.success(),
+        "the report says what the exit code says: {report}"
+    );
     (status.success(), report)
 }
 

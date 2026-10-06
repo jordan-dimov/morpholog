@@ -1493,8 +1493,12 @@
     "verify_report": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["replay", "tree", "role_rebindings"],
+      "required": ["passes", "replay", "tree", "role_rebindings"],
       "properties": {
+        "passes": {
+          "description": "Whether this verification passed under the checks it was asked for, decided as the exit code is: replay consistent, tree intact, a checked view surface not tampered (not_sealed passes), and no witness judged invalid. Witnesses not judged cannot fail it.",
+          "type": "boolean"
+        },
         "replay": { "$ref": "#/$defs/verify_outcome" },
         "tree": { "$ref": "#/$defs/tree_verification" },
         "views": { "$ref": "#/$defs/views_verification" },
@@ -1535,8 +1539,12 @@
     "pack_verification_report": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["verdict", "role_rebindings"],
+      "required": ["passes", "verdict", "role_rebindings"],
       "properties": {
+        "passes": {
+          "description": "Whether this verification passed under the checks it was asked for, decided as the exit code is: an intact verdict and no witness judged invalid. Only an invalid witness fails; verified, untrusted, unverified and unsupported do not, and witnesses not asked for were not judged.",
+          "type": "boolean"
+        },
         "verdict": {
           "oneOf": [
             { "$ref": "#/$defs/tree_verification" },
@@ -1581,8 +1589,12 @@
       "description": "Printed by `audit verify-receipt`, one layer per field. `evidence` is the pack's own report, exactly as `audit verify-pack` prints it, and `verdict_kind` says which kind of verdict it carries. Evaluation runs only when the evidence is an intact complete prefix and the checkpoint and programme match; a witness judged invalid fails the receipt without stopping it.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["receipt", "verdict_kind", "evidence", "completeness", "checkpoint", "program", "evaluation"],
+      "required": ["passes", "receipt", "verdict_kind", "evidence", "completeness", "checkpoint", "program", "evaluation"],
       "properties": {
+        "passes": {
+          "description": "Whether this verification passed under the checks it was asked for, decided as the exit code is: a well-formed receipt, passing complete evidence, matching checkpoint and programme, and a reproduced answer. An invalid witness fails it even when evaluation reproduced.",
+          "type": "boolean"
+        },
         "receipt": {
           "oneOf": [
             { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "well_formed" } } },

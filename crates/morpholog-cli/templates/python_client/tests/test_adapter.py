@@ -908,6 +908,7 @@ class AdapterDiscrimination(unittest.TestCase):
             ]:
                 os.environ["STUB_STDOUT"] = json.dumps(
                     {
+                        "passes": False,
                         "verdict": json.loads((GOLDEN_DIR / verdict_golden).read_text()),
                         "role_rebindings": {"status": "not_evaluated"},
                     }

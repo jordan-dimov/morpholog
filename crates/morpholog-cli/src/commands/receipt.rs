@@ -7,7 +7,7 @@ use morpholog_core::format::canonical_hash;
 use morpholog_postgres::{
     CheckpointMatch, Completeness, Evaluation, PackVerdict, ProgramMatch, ReceiptForm,
     ReceiptQuery, ReceiptVerificationReport, SelectiveVerification, TreeVerification, VerdictKind,
-    WindowVerification, WitnessesReport, issue_receipt, parse_receipt, reproduce,
+    WindowVerification, issue_receipt, parse_receipt, reproduce,
 };
 
 use crate::commands::evidence::{
@@ -107,24 +107,8 @@ pub(crate) fn verify(args: &ReceiptVerifyArgs) -> anyhow::Result<()> {
         evaluation,
     };
     print_json(&report)?;
-    if !passed(&report) {
+    if !report.passes() {
         return Err(AlreadyReported.into());
     }
     Ok(())
-}
-
-/// Whether every layer holds and no witness was judged invalid. Decided
-/// here, beside the trust the evidence was verified under.
-fn passed(report: &ReceiptVerificationReport) -> bool {
-    report.receipt == ReceiptForm::WellFormed
-        && report.evidence.verdict.is_intact()
-        && !report
-            .evidence
-            .witnesses
-            .as_ref()
-            .is_some_and(WitnessesReport::any_invalid)
-        && report.completeness == Completeness::Complete
-        && report.checkpoint == CheckpointMatch::Matches
-        && report.program == ProgramMatch::Matches
-        && report.evaluation == Evaluation::Reproduced
 }
