@@ -293,7 +293,19 @@ CREATE TABLE audit (
         OR (semantics_version BETWEEN 1 AND 4294967295
             AND model_hash IS NOT NULL)
     ),
-    CONSTRAINT audit_semantics_version_required CHECK (semantics_version IS NOT NULL)
+    CONSTRAINT audit_semantics_version_required CHECK (semantics_version IS NOT NULL),
+    -- The subjects the act drew from `new Subject()`, in draw order: the
+    -- one input to the decision nothing else records. Empty when it drew
+    -- none. Part of the leaf, chosen by presence, and only on a row that
+    -- names its semantics. Nullable for the same reason: never backfill.
+    drawn_subjects       jsonb,
+    CONSTRAINT audit_drawn_subjects_shape CHECK (
+        drawn_subjects IS NULL
+        OR (jsonb_typeof(drawn_subjects) = 'array'
+            AND NOT jsonb_path_exists(drawn_subjects, 'strict $[*] ? (@.type() != "string")')
+            AND semantics_version IS NOT NULL)
+    ),
+    CONSTRAINT audit_drawn_subjects_required CHECK (drawn_subjects IS NOT NULL)
 );
 
 -- Keyset replay order: every audit read (the blessed tail, verify,
@@ -609,4 +621,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (18, 'date_ordinal'),
     (19, 'requirement_position'),
     (20, 'audit_model_hash'),
-    (21, 'audit_semantics_version');
+    (21, 'audit_semantics_version'),
+    (22, 'audit_drawn_subjects');

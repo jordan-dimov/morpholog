@@ -72,6 +72,17 @@ pub struct AuditRow {
         deserialize_with = "present"
     )]
     pub semantics_version: Option<u32>,
+    /// The subjects the act drew from `new Subject()`, in draw order:
+    /// with the rest of the row and the history before it, every input
+    /// the decision read. Empty when it drew none; absent on older rows,
+    /// where presence on a row that names its semantics selects the leaf
+    /// encoding that commits to it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub drawn_subjects: Option<Vec<Subject>>,
 }
 
 /// How far up the leaf-format ladder a row reaches. A pack is versioned
@@ -86,6 +97,8 @@ pub(crate) enum RowRung {
     Model,
     /// Names the programme and the semantics that decided it.
     Semantics,
+    /// Also records the subjects its act drew.
+    Subjects,
 }
 
 /// A leaf-rung field that is optional by omission only: absent is
@@ -103,7 +116,9 @@ where
 impl AuditRow {
     /// How far up the leaf-format ladder this row reaches.
     pub(crate) fn rung(&self) -> RowRung {
-        if self.semantics_version.is_some() {
+        if self.drawn_subjects.is_some() {
+            RowRung::Subjects
+        } else if self.semantics_version.is_some() {
             RowRung::Semantics
         } else if self.model_hash.is_some() {
             RowRung::Model
@@ -114,12 +129,18 @@ impl AuditRow {
 
     /// Check the row is a shape the runtime writes: nothing extra, an
     /// attestation, an attestation plus one name per argument, those plus
-    /// the model hash, or those plus the semantics version. Each rung needs
-    /// the one below it.
+    /// the model hash, those plus the semantics version, or those plus the
+    /// drawn subjects. Each rung needs the one below it.
     ///
     /// Checked at the database boundary and before hashing, because packs
     /// carry rows as hostile input.
     pub fn validate_shape(&self) -> Result<(), String> {
+        if self.drawn_subjects.is_some() && self.semantics_version.is_none() {
+            return Err(format!(
+                "audit row {} records drawn subjects without a semantics version",
+                self.transition_id
+            ));
+        }
         if let Some(version) = self.semantics_version {
             if self.model_hash.is_none() {
                 return Err(format!(
@@ -190,13 +211,15 @@ pub(crate) struct AuditRowRaw {
     model_hash: Option<String>,
     // Nullable for the same reason; bigint holds the whole u32 range.
     semantics_version: Option<i64>,
+    // Nullable for the same reason: historical rows recorded no draws.
+    drawn_subjects: Option<serde_json::Value>,
 }
 // The canonical column order, shared by `AuditRowRaw` and every listing
 // SELECT (each `query_as!` must spell it out literally):
 //   transition_id, transformation_name, arguments, actor,
 //   invariant_epoch, invariants_checked,
 //   asserted_claims, retracted_claims, emitted_intents, committed_at,
-//   attestation, parameters, model_hash, semantics_version
+//   attestation, parameters, model_hash, semantics_version, drawn_subjects
 pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
     let decoded = AuditRow {
         transition_id: row.transition_id,
@@ -234,6 +257,10 @@ pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
                     PgError::InvalidState(format!("audit semantics version {v} is not a u32"))
                 })
             })
+            .transpose()?,
+        drawn_subjects: row
+            .drawn_subjects
+            .map(serde_json::from_value::<Vec<Subject>>)
             .transpose()?,
     };
     decoded.validate_shape().map_err(PgError::InvalidState)?;
@@ -273,7 +300,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash, semantics_version
+                attestation, parameters, model_hash, semantics_version, drawn_subjects
                  FROM morpholog.audit
                  ORDER BY committed_at, transition_id
                  LIMIT $1",
@@ -288,7 +315,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash, semantics_version
+                attestation, parameters, model_hash, semantics_version, drawn_subjects
                  FROM morpholog.audit
                  WHERE (committed_at, transition_id) > ($2, $3)
                  ORDER BY committed_at, transition_id
@@ -306,7 +333,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash, semantics_version
+                attestation, parameters, model_hash, semantics_version, drawn_subjects
                  FROM morpholog.audit
                  WHERE committed_at < $2
                  ORDER BY committed_at, transition_id
@@ -323,7 +350,7 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash, semantics_version
+                attestation, parameters, model_hash, semantics_version, drawn_subjects
                  FROM morpholog.audit
                  WHERE (committed_at, transition_id) > ($2, $3)
                    AND committed_at < $4

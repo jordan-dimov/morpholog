@@ -2387,7 +2387,8 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> R
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents,
-            committed_at, attestation, parameters, model_hash, semantics_version
+            committed_at, attestation, parameters, model_hash, semantics_version,
+            drawn_subjects
         )
         SELECT
             gen_random_uuid(),
@@ -2403,7 +2404,8 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> R
             '{\"mode\":\"gateway\",\"authenticated_by\":\"bench-fixture\"}'::jsonb,
             '[]'::jsonb,
             'sha256:' || repeat('0', 64),
-            1
+            1,
+            '[]'::jsonb
         FROM (
             SELECT
                 i,

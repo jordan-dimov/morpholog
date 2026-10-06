@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT coalesce(max(CASE\n                   WHEN prefix.drawn_subjects IS NOT NULL THEN 3\n                   WHEN prefix.semantics_version IS NOT NULL THEN 2\n                   WHEN prefix.model_hash IS NOT NULL THEN 1\n                   ELSE 0\n               END), 0) AS \"rung!\"\n           FROM (\n               SELECT model_hash, semantics_version, drawn_subjects FROM morpholog.audit\n               ORDER BY committed_at, transition_id\n               LIMIT $1\n           ) AS prefix",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rung!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0f42b37c0f04ead6932bd5bdd15d032d67d23088558d79e2da2158d1647f97f8"
+}

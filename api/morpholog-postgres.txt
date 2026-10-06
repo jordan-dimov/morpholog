@@ -1136,6 +1136,7 @@ pub morpholog_postgres::AuditRow::arguments: alloc::vec::Vec<morpholog_core::sta
 pub morpholog_postgres::AuditRow::asserted_claims: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
 pub morpholog_postgres::AuditRow::attestation: core::option::Option<morpholog_postgres::AuditAttestation>
 pub morpholog_postgres::AuditRow::committed_at: jiff::timestamp::Timestamp
+pub morpholog_postgres::AuditRow::drawn_subjects: core::option::Option<alloc::vec::Vec<morpholog_core::ir::Subject>>
 pub morpholog_postgres::AuditRow::emitted_intents: alloc::vec::Vec<morpholog_core::state::IntentInstance>
 pub morpholog_postgres::AuditRow::invariant_epoch: i32
 pub morpholog_postgres::AuditRow::invariants_checked: alloc::vec::Vec<morpholog_postgres::AuditedInvariantCheck>

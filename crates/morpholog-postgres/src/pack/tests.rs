@@ -1037,7 +1037,75 @@ fn a_semantics_naming_document_is_version_12() {
     malformed("such a pack is version 12", &relabelled);
 }
 
-/// Every version names one kind of pack, the ladder's three rungs per kind
+/// The whole ladder, then rows that record their draws too: one drew two
+/// subjects, one drew none.
+fn subjects_history() -> Vec<AuditRow> {
+    let mut rows = semantics_history();
+    let newest: Vec<AuditRow> = [vec!["s_one", "s_two"], vec![]]
+        .into_iter()
+        .enumerate()
+        .map(|(i, drawn)| {
+            let mut row = rows[rows.len() - 1].clone();
+            row.transition_id = uuid::Uuid::from_u128(0x200 + i as u128);
+            row.committed_at = format!("2026-06-24T00:02:{i:02}Z").parse().unwrap();
+            row.drawn_subjects = Some(
+                drawn
+                    .into_iter()
+                    .map(morpholog_core::Subject::from)
+                    .collect(),
+            );
+            row
+        })
+        .collect();
+    rows.extend(newest);
+    rows
+}
+
+/// A stream whose newest row records its draws is version 13 and verifies
+/// whole, every older rung before it included.
+#[test]
+fn a_stream_disclosing_a_draw_recording_row_is_version_13_and_verifies() {
+    assert!(matches!(
+        stream_verdict(&streamed_pack_of(&subjects_history(), 13), None),
+        Ok(TreeVerification::Intact { .. })
+    ));
+}
+
+/// A version-9 reader would drop the draws and report tamper on honest
+/// history, so version 9 may not carry such a row; and version 13 claims
+/// one, so it must.
+#[test]
+fn the_subjects_rung_is_held_both_ways() {
+    match stream_verdict(&streamed_pack_of(&subjects_history(), 9), None) {
+        Err(PackError::Malformed { detail }) => {
+            assert!(detail.contains("such a pack is version 13"), "{detail}");
+        }
+        other => panic!("expected version 9 to be refused, got {other:?}"),
+    }
+    match stream_verdict(&streamed_pack_of(&semantics_history(), 13), None) {
+        Err(PackError::Malformed { detail }) => {
+            assert!(detail.contains("such a pack is version 9"), "{detail}");
+        }
+        other => panic!("expected version 13 to be refused, got {other:?}"),
+    }
+}
+
+/// Read whole, a version-13 stream is a version-16 document, held to the
+/// same rule.
+#[test]
+fn a_draw_recording_document_is_version_16() {
+    let pack = read_prefix_stream(&streamed_pack_of(&subjects_history(), 13)[..]).unwrap();
+    assert_eq!(pack.manifest.pack_format_version, 16);
+    assert!(matches!(
+        verify_pack(&pack, None),
+        Ok(TreeVerification::Intact { .. })
+    ));
+    let mut relabelled = pack.clone();
+    relabelled.manifest.pack_format_version = 12;
+    malformed("such a pack is version 16", &relabelled);
+}
+
+/// Every version names one kind of pack, every rung of each kind's ladder
 /// included, and nothing past the newest.
 #[test]
 fn every_version_names_one_kind() {
@@ -1049,6 +1117,10 @@ fn every_version_names_one_kind() {
     assert_eq!(super::pack_kind(10), Some(super::PackKind::Window));
     assert_eq!(super::pack_kind(11), Some(super::PackKind::Selective));
     assert_eq!(super::pack_kind(12), Some(super::PackKind::PrefixDocument));
+    assert_eq!(super::pack_kind(13), Some(super::PackKind::PrefixStream));
+    assert_eq!(super::pack_kind(14), Some(super::PackKind::Window));
+    assert_eq!(super::pack_kind(15), Some(super::PackKind::Selective));
+    assert_eq!(super::pack_kind(16), Some(super::PackKind::PrefixDocument));
     assert_eq!(
         super::pack_kind(u64::from(super::NEWEST_PACK_FORMAT) + 1),
         None

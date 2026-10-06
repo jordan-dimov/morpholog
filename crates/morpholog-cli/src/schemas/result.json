@@ -713,11 +713,17 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 4294967295
+        },
+        "drawn_subjects": {
+          "description": "The subjects the act drew from `new Subject()`, in draw order; empty when it drew none. Absent on rows from before draws were recorded.",
+          "type": "array",
+          "items": { "type": "string" }
         }
       },
       "dependentRequired": {
         "model_hash": ["attestation", "parameters"],
-        "semantics_version": ["model_hash"]
+        "semantics_version": ["model_hash"],
+        "drawn_subjects": ["semantics_version"]
       }
     },
     "audit_row_named": {
@@ -781,11 +787,17 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 4294967295
+        },
+        "drawn_subjects": {
+          "description": "The subjects the act drew from `new Subject()`, in draw order; empty when it drew none. Absent on rows from before draws were recorded.",
+          "type": "array",
+          "items": { "type": "string" }
         }
       },
       "dependentRequired": {
         "model_hash": ["attestation", "parameters"],
-        "semantics_version": ["model_hash"]
+        "semantics_version": ["model_hash"],
+        "drawn_subjects": ["semantics_version"]
       }
     },
     "outbox_row": {

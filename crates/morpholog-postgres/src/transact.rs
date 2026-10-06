@@ -24,7 +24,7 @@ use crate::compiled::{DeltaStep, disable_jit};
 use crate::error::{PgError, classify_commit};
 use crate::program::{PgProgram, Route};
 use crate::propose::{
-    Refusal, load_state, record_refusal, resolve, write_acceptance_record, write_accepted,
+    Drawn, Refusal, load_state, record_refusal, resolve, write_acceptance_record, write_accepted,
     write_claim_delta,
 };
 use crate::txn::begin_authorised_proposal_tx;
@@ -114,16 +114,12 @@ pub async fn propose_all_against_pg(
             crate::actor_policy::authorise(&mut tx, &transition.actor, &login_role.name).await?;
         }
         let transition_id = Uuid::now_v7();
+        // Each act draws on its own, so its row records its own draws.
         let (asserted_claims, retracted_claims, emitted_intents) = match route {
             Route::Interpreted => {
-                match crate::propose::named(
-                    prepared.propose(
-                        transition,
-                        &state,
-                        &mut crate::propose::runtime_subjects(),
-                    )?,
-                    transition,
-                )? {
+                let Drawn { decided, draws } =
+                    crate::propose::propose_drawing(prepared, transition, &state)?;
+                match decided {
                     Outcome::Accepted {
                         asserted_claims,
                         retracted_claims,
@@ -139,6 +135,7 @@ pub async fn propose_all_against_pg(
                             &asserted_claims,
                             &retracted_claims,
                             &emitted_intents,
+                            &draws,
                             &login_role,
                         )
                         .await?;
@@ -151,14 +148,9 @@ pub async fn propose_all_against_pg(
                 }
             }
             Route::Compiled(_) | Route::Mixed(_) => {
-                match crate::propose::named(
-                    prepared.stage_delta(
-                        transition,
-                        &state,
-                        &mut crate::propose::runtime_subjects(),
-                    )?,
-                    transition,
-                )? {
+                let Drawn { decided, draws } =
+                    crate::propose::stage_drawing(prepared, transition, &state)?;
+                match decided {
                     StagedDelta::Rejected { reason } => {
                         return refuse(pool, tx, transformation, transition, reason, row).await;
                     }
@@ -191,6 +183,7 @@ pub async fn propose_all_against_pg(
                             &asserted,
                             &retracted,
                             &emitted,
+                            &draws,
                             &login_role,
                         )
                         .await?;

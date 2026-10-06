@@ -67,6 +67,7 @@ migrations![
         "audit_semantics_version",
         "021_audit_semantics_version.sql"
     ),
+    (22, "audit_drawn_subjects", "022_audit_drawn_subjects.sql"),
 ];
 
 /// The newest migration this binary carries.

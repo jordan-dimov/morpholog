@@ -223,16 +223,80 @@ pub(crate) struct ProposalRun {
 }
 
 /// A subject source that remembers what it handed out, in order.
-struct Recorded<S> {
+struct Recorder<S> {
     inner: S,
     drawn: Vec<Subject>,
 }
 
-impl<S: SubjectSource> SubjectSource for Recorded<S> {
+impl<S: SubjectSource> SubjectSource for Recorder<S> {
     fn next_subject(&mut self) -> Option<Subject> {
         let subject = self.inner.next_subject()?;
         self.drawn.push(subject.clone());
         Some(subject)
+    }
+}
+
+/// The subjects one execution drew, in order. Only the executions below
+/// make one, each beside what it decided, so a commit records the draws of
+/// the execution it commits.
+pub(crate) struct DrawRecord(Vec<Subject>);
+
+/// What an execution decided, and the subjects it drew to decide it.
+pub(crate) struct Drawn<T> {
+    pub(crate) decided: T,
+    pub(crate) draws: DrawRecord,
+}
+
+fn drawing<T>(
+    transition: &Transition,
+    run: impl FnOnce(&mut dyn SubjectSource) -> Result<Option<T>, PgError>,
+) -> Result<Drawn<T>, PgError> {
+    let mut subjects = Recorder {
+        inner: runtime_subjects(),
+        drawn: Vec::new(),
+    };
+    let decided = named(run(&mut subjects)?, transition)?;
+    Ok(Drawn {
+        decided,
+        draws: DrawRecord(subjects.drawn),
+    })
+}
+
+/// The interpreted act over `state`, drawing the runtime's subjects.
+pub(crate) fn propose_drawing(
+    prepared: &PreparedProgram,
+    transition: &Transition,
+    state: &State,
+) -> Result<Drawn<Outcome>, PgError> {
+    drawing(transition, |s| Ok(prepared.propose(transition, state, s)?))
+}
+
+/// The act's staged delta over `state`, drawing the runtime's subjects.
+pub(crate) fn stage_drawing(
+    prepared: &PreparedProgram,
+    transition: &Transition,
+    state: &State,
+) -> Result<Drawn<StagedDelta>, PgError> {
+    drawing(transition, |s| {
+        Ok(prepared.stage_delta(transition, state, s)?)
+    })
+}
+
+/// The interpreted act over `state` with its trace, drawing the runtime's
+/// subjects.
+fn trace_drawing(
+    prepared: &PreparedProgram,
+    transition: &Transition,
+    state: &State,
+) -> Result<Drawn<TracedProposal>, PgError> {
+    drawing(transition, |s| {
+        Ok(prepared.propose_with_trace(transition, state, s))
+    })
+}
+
+impl DrawRecord {
+    fn into_subjects(self) -> Vec<Subject> {
+        self.0
     }
 }
 
@@ -320,25 +384,21 @@ pub(crate) async fn propose_against_pg_run(
     let state = load_state(&mut tx, &scope).await?;
     let load = elapsed(clock) - begin;
 
-    let mut subjects = Recorded {
-        inner: runtime_subjects(),
-        drawn: Vec::new(),
-    };
-    let (decided, rejection_state) = match route {
+    let (decided, rejection_state, draws) = match route {
         Route::Interpreted => {
-            let outcome = named(
-                prepared.propose(transition, &state, &mut subjects)?,
-                transition,
-            )?;
+            let Drawn {
+                decided: outcome,
+                draws,
+            } = propose_drawing(prepared, transition, &state)?;
             let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
-            (Decided::Kernel(outcome), rejection_state)
+            (Decided::Kernel(outcome), rejection_state, draws)
         }
         Route::Compiled(_) | Route::Mixed(_) => {
-            let staged = named(
-                prepared.stage_delta(transition, &state, &mut subjects)?,
-                transition,
-            )?;
-            match staged {
+            let Drawn {
+                decided: staged,
+                draws,
+            } = stage_drawing(prepared, transition, &state)?;
+            let (decided, rejection_state) = match staged {
                 StagedDelta::Rejected { reason } => {
                     (Decided::Kernel(Outcome::Rejected { reason }), Some(state))
                 }
@@ -374,7 +434,8 @@ pub(crate) async fn propose_against_pg_run(
                         ),
                     }
                 }
-            }
+            };
+            (decided, rejection_state, draws)
         }
     };
     let kernel = elapsed(clock) - begin - load;
@@ -388,6 +449,7 @@ pub(crate) async fn propose_against_pg_run(
                 transition,
                 prepared,
                 outcome,
+                &draws,
                 &login_role,
             )
             .await?
@@ -407,6 +469,7 @@ pub(crate) async fn propose_against_pg_run(
                 &asserted,
                 &retracted,
                 &emitted,
+                &draws,
                 &login_role,
             )
             .await?;
@@ -424,7 +487,7 @@ pub(crate) async fn propose_against_pg_run(
     Ok(ProposalRun {
         outcome: pg_outcome,
         rejection_state,
-        drawn_subjects: subjects.drawn,
+        drawn_subjects: draws.into_subjects(),
         phases: timed.then_some(ProposalPhases {
             begin,
             load,
@@ -569,10 +632,10 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
         Reads::BodyAndInvariants,
     );
     let state = load_state(&mut tx, &scope).await?;
-    let traced = named(
-        prepared.propose_with_trace(transition, &state, &mut crate::propose::runtime_subjects()),
-        transition,
-    )?;
+    let Drawn {
+        decided: traced,
+        draws,
+    } = trace_drawing(prepared, transition, &state)?;
     match traced {
         TracedProposal::Completed { outcome, trace } => {
             let outcome = finalise_outcome(
@@ -582,6 +645,7 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
                 transition,
                 prepared,
                 outcome,
+                &draws,
                 &login_role,
             )
             .await?;
@@ -633,6 +697,7 @@ pub(crate) async fn record_refusal(
 
 /// Persist a kernel [`Outcome`]: commit it, or roll back and log the
 /// refusal.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn finalise_outcome(
     pool: &PgPool,
     mut tx: Transaction<'_, Postgres>,
@@ -640,6 +705,7 @@ pub(crate) async fn finalise_outcome(
     transition: &Transition,
     prepared: &PreparedProgram,
     outcome: Outcome,
+    draws: &DrawRecord,
     login_role: &LoginRole,
 ) -> Result<PgProposalOutcome, PgError> {
     match outcome {
@@ -671,6 +737,7 @@ pub(crate) async fn finalise_outcome(
                 &asserted_claims,
                 &retracted_claims,
                 &emitted_intents,
+                draws,
                 login_role,
             )
             .await?;
@@ -1089,6 +1156,7 @@ pub(crate) async fn write_accepted(
     asserted_claims: &[ClaimInstance],
     retracted_claims: &[ClaimInstance],
     emitted_intents: &[IntentInstance],
+    draws: &DrawRecord,
     login_role: &LoginRole,
 ) -> Result<(), PgError> {
     let _ = write_claim_delta(tx, transition_id, asserted_claims, retracted_claims).await?;
@@ -1101,6 +1169,7 @@ pub(crate) async fn write_accepted(
         asserted_claims,
         retracted_claims,
         emitted_intents,
+        draws,
         login_role,
     )
     .await
@@ -1120,6 +1189,7 @@ pub(crate) async fn write_acceptance_record(
     asserted_claims: &[ClaimInstance],
     retracted_claims: &[ClaimInstance],
     emitted_intents: &[IntentInstance],
+    draws: &DrawRecord,
     login_role: &LoginRole,
 ) -> Result<(), PgError> {
     let checked: Vec<AuditedInvariantCheck> = prepared
@@ -1145,8 +1215,8 @@ pub(crate) async fn write_acceptance_record(
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents, attestation,
-            parameters, model_hash, semantics_version
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+            parameters, model_hash, semantics_version, drawn_subjects
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         transition_id,
         transformation.name.as_str(),
         serde_json::to_value(&transition.args)?,
@@ -1167,6 +1237,7 @@ pub(crate) async fn write_acceptance_record(
         prepared.model_hash(),
         // The kernel linked into this binary decided the row.
         i64::from(morpholog_core::SEMANTICS_VERSION),
+        serde_json::to_value(&draws.0)?,
     )
     .execute(&mut **tx)
     .await

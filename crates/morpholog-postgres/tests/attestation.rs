@@ -93,6 +93,12 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        "ALTER TABLE morpholog.audit DROP CONSTRAINT IF EXISTS audit_drawn_subjects_required",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     legacy_insert(&pool).await.unwrap();
     sqlx::query(
         "ALTER TABLE morpholog.audit
@@ -144,6 +150,22 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     .execute(&pool)
     .await
     .unwrap();
+    // The fifth regime: rows that name their semantics but record no
+    // draws, checkpointed before the drawn-subjects boundary.
+    versioned_undrawn_insert(&pool).await.unwrap();
+    let CheckpointOutcome::Created(before_subjects) =
+        create_checkpoint(&pool, None, None).await.unwrap()
+    else {
+        panic!("a fifth row must make a new checkpoint");
+    };
+    sqlx::query(
+        "ALTER TABLE morpholog.audit
+         ADD CONSTRAINT audit_drawn_subjects_required
+         CHECK (drawn_subjects IS NOT NULL) NOT VALID",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     propose_pg_with_test_actor(
         &pool,
         &program,
@@ -155,10 +177,10 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     .unwrap();
 
     // The whole history - legacy, attested, self-describing, naming its
-    // programme, naming its semantics - verifies as one tree, live and
-    // offline, and the checkpoints taken before the last two boundaries
-    // keep the roots they had: verification recomputes every stored
-    // checkpoint's root.
+    // programme, naming its semantics, recording its draws - verifies as
+    // one tree, live and offline, and the checkpoints taken before the
+    // last boundaries keep the roots they had: verification recomputes
+    // every stored checkpoint's root.
     create_checkpoint(&pool, None, None).await.unwrap();
     let verification = verify_audit_tree(&pool, None).await.unwrap();
     assert!(
@@ -181,6 +203,14 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         kept.root_hash, before_semantics.root_hash,
         "adding the semantics rung reinterprets no earlier leaf"
     );
+    let kept = morpholog_postgres::load_checkpoint(&pool, before_subjects.tree_size)
+        .await
+        .unwrap()
+        .expect("the pre-subjects checkpoint is still stored");
+    assert_eq!(
+        kept.root_hash, before_subjects.root_hash,
+        "adding the subjects rung reinterprets no earlier leaf"
+    );
     let pack = morpholog_postgres::export_pack(&pool, None).await.unwrap();
     assert!(matches!(
         verify_pack(&pack, None).unwrap(),
@@ -191,8 +221,12 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     // discloses, so a verifier from before a rung refuses that pack as too
     // new rather than misjudging it, while a pack of older rows stays
     // readable by it.
-    assert_eq!(pack.manifest.pack_format_version, 12);
-    for (size, expected) in [(before.tree_size, 1), (before_semantics.tree_size, 8)] {
+    assert_eq!(pack.manifest.pack_format_version, 16);
+    for (size, expected) in [
+        (before.tree_size, 1),
+        (before_semantics.tree_size, 8),
+        (before_subjects.tree_size, 12),
+    ] {
         let older = morpholog_postgres::export_pack(&pool, Some(size))
             .await
             .unwrap();
@@ -201,7 +235,8 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     for (size, expected) in [
         (Some(before.tree_size), 4),
         (Some(before_semantics.tree_size), 5),
-        (None, 9),
+        (Some(before_subjects.tree_size), 9),
+        (None, 13),
     ] {
         let export = morpholog_postgres::begin_prefix_export(&pool, size)
             .await
@@ -224,15 +259,23 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     )
     .await
     .unwrap();
-    assert_eq!(across.manifest.pack_format_version, 10);
+    assert_eq!(across.manifest.pack_format_version, 14);
     assert!(
         matches!(
             morpholog_postgres::verify_window(&across, None).unwrap(),
             morpholog_postgres::WindowVerification::Intact { .. }
         ),
-        "a window across the semantics boundary verifies"
+        "a window across the semantics and subjects boundaries verifies"
     );
-    for (row, expected) in [(0, 3), (3, 7), (4, 11)] {
+    let to_semantics = morpholog_postgres::export_window(
+        &pool,
+        morpholog_postgres::WindowStart::TreeSize(before.tree_size),
+        Some(before_subjects.tree_size),
+    )
+    .await
+    .unwrap();
+    assert_eq!(to_semantics.manifest.pack_format_version, 10);
+    for (row, expected) in [(0, 3), (3, 7), (4, 11), (5, 15)] {
         let selective =
             morpholog_postgres::export_selective(&pool, None, &[pack.rows[row].transition_id])
                 .await
@@ -242,36 +285,43 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
             "an older row disclosed under a newer checkpoint keeps the readable version"
         );
     }
-    let regimes: Vec<(bool, bool, bool, bool)> = pack
+    let regimes: Vec<[bool; 5]> = pack
         .rows
         .iter()
         .map(|r| {
-            (
+            [
                 r.attestation.is_some(),
                 r.parameters.is_some(),
                 r.model_hash.is_some(),
                 r.semantics_version.is_some(),
-            )
+                r.drawn_subjects.is_some(),
+            ]
         })
         .collect();
     assert_eq!(
         regimes,
         vec![
-            (false, false, false, false),
-            (true, false, false, false),
-            (true, true, false, false),
-            (true, true, true, false),
-            (true, true, true, true)
+            [false, false, false, false, false],
+            [true, false, false, false, false],
+            [true, true, false, false, false],
+            [true, true, true, false, false],
+            [true, true, true, true, false],
+            [true, true, true, true, true]
         ],
         "every encoding, in the real chronology"
     );
     assert_eq!(
-        pack.rows[4].model_hash.as_deref(),
+        pack.rows[5].drawn_subjects,
+        Some(Vec::new()),
+        "an act that draws nothing records an empty list, not an absent one"
+    );
+    assert_eq!(
+        pack.rows[5].model_hash.as_deref(),
         Some(program.prepared().model_hash()),
         "the newest row names the programme that admitted it"
     );
     assert_eq!(
-        pack.rows[4].semantics_version,
+        pack.rows[5].semantics_version,
         Some(morpholog_core::SEMANTICS_VERSION),
         "and the semantics that decided it"
     );
@@ -281,7 +331,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         .map(ToString::to_string)
         .collect();
     assert_eq!(
-        pack.rows[4].parameters.as_deref(),
+        pack.rows[5].parameters.as_deref(),
         Some(declared.as_slice()),
         "the stamped row names its own signature, in declaration order"
     );
@@ -289,7 +339,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     // A stamped name is evidence: edit one in the exported pack and the
     // tree no longer verifies.
     let mut edited = pack.clone();
-    edited.rows[4].parameters.as_mut().unwrap()[0] = "entry".to_string();
+    edited.rows[5].parameters.as_mut().unwrap()[0] = "entry".to_string();
     assert!(
         !matches!(
             verify_pack(&edited, None).unwrap(),
@@ -325,7 +375,8 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         [
             "audit_model_hash_required",
             "audit_parameters_required",
-            "audit_semantics_version_required"
+            "audit_semantics_version_required",
+            "audit_drawn_subjects_required"
         ]
         .iter()
         .any(|c| err.to_string().contains(c)),
@@ -336,7 +387,8 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     assert!(
         [
             "audit_model_hash_required",
-            "audit_semantics_version_required"
+            "audit_semantics_version_required",
+            "audit_drawn_subjects_required"
         ]
         .iter()
         .any(|c| err.to_string().contains(c)),
@@ -345,7 +397,18 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     let refused = hashed_unversioned_insert(&pool).await;
     let err = refused.expect_err("an insert naming no semantics must be refused after activation");
     assert!(
-        err.to_string().contains("audit_semantics_version_required"),
+        [
+            "audit_semantics_version_required",
+            "audit_drawn_subjects_required"
+        ]
+        .iter()
+        .any(|c| err.to_string().contains(c)),
+        "the refusal names an activation constraint: {err}"
+    );
+    let refused = versioned_undrawn_insert(&pool).await;
+    let err = refused.expect_err("an insert recording no draws must be refused after activation");
+    assert!(
+        err.to_string().contains("audit_drawn_subjects_required"),
         "the refusal names the activation constraint: {err}"
     );
 }
@@ -417,6 +480,26 @@ async fn hashed_unversioned_insert(pool: &sqlx::PgPool) -> Result<(), sqlx::Erro
                    1, '[]', '[]', '[]', '[]',
                    '{\"mode\":\"gateway\",\"authenticated_by\":\"importer_role\"}', '[]',
                    'sha256:' || repeat('1', 64))",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+/// An audit insert shaped like the writer from before draws were
+/// recorded: it names its semantics but records no draws.
+async fn versioned_undrawn_insert(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents, attestation,
+            parameters, model_hash, semantics_version
+         ) VALUES ($1, 'versioned_import', '[]', '{\"type\":\"subject\",\"value\":\"importer\"}',
+                   1, '[]', '[]', '[]', '[]',
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"importer_role\"}', '[]',
+                   'sha256:' || repeat('1', 64), 1)",
     )
     .bind(uuid::Uuid::now_v7())
     .execute(pool)

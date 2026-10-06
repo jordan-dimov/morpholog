@@ -62,14 +62,16 @@ fn first_row(lines: &[Value]) -> usize {
 
 /// The same complete prefix as one JSON document, the form packs took
 /// before they were written a line at a time.
-/// The streamed pack as one document: version 1, or 8 when a row names
-/// its programme, as the exporter would write it.
+/// The streamed pack as one document, versioned for the highest rung among
+/// its rows as the exporter would write it.
 fn as_single_document(pack: &str) -> String {
     let lines = pack_lines(pack);
     let rows = first_row(&lines);
     // The document version for the highest rung among the rows.
     let has = |field: &str| lines[rows..].iter().any(|row| row.get(field).is_some());
-    let version = if has("semantics_version") {
+    let version = if has("drawn_subjects") {
+        16
+    } else if has("semantics_version") {
         12
     } else if has("model_hash") {
         8
@@ -1103,11 +1105,12 @@ async fn evidence_verify_names_an_unknown_future_pack_version() {
     // A pack newer than this binary must be named as too new, never
     // misread as a malformed older one, in either the single-document or
     // the line-by-line spelling.
+    let newer = morpholog_postgres::NEWEST_PACK_FORMAT + 1;
     for newer in [
-        &br#"{"manifest": {"pack_format_version": 13}}"#[..],
-        &b"{\"pack_format_version\": 13, \"pack_kind\": \"prefix\"}\n{}\n"[..],
+        format!(r#"{{"manifest": {{"pack_format_version": {newer}}}}}"#),
+        format!("{{\"pack_format_version\": {newer}, \"pack_kind\": \"prefix\"}}\n{{}}\n"),
     ] {
-        let packfile = temp_file(newer);
+        let packfile = temp_file(newer.as_bytes());
         let (status, stdout, _stderr) =
             run_cli_no_db(&["audit", "verify-pack", packfile.path().to_str().unwrap()]);
         assert!(!status.success());
@@ -4408,7 +4411,7 @@ async fn a_pack_larger_than_the_verifiers_memory_still_verifies() {
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor, invariant_epoch,
             invariants_checked, asserted_claims, retracted_claims, emitted_intents,
-            attestation, parameters, model_hash, semantics_version)
+            attestation, parameters, model_hash, semantics_version, drawn_subjects)
          SELECT gen_random_uuid(), 'note',
                 jsonb_build_array(jsonb_build_object(
                     'type', 'subject', 'value', repeat(md5(i::text), 128))),
@@ -4416,7 +4419,7 @@ async fn a_pack_larger_than_the_verifiers_memory_still_verifies() {
                 '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
                 '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb,
                 '[\"note\"]'::jsonb,
-                'sha256:' || repeat('0', 64), 1
+                'sha256:' || repeat('0', 64), 1, '[]'::jsonb
          FROM generate_series(1, $1) AS i",
     )
     .bind(ROWS)

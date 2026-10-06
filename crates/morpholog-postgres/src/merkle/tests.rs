@@ -42,6 +42,7 @@ fn fixed_row() -> AuditRow {
         parameters: None,
         model_hash: None,
         semantics_version: None,
+        drawn_subjects: None,
     }
 }
 
@@ -663,4 +664,74 @@ fn an_unknown_audit_row_field_is_malformed() {
     let mut value = serde_json::to_value(hashed_fixed_row()).unwrap();
     value["field_from_the_future"] = serde_json::json!("x");
     assert!(serde_json::from_value::<AuditRow>(value).is_err());
+}
+
+fn drawing_fixed_row(drawn: &[&str]) -> AuditRow {
+    AuditRow {
+        drawn_subjects: Some(drawn.iter().map(|s| Subject::from(*s)).collect()),
+        ..semantics_fixed_row()
+    }
+}
+
+const DRAWN: [&str; 2] = [
+    "01900000-0000-7000-8000-00000000000a",
+    "01900000-0000-7000-8000-00000000000b",
+];
+
+/// The frozen leaf hashes of a row that records its draws, derived
+/// separately in Python from the documented layout: the V5 bytes (checked
+/// there against the V5 pin) with version byte 6, then one more
+/// length-prefixed field holding a little-endian u32 count and each
+/// subject as length-prefixed UTF-8. An act that drew nothing still
+/// selects V6, with a count of zero.
+#[test]
+fn frozen_v6_leaf_hash_pins_the_draw_recording_encoding() {
+    for (drawn, pinned) in [
+        (
+            &DRAWN[..],
+            "sha256:d9356dfc31b46e05e3ca524a36139fe2442aabc92ec5417411224c0a785bf437",
+        ),
+        (
+            &[][..],
+            "sha256:6d844febaa619a271669a28495a9b91bf2d416d567bad74a33797be2cc4e51a7",
+        ),
+    ] {
+        let hash = audit_leaf_hash(&drawing_fixed_row(drawn)).unwrap();
+        assert_eq!(Digest::from_bytes(hash).to_string(), pinned, "{drawn:?}");
+    }
+}
+
+/// The leaf commits to every draw and their order: changing, swapping,
+/// adding or removing one changes it, and an empty record is not an
+/// absent one.
+#[test]
+fn the_leaf_commits_to_each_draw_and_its_order() {
+    let pinned = audit_leaf_hash(&drawing_fixed_row(&DRAWN)).unwrap();
+    for other in [
+        vec![DRAWN[0], "01900000-0000-7000-8000-00000000000c"],
+        vec![DRAWN[1], DRAWN[0]],
+        vec![DRAWN[0], DRAWN[1], DRAWN[1]],
+        vec![DRAWN[0]],
+    ] {
+        assert_ne!(
+            audit_leaf_hash(&drawing_fixed_row(&other)).unwrap(),
+            pinned,
+            "{other:?}"
+        );
+    }
+    assert_ne!(
+        audit_leaf_hash(&drawing_fixed_row(&[])).unwrap(),
+        audit_leaf_hash(&semantics_fixed_row()).unwrap(),
+        "drew nothing is not the same as not recorded"
+    );
+}
+
+/// A draw record belongs only on a row that names its semantics.
+#[test]
+fn drawn_subjects_off_their_rung_get_no_leaf() {
+    let hostile = AuditRow {
+        semantics_version: None,
+        ..drawing_fixed_row(&DRAWN)
+    };
+    assert!(audit_leaf_hash(&hostile).is_err());
 }

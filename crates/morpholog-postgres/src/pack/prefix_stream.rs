@@ -29,11 +29,13 @@ use crate::txn::{TxIsolation, begin_isolated_tx};
 pub(crate) const PACK_FORMAT_V4: u32 = 4;
 const PACK_KIND_PREFIX: &str = "prefix";
 /// The streamed prefix's versions: 4, 5 once a covered row names its
-/// programme, 9 once one names its semantics. See [`FormatLadder`].
+/// programme, 9 once one names its semantics, 13 once one records its
+/// draws. See [`FormatLadder`].
 pub(crate) const PREFIX_FORMATS: FormatLadder = FormatLadder {
     legacy: PACK_FORMAT_V4,
     model: 5,
     semantics: 9,
+    subjects: 13,
 };
 
 /// Line 1 of a complete-prefix pack.
@@ -84,12 +86,13 @@ pub async fn begin_prefix_export(
     // covered rows is asked first, in the same snapshot and order.
     let rung = sqlx::query_scalar!(
         r#"SELECT coalesce(max(CASE
+                   WHEN prefix.drawn_subjects IS NOT NULL THEN 3
                    WHEN prefix.semantics_version IS NOT NULL THEN 2
                    WHEN prefix.model_hash IS NOT NULL THEN 1
                    ELSE 0
                END), 0) AS "rung!"
            FROM (
-               SELECT model_hash, semantics_version FROM morpholog.audit
+               SELECT model_hash, semantics_version, drawn_subjects FROM morpholog.audit
                ORDER BY committed_at, transition_id
                LIMIT $1
            ) AS prefix"#,
@@ -101,7 +104,8 @@ pub async fn begin_prefix_export(
     let highest = match rung {
         0 => RowRung::Legacy,
         1 => RowRung::Model,
-        _ => RowRung::Semantics,
+        2 => RowRung::Semantics,
+        _ => RowRung::Subjects,
     };
 
     Ok(PrefixExport {
