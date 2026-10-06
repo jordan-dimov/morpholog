@@ -1,7 +1,8 @@
 //! `morpholog provision indexes` - reconcile the indexes the programmes'
 //! loads and compiled invariants can use. The compiler says what is needed
 //! and the adapter reconciles; this reports the plan it acted on and exits
-//! non-zero when a conflict needs an operator.
+//! non-zero when a conflict needs an operator, or, with `--check`, when
+//! anything is outstanding.
 
 use anyhow::bail;
 use morpholog_postgres::{
@@ -10,7 +11,7 @@ use morpholog_postgres::{
 };
 
 use crate::ProvisionIndexesArgs;
-use crate::commands::{connect, parse_or_report, prepare_or_report, print_json};
+use crate::commands::{AlreadyReported, connect, parse_or_report, prepare_or_report, print_json};
 use morpholog_cli::envelopes;
 
 pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
@@ -23,7 +24,7 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
     // A usage error should not need a database to be reported.
     check_named_programs(&programs)?;
     let pool = connect(&args.db.database_url).await?;
-    let report = if args.dry_run {
+    let report = if args.dry_run || args.check {
         plan_indexes(&pool, &programs, args.prune).await?
     } else {
         provision_indexes(&pool, &programs, args.prune).await?
@@ -51,6 +52,12 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
             "an index or statistics object under Morpholog's name has another definition and was left alone: {}",
             names.join(", ")
         );
+    }
+    if args.check && !report.is_current() {
+        // The plan is already on stdout, so the caller sees what is
+        // outstanding.
+        eprintln!("error: the indexes are not provisioned for these programmes");
+        return Err(AlreadyReported.into());
     }
     Ok(())
 }

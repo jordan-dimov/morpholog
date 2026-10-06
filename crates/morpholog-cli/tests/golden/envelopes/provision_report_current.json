@@ -1,0 +1,52 @@
+{
+  "applied": false,
+  "dry_run": true,
+  "indexes": [
+    {
+      "action": "keep",
+      "name": "morpholog_ci_journalentry_0_vk1_0123456789ab",
+      "position": 0,
+      "predicate": "JournalEntry",
+      "required_by": [
+        "ledger"
+      ]
+    },
+    {
+      "action": "satisfied_externally",
+      "detail": "lines_by_entry is equivalent and stays unmanaged",
+      "name": "morpholog_ci_journalline_1_vk1_456789abcdef",
+      "position": 1,
+      "predicate": "JournalLine",
+      "required_by": [
+        "ledger"
+      ]
+    }
+  ],
+  "positions_unknown_for": [],
+  "programs": [
+    {
+      "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "program": "ledger"
+    }
+  ],
+  "prune": false,
+  "required_elsewhere": [],
+  "statistics": [
+    {
+      "action": "keep",
+      "name": "morpholog_cs_vk1_p0",
+      "position": 0,
+      "required_by": [
+        "ledger"
+      ]
+    },
+    {
+      "action": "keep",
+      "name": "morpholog_cs_vk1_p1",
+      "position": 1,
+      "required_by": [
+        "ledger"
+      ]
+    }
+  ]
+}

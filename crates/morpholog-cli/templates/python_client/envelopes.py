@@ -1732,6 +1732,15 @@ class ProvisionReport:
         return any(e.action == "conflict" for e in (*self.indexes, *self.statistics))
 
     @property
+    def is_current(self) -> bool:
+        """Nothing is outstanding: every index is kept or satisfied by
+        another, every statistics object kept. What `provision indexes
+        --check` passes."""
+        return all(i.action in ("keep", "satisfied_externally") for i in self.indexes) and all(
+            s.action == "keep" for s in self.statistics
+        )
+
+    @property
     def pruned(self) -> list[str]:
         """What this run dropped: every stale index and statistics object,
         when it applied under prune."""

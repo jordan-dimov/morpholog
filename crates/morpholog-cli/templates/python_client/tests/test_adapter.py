@@ -210,6 +210,11 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertEqual(argv[:3], ["provision", "indexes", self.client.file])
             self.assertIn("--dry-run", argv)
             self.assertNotIn("--prune", argv)
+            self.assertNotIn("--check", argv)
+
+            argv = argv_after(lambda: self.client.provision_indexes(check=True))
+            self.assertIn("--check", argv)
+            self.assertNotIn("--dry-run", argv)
 
     def test_a_provisioning_conflict_is_a_report_not_a_raise(self):
         # The binary exits non-zero on a conflict with the report already
