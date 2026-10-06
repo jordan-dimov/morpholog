@@ -62,7 +62,8 @@ fn lex_error_diagnostics(errs: Vec<Rich<'_, char>>) -> Vec<Diagnostic> {
 }
 
 /// Map parser failures to diagnostics, like [`lex_error_diagnostics`]. A stray `Indent` also
-/// gets the fix spelled out, since "found 'indent'" alone does not suggest it.
+/// gets the fix spelled out, since "found 'indent'" alone does not suggest it, and so does a
+/// reserved word where something else was expected, since it is usually meant as a name.
 fn parse_error_diagnostics(errs: Vec<Rich<'_, Token>>) -> Vec<Diagnostic> {
     errs.into_iter()
         .map(|e| {
@@ -74,6 +75,11 @@ fn parse_error_diagnostics(errs: Vec<Rich<'_, Token>>) -> Vec<Diagnostic> {
                      indent no deeper, or wrap the expression in parentheses, which \
                      make layout stop mattering until they close",
                 );
+            }
+            if let Some(word) = e.found().and_then(Token::reserved_word) {
+                message.push_str(&format!(
+                    "; `{word}` is a reserved word, so if it was meant as a name, choose another"
+                ));
             }
             Diagnostic::error(message, span.start()..span.end())
         })

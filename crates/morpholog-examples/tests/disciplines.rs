@@ -273,6 +273,10 @@ predicate Item(id: Subject, label: Subject)
             .any(|m| m.contains("two identical claims are already one claim")),
         "the message teaches set semantics: {rendered:?}"
     );
+    assert!(
+        rendered.iter().any(|m| m.contains("require not Item(...)")),
+        "and names the gate that refuses a repeat: {rendered:?}"
+    );
 }
 
 #[test]

@@ -33,6 +33,14 @@ macro_rules! tokens {
         }
 
         impl Token {
+            /// The spelling of the keyword this token is, if it is one.
+            fn keyword_spelling(&self) -> Option<&'static str> {
+                match self {
+                    $( Token::$kw => Some($kt), )*
+                    _ => None,
+                }
+            }
+
             /// The token a reserved word lexes to, if the word is one.
             fn keyword(word: &str) -> Option<Token> {
                 match word {
@@ -52,6 +60,18 @@ macro_rules! tokens {
             }
         }
     };
+}
+
+impl Token {
+    /// The spelling of the reserved word this token is, if it is one: a keyword, a kind name,
+    /// or a boolean literal. None of them can be a name.
+    pub(crate) fn reserved_word(&self) -> Option<String> {
+        match self {
+            Token::Kind(kind) => Some(kind.to_string()),
+            Token::ReservedBoolLit(value) => Some(value.to_string()),
+            other => other.keyword_spelling().map(str::to_string),
+        }
+    }
 }
 
 tokens! {

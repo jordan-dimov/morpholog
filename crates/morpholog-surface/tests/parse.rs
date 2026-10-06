@@ -427,6 +427,32 @@ parse_err!(
     "program demo\ninvariant invariant: Foo(x)\n"
 );
 
+/// A reserved word where a name belongs is named as reserved, since "found `round`" alone
+/// does not say why; an error at an ordinary token says nothing about reserved words.
+#[test]
+fn a_reserved_word_used_as_a_name_is_named_as_reserved() {
+    for (source, word) in [
+        ("program demo\npredicate Bid(round: Subject)\n", "round"),
+        ("program demo\ninvariant invariant: Foo(x)\n", "invariant"),
+        ("program demo\npredicate Bid(Subject: Subject)\n", "Subject"),
+        ("program demo\npredicate Bid(true: Subject)\n", "true"),
+    ] {
+        let errors = parse_program(source).expect_err("a reserved word is no name");
+        assert!(
+            errors
+                .iter()
+                .any(|d| d.message.contains(&format!("`{word}` is a reserved word"))),
+            "{word}: {errors:?}"
+        );
+    }
+    let errors = parse_program("program demo\npredicate Bid(lot: Subject,, bid: Subject)\n")
+        .expect_err("a stray comma is a parse error");
+    assert!(
+        errors.iter().all(|d| !d.message.contains("reserved word")),
+        "{errors:?}"
+    );
+}
+
 // ============================================================
 // Transformation declarations + gate statements
 // ============================================================

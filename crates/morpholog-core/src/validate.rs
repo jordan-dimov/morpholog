@@ -580,7 +580,7 @@ pub enum ValidationError {
     /// nothing to determine: zero fields, or every field a key (claims
     /// are a set - two identical claims are already one claim).
     #[error(
-        "a uniqueness discipline on `{predicate}` needs at least one key field and at least one field for the keys to determine; keying every field adds nothing, because claims are a set and two identical claims are already one claim"
+        "a uniqueness discipline on `{predicate}` needs at least one key field and at least one field for the keys to determine; keying every field adds nothing, because claims are a set and two identical claims are already one claim, so duplicates cannot exist without it; to refuse an act that would admit a claim already held, gate the act with `require not {predicate}(...)`"
     )]
     DisciplineVacuousKeys { predicate: String },
     /// The same discipline clause declared twice on one predicate.
