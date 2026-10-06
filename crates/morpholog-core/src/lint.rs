@@ -170,16 +170,30 @@ impl std::fmt::Display for Lint {
                 variable,
                 first,
                 again,
-            } => write!(
-                f,
-                "`{variable}` is matched by the `require` at statement {} of `{transformation}` \
-                 and named again at statement {}; a `require` keeps none of its matches, so the \
-                 second is a fresh match that need not agree with the first. If they must \
-                 agree, match it with `bind` instead; if they are independent, renaming one \
-                 says so",
-                first + 1,
-                again + 1
-            ),
+            } => {
+                if first == again {
+                    write!(
+                        f,
+                        "`{variable}` is matched by a `require` inside statement {} of \
+                         `{transformation}` and named again later inside it",
+                        first + 1
+                    )?;
+                } else {
+                    write!(
+                        f,
+                        "`{variable}` is matched by the `require` at statement {} of \
+                         `{transformation}` and named again at statement {}",
+                        first + 1,
+                        again + 1
+                    )?;
+                }
+                write!(
+                    f,
+                    "; a `require` keeps none of its matches, so the second is a fresh match \
+                     that need not agree with the first. If they must agree, match it with \
+                     `bind` instead; if they are independent, renaming one says so"
+                )
+            }
             Lint::CaseWiderThanClaim {
                 invariant,
                 predicate,
@@ -422,6 +436,7 @@ fn require_rematch_findings(t: &crate::ir::Transformation, out: &mut Vec<Lint>) 
         transformation: t,
         matched: std::collections::BTreeMap::new(),
         reported: BTreeSet::new(),
+        visited: 0,
         out,
     };
     let mut bound: BTreeSet<&crate::ir::Var> = t.parameters.iter().collect();
@@ -432,9 +447,11 @@ fn require_rematch_findings(t: &crate::ir::Transformation, out: &mut Vec<Lint>) 
 
 struct Rematch<'a, 'o> {
     transformation: &'a crate::ir::Transformation,
-    /// Each variable a `require` matched, by the first such statement.
-    matched: std::collections::BTreeMap<&'a crate::ir::Var, usize>,
+    /// Each variable a `require` matched, by the first such statement:
+    /// its place in visiting order, and the top-level statement holding it.
+    matched: std::collections::BTreeMap<&'a crate::ir::Var, (usize, usize)>,
     reported: BTreeSet<&'a crate::ir::Var>,
+    visited: usize,
     out: &'o mut Vec<Lint>,
 }
 
@@ -447,12 +464,14 @@ impl<'a> Rematch<'a, '_> {
         bound: &mut BTreeSet<&'a crate::ir::Var>,
     ) {
         use crate::ir::Stmt;
+        let here = self.visited;
+        self.visited += 1;
         for var in named_here(stmt) {
             if bound.contains(var) || !self.reported.insert(var) {
                 continue;
             }
             match self.matched.get(var) {
-                Some(&first) if first != index => self.out.push(Lint::RequireRematch {
+                Some(&(seen, first)) if seen != here => self.out.push(Lint::RequireRematch {
                     transformation: self.transformation.name.to_string(),
                     variable: var.to_string(),
                     first,
@@ -467,7 +486,7 @@ impl<'a> Rematch<'a, '_> {
             Stmt::Require { prop, .. } => {
                 for var in matched_by(prop) {
                     if !bound.contains(var) {
-                        self.matched.entry(var).or_insert(index);
+                        self.matched.entry(var).or_insert((here, index));
                     }
                 }
             }
@@ -488,28 +507,38 @@ impl<'a> Rematch<'a, '_> {
 }
 
 /// The variables a statement names outside any quantifier binding them
-/// and outside any `sum`, `max` or `min` body, whose variables are its own;
-/// for a `for`, only its collection, since its body is visited apart.
+/// (a `forall` binds its own in its source too) and outside any `sum`,
+/// `max` or `min` body, whose variables are its own; for a `for`, only its
+/// collection, since its body is visited apart.
 fn named_here<'a>(stmt: &'a crate::ir::Stmt) -> Vec<&'a crate::ir::Var> {
     use crate::fold::Node;
     let term = |node: Node<'a>| match node {
         Node::Slot(t) | Node::Value(ValueExpr::Term(t)) => Some(t),
         _ => None,
     };
-    let mut in_aggregate: BTreeSet<*const Term> = BTreeSet::new();
-    crate::fold::walk_stmt(stmt, &mut |node| {
-        if let Node::Value(aggregate @ (ValueExpr::Sum { .. } | ValueExpr::Extremum { .. })) = node
-        {
+    let mut local: BTreeSet<*const Term> = BTreeSet::new();
+    crate::fold::walk_stmt(stmt, &mut |node| match node {
+        Node::Value(aggregate @ (ValueExpr::Sum { .. } | ValueExpr::Extremum { .. })) => {
             crate::fold::walk_value(aggregate, &mut |inner| {
-                in_aggregate.extend(term(inner).map(std::ptr::from_ref));
+                local.extend(term(inner).map(std::ptr::from_ref));
             });
         }
+        Node::Prop(Prop::Forall {
+            binding, source, ..
+        }) => crate::fold::walk_prop(source, &mut |inner| {
+            if let Some(t @ Term::Var(v)) = term(inner)
+                && v == binding
+            {
+                local.insert(std::ptr::from_ref(t));
+            }
+        }),
+        _ => {}
     });
     let mut out = Vec::new();
     let mut take = |node: Node<'a>, scope: &[&'a crate::ir::Var]| {
         if let Some(t @ Term::Var(v)) = term(node)
             && !scope.contains(&v)
-            && !in_aggregate.contains(&std::ptr::from_ref(t))
+            && !local.contains(&std::ptr::from_ref(t))
         {
             out.push(v);
         }

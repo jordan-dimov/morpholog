@@ -1297,6 +1297,33 @@ fn a_variable_matched_by_a_require_and_named_again_is_a_hint() {
     assert!(message.contains("`bind`"), "{message}");
 }
 
+/// Two `require`s side by side in one loop body match independently too.
+#[test]
+fn a_rematch_inside_one_loop_body_is_a_hint() {
+    let found = lints_of(
+        "
+program rounds
+
+predicate RoundOpen(contest: Subject, round_id: Subject)
+predicate Enrolled(contest: Subject, participant: Subject)
+predicate Entry(round_id: Subject, participant: Subject)
+
+transformation enter_all(round_ids):
+    for round_id in round_ids:
+        require RoundOpen(contest, round_id)
+        require Enrolled(contest, actor)
+        admit Entry(round_id, actor)
+",
+    );
+    assert_eq!(rematches(&found), vec![("enter_all", "contest", 0, 0)]);
+    let message = found
+        .iter()
+        .find(|l| matches!(l, Lint::RequireRematch { .. }))
+        .unwrap()
+        .to_string();
+    assert!(message.contains("inside statement 1"), "{message}");
+}
+
 /// No hint where the variable is matched once and kept, renamed apart,
 /// local to an aggregate, matched within one `require`, or bound by a
 /// quantifier.
@@ -1321,6 +1348,11 @@ fn a_single_or_intended_match_is_not_a_hint() {
         // A quantifier's own variable.
         "    require exists contest: RoundOpen(contest, round_id)
     require Enrolled(contest, actor)
+    admit Entry(round_id, actor)
+",
+        // A `forall`'s own variable, in its source as in its body.
+        "    require RoundOpen(contest, round_id)
+    require (forall contest in Enrolled(contest, actor): RoundOpen(contest, round_id))
     admit Entry(round_id, actor)
 ",
     ] {
