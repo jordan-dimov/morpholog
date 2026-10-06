@@ -46,8 +46,9 @@ A rule's truth depends only on the programme, the proposal, the state and the su
 
 A committed decision can be reconstructed from its recorded inputs under its recorded rules, and its meaning never depends on today's clock, mutable host code or a remote service.
 
-- **Holds by:** the audit record carries the proposal's arguments, the attested actor, the hash of the whole programme that admitted it and the semantics version that decided it, inside the tamper-evident tree.
-- **Gap:** the record does not hold the subjects a decision drew, so exact re-execution needs them supplied ([#461](https://github.com/jordan-dimov/morpholog/issues/461)).
+- **Holds by:** the authenticated history before a row reconstructs its pre-state, and the row carries the proposal's arguments, the attested actor and the subjects its act drew, and names the programme that admitted it and the semantics version that decided it, all inside the tamper-evident tree. No input to a commit goes unrecorded.
+- **Checked by:** `crates/morpholog-postgres/tests/drawn_subjects.rs` re-runs every commit of a history, made through every durable path, in the ordinary kernel from the authenticated history and the row's recorded execution inputs, under a programme matching its hash that implements its recorded semantics, and requires the same change and intents with every recorded subject consumed.
+- **Boundary:** re-running a commit also needs a programme whose canonical hash matches the row, and an implementation of the semantics version it names. The record names both; it does not contain them. Recording the draws removed the last missing input; it did not create a programme or semantics archive.
 
 ### 6. Semantic identity
 
