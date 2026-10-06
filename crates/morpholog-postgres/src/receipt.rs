@@ -194,7 +194,8 @@ pub fn issue_receipt(
 /// programme say whether it is the history and rulebook the receipt names;
 /// evaluation says whether the answer recomputes. Whether the history
 /// holds every claim the outside world does is not Morpholog's to say.
-#[derive(Debug, Clone, Serialize)]
+/// Serialised with [`Self::passes`] first.
+#[derive(Debug, Clone)]
 pub struct ReceiptVerificationReport {
     pub receipt: ReceiptForm,
     pub verdict_kind: VerdictKind,
@@ -203,6 +204,49 @@ pub struct ReceiptVerificationReport {
     pub checkpoint: CheckpointMatch,
     pub program: ProgramMatch,
     pub evaluation: Evaluation,
+}
+
+impl ReceiptVerificationReport {
+    /// Whether this verification passed under the checks it was asked
+    /// for: a well-formed receipt over passing, complete evidence, naming
+    /// this history and this programme, whose answer reproduced. A witness
+    /// judged invalid fails it even when the answer reproduced. The exit
+    /// code and the serialised `passes` are both this.
+    pub fn passes(&self) -> bool {
+        self.receipt == ReceiptForm::WellFormed
+            && self.evidence.passes()
+            && self.completeness == Completeness::Complete
+            && self.checkpoint == CheckpointMatch::Matches
+            && self.program == ProgramMatch::Matches
+            && self.evaluation == Evaluation::Reproduced
+    }
+}
+
+impl Serialize for ReceiptVerificationReport {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            passes: bool,
+            receipt: &'a ReceiptForm,
+            verdict_kind: VerdictKind,
+            evidence: &'a PackVerificationReport,
+            completeness: &'a Completeness,
+            checkpoint: &'a CheckpointMatch,
+            program: &'a ProgramMatch,
+            evaluation: &'a Evaluation,
+        }
+        Wire {
+            passes: self.passes(),
+            receipt: &self.receipt,
+            verdict_kind: self.verdict_kind,
+            evidence: &self.evidence,
+            completeness: &self.completeness,
+            checkpoint: &self.checkpoint,
+            program: &self.program,
+            evaluation: &self.evaluation,
+        }
+        .serialize(serializer)
+    }
 }
 
 /// Which kind of verdict `evidence` carries, so a reader can decode it. A
@@ -349,5 +393,96 @@ fn reevaluate(
         Err(e) => Evaluation::Errored {
             detail: e.to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RoleRebindings;
+    use crate::witnesses::{PackVerdict, WitnessStanding, witnesses_judged};
+
+    fn passing() -> ReceiptVerificationReport {
+        ReceiptVerificationReport {
+            receipt: ReceiptForm::WellFormed,
+            verdict_kind: VerdictKind::Prefix,
+            evidence: PackVerificationReport {
+                verdict: PackVerdict::Prefix(TreeVerification::Intact {
+                    checkpoints: 1,
+                    tree_size: 1,
+                }),
+                witnesses: None,
+                role_rebindings: RoleRebindings::NotEvaluated,
+            },
+            completeness: Completeness::Complete,
+            checkpoint: CheckpointMatch::Matches,
+            program: ProgramMatch::Matches,
+            evaluation: Evaluation::Reproduced,
+        }
+    }
+
+    /// Every layer must hold. An invalid witness fails the receipt even
+    /// though the answer reproduced, which is why passing is the report's
+    /// to say and not any one layer's.
+    #[test]
+    fn a_receipt_report_passes_only_when_every_layer_holds() {
+        assert!(passing().passes());
+        type Break = Box<dyn Fn(&mut ReceiptVerificationReport)>;
+        let failures: [(&str, Break); 7] = [
+            (
+                "malformed",
+                Box::new(|r| {
+                    r.receipt = ReceiptForm::Malformed {
+                        detail: "x".to_string(),
+                    };
+                }),
+            ),
+            (
+                "invalid witness, answer reproduced",
+                Box::new(|r| {
+                    r.evidence.witnesses = Some(witnesses_judged(WitnessStanding::Invalid))
+                }),
+            ),
+            (
+                "not complete",
+                Box::new(|r| r.completeness = Completeness::NotComplete),
+            ),
+            (
+                "checkpoint not checked",
+                Box::new(|r| r.checkpoint = CheckpointMatch::NotChecked),
+            ),
+            (
+                "programme not checked",
+                Box::new(|r| r.program = ProgramMatch::NotChecked),
+            ),
+            (
+                "not re-evaluated",
+                Box::new(|r| {
+                    r.evaluation = Evaluation::NotReEvaluated {
+                        receipt_semantics: 2,
+                        binary_semantics: 1,
+                    };
+                }),
+            ),
+            (
+                "differs",
+                Box::new(|r| {
+                    r.evaluation = Evaluation::Differs {
+                        missing: 1,
+                        unexpected: 0,
+                    };
+                }),
+            ),
+        ];
+        for (what, fail) in failures {
+            let mut report = passing();
+            fail(&mut report);
+            assert!(!report.passes(), "{what}");
+            assert_eq!(
+                serde_json::to_value(&report).unwrap()["passes"],
+                false,
+                "{what}"
+            );
+        }
     }
 }

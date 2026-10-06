@@ -1540,12 +1540,14 @@ pub struct morpholog_postgres::PackVerificationReport
 pub morpholog_postgres::PackVerificationReport::role_rebindings: morpholog_postgres::RoleRebindings
 pub morpholog_postgres::PackVerificationReport::verdict: morpholog_postgres::PackVerdict
 pub morpholog_postgres::PackVerificationReport::witnesses: core::option::Option<morpholog_postgres::WitnessesReport>
+impl morpholog_postgres::PackVerificationReport
+pub fn morpholog_postgres::PackVerificationReport::passes(&self) -> bool
 impl core::clone::Clone for morpholog_postgres::PackVerificationReport
 pub fn morpholog_postgres::PackVerificationReport::clone(&self) -> morpholog_postgres::PackVerificationReport
 impl core::fmt::Debug for morpholog_postgres::PackVerificationReport
 pub fn morpholog_postgres::PackVerificationReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl serde_core::ser::Serialize for morpholog_postgres::PackVerificationReport
-pub fn morpholog_postgres::PackVerificationReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub fn morpholog_postgres::PackVerificationReport::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 impl core::marker::Freeze for morpholog_postgres::PackVerificationReport
 impl core::marker::Send for morpholog_postgres::PackVerificationReport
 impl core::marker::Sync for morpholog_postgres::PackVerificationReport
@@ -1776,12 +1778,14 @@ pub morpholog_postgres::ReceiptVerificationReport::evidence: morpholog_postgres:
 pub morpholog_postgres::ReceiptVerificationReport::program: morpholog_postgres::ProgramMatch
 pub morpholog_postgres::ReceiptVerificationReport::receipt: morpholog_postgres::ReceiptForm
 pub morpholog_postgres::ReceiptVerificationReport::verdict_kind: morpholog_postgres::VerdictKind
+impl morpholog_postgres::ReceiptVerificationReport
+pub fn morpholog_postgres::ReceiptVerificationReport::passes(&self) -> bool
 impl core::clone::Clone for morpholog_postgres::ReceiptVerificationReport
 pub fn morpholog_postgres::ReceiptVerificationReport::clone(&self) -> morpholog_postgres::ReceiptVerificationReport
 impl core::fmt::Debug for morpholog_postgres::ReceiptVerificationReport
 pub fn morpholog_postgres::ReceiptVerificationReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl serde_core::ser::Serialize for morpholog_postgres::ReceiptVerificationReport
-pub fn morpholog_postgres::ReceiptVerificationReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub fn morpholog_postgres::ReceiptVerificationReport::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 impl core::marker::Freeze for morpholog_postgres::ReceiptVerificationReport
 impl core::marker::Send for morpholog_postgres::ReceiptVerificationReport
 impl core::marker::Sync for morpholog_postgres::ReceiptVerificationReport
@@ -2088,12 +2092,14 @@ pub morpholog_postgres::VerifyReport::role_rebindings: morpholog_postgres::RoleR
 pub morpholog_postgres::VerifyReport::tree: morpholog_postgres::TreeVerification
 pub morpholog_postgres::VerifyReport::views: core::option::Option<morpholog_postgres::ViewsVerification>
 pub morpholog_postgres::VerifyReport::witnesses: core::option::Option<morpholog_postgres::WitnessesReport>
+impl morpholog_postgres::VerifyReport
+pub fn morpholog_postgres::VerifyReport::passes(&self) -> bool
 impl core::clone::Clone for morpholog_postgres::VerifyReport
 pub fn morpholog_postgres::VerifyReport::clone(&self) -> morpholog_postgres::VerifyReport
 impl core::fmt::Debug for morpholog_postgres::VerifyReport
 pub fn morpholog_postgres::VerifyReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl serde_core::ser::Serialize for morpholog_postgres::VerifyReport
-pub fn morpholog_postgres::VerifyReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+pub fn morpholog_postgres::VerifyReport::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
 impl core::marker::Freeze for morpholog_postgres::VerifyReport
 impl core::marker::Send for morpholog_postgres::VerifyReport
 impl core::marker::Sync for morpholog_postgres::VerifyReport
@@ -2209,7 +2215,7 @@ pub struct morpholog_postgres::WitnessesReport
 pub morpholog_postgres::WitnessesReport::checkpoints: alloc::vec::Vec<morpholog_postgres::CheckpointWitnesses>
 pub morpholog_postgres::WitnessesReport::earliest_attested_at: core::option::Option<jiff::timestamp::Timestamp>
 impl morpholog_postgres::WitnessesReport
-pub fn morpholog_postgres::WitnessesReport::any_invalid(&self) -> bool
+pub fn morpholog_postgres::WitnessesReport::passes(&self) -> bool
 impl core::clone::Clone for morpholog_postgres::WitnessesReport
 pub fn morpholog_postgres::WitnessesReport::clone(&self) -> morpholog_postgres::WitnessesReport
 impl core::cmp::Eq for morpholog_postgres::WitnessesReport

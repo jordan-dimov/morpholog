@@ -1085,6 +1085,15 @@ def _drawn_subjects_of(data: dict[str, object]) -> list[str] | None:
 _ABSENT = object()
 
 
+def _passes(label: str, data: dict[str, object]) -> bool:
+    """A report's own verdict on whether its verification passed: a JSON
+    boolean, never coerced."""
+    raw = data["passes"]
+    if not isinstance(raw, bool):
+        raise EnvelopeError(f"{label}: passes must be a boolean, got {raw!r}")
+    return raw
+
+
 @dataclass(frozen=True)
 class Attestation:
     """How the actor identity on an audit row was established. Gateway
@@ -2298,8 +2307,14 @@ class VerifyReport:
     tamper-evidence verdict, the login roles seen under a new OID in the
     rows the tree covered, plus the generated-view-surface verdict when
     the verifier asked for it (`--views-schema`), plus what the
-    checkpoints' external witnesses prove when any carries one."""
+    checkpoints' external witnesses prove when any carries one.
 
+    `passes` is whether the verification passed under the checks it was
+    asked for, decided as the binary's exit code is: replay consistent, tree
+    intact, a checked view surface not tampered (`not_sealed` passes), and
+    no witness judged invalid. Read it rather than re-deriving the rule."""
+
+    passes: bool
     replay: ReplayConsistent | ReplayDivergent
     tree: TreeVerification
     role_rebindings: RoleRebindings
@@ -2311,12 +2326,13 @@ class VerifyReport:
         data = _strict(
             "verify report",
             payload,
-            {"replay", "tree", "role_rebindings"},
+            {"passes", "replay", "tree", "role_rebindings"},
             optional={"views", "witnesses"},
         )
         views = data.get("views")
         witnesses = data.get("witnesses")
         return cls(
+            passes=_passes("verify report", data),
             replay=parse_verify_outcome(data["replay"]),
             tree=parse_tree_verification(data["tree"]),
             role_rebindings=parse_role_rebindings(data["role_rebindings"]),
@@ -2938,8 +2954,15 @@ class PackVerificationReport(Generic[_PackVerdict]):
     """The `verify-pack` envelope: the pack's own verdict, the login roles
     seen under a new OID among its rows, and, when asked for, what its
     checkpoints' witnesses prove. ``witnesses`` is absent unless requested,
-    or when no checkpoint in the pack carries one."""
+    or when no checkpoint in the pack carries one.
 
+    ``passes`` is whether the verification passed under the checks it was
+    asked for, decided as the binary's exit code is: an intact verdict and
+    no witness judged ``invalid``. ``verified``, ``untrusted``,
+    ``unverified`` and ``unsupported`` do not fail it, and witnesses not
+    asked for were not judged. Read it rather than re-deriving the rule."""
+
+    passes: bool
     verdict: _PackVerdict
     role_rebindings: RoleRebindings
     witnesses: WitnessesReport | None = None
@@ -2951,11 +2974,12 @@ class PackVerificationReport(Generic[_PackVerdict]):
         data = _strict(
             "pack verification report",
             payload,
-            {"verdict", "role_rebindings"},
+            {"passes", "verdict", "role_rebindings"},
             optional={"witnesses"},
         )
         witnesses = data.get("witnesses")
         return cls(
+            passes=_passes("pack verification report", data),
             verdict=parse_verdict(data["verdict"]),
             role_rebindings=parse_role_rebindings(data["role_rebindings"]),
             witnesses=None if witnesses is None else WitnessesReport.from_json(witnesses),
@@ -3166,8 +3190,11 @@ class ReceiptVerificationReport:
     `verdict_kind` names. Evaluation runs only when the evidence is an
     intact complete prefix and the checkpoint and programme match; a
     witness judged invalid in `evidence` fails the receipt without
-    stopping it, so `evaluation == "reproduced"` alone is not a pass."""
+    stopping it, so `evaluation == "reproduced"` alone is not a pass.
+    `passes` is the binary's verdict over every layer, decided as its exit
+    code is: read it rather than re-deriving the rule."""
 
+    passes: bool
     receipt: str | ReceiptMalformed
     verdict_kind: str
     evidence: PackVerificationReport[TreeVerification | WindowVerification | SelectiveVerification]
@@ -3182,6 +3209,7 @@ class ReceiptVerificationReport:
             "receipt verification report",
             payload,
             {
+                "passes",
                 "receipt",
                 "verdict_kind",
                 "evidence",
@@ -3198,6 +3226,7 @@ class ReceiptVerificationReport:
         if parse_verdict is None:
             raise EnvelopeError(f"not a verdict kind: {verdict_kind!r}")
         return cls(
+            passes=_passes("receipt verification report", data),
             receipt=_by_status(
                 data["receipt"],
                 "a receipt form",

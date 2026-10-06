@@ -1,9 +1,11 @@
 {
+  "passes": false,
   "receipt": {
     "status": "well_formed"
   },
   "verdict_kind": "window",
   "evidence": {
+    "passes": true,
     "verdict": {
       "status": "intact",
       "from_tree_size": 2,

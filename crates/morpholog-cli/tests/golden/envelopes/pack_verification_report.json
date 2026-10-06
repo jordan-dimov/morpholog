@@ -1,4 +1,5 @@
 {
+  "passes": true,
   "verdict": {
     "status": "intact",
     "from_tree_size": 2,

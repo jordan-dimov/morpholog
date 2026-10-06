@@ -12,8 +12,8 @@ use morpholog_postgres::{
     Checkpoint, EvidencePack, NEWEST_PACK_FORMAT, PackError, PackKind, PackVerdict,
     PackVerificationReport, RoleRebindings, SelectiveEvidencePack, SelectiveVerification,
     SignaturePolicy, TreeVerification, WindowEvidencePack, WindowStart, WindowVerification,
-    WitnessesReport, begin_prefix_export, export_selective, export_window, pack_format_version,
-    pack_kind, pack_role_rebindings, read_prefix_stream, streamed_pack_version, verify_pack,
+    begin_prefix_export, export_selective, export_window, pack_format_version, pack_kind,
+    pack_role_rebindings, read_prefix_stream, streamed_pack_version, verify_pack,
     verify_prefix_stream, verify_selective, verify_window, with_anchor_signatures,
     witnesses_report,
 };
@@ -107,11 +107,7 @@ fn write_line(out: &mut impl Write, value: &impl serde::Serialize) -> anyhow::Re
 pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     let report = pack_report(&args.pack_file, &args.trust)?;
     print_json(&report)?;
-    let witness_invalid = report
-        .witnesses
-        .as_ref()
-        .is_some_and(WitnessesReport::any_invalid);
-    if !report.verdict.is_intact() || witness_invalid {
+    if !report.passes() {
         return Err(AlreadyReported.into());
     }
     Ok(())

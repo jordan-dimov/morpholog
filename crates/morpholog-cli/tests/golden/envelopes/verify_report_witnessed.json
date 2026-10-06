@@ -1,4 +1,5 @@
 {
+  "passes": true,
   "replay": {
     "status": "consistent",
     "transitions": 2,

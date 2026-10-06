@@ -47,18 +47,56 @@ pub enum VerifyOutcome {
 /// The `morpholog audit verify` envelope: the replay verdict (claims vs
 /// audit log) and the tree verdict (Merkle tree vs checkpoints), plus the
 /// view-surface verdict when requested and the witness report when any
-/// checkpoint has witnesses. Field order is the wire contract.
-#[derive(Debug, Clone, Serialize)]
+/// checkpoint has witnesses. Serialised with [`Self::passes`] first; field
+/// order is the wire contract.
+#[derive(Debug, Clone)]
 pub struct VerifyReport {
     pub replay: VerifyOutcome,
     pub tree: TreeVerification,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub views: Option<ViewsVerification>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub witnesses: Option<WitnessesReport>,
     /// Login-role names seen under a new OID in the checkpointed rows.
     /// Reported only when the tree is intact, and never a failure.
     pub role_rebindings: RoleRebindings,
+}
+
+impl VerifyReport {
+    /// Whether this verification passed under the checks it was asked
+    /// for: replay reproduces the claims, the tree is intact, the view
+    /// surface (when checked) was not tampered with, and no witness was
+    /// judged invalid. An unsealed surface has nothing to contradict, so it
+    /// passes. The exit code and the serialised `passes` are both this.
+    pub fn passes(&self) -> bool {
+        matches!(self.replay, VerifyOutcome::Consistent { .. })
+            && matches!(self.tree, TreeVerification::Intact { .. })
+            && !matches!(self.views, Some(ViewsVerification::Tampered { .. }))
+            && self.witnesses.as_ref().is_none_or(WitnessesReport::passes)
+    }
+}
+
+impl Serialize for VerifyReport {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            passes: bool,
+            replay: &'a VerifyOutcome,
+            tree: &'a TreeVerification,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            views: Option<&'a ViewsVerification>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            witnesses: Option<&'a WitnessesReport>,
+            role_rebindings: &'a RoleRebindings,
+        }
+        Wire {
+            passes: self.passes(),
+            replay: &self.replay,
+            tree: &self.tree,
+            views: self.views.as_ref(),
+            witnesses: self.witnesses.as_ref(),
+            role_rebindings: &self.role_rebindings,
+        }
+        .serialize(serializer)
+    }
 }
 
 /// The verdict over a generated SQL view surface: the seal recorded at
@@ -452,5 +490,83 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
             only_in_claims_table,
             only_in_replay,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::witnesses::{WitnessStanding, witnesses_judged};
+
+    fn report(
+        replay: VerifyOutcome,
+        tree: TreeVerification,
+        views: Option<ViewsVerification>,
+        witnesses: Option<WitnessStanding>,
+    ) -> VerifyReport {
+        VerifyReport {
+            replay,
+            tree,
+            views,
+            witnesses: witnesses.map(witnesses_judged),
+            role_rebindings: RoleRebindings::NotEvaluated,
+        }
+    }
+
+    fn consistent() -> VerifyOutcome {
+        VerifyOutcome::Consistent {
+            transitions: 1,
+            claims: 1,
+        }
+    }
+
+    fn intact() -> TreeVerification {
+        TreeVerification::Intact {
+            checkpoints: 1,
+            tree_size: 1,
+        }
+    }
+
+    /// Each axis that can fail fails it alone; an unsealed view surface
+    /// has nothing to contradict, so it passes.
+    #[test]
+    fn a_verify_report_passes_only_when_every_checked_axis_holds() {
+        assert!(report(consistent(), intact(), None, None).passes());
+        for views in [
+            ViewsVerification::Intact { views_checked: 2 },
+            ViewsVerification::NotSealed,
+        ] {
+            assert!(report(consistent(), intact(), Some(views), None).passes());
+        }
+        assert!(
+            report(
+                consistent(),
+                intact(),
+                None,
+                Some(WitnessStanding::Unverified)
+            )
+            .passes()
+        );
+
+        let divergent = VerifyOutcome::Divergent {
+            only_in_claims_table: Vec::new(),
+            only_in_replay: Vec::new(),
+        };
+        let broken = TreeVerification::ChainBroken {
+            detail: "a prev link is broken".to_string(),
+        };
+        let tampered_views = ViewsVerification::Tampered {
+            mismatched: vec!["v".to_string()],
+            missing: Vec::new(),
+        };
+        for failing in [
+            report(divergent, intact(), None, None),
+            report(consistent(), broken, None, None),
+            report(consistent(), intact(), Some(tampered_views), None),
+            report(consistent(), intact(), None, Some(WitnessStanding::Invalid)),
+        ] {
+            assert!(!failing.passes(), "{failing:?}");
+            assert_eq!(serde_json::to_value(&failing).unwrap()["passes"], false);
+        }
     }
 }

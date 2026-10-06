@@ -1,4 +1,5 @@
 {
+  "passes": true,
   "replay": {
     "claims": 3,
     "status": "consistent",
