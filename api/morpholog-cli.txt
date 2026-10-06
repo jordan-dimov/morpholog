@@ -165,10 +165,10 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::InitR
 impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::InitReport
 pub struct morpholog_cli::envelopes::LeastPrivilegeReport
 pub morpholog_cli::envelopes::LeastPrivilegeReport::next_steps: alloc::vec::Vec<alloc::string::String>
-pub morpholog_cli::envelopes::LeastPrivilegeReport::reader_role: &'static str
-pub morpholog_cli::envelopes::LeastPrivilegeReport::writer_role: &'static str
+pub morpholog_cli::envelopes::LeastPrivilegeReport::reader_role: alloc::string::String
+pub morpholog_cli::envelopes::LeastPrivilegeReport::writer_role: alloc::string::String
 impl morpholog_cli::envelopes::LeastPrivilegeReport
-pub fn morpholog_cli::envelopes::LeastPrivilegeReport::applied() -> Self
+pub fn morpholog_cli::envelopes::LeastPrivilegeReport::applied(&morpholog_postgres::provision::DeploymentRoles) -> Self
 impl serde_core::ser::Serialize for morpholog_cli::envelopes::LeastPrivilegeReport
 pub fn morpholog_cli::envelopes::LeastPrivilegeReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl core::marker::Freeze for morpholog_cli::envelopes::LeastPrivilegeReport

@@ -36,6 +36,16 @@ CREATE TABLE schema_migrations (
     applied_at  timestamptz  NOT NULL DEFAULT now()
 );
 
+-- The group roles this deployment's least-privilege floor grants to,
+-- written by `init --least-privilege`. Roles belong to the whole cluster,
+-- so a database names its own here, and `migrate` re-applies the floor to
+-- these roles and no others. At most one row; none without the floor.
+CREATE TABLE deployment_roles (
+    singleton    boolean  PRIMARY KEY DEFAULT true CHECK (singleton),
+    writer_role  text     NOT NULL,
+    reader_role  text     NOT NULL
+);
+
 
 -- The digest a claim is keyed by. Keying on the whole argument array
 -- put a silent ceiling on argument size: a btree index row may not
@@ -622,4 +632,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (19, 'requirement_position'),
     (20, 'audit_model_hash'),
     (21, 'audit_semantics_version'),
-    (22, 'audit_drawn_subjects');
+    (22, 'audit_drawn_subjects'),
+    (23, 'deployment_roles');

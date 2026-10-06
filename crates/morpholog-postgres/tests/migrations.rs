@@ -29,6 +29,8 @@ const SEMANTICS_VERSION_MIGRATION: &str =
     include_str!("../../morpholog-core/sql/migrations/021_audit_semantics_version.sql");
 const DRAWN_SUBJECTS_MIGRATION: &str =
     include_str!("../../morpholog-core/sql/migrations/022_audit_drawn_subjects.sql");
+const DEPLOYMENT_ROLES_MIGRATION: &str =
+    include_str!("../../morpholog-core/sql/migrations/023_deployment_roles.sql");
 
 /// Run one statement whose text this test owns. The scratch schema name is a
 /// literal here, never external input.
@@ -2132,6 +2134,63 @@ async fn the_drawn_subjects_migration_accepts_two_shapes_and_refuses_the_rest() 
         assert!(refused(&result), "{what}: {result:?}");
     }
 
+    ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn the_deployment_roles_migration_holds_one_row_and_refuses_another_shape() {
+    let pool = test_pool().await;
+    let scratch = "morpholog_deployment_roles_probe";
+    ddl(&pool, format!("DROP SCHEMA IF EXISTS {scratch} CASCADE"))
+        .await
+        .unwrap();
+    ddl(&pool, format!("CREATE SCHEMA {scratch}"))
+        .await
+        .unwrap();
+    let migration = DEPLOYMENT_ROLES_MIGRATION.replace(
+        "morpholog.deployment_roles",
+        &format!("{scratch}.deployment_roles"),
+    );
+
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the pre-migration shape migrates");
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the head shape is current");
+    ddl(
+        &pool,
+        format!("DELETE FROM {scratch}.deployment_roles; INSERT INTO {scratch}.deployment_roles (writer_role, reader_role) VALUES ('w', 'r')"),
+    )
+    .await
+    .unwrap();
+    for second in [
+        "(writer_role, reader_role) VALUES ('w2', 'r2')",
+        "(singleton, writer_role, reader_role) VALUES (false, 'w2', 'r2')",
+    ] {
+        ddl(
+            &pool,
+            format!("INSERT INTO {scratch}.deployment_roles {second}"),
+        )
+        .await
+        .expect_err("a deployment records one pair of roles");
+    }
+
+    ddl(
+        &pool,
+        format!("ALTER TABLE {scratch}.deployment_roles ADD COLUMN note text"),
+    )
+    .await
+    .unwrap();
+    let result = ddl(&pool, migration).await;
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|e| e.to_string().contains("refusing to guess")),
+        "another shape is refused: {result:?}"
+    );
     ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
         .await
         .unwrap();

@@ -6,15 +6,17 @@
 //!
 //! `--least-privilege` also provisions the writer and reader roles, so the
 //! governed path is the only way in from the start. It is idempotent, so
-//! with `--skip-if-exists` it can retrofit an existing database.
+//! with `--skip-if-exists` it can retrofit an existing database. Each
+//! deployment on a cluster names its own roles with `--role-prefix`.
 
 use anyhow::{Context, anyhow};
 use morpholog_postgres::{
-    InitOutcome, drop_schema, initialise_schema, provision_least_privilege, redact_database_url,
+    DeploymentRoles, InitOutcome, drop_schema, initialise_schema, provision_least_privilege,
+    redact_database_url,
 };
 
 use crate::InitArgs;
-use crate::commands::{AlreadyReported, connect_unchecked, print_json};
+use crate::commands::{AlreadyReported, connect_unchecked, print_json, warn_if_roles_shared};
 use morpholog_cli::envelopes::{InitReport, LeastPrivilegeReport};
 
 pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
@@ -33,6 +35,8 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
             redact_database_url(&args.db.database_url)
         ));
     }
+
+    let roles = DeploymentRoles::with_prefix(&args.role_prefix)?;
 
     // Unchecked: this is the command that provisions a database.
     let pool = connect_unchecked(&args.db.database_url).await?;
@@ -62,10 +66,11 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
         if status == "already-initialised" {
             morpholog_postgres::require_current_schema(&pool).await?;
         }
-        provision_least_privilege(&pool)
+        provision_least_privilege(&pool, &roles)
             .await
             .context("least-privilege provisioning failed")?;
-        Some(LeastPrivilegeReport::applied())
+        warn_if_roles_shared(&pool, &roles).await?;
+        Some(LeastPrivilegeReport::applied(&roles))
     } else {
         None
     };

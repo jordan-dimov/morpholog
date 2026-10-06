@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.datname::text AS \"datname!\"\n           FROM pg_shdepend s\n           JOIN pg_database d ON d.oid = s.dbid\n           JOIN pg_roles r ON r.oid = s.refobjid\n           WHERE s.refclassid = 'pg_authid'::regclass\n             AND r.rolname = ANY($1)\n             AND d.datname <> current_database()\n           UNION\n           SELECT d.datname::text\n           FROM pg_database d\n           JOIN pg_roles r ON r.oid = d.datdba\n           WHERE r.rolname = ANY($1)\n             AND d.datname <> current_database()\n           ORDER BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "datname!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "NameArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "726129ed9f06db89670bd1aaa7dba624ad6772da914aaad4faee85a9eeb0a7c7"
+}
