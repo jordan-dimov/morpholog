@@ -132,6 +132,7 @@ mod tests {
             parameters: None,
             model_hash: None,
             semantics_version: None,
+            drawn_subjects: None,
         }
     }
 

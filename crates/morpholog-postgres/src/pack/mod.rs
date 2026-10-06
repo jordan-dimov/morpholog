@@ -50,6 +50,7 @@ pub(crate) struct FormatLadder {
     pub(crate) legacy: u32,
     pub(crate) model: u32,
     pub(crate) semantics: u32,
+    pub(crate) subjects: u32,
 }
 
 impl FormatLadder {
@@ -59,15 +60,21 @@ impl FormatLadder {
             RowRung::Legacy => self.legacy,
             RowRung::Model => self.model,
             RowRung::Semantics => self.semantics,
+            RowRung::Subjects => self.subjects,
         }
     }
 
     /// The rung a version of this kind stands for, or `None` for a version
     /// that is not this kind's.
     pub(crate) fn rung(self, version: u32) -> Option<RowRung> {
-        [RowRung::Legacy, RowRung::Model, RowRung::Semantics]
-            .into_iter()
-            .find(|&rung| self.version(rung) == version)
+        [
+            RowRung::Legacy,
+            RowRung::Model,
+            RowRung::Semantics,
+            RowRung::Subjects,
+        ]
+        .into_iter()
+        .find(|&rung| self.version(rung) == version)
     }
 
     /// The version for a pack disclosing `rows`.
@@ -101,7 +108,10 @@ fn rung_description(rung: RowRung) -> &'static str {
     match rung {
         RowRung::Legacy => "names no programme",
         RowRung::Model => "names its programme but not its semantics",
-        RowRung::Semantics => "names its programme and the semantics that decided it",
+        RowRung::Semantics => {
+            "names its programme and the semantics that decided it, but not its draws"
+        }
+        RowRung::Subjects => "also records the subjects its act drew",
     }
 }
 
@@ -109,16 +119,19 @@ pub(crate) const DOCUMENT_FORMATS: FormatLadder = FormatLadder {
     legacy: PACK_FORMAT_V1,
     model: 8,
     semantics: 12,
+    subjects: 16,
 };
 const WINDOW_FORMATS: FormatLadder = FormatLadder {
     legacy: PACK_FORMAT_V2,
     model: 6,
     semantics: 10,
+    subjects: 14,
 };
 const SELECTIVE_FORMATS: FormatLadder = FormatLadder {
     legacy: PACK_FORMAT_V3,
     model: 7,
     semantics: 11,
+    subjects: 15,
 };
 
 /// What a pack is, by its format version.
@@ -147,7 +160,7 @@ pub fn pack_kind(version: u64) -> Option<PackKind> {
 }
 
 /// The highest pack format version this binary reads.
-pub const NEWEST_PACK_FORMAT: u32 = 12;
+pub const NEWEST_PACK_FORMAT: u32 = 16;
 
 /// The highest rung among `rows`.
 pub(crate) fn highest_rung<'r>(rows: impl IntoIterator<Item = &'r AuditRow>) -> RowRung {

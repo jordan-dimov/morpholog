@@ -628,6 +628,8 @@ The claim is semantic: ambient clock or randomness never supplies a governed val
 
 Freshness belongs to transformation-body execution only: admission checking draws nothing.
 
+Every committed act records the subjects it drew, in draw order, in its audit row and so in its Merkle leaf. The list includes a draw whose value appears in no admitted claim (one used only in an emitted intent, or never used), since re-running the act must consume exactly what it consumed. An act that drew nothing records an empty list; rows from before draws were recorded carry none. Draws by a refused proposal are not recorded. A drawn UUIDv7 carries the millisecond it was minted, so a draw that appears nowhere else shows slightly finer timing within the transaction than `committed_at`, which is the transaction's start.
+
 ## Semantics versions
 
 The programme hash names the rules. `SEMANTICS_VERSION`, a constant in the kernel, names what the kernel makes of them. It moves when the result of any public semantic evaluation can change for the same programme, state and inputs: a proposal's admitted change, emitted intents, rejection (rule, version, witness) or error; an invariant's truth or error; a derived claim's rows or error. Cost, plans, the compiled route, diagnostics, explanation wording and wire formats are not semantics and never move it.

@@ -1002,7 +1002,13 @@ _AUDIT_ROW_KEYS = {
     "committed_at",
 }
 
-_AUDIT_ROW_OPTIONAL_KEYS = {"attestation", "parameters", "model_hash", "semantics_version"}
+_AUDIT_ROW_OPTIONAL_KEYS = {
+    "attestation",
+    "parameters",
+    "model_hash",
+    "semantics_version",
+    "drawn_subjects",
+}
 
 
 def _parameters_of(data: dict[str, object]) -> list[str] | None:
@@ -1058,6 +1064,22 @@ def _semantics_version_of(data: dict[str, object]) -> int | None:
     if data.get("model_hash") is None:
         raise EnvelopeError("an audit row carries a semantics version without a model hash")
     return raw
+
+
+def _drawn_subjects_of(data: dict[str, object]) -> list[str] | None:
+    """The subjects a row records its act drawing, in order: strings,
+    possibly none, only on a row that also names its semantics."""
+    if "drawn_subjects" not in data:
+        return None
+    raw = data["drawn_subjects"]
+    if raw is None:
+        raise EnvelopeError(
+            "an audit row carries drawn_subjects: null; absent is the only spelling"
+        )
+    drawn = _str_list("drawn_subjects", raw)
+    if data.get("semantics_version") is None:
+        raise EnvelopeError("an audit row records drawn subjects without a semantics version")
+    return drawn
 
 
 _ABSENT = object()
@@ -1135,6 +1157,9 @@ class AuditRow:
     # The version of the kernel's semantics that decided the row. None on
     # rows from before it was stamped.
     semantics_version: int | None = None
+    # The subjects the act drew from `new Subject()`, in draw order; empty
+    # when it drew none. None on rows from before draws were recorded.
+    drawn_subjects: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRow:
@@ -1156,6 +1181,7 @@ class AuditRow:
             parameters=_parameters_of(data),
             model_hash=_model_hash_of(data),
             semantics_version=_semantics_version_of(data),
+            drawn_subjects=_drawn_subjects_of(data),
         )
 
 
@@ -1188,6 +1214,9 @@ class AuditRowNamed:
     # The version of the kernel's semantics that decided the row. None on
     # rows from before it was stamped.
     semantics_version: int | None = None
+    # The subjects the act drew from `new Subject()`, in draw order; empty
+    # when it drew none. None on rows from before draws were recorded.
+    drawn_subjects: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRowNamed:
@@ -1209,6 +1238,7 @@ class AuditRowNamed:
             parameters=_parameters_of(data),
             model_hash=_model_hash_of(data),
             semantics_version=_semantics_version_of(data),
+            drawn_subjects=_drawn_subjects_of(data),
         )
 
 

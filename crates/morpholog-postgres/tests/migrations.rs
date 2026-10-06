@@ -27,6 +27,8 @@ const MODEL_HASH_MIGRATION: &str =
     include_str!("../../morpholog-core/sql/migrations/020_audit_model_hash.sql");
 const SEMANTICS_VERSION_MIGRATION: &str =
     include_str!("../../morpholog-core/sql/migrations/021_audit_semantics_version.sql");
+const DRAWN_SUBJECTS_MIGRATION: &str =
+    include_str!("../../morpholog-core/sql/migrations/022_audit_drawn_subjects.sql");
 
 /// Run one statement whose text this test owns. The scratch schema name is a
 /// literal here, never external input.
@@ -590,6 +592,12 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     .expect("simulate a database from before checkpoint witnesses");
     ddl(
         &pool,
+        "ALTER TABLE morpholog.audit DROP COLUMN drawn_subjects".to_string(),
+    )
+    .await
+    .expect("simulate a database from before rows recorded their draws");
+    ddl(
+        &pool,
         "ALTER TABLE morpholog.audit DROP COLUMN semantics_version".to_string(),
     )
     .await
@@ -928,11 +936,17 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     .execute(&pool)
     .await;
     // PostgreSQL reports the first failing check by constraint name, so a
-    // row missing both later fields names either boundary.
+    // row missing several later fields names any of their boundaries.
     match unstamped {
         Err(e)
-            if e.to_string().contains("audit_parameters_required")
-                || e.to_string().contains("audit_model_hash_required") => {}
+            if [
+                "audit_parameters_required",
+                "audit_model_hash_required",
+                "audit_semantics_version_required",
+                "audit_drawn_subjects_required",
+            ]
+            .iter()
+            .any(|c| e.to_string().contains(c)) => {}
         other => {
             return Err(format!(
                 "a new unstamped row must be refused by an activation constraint, got {other:?}"
@@ -952,7 +966,14 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     .execute(&pool)
     .await;
     match unhashed {
-        Err(e) if e.to_string().contains("audit_model_hash_required") => {}
+        Err(e)
+            if [
+                "audit_model_hash_required",
+                "audit_semantics_version_required",
+                "audit_drawn_subjects_required",
+            ]
+            .iter()
+            .any(|c| e.to_string().contains(c)) => {}
         other => {
             return Err(format!(
                 "a new row naming no programme must be refused by audit_model_hash_required, got {other:?}"
@@ -989,10 +1010,49 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
     .execute(&pool)
     .await;
     match unversioned {
-        Err(e) if e.to_string().contains("audit_semantics_version_required") => {}
+        Err(e)
+            if e.to_string().contains("audit_semantics_version_required")
+                || e.to_string().contains("audit_drawn_subjects_required") => {}
         other => {
             return Err(format!(
-                "a new row naming no semantics must be refused by audit_semantics_version_required, got {other:?}"
+                "a new row naming no semantics must be refused by an activation constraint, got {other:?}"
+            ));
+        }
+    }
+    let drawn = columns(&pool, "morpholog", "audit")
+        .await
+        .into_iter()
+        .find(|(name, _, _)| name == "drawn_subjects");
+    if drawn
+        != Some((
+            "drawn_subjects".to_string(),
+            "YES".to_string(),
+            "jsonb".to_string(),
+        ))
+    {
+        return Err(format!(
+            "drawn_subjects must come back as nullable jsonb, got {drawn:?}"
+        ));
+    }
+    let undrawn = sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents, attestation, parameters,
+            model_hash, semantics_version
+         ) VALUES ($1, 'stale_binary', '[]', '{\"type\":\"subject\",\"value\":\"s\"}',
+                   1, '[]', '[]', '[]', '[]',
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"s\"}', '[]',
+                   'sha256:' || repeat('0', 64), 1)",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .execute(&pool)
+    .await;
+    match undrawn {
+        Err(e) if e.to_string().contains("audit_drawn_subjects_required") => {}
+        other => {
+            return Err(format!(
+                "a new row recording no draws must be refused by audit_drawn_subjects_required, got {other:?}"
             ));
         }
     }
@@ -1001,11 +1061,11 @@ async fn upgrade_probe(url: &str) -> Result<(), String> {
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents, attestation, parameters,
-            model_hash, semantics_version
+            model_hash, semantics_version, drawn_subjects
          ) VALUES ($1, 'misshapen', '[]', '{\"type\":\"subject\",\"value\":\"m\"}',
                    1, '[]', '[]', '[]', '[]',
                    '{\"mode\":\"gateway\",\"authenticated_by\":\"m\"}', '[\"extra\"]',
-                   'sha256:' || repeat('0', 64), 1)",
+                   'sha256:' || repeat('0', 64), 1, '[]')",
     )
     .bind(uuid::Uuid::now_v7())
     .execute(&pool)
@@ -1969,6 +2029,101 @@ async fn the_semantics_version_migration_accepts_two_shapes_and_refuses_the_rest
         )
         .await
         .unwrap();
+        ddl(&pool, migration.clone())
+            .await
+            .expect("back to the head shape");
+        ddl(&pool, drift.replace("{s}", scratch)).await.unwrap();
+        let result = ddl(&pool, migration.clone()).await;
+        assert!(refused(&result), "{what}: {result:?}");
+    }
+
+    ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
+        .await
+        .unwrap();
+}
+
+/// The drawn-subjects migration takes the audit table from before it to the
+/// head shape, leaves the head shape alone (fresh or migrated), and
+/// refuses any other shape by name, as the semantics-version migration
+/// does.
+#[tokio::test]
+async fn the_drawn_subjects_migration_accepts_two_shapes_and_refuses_the_rest() {
+    let pool = test_pool().await;
+    let scratch = "morpholog_drawn_subjects_probe";
+    ddl(&pool, format!("DROP SCHEMA IF EXISTS {scratch} CASCADE"))
+        .await
+        .unwrap();
+    ddl(&pool, format!("CREATE SCHEMA {scratch}"))
+        .await
+        .unwrap();
+    ddl(
+        &pool,
+        format!("CREATE TABLE {scratch}.audit (LIKE morpholog.audit INCLUDING ALL)"),
+    )
+    .await
+    .unwrap();
+    let migration =
+        DRAWN_SUBJECTS_MIGRATION.replace("morpholog.audit", &format!("{scratch}.audit"));
+    let refused = |result: &Result<(), sqlx::Error>| {
+        result
+            .as_ref()
+            .is_err_and(|e| e.to_string().contains("refusing to guess"))
+    };
+    let back_to_head = format!(
+        "ALTER TABLE {scratch}.audit DROP COLUMN drawn_subjects;
+         ALTER TABLE {scratch}.audit DROP CONSTRAINT IF EXISTS audit_drawn_subjects_shape;
+         ALTER TABLE {scratch}.audit DROP CONSTRAINT IF EXISTS audit_drawn_subjects_required"
+    );
+
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the fresh head shape is current");
+    ddl(
+        &pool,
+        format!("ALTER TABLE {scratch}.audit DROP COLUMN drawn_subjects"),
+    )
+    .await
+    .unwrap();
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the pre-migration shape migrates");
+    ddl(&pool, migration.clone())
+        .await
+        .expect("the migrated head shape is current");
+
+    for (what, drift) in [
+        (
+            "a column of another type",
+            "ALTER TABLE {s}.audit DROP COLUMN drawn_subjects;
+             ALTER TABLE {s}.audit ADD COLUMN drawn_subjects text[]",
+        ),
+        (
+            "an impostor shape check",
+            "ALTER TABLE {s}.audit DROP CONSTRAINT audit_drawn_subjects_shape;
+             ALTER TABLE {s}.audit ADD CONSTRAINT audit_drawn_subjects_shape CHECK (true)",
+        ),
+        (
+            "a shape check that forgets the semantics rung",
+            "ALTER TABLE {s}.audit DROP CONSTRAINT audit_drawn_subjects_shape;
+             ALTER TABLE {s}.audit ADD CONSTRAINT audit_drawn_subjects_shape CHECK (
+                 drawn_subjects IS NULL OR jsonb_typeof(drawn_subjects) = 'array')",
+        ),
+        (
+            "a default",
+            "ALTER TABLE {s}.audit ALTER COLUMN drawn_subjects SET DEFAULT '[]'",
+        ),
+        (
+            "a NOT NULL column",
+            "ALTER TABLE {s}.audit ALTER COLUMN drawn_subjects SET NOT NULL",
+        ),
+        (
+            "a required constraint that says something else",
+            "ALTER TABLE {s}.audit DROP CONSTRAINT audit_drawn_subjects_required;
+             ALTER TABLE {s}.audit ADD CONSTRAINT audit_drawn_subjects_required CHECK (true)",
+        ),
+    ] {
+        // Start each from the head shape, then drift one thing.
+        ddl(&pool, back_to_head.clone()).await.unwrap();
         ddl(&pool, migration.clone())
             .await
             .expect("back to the head shape");

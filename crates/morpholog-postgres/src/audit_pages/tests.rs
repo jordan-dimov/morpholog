@@ -55,12 +55,13 @@ async fn insert(pool: &PgPool, transition_id: Uuid, committed_at: Timestamp) {
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents,
-            attestation, parameters, model_hash, semantics_version, committed_at
+            attestation, parameters, model_hash, semantics_version, drawn_subjects,
+            committed_at
          ) VALUES ($1, 'post', '[]'::jsonb,
                    '{\"type\":\"subject\",\"value\":\"pager\"}'::jsonb,
                    1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
                    '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb,
-                   '[]'::jsonb, 'sha256:' || repeat('0', 64), 1, $2)",
+                   '[]'::jsonb, 'sha256:' || repeat('0', 64), 1, '[]'::jsonb, $2)",
     )
     .bind(transition_id)
     .bind(jiff_sqlx::ToSqlx::to_sqlx(committed_at))

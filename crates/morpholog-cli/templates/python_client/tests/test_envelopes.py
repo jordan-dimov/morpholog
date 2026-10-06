@@ -754,6 +754,7 @@ class TamperEvidence(unittest.TestCase):
         named = envelopes.AuditRowNamed.from_json(golden("audit_row_named.json"))
         self.assertEqual(named.parameters, ["account_id"])
         self.assertEqual(named.semantics_version, 1)
+        self.assertEqual(len(named.drawn_subjects), 2)
         # Evidence is never coerced, and the row's shapes hold: names
         # are strings, only an attested row carries them, one per
         # argument.
@@ -810,6 +811,29 @@ class TamperEvidence(unittest.TestCase):
             with self.assertRaises(envelopes.EnvelopeError):
                 envelopes.AuditRow.from_json(row)
 
+    def test_an_audit_row_records_the_subjects_its_act_drew(self):
+        row = envelopes.AuditRow.from_json(golden("audit_row_drawn_subjects.json"))
+        self.assertEqual(
+            row.drawn_subjects,
+            ["01900000-0000-7000-8000-00000000000a", "01900000-0000-7000-8000-00000000000b"],
+        )
+        self.assertIsNone(
+            envelopes.AuditRow.from_json(golden("audit_row_semantics_version.json")).drawn_subjects
+        )
+        # Drew nothing is an empty list, not an absent one.
+        none_drawn = golden("audit_row_drawn_subjects.json")
+        none_drawn["drawn_subjects"] = []
+        self.assertEqual(envelopes.AuditRow.from_json(none_drawn).drawn_subjects, [])
+        for tamper in (
+            lambda r: r.__setitem__("drawn_subjects", [1]),
+            lambda r: r.__setitem__("drawn_subjects", "01900000"),
+            lambda r: r.pop("semantics_version"),
+        ):
+            row = golden("audit_row_drawn_subjects.json")
+            tamper(row)
+            with self.assertRaises(envelopes.EnvelopeError):
+                envelopes.AuditRow.from_json(row)
+
     def test_a_present_null_is_malformed_on_its_own_rung(self):
         # Absent is the only spelling for "not on this rung". Each case is
         # a row whose other fields are lawful, so only the null is at stake.
@@ -818,6 +842,7 @@ class TamperEvidence(unittest.TestCase):
             ("audit_row_attested.json", "attestation"),
             ("audit_row_model_hash.json", "model_hash"),
             ("audit_row_semantics_version.json", "semantics_version"),
+            ("audit_row_drawn_subjects.json", "drawn_subjects"),
         ):
             row = golden(golden_name)
             envelopes.AuditRow.from_json(row)

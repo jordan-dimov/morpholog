@@ -18,7 +18,7 @@ use jiff::Timestamp;
 use sha2::{Digest as _, Sha256};
 
 use crate::audit::AuditRow;
-use morpholog_core::EvalValue;
+use morpholog_core::{EvalValue, Subject};
 
 /// Domain-separation prefixes from RFC 6962 section 2.1: a leaf hash is
 /// `SHA-256(0x00 || data)`, an interior node is
@@ -39,6 +39,7 @@ const LEAF_FORMAT_V2: u8 = 2;
 const LEAF_FORMAT_V3: u8 = 3;
 const LEAF_FORMAT_V4: u8 = 4;
 const LEAF_FORMAT_V5: u8 = 5;
+const LEAF_FORMAT_V6: u8 = 6;
 
 /// A 32-byte SHA-256 digest.
 pub(crate) type Hash = [u8; 32];
@@ -227,13 +228,18 @@ fn canonical_leaf_bytes(row: &AuditRow) -> Result<Vec<u8>, serde_json::Error> {
         // so the row commits to the programme that admitted it. With the
         // semantics version too, V5: V4's fields plus the version as a u32
         // in little-endian, so the row commits to the contract that decided
-        // it. The shape check above refuses either on a lower rung.
+        // it. With the drawn subjects too, V6: V5's fields plus the draws,
+        // so the row commits to every input its act read. The shape check
+        // above refuses any of these on a lower rung.
         (Some(attestation), Some(parameters)) => {
-            buf.push(match (&row.model_hash, row.semantics_version) {
-                (Some(_), Some(_)) => LEAF_FORMAT_V5,
-                (Some(_), None) => LEAF_FORMAT_V4,
-                (None, _) => LEAF_FORMAT_V3,
-            });
+            buf.push(
+                match (&row.model_hash, row.semantics_version, &row.drawn_subjects) {
+                    (Some(_), Some(_), Some(_)) => LEAF_FORMAT_V6,
+                    (Some(_), Some(_), None) => LEAF_FORMAT_V5,
+                    (Some(_), None, _) => LEAF_FORMAT_V4,
+                    (None, _, _) => LEAF_FORMAT_V3,
+                },
+            );
             let actor = EvalValue::Subject(row.actor.clone());
             push_transition_fields(&mut buf, row, &serde_json::to_vec(&actor)?)?;
             push_field(&mut buf, &serde_json::to_vec(attestation)?);
@@ -244,9 +250,23 @@ fn canonical_leaf_bytes(row: &AuditRow) -> Result<Vec<u8>, serde_json::Error> {
             if let Some(version) = row.semantics_version {
                 push_field(&mut buf, &version.to_le_bytes());
             }
+            if let Some(drawn) = &row.drawn_subjects {
+                push_field(&mut buf, &drawn_subjects_bytes(drawn));
+            }
         }
     }
     Ok(buf)
+}
+
+/// The draws as one field's content: a little-endian u32 count, then each
+/// subject as length-prefixed UTF-8, in draw order. Binary rather than
+/// JSON, so a verifier in any language reads it without a JSON codec.
+fn drawn_subjects_bytes(drawn: &[Subject]) -> Vec<u8> {
+    let mut out = (drawn.len() as u32).to_le_bytes().to_vec();
+    for subject in drawn {
+        push_field(&mut out, subject.as_str().as_bytes());
+    }
+    out
 }
 
 /// The fields every leaf version shares, in fixed order. The caller

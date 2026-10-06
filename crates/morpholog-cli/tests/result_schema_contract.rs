@@ -965,6 +965,7 @@ fn audit_rows_serialize_as_pinned() {
         parameters: None,
         model_hash: None,
         semantics_version: None,
+        drawn_subjects: None,
     };
     assert_golden("audit_row.json", &to_value(&row));
 
@@ -1019,12 +1020,25 @@ fn audit_rows_serialize_as_pinned() {
         &to_value(&semantics_naming),
     );
 
+    // The row as written now: also recording the subjects its act drew.
+    let subjects_recording = AuditRow {
+        drawn_subjects: Some(vec![
+            Subject::from("01900000-0000-7000-8000-00000000000a"),
+            Subject::from("01900000-0000-7000-8000-00000000000b"),
+        ]),
+        ..semantics_naming.clone()
+    };
+    assert_golden(
+        "audit_row_drawn_subjects.json",
+        &to_value(&subjects_recording),
+    );
+
     // The --named form replaces the claim arrays with named claims and
     // leaves the rest unchanged, via the binary's own projection. Built
     // from the row as written now, so the named schema is held to every
     // rung.
     let named = morpholog_cli::envelopes::audit_row_named(
-        &semantics_naming,
+        &subjects_recording,
         vec![morpholog_cli::envelopes::NamedClaim {
             args: [
                 ("account_id".to_string(), serde_json::json!("acct_1")),
@@ -1501,6 +1515,7 @@ fn sample_audit_row() -> AuditRow {
         parameters: None,
         model_hash: None,
         semantics_version: None,
+        drawn_subjects: None,
     }
 }
 
@@ -2533,6 +2548,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("audit_row_self_describing.json", "audit_row"),
         ("audit_row_model_hash.json", "audit_row"),
         ("audit_row_semantics_version.json", "audit_row"),
+        ("audit_row_drawn_subjects.json", "audit_row"),
         ("audit_row_named.json", "audit_row_named"),
         ("check_report.json", "check_report"),
         ("check_report_routes.json", "check_report"),
