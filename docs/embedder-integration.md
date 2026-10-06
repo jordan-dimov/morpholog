@@ -611,13 +611,12 @@ timeout after submission, or no statement at all.
 
 `submit_all` is the typed form, as `submit` is for one proposal: it
 takes (request, actor) pairs of generated request models, so acts by
-different actors need no hand-built rows.
+different actors need no hand-built rows. Here `capture` is a
+`CaptureTradeRequest` built earlier:
 
 ```python
-decision = client.submit_all([
-    (models.GrantConfirmAuthorityRequest(principal="desk", commodity="oil"), "desk"),
-    (models.CaptureTradeRequest(trade="t1", ...), "trader"),
-])
+grant = models.GrantConfirmAuthorityRequest(principal="desk", commodity="oil")
+decision = client.submit_all([(grant, "desk"), (capture, "trader")])
 ```
 
 A list built ahead of the call is annotated `list[tuple[Request, str]]`

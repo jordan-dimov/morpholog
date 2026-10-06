@@ -9,10 +9,10 @@ statement - a decided envelope or a coded error object - settles the
 outcome; anything else raises ``MorphologOutcomeUnknown``.
 
 This module never imports the generated ``models``; ``submit`` and
-``submit_all`` take any ``Request``, the protocol naming the two class
-attributes every generated request model carries (``TRANSFORMATION``
-and ``to_args_named``), so the static and generated halves of the
-package meet only at that seam.
+``submit_all`` take any ``Request``, the protocol naming what every
+generated request model carries (the ``TRANSFORMATION`` class attribute
+and the ``to_args_named`` method), so the static and generated halves
+of the package meet only at that seam.
 """
 
 from __future__ import annotations
