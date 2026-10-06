@@ -194,6 +194,55 @@ than the client was generated for, by name, before the first call. Upgrade
 the binary and regenerate the client together; between the two, the
 refusal says which side is behind.
 
+## Several deployments on one cluster
+
+PostgreSQL roles belong to the whole cluster, not to one database, so
+each deployment provisioned with `--least-privilege` needs roles of its
+own:
+
+```bash
+morpholog init --least-privilege --role-prefix acme_ --database-url postgres:///acme
+```
+
+This creates `acme_writer` and `acme_reader`, grants them privileges in
+this database only, and records them there. `migrate` re-applies the
+grants to the recorded roles and to no others. It never creates a role,
+and it refuses if a recorded role is gone.
+
+`init` creates a deployment's roles itself and refuses a role name that
+already exists, unless this database already records it: choose another
+prefix. `init --reset --least-privilege` binds the roles the database
+recorded before the reset again. It refuses another prefix, or a recorded
+role that no longer exists, before dropping anything. A reset without
+`--least-privilege` drops the record and leaves the roles on the cluster,
+so their prefix is refused until you drop them or choose another. `migrate` warns when this deployment's roles also hold privileges
+in, or on, another database. Deployments provisioned
+before this check existed can be in that state.
+
+A login granted two deployments' writers holds both, so grant each login
+the roles of one deployment. A `pg_dump` restore carries grants by role
+name: restore onto a cluster where those roles exist and belong to this
+deployment alone. If they don't, the next `migrate` warns.
+
+### Moving a deployment to its own roles
+
+If `migrate` warns, move one of the deployments to new roles. In that
+deployment's database, as the role that owns its tables, withdraw the
+shared roles and the record:
+
+```sql
+REVOKE ALL ON ALL TABLES IN SCHEMA morpholog, morpholog_read FROM morpholog_writer, morpholog_reader;
+REVOKE ALL ON SCHEMA morpholog, morpholog_read FROM morpholog_writer, morpholog_reader;
+DELETE FROM morpholog.deployment_roles;
+```
+
+Then provision its own roles, and move its logins to them
+(`GRANT acme_writer TO <login>`, then `REVOKE morpholog_writer FROM <login>`):
+
+```bash
+morpholog init --skip-if-exists --least-privilege --role-prefix acme_ --database-url postgres:///acme
+```
+
 From here: the [developer introduction](developer-intro.md) builds a
 governed model from scratch; [`embedder-integration.md`](embedder-integration.md)
 is the integration contract.

@@ -860,6 +860,13 @@ pub(crate) struct InitArgs {
     /// combine with --skip-if-exists to retrofit an existing database.
     #[arg(long)]
     pub(crate) least_privilege: bool,
+
+    /// Name this deployment's roles `<PREFIX>writer` and `<PREFIX>reader`.
+    /// Roles belong to the whole PostgreSQL cluster, so each deployment
+    /// on one cluster needs its own prefix.
+    #[arg(long, value_name = "PREFIX", requires = "least_privilege",
+          default_value = morpholog_postgres::DEFAULT_ROLE_PREFIX)]
+    pub(crate) role_prefix: String,
 }
 
 /// An `--as-of` coordinate: an exact `transition_id` (UUIDv7), or an

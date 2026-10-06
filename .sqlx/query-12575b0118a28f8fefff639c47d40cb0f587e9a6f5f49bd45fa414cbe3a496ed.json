@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT writer_role, reader_role FROM morpholog.deployment_roles",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "writer_role",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.deployment_roles",
+            "name": "writer_role"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "reader_role",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.deployment_roles",
+            "name": "reader_role"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "12575b0118a28f8fefff639c47d40cb0f587e9a6f5f49bd45fa414cbe3a496ed"
+}

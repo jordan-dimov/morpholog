@@ -68,6 +68,7 @@ migrations![
         "021_audit_semantics_version.sql"
     ),
     (22, "audit_drawn_subjects", "022_audit_drawn_subjects.sql"),
+    (23, "deployment_roles", "023_deployment_roles.sql"),
 ];
 
 /// The newest migration this binary carries.
@@ -240,6 +241,7 @@ pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError>
     // Migrating a database that is ahead would apply nothing and report
     // success, although an unseen migration may have broken this binary.
     refuse_if_ahead(&before)?;
+    crate::require_deployment_roles(pool).await?;
     // The record table must exist before the first migration records
     // itself, though a later migration introduces it. This matches what that
     // migration creates, which stays for anyone applying files by hand.
@@ -280,8 +282,8 @@ pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError>
     }
     // Grants are per table and do not cover tables created later, so
     // re-apply the least-privilege floor (idempotent) after migrating.
-    if !applied.is_empty() && crate::least_privilege_roles_exist(pool).await? {
-        crate::provision_least_privilege(pool).await?;
+    if !applied.is_empty() {
+        crate::reapply_least_privilege(pool).await?;
     }
     let after = migration_status(pool).await?;
     Ok(MigrationReport {

@@ -6,10 +6,10 @@
 //! ready for this binary?
 
 use anyhow::Context;
-use morpholog_postgres::{apply_migrations, migration_status};
+use morpholog_postgres::{apply_migrations, deployment_roles, migration_status};
 
 use crate::MigrateArgs;
-use crate::commands::{AlreadyReported, connect_unchecked, print_json};
+use crate::commands::{AlreadyReported, connect_unchecked, print_json, warn_if_roles_shared};
 
 pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     let pool = connect_unchecked(&args.db.database_url).await?;
@@ -34,5 +34,10 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     let report = apply_migrations(&pool)
         .await
         .context("applying migrations failed")?;
+    // Also with nothing to apply: a restore can land a current database
+    // whose recorded roles already serve another.
+    if let Some(roles) = deployment_roles(&pool).await? {
+        warn_if_roles_shared(&pool, &roles).await?;
+    }
     print_json(&report)
 }

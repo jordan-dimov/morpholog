@@ -1272,7 +1272,9 @@ fn report_envelopes_serialize_as_pinned() {
     assert_golden(
         "init_report_least_privilege.json",
         &to_value(&InitReport {
-            least_privilege: Some(LeastPrivilegeReport::applied()),
+            least_privilege: Some(LeastPrivilegeReport::applied(
+                &morpholog_postgres::DeploymentRoles::default(),
+            )),
             schema: "morpholog",
             status: "initialised",
         }),

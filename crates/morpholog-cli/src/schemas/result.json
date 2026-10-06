@@ -1123,8 +1123,8 @@
           "required": ["next_steps", "reader_role", "writer_role"],
           "properties": {
             "next_steps": { "type": "array", "items": { "type": "string" } },
-            "reader_role": { "const": "morpholog_reader" },
-            "writer_role": { "const": "morpholog_writer" }
+            "reader_role": { "type": "string" },
+            "writer_role": { "type": "string" }
           }
         }
       }

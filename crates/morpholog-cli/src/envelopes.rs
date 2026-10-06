@@ -263,14 +263,14 @@ pub struct InitReport {
 #[derive(Serialize)]
 pub struct LeastPrivilegeReport {
     pub next_steps: Vec<String>,
-    pub reader_role: &'static str,
-    pub writer_role: &'static str,
+    pub reader_role: String,
+    pub writer_role: String,
 }
 
 impl LeastPrivilegeReport {
-    pub fn applied() -> Self {
-        let writer = morpholog_postgres::WRITER_ROLE;
-        let reader = morpholog_postgres::READER_ROLE;
+    pub fn applied(roles: &morpholog_postgres::DeploymentRoles) -> Self {
+        let writer = roles.writer();
+        let reader = roles.reader();
         Self {
             next_steps: vec![
                 format!("GRANT {writer} TO <the runtime's login role>;"),
@@ -279,8 +279,8 @@ impl LeastPrivilegeReport {
                  -- the resume watermark reads pg_stat_activity"
                     .to_string(),
             ],
-            reader_role: reader,
-            writer_role: writer,
+            reader_role: reader.to_string(),
+            writer_role: writer.to_string(),
         }
     }
 }

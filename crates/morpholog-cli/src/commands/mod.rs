@@ -257,6 +257,31 @@ pub(crate) fn read_anchor(
         .transpose()
 }
 
+/// Warn on stderr when this deployment's roles also reach another
+/// database: a login granted either role holds the other deployment too.
+/// A warning, not a refusal, so an affected deployment still upgrades.
+pub(crate) async fn warn_if_roles_shared(
+    pool: &PgPool,
+    roles: &morpholog_postgres::DeploymentRoles,
+) -> anyhow::Result<()> {
+    let others = morpholog_postgres::databases_also_reached(pool, roles).await?;
+    if !others.is_empty() {
+        eprintln!(
+            "warning: this deployment's roles `{}` and `{}` also hold privileges in {}; \
+             a login granted either can act there too. Give each deployment its own \
+             roles: see docs/install.md, \"Several deployments on one cluster\"",
+            roles.writer(),
+            roles.reader(),
+            others
+                .iter()
+                .map(|d| format!("`{d}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// Pretty-print a value as JSON to stdout. The canonical output shape
 /// for every read-only subcommand.
 pub(crate) fn print_json<T: Serialize>(value: &T) -> anyhow::Result<()> {
