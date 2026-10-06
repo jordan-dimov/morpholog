@@ -642,6 +642,11 @@ pub morpholog_core::Lint::GateVsInvariant::pointer: alloc::string::String
 pub morpholog_core::Lint::GoverningSelectionWithoutTotality
 pub morpholog_core::Lint::GoverningSelectionWithoutTotality::invariant: alloc::string::String
 pub morpholog_core::Lint::GoverningSelectionWithoutTotality::predicates: alloc::vec::Vec<alloc::string::String>
+pub morpholog_core::Lint::RequireRematch
+pub morpholog_core::Lint::RequireRematch::again: usize
+pub morpholog_core::Lint::RequireRematch::first: usize
+pub morpholog_core::Lint::RequireRematch::transformation: alloc::string::String
+pub morpholog_core::Lint::RequireRematch::variable: alloc::string::String
 pub morpholog_core::Lint::SharedWriter
 pub morpholog_core::Lint::SharedWriter::guarded: bool
 pub morpholog_core::Lint::SharedWriter::other_program: alloc::string::String

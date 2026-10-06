@@ -177,6 +177,14 @@ impl SourceMap {
             Lint::SharedWriter { transformation, .. } => {
                 self.decl_span(DeclKind::Transformation, transformation)
             }
+            // On the statement that matches afresh, where the fix (or the rename) goes.
+            Lint::RequireRematch {
+                transformation,
+                again,
+                ..
+            } => self
+                .statement_span(transformation, *again)
+                .or_else(|| self.decl_span(DeclKind::Transformation, transformation)),
         }
     }
 

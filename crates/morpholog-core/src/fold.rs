@@ -53,6 +53,11 @@ pub(crate) fn walk_prop_scoped<'a>(prop: &'a Prop, visit: &mut dyn FnMut(Node<'a
     prop_scoped(prop, visit, &mut Vec::new());
 }
 
+/// Statement-sort companion to [`walk_prop_scoped`].
+pub(crate) fn walk_stmt_scoped<'a>(stmt: &'a Stmt, visit: &mut dyn FnMut(Node<'a>, &[&'a Var])) {
+    stmt_scoped(stmt, visit, &mut Vec::new());
+}
+
 /// Value-sort companion to [`walk_prop_scoped`].
 pub(crate) fn walk_value_scoped<'a>(
     expr: &'a ValueExpr,
