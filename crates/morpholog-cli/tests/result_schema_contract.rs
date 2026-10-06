@@ -777,6 +777,38 @@ fn provision_reports_serialize_as_pinned() {
         "provision_report_pruned.json",
         &ProvisionReport::from(&pruned),
     );
+
+    // What `--check` passes: nothing to create, repair, prune or resolve.
+    let current = morpholog_postgres::ProvisionReport {
+        entries: vec![
+            provisioned_index(IndexAction::Keep, entry, "JournalEntry", 0, &["ledger"], ""),
+            provisioned_index(
+                IndexAction::SatisfiedExternally,
+                line,
+                "JournalLine",
+                1,
+                &["ledger"],
+                "lines_by_entry is equivalent and stays unmanaged",
+            ),
+        ],
+        statistics: vec![
+            provisioned_statistics(StatisticsAction::Keep, 0, &["ledger"], ""),
+            provisioned_statistics(StatisticsAction::Keep, 1, &["ledger"], ""),
+        ],
+        dry_run: true,
+        applied: false,
+        ..applied.clone()
+    };
+    assert_golden_bytes(
+        "provision_report_current.json",
+        &ProvisionReport::from(&current),
+    );
+    // The client derives the same verdict from these goldens; its tests
+    // read them and must agree.
+    assert!(current.is_current());
+    for outstanding in [&applied, &dry_run, &conflict, &pruned] {
+        assert!(!outstanding.is_current());
+    }
 }
 
 /// The wire word of every action is in the schema, and the schema offers
@@ -2532,6 +2564,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("provision_report_dry_run.json", "provision_report"),
         ("provision_report_conflict.json", "provision_report"),
         ("provision_report_pruned.json", "provision_report"),
+        ("provision_report_current.json", "provision_report"),
         ("rejection_row.json", "rejection_row"),
         ("rejection_row_gate.json", "rejection_row"),
         ("outbox_claim.json", "outbox_claim"),

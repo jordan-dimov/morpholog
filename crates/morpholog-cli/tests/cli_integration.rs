@@ -4577,6 +4577,48 @@ async fn provision_indexes_reports_the_same_bytes_whatever_order_the_programmes_
     reset_db().await;
 }
 
+/// `--check` is a deploy gate: it changes nothing, prints the plan, and
+/// passes only once there is nothing left to do.
+#[tokio::test(flavor = "current_thread")]
+async fn provision_indexes_check_passes_only_when_nothing_is_outstanding() {
+    reset_db().await;
+    let ledger = example("03_double_entry_ledger/ledger.morph");
+    let (status, stdout, stderr) = run_cli(&["provision", "indexes", &ledger, "--check", "--json"]);
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("not provisioned"), "{stderr}");
+    let report = provision_report(&stdout);
+    assert_eq!(report["dry_run"], true, "--check changes nothing");
+    assert_eq!(report["applied"], false);
+    assert!(
+        report["indexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["action"] == "create"),
+        "{stdout}"
+    );
+    let (status, _, stderr) = run_cli(&["provision", "indexes", &ledger, "--check"]);
+    assert_eq!(
+        status.code(),
+        Some(1),
+        "the printed plan fails it too: {stderr}"
+    );
+
+    let (status, _, stderr) = run_cli(&["provision", "indexes", &ledger]);
+    assert!(status.success(), "{stderr}");
+    let (status, stdout, stderr) = run_cli(&["provision", "indexes", &ledger, "--check", "--json"]);
+    assert!(status.success(), "a provisioned database passes: {stderr}");
+    assert!(
+        provision_report(&stdout)["indexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["action"] == "keep"),
+        "{stdout}"
+    );
+    reset_db().await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn provision_indexes_reports_a_conflict_on_stdout_and_exits_non_zero() {
     reset_db().await;

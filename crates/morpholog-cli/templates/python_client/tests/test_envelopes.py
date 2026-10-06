@@ -322,6 +322,32 @@ class Provisioning(unittest.TestCase):
         self.assertFalse(applied.has_conflict)
         self.assertEqual(applied.pruned, [])
 
+    def test_current_means_nothing_is_outstanding(self):
+        # The binary holds the same goldens to the same answers.
+        self.assertTrue(
+            envelopes.ProvisionReport.from_json(golden("provision_report_current.json")).is_current
+        )
+        for outstanding in ("applied", "dry_run", "conflict", "pruned"):
+            report = envelopes.ProvisionReport.from_json(
+                golden(f"provision_report_{outstanding}.json")
+            )
+            self.assertFalse(report.is_current, outstanding)
+        # One outstanding action anywhere is enough.
+        for field, action in (
+            ("indexes", "create"),
+            ("indexes", "repair_invalid"),
+            ("indexes", "stale"),
+            ("indexes", "conflict"),
+            ("statistics", "create"),
+            ("statistics", "stale"),
+            ("statistics", "conflict"),
+        ):
+            payload = golden("provision_report_current.json")
+            payload[field][0]["action"] = action
+            self.assertFalse(
+                envelopes.ProvisionReport.from_json(payload).is_current, (field, action)
+            )
+
     def test_a_conflict_is_in_the_report(self):
         report = envelopes.ProvisionReport.from_json(golden("provision_report_conflict.json"))
         self.assertTrue(report.has_conflict)

@@ -1713,6 +1713,7 @@ pub morpholog_postgres::ProvisionReport::required_elsewhere: alloc::vec::Vec<mor
 pub morpholog_postgres::ProvisionReport::statistics: alloc::vec::Vec<morpholog_postgres::StatisticsPlanEntry>
 impl morpholog_postgres::ProvisionReport
 pub fn morpholog_postgres::ProvisionReport::has_conflict(&self) -> bool
+pub fn morpholog_postgres::ProvisionReport::is_current(&self) -> bool
 impl core::clone::Clone for morpholog_postgres::ProvisionReport
 pub fn morpholog_postgres::ProvisionReport::clone(&self) -> morpholog_postgres::ProvisionReport
 impl core::fmt::Debug for morpholog_postgres::ProvisionReport

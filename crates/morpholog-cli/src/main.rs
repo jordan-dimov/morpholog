@@ -591,6 +591,12 @@ pub(crate) struct ProvisionIndexesArgs {
     #[arg(long)]
     pub(crate) dry_run: bool,
 
+    /// Plan, change nothing, and exit non-zero unless the database already
+    /// holds everything the programmes need: anything to create or repair,
+    /// anything stale, or a conflict fails it. A deploy step can gate on it.
+    #[arg(long)]
+    pub(crate) check: bool,
+
     /// Also drop managed indexes and statistics no programme requires any
     /// more, the named programmes and every other the database has
     /// recorded.

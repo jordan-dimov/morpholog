@@ -176,6 +176,22 @@ pub struct ProvisionReport {
 }
 
 impl ProvisionReport {
+    /// Whether the database already holds everything the plan asks for:
+    /// every index kept or satisfied by another, every statistics object
+    /// kept. Anything to create or repair, anything stale and any conflict
+    /// make it not current.
+    pub fn is_current(&self) -> bool {
+        self.entries.iter().all(|e| {
+            matches!(
+                e.action,
+                IndexAction::Keep | IndexAction::SatisfiedExternally
+            )
+        }) && self
+            .statistics
+            .iter()
+            .all(|s| s.action == StatisticsAction::Keep)
+    }
+
     pub fn has_conflict(&self) -> bool {
         self.entries
             .iter()
@@ -976,4 +992,73 @@ async fn drop_concurrently(conn: &mut sqlx::PgConnection, name: &str) -> Result<
     .await
     .map_err(classify)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(index: IndexAction, statistics: StatisticsAction) -> ProvisionReport {
+        ProvisionReport {
+            programs: Vec::new(),
+            entries: vec![IndexPlanEntry {
+                action: index,
+                index_name: "morpholog_ci_x".to_string(),
+                predicate: "P".to_string(),
+                position: 0,
+                representation: "key",
+                expression_sql: String::new(),
+                partial_predicate_sql: String::new(),
+                detail: String::new(),
+                required_by: Vec::new(),
+            }],
+            statistics: vec![StatisticsPlanEntry {
+                action: statistics,
+                statistics_name: "morpholog_cs_0".to_string(),
+                position: 0,
+                expression_sql: String::new(),
+                detail: String::new(),
+                required_by: Vec::new(),
+            }],
+            required_elsewhere: Vec::new(),
+            positions_unknown_for: Vec::new(),
+            dry_run: true,
+            prune: false,
+            applied: false,
+            pruned: Vec::new(),
+        }
+    }
+
+    /// Current means nothing to do: an index kept or satisfied by another,
+    /// a statistics object kept. Every other action is outstanding.
+    #[test]
+    fn current_is_nothing_left_to_do() {
+        for index in [IndexAction::Keep, IndexAction::SatisfiedExternally] {
+            assert!(
+                report(index, StatisticsAction::Keep).is_current(),
+                "{index}"
+            );
+        }
+        for index in [
+            IndexAction::Create,
+            IndexAction::RepairInvalid,
+            IndexAction::Stale,
+            IndexAction::Conflict,
+        ] {
+            assert!(
+                !report(index, StatisticsAction::Keep).is_current(),
+                "{index}"
+            );
+        }
+        for statistics in [
+            StatisticsAction::Create,
+            StatisticsAction::Stale,
+            StatisticsAction::Conflict,
+        ] {
+            assert!(
+                !report(IndexAction::Keep, statistics).is_current(),
+                "{statistics}"
+            );
+        }
+    }
 }

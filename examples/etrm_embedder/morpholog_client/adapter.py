@@ -386,6 +386,7 @@ class Morpholog:
         self,
         *,
         dry_run: bool = False,
+        check: bool = False,
         prune: bool = False,
         with_programs: list[str] | None = None,
         timeout: float | None = None,
@@ -408,6 +409,12 @@ class Morpholog:
             if report.has_conflict:
                 ...
 
+        `check` plans and changes nothing, as `dry_run` does; a deploy step
+        gates on whether anything is outstanding:
+
+            if not client.provision_indexes(check=True).is_current:
+                ...
+
         ``timeout`` bounds this one call and defaults to unbounded,
         ignoring the client-wide timeout: an index build over a large
         table is the legitimate long case. A build cut short leaves an
@@ -417,6 +424,8 @@ class Morpholog:
         args.extend(["--database-url", self.database_url, "--json"])
         if dry_run:
             args.append("--dry-run")
+        if check:
+            args.append("--check")
         if prune:
             args.append("--prune")
         proc = self._run(args, timeout=timeout)
