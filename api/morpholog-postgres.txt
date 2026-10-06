@@ -2363,6 +2363,7 @@ pub fn morpholog_postgres::render_signature(&ed25519::Signature) -> alloc::strin
 pub fn morpholog_postgres::render_views(morpholog_core::validate::ValidatedProgram<'_>, &str, &str) -> core::result::Result<morpholog_postgres::RenderedViews, alloc::vec::Vec<morpholog_postgres::ViewRefusal>>
 pub fn morpholog_postgres::reproduce(morpholog_core::validate::ValidatedProgram<'_>, &morpholog_postgres::ParsedReceipt, &morpholog_postgres::EvidencePack) -> (morpholog_postgres::CheckpointMatch, morpholog_postgres::Evaluation)
 pub async fn morpholog_postgres::require_current_schema(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
+pub async fn morpholog_postgres::require_deployment_roles(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::resolve_transition_at_or_before<'e, E>(E, jiff::timestamp::Timestamp) -> core::result::Result<uuid::Uuid, morpholog_postgres::PgError> where E: sqlx_core::executor::Executor<'e, Database = sqlx_postgres::database::Postgres>
 pub fn morpholog_postgres::runtime_subjects() -> impl morpholog_core::propose::SubjectSource
 pub async fn morpholog_postgres::score_candidate(&sqlx_postgres::PgPool, morpholog_core::validate::ValidatedProgram<'_>, core::option::Option<morpholog_postgres::SplitBoundary>) -> core::result::Result<morpholog_core::score::CandidateScore, morpholog_postgres::PgError>

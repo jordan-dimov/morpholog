@@ -111,13 +111,13 @@ pub use propose::{
     propose_against_pg_timed, propose_against_pg_with_rejection_state,
     propose_against_pg_with_trace, runtime_subjects,
 };
+pub(crate) use provision::reapply_least_privilege;
 pub use provision::{
     DEFAULT_ROLE_PREFIX, DeploymentRoles, DroppedSchema, InitOutcome, RecordedRoles,
     databases_also_reached, deployment_roles, drop_schema, initialise_schema,
-    provision_least_privilege, rebind_least_privilege, redact_database_url, single_connection_pool,
-    with_default_user, with_user,
+    provision_least_privilege, rebind_least_privilege, redact_database_url,
+    require_deployment_roles, single_connection_pool, with_default_user, with_user,
 };
-pub(crate) use provision::{reapply_least_privilege, require_deployment_roles};
 pub use receipt::{
     CheckpointMatch, Completeness, Evaluation, EvaluationReceipt, ParsedReceipt, ProgramMatch,
     ReceiptCheckpoint, ReceiptForm, ReceiptQuery, ReceiptVerificationReport, VerdictKind,

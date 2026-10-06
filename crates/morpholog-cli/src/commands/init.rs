@@ -13,6 +13,7 @@ use anyhow::{Context, anyhow};
 use morpholog_postgres::{
     DeploymentRoles, InitOutcome, deployment_roles, drop_schema, initialise_schema,
     provision_least_privilege, rebind_least_privilege, redact_database_url,
+    require_deployment_roles,
 };
 
 use crate::InitArgs;
@@ -55,6 +56,13 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
                 recorded.writer(),
                 recorded.reader()
             ));
+        }
+        // A recorded role that is gone stays a refusal, decided while the
+        // record that names it still exists.
+        if args.least_privilege {
+            require_deployment_roles(&pool)
+                .await
+                .context("nothing was dropped")?;
         }
         Some(drop_schema(&pool).await.context("schema drop failed")?)
     } else {

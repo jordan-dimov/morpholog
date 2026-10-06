@@ -212,8 +212,10 @@ and it refuses if a recorded role is gone.
 `init` creates a deployment's roles itself and refuses a role name that
 already exists, unless this database already records it: choose another
 prefix. `init --reset --least-privilege` binds the roles the database
-recorded before the reset again, and refuses another prefix before
-dropping anything. `migrate` warns when this deployment's roles also hold privileges
+recorded before the reset again. It refuses another prefix, or a recorded
+role that no longer exists, before dropping anything. A reset without
+`--least-privilege` drops the record and leaves the roles on the cluster,
+so their prefix is refused until you drop them or choose another. `migrate` warns when this deployment's roles also hold privileges
 in, or on, another database. Deployments provisioned
 before this check existed can be in that state.
 

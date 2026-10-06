@@ -757,3 +757,50 @@ async fn concurrent_creation_of_the_same_roles_shares_nothing() {
     pool_b.close().await;
     scratch.clean().await;
 }
+
+/// Binding a dropped schema's roles again restores roles that still
+/// exist; a recorded role that is gone is refused, never recreated.
+#[tokio::test]
+async fn a_rebind_never_recreates_a_missing_role() {
+    let Some(base) = base_url() else { return };
+    let db = "morpholog_ci_lp_rebind";
+    let (writer, reader) = (
+        "morpholog_ci_lp_rebind_writer",
+        "morpholog_ci_lp_rebind_reader",
+    );
+    let scratch = Scratch::new(&base, &[db], &[writer, reader]).await;
+    let pool = scratch.deployment(db).await;
+    provision_least_privilege(&pool, &roles("morpholog_ci_lp_rebind_"))
+        .await
+        .unwrap();
+
+    let dropped = morpholog_postgres::drop_schema(&pool).await.unwrap();
+    let recorded = dropped
+        .roles
+        .expect("the drop hands back the recorded roles");
+    assert_eq!(*recorded.roles(), roles("morpholog_ci_lp_rebind_"));
+    run(&pool, &format!("DROP OWNED BY {writer}")).await;
+    run(&scratch.admin, &format!("DROP ROLE {writer}")).await;
+    initialise_schema(&pool).await.unwrap();
+
+    let refused = morpholog_postgres::rebind_least_privilege(&pool, recorded)
+        .await
+        .expect_err("the writer is gone")
+        .to_string();
+    assert!(
+        refused.contains(&format!("`{writer}` does not exist"))
+            && refused.contains("never recreates"),
+        "{refused}"
+    );
+    let recreated =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)")
+            .bind(writer)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!recreated);
+    assert_eq!(deployment_roles(&pool).await.unwrap(), None);
+
+    pool.close().await;
+    scratch.clean().await;
+}

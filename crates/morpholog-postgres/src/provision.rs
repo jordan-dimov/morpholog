@@ -409,9 +409,9 @@ pub async fn provision_least_privilege(
 }
 
 /// Provision the floor again for the roles this database recorded before
-/// its schema was dropped, as a reset does: those roles still exist, and
-/// they are bound again rather than refused as unrecorded. Any other
-/// existing role is still refused.
+/// its schema was dropped, as a reset does: they are bound again rather
+/// than refused as unrecorded. A recorded role that no longer exists is
+/// refused, never recreated.
 pub async fn rebind_least_privilege(pool: &PgPool, recorded: RecordedRoles) -> Result<(), PgError> {
     provision(pool, &recorded.0, true).await
 }
@@ -429,6 +429,11 @@ async fn provision(pool: &PgPool, roles: &DeploymentRoles, rebinding: bool) -> R
         }
         Some(recorded) => require_recorded_roles(&mut tx, &recorded).await?,
         None => {
+            // A rebind restores roles that still exist; a missing one is a
+            // broken binding, never recreated.
+            if rebinding {
+                require_recorded_roles(&mut tx, roles).await?;
+            }
             for role in roles.both() {
                 if role_exists(&mut tx, role).await? {
                     if rebinding {
@@ -474,9 +479,10 @@ pub(crate) async fn reapply_least_privilege(pool: &PgPool) -> Result<(), PgError
     Ok(())
 }
 
-/// Refuse before migrating when a recorded role is gone, so a migration
-/// never lands tables the floor then cannot reach.
-pub(crate) async fn require_deployment_roles(pool: &PgPool) -> Result<(), PgError> {
+/// Refuse when a role this database records is gone: before migrating, so
+/// a migration never lands tables the floor then cannot reach, and before
+/// a reset drops the record that names it.
+pub async fn require_deployment_roles(pool: &PgPool) -> Result<(), PgError> {
     let mut conn = pool.acquire().await.map_err(classify)?;
     match recorded_roles(&mut conn).await? {
         Some(roles) => require_recorded_roles(&mut conn, &roles).await,

@@ -270,3 +270,76 @@ async fn a_reset_binds_again_only_the_roles_the_database_recorded() {
 
     clean().await;
 }
+
+/// A reset never recreates a recorded role that is gone: it refuses while
+/// the record still names it, and drops nothing.
+#[tokio::test]
+async fn a_reset_never_recreates_a_missing_recorded_role() {
+    let Ok(base) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let base = morpholog_postgres::with_default_user(&base);
+    let admin = PgPool::connect(&with_database(&base, "postgres"))
+        .await
+        .unwrap();
+    let db = "morpholog_ci_cli_gone";
+    let (writer, reader) = (
+        "morpholog_ci_cli_gone_writer",
+        "morpholog_ci_cli_gone_reader",
+    );
+    let clean = || async {
+        run(
+            &admin,
+            &format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"),
+        )
+        .await;
+        run(&admin, &format!("DROP ROLE IF EXISTS {writer}, {reader}")).await;
+    };
+    clean().await;
+    run(&admin, &format!("CREATE DATABASE {db}")).await;
+    let url = with_database(&base, db);
+    let (status, _, stderr) = cli(&[
+        "init",
+        "--least-privilege",
+        "--role-prefix",
+        "morpholog_ci_cli_gone_",
+        "--database-url",
+        &url,
+    ]);
+    assert!(status.success(), "{stderr}");
+    let pool = PgPool::connect(&url).await.unwrap();
+    run(&pool, &format!("DROP OWNED BY {writer}")).await;
+    run(&admin, &format!("DROP ROLE {writer}")).await;
+
+    let (status, _, stderr) = cli(&[
+        "init",
+        "--reset",
+        "--i-know-this-deletes-data",
+        "--least-privilege",
+        "--role-prefix",
+        "morpholog_ci_cli_gone_",
+        "--database-url",
+        &url,
+    ]);
+    assert!(!status.success());
+    assert!(
+        stderr.contains("nothing was dropped") && stderr.contains("does not exist"),
+        "{stderr}"
+    );
+    let still_recorded =
+        sqlx::query_scalar::<_, String>("SELECT writer_role FROM morpholog.deployment_roles")
+            .fetch_one(&pool)
+            .await
+            .expect("the schema and its record are still there");
+    assert_eq!(still_recorded, writer);
+    let recreated =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)")
+            .bind(writer)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!recreated);
+
+    pool.close().await;
+    clean().await;
+}
