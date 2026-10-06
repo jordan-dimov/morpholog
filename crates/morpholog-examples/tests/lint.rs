@@ -1297,6 +1297,19 @@ fn a_variable_matched_by_a_require_and_named_again_is_a_hint() {
     assert!(message.contains("`bind`"), "{message}");
 }
 
+/// A `forall` keeps only its own variable local: an outer name inside it
+/// is still matched afresh.
+#[test]
+fn an_outer_variable_inside_a_forall_is_still_a_hint() {
+    let found = entry(
+        "    require RoundOpen(contest, round_id)
+    require (forall p in Enrolled(contest, p): Entry(round_id, p))
+    admit Entry(round_id, actor)
+",
+    );
+    assert_eq!(rematches(&found), vec![("enter", "contest", 0, 1)]);
+}
+
 /// Two `require`s side by side in one loop body match independently too.
 #[test]
 fn a_rematch_inside_one_loop_body_is_a_hint() {
