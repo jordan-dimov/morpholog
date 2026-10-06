@@ -2178,19 +2178,32 @@ async fn the_deployment_roles_migration_holds_one_row_and_refuses_another_shape(
         .expect_err("a deployment records one pair of roles");
     }
 
-    ddl(
-        &pool,
-        format!("ALTER TABLE {scratch}.deployment_roles ADD COLUMN note text"),
-    )
-    .await
-    .unwrap();
-    let result = ddl(&pool, migration).await;
-    assert!(
-        result
-            .as_ref()
-            .is_err_and(|e| e.to_string().contains("refusing to guess")),
-        "another shape is refused: {result:?}"
-    );
+    // Each change keeps the columns but loses what holds the table to one
+    // row, or what an insert relies on.
+    for change in [
+        "ADD COLUMN note text",
+        "DROP CONSTRAINT deployment_roles_pkey",
+        "DROP CONSTRAINT deployment_roles_singleton_check",
+        "ALTER COLUMN singleton DROP DEFAULT",
+    ] {
+        ddl(&pool, format!("DROP TABLE {scratch}.deployment_roles"))
+            .await
+            .unwrap();
+        ddl(&pool, migration.clone()).await.expect("a fresh table");
+        ddl(
+            &pool,
+            format!("ALTER TABLE {scratch}.deployment_roles {change}"),
+        )
+        .await
+        .unwrap();
+        let result = ddl(&pool, migration.clone()).await;
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("refusing to guess")),
+            "{change}: another shape is refused: {result:?}"
+        );
+    }
     ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
         .await
         .unwrap();

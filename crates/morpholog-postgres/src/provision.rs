@@ -267,10 +267,10 @@ async fn recorded_roles(conn: &mut sqlx::PgConnection) -> Result<Option<Deployme
     }))
 }
 
-/// The other databases on this cluster in which `roles` hold a privilege,
-/// own an object, or own the database itself. Read from the cluster-wide
-/// dependency catalogue, so it sees databases this connection cannot
-/// enter.
+/// The other databases on this cluster in which `roles` hold a privilege
+/// or own an object, or on which they hold a privilege or ownership. Read
+/// from the cluster-wide dependency catalogue, so it sees databases this
+/// connection cannot enter.
 pub async fn databases_also_reached(
     pool: &PgPool,
     roles: &DeploymentRoles,
@@ -294,9 +294,13 @@ async fn other_databases(
              AND d.datname <> current_database()
            UNION
            SELECT d.datname::text
-           FROM pg_database d
-           JOIN pg_roles r ON r.oid = d.datdba
-           WHERE r.rolname = ANY($1)
+           FROM pg_shdepend s
+           JOIN pg_database d ON d.oid = s.objid
+           JOIN pg_roles r ON r.oid = s.refobjid
+           WHERE s.dbid = 0
+             AND s.classid = 'pg_database'::regclass
+             AND s.refclassid = 'pg_authid'::regclass
+             AND r.rolname = ANY($1)
              AND d.datname <> current_database()
            ORDER BY 1"#,
         &names,
@@ -306,69 +310,25 @@ async fn other_databases(
     .map_err(classify_checked_query)
 }
 
-/// Why an existing role that this database does not record may not become
-/// one of its floor roles. Only a role exactly as `CREATE ROLE ... NOLOGIN`
-/// leaves it is adopted: anything it already carries would come with it,
-/// and a role that might be harmless is refused rather than guessed about.
-async fn adoption_refusals(
-    conn: &mut sqlx::PgConnection,
-    role: &str,
-) -> Result<Vec<String>, PgError> {
-    let row = sqlx::query!(
-        r#"SELECT rolcanlogin AS "login!", rolsuper AS "superuser!",
-                  rolcreatedb AS "createdb!", rolcreaterole AS "createrole!",
-                  rolreplication AS "replication!", rolbypassrls AS "bypassrls!",
-                  NOT rolinherit AS "noinherit!",
-                  rolconnlimit <> -1 AS "connlimit!",
-                  rolvaliduntil IS NOT NULL AS "validuntil!",
-                  EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = r.oid) AS "has_members!",
-                  EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member = r.oid) AS "is_member!",
-                  EXISTS (SELECT 1 FROM pg_db_role_setting s WHERE s.setrole = r.oid) AS "settings!",
-                  EXISTS (SELECT 1 FROM pg_shdepend d
-                          WHERE d.refclassid = 'pg_authid'::regclass AND d.refobjid = r.oid
-                            AND d.dbid = (SELECT oid FROM pg_database
-                                          WHERE datname = current_database())) AS "here!",
-                  EXISTS (SELECT 1 FROM pg_shdepend d
-                          WHERE d.refclassid = 'pg_authid'::regclass AND d.refobjid = r.oid
-                            AND d.dbid = 0) AS "shared!"
-           FROM pg_roles r WHERE rolname = $1"#,
-        role,
-    )
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(classify_checked_query)?;
-    let mut reasons: Vec<String> = [
-        (row.login, "it can log in"),
-        (row.superuser, "it is a superuser"),
-        (row.createdb, "it can create databases"),
-        (row.createrole, "it can create roles"),
-        (row.replication, "it can replicate"),
-        (row.bypassrls, "it bypasses row security"),
-        (row.noinherit, "it does not inherit"),
-        (row.connlimit, "it has a connection limit"),
-        (row.validuntil, "it has an expiry"),
-        (row.has_members, "other roles are members of it"),
-        (row.is_member, "it is a member of other roles"),
-        (row.settings, "it has settings of its own"),
-        (
-            row.here,
-            "it already holds privileges or owns objects in this database",
-        ),
-        (row.shared, "it owns or holds a cluster-wide object"),
-    ]
-    .into_iter()
-    .filter(|(holds, _)| *holds)
-    .map(|(_, reason)| reason.to_string())
-    .collect();
+/// The refusal for a role that exists but that this database does not
+/// record. A deployment's roles are created by its own provisioning, so two
+/// databases provisioning the same names at once collide on the name and
+/// one fails; adopting an existing role would let both pass.
+async fn existing_role(conn: &mut sqlx::PgConnection, role: &str) -> Result<PgError, PgError> {
     let single = DeploymentRoles {
         writer: role.to_string(),
         reader: role.to_string(),
     };
     let elsewhere = other_databases(conn, &single).await?;
-    if !elsewhere.is_empty() {
-        reasons.push(format!("it reaches database {}", elsewhere.join(", ")));
-    }
-    Ok(reasons)
+    let used = if elsewhere.is_empty() {
+        String::new()
+    } else {
+        format!(" (it reaches {})", elsewhere.join(", "))
+    };
+    Ok(PgError::InvalidState(format!(
+        "the role `{role}` already exists{used} and this database does not record it; \
+         Morpholog creates a deployment's roles itself, so choose another --role-prefix"
+    )))
 }
 
 async fn role_exists(conn: &mut sqlx::PgConnection, role: &str) -> Result<bool, PgError> {
@@ -402,16 +362,14 @@ async fn require_recorded_roles(
     Ok(())
 }
 
-/// Provision the least-privilege floor for `roles`: create each role, or
-/// adopt an existing one only if it carries nothing, record the pair as
-/// this database's own, revoke PUBLIC from the governed schemas and
-/// tables, and grant each role exactly what it needs. Idempotent for the
-/// recorded pair, and in one transaction.
+/// Provision the least-privilege floor for `roles`: create both roles,
+/// record the pair as this database's own, revoke PUBLIC from the governed
+/// schemas and tables, and grant each role exactly what it needs.
+/// Idempotent for the recorded pair, and in one transaction.
 ///
 /// Roles belong to the whole cluster, so a deployment's are its own: a
-/// role that already has members, memberships, attributes beyond a plain
-/// group role, or a footing in another database is refused, as is a pair
-/// other than the one this database records.
+/// role that already exists is refused unless this database records it,
+/// as is a pair other than the one this database records.
 ///
 /// The writer gets the runtime's write set and nothing more. In
 /// particular `morpholog.audit` gets INSERT and SELECT only, so the log is
@@ -438,26 +396,17 @@ pub async fn provision_least_privilege(
         None => {
             for role in roles.both() {
                 if role_exists(&mut tx, role).await? {
-                    let reasons = adoption_refusals(&mut tx, role).await?;
-                    if !reasons.is_empty() {
-                        return Err(PgError::InvalidState(format!(
-                            "the role `{role}` already exists and will not be adopted for this \
-                             deployment: {}. Choose another --role-prefix, or clear the role \
-                             first",
-                            reasons.join("; ")
-                        )));
-                    }
-                } else {
-                    // Audited for AssertSqlSafe: `role` is a validated
-                    // prefix plus a fixed suffix, quoted.
-                    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-                        "CREATE ROLE {} NOLOGIN",
-                        quote_ident(role)
-                    )))
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(provision_error)?;
+                    return Err(existing_role(&mut tx, role).await?);
                 }
+                // Audited for AssertSqlSafe: `role` is a validated prefix
+                // plus a fixed suffix, quoted.
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                    "CREATE ROLE {} NOLOGIN",
+                    quote_ident(role)
+                )))
+                .execute(&mut *tx)
+                .await
+                .map_err(provision_error)?;
             }
             sqlx::query!(
                 "INSERT INTO morpholog.deployment_roles (writer_role, reader_role) VALUES ($1, $2)",

@@ -130,7 +130,7 @@ async fn init_refuses_held_roles_and_migrate_warns_about_shared_ones() {
     ]);
     assert!(!status.success());
     assert!(
-        stderr.contains("will not be adopted") && stderr.contains(DATABASES[0]),
+        stderr.contains("already exists") && stderr.contains(DATABASES[0]),
         "{stderr}"
     );
 

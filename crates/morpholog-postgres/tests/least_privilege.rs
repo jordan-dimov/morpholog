@@ -266,6 +266,18 @@ async fn a_deployments_roles_carry_no_authority_into_another() {
             .is_empty()
     );
 
+    // A grant on the other database itself, not on anything in it, is
+    // reaching it too.
+    run(
+        &scratch.admin,
+        &format!("GRANT CREATE ON DATABASE {b} TO morpholog_ci_lp_a_writer"),
+    )
+    .await;
+    assert_eq!(
+        databases_also_reached(&pool_a, &roles_a).await.unwrap(),
+        vec![b.to_string()]
+    );
+
     pool_a.close().await;
     pool_b.close().await;
     scratch.clean().await;
@@ -306,108 +318,46 @@ async fn roles_another_deployment_holds_are_refused() {
     scratch.clean().await;
 }
 
-/// An existing role is adopted only if it carries nothing: a member, a
-/// membership, or a power beyond a plain group role would come with it.
+/// A role that already exists is never adopted, however plain: a
+/// deployment's roles are created by its own provisioning, where the name
+/// itself decides between two databases provisioning at once.
 #[tokio::test]
-async fn a_role_that_carries_anything_is_not_adopted() {
+async fn an_existing_role_this_database_does_not_record_is_refused() {
     let Some(base) = base_url() else { return };
-    let db = "morpholog_ci_lp_adopt";
-    let prefix = "morpholog_ci_lp_adopt_";
-    let (writer, member) = (
-        "morpholog_ci_lp_adopt_writer",
-        "morpholog_ci_lp_adopt_member",
+    let db = "morpholog_ci_lp_exists";
+    let (writer, reader) = (
+        "morpholog_ci_lp_exists_writer",
+        "morpholog_ci_lp_exists_reader",
     );
-    let scratch = Scratch::new(
-        &base,
-        &[db],
-        &[member, writer, "morpholog_ci_lp_adopt_reader"],
-    )
-    .await;
+    let scratch = Scratch::new(&base, &[db], &[writer, reader]).await;
     let pool = scratch.deployment(db).await;
-
-    for (what, setup, reason) in [
-        (
-            "an unrelated login's membership",
-            format!("CREATE ROLE {member}; GRANT {writer} TO {member}"),
-            "other roles are members of it",
-        ),
-        (
-            "a membership of its own",
-            format!("GRANT pg_read_all_data TO {writer}"),
-            "it is a member of other roles",
-        ),
-        (
-            "a power",
-            format!("ALTER ROLE {writer} CREATEDB"),
-            "it can create databases",
-        ),
-        (
-            "a login",
-            format!("ALTER ROLE {writer} LOGIN"),
-            "it can log in",
-        ),
-        (
-            "a privilege in this database",
-            format!("GRANT USAGE ON SCHEMA public TO {writer}"),
-            "it already holds privileges or owns objects in this database",
-        ),
-        (
-            "a setting",
-            format!("ALTER ROLE {writer} SET work_mem = '1MB'"),
-            "it has settings of its own",
-        ),
-        (
-            "no inheritance",
-            format!("ALTER ROLE {writer} NOINHERIT"),
-            "it does not inherit",
-        ),
-    ] {
-        drop_role_here(&pool, writer).await;
-        run(&scratch.admin, &format!("DROP ROLE IF EXISTS {member}")).await;
-        run(&scratch.admin, &format!("DROP ROLE IF EXISTS {writer}")).await;
-        run(&scratch.admin, &format!("CREATE ROLE {writer} NOLOGIN")).await;
-        // Role statements reach the whole cluster from any database; a
-        // grant reaches the database it runs in.
-        run(&pool, &setup).await;
-
-        let refused = provision_least_privilege(&pool, &roles(prefix))
-            .await
-            .expect_err(what)
-            .to_string();
-        assert!(refused.contains(reason), "{what}: {refused}");
-        assert_eq!(deployment_roles(&pool).await.unwrap(), None, "{what}");
-        assert_eq!(
-            as_role(&pool, writer, WRITES[2].1).await.as_deref(),
-            Some("42501"),
-            "{what}: no grant was made"
-        );
-    }
-
-    // A plain pre-created group role is adopted.
-    drop_role_here(&pool, writer).await;
-    run(&scratch.admin, &format!("DROP ROLE IF EXISTS {member}")).await;
-    run(&scratch.admin, &format!("DROP ROLE IF EXISTS {writer}")).await;
     run(&scratch.admin, &format!("CREATE ROLE {writer} NOLOGIN")).await;
-    provision_least_privilege(&pool, &roles(prefix))
+
+    let refused = provision_least_privilege(&pool, &roles("morpholog_ci_lp_exists_"))
         .await
-        .expect("a role that carries nothing is adopted");
-    assert_eq!(probes(&pool, &roles(prefix)).await, all(None));
+        .expect_err("a plain pre-created role is still not adopted")
+        .to_string();
+    assert!(
+        refused.contains(&format!("`{writer}` already exists"))
+            && refused.contains("does not record it"),
+        "{refused}"
+    );
+    assert_eq!(deployment_roles(&pool).await.unwrap(), None);
+    assert_eq!(
+        as_role(&pool, writer, WRITES[2].1).await.as_deref(),
+        Some("42501"),
+        "no grant was made"
+    );
+    let reader_made =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)")
+            .bind(reader)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!reader_made, "nothing outlives the refusal");
 
     pool.close().await;
     scratch.clean().await;
-}
-
-/// Drop what `role` holds in `pool`'s database, if the role exists, so the
-/// role itself can be dropped.
-async fn drop_role_here(pool: &PgPool, role: &str) {
-    run(
-        pool,
-        &format!(
-            "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') \
-             THEN EXECUTE 'DROP OWNED BY {role}'; END IF; END $$"
-        ),
-    )
-    .await;
 }
 
 /// Creating the roles, recording them and granting are one transaction: a
@@ -502,10 +452,10 @@ async fn before_the_record(pool: &PgPool) {
     .await;
 }
 
-/// Create the default roles if the cluster lacks them, returning whether
-/// this test made them (and so removes them).
-async fn ensure_default_roles(admin: &PgPool) -> bool {
-    let mut made = false;
+/// Create the default roles the cluster lacks, returning those this test
+/// made (and so removes).
+async fn ensure_default_roles(admin: &PgPool) -> Vec<&'static str> {
+    let mut made = Vec::new();
     for role in ["morpholog_writer", "morpholog_reader"] {
         let exists = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)",
@@ -516,7 +466,7 @@ async fn ensure_default_roles(admin: &PgPool) -> bool {
         .unwrap();
         if !exists {
             run(admin, &format!("CREATE ROLE {role} NOLOGIN")).await;
-            made = true;
+            made.push(role);
         }
     }
     made
@@ -555,23 +505,30 @@ async fn migrate_grants_only_to_recorded_roles() {
 
     pool.close().await;
     scratch.clean().await;
-    if made {
-        run(
-            &scratch.admin,
-            "DROP ROLE morpholog_writer, morpholog_reader",
-        )
-        .await;
+    for role in made {
+        run(&scratch.admin, &format!("DROP ROLE {role}")).await;
     }
 }
 
 /// The floor provisioned before the record existed is recorded when the
-/// database shows it, and a lone grant to a role of that name is not.
+/// database grants it to those roles by name. A lone grant, the floor
+/// granted to PUBLIC, and the floor reached through another role are not.
 #[tokio::test]
 async fn the_old_floor_is_recorded_only_when_it_is_there() {
     let Some(base) = base_url() else { return };
     let _turn = DEFAULT_NAMES.lock().await;
-    let (old, stray) = ("morpholog_ci_lp_oldfloor", "morpholog_ci_lp_stray");
-    let scratch = Scratch::new(&base, &[old, stray], &[]).await;
+    let (old, stray, public, inherited) = (
+        "morpholog_ci_lp_oldfloor",
+        "morpholog_ci_lp_stray",
+        "morpholog_ci_lp_public",
+        "morpholog_ci_lp_inherited",
+    );
+    let scratch = Scratch::new(
+        &base,
+        &[old, stray, public, inherited],
+        &["morpholog_ci_lp_floor_group"],
+    )
+    .await;
     let made = ensure_default_roles(&scratch.admin).await;
 
     // The grants the floor made before it was recorded.
@@ -602,17 +559,40 @@ async fn the_old_floor_is_recorded_only_when_it_is_there() {
         "the floor was re-applied after migrating, reaching the new table"
     );
 
-    // One stray grant is not a floor.
-    let stray_pool = scratch.deployment(stray).await;
-    before_the_record(&stray_pool).await;
-    run(
-        &stray_pool,
-        "GRANT USAGE ON SCHEMA morpholog TO morpholog_writer;
-         GRANT INSERT ON morpholog.audit TO morpholog_writer",
-    )
-    .await;
-    apply_migrations(&stray_pool).await.unwrap();
-    assert_eq!(deployment_roles(&stray_pool).await.unwrap(), None);
+    // Neither one stray grant, nor the whole floor granted to PUBLIC, nor
+    // the whole floor reached through another role, is a floor granted to
+    // these roles.
+    let group = "morpholog_ci_lp_floor_group";
+    run(&scratch.admin, &format!("CREATE ROLE {group} NOLOGIN")).await;
+    let floor = "USAGE ON SCHEMA morpholog TO {to};
+                 GRANT SELECT, INSERT, DELETE ON morpholog.claims TO {to};
+                 GRANT SELECT, INSERT ON morpholog.audit TO {to};
+                 GRANT SELECT, INSERT, UPDATE ON morpholog.outbox TO {to}";
+    let mut not_floors = Vec::new();
+    for (db, grants) in [
+        (
+            stray,
+            "GRANT USAGE ON SCHEMA morpholog TO morpholog_writer;
+             GRANT INSERT ON morpholog.audit TO morpholog_writer"
+                .to_string(),
+        ),
+        (public, format!("GRANT {}", floor.replace("{to}", "PUBLIC"))),
+        (
+            inherited,
+            format!(
+                "GRANT {}; GRANT {group} TO morpholog_writer, morpholog_reader",
+                floor.replace("{to}", group)
+            ),
+        ),
+    ] {
+        let not_floor = scratch.deployment(db).await;
+        before_the_record(&not_floor).await;
+        run(&not_floor, &grants).await;
+        apply_migrations(&not_floor).await.unwrap();
+        assert_eq!(deployment_roles(&not_floor).await.unwrap(), None, "{db}");
+        not_floors.push(not_floor);
+    }
+    let stray_pool = not_floors.remove(0);
     assert_eq!(
         as_role(&stray_pool, "morpholog_writer", WRITES[0].1)
             .await
@@ -620,16 +600,15 @@ async fn the_old_floor_is_recorded_only_when_it_is_there() {
         Some("42501"),
         "the stray grant was not widened into a floor"
     );
+    for pool in not_floors {
+        pool.close().await;
+    }
 
     pool.close().await;
     stray_pool.close().await;
     scratch.clean().await;
-    if made {
-        run(
-            &scratch.admin,
-            "DROP ROLE morpholog_writer, morpholog_reader",
-        )
-        .await;
+    for role in made {
+        run(&scratch.admin, &format!("DROP ROLE {role}")).await;
     }
 }
 
@@ -712,6 +691,67 @@ async fn the_documented_move_ends_a_shared_floor() {
     assert_eq!(probes(&pool_b, &shared).await, all(Some("42501")));
     assert_eq!(probes(&pool_b, &own).await, all(None));
     assert_eq!(probes(&pool_a, &shared).await, all(None));
+
+    pool_a.close().await;
+    pool_b.close().await;
+    scratch.clean().await;
+}
+
+/// Two deployments creating the same roles at once: the second creation
+/// waits for the first and fails on the name, never sharing the roles.
+#[tokio::test]
+async fn concurrent_creation_of_the_same_roles_shares_nothing() {
+    let Some(base) = base_url() else { return };
+    let (a, b) = ("morpholog_ci_lp_race2_a", "morpholog_ci_lp_race2_b");
+    let (writer, reader) = (
+        "morpholog_ci_lp_race2_writer",
+        "morpholog_ci_lp_race2_reader",
+    );
+    let scratch = Scratch::new(&base, &[a, b], &[writer, reader]).await;
+    let (pool_a, pool_b) = (scratch.deployment(a).await, scratch.deployment(b).await);
+    let shared = roles("morpholog_ci_lp_race2_");
+
+    let mut a_tx = pool_a.begin().await.unwrap();
+    for step in [
+        format!("CREATE ROLE {writer} NOLOGIN"),
+        format!("CREATE ROLE {reader} NOLOGIN"),
+        format!("GRANT USAGE ON SCHEMA morpholog TO {writer}, {reader}"),
+    ] {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(step))
+            .execute(&mut *a_tx)
+            .await
+            .unwrap();
+    }
+    let b_provisioning = {
+        let (pool_b, shared) = (pool_b.clone(), shared.clone());
+        tokio::spawn(async move { provision_least_privilege(&pool_b, &shared).await })
+    };
+    for _ in 0..100 {
+        let waiting = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM pg_stat_activity WHERE datname = $1 AND wait_event_type = 'Lock'",
+        )
+        .bind(b)
+        .fetch_one(&scratch.admin)
+        .await
+        .unwrap();
+        if waiting > 0 || b_provisioning.is_finished() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    a_tx.commit().await.unwrap();
+
+    b_provisioning
+        .await
+        .unwrap()
+        .expect_err("B must not take roles A created first");
+    assert_eq!(deployment_roles(&pool_b).await.unwrap(), None);
+    assert!(
+        databases_also_reached(&pool_a, &shared)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     pool_a.close().await;
     pool_b.close().await;

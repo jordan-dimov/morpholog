@@ -209,11 +209,10 @@ this database only, and records them there. `migrate` re-applies the
 grants to the recorded roles and to no others. It never creates a role,
 and it refuses if a recorded role is gone.
 
-`init` refuses a role that another database already uses. It adopts an
-existing role only as `CREATE ROLE ... NOLOGIN` would leave it, and
-refuses one that carries anything more: members, memberships of its own,
-attributes, settings, or privileges it already holds. `migrate` warns when this deployment's
-roles also hold privileges in another database. Deployments provisioned
+`init` creates a deployment's roles itself and refuses a role name that
+already exists, unless this database already records it: choose another
+prefix. `migrate` warns when this deployment's roles also hold privileges
+in, or on, another database. Deployments provisioned
 before this check existed can be in that state.
 
 A login granted two deployments' writers holds both, so grant each login
