@@ -105,6 +105,19 @@ pub enum Lint {
         other_program: String,
         other_writers: Vec<SharedWriterPeer>,
     },
+
+    /// A variable a `require` matches, named again by a later statement
+    /// of the same transformation while still unbound. A `require` keeps
+    /// none of its matches, so the later statement matches it afresh, and
+    /// the two need not agree. `first` and `again` are 0-based top-level
+    /// statement indexes. A hint, because two independent matches are
+    /// sometimes meant; renaming one says so in the source.
+    RequireRematch {
+        transformation: String,
+        variable: String,
+        first: usize,
+        again: usize,
+    },
 }
 
 /// A writing transformation on the other side of a [`Lint::SharedWriter`].
@@ -152,6 +165,21 @@ pub fn shared_writer_lints(this: &Program, other: &Program) -> Vec<Lint> {
 impl std::fmt::Display for Lint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Lint::RequireRematch {
+                transformation,
+                variable,
+                first,
+                again,
+            } => write!(
+                f,
+                "`{variable}` is matched by the `require` at statement {} of `{transformation}` \
+                 and named again at statement {}; a `require` keeps none of its matches, so the \
+                 second is a fresh match that need not agree with the first. If they must \
+                 agree, match it with `bind` instead; if they are independent, renaming one \
+                 says so",
+                first + 1,
+                again + 1
+            ),
             Lint::CaseWiderThanClaim {
                 invariant,
                 predicate,
@@ -352,6 +380,10 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
         }
     }
 
+    for t in &program.transformations {
+        require_rematch_findings(t, &mut out);
+    }
+
     for (index, inv) in program.invariants.iter().enumerate() {
         let implications = implications_of(&inv.body, definitions);
         if do_gate {
@@ -381,6 +413,150 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
         }
     }
     out
+}
+
+/// The re-match hints for one transformation: once per variable, at the
+/// first later statement that names it while it is still unbound.
+fn require_rematch_findings(t: &crate::ir::Transformation, out: &mut Vec<Lint>) {
+    let mut rematch = Rematch {
+        transformation: t,
+        matched: std::collections::BTreeMap::new(),
+        reported: BTreeSet::new(),
+        out,
+    };
+    let mut bound: BTreeSet<&crate::ir::Var> = t.parameters.iter().collect();
+    for (index, stmt) in t.body.iter().enumerate() {
+        rematch.visit(stmt, index, &mut bound);
+    }
+}
+
+struct Rematch<'a, 'o> {
+    transformation: &'a crate::ir::Transformation,
+    /// Each variable a `require` matched, by the first such statement.
+    matched: std::collections::BTreeMap<&'a crate::ir::Var, usize>,
+    reported: BTreeSet<&'a crate::ir::Var>,
+    out: &'o mut Vec<Lint>,
+}
+
+impl<'a> Rematch<'a, '_> {
+    /// `index` is the top-level statement, which a nested `for` body keeps.
+    fn visit(
+        &mut self,
+        stmt: &'a crate::ir::Stmt,
+        index: usize,
+        bound: &mut BTreeSet<&'a crate::ir::Var>,
+    ) {
+        use crate::ir::Stmt;
+        for var in named_here(stmt) {
+            if bound.contains(var) || !self.reported.insert(var) {
+                continue;
+            }
+            match self.matched.get(var) {
+                Some(&first) if first != index => self.out.push(Lint::RequireRematch {
+                    transformation: self.transformation.name.to_string(),
+                    variable: var.to_string(),
+                    first,
+                    again: index,
+                }),
+                _ => {
+                    self.reported.remove(var);
+                }
+            }
+        }
+        match stmt {
+            Stmt::Require { prop, .. } => {
+                for var in matched_by(prop) {
+                    if !bound.contains(var) {
+                        self.matched.entry(var).or_insert(index);
+                    }
+                }
+            }
+            Stmt::BindOne { prop, .. } => bound.extend(matched_by(prop)),
+            Stmt::Let { name, .. } | Stmt::LetNewSubject { name } => {
+                bound.insert(name);
+            }
+            Stmt::For { binding, body, .. } => {
+                let mut inner = bound.clone();
+                inner.insert(binding);
+                for s in body {
+                    self.visit(s, index, &mut inner);
+                }
+            }
+            Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) => {}
+        }
+    }
+}
+
+/// The variables a statement names outside any quantifier binding them
+/// and outside any `sum`, `max` or `min` body, whose variables are its own;
+/// for a `for`, only its collection, since its body is visited apart.
+fn named_here<'a>(stmt: &'a crate::ir::Stmt) -> Vec<&'a crate::ir::Var> {
+    use crate::fold::Node;
+    let term = |node: Node<'a>| match node {
+        Node::Slot(t) | Node::Value(ValueExpr::Term(t)) => Some(t),
+        _ => None,
+    };
+    let mut in_aggregate: BTreeSet<*const Term> = BTreeSet::new();
+    crate::fold::walk_stmt(stmt, &mut |node| {
+        if let Node::Value(aggregate @ (ValueExpr::Sum { .. } | ValueExpr::Extremum { .. })) = node
+        {
+            crate::fold::walk_value(aggregate, &mut |inner| {
+                in_aggregate.extend(term(inner).map(std::ptr::from_ref));
+            });
+        }
+    });
+    let mut out = Vec::new();
+    let mut take = |node: Node<'a>, scope: &[&'a crate::ir::Var]| {
+        if let Some(t @ Term::Var(v)) = term(node)
+            && !scope.contains(&v)
+            && !in_aggregate.contains(&std::ptr::from_ref(t))
+        {
+            out.push(v);
+        }
+    };
+    match stmt {
+        crate::ir::Stmt::For { collection, .. } => {
+            crate::fold::walk_value_scoped(collection, &mut take);
+        }
+        other => crate::fold::walk_stmt_scoped(other, &mut take),
+    }
+    out
+}
+
+/// The variables a proposition certainly binds: those of claim and call
+/// patterns it matches positively, through `and`, `pre` and `exists`, and
+/// those every branch of an `or` binds. Conservative: a hint built on it
+/// may miss a re-match, never invent one.
+fn matched_by(prop: &Prop) -> BTreeSet<&crate::ir::Var> {
+    match prop {
+        Prop::Claim { args, .. } | Prop::Defined { args, .. } => args
+            .iter()
+            .filter_map(|t| match t {
+                Term::Var(v) => Some(v),
+                _ => None,
+            })
+            .collect(),
+        Prop::And(props) => props.iter().flat_map(matched_by).collect(),
+        Prop::Or(props) => {
+            let mut branches = props.iter().map(matched_by);
+            let first = branches.next().unwrap_or_default();
+            branches.fold(first, |acc, b| acc.intersection(&b).copied().collect())
+        }
+        Prop::Pre(p) => matched_by(p),
+        Prop::Exists { binding, body } => {
+            let mut vars = matched_by(body);
+            vars.remove(binding);
+            vars
+        }
+        Prop::Not(_)
+        | Prop::Implies { .. }
+        | Prop::Forall { .. }
+        | Prop::Xor(_, _)
+        | Prop::Eq(_, _)
+        | Prop::Neq(_, _)
+        | Prop::Compare { .. }
+        | Prop::In(_, _) => BTreeSet::new(),
+    }
 }
 
 /// The case-width hint for one authored invariant. Eligibility is the

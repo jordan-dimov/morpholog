@@ -30,7 +30,8 @@ fn unsupplied_missing(found: &[Lint]) -> Vec<&str> {
             | Lint::GoverningSelectionWithoutTotality { .. }
             | Lint::EffectiveWithoutDeclaredTotality { .. }
             | Lint::SharedWriter { .. }
-            | Lint::CaseWiderThanClaim { .. } => None,
+            | Lint::CaseWiderThanClaim { .. }
+            | Lint::RequireRematch { .. } => None,
         })
         .unwrap_or_default()
 }
@@ -50,7 +51,8 @@ fn governing_finding(found: &[Lint]) -> Option<(&str, Vec<&str>)> {
         | Lint::UnsuppliedAntecedent { .. }
         | Lint::EffectiveWithoutDeclaredTotality { .. }
         | Lint::SharedWriter { .. }
-        | Lint::CaseWiderThanClaim { .. } => None,
+        | Lint::CaseWiderThanClaim { .. }
+        | Lint::RequireRematch { .. } => None,
     })
 }
 
@@ -1238,4 +1240,105 @@ invariant rates_are_non_negative:
         message.contains("leaves declared-key field `from` unconstrained; constraining `from` completes a uniqueness key"),
         "{message}"
     );
+}
+
+/// The re-match findings among `found`, as (transformation, variable,
+/// first, again).
+fn rematches(found: &[Lint]) -> Vec<(&str, &str, usize, usize)> {
+    found
+        .iter()
+        .filter_map(|l| match l {
+            Lint::RequireRematch {
+                transformation,
+                variable,
+                first,
+                again,
+            } => Some((transformation.as_str(), variable.as_str(), *first, *again)),
+            _ => None,
+        })
+        .collect()
+}
+
+const ENTRY_HEAD: &str = "
+program contest
+
+predicate RoundOpen(contest: Subject, round_id: Subject)
+predicate Enrolled(contest: Subject, participant: Subject)
+predicate Entry(round_id: Subject, participant: Subject)
+
+transformation enter(round_id):
+";
+
+fn entry(body: &str) -> Vec<Lint> {
+    lints_of(&format!("{ENTRY_HEAD}{body}"))
+}
+
+/// The shape a contest author first wrote: "enrolled in this round's
+/// contest" read as "enrolled in any contest", because each `require`
+/// matches `contest` on its own.
+#[test]
+fn a_variable_matched_by_a_require_and_named_again_is_a_hint() {
+    let found = entry(
+        "    require RoundOpen(contest, round_id)
+    require Enrolled(contest, actor)
+    admit Entry(round_id, actor)
+",
+    );
+    assert_eq!(rematches(&found), vec![("enter", "contest", 0, 1)]);
+    let message = found
+        .iter()
+        .find(|l| matches!(l, Lint::RequireRematch { .. }))
+        .unwrap()
+        .to_string();
+    assert!(
+        message.contains("statement 1") && message.contains("statement 2"),
+        "{message}"
+    );
+    assert!(message.contains("`bind`"), "{message}");
+}
+
+/// No hint where the variable is matched once and kept, renamed apart,
+/// local to an aggregate, matched within one `require`, or bound by a
+/// quantifier.
+#[test]
+fn a_single_or_intended_match_is_not_a_hint() {
+    for body in [
+        // Kept by `bind`, so every later use is the same value.
+        "    bind RoundOpen(contest, round_id)
+    require Enrolled(contest, actor)
+    require RoundOpen(contest, _)
+    admit Entry(round_id, actor)
+",
+        // Renamed: two independent matches, said so.
+        "    require RoundOpen(contest, round_id)
+    require Enrolled(other, actor)
+    admit Entry(round_id, actor)
+",
+        // Both uses inside one `require`, where matches flow.
+        "    require RoundOpen(contest, round_id) and Enrolled(contest, actor)
+    admit Entry(round_id, actor)
+",
+        // A quantifier's own variable.
+        "    require exists contest: RoundOpen(contest, round_id)
+    require Enrolled(contest, actor)
+    admit Entry(round_id, actor)
+",
+    ] {
+        assert_eq!(rematches(&entry(body)), vec![], "{body}");
+    }
+    // An aggregate's variable is its own, even under the same name.
+    let found = lints_of(
+        "
+program fees
+
+predicate Fee(account: Subject, amount: Decimal)
+predicate Total(account: Subject, amount: Decimal)
+
+transformation total(account):
+    require Fee(account, amount)
+    let sum_of = sum(amount | Fee(account, amount))
+    admit Total(account, sum_of)
+",
+    );
+    assert_eq!(rematches(&found), vec![]);
 }

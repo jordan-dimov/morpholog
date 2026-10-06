@@ -329,6 +329,8 @@ Four statement classes serve different binding purposes; conflating them is the 
 
 - **`require Prop`** is a **yes/no gate**. It evaluates the `Prop` against the pre-state snapshot; if it admits any match the statement succeeds, otherwise the proposal is rejected. The matches' bindings are **not** propagated back into the active scope: a `require Claim(x, y)` that uses fresh variable names `x` and `y` does not bind them for later statements. The require's only job is admission control.
 
+  So a name matched by a `require` and used again later is matched afresh, and the second match need not agree with the first. `check` prints a hint naming both statements: use `bind` if they must agree, or rename one if they are independent. A variable local to a `sum`, `max` or `min` body does not count.
+
 - **`bind_one Prop`** is a **deterministic unique lookup**. It evaluates the `Prop` against the pre-state, current bindings, and transition actor; the surviving binding set is treated as the next binding context.
   - Zero matches: the transformation is rejected (lawful business outcome: the expected governed record is not present).
   - One match: the returned binding set **replaces** the current binding context. Statements after a successful `bind_one` see the newly-bound variables.

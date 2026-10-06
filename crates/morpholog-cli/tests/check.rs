@@ -420,6 +420,41 @@ fn check_prints_a_located_hint_and_passes_without_strict() {
     );
 }
 
+// A re-match hint carets the statement that matches afresh, here 8:5, and
+// --strict makes it an error.
+#[test]
+fn a_require_rematch_hint_points_at_the_second_match() {
+    let f = temp_morph(
+        "program contest
+
+predicate RoundOpen(contest: Subject, round_id: Subject)
+predicate Enrolled(contest: Subject, participant: Subject)
+
+transformation enter(round_id):
+    require RoundOpen(contest, round_id)
+    require Enrolled(contest, actor)
+",
+    );
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(f.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = strip_ansi(&String::from_utf8(out.stderr).unwrap());
+    assert!(
+        stderr.contains("hint:") && stderr.contains(":8:5") && stderr.contains("`contest`"),
+        "got: {stderr}"
+    );
+    let strict = Command::new(bin())
+        .arg("check")
+        .arg(f.path())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert!(!strict.status.success(), "--strict promotes it");
+}
+
 // --strict promotes the same finding to an error and a failing exit.
 #[test]
 fn check_strict_promotes_the_hint_to_an_error() {
