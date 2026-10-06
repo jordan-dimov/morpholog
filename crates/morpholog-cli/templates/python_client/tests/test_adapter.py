@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from _support import GOLDEN_DIR, add_client_to_path, recording_argv
 
@@ -1206,6 +1207,32 @@ class AdapterDiscrimination(unittest.TestCase):
 
         outcome = self.client.submit(FakeRequest(), "alex")
         self.assertIsInstance(outcome, envelopes.Rejected)
+
+    def test_submit_all_is_transact_over_one_row_per_request_and_actor(self):
+        class Grant:
+            TRANSFORMATION = "grant"
+
+            def to_args_named(self):
+                return {"principal": "desk"}
+
+        class Capture:
+            TRANSFORMATION = "capture"
+
+            def to_args_named(self):
+                return {"trade": "t1"}
+
+        with mock.patch.object(self.client, "transact", return_value="decision") as transact:
+            decision = self.client.submit_all(
+                [(Grant(), "desk"), (Capture(), "trader")], timeout=5
+            )
+        self.assertEqual(decision, "decision")
+        transact.assert_called_once_with(
+            [
+                {"transformation": "grant", "actor": "desk", "args_named": {"principal": "desk"}},
+                {"transformation": "capture", "actor": "trader", "args_named": {"trade": "t1"}},
+            ],
+            5,
+        )
 
     def test_checkpoint_signing_key_and_key_id_must_be_given_together(self):
         # The guard raises before any subprocess, so the stub never runs.

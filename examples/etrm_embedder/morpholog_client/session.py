@@ -35,14 +35,19 @@ import queue
 import subprocess
 import threading
 import time
+from typing import Callable, Sequence, TypeVar
 
 from . import envelopes
 from .adapter import (
     MorphologError,
     MorphologOutcomeUnknown,
     MorphologRequestError,
+    Request,
+    _act_rows,
     _redact_argv,
 )
+
+_T = TypeVar("_T")
 
 #: The wire version this client speaks; the ready line must agree.
 PROTOCOL = 1
@@ -68,7 +73,9 @@ class _ResponseContract(Exception):
         self.detail = detail
 
 
-def _decode_atomic(payload: object, expected_row: int) -> object:
+def _decode_atomic(
+    payload: object, expected_row: int
+) -> envelopes.AtomicCommitted | envelopes.AtomicRejected:
     """The transact decoder: the one atomic outcome, matched to the row
     THIS caller sent (the session adds it beside the outcome)."""
     if not isinstance(payload, dict) or payload.get("row") != expected_row:
@@ -86,7 +93,9 @@ def _decode_atomic(payload: object, expected_row: int) -> object:
         ) from None
 
 
-def _decode_receipt(payload: object, expected_row: int) -> object:
+def _decode_receipt(
+    payload: object, expected_row: int
+) -> envelopes.Committed | envelopes.Rejected:
     """The propose decoder: parse the receipt, match it to the row
     THIS caller sent, and refuse an error receipt where an outcome
     belongs (errors answer through the session's own path). Every check reads
@@ -113,18 +122,18 @@ def _decode_receipt(payload: object, expected_row: int) -> object:
     return receipt.outcome
 
 
-def _decode_rows(cls: type):
+def _decode_rows(parse: Callable[[object], _T]) -> Callable[[object, int], list[_T]]:
     """The read decoder: the pinned array shape, then every row
     against its envelope contract."""
 
-    def decode(payload: object, _expected_row: int) -> list[object]:
+    def decode(payload: object, _expected_row: int) -> list[_T]:
         if not isinstance(payload, list):
             raise _ResponseContract(
                 "a read response was not the pinned array shape",
                 f"malformed read response: {payload!r}",
             )
         try:
-            return [cls.from_json(r) for r in payload]
+            return [parse(r) for r in payload]
         except envelopes.EnvelopeError as exc:
             raise _ResponseContract(
                 "a read row did not match the pinned contract",
@@ -367,7 +376,13 @@ class Session:
     # The one exchange seam.
     # ------------------------------------------------------------
 
-    def _exchange(self, body: dict[str, object], *, commitful: bool, decode) -> object:
+    def _exchange(
+        self,
+        body: dict[str, object],
+        *,
+        commitful: bool,
+        decode: Callable[[object, int], _T],
+    ) -> _T:
         """Write one request line, wait for its one response line, and
         decode it - all in lockstep under the lock. Any break after the
         request has been flushed poisons the session; for a commitful
@@ -517,16 +532,23 @@ class Session:
         return self._exchange(body, commitful=True, decode=_decode_atomic)
 
     def submit(
-        self, request: object, actor: str, explain_on_reject: bool = False
+        self, request: Request, actor: str, explain_on_reject: bool = False
     ) -> envelopes.Committed | envelopes.Rejected:
         """Commit a generated request model through the session: its
         class names the transformation, its fields encode themselves."""
         return self.propose(
-            request.TRANSFORMATION,  # type: ignore[attr-defined]
+            request.TRANSFORMATION,
             actor,
-            request.to_args_named(),  # type: ignore[attr-defined]
+            request.to_args_named(),
             explain_on_reject=explain_on_reject,
         )
+
+    def submit_all(
+        self, acts: Sequence[tuple[Request, str]]
+    ) -> envelopes.AtomicCommitted | envelopes.AtomicRejected:
+        """``transact`` over generated request models, each with the
+        actor who proposes it, as on the one-shot client."""
+        return self.transact(_act_rows(acts))
 
     def claims(
         self, *predicates: str, as_of: str | None = None
@@ -534,7 +556,7 @@ class Session:
         """The bare claims read, as on the one-shot client: the claims
         table is the authority, an unknown predicate matches nothing."""
         body = self._claims_body(predicates, named=False, as_of=as_of)
-        return self._read_rows(body, envelopes.ClaimInstance)
+        return self._read_rows(body, envelopes.ClaimInstance.from_json)
 
     def claims_named(
         self,
@@ -548,13 +570,13 @@ class Session:
         body = self._claims_body(predicates, named=True, as_of=as_of)
         if where:
             body["where"] = dict(where)
-        return self._read_rows(body, envelopes.NamedClaim)
+        return self._read_rows(body, envelopes.NamedClaim.from_json)
 
     def derived(self, name: str, *, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
         """Compute a read-side view through the session - always live,
         never the refresh cache, as on the one-shot client."""
         body = self._derived_body(name, named=False, as_of=as_of)
-        return self._read_rows(body, envelopes.ClaimInstance)
+        return self._read_rows(body, envelopes.ClaimInstance.from_json)
 
     def derived_named(
         self, name: str, *, as_of: str | None = None, where: dict[str, str] | None = None
@@ -564,7 +586,7 @@ class Session:
         body = self._derived_body(name, named=True, as_of=as_of)
         if where:
             body["where"] = dict(where)
-        return self._read_rows(body, envelopes.NamedClaim)
+        return self._read_rows(body, envelopes.NamedClaim.from_json)
 
     def _claims_body(
         self, predicates: tuple[str, ...], named: bool, as_of: str | None
@@ -586,9 +608,9 @@ class Session:
             body["as_of"] = as_of
         return body
 
-    def _read_rows(self, body: dict[str, object], cls: type) -> list[object]:
+    def _read_rows(self, body: dict[str, object], parse: Callable[[object], _T]) -> list[_T]:
         """One read exchange, decoded into `cls` rows under the lock. A
         row that does not match the pinned contract poisons the
         session: the framing is intact, but a binary/client contract
         mismatch will not heal on the next call."""
-        return self._exchange(body, commitful=False, decode=_decode_rows(cls))
+        return self._exchange(body, commitful=False, decode=_decode_rows(parse))

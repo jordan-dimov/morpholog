@@ -303,6 +303,29 @@ class TranscriptConversation(SessionHarness):
         self.assertEqual(request["op"], "transact")
         self.assertEqual(request["acts"], acts)
 
+    def test_submit_all_sends_one_act_per_request_and_actor(self):
+        class Open:
+            TRANSFORMATION = "open"
+
+            def __init__(self, id):
+                self.id = id
+
+            def to_args_named(self):
+                return {"id": self.id}
+
+        with self.session("transact_rejected") as s:
+            rejected = s.submit_all([(Open("a1"), "teller"), (Open("a2"), "manager")])
+            self.assertIsInstance(rejected, envelopes.AtomicRejected)
+        request = json.loads(self.recorded()[0])
+        self.assertEqual(request["op"], "transact")
+        self.assertEqual(
+            request["acts"],
+            [
+                {"transformation": "open", "actor": "teller", "args_named": {"id": "a1"}},
+                {"transformation": "open", "actor": "manager", "args_named": {"id": "a2"}},
+            ],
+        )
+
     def test_an_empty_batch_is_the_runtimes_coded_refusal_on_both_transports(self):
         # The runtime owns the contract: the session sends the empty
         # batch and relays the coded receipt, as the one-shot does.

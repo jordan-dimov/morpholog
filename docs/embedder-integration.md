@@ -609,6 +609,21 @@ outcomes - and raising `MorphologRequestError` with the code for a
 known error, `MorphologOutcomeUnknown` for `commit_outcome_unknown`, a
 timeout after submission, or no statement at all.
 
+`submit_all` is the typed form, as `submit` is for one proposal: it
+takes (request, actor) pairs of generated request models, so acts by
+different actors need no hand-built rows.
+
+```python
+decision = client.submit_all([
+    (models.GrantConfirmAuthorityRequest(principal="desk", commodity="oil"), "desk"),
+    (models.CaptureTradeRequest(trade="t1", ...), "trader"),
+])
+```
+
+A list built ahead of the call is annotated `list[tuple[Request, str]]`
+(`Request` is exported by the package), since two request classes
+share no other type.
+
 **Sizing.** The bench's `transact` scenario times N acts as one
 decision against the same N one by one, with optional concurrent
 writers on the same period. Its reading on the development machine

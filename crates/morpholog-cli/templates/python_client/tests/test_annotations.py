@@ -1,8 +1,9 @@
 """The envelope models' type annotations, held to the same standard as
 their shapes: pinned, not hopeful.
 
-Nothing type-checks this package in CI, so a wrong annotation would
-otherwise pass every gate while misleading every reader and IDE. Three
+The gate's type check reports errors only in the client seam, not in
+the envelope models, so a wrong annotation here would otherwise pass
+every gate while misleading every reader and IDE. Three
 properties close that gap:
 
 1. No container annotation on the consumed surface stays bare, at ANY
