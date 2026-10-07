@@ -208,13 +208,7 @@ Active development, in Rust on PostgreSQL 18+, with no unsafe code. The kernel, 
 
 ## Deeper reading
 
-- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - what Morpholog is for, and what it refuses to become.
-- [`docs/computational-model.md`](docs/computational-model.md) - why every decision terminates and depends only on what it is given, and what that rules out.
-- [`docs/roadmap.md`](docs/roadmap.md) - what's next, what's deferred, and what's out of scope.
-- [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - exactly what the rules mean.
-- [`docs/embedder-integration.md`](docs/embedder-integration.md) - the pinned contract for integrating from any language.
-- [`docs/design-history.md`](docs/design-history.md) - which worked example forced each design decision, and why.
-- [`docs/prior-art.md`](docs/prior-art.md) - the theory underneath, and what was deliberately left out.
+[The documentation guide](docs/README.md) maps the rest by what you want to know: what Morpholog is for, how to build on it, exactly what the rules mean, and why each piece exists. It ends with a glossary of Morpholog's words for things you already have.
 
 ## License
 
