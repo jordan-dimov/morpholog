@@ -2213,10 +2213,11 @@ async fn the_deployment_roles_migration_holds_one_row_and_refuses_another_shape(
 const FIRST_RELEASE_SCHEMA: &str = include_str!("fixtures/schema_v0.0.1.sql");
 
 /// Everything about a database's schema but the order of its columns:
-/// columns by name with type, nullability and default; constraints;
-/// indexes; functions; triggers. A column added by a migration lands last,
-/// where a fresh `init` may place it elsewhere, so order is the one thing
-/// a database's history may decide.
+/// columns by name with type, nullability, default, identity and
+/// generation; constraints; indexes; views; whole function definitions;
+/// triggers. A column added by a migration lands last, where a fresh
+/// `init` may place it elsewhere, so order is the one thing a database's
+/// history may decide.
 async fn schema_but_order(pool: &PgPool) -> Vec<String> {
     // Names print qualified only outside the search path, so pin it.
     let mut conn = pool.acquire().await.unwrap();
@@ -2225,10 +2226,24 @@ async fn schema_but_order(pool: &PgPool) -> Vec<String> {
         .await
         .unwrap();
     let schema = sqlx::query_scalar::<_, String>(
-        "SELECT 'column ' || table_schema || '.' || table_name || '.' || column_name || ' '
-                || data_type || ' ' || is_nullable || ' ' || coalesce(column_default, '')
-         FROM information_schema.columns
-         WHERE table_schema IN ('morpholog', 'morpholog_read')
+        "SELECT 'column ' || a.attrelid::regclass || '.' || a.attname || ' '
+                || format_type(a.atttypid, a.atttypmod)
+                || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END
+                || CASE a.attidentity WHEN 'a' THEN ' identity always'
+                                      WHEN 'd' THEN ' identity by default' ELSE '' END
+                || CASE WHEN a.attgenerated = 's' THEN ' generated ' ELSE ' default ' END
+                || coalesce(pg_get_expr(d.adbin, d.adrelid), '')
+         FROM pg_attribute a
+         JOIN pg_class c ON c.oid = a.attrelid
+         LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+         WHERE c.relnamespace IN ('morpholog'::regnamespace, 'morpholog_read'::regnamespace)
+           AND c.relkind IN ('r', 'p', 'v', 'm')
+           AND a.attnum > 0 AND NOT a.attisdropped
+         UNION ALL
+         SELECT 'view ' || c.oid::regclass || ' ' || pg_get_viewdef(c.oid)
+         FROM pg_class c
+         WHERE c.relnamespace IN ('morpholog'::regnamespace, 'morpholog_read'::regnamespace)
+           AND c.relkind IN ('v', 'm')
          UNION ALL
          SELECT 'constraint ' || conrelid::regclass || ' ' || conname || ' '
                 || pg_get_constraintdef(oid)
@@ -2238,9 +2253,10 @@ async fn schema_but_order(pool: &PgPool) -> Vec<String> {
          SELECT 'index ' || indexdef FROM pg_indexes
          WHERE schemaname IN ('morpholog', 'morpholog_read')
          UNION ALL
-         SELECT 'function ' || p.oid::regprocedure || ' ' || md5(p.prosrc)
+         SELECT 'function ' || pg_get_functiondef(p.oid)
          FROM pg_proc p
          WHERE p.pronamespace IN ('morpholog'::regnamespace, 'morpholog_read'::regnamespace)
+           AND p.prokind IN ('f', 'p')
          UNION ALL
          SELECT 'trigger ' || pg_get_triggerdef(t.oid)
          FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
@@ -2259,15 +2275,18 @@ async fn schema_but_order(pool: &PgPool) -> Vec<String> {
 }
 
 /// A database the first release provisioned, migrated to the head, has
-/// the schema a fresh `init` builds, but for the order of its columns and
-/// the activation boundary of the audit log's required fields, which hold
-/// for new rows only on a database that has old ones.
+/// the schema a fresh `init` builds, but for two things its history
+/// decides: the order of its columns, and the audit log's required-field
+/// checks, which an upgraded database leaves unvalidated so its old rows
+/// stay lawful.
 #[tokio::test]
-async fn the_first_release_migrated_to_the_head_is_a_fresh_schema_but_for_column_order() {
+async fn the_first_release_migrated_to_the_head_differs_from_a_fresh_schema_only_by_its_history() {
     let Ok(base) = std::env::var("DATABASE_URL") else {
         return;
     };
-    let (fresh, upgraded) = ("morpholog_ci_schema_fresh", "morpholog_ci_schema_upgraded");
+    let fresh = format!("morpholog_schema_fresh_{}", std::process::id());
+    let upgraded = format!("morpholog_schema_upgraded_{}", std::process::id());
+    let (fresh, upgraded) = (fresh.as_str(), upgraded.as_str());
     let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
     let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
     for db in [fresh, upgraded] {
@@ -2313,16 +2332,8 @@ async fn the_first_release_migrated_to_the_head_is_a_fresh_schema_but_for_column
             None => item,
         })
         .collect();
-    assert_eq!(found, expected);
-    assert!(
-        deferred
-            .iter()
-            .all(|c| c.starts_with("constraint morpholog.audit audit_")
-                && c.contains("_required CHECK")),
-        "only the audit log's required fields are deferred: {deferred:?}"
-    );
-    assert!(!deferred.is_empty());
-
+    // Dropped before asserting: the names are this process's, so a later
+    // run would never drop what a failed one left behind.
     fresh_pool.close().await;
     upgraded_pool.close().await;
     for db in [fresh, upgraded] {
@@ -2333,4 +2344,19 @@ async fn the_first_release_migrated_to_the_head_is_a_fresh_schema_but_for_column
         .await
         .unwrap();
     }
+    let fresh_only: Vec<_> = expected.iter().filter(|e| !found.contains(e)).collect();
+    let migrated_only: Vec<_> = found.iter().filter(|f| !expected.contains(f)).collect();
+    assert!(
+        fresh_only.is_empty() && migrated_only.is_empty(),
+        "fresh only: {fresh_only:#?}\nmigrated only: {migrated_only:#?}"
+    );
+    assert_eq!(found.len(), expected.len());
+    assert!(
+        deferred
+            .iter()
+            .all(|c| c.starts_with("constraint morpholog.audit audit_")
+                && c.contains("_required CHECK")),
+        "only the audit log's required fields are deferred: {deferred:?}"
+    );
+    assert!(!deferred.is_empty());
 }

@@ -1,3 +1,7 @@
+-- Frozen: crates/morpholog-core/sql/schema.sql at tag v0.0.1
+-- (commit 4cda1d4103e0833f71edb59bf1a1f4266d8a25e9), verbatim below this
+-- header. The migrations test upgrades it to the head; never update it.
+
 -- Morpholog v0 PostgreSQL schema.
 --
 -- Tables: claims (admitted state), audit (causal log of committed
