@@ -52,8 +52,8 @@ A verifier signs off Q1 revenue at £92,000; the bank approves it for its
 covenant test and runs the test on 30 June. On 15 July the verifier
 corrects the figure to £91,000. The record still shows the original
 figure, the corrected one and the link between them; which figure each
-decision relied on; who approved each figure for which use, and when it was
-withdrawn; and that the 30 June test was made under a valid approval.
+decision relied on; which authority was recorded as approving each figure
+for which use, and when the approval was withdrawn; and that the 30 June test was made under a valid approval.
 
 ## Where it fits
 

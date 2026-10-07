@@ -150,7 +150,7 @@ Each one runs end to end against PostgreSQL; nothing is mocked.
 - [Adding Morpholog to an existing trading system](examples/etrm_embedder/) - a Python program standing in for a trading system drives the trade lifecycle through the client Morpholog generates from its rules. The trading system keeps doing its job; Morpholog decides the steps that must be defensible.
 - [Margin call run](examples/14_margin_call_run/) - a risk engine proposes the whole day's run. It is accepted only if every account that should be called is in it, no other account is, and every amount is exact. A margin call the engine forgot is refused, not just a wrong one.
 - [Verified revenue](examples/02_verified_revenue/) - a figure is approved for a particular use, relied on, then corrected. Every decision made along the way stays defensible.
-- [Biometric identification oversight](examples/13_biometric_identification_oversight/) - the EU AI Act's two-person verification, enforced: an AI's match counts for nothing until two different, currently authorised people verify it.
+- [Biometric identification oversight](examples/13_biometric_identification_oversight/) - the EU AI Act's two-person verification, enforced: an AI's match counts for nothing until two distinct verifiers, each authorised when they verified, confirm it.
 
 If you came with a question rather than an industry - "can it accept a whole batch as one decision?" - the [example index](examples/README.md) maps what you want to do to the example that shows it.
 

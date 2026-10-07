@@ -1,18 +1,20 @@
 # Biometric identification oversight
 
-**An AI system's identification counts for nothing until two different,
-currently authorised people have verified it - and every use leaves the
-record the EU AI Act asks for.** The AI system only proposes; whether its
+**An AI system's identification counts for nothing until two distinct
+verifier identities, each authorised when they verified, have confirmed
+it - and each governed use records the model version, the input, the use
+period and who verified.** The AI system only proposes; whether its
 match may be acted on is decided outside it.
 
 ## Why this matters
 
-From 2 August 2026, Regulation (EU) 2024/1689 (the EU AI Act) applies to
-high-risk AI systems, and remote biometric identification is the statute's
-own first example (Annex III, point 1(a)). Such a system must keep automatic
-records of every use (Article 12), and no action may be taken on an
-identification unless at least two people have separately verified it
-(Article 14(5)). Non-compliance with provider or deployer obligations
+Regulation (EU) 2024/1689 (the EU AI Act) classes remote biometric
+identification as high-risk; it is the statute's own first example (Annex
+III, point 1(a)). Under the timetable as amended in 2026, the high-risk
+requirements modelled here apply to Annex III systems from 2 December 2027.
+Such a system must keep automatic records of every use (Article 12), and no
+action may be taken on an identification unless at least two people have
+separately verified it (Article 14(5)). Non-compliance with provider or deployer obligations
 carries fines up to EUR 15 million or 3% of worldwide annual turnover
 (Article 99(4)).
 
@@ -25,16 +27,18 @@ committed at all, and the Article 12 log is that record, read back.
 
 - **The AI's match carries no weight on its own.** It enters the record
   with no standing to be acted on.
-- **Two different people, verifying first.** A decision needs verifications
-  by two distinct overseers, both made before the decision.
-- **Live, revocable authority.** Only someone currently assigned oversight
-  may verify. Revoking that assignment stops their future verifications and
-  leaves every past decision a valid record of what was decided then.
+- **Two different verifiers, verifying first.** A decision needs
+  verifications under two distinct verifier identities, both made before
+  the decision.
+- **Live, revocable authority.** Only someone assigned oversight at the
+  time may verify, or decide. Revoking that assignment stops their future
+  acts and leaves every past verification and decision a valid record of
+  what was done then.
 - **A name only its authorised login can use.** A verifier's name, once
   restricted, can be asserted only by a database login authorised for it.
-  The deployer, who hands out oversight, is restricted the same way. Two
-  names are two people only when their logins belong to separate
-  applications and credentials (see below).
+  The deployer, who restricts verifier names and authorises their logins,
+  is restricted the same way. Two names are two people only when their
+  logins belong to separate applications and credentials (see below).
 - **Matches recorded under the system's name.** A match may only be
   recorded with the AI system as its actor.
 
@@ -83,7 +87,8 @@ candidates does not have to be trusted to behave; it only gets to
 Asked about any decision, the record answers in one as-of lookup: the
 decision, its match, the input it was matched on, both verifiers, the model
 version in service, and the oversight assignments in force at that moment.
-That is the explanation an affected person may demand under Article 86(1).
+That gives the deployer governed evidence from which to write the clear and
+meaningful explanation an affected person may request under Article 86(1).
 
 There is deliberately no clock in the model. Every timestamp is supplied by
 the proposer and judged by the gates; nothing reads "now" from the machine it
@@ -116,7 +121,7 @@ final regulation, not the draft):
 | Art. 14(5) | No action or decision on an identification unless separately verified by at least two natural persons | The `decide_on_identification` gate and the `decision_rests_on_two_distinct_prior_verifications` invariant - two verification records with distinct verifiers, **both at or before the decision**, or the decision cannot commit |
 | Art. 26(2) | Deployers assign oversight to natural persons with competence, training and authority | `OversightAssigned`, granted and revoked by `assign_oversight` / `revoke_oversight`; consulted as a gate at each verification |
 | Art. 19(1), 26(6) | Providers and deployers keep logs at least six months | No machinery needed: the substrate never deletes, so any retention minimum is trivially exceeded |
-| Art. 86(1) | An affected person may demand a clear and meaningful explanation of the decision | One as-of lookup: the decision, its match, the input reference, both verifier identities, the version in service, and the oversight assignments in force - all at the decision's transition |
+| Art. 86(1) | An affected person may demand a clear and meaningful explanation of the decision | The evidence for that explanation, in one as-of lookup: the decision, its match, the input reference, both verifier identities, the version in service, and the oversight assignments in force - all at the decision's transition |
 
 ## What this example deliberately does not claim
 
@@ -139,6 +144,11 @@ final regulation, not the draft):
   role can write claims and audit rows directly, so two verifier identities
   are genuinely distinct only when the two applications and their credentials
   are genuinely separate.
+- Who may assign oversight, and whose names must be restricted. Here any
+  login may call `assign_oversight` or `revoke_oversight`, a verifier's
+  name need not be restricted before it verifies, and the AI system's own
+  name is not restricted. A real deployment would gate the first on the
+  deployer and restrict every name that may verify or record a match.
 - Hash-chained or blockchain-style logging solves a different problem:
   tamper-evidence, proof that nobody altered the record after the fact. This
   example demonstrates the layer above - invalid records were never
