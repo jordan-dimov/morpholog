@@ -2208,3 +2208,129 @@ async fn the_deployment_roles_migration_holds_one_row_and_refuses_another_shape(
         .await
         .unwrap();
 }
+
+/// The schema of the first release, as its `init` provisioned it.
+const FIRST_RELEASE_SCHEMA: &str = include_str!("fixtures/schema_v0.0.1.sql");
+
+/// Everything about a database's schema but the order of its columns:
+/// columns by name with type, nullability and default; constraints;
+/// indexes; functions; triggers. A column added by a migration lands last,
+/// where a fresh `init` may place it elsewhere, so order is the one thing
+/// a database's history may decide.
+async fn schema_but_order(pool: &PgPool) -> Vec<String> {
+    // Names print qualified only outside the search path, so pin it.
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::raw_sql("SET search_path TO pg_catalog")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let schema = sqlx::query_scalar::<_, String>(
+        "SELECT 'column ' || table_schema || '.' || table_name || '.' || column_name || ' '
+                || data_type || ' ' || is_nullable || ' ' || coalesce(column_default, '')
+         FROM information_schema.columns
+         WHERE table_schema IN ('morpholog', 'morpholog_read')
+         UNION ALL
+         SELECT 'constraint ' || conrelid::regclass || ' ' || conname || ' '
+                || pg_get_constraintdef(oid)
+         FROM pg_constraint
+         WHERE connamespace IN ('morpholog'::regnamespace, 'morpholog_read'::regnamespace)
+         UNION ALL
+         SELECT 'index ' || indexdef FROM pg_indexes
+         WHERE schemaname IN ('morpholog', 'morpholog_read')
+         UNION ALL
+         SELECT 'function ' || p.oid::regprocedure || ' ' || md5(p.prosrc)
+         FROM pg_proc p
+         WHERE p.pronamespace IN ('morpholog'::regnamespace, 'morpholog_read'::regnamespace)
+         UNION ALL
+         SELECT 'trigger ' || pg_get_triggerdef(t.oid)
+         FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+         WHERE NOT t.tgisinternal
+           AND c.relnamespace IN ('morpholog'::regnamespace, 'morpholog_read'::regnamespace)
+         ORDER BY 1",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .unwrap();
+    sqlx::raw_sql("RESET search_path")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    schema
+}
+
+/// A database the first release provisioned, migrated to the head, has
+/// the schema a fresh `init` builds, but for the order of its columns and
+/// the activation boundary of the audit log's required fields, which hold
+/// for new rows only on a database that has old ones.
+#[tokio::test]
+async fn the_first_release_migrated_to_the_head_is_a_fresh_schema_but_for_column_order() {
+    let Ok(base) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let (fresh, upgraded) = ("morpholog_ci_schema_fresh", "morpholog_ci_schema_upgraded");
+    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
+    let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
+    for db in [fresh, upgraded] {
+        ddl(
+            &admin_pool,
+            format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"),
+        )
+        .await
+        .unwrap();
+        ddl(&admin_pool, format!("CREATE DATABASE {db}"))
+            .await
+            .unwrap();
+    }
+    let connect = |db: &str| {
+        sqlx::PgPool::connect_lazy(&morpholog_postgres::with_default_user(&with_database(
+            &base, db,
+        )))
+        .unwrap()
+    };
+    let (fresh_pool, upgraded_pool) = (connect(fresh), connect(upgraded));
+
+    morpholog_postgres::initialise_schema(&fresh_pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(FIRST_RELEASE_SCHEMA)
+        .execute(&upgraded_pool)
+        .await
+        .expect("the first release's schema");
+    morpholog_postgres::apply_migrations(&upgraded_pool)
+        .await
+        .expect("the first release migrates to the head");
+
+    let expected = schema_but_order(&fresh_pool).await;
+    let mut deferred = Vec::new();
+    let found: Vec<String> = schema_but_order(&upgraded_pool)
+        .await
+        .into_iter()
+        .map(|item| match item.strip_suffix(" NOT VALID") {
+            Some(checked_later) => {
+                deferred.push(checked_later.to_string());
+                checked_later.to_string()
+            }
+            None => item,
+        })
+        .collect();
+    assert_eq!(found, expected);
+    assert!(
+        deferred
+            .iter()
+            .all(|c| c.starts_with("constraint morpholog.audit audit_")
+                && c.contains("_required CHECK")),
+        "only the audit log's required fields are deferred: {deferred:?}"
+    );
+    assert!(!deferred.is_empty());
+
+    fresh_pool.close().await;
+    upgraded_pool.close().await;
+    for db in [fresh, upgraded] {
+        ddl(
+            &admin_pool,
+            format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"),
+        )
+        .await
+        .unwrap();
+    }
+}
