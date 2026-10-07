@@ -1,7 +1,7 @@
 //! `morpholog check` - parse + validate + lint a `.morph` source file.
 
 use crate::CheckArgs;
-use crate::commands::{AlreadyReported, print_json};
+use crate::commands::{AlreadyReported, colour, print_json};
 use anyhow::Context;
 use morpholog_cli::envelopes::{CheckDiagnostic, CheckRefusal, CheckReport, CheckedInvariant};
 use morpholog_core::{PreparedProgram, Program};
@@ -61,9 +61,12 @@ pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
     } else {
         for f in &collected.findings {
             match (&f.diagnostic, &f.foreign) {
-                (Some(d), Some((name, source))) => eprint!("{}", d.render(name, source)),
+                (Some(d), Some((name, source))) => eprint!("{}", d.render(name, source, colour())),
                 (Some(d), None) => {
-                    eprint!("{}", d.render(&collected.source_name, &collected.source));
+                    eprint!(
+                        "{}",
+                        d.render(&collected.source_name, &collected.source, colour())
+                    );
                 }
                 (None, _) => eprintln!("{}: {}", f.severity, f.message),
             }

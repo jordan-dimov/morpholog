@@ -103,11 +103,18 @@ pub(crate) fn parse_or_report(file: &Path) -> anyhow::Result<ParsedSource> {
         }),
         Err(diagnostics) => {
             for d in &diagnostics {
-                eprint!("{}", d.render(&source_name, &source));
+                eprint!("{}", d.render(&source_name, &source, colour()));
             }
             Err(AlreadyReported.into())
         }
     }
+}
+
+/// Whether diagnostics on stderr are coloured: only on a terminal, and
+/// never when `NO_COLOR` is set to anything but the empty string.
+pub(crate) fn colour() -> bool {
+    use std::io::IsTerminal;
+    std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
 }
 
 /// Render one validation error to stderr: an ariadne caret block when
@@ -117,7 +124,11 @@ pub(crate) fn render_validation_error(err: &ValidationError, parsed: &ParsedSour
     match parsed.map.span_for_error(err) {
         Some(span) => eprint!(
             "{}",
-            Diagnostic::error(err.to_string(), span).render(&parsed.source_name, &parsed.source)
+            Diagnostic::error(err.to_string(), span).render(
+                &parsed.source_name,
+                &parsed.source,
+                colour()
+            )
         ),
         None => eprintln!("error: {err}"),
     }

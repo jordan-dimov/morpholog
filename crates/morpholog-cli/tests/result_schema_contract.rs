@@ -2830,6 +2830,37 @@ fn every_session_error_code_is_in_the_pinned_enum() {
     );
 }
 
+/// The embedder guide's table of proposal-row codes lists exactly the codes
+/// a proposal can carry, so a new code cannot ship undocumented.
+#[test]
+fn the_embedder_guide_lists_every_proposal_code() {
+    use morpholog_cli::envelopes::{ErrorCode, ProposeCode};
+    let guide = include_str!("../../../docs/embedder-integration.md");
+    let table = guide
+        .split_once("The proposal-row codes,")
+        .expect("the guide introduces the table")
+        .1;
+    let documented: std::collections::BTreeSet<&str> = table
+        .lines()
+        .skip_while(|l| !l.starts_with('|'))
+        .take_while(|l| l.starts_with('|'))
+        .filter_map(|l| l.strip_prefix("| `")?.split_once('`'))
+        .map(|(code, _)| code)
+        .collect();
+    let emitted: Vec<String> = ProposeCode::ALL
+        .iter()
+        .map(|c| {
+            serde_json::to_value(ErrorCode::from(*c))
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    let emitted: std::collections::BTreeSet<&str> = emitted.iter().map(String::as_str).collect();
+    assert_eq!(documented, emitted);
+}
+
 // ============================================================
 // The manual-schema intent ledger.
 //

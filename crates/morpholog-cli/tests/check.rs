@@ -16,30 +16,6 @@ fn temp_morph(source: &str) -> NamedTempFile {
     f
 }
 
-/// Drop ANSI CSI sequences (`ESC [`, ended by a byte in `@`..=`~`) so
-/// assertions read the diagnostic as plain text; ariadne colours each
-/// character. Only CSI, so another escape cannot swallow real output. A
-/// lone ESC is dropped.
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\u{1b}' {
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                for d in chars.by_ref() {
-                    if ('\u{40}'..='\u{7e}').contains(&d) {
-                        break;
-                    }
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
 #[test]
 fn check_clean_program_exits_zero_with_no_output() {
     let out = Command::new(bin())
@@ -409,7 +385,11 @@ fn check_prints_a_located_hint_and_passes_without_strict() {
         .expect("spawn morpholog");
     assert!(out.status.success(), "lints alone must not fail the check");
     assert!(out.stdout.is_empty(), "stdout stays silent");
-    let stderr = strip_ansi(&String::from_utf8(out.stderr).unwrap());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        !stderr.contains('\u{1b}'),
+        "no colour when stderr is not a terminal: {stderr:?}"
+    );
     assert!(
         stderr.contains("hint:") && stderr.contains("decisions_need_live_mandate"),
         "got: {stderr}"
@@ -441,7 +421,7 @@ transformation enter(round_id):
         .output()
         .unwrap();
     assert!(out.status.success());
-    let stderr = strip_ansi(&String::from_utf8(out.stderr).unwrap());
+    let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
         stderr.contains("hint:") && stderr.contains(":8:5") && stderr.contains("`contest`"),
         "got: {stderr}"
@@ -487,7 +467,7 @@ fn check_validation_error_carets_the_declaration() {
         .output()
         .unwrap();
     assert!(!out.status.success());
-    let stderr = strip_ansi(&String::from_utf8(out.stderr).unwrap());
+    let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
         stderr.contains(":3:1") && stderr.contains("invariant test: UndeclaredPred(x)"),
         "the error carets the invariant's source line; got: {stderr}"
@@ -710,7 +690,7 @@ fn against_reports_a_shared_writer_as_a_hint_on_the_local_transformation() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(out.stdout.is_empty(), "stdout stays script-silent");
-    let stderr = strip_ansi(&String::from_utf8(out.stderr).unwrap());
+    let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
         stderr.contains("hint:")
             && stderr.contains(&format!("against {}", rogue.path().display()))
@@ -722,7 +702,7 @@ fn against_reports_a_shared_writer_as_a_hint_on_the_local_transformation() {
 
     let out = check_against(secure.path(), &[rogue.path()], &["--strict"]);
     assert!(!out.status.success(), "--strict promotes the finding");
-    let stderr = strip_ansi(&String::from_utf8(out.stderr).unwrap());
+    let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(stderr.contains("error:"), "{stderr}");
 }
 
@@ -775,7 +755,7 @@ fn against_a_broken_file_carets_that_file_in_plain_mode() {
     let broken = temp_morph("program broken\npredicate P(x: Subject)\ninvariant t: Nope(x)\n");
     let out = check_against(secure.path(), &[broken.path()], &[]);
     assert!(!out.status.success());
-    let stderr = strip_ansi(&String::from_utf8(out.stderr).unwrap());
+    let stderr = String::from_utf8(out.stderr).unwrap();
     let broken_path = broken.path().display().to_string();
     assert!(
         stderr.contains(&format!("against {broken_path}"))

@@ -408,12 +408,31 @@ fn check_exits_zero_when_the_package_is_current() {
     let dir = tempfile::tempdir().expect("tempdir");
     let out = dir.path();
     assert!(generate(&trade_lifecycle(), out).status.success());
+    // Importing the package leaves bytecode beside it.
+    std::fs::create_dir(out.join("morpholog_client/__pycache__")).expect("mkdir");
 
     let checked = check(&trade_lifecycle(), out);
     assert!(
         checked.status.success(),
         "a freshly generated package must be reported current: {}",
         String::from_utf8_lossy(&checked.stderr)
+    );
+}
+
+#[test]
+fn check_names_what_the_generator_would_not_write() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path();
+    assert!(generate(&trade_lifecycle(), out).status.success());
+    std::fs::write(out.join("morpholog_client/stray.py"), "").expect("write");
+    std::fs::create_dir(out.join("morpholog_client/old")).expect("mkdir");
+
+    let checked = check(&trade_lifecycle(), out);
+    assert!(!checked.status.success(), "a stray entry is drift");
+    let stderr = String::from_utf8_lossy(&checked.stderr);
+    assert!(
+        stderr.contains("stray.py: not generated") && stderr.contains("old/: not generated"),
+        "stderr names each stray: {stderr}"
     );
 }
 

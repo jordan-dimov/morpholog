@@ -17,7 +17,10 @@ use morpholog_core::{Invariant, Program, Transformation};
 /// Panics on failure: a built-in example that does not parse is a bug.
 pub(crate) fn parse_example(name: &str, source: &str) -> Program {
     morpholog_surface::parse_program(source).unwrap_or_else(|diagnostics| {
-        let rendered: String = diagnostics.iter().map(|d| d.render(name, source)).collect();
+        let rendered: String = diagnostics
+            .iter()
+            .map(|d| d.render(name, source, false))
+            .collect();
         panic!("built-in example `{name}` must parse:\n{rendered}")
     })
 }

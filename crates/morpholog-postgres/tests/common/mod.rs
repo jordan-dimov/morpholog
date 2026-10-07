@@ -280,12 +280,28 @@ pub async fn drain_open_transactions(pool: &PgPool) {
 /// A checkpoint over every audit row committed so far. Rows the
 /// watermark withholds are waited for, not silently left out.
 pub async fn make_checkpoint(pool: &PgPool) -> morpholog_postgres::Checkpoint {
+    checkpoint_everything(pool, None).await
+}
+
+/// [`make_checkpoint`], signed. A head that already covers every row
+/// takes the signature instead of a new checkpoint.
+pub async fn make_signed_checkpoint(
+    pool: &PgPool,
+    signer: &morpholog_postgres::CheckpointSigner,
+) -> morpholog_postgres::Checkpoint {
+    checkpoint_everything(pool, Some(signer)).await
+}
+
+async fn checkpoint_everything(
+    pool: &PgPool,
+    signer: Option<&morpholog_postgres::CheckpointSigner>,
+) -> morpholog_postgres::Checkpoint {
     let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM morpholog.audit")
         .fetch_one(pool)
         .await
         .expect("count audit rows");
-    assert!(rows > 0, "make_checkpoint needs committed rows to cover");
-    make_checkpoint_at(pool, rows).await
+    assert!(rows > 0, "a checkpoint needs committed rows to cover");
+    checkpoint_at(pool, rows, signer).await
 }
 
 /// A checkpoint covering exactly `tree_size` rows.
@@ -296,10 +312,18 @@ pub async fn make_checkpoint(pool: &PgPool) -> morpholog_postgres::Checkpoint {
 /// retry would chain onto it, so that fails at once, naming who held
 /// the watermark back.
 pub async fn make_checkpoint_at(pool: &PgPool, tree_size: i64) -> morpholog_postgres::Checkpoint {
+    checkpoint_at(pool, tree_size, None).await
+}
+
+async fn checkpoint_at(
+    pool: &PgPool,
+    tree_size: i64,
+    signer: Option<&morpholog_postgres::CheckpointSigner>,
+) -> morpholog_postgres::Checkpoint {
     use morpholog_postgres::CheckpointOutcome::{Created, NoNewRows};
     for attempt in 0..3 {
         drain_open_transactions(pool).await;
-        match morpholog_postgres::create_checkpoint(pool, None, None)
+        match morpholog_postgres::create_checkpoint(pool, signer, None)
             .await
             .unwrap()
         {

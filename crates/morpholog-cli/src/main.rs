@@ -159,7 +159,8 @@ enum Command {
     /// invariant, or admissibility - as plain prose, or as JSON with
     /// `--json`. The verdict does not affect the exit code (zero on
     /// both admissible and refused); only operational failures exit
-    /// non-zero.
+    /// non-zero. It does not check that this login may assert the
+    /// actor, as `propose` does.
     Explain(ExplainArgs),
 
     /// Look inside a running system: state, history, refusals, rules.

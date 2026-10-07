@@ -144,7 +144,7 @@ pub morpholog_surface::Diagnostic::severity: morpholog_surface::Severity
 impl morpholog_surface::Diagnostic
 pub fn morpholog_surface::Diagnostic::error(impl core::convert::Into<alloc::string::String>, morpholog_surface::Span) -> Self
 pub fn morpholog_surface::Diagnostic::hint(impl core::convert::Into<alloc::string::String>, morpholog_surface::Span) -> Self
-pub fn morpholog_surface::Diagnostic::render(&self, &str, &str) -> alloc::string::String
+pub fn morpholog_surface::Diagnostic::render(&self, &str, &str, bool) -> alloc::string::String
 pub fn morpholog_surface::Diagnostic::with_secondary(self, morpholog_surface::Span, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::clone::Clone for morpholog_surface::Diagnostic
 pub fn morpholog_surface::Diagnostic::clone(&self) -> morpholog_surface::Diagnostic

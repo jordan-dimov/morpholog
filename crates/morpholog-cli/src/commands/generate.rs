@@ -88,9 +88,11 @@ pub(crate) fn run(args: &GeneratePythonClientArgs) -> anyhow::Result<()> {
 /// `--check`: compare the rendered package against what is on disk and
 /// write nothing.
 ///
-/// The exit code is the contract: zero when every file agrees, non-zero on
-/// any difference, missing file or unreadable directory. The stderr prose
-/// is for a human reading a CI log, not for parsing.
+/// The exit code is the contract: zero when the package holds exactly the
+/// generated files, each agreeing, and non-zero on any difference, missing
+/// file, entry the generator does not write (`__pycache__` aside) or
+/// unreadable directory. The stderr prose is for a human reading a CI
+/// log, not for parsing.
 fn report_drift(package_dir: &std::path::Path, files: &[(&str, &str)]) -> anyhow::Result<()> {
     let mut drifted: Vec<String> = Vec::new();
     for (name, expected) in files {
@@ -104,6 +106,24 @@ fn report_drift(package_dir: &std::path::Path, files: &[(&str, &str)]) -> anyhow
             Err(e) => drifted.push(format!("{name}: unreadable ({e})")),
         }
     }
+    match std::fs::read_dir(package_dir) {
+        Ok(entries) => {
+            let mut strays = Vec::new();
+            for entry in entries {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name != "__pycache__" && !files.iter().any(|(f, _)| *f == name) {
+                    let dir = if entry.file_type()?.is_dir() { "/" } else { "" };
+                    strays.push(format!("{name}{dir}: not generated; delete it"));
+                }
+            }
+            strays.sort();
+            drifted.extend(strays);
+        }
+        // Every file is already reported missing.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => drifted.push(format!("{}: unreadable ({e})", package_dir.display())),
+    }
     if drifted.is_empty() {
         eprintln!(
             "{} is current ({} files)",
@@ -116,10 +136,9 @@ fn report_drift(package_dir: &std::path::Path, files: &[(&str, &str)]) -> anyhow
         eprintln!("error: {entry}");
     }
     eprintln!(
-        "{} is stale: {} of {} file(s) drifted; regenerate without --check",
+        "{} is stale: {} difference(s); regenerate without --check",
         package_dir.display(),
         drifted.len(),
-        files.len(),
     );
     Err(AlreadyReported.into())
 }

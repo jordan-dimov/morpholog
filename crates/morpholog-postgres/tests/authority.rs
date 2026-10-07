@@ -36,12 +36,7 @@ async fn signed_checkpoint(pool: &PgPool, key_id: &str) -> Checkpoint {
         key_id: key_id.into(),
         key,
     };
-    match create_checkpoint(pool, Some(&signer), None).await.unwrap() {
-        CheckpointOutcome::Created(c) => c,
-        other @ CheckpointOutcome::NoNewRows(_) => {
-            panic!("expected a created checkpoint: {other:?}")
-        }
-    }
+    common::make_signed_checkpoint(pool, &signer).await
 }
 
 /// A genuine signature over a checkpoint's tree head by any key, as an
@@ -93,6 +88,7 @@ async fn signing_with_an_unauthorized_key_is_refused() {
         key_id: "k1".into(),
         key: generate_signing_key(),
     };
+    common::drain_open_transactions(&pool).await;
     let err = create_checkpoint(&pool, Some(&interloper), None)
         .await
         .expect_err("signing with an unauthorised key must be refused, not produced");
@@ -154,6 +150,7 @@ async fn an_unauthorised_key_with_a_withheld_authorisation_names_the_horizon() {
     // The remedy the message names works: once the older transaction
     // ends, the same signer succeeds.
     interferer.rollback().await.unwrap();
+    common::drain_open_transactions(&pool).await;
     match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
         CheckpointOutcome::Created(c) => {
             assert_eq!(c.tree_size, 1);
@@ -307,6 +304,7 @@ async fn an_authorisation_beyond_the_head_is_diagnosed_as_withheld_not_missing()
     // Once the interferer ends, the same signer checkpoints the suffix
     // that authorises it.
     interferer.rollback().await.unwrap();
+    common::drain_open_transactions(&pool).await;
     match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
         CheckpointOutcome::Created(c) => {
             assert_eq!(c.tree_size, 2);
@@ -362,7 +360,7 @@ async fn an_unsigned_checkpoint_asks_no_authority_question() {
     reset_db(&pool).await;
     authorize_signing_key(&pool, "k1", PURPOSE, "ed25519-pub:unused").await;
 
-    create_checkpoint(&pool, None, None).await.unwrap();
+    common::make_checkpoint(&pool).await;
     assert!(matches!(
         verify_audit_tree(&pool, None).await.unwrap(),
         TreeVerification::Intact { .. }
