@@ -57,15 +57,15 @@ Morpholog's words for things you already have.
 
 | You might say | Morpholog says | What it means |
 |---|---|---|
-| a record, a row | **claim** | A statement the record has accepted and stands behind, such as "this trade was captured at this price". Claims are added and retracted, never edited. A claim records what was accepted, not an objective fact; the audit log says by whom and under which rules. |
+| a record, a row | **claim** | A statement the record has accepted and stands behind, such as "this trade was captured at this price". Claims are added and retracted, never edited. A claim records what was accepted, not an objective fact. The audit log says which actor was asserted, which database login proposed it, and under which programme and semantics it was accepted. |
 | an id, an account, an entity | **subject** | An opaque identifier that claims are about. Morpholog has no types over subjects: what an account is follows from the claims about it. |
 | a business rule, a control | **invariant** | A rule no accepted change may break. It is checked whenever a change could affect it, so a change that would break it is refused. |
 | an action, a workflow step | **transformation** | A named action with parameters. The only way the record changes. |
 | a precondition, an approval check | **gate** (`require`) | A condition on one action, checked when the action is proposed. Withdrawing an authority later stops future actions and leaves past ones standing. |
 | a request, a submission | **proposal** | One call of a transformation, with its values and who is acting. It is accepted whole or refused whole, and a refusal names the rule and the values that failed it. |
 | a user, a system, an approver | **actor** | Whoever a proposal says is acting, recorded with every change. A name can be restricted so that only an authorised database login may act under it. |
-| a notification, a message to another system | **intent** (`emit`) | A message declared in the rules, saved with the change, and delivered by a separate worker only after the change is saved. |
+| a notification, a message to another system | **intent** (`emit`) | A message declared in the rules and saved with the change. A separate worker attempts delivery only after the change is saved, retries a failure that may pass, and records one that cannot. |
 | a report, a view | **derived claim** (`derived`) | A read-side figure computed from admitted claims. It is never admitted itself, so no rule can depend on it. |
-| the ruleset, the policy version | **programme**, **model hash** | The `.morph` file: the claims, rules and actions together. Its model hash identifies the rules, ignoring comments and layout, and is stamped on every change it accepted. |
-| the audit trail | **audit log**, **checkpoint** | One row per accepted change: who proposed it, its values, what it added and removed. `audit verify` shows it has not been edited; a checkpoint is a 32-byte fingerprint of it to keep outside the database. |
+| the ruleset, the policy version | **programme**, **model hash** | The `.morph` file: the claims, rules and actions together. The model hash identifies the whole programme by what it means; comments and layout do not affect it, and every accepted change records it. |
+| the audit trail | **audit log**, **checkpoint** | One row per accepted change: the asserted actor and the login behind it, its values, what it added and removed. `audit verify` checks that the log and the records agree. A checkpoint commits to the history so far; held outside the database, it lets someone detect a later rewrite of that history. |
 | evidence for an auditor | **evidence pack** | A file written by `audit export` that `audit verify-pack` checks offline, with no database. |
