@@ -28,8 +28,9 @@ it for which use, what corrected it, and what did we decide while it held?*
   verification approved for debt-service use; investor reporting only on
   one approved for investor reporting. Morpholog calls such an approval
   *standing*. The two approvals on one figure are independent.
-- **Approval only on the figure in force.** A corrected figure cannot
-  receive new approval, and a revoked approval cannot be granted again.
+- **Approval only on the figure in force.** A figure that a correction has
+  replaced cannot receive new approval, and a revoked approval cannot be
+  granted again.
 - **Correction withdraws approval.** Correcting the figure withdraws every
   approval of the old one; whoever relies on the new figure must approve it
   afresh.

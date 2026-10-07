@@ -30,12 +30,13 @@ committed at all, and the Article 12 log is that record, read back.
 - **Live, revocable authority.** Only someone currently assigned oversight
   may verify. Revoking that assignment stops their future verifications and
   leaves every past decision a valid record of what was decided then.
-- **A name only its owner can use.** A verifier's name, once restricted,
-  can be asserted only by a database login authorised for it, so one
-  operator cannot act as both verifiers. The deployer, who hands out
-  oversight, is restricted the same way.
-- **The match came from the system.** Only the AI system itself may record
-  a match attributed to it.
+- **A name only its authorised login can use.** A verifier's name, once
+  restricted, can be asserted only by a database login authorised for it.
+  The deployer, who hands out oversight, is restricted the same way. Two
+  names are two people only when their logins belong to separate
+  applications and credentials (see below).
+- **Matches recorded under the system's name.** A match may only be
+  recorded with the AI system as its actor.
 
 ## What it refuses
 
@@ -69,13 +70,13 @@ proposal the runtime refuses, with the reason named:
    produced.** Backdating the end of a use to exclude an awkward match is not
    forbidden by policy; it is uncommittable.
 
-Note who proposes `record_match`: the AI system itself, as the actor, and
-`require actor = system` enforces it - a match attributed to this system
-genuinely originated from it, not from an analyst typing one in. A machine
-actor passes the same gates as a human one, and here its identity is part of
-what makes the record admissible. The thing producing candidates does not have
-to be trusted to behave; it only gets to *propose*, and admissibility - down
-to who proposed - is enforced outside it.
+Note who proposes `record_match`: the AI system, as the actor, and
+`require actor = system` holds the match to the system's name. A machine
+actor passes the same gates as a human one. This example does not restrict
+the system's own name, as it does the verifiers', so any login could still
+assert it; restricting it takes the same two claims. The thing producing
+candidates does not have to be trusted to behave; it only gets to
+*propose*, and what may be admitted is enforced outside it.
 
 ## What you can show afterwards
 
