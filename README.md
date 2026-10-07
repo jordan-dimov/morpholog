@@ -2,43 +2,59 @@
 
 **Rules your records cannot break.**
 
-Morpholog guards the records a business must be able to defend: the books, the approvals, the trades, the filings. You write the rules those records must obey. From then on, no change that breaks a rule can be saved - whether a person, a script or an AI agent tries - and every change that is saved carries proof of why it was allowed.
+People, applications, optimisers and AI agents propose the changes a business must be able to defend: booking a trade, approving a payment, accepting a model's result, settling an account.
+
+Anything may propose an action. Morpholog accepts it only if the organisation's rules, authority and evidence requirements are satisfied. An accepted action leaves a record of what was decided, by whom, under which rules and why. A refused one changes nothing, and the refusal names the rule that failed and the values that failed it, so a person or a program can repair the proposal and try again.
+
+**You do not have to trust the system proposing the action.** The control sits outside it. A risk engine, an optimiser or an AI agent can calculate whatever it likes; it cannot make a change the rules forbid. Morpholog has no bypass flag and no privileged "approve anyway" path.
+
+So when someone asks *"how do you know this record met the controls?"*, the answer is not an investigation. It is: **the system could not have saved it otherwise**, and here is the record that proves it.
+
+## Where Morpholog fits
 
 ```text
-your app, a script, an AI agent
-        |
-        |  proposes a change
-        v
-   +----------+     all it touches obeys the rules  -->  saved, with an audit record
-   |  rules   |
-   +----------+     a rule would break               -->  refused, with the reason;
-                                                          nothing changes
+   person, application, optimiser, AI agent
+                     |
+                     |  proposes an action
+                     v
+             +----------------+
+             |   Morpholog    |   rules, authority, evidence
+             +----------------+
+                |            |
+       accepted |            |  refused
+                v            v
+         the record,      the rule that failed and
+       and notifications  the values that failed it;
+                |         nothing changes
+                v
+      ETRM, ERP, ledger, workflow
 ```
 
-That flips the usual burden. When someone asks *"how do you know this number is right?"*, the answer is no longer an investigation. It is: **the system could not have saved it otherwise**, and here is the audit trail that proves it.
+Your ETRM, ERP, workflow engine and AI platform stay where they are. Morpholog owns the decision boundary for the actions you need to be able to defend.
 
-## Questions it can answer
+| Already in your stack | Its job | Morpholog's job beside it |
+|---|---|---|
+| AI or agent platform | Reason, plan, call tools. | Decide whether what it proposes may be accepted. |
+| Policy engine (OPA, Cedar) | Evaluate policy against the context it is given. | Enforce rules over the records as part of the change itself, and keep the history that results. |
+| Workflow engine | Order the steps. | Decide whether each step that changes the record is allowed. |
+| ETRM or ERP | Run the business. | Leave it running the business; send it each accepted action. |
+| PostgreSQL | Store and query data. | Use it as the durable store: Morpholog's tables can live in their own schema in your existing database. |
 
-- *Who entered this, and under what authority?*
-- *If that authority was taken away yesterday, is yesterday's decision still valid?*
-- *What did the books say on the last day of Q1, under the rules in force then?*
-- *Did this trade respect our exposure limits when it was booked - not now, then?*
-- *On what basis did the AI system identify this person, who checked it, and were they allowed to that day?*
+## What you can answer afterwards
 
-Each one is answered by a worked example below, against a real PostgreSQL database, through a small command-line tool.
-
-## Anything can propose; only the rules decide
-
-More and more of what writes to business records is software you did not write and cannot check line by line: optimisers, machine-learning models, AI agents. Morpholog is built for that. Nothing writes directly. A person, a script or a model only ever *proposes* a change, and Morpholog saves it or refuses it.
-
-A refusal is not an error code. It names the rule that failed and the values that failed it, in your own vocabulary. A program can read it, fix its proposal and try again: **propose, refuse, repair**. You do not have to trust the proposer, because the rules decide what gets saved.
+| The question | The answer |
+|---|---|
+| Can an AI or a service do something it should not? | It can propose it. Nothing it proposes is saved unless the rules allow it. |
+| Was this person allowed to act when they acted? | Authority is checked at the moment of the action and recorded with it. Withdrawn tomorrow, it stops tomorrow's actions; today's stay valid. |
+| What happens when a figure is corrected later? | The correction changes what may happen next. It does not rewrite what was decided on the old figure. |
+| Can we prove all this later? | Any past moment can be rebuilt exactly. Every change records the rules that accepted it. And someone outside your organisation can check that the history was not edited. |
 
 ## A rule, read aloud
 
 Morpholog has two building blocks:
 
-- An **invariant** is a standing rule about the records. Every change is checked against it.
-- A **transformation** is the only way records change. It proposes what to add, what to remove and who to notify. If anything it touches would break an invariant, nothing happens.
+- A **business rule** about the records, which Morpholog calls an **invariant**. Every change is checked against it.
+- A **governed action**, which Morpholog calls a **transformation**. It is the only way records change: it proposes what to add, what to remove and who to notify. If anything it touches would break a rule, nothing happens.
 
 Everything else is built from these two.
 
@@ -68,35 +84,20 @@ Read it line by line:
 - The `invariant` says: for every entry, the debits add up to the credits.
 - The `transformation` posts an entry. It first `require`s that the period is still open, then `admit`s the entry and its two lines, then `emit`s a notification for other systems.
 
-An entry that is off by a penny is refused, with the rule named, and the database looks exactly as it did before. There is no way around the check: no bypass flag, no admin path. If the business needs an exception, the exception is itself a record the rules govern and the audit trail keeps.
+An entry that is off by a penny is refused, with the rule named, and the database looks exactly as it did before. If the business needs an exception, the exception is itself a record the rules govern and the audit trail keeps.
 
 One word before going further. Morpholog calls a record a **claim**: something stated under someone's authority at a particular moment, not a neutral fact. That is why a correction is a new claim that replaces the old one, rather than an edit that erases it.
 
-## What you get
+## What Morpholog gives you
 
-- **A full audit record for every change**: what was proposed, by whom, with which values, what was added and removed, and which rules were checked.
-- **Corrections that keep the original.** A correction records what it replaces. An auditor sees the original figure, the corrected one, and the moment one became the other.
-- **Exact time travel.** Ask for any report as it stood at any past moment and get exactly what the system knew then. Rules never read the clock or the network; anything the outside world decides, like a rate or a holiday calendar, comes in as a dated record. So the past cannot shift under you.
-- **Decisions that stay valid.** Whether a figure may be relied on is itself a record, granted and withdrawn by named people. An approval given while its basis was sound stays valid after that basis is withdrawn.
+- **A record of every change**: what was proposed, by whom, with which values, what was added and removed, and which rules were checked.
+- **Corrections that keep the original.** A correction records what it replaces, so the original figure, the corrected one and the moment one became the other all stay visible. Whether a figure may be relied on is itself a record, granted and withdrawn by named people.
+- **A past that cannot shift.** Rules never read the clock or the network; anything the outside world decides, like a rate or a holiday calendar, comes in as a dated record. So any report can be rebuilt exactly as it stood at any past moment.
 - **Exact arithmetic.** Decimals with no rounding drift, exact times and durations, and amounts that carry their unit, so dollars never get added to tonnes.
 - **Several changes as one decision.** `morpholog transact` saves a group of proposals together, or none of them.
 - **Notifications that respect the save.** Messages to other systems are sent only after a change is saved, by a separate worker, and never for a change that was refused.
-- **Rules you can read back.** Before anything runs, ask what the rules forbid (`inspect guarantees`) and what each action requires (`inspect controls`). Later, ask which rules have ever actually done any work (`inspect coverage`), or turn a refusal into a checklist of missing evidence (`explain`).
-- **A tamper-evident history.** `audit verify` proves the history has not been edited. `audit export` produces a file someone else can check offline, against a 32-byte fingerprint you gave them in advance, which catches even an edit to the records and the history together.
-
-## How this differs from what you already have
-
-- **Database constraints.** A `CHECK` constraint checks one row and fails with a constraint name. Morpholog checks rules that span many records, refuses in your own vocabulary, and keeps the history of what was saved, by whom and why.
-- **Policy engines** (OPA, Cedar) answer "may this happen?" but hold no records: no commit, no audit trail, no history to replay. Morpholog's rules guard the change itself and leave the proof behind.
-- **Immutable or bitemporal databases** (Datomic, XTDB) remember everything but enforce nothing: an invalid record enters history like any other. Morpholog keeps the history *and* refuses the invalid record.
-- **BDD test suites** (Cucumber) describe behaviour beside the code, and drift from it. In Morpholog the rules *are* the enforcement, checked on every real change, so they cannot drift.
-- **Workflow engines** decide the order of steps. They do not make a wrong outcome impossible. Morpholog does not care about order, only that the change breaks no rule.
-
-None of the ideas underneath is new. What did not exist is all of them in one small runtime on plain PostgreSQL, enforced at the moment something becomes a record. [`docs/prior-art.md`](docs/prior-art.md) has the longer comparison.
-
-## Where it fits in your stack
-
-Morpholog is not a general-purpose language and does not replace your application. Screens, jobs, pipelines and analytics stay in the tools you already use. Only the governed core moves: the records that must be defensible, and their rules. Your code works out whatever it needs to, then proposes the result through a typed Python client generated from your own rules, the command line, or a batch import. Reads come back the same way, as of any past moment, or through generated SQL views. Morpholog owns the small part of a system that makes the news when it goes wrong.
+- **Rules you can read back.** Ask what the rules forbid (`inspect guarantees`) and what each action requires (`inspect controls`); later, which rules have ever actually done any work (`inspect coverage`), and what evidence a refusal is missing (`explain`).
+- **A tamper-evident history.** `audit verify` proves the history has not been edited. `audit export` writes a file someone else can check offline, against a 32-byte fingerprint you gave them in advance.
 
 ## Try it
 
@@ -141,42 +142,47 @@ The second answer is exactly what an auditor would have seen at that moment, reb
 
 New to Morpholog? [The developer introduction](docs/developer-intro.md) is the hands-on start. Written for someone who knows Python and SQL, it builds a small governed ledger end to end: a reported figure, a decision that relies on it, the honest correction, and the replay that keeps both answers true.
 
-## Worked examples
+## Start with these examples
 
-Each one runs end to end against PostgreSQL; nothing is mocked, and each has a README with the business story. If you came with a question rather than an industry - "can it accept a whole batch as one decision?" - the [capability index](examples/README.md) maps what you want to do to the example that shows it.
+Each one runs end to end against PostgreSQL; nothing is mocked.
+
+- [Trade lifecycle](examples/10_trade_lifecycle/) - a commodity trade from capture to settlement. Only a desk with authority for the commodity can confirm it. Each settlement must name the official price in force. A price correction changes the price the next settlement must name, and leaves the earlier settlements standing.
+- [Adding Morpholog to an existing trading system](examples/etrm_embedder/) - a Python program standing in for a trading system drives the trade lifecycle through the client Morpholog generates from its rules. The trading system keeps doing its job; Morpholog decides the steps that must be defensible.
+- [Margin call run](examples/14_margin_call_run/) - a risk engine proposes the whole day's run. It is accepted only if every account that should be called is in it, no other account is, and every amount is exact. A margin call the engine forgot is refused, not just a wrong one.
+- [Verified revenue](examples/02_verified_revenue/) - a figure is approved for a particular use, relied on, then corrected. Every decision made along the way stays defensible.
+- [Biometric identification oversight](examples/13_biometric_identification_oversight/) - the EU AI Act's two-person verification, enforced: an AI's match counts for nothing until two different, currently authorised people verify it.
+
+If you came with a question rather than an industry - "can it accept a whole batch as one decision?" - the [example index](examples/README.md) maps what you want to do to the example that shows it.
+
+## More examples
 
 **Money and markets**
 
 - [Double-entry ledger](examples/03_double_entry_ledger/) - debits equal credits; closing a period; restating; a trial balance at any past moment.
 - [Settlement netting](examples/01_settlement_netting/) - settlements that are fine alone but forbidden together are refused.
 - [Insurance claim settlement](examples/05_insurance_claim_settlement/) - total payouts can never exceed the policy limit.
-- [Trade lifecycle](examples/10_trade_lifecycle/) - a commodity trade from capture to settlement; a price correction leaves earlier settlements standing.
 - [Borrowing base](examples/11_borrowing_base/) - a loan can never be drawn beyond what its collateral supports.
-- [Margin call run](examples/14_margin_call_run/) - a risk engine's whole batch is accepted only if it is complete; a missing call is refused, not just a wrong one.
 - [Metered billing](examples/15_metered_billing/) - a bill correct to the penny, every line recomputed and rounded the agreed way.
-- [Scoped charges](examples/18_scoped_charges/) - each charge takes its figure from the right source, and a line with the wrong source's figure cannot be saved.
-- [Charging years](examples/19_charging_years/) - a billing period may not cross the 1 April anniversary, and each run records the price list it used.
 - [Covenant reporting](examples/17_covenant_reporting/) - a loan's reporting calendar, three calendar months at a time, with overdue notices that must count the days correctly.
 - [Laytime and demurrage](examples/12_laytime_demurrage/) - shipping's argument about minutes: exact times, computed deadlines, tonnes of cargo and dollars of delay.
 
 **Evidence, authority and regulation**
 
-- [Verified revenue](examples/02_verified_revenue/) - the flagship: a figure is verified, relied on, then corrected, and every decision along the way stays defensible.
-- [Approval controls](examples/04_approval_controls/) - authority granted, used and withdrawn; withdrawing it stops future approvals and keeps past ones valid.
+- [Approval controls](examples/04_approval_controls/) - authority checked at the moment someone approves, and withdrawn later; approvals given while it held stay valid.
 - [Clinical trial enrolment](examples/06_clinical_trial_enrolment/) - protocol, consent and eligibility must all be valid on the day a patient is enrolled.
 - [KYC sanctions screening](examples/08_kyc_sanctions_screening/) - onboarding blocked by an out-of-date screening or an unresolved match.
 - [Carbon-credit provenance](examples/09_carbon_credit_provenance/) - no green claim without evidence behind it, and no credit counted twice.
-- [Biometric identification oversight](examples/13_biometric_identification_oversight/) - the EU AI Act as rules: an AI's match counts for nothing until two different, currently authorised people verify it.
 
 **Operations**
 
-- [Release governance](examples/16_release_governance/) - this project's own release checklist: a release tagged before its checks passed cannot be recorded.
 - [Operational information](examples/20_operational_information/) - an untrusted optimiser's figures are recomputed and checked before any of them is accepted.
-- [Worked embedder](examples/etrm_embedder/) - the trade lifecycle driven from Python through the generated client.
+- [Release governance](examples/16_release_governance/) - this project's own release checklist: a release tagged before its checks passed cannot be recorded.
 
-**A toy**
+**Language features**
 
-- [Chess](examples/07_chess_transition_invariants/) - rules that compare the board before a move with the board after it.
+- [Scoped charges](examples/18_scoped_charges/) - each charge takes its figure from the right source, and a line with the wrong source's figure cannot be saved.
+- [Charging years](examples/19_charging_years/) - a billing period may not cross the 1 April anniversary, and each run records the price list it used.
+- [Chess](examples/07_chess_transition_invariants/) - a toy: rules that compare the board before a move with the board after it.
 
 ## Status
 
@@ -188,7 +194,7 @@ Active development, in Rust on PostgreSQL 18+, with no unsafe code. The kernel, 
 
 ## Common questions
 
-**Doesn't a separate system of record mean writing everything twice?** No. Morpholog holds the governed records; other stores are copies, kept up to date from the notifications each change sends (retried on transient failure, with keys that make a repeated delivery harmless, and a permanent failure recorded rather than retried forever). One write, then explicit copying, with no two-phase commit. The tables are plain PostgreSQL and can sit in the same database as your application's, in their own schema.
+**Doesn't this mean writing everything twice?** No. Each governed action is written once, to Morpholog. The systems that need it - the ETRM, the ERP, a reporting store - are kept up to date from the notifications accepted actions emit (retried on transient failure, with keys that make a repeated delivery harmless, and a permanent failure recorded rather than retried forever). One write, then explicit copying, with no two-phase commit. The tables are plain PostgreSQL and can sit in the same database as your application's, in their own schema.
 
 **Can't someone bypass the rules with raw SQL?** With superuser access, yes, as with any database (a DBA can drop a `CHECK` constraint too). Two things limit it. Ordinary permissions let only Morpholog's role write its tables. And the records and the audit log are two accounts of one history, so `audit verify` catches an edit that makes them disagree, or one that rewrites both if you have shared a checkpoint fingerprint outside the database. That fingerprint is 32 bytes: email it to your auditor, or have a public timestamp authority sign it (`audit checkpoint --witness rfc3161:<url>`) so the check can also show *when* the history looked like this. The honest limit: it protects history only up to the last fingerprint you shared, and sharing it is a habit the software cannot enforce.
 
