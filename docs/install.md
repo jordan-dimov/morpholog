@@ -183,9 +183,9 @@ per version, side by side, and point each project at the one its generated
 client was built for:
 
 ```bash
-mkdir -p ~/.local/lib/morpholog/v0.0.13
-tar -xzf "morpholog-v0.0.13-$TARGET.tar.gz" --strip-components=1 -C ~/.local/lib/morpholog/v0.0.13
-export MORPHOLOG_BIN=~/.local/lib/morpholog/v0.0.13/morpholog   # per project
+mkdir -p ~/.local/lib/morpholog/v0.0.14
+tar -xzf "morpholog-v0.0.14-$TARGET.tar.gz" --strip-components=1 -C ~/.local/lib/morpholog/v0.0.14
+export MORPHOLOG_BIN=~/.local/lib/morpholog/v0.0.14/morpholog   # per project
 ```
 
 The generated Python client reads `MORPHOLOG_BIN` before `PATH`, and its
