@@ -215,11 +215,13 @@ and it refuses if a recorded role is gone.
 `init` creates a deployment's roles itself and refuses a role name that
 already exists, unless this database already records it: choose another
 prefix. `init --reset --least-privilege` binds the roles the database
-recorded before the reset again. Before dropping anything it refuses whatever
-it could not provision afterwards: another prefix, a recorded role that no
-longer exists, a role that exists but this database does not record, and a
-database from before the record existed, which `morpholog migrate` brings
-forward first. A reset without
+recorded before the reset again. With or without `--reset`, `init
+--least-privilege` refuses before it creates or drops anything whatever it
+could not provision afterwards: another prefix than the recorded one, a
+recorded role that no longer exists, a role that exists but this database
+does not record, a connecting role that may not create roles, and a
+schema behind or ahead of the binary (behind: run `morpholog migrate`
+first). A reset without
 `--least-privilege` drops the record and leaves the roles on the cluster,
 so their prefix is refused until you drop them or choose another. `migrate` warns when this deployment's roles also hold privileges
 in, or on, another database. Deployments provisioned

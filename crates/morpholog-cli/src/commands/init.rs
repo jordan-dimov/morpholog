@@ -12,7 +12,7 @@
 use anyhow::{Context, anyhow};
 use morpholog_postgres::{
     DeploymentRoles, InitOutcome, drop_schema, initialise_schema, provision_least_privilege,
-    rebind_least_privilege, redact_database_url, require_reset_can_provision,
+    rebind_least_privilege, redact_database_url, require_can_provision_least_privilege,
 };
 
 use crate::InitArgs;
@@ -40,12 +40,16 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
 
     // Unchecked: this is the command that provisions a database.
     let pool = connect_unchecked(&args.db.database_url).await?;
+    if args.least_privilege {
+        require_can_provision_least_privilege(&pool, &roles)
+            .await
+            .context(if args.reset {
+                "nothing was dropped"
+            } else {
+                "nothing was provisioned"
+            })?;
+    }
     let mut dropped = if args.reset {
-        if args.least_privilege {
-            require_reset_can_provision(&pool, &roles)
-                .await
-                .context("nothing was dropped")?;
-        }
         Some(drop_schema(&pool).await.context("schema drop failed")?)
     } else {
         None

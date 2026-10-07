@@ -518,10 +518,11 @@ pub async fn require_deployment_roles(pool: &PgPool) -> Result<(), PgError> {
     }
 }
 
-/// Refuse, before `init --reset --least-privilege` drops anything, whatever
-/// provisioning `roles` afterwards would refuse. A reset that dropped the
-/// schema and then refused would leave one with no least-privilege floor.
-pub async fn require_reset_can_provision(
+/// Refuse, before `init --least-privilege` changes anything, whatever
+/// provisioning `roles` afterwards would refuse. An init that created or
+/// dropped the schema and then refused would leave one with no
+/// least-privilege floor.
+pub async fn require_can_provision_least_privilege(
     pool: &PgPool,
     roles: &DeploymentRoles,
 ) -> Result<(), PgError> {
@@ -537,20 +538,26 @@ pub async fn require_reset_can_provision(
     .fetch_one(&mut *conn)
     .await
     .map_err(classify_checked_query)?;
-    if schema && !record {
-        return Err(PgError::InvalidState(
-            "this database predates the record of its least-privilege roles, so a reset \
-             would not know which roles to bind again; run `morpholog migrate` first, which \
-             records them"
-                .to_string(),
-        ));
+    if schema {
+        // Behind names `migrate`; ahead never advises it.
+        drop(conn);
+        crate::migrations::require_current_schema(pool).await?;
+        conn = pool.acquire().await.map_err(classify)?;
+        if !record {
+            return Err(PgError::InvalidState(
+                "this database records the migration that adds `morpholog.deployment_roles`, \
+                 but the table is gone, so its schema is not one Morpholog made and `migrate` \
+                 cannot repair it; restore it from a backup"
+                    .to_string(),
+            ));
+        }
     }
     match recorded_roles(&mut conn).await? {
         Some(recorded) if recorded != *roles => Err(PgError::InvalidState(format!(
-            "this database records `{}` and `{}` as its least-privilege roles; --reset \
-             --least-privilege binds them again, so pass their prefix, or move the deployment \
-             to new roles first (docs/install.md, \"Several deployments on one cluster\")",
-            recorded.writer, recorded.reader
+            "this database records `{}` and `{}` as its least-privilege roles, not `{}` and \
+             `{}`; pass their prefix, or move the deployment to new roles first \
+             (docs/install.md, \"Several deployments on one cluster\")",
+            recorded.writer, recorded.reader, roles.writer, roles.reader
         ))),
         Some(recorded) => require_recorded_roles(&mut conn, &recorded).await,
         None => {
@@ -558,6 +565,22 @@ pub async fn require_reset_can_provision(
                 if role_exists(&mut conn, role).await? {
                     return Err(existing_role(&mut conn, role).await?);
                 }
+            }
+            let may_create = sqlx::query_scalar!(
+                "SELECT rolsuper OR rolcreaterole AS \"may!\" FROM pg_roles \
+                 WHERE rolname = current_user"
+            )
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(classify_checked_query)?;
+            if !may_create {
+                return Err(PgError::InvalidState(
+                    "least-privilege provisioning creates the deployment's roles, and this \
+                     role may not create roles; connect as a superuser, or as a role that \
+                     has CREATEROLE and owns the morpholog tables (normally the role that \
+                     ran `morpholog init`)"
+                        .to_string(),
+                ));
             }
             Ok(())
         }
