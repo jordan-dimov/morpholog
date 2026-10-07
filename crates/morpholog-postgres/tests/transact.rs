@@ -151,6 +151,16 @@ async fn later_acts_see_earlier_acts_and_the_audit_keeps_act_order() {
     .await;
     assert_eq!(stamps, 1, "one transaction, one committed_at");
 
+    // So the last act's id is the record just after the whole decision.
+    let after = morpholog_postgres::reconstruct_state_at(&pool, *ids.last().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        after.claims().len(),
+        3,
+        "every act's claims, as of the last id"
+    );
+
     assert_eq!(
         count(&pool, "SELECT count(*) FROM morpholog.claims").await,
         3

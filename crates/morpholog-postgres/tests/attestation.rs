@@ -16,8 +16,7 @@ use common::{expect_committed, pg_program, propose_pg_with_test_actor, reset_db,
 use morpholog_core::EvalValue;
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    AuditAttestation, CheckpointOutcome, TreeVerification, create_checkpoint, list_audit_rows,
-    verify_audit_tree, verify_pack,
+    AuditAttestation, TreeVerification, list_audit_rows, verify_audit_tree, verify_pack,
 };
 use morpholog_test_support::{dec, subj};
 
@@ -122,10 +121,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     // The third regime: rows that name their parameters but not their
     // programme, checkpointed before the model-hash boundary.
     named_unhashed_insert(&pool).await.unwrap();
-    let CheckpointOutcome::Created(before) = create_checkpoint(&pool, None, None).await.unwrap()
-    else {
-        panic!("three rows must make a new checkpoint");
-    };
+    let before = common::make_checkpoint(&pool).await;
     sqlx::query(
         "ALTER TABLE morpholog.audit
          ADD CONSTRAINT audit_model_hash_required
@@ -137,11 +133,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     // The fourth regime: rows that name their programme but not their
     // semantics, checkpointed before the semantics boundary.
     hashed_unversioned_insert(&pool).await.unwrap();
-    let CheckpointOutcome::Created(before_semantics) =
-        create_checkpoint(&pool, None, None).await.unwrap()
-    else {
-        panic!("a fourth row must make a new checkpoint");
-    };
+    let before_semantics = common::make_checkpoint(&pool).await;
     sqlx::query(
         "ALTER TABLE morpholog.audit
          ADD CONSTRAINT audit_semantics_version_required
@@ -153,11 +145,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     // The fifth regime: rows that name their semantics but record no
     // draws, checkpointed before the drawn-subjects boundary.
     versioned_undrawn_insert(&pool).await.unwrap();
-    let CheckpointOutcome::Created(before_subjects) =
-        create_checkpoint(&pool, None, None).await.unwrap()
-    else {
-        panic!("a fifth row must make a new checkpoint");
-    };
+    let before_subjects = common::make_checkpoint(&pool).await;
     sqlx::query(
         "ALTER TABLE morpholog.audit
          ADD CONSTRAINT audit_drawn_subjects_required
@@ -181,7 +169,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     // one tree, live and offline, and the checkpoints taken before the
     // last boundaries keep the roots they had: verification recomputes
     // every stored checkpoint's root.
-    create_checkpoint(&pool, None, None).await.unwrap();
+    common::make_checkpoint(&pool).await;
     let verification = verify_audit_tree(&pool, None).await.unwrap();
     assert!(
         matches!(verification, TreeVerification::Intact { .. }),
@@ -521,7 +509,7 @@ async fn tampering_with_the_attestation_breaks_the_root() {
     .await
     .map(expect_committed)
     .unwrap();
-    create_checkpoint(&pool, None, None).await.unwrap();
+    common::make_checkpoint(&pool).await;
 
     // Attacker: full DDL control, so it can drop the database floor.
     // The tree still catches it. Rewriting the lineage changes the leaf

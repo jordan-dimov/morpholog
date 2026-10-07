@@ -190,7 +190,10 @@ export MORPHOLOG_BIN=~/.local/lib/morpholog/v0.0.13/morpholog   # per project
 
 The generated Python client reads `MORPHOLOG_BIN` before `PATH`, and its
 `open_client()` and `open_session()` refuse a binary of another version
-than the client was generated for, by name, before the first call. Upgrade
+than the client was generated for, by name, before the first call. Only
+the client reads it: a shell script, Makefile or cron job that runs
+`morpholog` gets whatever is first on `PATH`, so give those the pinned
+path too. Upgrade
 the binary and regenerate the client together; between the two, the
 refusal says which side is behind.
 

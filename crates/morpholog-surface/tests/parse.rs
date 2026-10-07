@@ -245,11 +245,18 @@ predicate Foo(b: Decimal)
 fn render_produces_ariadne_output() {
     let source = "predicate Foo(a: Subject)\n";
     let errs = parse_program(source).expect_err("missing header should fail");
-    let rendered = errs[0].render("test.morph", source);
-    // ariadne emits ANSI-colored output by default; just check
-    // that the source name appears and the rendering is non-empty.
-    assert!(!rendered.is_empty());
-    assert!(rendered.contains("test.morph"));
+    let plain = errs[0].render("test.morph", source, false);
+    assert!(plain.contains("test.morph"));
+    assert!(plain.contains("predicate Foo(a: Subject)"), "{plain}");
+    assert!(
+        !plain.contains('\u{1b}'),
+        "no escape codes without colour: {plain:?}"
+    );
+    let coloured = errs[0].render("test.morph", source, true);
+    assert!(
+        coloured.contains('\u{1b}'),
+        "colour when asked: {coloured:?}"
+    );
 }
 
 /// Empty and whitespace-only files both report "expected `program` header", not a confusing lex

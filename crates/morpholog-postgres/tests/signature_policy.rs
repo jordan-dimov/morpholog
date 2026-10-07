@@ -13,10 +13,9 @@ mod common;
 use common::{authorize_signing_key, commit_entry, make_checkpoint_at, reset_db, test_pool};
 
 use morpholog_postgres::{
-    Checkpoint, CheckpointOutcome, CheckpointSigner, PgPool, SignaturePolicy,
-    SignaturePolicyViolation, TreeHead, TreeHeadSignature, TreeVerification, create_checkpoint,
-    generate_signing_key, render_public_key, render_signature, sign_tree_head,
-    verify_audit_tree_under,
+    Checkpoint, CheckpointSigner, PgPool, SignaturePolicy, SignaturePolicyViolation, TreeHead,
+    TreeHeadSignature, TreeVerification, generate_signing_key, render_public_key, render_signature,
+    sign_tree_head, verify_audit_tree_under,
 };
 
 const PURPOSE: &str = "audit_checkpoint_v1";
@@ -105,9 +104,7 @@ async fn signer(pool: &PgPool, key_id: &str) -> (CheckpointSigner, String) {
 }
 
 async fn head(pool: &PgPool, signer: &CheckpointSigner) -> Checkpoint {
-    match create_checkpoint(pool, Some(signer), None).await.unwrap() {
-        CheckpointOutcome::Created(c) | CheckpointOutcome::NoNewRows(c) => c,
-    }
+    common::make_signed_checkpoint(pool, signer).await
 }
 
 #[tokio::test]

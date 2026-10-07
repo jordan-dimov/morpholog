@@ -8,8 +8,8 @@ use morpholog_core::CaseOutcome;
 use morpholog_core::Program;
 use morpholog_core::ir_builder::{claim, exists, invariant, not, pre, predicate, var, wildcard};
 use morpholog_postgres::{
-    Checkpoint, CheckpointOutcome, EvidencePack, PgError, PgPool, create_checkpoint, export_pack,
-    score_candidate, score_candidate_against_pack, score_candidate_against_packs,
+    Checkpoint, EvidencePack, PgError, PgPool, export_pack, score_candidate,
+    score_candidate_against_pack, score_candidate_against_packs,
 };
 
 mod common;
@@ -47,9 +47,7 @@ fn no_entries() -> Program {
 }
 
 async fn export_history_pack(pool: &PgPool) -> EvidencePack {
-    match create_checkpoint(pool, None, None).await.unwrap() {
-        CheckpointOutcome::Created(_) | CheckpointOutcome::NoNewRows(_) => {}
-    }
+    common::make_checkpoint(pool).await;
     export_pack(pool, None).await.unwrap()
 }
 
