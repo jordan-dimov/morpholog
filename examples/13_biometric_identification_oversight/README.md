@@ -1,52 +1,48 @@
-# Biometric identification oversight: EU AI Act Article 12 as admission law
+# Biometric identification oversight
 
-An authority asks, two years later: *on what basis was this person identified,
-who verified it, were they authorised and trained that day, and which version
-of the model was in service?* That should be one lookup, not a forensic dig
-across four systems and a log archive.
+**An AI system's identification counts for nothing until two distinct
+verifier identities, each authorised when they verified, have confirmed
+it - and each governed use records the model version, the input, the use
+period and who verified.** The AI system only proposes; whether its
+match may be acted on is decided outside it.
 
-From 2 August 2026, Regulation (EU) 2024/1689 (the EU AI Act) makes that
-question legally loaded. High-risk AI systems - and remote biometric
-identification is the statute's own first example (Annex III, point 1(a)) -
-must keep automatic records of every use, and no action may be taken on an
-identification unless at least two people have separately verified it.
-Non-compliance with provider or deployer obligations carries fines up to
-EUR 15 million or 3% of worldwide annual turnover (Article 99(4)).
+## Why this matters
+
+Regulation (EU) 2024/1689 (the EU AI Act) classes remote biometric
+identification as high-risk; it is the statute's own first example (Annex
+III, point 1(a)). Under the timetable as amended in 2026, the high-risk
+requirements modelled here apply to Annex III systems from 2 December 2027.
+Such a system must keep automatic records of every use (Article 12), and no
+action may be taken on an identification unless at least two people have
+separately verified it (Article 14(5)). Non-compliance with provider or deployer obligations
+carries fines up to EUR 15 million or 3% of worldwide annual turnover
+(Article 99(4)).
 
 The usual answer is a logging pipeline beside the AI system and a policy
-document asking everyone to follow the rules. This example demonstrates the
-other answer: the statutory record as **governed state**, where an
-inadmissible decision record cannot be committed at all, and the Article 12
-log is not a subsystem bolted on - the log IS the governed record, read back.
+document asking everyone to follow the rules. Here the statutory record is
+the governed record itself: a decision the statute forbids cannot be
+committed at all, and the Article 12 log is that record, read back.
 
-## The sentence this example teaches
+## What Morpholog enforces
 
-> The AI system's output enters the record as a claim with no standing.
-> Standing is granted only by verification under live, revocable human
-> authority. Decisions gate on standing, never on the raw output. Revoking an
-> overseer's authority stops future verifications and leaves every past
-> decision a valid record of what was decided then.
+- **The AI's match carries no weight on its own.** It enters the record
+  with no standing to be acted on.
+- **Two different verifiers, verifying first.** A decision needs
+  verifications under two distinct verifier identities, both made before
+  the decision.
+- **Live, revocable authority.** Only someone assigned oversight at the
+  time may verify, or decide. Revoking that assignment stops their future
+  acts and leaves every past verification and decision a valid record of
+  what was done then.
+- **A name only its authorised login can use.** A verifier's name, once
+  restricted, can be asserted only by a database login authorised for it.
+  The deployer, who restricts verifier names and authorises their logins,
+  is restricted the same way. Two names are two people only when their
+  logins belong to separate applications and credentials (see below).
+- **Matches recorded under the system's name.** A match may only be
+  recorded with the AI system as its actor.
 
-## The statute, clause by clause
-
-Every rule in [`biometric_oversight.morph`](biometric_oversight.morph) traces
-to a clause of the final text, verified against the Official Journal
-(Regulation (EU) 2024/1689, OJ L, 12.7.2024; article numbers are from the
-final regulation, not the draft):
-
-| Statute | Requirement | Rule in the model |
-|---|---|---|
-| Art. 12(1) | High-risk systems technically allow automatic recording of events over their lifetime | The substrate itself: every transformation commits a claim-and-audit record or nothing |
-| Art. 12(3)(a) | Record the period of each use (start and end date and time) | `UseStarted` / `UseEnded` claims; `UsePeriod` derived (period and exact length, computed, never stored) |
-| Art. 12(3)(b) | Record the reference database checked | `reference_db` on `UseStarted` |
-| Art. 12(3)(c) | Record the input data for which the search led to a match | `input_ref` on `MatchRecorded` |
-| Art. 12(3)(d) | Record the identity of the natural persons who verified the results | `MatchVerified(match, verifier, verified_at)` - the verifier is the proposing actor, recorded in the claim and the audit row |
-| Art. 14(5) | No action or decision on an identification unless separately verified by at least two natural persons | The `decide_on_identification` gate and the `decision_rests_on_two_distinct_prior_verifications` invariant - two verification records with distinct verifiers, **both at or before the decision**, or the decision cannot commit |
-| Art. 26(2) | Deployers assign oversight to natural persons with competence, training and authority | `OversightAssigned`, granted and revoked by `assign_oversight` / `revoke_oversight`; consulted as a gate at each verification |
-| Art. 19(1), 26(6) | Providers and deployers keep logs at least six months | No machinery needed: the substrate never deletes, so any retention minimum is trivially exceeded |
-| Art. 86(1) | An affected person may demand a clear and meaningful explanation of the decision | One as-of lookup: the decision, its match, the input reference, both verifier identities, the version in service, and the oversight assignments in force - all at the decision's transition |
-
-## The refusals that carry the argument
+## What it refuses
 
 Each beat of the walkthrough (typed out in
 `crates/morpholog-examples/tests/biometric_identification_oversight.rs`) is a
@@ -78,18 +74,54 @@ proposal the runtime refuses, with the reason named:
    produced.** Backdating the end of a use to exclude an awkward match is not
    forbidden by policy; it is uncommittable.
 
-Note who proposes `record_match`: the AI system itself, as the actor, and
-`require actor = system` enforces it - a match attributed to this system
-genuinely originated from it, not from an analyst typing one in. A machine
-actor passes the same gates as a human one, and here its identity is part of
-what makes the record admissible. The thing producing candidates does not have
-to be trusted to behave; it only gets to *propose*, and admissibility - down
-to who proposed - is enforced outside it.
+Note who proposes `record_match`: the AI system, as the actor, and
+`require actor = system` holds the match to the system's name. A machine
+actor passes the same gates as a human one. This example does not restrict
+the system's own name, as it does the verifiers', so any login could still
+assert it; restricting it takes the same two claims. The thing producing
+candidates does not have to be trusted to behave; it only gets to
+*propose*, and what may be admitted is enforced outside it.
+
+## What you can show afterwards
+
+Asked about any decision, the record answers in one as-of lookup: the
+decision, its match, the input it was matched on, both verifiers, the model
+version in service, and the oversight assignments in force at that moment.
+That gives the deployer governed evidence from which to write the clear and
+meaningful explanation an affected person may request under Article 86(1).
 
 There is deliberately no clock in the model. Every timestamp is supplied by
 the proposer and judged by the gates; nothing reads "now" from the machine it
 runs on. Replay the record next year, in front of a regulator, and every
 admission decision comes out the same.
+
+## Where it fits
+
+The matching system keeps doing the matching: confidence scores,
+thresholds and embeddings stay inside it. It proposes each match through
+Morpholog as itself, and the overseers' verifications and decisions go
+through Morpholog from their own applications. Morpholog is not a logging
+pipeline beside the AI system; it is where a match becomes something that
+may be acted on.
+
+## The statute, clause by clause
+
+Every rule in [`biometric_oversight.morph`](biometric_oversight.morph) traces
+to a clause of the final text, verified against the Official Journal
+(Regulation (EU) 2024/1689, OJ L, 12.7.2024; article numbers are from the
+final regulation, not the draft):
+
+| Statute | Requirement | Rule in the model |
+|---|---|---|
+| Art. 12(1) | High-risk systems technically allow automatic recording of events over their lifetime | The substrate itself: every transformation commits a claim-and-audit record or nothing |
+| Art. 12(3)(a) | Record the period of each use (start and end date and time) | `UseStarted` / `UseEnded` claims; `UsePeriod` derived (period and exact length, computed, never stored) |
+| Art. 12(3)(b) | Record the reference database checked | `reference_db` on `UseStarted` |
+| Art. 12(3)(c) | Record the input data for which the search led to a match | `input_ref` on `MatchRecorded` |
+| Art. 12(3)(d) | Record the identity of the natural persons who verified the results | `MatchVerified(match, verifier, verified_at)` - the verifier is the proposing actor, recorded in the claim and the audit row |
+| Art. 14(5) | No action or decision on an identification unless separately verified by at least two natural persons | The `decide_on_identification` gate and the `decision_rests_on_two_distinct_prior_verifications` invariant - two verification records with distinct verifiers, **both at or before the decision**, or the decision cannot commit |
+| Art. 26(2) | Deployers assign oversight to natural persons with competence, training and authority | `OversightAssigned`, granted and revoked by `assign_oversight` / `revoke_oversight`; consulted as a gate at each verification |
+| Art. 19(1), 26(6) | Providers and deployers keep logs at least six months | No machinery needed: the substrate never deletes, so any retention minimum is trivially exceeded |
+| Art. 86(1) | An affected person may demand a clear and meaningful explanation of the decision | The evidence for that explanation, in one as-of lookup: the decision, its match, the input reference, both verifier identities, the version in service, and the oversight assignments in force - all at the decision's transition |
 
 ## What this example deliberately does not claim
 
@@ -112,38 +144,15 @@ admission decision comes out the same.
   role can write claims and audit rows directly, so two verifier identities
   are genuinely distinct only when the two applications and their credentials
   are genuinely separate.
+- Who may assign oversight, and whose names must be restricted. Here any
+  login may call `assign_oversight` or `revoke_oversight`, a verifier's
+  name need not be restricted before it verifies, and the AI system's own
+  name is not restricted. A real deployment would gate the first on the
+  deployer and restrict every name that may verify or record a match.
 - Hash-chained or blockchain-style logging solves a different problem:
   tamper-evidence, proof that nobody altered the record after the fact. This
   example demonstrates the layer above - invalid records were never
   admissible in the first place. The two compose; neither replaces the other.
-
-## What this example forced
-
-**The language: nothing** - and that is still the headline. Authority
-grant/revoke is the approval-controls example's shape; admission-time
-validity windows are the clinical-trial example's; standing granted by
-verification is verified revenue's; exact instants and durations are
-laytime's. Shipped patterns met a statute, and the surface did not move.
-
-**The trust boundary: one thing.** Article 14(5) asks for two distinct
-people, and the rule here says so exactly. But every proposal arrives through
-some application that names its actor, and if one application may name
-anyone, one operator can be both verifiers and the rule passes while meaning
-nothing. Nothing in the language can fix that, because the question is not
-what the record says - it is who is allowed to say it. So the runtime learned
-to read two claims, `ActorAssertionRestricted` and `ActorAssertionAuthority`:
-a name, once armed, may only be asserted by an authorised database login.
-
-They are two claims rather than one for a reason worth reading the `.morph`
-for: if the grants did the arming, withdrawing someone's last grant - the
-thing you do the moment you suspect trouble - would hand their name back to
-everybody.
-
-The deployer is armed too, in the same act that puts the system on the record.
-That is not incidental. The enrolment acts all ask "are you the deployer?", so
-an unarmed deployer is a name anyone can wear to grant themselves every
-verifier - a lock on the door of an open room. The general rule travels: every
-actor allowed to hand out authority must itself be restricted.
 
 ## Running it
 

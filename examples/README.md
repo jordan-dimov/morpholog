@@ -1,16 +1,29 @@
-# The worked examples, by what they show you how to do
+# The worked examples
 
-The gallery is named by domain, and that is the wrong index if you arrived
-with a question. An embedder spent a week believing Morpholog could not admit
-a set of records in one act. It can, and the example that shows it is called
-`14_margin_call_run` - so they skipped it, because a margin-call run did not
-sound like an invoice.
+Every example runs end to end against PostgreSQL; nothing is mocked. The
+[main README](../README.md#start-with-these-examples) lists them by domain.
+This page offers two other ways in: by the business problem you have, and
+by what you want to write in a `.morph` file.
 
-This table is the other index. The [main README](../README.md#start-with-these-examples)
-lists the same examples by the business problem each one governs; start there
-if you want to read one end to end.
+## Find an example by business problem
 
-## I want to...
+| The problem | Start with |
+|---|---|
+| Let an AI or an optimiser propose, without trusting it | [Operational information](20_operational_information/), [Margin call run](14_margin_call_run/) |
+| Govern a trade from capture to settlement | [Trade lifecycle](10_trade_lifecycle/) |
+| Accept a batch only if it is complete, not just correct line by line | [Margin call run](14_margin_call_run/) |
+| Check authority at the moment someone acts, and withdraw it later | [Trade lifecycle](10_trade_lifecycle/), [Approval controls](04_approval_controls/) |
+| Correct a figure without rewriting decisions made on the old one | [Verified revenue](02_verified_revenue/), [Trade lifecycle](10_trade_lifecycle/) |
+| Hold a running total under a limit | [Insurance claim settlement](05_insurance_claim_settlement/), [Borrowing base](11_borrowing_base/) |
+| Show what the record said at a past moment | [Double-entry ledger](03_double_entry_ledger/), [Trade lifecycle](10_trade_lifecycle/) |
+| Require human oversight of an AI's output | [Biometric identification oversight](13_biometric_identification_oversight/) |
+| Add Morpholog to an application you already run | [Adding Morpholog to an existing trading system](etrm_embedder/) |
+
+## Find an example by what you want to write
+
+The examples are named by domain, so a capability can hide behind a name
+that does not suggest it: the example that admits a whole set of records in
+one act is a margin-call run.
 
 | ...do this | ...look here | the construct |
 |---|---|---|
@@ -42,7 +55,7 @@ if you want to read one end to end.
 | hand work to the outside world after a commit | [08_kyc_sanctions_screening](08_kyc_sanctions_screening/) | `intent` plus `emit` |
 | refuse a combination that is fine one at a time | [01_settlement_netting](01_settlement_netting/) | `forall x in source: body` over the proposed set |
 | show that a rule comes from a named statute | [13_biometric_identification_oversight](13_biometric_identification_oversight/) | the article-to-rule table in its README |
-| stop one application asserting two different people | [13_biometric_identification_oversight](13_biometric_identification_oversight/) | `ActorAssertionRestricted` + `ActorAssertionAuthority` |
+| let only an authorised login act under a name | [13_biometric_identification_oversight](13_biometric_identification_oversight/) | `ActorAssertionRestricted` + `ActorAssertionAuthority` |
 | watch a limit on a net position, long minus short | [10_trade_lifecycle](10_trade_lifecycle/) | `abs(...)` |
 | make a skipped process step uncommittable, not just reviewable | [16_release_governance](16_release_governance/) | `require name: ...` gates, one per checklist step |
 | gate an act on completeness over a declared set | [16_release_governance](16_release_governance/) | `forall p in PlatformDeclared(p): ...` inside a `require` |

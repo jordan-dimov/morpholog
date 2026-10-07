@@ -1,22 +1,67 @@
-# Verified Revenue
+# Verified revenue
 
-A battery-storage asset earns monthly revenue. Several parties care about that number for different reasons - the asset owner, the bank that financed the system, investor relations, sometimes a regulator. The figure is the same; what differs is *what each party is allowed to do with it*, and *what happens when the verifier later corrects it*.
+**A figure is approved for a particular use, relied on, then corrected - and
+every decision made along the way stays defensible.** A correction keeps
+the original figure, withdraws approval from it, and leaves the decisions
+made while it was approved standing as a true record of what was decided.
 
-In a conventional system, the answers come from detective work. Pull the verifier's email. Compare it to the bank's spreadsheet. Cross-reference the investor deck. Sometimes they tie out; sometimes they don't.
+## Why this matters
 
-Morpholog makes them admitted claims. The verifier's figure, each party's standing to rely on it for *their* decision, each decision admitted under that standing, the lineage when the figure is corrected - all admitted claims. Three quarters from now, *what did we recognise as revenue for Q1, who verified it, who said it was admissible for which purpose, what later corrected it, and what decisions did we make while it was valid?* is one query against the audit log.
+A battery-storage asset earns monthly revenue. Several parties care about
+that number for different reasons: the asset owner, the bank that financed
+it, investor relations, sometimes a regulator. The figure is the same; what
+differs is *what each party may do with it*, and *what happens when the
+verifier later corrects it*.
 
-## The scenario
+Usually the answers come from detective work: the verifier's email, the
+bank's spreadsheet, the investor deck, and hope that they tie out. Here the
+verifier's figure, each party's approval to rely on it for their purpose,
+each decision made under that approval, and the link from a correction to
+what it corrected are all records. The question that would start an
+investigation - *what did we recognise for Q1, who verified it, who approved
+it for which use, what corrected it, and what did we decide while it held?*
+- is a query.
 
-Two patterns weave through one programme.
+## What Morpholog enforces
 
-**Currentness with restatement.** A verifier signs off on Q1 revenue at £92,000. Weeks later, after metering reconciliation, they correct it to £91,000. The original figure stays in the books; a singleton `CurrentVerification` pointer moves to the corrected figure; a `Supersedes` claim records the lineage.
+- **Approval for a purpose.** The bank's covenant test may rely only on a
+  verification approved for debt-service use; investor reporting only on
+  one approved for investor reporting. Morpholog calls such an approval
+  *standing*. The two approvals on one figure are independent.
+- **Approval only on the figure in force.** A figure that a correction has
+  replaced cannot receive new approval, and a revoked approval cannot be
+  granted again.
+- **Correction withdraws approval.** Correcting the figure withdraws every
+  approval of the old one; whoever relies on the new figure must approve it
+  afresh.
+- **Decisions stay.** A decision made under a valid approval stays on the
+  record after the approval is withdrawn or the figure is corrected.
 
-**Admissibility-for-purpose.** The bank's credit committee grants *standing* for the verification to be relied on for debt-service-coverage covenant tests. Investor relations separately grants standing for the same verification for shareholder reporting. Two parallel admissibilities on the same figure, two different authorities. Either can be revoked without touching the other.
+## What it refuses
 
-**Where they meet.** When the verifier corrects the figure, every standing granted on the prior verification is retracted by pattern - the authorities must re-issue standing on the corrected figure if they accept it. **Every historical decision admitted under the prior standing survives.** A covenant test computed on June 30 against the then-valid figure stays a valid record of what the bank decided that day, even after the verifier corrects the figure on July 15.
+- A covenant test on a figure with no debt-service approval, including one
+  approved only for investor reporting.
+- An approval granted to a figure that has since been corrected.
+- An approval granted again after it was revoked.
+- A second "first" verification for an asset and period that already has
+  one in force.
 
-After correction, the prior verification remains queryable as history but cannot receive new standing - `grant_standing` requires a *currently in force* verification. The whole doctrine: **correction does not erase the old figure, does not erase old decisions, does remove future standing from the old figure, and requires future reliance to attach to the current figure.**
+## What you can show afterwards
+
+A verifier signs off Q1 revenue at £92,000; the bank approves it for its
+covenant test and runs the test on 30 June. On 15 July the verifier
+corrects the figure to £91,000. The record still shows the original
+figure, the corrected one and the link between them; which figure each
+decision relied on; which authority was recorded as approving each figure
+for which use, and when the approval was withdrawn; and that the 30 June test was made under a valid approval.
+
+## Where it fits
+
+The verifier, the bank and investor relations keep their own systems. Each
+step - a verification, a correction, an approval, a decision that relies on
+the figure - is proposed through Morpholog, and each accepted step sends a
+notification (`VerificationCorrected`, `StandingGranted`,
+`DebtServiceRevenueAdmitted` and the rest) to the systems that need it.
 
 ## The program
 
@@ -46,7 +91,7 @@ Content claims (figures, grants, revocations, decisions) are append-only. Pointe
 | `current_verification_unique_by_asset_period` (from `current pointer by (asset, period)`) | The singleton pointer property. |
 | `supersedes_unique_by_prior_verification_id` (from `superseded via Supersedes`) | A verification is superseded by at most one direct successor; parallel chains are forbidden. |
 
-**No invariant ties decision claims to live `AdmissibleFor`.** Decisions are gated at admission via `require`; once admitted, locked in. An invariant tying them to live standing would force either rejecting revocation (because historical decisions would break the rule) or cascade-retracting those decisions (which destroys the record). Neither matches the business. This is the require-vs-invariant lesson running through every example in the project.
+**No invariant ties a decision to live approval.** A decision is checked against its approval when it is made (a `require`), and stays a valid record afterwards. As an invariant, revoking approval later would have to be refused, or would have to erase the decisions made under it. [`verified_revenue.morph`](verified_revenue.morph) walks through why.
 
 ### Transformations
 
@@ -75,23 +120,17 @@ DATABASE_URL=postgres:///morpholog_dev \
 
 In-memory tests cover restatement, standing, and the combined load-bearing test where a correction retracts standings on the prior verification while historical decisions survive. The PG integration test walks the whole story end to end through `propose_against_pg`.
 
----
+## What this example deliberately does not cover
 
-## Design notes
-
-### Pattern-based retraction in correction
-
-`correct_independent_verification` includes `retract AdmissibleFor(prior_verification_id, _)`. The `_` is `Term::Wildcard`; the runtime iterates pre-state for every `AdmissibleFor` claim whose first argument matches the prior verification, and retracts each one. Zero or many - the transformation does the right thing in all cases. This is the cleanest demonstration of wildcard retraction in the project.
-
-### Why decisions are not tied to live standing by an invariant
-
-The natural rule "every `DebtServiceRevenue` claim implies an active `AdmissibleFor`" is an invariant trap. As an invariant, revoking standing later would either reject the revoke (breaking the rule that standing can be lost) or cascade-retract every historical decision that relied on it (breaking the rule that history is preserved). The legitimacy of a decision made under valid standing at time T stays valid even if standing is revoked at T + 1.
-
-`require` is the *admission gate* - checked at admission, never again. `invariant` is the *standing rule* - checked again by every change that touches what it governs. Different questions.
-
-### What this example deliberately does not cover
-
-- **Authority over the verifier itself.** `admit_independent_verification` is ungated. A real system would gate it on `MayVerify(actor, asset)` using the actor-authority pattern from approval controls.
-- **Re-grant after revocation.** `StandingRevoked` is terminal in v0; a `RevocationLifted` shape would unlock re-granting.
-- **Effective time as a separate axis.** Real verifications have an effective period (the figure is *for* Q1) distinct from when the runtime admitted them. Effective time as a first-class axis combined with as-of replay would give full bitemporal addressability.
-- **Multi-party revenue claims.** A real BESS stack has parallel revenue claims (optimiser dispatch log, bank recognition, owner expectation). Modelling several `*ReportedRevenue` predicates with their own currentness pointers would scale the pattern; v0 uses one verification per (asset, period) and lets the standing layer carry the multi-party story.
+- **Who may verify or approve.** `admit_independent_verification` is not
+  gated, and `grant_standing` records the approving authority as a value it
+  is given. A real system would gate both on the actor's own authority,
+  the pattern [approval controls](../04_approval_controls/) shows.
+- **Approval again after revocation.** A revocation here is final.
+- **Effective dates.** A real verification is *for* a period, distinct from
+  when it was recorded. [Trade lifecycle](../10_trade_lifecycle/) shows
+  effective-dated records; this example does not use them.
+- **Several revenue figures per asset.** A real battery stack has parallel
+  figures (the optimiser's dispatch log, the bank's recognition, the
+  owner's expectation). This example keeps one verification per asset and
+  period and lets the approvals carry the several parties.
