@@ -26,7 +26,9 @@ use jiff::Timestamp;
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha384, Sha512};
 use x509_certificate::rfc5280::{AlgorithmIdentifier, Extension};
-use x509_certificate::{CapturedX509Certificate, X509CertificateError};
+use x509_certificate::{
+    CapturedX509Certificate, KeyAlgorithm, SignatureAlgorithm, X509CertificateError,
+};
 
 /// The media type of a request body, RFC 3161 section 3.4.
 pub const REQUEST_CONTENT_TYPE: &str = "application/timestamp-query";
@@ -147,11 +149,12 @@ pub fn verify_rfc3161(proof: &[u8], payload: &[u8], anchors: Option<&Anchors>) -
         Ok(()) => WitnessStatus::Verified {
             attested_at: examined.attested_at,
         },
-        Err(reason) => WitnessStatus::Untrusted {
+        Err(PathFailure::Untrusted(reason)) => WitnessStatus::Untrusted {
             attested_at: examined.attested_at,
             signer: common_name(&examined.signer),
             reason,
         },
+        Err(PathFailure::Unsupported(detail)) => WitnessStatus::Unsupported { detail },
     }
 }
 
@@ -541,26 +544,36 @@ fn check_ecdsa_sha512(
 /// algorithm, `invalid` when it judged and refused. Matched on the error
 /// type, never its wording.
 fn classify_cms(err: CmsError) -> WitnessStatus {
-    let lacks_primitive = matches!(
-        &err,
+    let cannot_judge = match &err {
         CmsError::UnknownKeyAlgorithm(_)
-            | CmsError::UnknownDigestAlgorithm(_)
-            | CmsError::UnknownSignatureAlgorithm(_)
-            | CmsError::X509Certificate(
-                X509CertificateError::UnknownDigestAlgorithm(_)
-                    | X509CertificateError::UnknownSignatureAlgorithm(_)
-                    | X509CertificateError::UnknownKeyAlgorithm(_)
-                    | X509CertificateError::UnknownEllipticCurve(_)
-                    | X509CertificateError::UnsupportedSignatureVerification(_, _)
-            )
-    );
-    if lacks_primitive {
+        | CmsError::UnknownDigestAlgorithm(_)
+        | CmsError::UnknownSignatureAlgorithm(_) => true,
+        CmsError::X509Certificate(X509CertificateError::UnsupportedSignatureVerification(..)) => {
+            true
+        }
+        CmsError::X509Certificate(err) => lacks_primitive(err),
+        _ => false,
+    };
+    if cannot_judge {
         WitnessStatus::Unsupported {
             detail: format!("signature algorithm not implemented here: {err}"),
         }
     } else {
         invalid(format!("the token's signature does not verify: {err}"))
     }
+}
+
+/// Whether the certificate library failed for want of an algorithm, rather than judging and
+/// refusing. Shared by the token's signature and the certificate path, so the two cannot
+/// disagree about what "not implemented here" means.
+fn lacks_primitive(err: &X509CertificateError) -> bool {
+    matches!(
+        err,
+        X509CertificateError::UnknownDigestAlgorithm(_)
+            | X509CertificateError::UnknownSignatureAlgorithm(_)
+            | X509CertificateError::UnknownKeyAlgorithm(_)
+            | X509CertificateError::UnknownEllipticCurve(_)
+    )
 }
 
 /// RFC 3161 section 2.4.2: the signature names its certificate by hash in
@@ -700,6 +713,16 @@ fn valid_at(cert: &CapturedX509Certificate, at: DateTime<Utc>) -> bool {
     cert.validity_not_before() <= at && at <= cert.validity_not_after()
 }
 
+/// Why no certification path validated.
+#[derive(Debug, PartialEq, Eq)]
+enum PathFailure {
+    /// Every candidate path was judged, and none validates.
+    Untrusted(String),
+    /// A candidate path needs a primitive this implementation lacks, so it might have
+    /// validated. Outranks every judged failure.
+    Unsupported(String),
+}
+
 /// Certification path validation from the signer to an anchor (RFC 5280 section 6.1).
 ///
 /// Validity is judged at the attested time: what matters is whether the signer was valid when
@@ -707,102 +730,188 @@ fn valid_at(cert: &CapturedX509Certificate, at: DateTime<Utc>) -> bool {
 /// used. Below it, every certificate must have been valid then, each issuer must be a
 /// certification authority whose path length and key usage allow the path, and the signer's key
 /// usage, if declared, must allow signing. Revocation and policies are not checked.
+///
+/// Every candidate issuer is tried, since several certificates may share a name: any path that
+/// validates wins, then any that could not be judged, and only a search judged throughout says
+/// that no path validates.
 fn validate_path(
     signer: &CapturedX509Certificate,
     carried: &[CapturedX509Certificate],
     anchors: &Anchors,
     at: DateTime<Utc>,
-) -> Result<(), String> {
-    let same = |a: &CapturedX509Certificate, b: &CapturedX509Certificate| {
-        a.constructed_data() == b.constructed_data()
-    };
+) -> Result<(), PathFailure> {
     if anchors.0.iter().any(|a| same(a, signer)) {
         return Ok(());
     }
     if !valid_at(signer, at) {
-        return Err(format!(
+        return Err(PathFailure::Untrusted(format!(
             "the signer's certificate `{}` was not valid at the attested time",
             common_name(signer)
-        ));
+        )));
     }
     if let Some(usage) = key_usage(signer)
         && !(usage.bit(KU_DIGITAL_SIGNATURE) || usage.bit(KU_NON_REPUDIATION))
     {
-        return Err(format!(
+        return Err(PathFailure::Untrusted(format!(
             "the signer's certificate `{}` is not permitted to sign (keyUsage)",
             common_name(signer)
-        ));
+        )));
     }
-    let issued_by = |cert: &CapturedX509Certificate, issuer: &CapturedX509Certificate| {
-        !same(cert, issuer)
-            && issuer.subject_name() == cert.issuer_name()
-            && signed_by(cert, issuer)
-    };
-    let mut current = signer.clone();
-    for below in 0..MAX_PATH_LENGTH {
-        if anchors.0.iter().any(|a| issued_by(&current, a)) {
-            return Ok(());
-        }
-        let Some(issuer) = carried.iter().find(|c| issued_by(&current, c)) else {
-            return Err(format!(
+    search_issuers(signer, carried, anchors, at, 0).map_err(|failure| {
+        failure.unwrap_or_else(|| {
+            PathFailure::Untrusted(format!(
                 "no certification path from the signer `{}` to a supplied anchor",
                 common_name(signer)
-            ));
-        };
-        let name = common_name(issuer);
-        if !valid_at(issuer, at) {
-            return Err(format!(
-                "the issuing certificate `{name}` was not valid at the attested time"
-            ));
+            ))
+        })
+    })
+}
+
+fn same(a: &CapturedX509Certificate, b: &CapturedX509Certificate) -> bool {
+    a.constructed_data() == b.constructed_data()
+}
+
+/// Search upwards from `current`, with `below` certificates already under it on the path.
+/// `Err(None)` means no candidate issuer was found at all.
+fn search_issuers(
+    current: &CapturedX509Certificate,
+    carried: &[CapturedX509Certificate],
+    anchors: &Anchors,
+    at: DateTime<Utc>,
+    below: usize,
+) -> Result<(), Option<PathFailure>> {
+    if below == MAX_PATH_LENGTH {
+        return Err(Some(PathFailure::Untrusted(
+            "the certification path is longer than this verifier follows".to_string(),
+        )));
+    }
+    let mut failure: Option<PathFailure> = None;
+    let mut note = |found: PathFailure| {
+        let outranks = matches!(
+            (&failure, &found),
+            (None, _) | (Some(PathFailure::Untrusted(_)), PathFailure::Unsupported(_))
+        );
+        if outranks {
+            failure = Some(found);
         }
-        match basic_constraints(issuer) {
-            Some((true, path_len)) => {
-                if path_len.is_some_and(|max| (below as u64) > max) {
-                    return Err(format!(
-                        "the issuing certificate `{name}` allows a shorter path than this one"
-                    ));
-                }
+    };
+    let candidates = |pool: &'_ [CapturedX509Certificate]| {
+        pool.iter()
+            .filter(|c| !same(current, c) && c.subject_name() == current.issuer_name())
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    for anchor in candidates(&anchors.0) {
+        match signed_by(current, &anchor) {
+            Signature::Signed => return Ok(()),
+            Signature::NotSigned => {}
+            Signature::CannotJudge(detail) => note(PathFailure::Unsupported(detail)),
+        }
+    }
+    for issuer in candidates(carried) {
+        match signed_by(current, &issuer) {
+            Signature::Signed => {}
+            Signature::NotSigned => continue,
+            Signature::CannotJudge(detail) => {
+                note(PathFailure::Unsupported(detail));
+                continue;
             }
-            _ => {
+        }
+        if let Err(reason) = may_issue(&issuer, at, below) {
+            note(PathFailure::Untrusted(reason));
+            continue;
+        }
+        match search_issuers(&issuer, carried, anchors, at, below + 1) {
+            Ok(()) => return Ok(()),
+            Err(Some(found)) => note(found),
+            Err(None) => {}
+        }
+    }
+    Err(failure)
+}
+
+/// Whether `issuer` could issue a certificate with `below` certificates under it on the path.
+fn may_issue(
+    issuer: &CapturedX509Certificate,
+    at: DateTime<Utc>,
+    below: usize,
+) -> Result<(), String> {
+    let name = common_name(issuer);
+    if !valid_at(issuer, at) {
+        return Err(format!(
+            "the issuing certificate `{name}` was not valid at the attested time"
+        ));
+    }
+    match basic_constraints(issuer) {
+        Some((true, path_len)) => {
+            if path_len.is_some_and(|max| (below as u64) > max) {
                 return Err(format!(
-                    "the issuing certificate `{name}` is not a certification authority \
-                     (basicConstraints)"
+                    "the issuing certificate `{name}` allows a shorter path than this one"
                 ));
             }
         }
-        if let Some(usage) = key_usage(issuer)
-            && !usage.bit(KU_KEY_CERT_SIGN)
-        {
+        _ => {
             return Err(format!(
-                "the issuing certificate `{name}` is not permitted to sign certificates \
-                 (keyUsage)"
+                "the issuing certificate `{name}` is not a certification authority \
+                 (basicConstraints)"
             ));
         }
-        current = issuer.clone();
     }
-    Err("the certification path is longer than this verifier follows".to_string())
+    if let Some(usage) = key_usage(issuer)
+        && !usage.bit(KU_KEY_CERT_SIGN)
+    {
+        return Err(format!(
+            "the issuing certificate `{name}` is not permitted to sign certificates (keyUsage)"
+        ));
+    }
+    Ok(())
+}
+
+/// Whether an issuer signed a certificate, as far as this implementation can tell.
+#[derive(Debug, PartialEq, Eq)]
+enum Signature {
+    Signed,
+    NotSigned,
+    /// The check needs a primitive this implementation lacks.
+    CannotJudge(String),
 }
 
 /// Whether `issuer`'s key signed `cert`, checked with the algorithm `cert` names for its
 /// signature and the issuer's key type. The certificate library's own shortcut pairs that
 /// algorithm with `cert`'s key type instead, so an RSA issuer of an ECDSA certificate (FreeTSA's
 /// chain) could never verify.
-fn signed_by(cert: &CapturedX509Certificate, issuer: &CapturedX509Certificate) -> bool {
-    let (Some(signature_algorithm), Some(key_algorithm)) =
-        (cert.signature_signature_algorithm(), issuer.key_algorithm())
-    else {
-        return false;
-    };
-    let Ok(algorithm) = signature_algorithm.resolve_verification_algorithm(key_algorithm) else {
-        return false;
-    };
+fn signed_by(cert: &CapturedX509Certificate, issuer: &CapturedX509Certificate) -> Signature {
     let raw: &x509_certificate::rfc5280::Certificate = cert.as_ref();
-    let Some(tbs) = raw.tbs_certificate.raw_data.as_ref() else {
-        return false;
+    let issuer_raw: &x509_certificate::rfc5280::Certificate = issuer.as_ref();
+    let resolved = SignatureAlgorithm::try_from(&raw.signature_algorithm).and_then(|signature| {
+        let key =
+            KeyAlgorithm::try_from(&issuer_raw.tbs_certificate.subject_public_key_info.algorithm)?;
+        signature.resolve_verification_algorithm(key)
+    });
+    let algorithm = match resolved {
+        Ok(algorithm) => algorithm,
+        Err(err) if lacks_primitive(&err) => {
+            return Signature::CannotJudge(format!(
+                "signature algorithm not implemented here: `{}` issuing `{}`: {err}",
+                common_name(issuer),
+                common_name(cert)
+            ));
+        }
+        // Includes a key of another family than the signature (an ECDSA key and an RSA
+        // signature): that key cannot have made it.
+        Err(_) => return Signature::NotSigned,
     };
-    issuer
+    let Some(tbs) = raw.tbs_certificate.raw_data.as_ref() else {
+        return Signature::NotSigned;
+    };
+    if issuer
         .verify_signed_data_with_algorithm(tbs, raw.signature.octet_bytes(), algorithm)
         .is_ok()
+    {
+        Signature::Signed
+    } else {
+        Signature::NotSigned
+    }
 }
 
 /// Test helpers: rebuild a `Request` from recorded DER, so a recorded response can be
@@ -865,12 +974,12 @@ mod tests {
 
         // Before the leaf was issued, the same path does not validate.
         let too_early = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
-        let err = validate_path(leaf, carried, &root, too_early).unwrap_err();
+        let err = untrusted(validate_path(leaf, carried, &root, too_early));
         assert!(err.contains("not valid at the attested time"), "{err}");
 
         // An anchor nothing chains to.
         let unrelated = Anchors::from_pem(&fixture("unrelated.pem")).unwrap();
-        let err = validate_path(leaf, carried, &unrelated, attested).unwrap_err();
+        let err = untrusted(validate_path(leaf, carried, &unrelated, attested));
         assert!(err.contains("no certification path"), "{err}");
 
         // A pinned leaf is trusted as given, whatever the time.
@@ -880,7 +989,7 @@ mod tests {
         );
 
         // Without the intermediate in hand, the root is unreachable.
-        let err = validate_path(leaf, &chain[..1], &root, attested).unwrap_err();
+        let err = untrusted(validate_path(leaf, &chain[..1], &root, attested));
         assert!(err.contains("no certification path"), "{err}");
     }
 
@@ -893,15 +1002,107 @@ mod tests {
             CapturedX509Certificate::from_pem_multiple(fixture("rsa_issuer_ecdsa_subject.pem"))
                 .unwrap();
         let (issuer, subject) = (&pair[0], &pair[1]);
-        assert!(signed_by(subject, issuer));
+        assert_eq!(signed_by(subject, issuer), Signature::Signed);
         assert!(subject.verify_signed_by_certificate(issuer).is_err());
         // Not signed by itself, and not by the other way round.
-        assert!(!signed_by(subject, subject));
-        assert!(!signed_by(issuer, subject));
+        assert_eq!(signed_by(subject, subject), Signature::NotSigned);
+        assert_eq!(signed_by(issuer, subject), Signature::NotSigned);
         // DigiCert's all-RSA chain still links.
         let chain = digicert();
-        assert!(signed_by(&chain[0], &chain[1]));
-        assert!(signed_by(&chain[1], &chain[2]));
+        assert_eq!(signed_by(&chain[0], &chain[1]), Signature::Signed);
+        assert_eq!(signed_by(&chain[1], &chain[2]), Signature::Signed);
+    }
+
+    fn untrusted(result: Result<(), PathFailure>) -> String {
+        match result {
+            Err(PathFailure::Untrusted(reason)) => reason,
+            other => panic!("expected untrusted, got {other:?}"),
+        }
+    }
+
+    /// Root, a P-521 intermediate, its leaf A, a P-256 intermediate under the same name as a
+    /// certification authority and again as not one, and its leaf C: the order the PEM holds.
+    fn branches() -> Vec<CapturedX509Certificate> {
+        CapturedX509Certificate::from_pem_multiple(fixture("path_branches.pem")).unwrap()
+    }
+
+    fn in_range() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap()
+    }
+
+    /// The only issuer of leaf A has a P-521 key, which this build cannot check a signature
+    /// with: the path might validate, so it is unsupported, not untrusted. An unrelated anchor
+    /// beside the real one does not make that edge judgeable.
+    #[test]
+    fn a_path_through_a_signature_this_build_cannot_check_is_unsupported() {
+        let c = branches();
+        let (root, mid_p521, leaf_a) = (&c[0], &c[1], &c[2]);
+        let unrelated = Anchors::from_pem(&fixture("unrelated.pem")).unwrap();
+        let with_unrelated = anchors_of(&[unrelated.0[0].clone(), root.clone()]);
+        for anchors in [anchors_of(std::slice::from_ref(root)), with_unrelated] {
+            let result =
+                validate_path(leaf_a, std::slice::from_ref(mid_p521), &anchors, in_range());
+            let Err(PathFailure::Unsupported(detail)) = result else {
+                panic!("expected unsupported, got {result:?}");
+            };
+            assert!(detail.contains("Morpholog test intermediate"), "{detail}");
+        }
+    }
+
+    /// Without the unjudgeable issuer, a search judged throughout that finds no trusted path
+    /// is untrusted, as before.
+    #[test]
+    fn a_path_judged_throughout_is_untrusted() {
+        let c = branches();
+        let (root, mid_not_ca, leaf_c) = (&c[0], &c[4], &c[5]);
+        let err = untrusted(validate_path(
+            leaf_c,
+            std::slice::from_ref(mid_not_ca),
+            &anchors_of(std::slice::from_ref(root)),
+            in_range(),
+        ));
+        assert!(err.contains("not a certification authority"), "{err}");
+    }
+
+    /// One candidate cannot be judged; another signed but may not issue. The second path is
+    /// certainly bad, but the first might have validated, so the answer is unsupported.
+    #[test]
+    fn a_judged_failure_does_not_hide_a_path_that_could_not_be_judged() {
+        let c = branches();
+        let (root, mid_p521, mid_not_ca, leaf_c) = (&c[0], &c[1], &c[4], &c[5]);
+        for carried in [
+            [mid_p521.clone(), mid_not_ca.clone()],
+            [mid_not_ca.clone(), mid_p521.clone()],
+        ] {
+            let result = validate_path(
+                leaf_c,
+                &carried,
+                &anchors_of(std::slice::from_ref(root)),
+                in_range(),
+            );
+            assert!(
+                matches!(result, Err(PathFailure::Unsupported(_))),
+                "{result:?}"
+            );
+        }
+    }
+
+    /// Any path that validates wins, whatever was tried before it: neither a candidate that
+    /// cannot be judged nor one that signed but may not issue stops the search.
+    #[test]
+    fn any_path_that_validates_is_found() {
+        let c = branches();
+        let (root, mid_p521, mid_p256, mid_not_ca, leaf_c) = (&c[0], &c[1], &c[3], &c[4], &c[5]);
+        let carried = [mid_p521.clone(), mid_not_ca.clone(), mid_p256.clone()];
+        assert_eq!(
+            validate_path(
+                leaf_c,
+                &carried,
+                &anchors_of(std::slice::from_ref(root)),
+                in_range()
+            ),
+            Ok(())
+        );
     }
 
     #[test]
