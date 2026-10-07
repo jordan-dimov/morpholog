@@ -38,7 +38,7 @@ Your ETRM, ERP, workflow engine and AI platform stay where they are. Morpholog o
 | Policy engine (OPA, Cedar) | Answer "may this caller do this?" | Check the change against the records it touches, at the moment it is saved, and keep the record. |
 | Workflow engine | Order the steps. | Decide whether each step that changes the record is allowed. |
 | ETRM or ERP | Run the business. | Leave it running the business; send it each accepted action. |
-| PostgreSQL | Store and query data. | Run inside it: Morpholog's tables are a schema in your own database. |
+| PostgreSQL | Store and query data. | Keep its records there: Morpholog's tables are a schema in your own database, beside your application's. |
 
 ## What you can answer afterwards
 
@@ -146,7 +146,7 @@ New to Morpholog? [The developer introduction](docs/developer-intro.md) is the h
 
 Each one runs end to end against PostgreSQL; nothing is mocked.
 
-- [Trade lifecycle](examples/10_trade_lifecycle/) - a commodity trade from capture to settlement. Only a desk with authority for the commodity can confirm it. A price correction changes what the next settlement must pay, and leaves the earlier settlements standing.
+- [Trade lifecycle](examples/10_trade_lifecycle/) - a commodity trade from capture to settlement. Only a desk with authority for the commodity can confirm it. Each settlement must name the official price in force. A price correction changes the price the next settlement must name, and leaves the earlier settlements standing.
 - [Margin call run](examples/14_margin_call_run/) - a risk engine proposes the whole day's run. It is accepted only if every account that should be called is in it, no other account is, and every amount is exact. A margin call the engine forgot is refused, not just a wrong one.
 - [Verified revenue](examples/02_verified_revenue/) - a figure is approved for a particular use, relied on, then corrected. Every decision made along the way stays defensible.
 - [Biometric identification oversight](examples/13_biometric_identification_oversight/) - the EU AI Act's two-person verification, enforced: an AI's match counts for nothing until two different, currently authorised people verify it.
