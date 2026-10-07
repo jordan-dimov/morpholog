@@ -6,7 +6,7 @@ a set of records in one act. It can, and the example that shows it is called
 `14_margin_call_run` - so they skipped it, because a margin-call run did not
 sound like an invoice.
 
-This table is the other index. The [main README](../README.md#worked-examples)
+This table is the other index. The [main README](../README.md#start-with-these-examples)
 lists the same examples by the business problem each one governs; start there
 if you want to read one end to end.
 
