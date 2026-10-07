@@ -6,9 +6,9 @@ People, applications, optimisers and AI agents propose the changes a business mu
 
 Anything may propose an action. Morpholog accepts it only if the organisation's rules, authority and evidence requirements are satisfied. An accepted action leaves a record of what was decided, by whom, under which rules and why. A refused one changes nothing, and the refusal names the rule that failed and the values that failed it, so a person or a program can repair the proposal and try again.
 
-**You do not have to trust the system proposing the action.** The control sits outside it. A risk engine, an optimiser or an AI agent can calculate whatever it likes; it cannot make a change the rules forbid. There is no bypass flag and no admin path.
+**You do not have to trust the system proposing the action.** The control sits outside it. A risk engine, an optimiser or an AI agent can calculate whatever it likes; it cannot make a change the rules forbid. Morpholog has no bypass flag and no privileged "approve anyway" path.
 
-So when someone asks *"how do you know this number is right?"*, the answer is not an investigation. It is: **the system could not have saved it otherwise**, and here is the record that proves it.
+So when someone asks *"how do you know this record met the controls?"*, the answer is not an investigation. It is: **the system could not have saved it otherwise**, and here is the record that proves it.
 
 ## Where Morpholog fits
 
@@ -35,10 +35,10 @@ Your ETRM, ERP, workflow engine and AI platform stay where they are. Morpholog o
 | Already in your stack | Its job | Morpholog's job beside it |
 |---|---|---|
 | AI or agent platform | Reason, plan, call tools. | Decide whether what it proposes may be accepted. |
-| Policy engine (OPA, Cedar) | Answer "may this caller do this?" | Check the change against the records it touches, at the moment it is saved, and keep the record. |
+| Policy engine (OPA, Cedar) | Evaluate policy against the context it is given. | Enforce rules over the records as part of the change itself, and keep the history that results. |
 | Workflow engine | Order the steps. | Decide whether each step that changes the record is allowed. |
 | ETRM or ERP | Run the business. | Leave it running the business; send it each accepted action. |
-| PostgreSQL | Store and query data. | Keep its records there: Morpholog's tables are a schema in your own database, beside your application's. |
+| PostgreSQL | Store and query data. | Use it as the durable store: Morpholog's tables can live in their own schema in your existing database. |
 
 ## What you can answer afterwards
 
@@ -88,7 +88,7 @@ An entry that is off by a penny is refused, with the rule named, and the databas
 
 One word before going further. Morpholog calls a record a **claim**: something stated under someone's authority at a particular moment, not a neutral fact. That is why a correction is a new claim that replaces the old one, rather than an edit that erases it.
 
-## What is underneath
+## What Morpholog gives you
 
 - **A record of every change**: what was proposed, by whom, with which values, what was added and removed, and which rules were checked.
 - **Corrections that keep the original.** A correction records what it replaces, so the original figure, the corrected one and the moment one became the other all stay visible. Whether a figure may be relied on is itself a record, granted and withdrawn by named people.
@@ -147,10 +147,10 @@ New to Morpholog? [The developer introduction](docs/developer-intro.md) is the h
 Each one runs end to end against PostgreSQL; nothing is mocked.
 
 - [Trade lifecycle](examples/10_trade_lifecycle/) - a commodity trade from capture to settlement. Only a desk with authority for the commodity can confirm it. Each settlement must name the official price in force. A price correction changes the price the next settlement must name, and leaves the earlier settlements standing.
+- [Adding Morpholog to an existing trading system](examples/etrm_embedder/) - a Python program standing in for a trading system drives the trade lifecycle through the client Morpholog generates from its rules. The trading system keeps doing its job; Morpholog decides the steps that must be defensible.
 - [Margin call run](examples/14_margin_call_run/) - a risk engine proposes the whole day's run. It is accepted only if every account that should be called is in it, no other account is, and every amount is exact. A margin call the engine forgot is refused, not just a wrong one.
 - [Verified revenue](examples/02_verified_revenue/) - a figure is approved for a particular use, relied on, then corrected. Every decision made along the way stays defensible.
 - [Biometric identification oversight](examples/13_biometric_identification_oversight/) - the EU AI Act's two-person verification, enforced: an AI's match counts for nothing until two different, currently authorised people verify it.
-- [Adding Morpholog to an existing trading system](examples/etrm_embedder/) - a Python program standing in for a trading system drives the trade lifecycle through the client Morpholog generates from its rules. The trading system keeps doing its job; Morpholog decides the steps that must be defensible.
 
 If you came with a question rather than an industry - "can it accept a whole batch as one decision?" - the [example index](examples/README.md) maps what you want to do to the example that shows it.
 
@@ -194,7 +194,7 @@ Active development, in Rust on PostgreSQL 18+, with no unsafe code. The kernel, 
 
 ## Common questions
 
-**Doesn't this mean writing everything twice?** No. Each governed action is written once, to Morpholog. The systems that need it - the ETRM, the ERP, a reporting store - are kept up to date from the notifications each accepted change sends (retried on transient failure, with keys that make a repeated delivery harmless, and a permanent failure recorded rather than retried forever). One write, then explicit copying, with no two-phase commit. The tables are plain PostgreSQL and can sit in the same database as your application's, in their own schema.
+**Doesn't this mean writing everything twice?** No. Each governed action is written once, to Morpholog. The systems that need it - the ETRM, the ERP, a reporting store - are kept up to date from the notifications accepted actions emit (retried on transient failure, with keys that make a repeated delivery harmless, and a permanent failure recorded rather than retried forever). One write, then explicit copying, with no two-phase commit. The tables are plain PostgreSQL and can sit in the same database as your application's, in their own schema.
 
 **Can't someone bypass the rules with raw SQL?** With superuser access, yes, as with any database (a DBA can drop a `CHECK` constraint too). Two things limit it. Ordinary permissions let only Morpholog's role write its tables. And the records and the audit log are two accounts of one history, so `audit verify` catches an edit that makes them disagree, or one that rewrites both if you have shared a checkpoint fingerprint outside the database. That fingerprint is 32 bytes: email it to your auditor, or have a public timestamp authority sign it (`audit checkpoint --witness rfc3161:<url>`) so the check can also show *when* the history looked like this. The honest limit: it protects history only up to the last fingerprint you shared, and sharing it is a habit the software cannot enforce.
 
