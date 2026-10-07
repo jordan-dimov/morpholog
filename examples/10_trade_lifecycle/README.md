@@ -1,20 +1,82 @@
 # Trade lifecycle
 
+**A commodity trade, captured, confirmed, corrected and settled as governed
+actions.** Only a desk with authority for the commodity can confirm it. A
+price correction never rewrites a settlement already made. And a trade can
+never be settled for more than its terms allow.
+
+## Why this matters
+
 A commodity trade does not have a status. It has a history.
 
 When a trading desk strikes a deal, it travels a path: a trader *captures*
 it, the middle office *confirms* it against the counterparty and fixes an
 official price, and in time it *settles*. Most systems record where a trade
 is on that path in a single mutable field - `status = "confirmed"` - and
-then spend the next three years reconstructing, from logs and emails, what
-that field used to say and who was allowed to change it.
+then spend years reconstructing, from logs and emails, what that field used
+to say and who was allowed to change it.
 
-This example takes the other view. A trade is "captured" because a capture
-claim exists for it; "confirmed" because a confirmation claim exists;
-"settled" because a settlement claim exists. The phase is the accumulation
-of admitted claims, and earlier claims never stop being true - so the
-history reads itself, with no status column to overwrite and no audit
-reconstruction to perform.
+Here a trade is "captured" because a capture record exists for it,
+"confirmed" because a confirmation exists, "settled" because a settlement
+exists. Earlier records never stop being true, so the history reads itself.
+
+## What Morpholog enforces
+
+- **Authority, per commodity.** Only a desk granted authority for the
+  trade's commodity may confirm it, amend its terms or correct its price.
+- **Settlement on the right price.** A settlement must name the official
+  price in force, and can never run ahead of confirmation.
+- **A cap that moves with the terms.** The total settled on or before any
+  date never exceeds the quantity the terms in force on that date allow,
+  even when the terms are amended after the fact.
+- **A net-position limit.** A desk's net position in a commodity, buys
+  minus sells in either direction, stays within its limit, through every
+  capture and amendment.
+- **One settlement per id.** Replaying a settlement is refused before it
+  can request a second payment downstream.
+
+## What it refuses
+
+- A confirmation by a desk with no authority for the trade's commodity.
+- A settlement before the trade is confirmed, or with no terms in force by
+  its date.
+- A settlement slice of 110 lots effective 20 February while the terms in
+  force say 100. Once an amendment to 120, effective 1 February, is
+  recorded, the same slice is accepted.
+- A second settlement under an id already used.
+- A capture or amendment that takes the desk's net position past its limit.
+
+## What you can show afterwards
+
+In the scenario below, settlements rely on an official price `op1` of 52,
+later corrected to 49, and the quantity is re-agreed from 100 to 120 lots,
+effective 1 February. The record answers, by construction:
+
+- *What price did this settlement rely on?* The settlement carries `op1`;
+  `op1`'s figure (52) is still on the record, even though the current
+  official price is now 49.
+- *What quantity was effective on 20 February?* The version in force on
+  that date - 120, once the amendment is known. Ask the same question of
+  the book as it stood on 16 January, before the amendment was recorded,
+  and the answer is 100. Same date, different answer - because new
+  knowledge arrived, not because the past was rewritten.
+- *Who confirmed it, and under what authority?* The confirmation event
+  records the actor who confirmed it (its `confirmed_by`); the
+  `MayConfirm(_, power)` authority that satisfied the gate when the
+  confirmation was admitted.
+- *Could a trade be settled for more than its terms allowed - or before
+  any terms were effective at all?* No to either - the runtime would not
+  have admitted it.
+
+## Where it fits
+
+The trading system keeps its screens, its pricing and its mark-to-market.
+It proposes each lifecycle step through Morpholog instead of writing it,
+and learns of each accepted step from its notifications: a settlement's
+`TradeSettlementRequested` reaches the payment side only after the
+settlement is accepted. How much money moves is still computed downstream.
+[Adding Morpholog to an existing trading system](../etrm_embedder/) drives
+this lifecycle from Python.
 
 ## The scenario
 
@@ -49,25 +111,7 @@ the original stays on the record, and each version carries the date its
 quantity takes force. The quantity a trade carries is not one number but a
 timeline.
 
-An auditor later can ask, and the model answers by construction:
-
-- *What price did this settlement rely on?* The settlement carries `op1`;
-  `op1`'s figure (52) is still on the record, even though the current
-  official price is now 49.
-- *What quantity was effective on 20 February?* The version in force on
-  that date - 120, once the amendment is known. Ask the same question of
-  the book as it stood on 16 January, before the amendment was recorded,
-  and the answer is 100. Same date, different answer - because new
-  knowledge arrived, not because the past was rewritten.
-- *Who confirmed it, and under what authority?* The confirmation event
-  records the actor who confirmed it (its `confirmed_by`); the
-  `MayConfirm(_, power)` authority that satisfied the gate when the
-  confirmation was admitted.
-- *Could a trade be settled for more than its terms allowed - or before
-  any terms were effective at all?* No to either - the runtime would not
-  have admitted it.
-
-## What it governs
+## Three ideas in the rules
 
 The deep walk-through of each control is in
 [`trade_lifecycle.morph`](trade_lifecycle.morph); in brief, three are worth

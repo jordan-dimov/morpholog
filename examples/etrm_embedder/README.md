@@ -1,10 +1,56 @@
-# A worked embedder: an ETRM driving Morpholog
+# Adding Morpholog to an existing trading system
 
-The other examples here are `.morph` programmes - the rules an auditor reads. This one is the other side of the boundary: a non-Rust system putting one of those programmes to work. It is the smallest honest sketch of the reference energy-trading risk system integrating with Morpholog the way any external system would - a subprocess and JSON underneath, no FFI, no Rust toolchain - and it drives a real commodity trade through its whole governed life:
+**A reference integration: the trading system keeps doing trading-system
+work, and Morpholog decides the lifecycle steps that must be defensible.**
+
+```text
+   trading system (Python)
+          |
+          |  capture, confirm, correct, settle
+          v
+      Morpholog  -- refused: the rule and the values, nothing changes
+          |
+          |  accepted: the record, and the notifications it emits
+          v
+   trading system, payments, downstream systems
+```
+
+## Why this matters
+
+Replacing a trading system to get governed records is not an option for
+most firms. This example shows the alternative: a program standing in for
+an energy-trading system drives one commodity trade through its whole life
+with the governed steps going through Morpholog, the way any external
+system would - a subprocess and JSON underneath, no Rust:
 
 > grant the desk its authority -> capture the trade -> confirm it and set the official price -> correct that price -> settle against the corrected figure.
 
-It runs against [`../10_trade_lifecycle/trade_lifecycle.morph`](../10_trade_lifecycle/) through the typed client the binary itself emits:
+## What Morpholog enforces
+
+Everything in [trade lifecycle](../10_trade_lifecycle/): authority per
+commodity, settlement on the official price in force, a settlement cap
+that moves with the terms, and one settlement per id. The trading system
+cannot write a step that breaks those rules; it can only propose one.
+
+## What it refuses
+
+The run includes a second settlement that would take the trade past its
+terms. The client reports it as a business rejection, distinct by
+construction from an operational failure, and `explain` says beforehand why
+a settlement would be refused while the trade is still unconfirmed.
+
+## What you can show afterwards
+
+Every accepted step is in Morpholog's record with who proposed it and the
+rules that accepted it. The script reads back which official price was in
+force as of the confirmation and which is in force now, and the terms as a
+timeline.
+
+## Where it fits
+
+The trading system keeps its market data, curves, positions and P&L.
+It calls Morpholog through a typed Python client that Morpholog generates
+from the trade lifecycle's own rules:
 
 ```bash
 morpholog generate python-client examples/10_trade_lifecycle/trade_lifecycle.morph --out examples/etrm_embedder
@@ -12,15 +58,7 @@ morpholog generate python-client examples/10_trade_lifecycle/trade_lifecycle.mor
 
 The [`morpholog_client/`](morpholog_client/) package beside the script is that output, committed so the example runs as-is and so CI can prove the binary still generates it byte-for-byte (regenerate-and-diff). The lifecycle script itself is now only the business narrative: typed request models in, typed envelopes and read models out, every emitted intent delivered through its generated payload model.
 
-## Why it exists
-
-A worked example here earns its place by forcing the next improvement, not by looking polished. This one was written to lean on the contract's edges the way a real integration does.
-
 **It uses what the binary already knows.** The request models carry each transformation's parameters and kinds (a `Decimal` is a `Decimal`, a date is a `date` - never a float, never a guessed string); the envelope models distinguish a lawful business rejection (the over-cap second settlement) from an operational failure by construction; `explain` answers *why* a settlement would be refused before the trade is confirmed, through the same typed surface. The whole lifecycle, including the post-commit delivery of every emitted intent, goes through the CLI alone.
-
-## It keeps forcing the missing piece
-
-Decoding emitted intent payloads by hand forced `morpholog schema --intent`. Reading governed state back forced `inspect claims --predicate`, and decoding those reads by declared field name forced `--named` (this script and the first real external embedder independently hand-rolled the same helper - two reinventions of one decode is the bar). Schema provisioning moved onto `morpholog init`, the embedded-schema path. The last layer standing was the hand-written client itself: the same codecs, envelope models, and subprocess adapter, written twice by two independent Python embedders. That convergence forced `generate python-client`, and the hand-rolled `Morpholog` class this example used to carry is deleted - the client is a projection of the programme now, like the schema and the envelopes, stamped with the model hash it was built against. The residual friction, printed at the end, is that selection stops at predicate granularity: an argument-level filter waits for an example with a book big enough to force it.
 
 ## Running it
 

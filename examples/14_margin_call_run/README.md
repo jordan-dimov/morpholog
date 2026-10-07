@@ -1,34 +1,40 @@
 # Margin call run
 
+**A risk engine may calculate the whole margin run. Morpholog does not have
+to trust it.** The run is accepted only if every account that should be
+called is in it, no account that should not be called is, and every amount
+is exact.
+
+## Why this matters
+
 When a trading account is leveraged, the firm holds a deposit - *margin* -
 as a cushion against the position moving against it. Each day the account
 is re-priced and its *equity* drifts. Two levels matter: the **required**
 margin the account is meant to sit at, and a lower **maintenance** floor.
-While equity stays above the floor, nothing happens. The moment it drops
-below, the firm must issue a **margin call** - a demand to top the account
-back up to the required level by the next morning - and the amount is
-exactly the gap between where the account is and where it should be.
+The moment equity drops below the floor, the firm must issue a **margin
+call**: a demand to top the account back up to the required level, for
+exactly the gap.
 
-Every day a risk engine sweeps the whole book, works out which accounts
-have fallen through the floor, and produces the day's batch of calls. This
-example governs that batch.
+A risk engine sweeps the whole book each day and produces the day's batch
+of calls. The dangerous failure is not a wrong call but a **missing** one.
+An under-margined account left out of the run carries a losing position
+with too little collateral, and if it defaults the firm absorbs the loss.
+A check that only forbids bad calls would wave through a run that forgot
+half the book.
 
-The danger it guards against is not a wrong call - it is a **missing** one.
-An under-margined account left out of the run is now carrying a losing
-position with too little collateral; if it defaults, the firm absorbs the
-loss. Whole firms have failed this way in volatile markets. So the control
-the model needs is *completeness*, not merely correctness: a rule that only
-forbade bad calls would happily wave through a run that forgot half the
-book.
+## What Morpholog enforces
 
-This is the example that forces **set-valued proposal**. Earlier examples
-hand the runtime one record at a time. Here the risk engine - ordinary,
-untrusted software - submits the **whole batch of called accounts as one
-value**, and the run is admitted only if that batch is complete and exact.
-It is the shape every "an external engine proposes a whole official
-snapshot" job shares: settlement runs, payment runs, allocation engines.
+- **Completeness.** The run may proceed only if no account below its floor
+  is absent from it.
+- **Only real calls.** Every account in the run must actually be below its
+  floor.
+- **Exact amounts.** Every call is the required level minus equity, and no
+  account is called twice in a run.
 
-## The scenario
+The engine submits the run as one proposal, and the whole run is accepted
+or refused as one decision.
+
+## What it refuses
 
 The book opens with three accounts:
 
@@ -38,40 +44,33 @@ The book opens with three accounts:
 | `acct_short_b` | 50,000   | 35,000            | 30,000 | below the floor |
 | `acct_ok`      | 100,000  | 70,000            | 90,000 | comfortably above |
 
-The risk engine proposes a run calling `[acct_short_a, acct_short_b]`. It is
-admitted: each call is the exact top-up - 40,000 for `acct_short_a`
-(`100,000 - 60,000`), 20,000 for `acct_short_b` - and a demand notice is
-emitted for each.
+A run calling `[acct_short_a, acct_short_b]` is accepted: 40,000 for
+`acct_short_a` (`100,000 - 60,000`), 20,000 for `acct_short_b`, and a demand
+notice for each. Each of these is refused whole, with nothing recorded:
 
-Now the failures, each refused atomically, nothing recorded:
+- **A forgotten account.** `[acct_short_a]` alone: an account below its
+  floor is missing from the run.
+- **A healthy account called.** Adding `acct_ok`: it is not short, so no
+  demand can be made against it.
 
-- **A forgotten account.** The engine proposes `[acct_short_a]` and leaves
-  `acct_short_b` out. The whole run is refused - the completeness gate sees
-  an account below its floor that is not in the batch.
-- **A healthy account called.** The engine includes `acct_ok`. The run is
-  refused - only an account actually short of margin may be called, so the
-  run cannot manufacture a demand against a healthy one.
+A calm day works too: with nobody below the floor, a run that calls no one
+is accepted. Completeness refuses what is missing; it never demands a call
+that is not owed.
 
-And a calm day works too: a book with nobody below the floor admits a run
-that calls no one. Completeness refuses what is *missing*; it never demands
-a call that is not owed.
+## What you can show afterwards
 
-## Completeness, not just correctness
+Every run in the record was complete and exact against the book as it
+stood when the engine proposed it. The record names who proposed each run,
+and any past day's book and calls can be rebuilt as they stood.
 
-Most of the gallery's controls *forbid* a bad state: a settlement larger
-than the cap, an approval without authority. They are exclusions. The
-margin run needs something stronger - that the proposed batch *contains*
-everything the rule requires. A missing call is the dangerous failure, and
-no exclusion rule catches an omission.
+## Where it fits
 
-The model expresses this as a gate over the whole proposed batch:
-
-> the run may proceed only if there is no account below its floor that is
-> absent from the batch.
-
-The batch is the collection the engine submitted. Reading "is this account
-in the batch?" against the book the firm already holds is what makes the
-omission visible - and refusable - in one decision.
+The risk engine keeps doing what it does: pricing the book and deciding
+whom to call. It proposes the run through Morpholog instead of writing it.
+The demand notices (`MarginCallIssued`) reach the systems that send them
+only after the run is accepted. The same shape fits any job where an
+external engine proposes a whole official batch: settlement runs, payment
+runs, allocation engines.
 
 ## The program
 
