@@ -564,8 +564,8 @@ fn classify_cms(err: CmsError) -> WitnessStatus {
 }
 
 /// Whether the certificate library failed for want of an algorithm, rather than judging and
-/// refusing. Shared by the token's signature and the certificate path, so the two cannot
-/// disagree about what "not implemented here" means.
+/// refusing: the one definition of a missing primitive, used by the token's signature and the
+/// certificate path alike.
 fn lacks_primitive(err: &X509CertificateError) -> bool {
     matches!(
         err,
@@ -714,7 +714,7 @@ fn valid_at(cert: &CapturedX509Certificate, at: DateTime<Utc>) -> bool {
 }
 
 /// Why no certification path validated.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PathFailure {
     /// Every candidate path was judged, and none validates.
     Untrusted(String),
@@ -757,77 +757,125 @@ fn validate_path(
             common_name(signer)
         )));
     }
-    search_issuers(signer, carried, anchors, at, 0).map_err(|failure| {
-        failure.unwrap_or_else(|| {
-            PathFailure::Untrusted(format!(
-                "no certification path from the signer `{}` to a supplied anchor",
-                common_name(signer)
-            ))
+    PathSearch::new(carried, anchors, at)
+        .upwards(signer, 0)
+        .map_err(|failure| {
+            failure.unwrap_or_else(|| {
+                PathFailure::Untrusted(format!(
+                    "no certification path from the signer `{}` to a supplied anchor",
+                    common_name(signer)
+                ))
+            })
         })
-    })
 }
 
 fn same(a: &CapturedX509Certificate, b: &CapturedX509Certificate) -> bool {
     a.constructed_data() == b.constructed_data()
 }
 
-/// Search upwards from `current`, with `below` certificates already under it on the path.
-/// `Err(None)` means no candidate issuer was found at all.
-fn search_issuers(
-    current: &CapturedX509Certificate,
-    carried: &[CapturedX509Certificate],
-    anchors: &Anchors,
+/// What a search from one certificate found. `Err(None)`: no candidate issuer at all.
+type Searched = Result<(), Option<PathFailure>>;
+
+/// A search upwards from the signer. The certificates come from the token, so whoever made it
+/// chooses them: each distinct carried certificate is searched at most once per depth, which
+/// keeps the work polynomial in what the token carries.
+struct PathSearch<'a> {
+    carried: Vec<&'a CapturedX509Certificate>,
+    anchors: &'a Anchors,
     at: DateTime<Utc>,
-    below: usize,
-) -> Result<(), Option<PathFailure>> {
-    if below == MAX_PATH_LENGTH {
-        return Err(Some(PathFailure::Untrusted(
-            "the certification path is longer than this verifier follows".to_string(),
-        )));
-    }
-    let mut failure: Option<PathFailure> = None;
-    let mut note = |found: PathFailure| {
-        let outranks = matches!(
-            (&failure, &found),
-            (None, _) | (Some(PathFailure::Untrusted(_)), PathFailure::Unsupported(_))
-        );
-        if outranks {
-            failure = Some(found);
-        }
-    };
-    let candidates = |pool: &'_ [CapturedX509Certificate]| {
-        pool.iter()
-            .filter(|c| !same(current, c) && c.subject_name() == current.issuer_name())
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-    for anchor in candidates(&anchors.0) {
-        match signed_by(current, &anchor) {
-            Signature::Signed => return Ok(()),
-            Signature::NotSigned => {}
-            Signature::CannotJudge(detail) => note(PathFailure::Unsupported(detail)),
-        }
-    }
-    for issuer in candidates(carried) {
-        match signed_by(current, &issuer) {
-            Signature::Signed => {}
-            Signature::NotSigned => continue,
-            Signature::CannotJudge(detail) => {
-                note(PathFailure::Unsupported(detail));
-                continue;
+    searched: std::collections::HashMap<(usize, usize), Searched>,
+    signature_checks: usize,
+}
+
+impl<'a> PathSearch<'a> {
+    fn new(
+        carried: &'a [CapturedX509Certificate],
+        anchors: &'a Anchors,
+        at: DateTime<Utc>,
+    ) -> Self {
+        let mut distinct: Vec<&CapturedX509Certificate> = Vec::new();
+        for cert in carried {
+            if !distinct.iter().any(|seen| same(seen, cert)) {
+                distinct.push(cert);
             }
         }
-        if let Err(reason) = may_issue(&issuer, at, below) {
-            note(PathFailure::Untrusted(reason));
-            continue;
-        }
-        match search_issuers(&issuer, carried, anchors, at, below + 1) {
-            Ok(()) => return Ok(()),
-            Err(Some(found)) => note(found),
-            Err(None) => {}
+        Self {
+            carried: distinct,
+            anchors,
+            at,
+            searched: std::collections::HashMap::new(),
+            signature_checks: 0,
         }
     }
-    Err(failure)
+
+    /// From `current`, with `below` certificates already under it on the path.
+    fn upwards(&mut self, current: &CapturedX509Certificate, below: usize) -> Searched {
+        if below == MAX_PATH_LENGTH {
+            return Err(Some(PathFailure::Untrusted(
+                "the certification path is longer than this verifier follows".to_string(),
+            )));
+        }
+        let issues = |c: &CapturedX509Certificate| {
+            !same(current, c) && c.subject_name() == current.issuer_name()
+        };
+        let mut failure: Option<PathFailure> = None;
+        let anchors = self.anchors;
+        for anchor in anchors.0.iter().filter(|a| issues(a)) {
+            self.signature_checks += 1;
+            match signed_by(current, anchor) {
+                Signature::Signed => return Ok(()),
+                Signature::NotSigned => {}
+                Signature::CannotJudge(detail) => {
+                    note(&mut failure, PathFailure::Unsupported(detail));
+                }
+            }
+        }
+        for index in 0..self.carried.len() {
+            let issuer = self.carried[index];
+            if !issues(issuer) {
+                continue;
+            }
+            self.signature_checks += 1;
+            let unjudged = match signed_by(current, issuer) {
+                Signature::Signed => None,
+                Signature::NotSigned => continue,
+                Signature::CannotJudge(detail) => Some(detail),
+            };
+            // The rest of the path is judged first: an edge that could not be judged matters
+            // only if the path above it could validate.
+            let rest = match may_issue(issuer, self.at, below) {
+                Err(reason) => Err(Some(PathFailure::Untrusted(reason))),
+                Ok(()) => self.upwards_from_carried(index, below + 1),
+            };
+            match (unjudged, rest) {
+                (None, Ok(())) => return Ok(()),
+                (Some(detail), Ok(())) => note(&mut failure, PathFailure::Unsupported(detail)),
+                (_, Err(Some(found))) => note(&mut failure, found),
+                (_, Err(None)) => {}
+            }
+        }
+        Err(failure)
+    }
+
+    fn upwards_from_carried(&mut self, index: usize, below: usize) -> Searched {
+        if let Some(found) = self.searched.get(&(index, below)) {
+            return found.clone();
+        }
+        let found = self.upwards(self.carried[index], below);
+        self.searched.insert((index, below), found.clone());
+        found
+    }
+}
+
+/// Keep the first failure, unless a later one could not be judged and the kept one was.
+fn note(failure: &mut Option<PathFailure>, found: PathFailure) {
+    let outranks = matches!(
+        (&*failure, &found),
+        (None, _) | (Some(PathFailure::Untrusted(_)), PathFailure::Unsupported(_))
+    );
+    if outranks {
+        *failure = Some(found);
+    }
 }
 
 /// Whether `issuer` could issue a certificate with `below` certificates under it on the path.
@@ -1102,6 +1150,45 @@ mod tests {
                 in_range()
             ),
             Ok(())
+        );
+    }
+
+    /// An issuer that could not be judged, but whose own path reaches no supplied anchor, could
+    /// not have completed a trusted path whatever its signature: the search is still judged
+    /// throughout, so untrusted.
+    #[test]
+    fn an_unjudgeable_issuer_on_a_dead_path_does_not_make_it_unsupported() {
+        let c = branches();
+        let (mid_p521, mid_not_ca, leaf_c) = (&c[1], &c[4], &c[5]);
+        let unrelated = Anchors::from_pem(&fixture("unrelated.pem")).unwrap();
+        for carried in [
+            vec![mid_p521.clone()],
+            vec![mid_p521.clone(), mid_not_ca.clone()],
+        ] {
+            untrusted(validate_path(leaf_c, &carried, &unrelated, in_range()));
+        }
+    }
+
+    /// Authorities that all share one name, each a candidate issuer of every other, with keys
+    /// this build cannot check. The token chooses its certificates, so the search must stay
+    /// polynomial in them: each certificate is searched at most once per depth.
+    #[test]
+    fn a_token_full_of_candidate_issuers_cannot_make_the_search_explode() {
+        let c = CapturedX509Certificate::from_pem_multiple(fixture("path_loop.pem")).unwrap();
+        let (leaf, carried) = (&c[0], &c[..]);
+        let unrelated = Anchors::from_pem(&fixture("unrelated.pem")).unwrap();
+        let mut search = PathSearch::new(carried, &unrelated, in_range());
+        let found = search.upwards(leaf, 0);
+        assert!(
+            matches!(found, Err(Some(PathFailure::Untrusted(_)))),
+            "{found:?}"
+        );
+        let n = carried.len();
+        let bound = (n * (MAX_PATH_LENGTH + 1) + 1) * (n + unrelated.len());
+        assert!(
+            search.signature_checks <= bound,
+            "{} signature checks for {n} certificates",
+            search.signature_checks
         );
     }
 
