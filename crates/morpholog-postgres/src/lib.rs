@@ -116,7 +116,8 @@ pub use provision::{
     DEFAULT_ROLE_PREFIX, DeploymentRoles, DroppedSchema, InitOutcome, RecordedRoles,
     databases_also_reached, deployment_roles, drop_schema, initialise_schema,
     provision_least_privilege, rebind_least_privilege, redact_database_url,
-    require_deployment_roles, single_connection_pool, with_default_user, with_user,
+    require_deployment_roles, require_reset_can_provision, single_connection_pool,
+    with_default_user, with_user,
 };
 pub use receipt::{
     CheckpointMatch, Completeness, Evaluation, EvaluationReceipt, ParsedReceipt, ProgramMatch,

@@ -11,9 +11,8 @@
 
 use anyhow::{Context, anyhow};
 use morpholog_postgres::{
-    DeploymentRoles, InitOutcome, deployment_roles, drop_schema, initialise_schema,
-    provision_least_privilege, rebind_least_privilege, redact_database_url,
-    require_deployment_roles,
+    DeploymentRoles, InitOutcome, drop_schema, initialise_schema, provision_least_privilege,
+    rebind_least_privilege, redact_database_url, require_reset_can_provision,
 };
 
 use crate::InitArgs;
@@ -42,25 +41,8 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
     // Unchecked: this is the command that provisions a database.
     let pool = connect_unchecked(&args.db.database_url).await?;
     let mut dropped = if args.reset {
-        // A reset binds the roles this database recorded again, so another
-        // prefix is refused while there is still something to keep.
-        if args.least_privilege
-            && let Some(recorded) = deployment_roles(&pool).await?
-            && recorded != roles
-        {
-            return Err(anyhow!(
-                "this database records `{}` and `{}` as its least-privilege roles; \
-                 --reset --least-privilege binds them again, so pass their prefix, or \
-                 move the deployment to new roles first (docs/install.md, \"Several \
-                 deployments on one cluster\"). Nothing was dropped",
-                recorded.writer(),
-                recorded.reader()
-            ));
-        }
-        // A recorded role that is gone stays a refusal, decided while the
-        // record that names it still exists.
         if args.least_privilege {
-            require_deployment_roles(&pool)
+            require_reset_can_provision(&pool, &roles)
                 .await
                 .context("nothing was dropped")?;
         }

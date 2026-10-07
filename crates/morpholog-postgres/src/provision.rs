@@ -518,6 +518,52 @@ pub async fn require_deployment_roles(pool: &PgPool) -> Result<(), PgError> {
     }
 }
 
+/// Refuse, before `init --reset --least-privilege` drops anything, whatever
+/// provisioning `roles` afterwards would refuse. A reset that dropped the
+/// schema and then refused would leave one with no least-privilege floor.
+pub async fn require_reset_can_provision(
+    pool: &PgPool,
+    roles: &DeploymentRoles,
+) -> Result<(), PgError> {
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    let schema = sqlx::query!("SELECT 1 AS one FROM pg_namespace WHERE nspname = 'morpholog'")
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(classify_checked_query)?
+        .is_some();
+    let record = sqlx::query_scalar!(
+        "SELECT to_regclass('morpholog.deployment_roles') IS NOT NULL AS \"present!\""
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    if schema && !record {
+        return Err(PgError::InvalidState(
+            "this database predates the record of its least-privilege roles, so a reset \
+             would not know which roles to bind again; run `morpholog migrate` first, which \
+             records them"
+                .to_string(),
+        ));
+    }
+    match recorded_roles(&mut conn).await? {
+        Some(recorded) if recorded != *roles => Err(PgError::InvalidState(format!(
+            "this database records `{}` and `{}` as its least-privilege roles; --reset \
+             --least-privilege binds them again, so pass their prefix, or move the deployment \
+             to new roles first (docs/install.md, \"Several deployments on one cluster\")",
+            recorded.writer, recorded.reader
+        ))),
+        Some(recorded) => require_recorded_roles(&mut conn, &recorded).await,
+        None => {
+            for role in roles.both() {
+                if role_exists(&mut conn, role).await? {
+                    return Err(existing_role(&mut conn, role).await?);
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 async fn grant_floor(
     conn: &mut sqlx::PgConnection,
     roles: &DeploymentRoles,
