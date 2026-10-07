@@ -410,7 +410,9 @@ async fn least_privilege_without_createrole_refuses_before_any_change() {
     run(&admin, &format!("CREATE ROLE {owner} NOLOGIN NOCREATEROLE")).await;
     run(&admin, &format!("CREATE DATABASE {db} OWNER {owner}")).await;
     // The binary acts as the owner, which may not create roles.
-    let as_owner = format!("{}&options[role]={owner}", with_database(&base, db));
+    let url = with_database(&base, db);
+    let joiner = if url.contains('?') { '&' } else { '?' };
+    let as_owner = format!("{url}{joiner}options[role]={owner}");
     let provision = |reset: bool| {
         let mut args = vec!["init"];
         if reset {
