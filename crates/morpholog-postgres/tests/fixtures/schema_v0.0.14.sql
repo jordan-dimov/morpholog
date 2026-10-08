@@ -606,9 +606,10 @@ CREATE TABLE morpholog_read.derived_claims (
 CREATE INDEX derived_claims_generation_predicate
     ON morpholog_read.derived_claims (refresh_id, predicate_name);
 
--- The ledger of the v0.0.14 schema this file embodies, so that a v0.0.14
--- binary reads a fresh database as current too. The newest row is the
--- baseline this binary starts from; a test holds it there.
+-- The migrations this file embodies. A database provisioned from it is at
+-- the head and says so: `morpholog migrate` has nothing to apply and every
+-- command finds it current. One line per migration, beside the file under
+-- migrations/; a test holds this list to the binary's.
 INSERT INTO schema_migrations (version, name) VALUES
     (1, 'outbox_delivery_state'),
     (2, 'compensation_in_progress'),

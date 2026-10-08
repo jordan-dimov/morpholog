@@ -732,15 +732,9 @@ async fn establish(pool: &PgPool, implementation: Implementation, cores: &[Progr
 /// database must be at the migration head; say so rather than fail
 /// inside provisioning.
 async fn require_migration_head(pool: &PgPool) -> Result<()> {
-    let status = morpholog_postgres::migration_status(pool)
+    morpholog_postgres::require_current_schema(pool)
         .await
-        .context("reading the migration status")?;
-    if !status.is_current() {
-        return Err(anyhow!(
-            "the database schema is behind the Morpholog migration head; run `morpholog migrate`"
-        ));
-    }
-    Ok(())
+        .context("the bench needs a database at the migration head")
 }
 
 /// Bumped only when what the benchmark measures changes (cases,
@@ -3466,14 +3460,14 @@ mod smoke {
             eprintln!("DATABASE_URL unset; skipping bench smoke test");
             return;
         };
-        // A database behind the migration head is refused with the
-        // remedy named; afterwards the test migrates it back.
+        // A database this binary cannot serve is refused with the remedy
+        // named; afterwards the test puts the record back.
         let pool = connect(&url).await.expect("connect");
         sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
-            .bind(morpholog_postgres::head_version())
+            .bind(morpholog_postgres::BASELINE_VERSION)
             .execute(&pool)
             .await
-            .expect("remove the head's record");
+            .expect("remove the baseline's record");
         let behind = run_write(ScenarioArgs {
             n: 1,
             accounts: 2,
@@ -3486,15 +3480,22 @@ mod smoke {
         .await;
         let message = format!(
             "{:?}",
-            behind.expect_err("a database behind the head is refused")
+            behind.expect_err("a database below the baseline is refused")
         );
         assert!(
-            message.contains("behind the Morpholog migration head"),
+            message.contains("migration head") && message.contains("v0.0.14 binary"),
             "the refusal names the remedy: {message}"
         );
-        morpholog_postgres::apply_migrations(&pool)
+        sqlx::query(
+            "INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, 'deployment_roles')",
+        )
+        .bind(morpholog_postgres::BASELINE_VERSION)
+        .execute(&pool)
+        .await
+        .expect("put the baseline's record back");
+        morpholog_postgres::require_current_schema(&pool)
             .await
-            .expect("bring the test database to the migration head");
+            .expect("the test database is current again");
         drop(pool);
 
         run_write(ScenarioArgs {

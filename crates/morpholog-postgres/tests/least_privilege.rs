@@ -441,17 +441,6 @@ async fn a_missing_recorded_role_is_refused_never_recreated() {
     scratch.clean().await;
 }
 
-/// Wind a head database back to before the roles record, so migrating
-/// has something to apply.
-async fn before_the_record(pool: &PgPool) {
-    run(
-        pool,
-        "DROP TABLE morpholog.deployment_roles; \
-         DELETE FROM morpholog.schema_migrations WHERE version = 23",
-    )
-    .await;
-}
-
 /// Create the default roles the cluster lacks, returning those this test
 /// made (and so removes).
 async fn ensure_default_roles(admin: &PgPool) -> Vec<&'static str> {
@@ -496,10 +485,9 @@ async fn migrate_grants_only_to_recorded_roles() {
     let scratch = Scratch::new(&base, &[db], &[]).await;
     let made = ensure_default_roles(&scratch.admin).await;
     let pool = scratch.deployment(db).await;
-    before_the_record(&pool).await;
 
     let report = apply_migrations(&pool).await.unwrap();
-    assert!(!report.applied.is_empty(), "there was a migration to apply");
+    assert!(report.is_current(), "{report:?}");
     assert_eq!(foreign_grants(&pool).await, Vec::<String>::new());
     assert_eq!(deployment_roles(&pool).await.unwrap(), None);
 
@@ -510,106 +498,39 @@ async fn migrate_grants_only_to_recorded_roles() {
     }
 }
 
-/// The floor provisioned before the record existed is recorded when the
-/// database grants it to those roles by name. A lone grant, the floor
-/// granted to PUBLIC, and the floor reached through another role are not.
+/// `migrate` re-applies the floor to the recorded roles on every run,
+/// with nothing to apply too: a grant withdrawn by hand, or lost in a
+/// restore, is back after the next `migrate`.
 #[tokio::test]
-async fn the_old_floor_is_recorded_only_when_it_is_there() {
+async fn migrate_re_applies_the_floor_on_every_run() {
     let Some(base) = base_url() else { return };
-    let _turn = DEFAULT_NAMES.lock().await;
-    let (old, stray, public, inherited) = (
-        "morpholog_ci_lp_oldfloor",
-        "morpholog_ci_lp_stray",
-        "morpholog_ci_lp_public",
-        "morpholog_ci_lp_inherited",
-    );
-    let scratch = Scratch::new(
-        &base,
-        &[old, stray, public, inherited],
-        &["morpholog_ci_lp_floor_group"],
-    )
-    .await;
-    let made = ensure_default_roles(&scratch.admin).await;
+    let db = "morpholog_ci_lp_refloor";
+    let roles = roles("morpholog_ci_lp_refloor_");
+    let scratch = Scratch::new(&base, &[db], &[roles.writer(), roles.reader()]).await;
+    let pool = scratch.deployment(db).await;
+    provision_least_privilege(&pool, &roles).await.unwrap();
+    assert_eq!(as_role(&pool, roles.reader(), READS[1].1).await, None);
 
-    // The grants the floor made before it was recorded.
-    let pool = scratch.deployment(old).await;
-    before_the_record(&pool).await;
     run(
         &pool,
-        "GRANT USAGE ON SCHEMA morpholog TO morpholog_writer, morpholog_reader;
-         GRANT SELECT, INSERT, DELETE ON morpholog.claims TO morpholog_writer;
-         GRANT SELECT, INSERT ON morpholog.audit TO morpholog_writer;
-         GRANT SELECT, INSERT, UPDATE ON morpholog.outbox TO morpholog_writer;
-         GRANT SELECT ON ALL TABLES IN SCHEMA morpholog TO morpholog_reader",
+        &format!("REVOKE SELECT ON morpholog.audit FROM {}", roles.reader()),
     )
     .await;
-    apply_migrations(&pool).await.unwrap();
     assert_eq!(
-        deployment_roles(&pool).await.unwrap(),
-        Some(DeploymentRoles::default())
-    );
-    assert_eq!(
-        as_role(
-            &pool,
-            "morpholog_reader",
-            "SELECT 1 FROM morpholog.deployment_roles"
-        )
-        .await,
-        None,
-        "the floor was re-applied after migrating, reaching the new table"
-    );
-
-    // Neither one stray grant, nor the whole floor granted to PUBLIC, nor
-    // the whole floor reached through another role, is a floor granted to
-    // these roles.
-    let group = "morpholog_ci_lp_floor_group";
-    run(&scratch.admin, &format!("CREATE ROLE {group} NOLOGIN")).await;
-    let floor = "USAGE ON SCHEMA morpholog TO {to};
-                 GRANT SELECT, INSERT, DELETE ON morpholog.claims TO {to};
-                 GRANT SELECT, INSERT ON morpholog.audit TO {to};
-                 GRANT SELECT, INSERT, UPDATE ON morpholog.outbox TO {to}";
-    let mut not_floors = Vec::new();
-    for (db, grants) in [
-        (
-            stray,
-            "GRANT USAGE ON SCHEMA morpholog TO morpholog_writer;
-             GRANT INSERT ON morpholog.audit TO morpholog_writer"
-                .to_string(),
-        ),
-        (public, format!("GRANT {}", floor.replace("{to}", "PUBLIC"))),
-        (
-            inherited,
-            format!(
-                "GRANT {}; GRANT {group} TO morpholog_writer, morpholog_reader",
-                floor.replace("{to}", group)
-            ),
-        ),
-    ] {
-        let not_floor = scratch.deployment(db).await;
-        before_the_record(&not_floor).await;
-        run(&not_floor, &grants).await;
-        apply_migrations(&not_floor).await.unwrap();
-        assert_eq!(deployment_roles(&not_floor).await.unwrap(), None, "{db}");
-        not_floors.push(not_floor);
-    }
-    let stray_pool = not_floors.remove(0);
-    assert_eq!(
-        as_role(&stray_pool, "morpholog_writer", WRITES[0].1)
-            .await
-            .as_deref(),
+        as_role(&pool, roles.reader(), READS[1].1).await.as_deref(),
         Some("42501"),
-        "the stray grant was not widened into a floor"
+        "the grant is withdrawn"
     );
-    for pool in not_floors {
-        pool.close().await;
-    }
+    let report = apply_migrations(&pool).await.unwrap();
+    assert!(report.applied.is_empty(), "nothing to apply: {report:?}");
+    assert_eq!(
+        as_role(&pool, roles.reader(), READS[1].1).await,
+        None,
+        "the floor is back"
+    );
 
     pool.close().await;
-    stray_pool.close().await;
     scratch.clean().await;
-    for role in made {
-        run(&scratch.admin, &format!("DROP ROLE {role}")).await;
-    }
 }
 
 /// The SQL of the install guide's procedure for moving a deployment to its

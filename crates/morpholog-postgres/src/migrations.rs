@@ -1,79 +1,30 @@
 //! Schema evolution: the numbered migrations, compiled into the binary.
 //!
-//! Embedded like `SCHEMA_SQL`, so a binary-only deployment carries exactly
-//! the migrations it expects, with nothing to vendor or drift.
+//! The baseline is the schema v0.0.14 provisioned, migration 23. A
+//! database that does not record it was made by an older release and is
+//! brought to the baseline with a v0.0.14 binary first; this binary
+//! carries only the migrations beyond it. Embedded like `SCHEMA_SQL`, so
+//! a binary-only deployment carries exactly the migrations it expects.
 //!
 //! **What "pending" means.** `morpholog.schema_migrations` records applied
 //! versions. A database provisioned from `schema.sql` is at the head, and
-//! the file records every migration it embodies, so none is pending. A
-//! database predating that table has no record, so everything is pending.
-//! That is sound because the migrations are idempotent.
+//! the file records the ledger up to the baseline, so none is pending.
 
 use crate::error::{PgError, classify, classify_checked_query};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
-/// One numbered migration, its version, and the SQL that applies it.
-pub(crate) struct Migration {
-    pub(crate) version: i32,
-    pub(crate) name: &'static str,
-    pub(crate) sql: &'static str,
-}
+/// The migration every database must record: v0.0.14's head.
+pub const BASELINE_VERSION: i32 = 23;
 
-macro_rules! migrations {
-    ($(($version:expr, $name:literal, $file:literal)),* $(,)?) => {
-        /// Every migration this build knows, in order.
-        pub(crate) const MIGRATIONS: &[Migration] = &[
-            $(Migration {
-                version: $version,
-                name: $name,
-                sql: include_str!(concat!("../../morpholog-core/sql/migrations/", $file)),
-            }),*
-        ];
-    };
-}
-
-migrations![
-    (1, "outbox_delivery_state", "001_outbox_delivery_state.sql"),
-    (
-        2,
-        "compensation_in_progress",
-        "002_compensation_in_progress.sql"
-    ),
-    (
-        3,
-        "outbox_intent_type_next_attempt_index",
-        "003_outbox_intent_type_next_attempt_index.sql"
-    ),
-    (4, "audit_actor", "004_audit_actor.sql"),
-    (5, "rejections", "005_rejections.sql"),
-    (6, "audit_keyset_index", "006_audit_keyset_index.sql"),
-    (7, "derived_read_cache", "007_derived_read_cache.sql"),
-    (8, "checkpoint_signatures", "008_checkpoint_signatures.sql"),
-    (9, "audit_attestation", "009_audit_attestation.sql"),
-    (10, "rejections_witness", "010_rejections_witness.sql"),
-    (11, "schema_migrations", "011_schema_migrations.sql"),
-    (12, "claims_hash_key", "012_claims_hash_key.sql"),
-    (13, "checkpoint_witnesses", "013_checkpoint_witnesses.sql"),
-    (14, "audit_parameters", "014_audit_parameters.sql"),
-    (15, "managed_indexes", "015_managed_indexes.sql"),
-    (16, "timestamp_nanos", "016_timestamp_nanos.sql"),
-    (17, "value_key_v1", "017_value_key_v1.sql"),
-    (18, "date_ordinal", "018_date_ordinal.sql"),
-    (19, "requirement_position", "019_requirement_position.sql"),
-    (20, "audit_model_hash", "020_audit_model_hash.sql"),
-    (
-        21,
-        "audit_semantics_version",
-        "021_audit_semantics_version.sql"
-    ),
-    (22, "audit_drawn_subjects", "022_audit_drawn_subjects.sql"),
-    (23, "deployment_roles", "023_deployment_roles.sql"),
-];
+/// Every migration this build carries beyond the baseline, in order, as
+/// `(version, name, sql)`; the SQL is `include_str!` of a file under
+/// `crates/morpholog-core/sql/migrations/`.
+pub(crate) const MIGRATIONS: &[(i32, &str, &str)] = &[];
 
 /// The newest migration this binary carries.
 pub fn head_version() -> i32 {
-    MIGRATIONS.last().map_or(0, |m| m.version)
+    MIGRATIONS.last().map_or(BASELINE_VERSION, |m| m.0)
 }
 
 /// One migration, as reported.
@@ -86,14 +37,10 @@ pub struct MigrationRef {
 /// What `migrate` found and did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MigrationReport {
-    /// The newest version the database recorded before this run, or `None`
-    /// when it predates the record.
-    ///
-    /// `None`, not `0`: such a database may well have migrations applied;
-    /// only the record is missing.
-    pub recorded_version_before: Option<i32>,
+    /// The newest version the database recorded before this run.
+    pub recorded_version_before: i32,
     /// The newest version recorded after this run. Unchanged by `--check`.
-    pub recorded_version_after: Option<i32>,
+    pub recorded_version_after: i32,
     /// The newest migration this binary carries.
     pub binary_version: i32,
     /// Applied by this run, in order. Empty when checking, and empty when
@@ -109,67 +56,6 @@ pub struct MigrationReport {
     /// migration changed something it depends on.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown: Vec<MigrationRef>,
-    /// What `morpholog.deployment_roles` holds once migration 023 has run:
-    /// predicted from the database as it is now, or read back after the
-    /// run. Absent when that migration is not part of the run.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role_backfill: Option<RoleBackfill>,
-}
-
-/// The migration that introduced `morpholog.deployment_roles` and backfills
-/// it from the grants it finds.
-const DEPLOYMENT_ROLES_VERSION: i32 = 23;
-
-/// Whether a [`RoleBackfill`] is a forecast or a reading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BackfillPhase {
-    /// Computed from the database as it is now, before the migration runs.
-    /// Grants and earlier migrations can still change what it meets.
-    Preview,
-    /// Read from the database after the migration ran.
-    Observed,
-}
-
-/// Whether the record holds a pair of roles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BackfillOutcome {
-    RecordPair,
-    NoRecord,
-}
-
-/// The pair `morpholog.deployment_roles` records after migration 023, or
-/// that it records none. "None" says the database records no managed
-/// floor; it says nothing about what PostgreSQL privileges exist.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RoleBackfill {
-    pub phase: BackfillPhase,
-    pub outcome: BackfillOutcome,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub writer_role: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reader_role: Option<String>,
-}
-
-impl RoleBackfill {
-    fn new(phase: BackfillPhase, roles: Option<&crate::DeploymentRoles>) -> Self {
-        Self {
-            phase,
-            outcome: if roles.is_some() {
-                BackfillOutcome::RecordPair
-            } else {
-                BackfillOutcome::NoRecord
-            },
-            writer_role: roles.map(|r| r.writer().to_string()),
-            reader_role: roles.map(|r| r.reader().to_string()),
-        }
-    }
-
-    /// The pair the record holds, when it holds one.
-    pub fn roles(&self) -> Option<(&str, &str)> {
-        Some((self.writer_role.as_deref()?, self.reader_role.as_deref()?))
-    }
 }
 
 impl MigrationReport {
@@ -179,10 +65,8 @@ impl MigrationReport {
     }
 }
 
-/// Which versions the database records as applied.
-///
-/// `None` when the record table itself does not exist, which the caller
-/// treats as "everything is pending".
+/// Which versions the database records as applied, or `None` when the
+/// record table itself does not exist.
 async fn recorded_versions(pool: &PgPool) -> Result<Option<Vec<MigrationRef>>, PgError> {
     let present = sqlx::query!(
         "SELECT 1 AS one FROM pg_tables
@@ -238,11 +122,11 @@ fn refuse_if_ahead(status: &MigrationReport) -> Result<(), PgError> {
 }
 
 /// Refuse a database this binary cannot serve, before its first query:
-/// one with no `morpholog` schema, one ahead of this binary, or one behind
-/// it, asked in that order, so an older binary never advises a migration
-/// against a database it does not understand. What every database-backed command asks
-/// once after connecting, except the two that make a database current,
-/// `init` and `migrate`.
+/// one with no `morpholog` schema, one below the baseline, one ahead of
+/// this binary, or one behind it, asked in that order, so an older binary
+/// never advises a migration against a database it does not understand.
+/// What every database-backed command asks once after connecting, except
+/// the two that make a database current, `init` and `migrate`.
 pub async fn require_current_schema(pool: &PgPool) -> Result<(), PgError> {
     let status = migration_status(pool).await?;
     refuse_if_ahead(&status)?;
@@ -259,28 +143,38 @@ pub async fn require_current_schema(pool: &PgPool) -> Result<(), PgError> {
     Ok(())
 }
 
-/// Report the database's migration state, changing nothing.
+/// Report the database's migration state, changing nothing. A database
+/// that does not record the baseline is refused: nothing this binary
+/// carries can bring it forward.
 pub async fn migration_status(pool: &PgPool) -> Result<MigrationReport, PgError> {
     ensure_schema_present(pool).await?;
-    let recorded = recorded_versions(pool).await?;
-    let rows = recorded.clone().unwrap_or_default();
+    let rows = recorded_versions(pool).await?.unwrap_or_default();
+    if !rows.iter().any(|r| r.version == BASELINE_VERSION) {
+        return Err(PgError::SchemaBelowBaseline {
+            recorded: rows.iter().map(|r| r.version).max(),
+            baseline: BASELINE_VERSION,
+        });
+    }
     let pending: Vec<MigrationRef> = MIGRATIONS
         .iter()
-        .filter(|m| !rows.iter().any(|r| r.version == m.version))
+        .filter(|m| !rows.iter().any(|r| r.version == m.0))
         .map(|m| MigrationRef {
-            version: m.version,
-            name: m.name.to_string(),
+            version: m.0,
+            name: m.1.to_string(),
         })
         .collect();
-    // Recorded here, unknown to this build: the database is ahead.
+    // Recorded here, beyond the baseline and unknown to this build: the
+    // database is ahead. Versions below the baseline are its history.
     let unknown: Vec<MigrationRef> = rows
         .iter()
-        .filter(|r| !MIGRATIONS.iter().any(|m| m.version == r.version))
+        .filter(|r| r.version > BASELINE_VERSION && !MIGRATIONS.iter().any(|m| m.0 == r.version))
         .cloned()
         .collect();
-    let newest = recorded
-        .as_ref()
-        .and_then(|rows| rows.iter().map(|r| r.version).max());
+    let newest = rows
+        .iter()
+        .map(|r| r.version)
+        .max()
+        .unwrap_or(BASELINE_VERSION);
     Ok(MigrationReport {
         recorded_version_before: newest,
         recorded_version_after: newest,
@@ -288,95 +182,51 @@ pub async fn migration_status(pool: &PgPool) -> Result<MigrationReport, PgError>
         applied: Vec::new(),
         pending,
         unknown,
-        role_backfill: None,
     })
 }
 
-/// [`migration_status`], plus what migration 023 would record when it is
-/// still pending. What `migrate --check` reports.
-pub async fn migration_check(pool: &PgPool) -> Result<MigrationReport, PgError> {
-    let mut status = migration_status(pool).await?;
-    // A database ahead of this binary is diagnosed as such; a newer
-    // migration may have reshaped the very table the forecast would read.
-    if status.unknown.is_empty()
-        && status
-            .pending
-            .iter()
-            .any(|m| m.version == DEPLOYMENT_ROLES_VERSION)
-    {
-        let roles = crate::preview_role_backfill(pool).await?;
-        status.role_backfill = Some(RoleBackfill::new(BackfillPhase::Preview, roles.as_ref()));
-    }
-    Ok(status)
-}
-
-/// Apply every migration the database has not recorded, in order.
+/// Apply every migration the database has not recorded, in order, then
+/// re-apply the privilege floor to the roles the database records.
 ///
-/// Each runs in its own transaction with its record, so a failure part-way
-/// leaves the earlier versions applied and recorded, never a half-migrated
-/// database claiming to be current.
+/// Each migration runs in its own transaction with its record, so a
+/// failure part-way leaves the earlier versions applied and recorded,
+/// never a half-migrated database claiming to be current.
 pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError> {
-    ensure_schema_present(pool).await?;
     let before = migration_status(pool).await?;
     // Migrating a database that is ahead would apply nothing and report
     // success, although an unseen migration may have broken this binary.
     refuse_if_ahead(&before)?;
     crate::require_deployment_roles(pool).await?;
-    // The record table must exist before the first migration records
-    // itself, though a later migration introduces it. This matches what that
-    // migration creates, which stays for anyone applying files by hand.
-    sqlx::raw_sql(
-        "CREATE TABLE IF NOT EXISTS morpholog.schema_migrations (
-             version     integer      PRIMARY KEY,
-             name        text         NOT NULL,
-             applied_at  timestamptz  NOT NULL DEFAULT now()
-         )",
-    )
-    .execute(pool)
-    .await
-    .map_err(classify)?;
     let mut applied = Vec::new();
-    for m in MIGRATIONS {
-        if !before.pending.iter().any(|p| p.version == m.version) {
+    for &(version, name, sql) in MIGRATIONS {
+        if !before.pending.iter().any(|p| p.version == version) {
             continue;
         }
         let mut tx = pool.begin().await.map_err(classify)?;
-        sqlx::raw_sql(m.sql)
+        sqlx::raw_sql(sql)
             .execute(&mut *tx)
             .await
             .map_err(classify)?;
         sqlx::query!(
             "INSERT INTO morpholog.schema_migrations (version, name)
              VALUES ($1, $2) ON CONFLICT (version) DO NOTHING",
-            m.version,
-            m.name,
+            version,
+            name,
         )
         .execute(&mut *tx)
         .await
         .map_err(classify_checked_query)?;
         tx.commit().await.map_err(classify)?;
         applied.push(MigrationRef {
-            version: m.version,
-            name: m.name.to_string(),
+            version,
+            name: name.to_string(),
         });
     }
-    // Grants are per table and do not cover tables created later, so
-    // re-apply the least-privilege floor (idempotent) after migrating.
-    if !applied.is_empty() {
-        crate::reapply_least_privilege(pool).await?;
-    }
+    // Grants are per table and do not cover tables created later, so the
+    // floor is re-applied on every run (it is idempotent), not only after
+    // a migration: a restore or a hand change can have narrowed it too.
+    crate::reapply_least_privilege(pool).await?;
     let after = migration_status(pool).await?;
-    // Read back, never the forecast: what the record holds now is the
-    // answer, whatever the preview said.
-    let role_backfill = if applied
-        .iter()
-        .any(|m| m.version == DEPLOYMENT_ROLES_VERSION)
-    {
-        let roles = crate::deployment_roles(pool).await?;
-        Some(RoleBackfill::new(BackfillPhase::Observed, roles.as_ref()))
-    } else {
-        None
-    };
     Ok(MigrationReport {
         recorded_version_before: before.recorded_version_before,
         recorded_version_after: after.recorded_version_after,
@@ -384,6 +234,42 @@ pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError>
         applied,
         pending: after.pending,
         unknown: after.unknown,
-        role_backfill,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The runner owns each migration's transaction, and a COMMIT inside
+    /// one would separate the schema change from its version record.
+    #[test]
+    fn no_migration_controls_its_own_transaction() {
+        let offenders: Vec<String> = MIGRATIONS
+            .iter()
+            .flat_map(|&(_, name, sql)| {
+                sql.lines().enumerate().filter_map(move |(n, line)| {
+                    let bare = line
+                        .split("--")
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .to_ascii_uppercase();
+                    matches!(bare.as_str(), "BEGIN;" | "COMMIT;" | "ROLLBACK;" | "END;")
+                        .then(|| format!("{name}:{}", n + 1))
+                })
+            })
+            .collect();
+        assert!(offenders.is_empty(), "{}", offenders.join(", "));
+    }
+
+    #[test]
+    fn migrations_are_numbered_from_the_baseline_in_order() {
+        let mut expected = BASELINE_VERSION;
+        for &(version, _, _) in MIGRATIONS {
+            expected += 1;
+            assert_eq!(version, expected);
+        }
+        assert_eq!(head_version(), expected);
+    }
 }

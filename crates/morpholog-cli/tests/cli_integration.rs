@@ -4804,9 +4804,9 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
     let head = morpholog_postgres::head_version();
     let args_named = r#"{"entry_id":"e1","posting_date":"2026-04-15","period":"q1_2026","debit_account":"a","credit_account":"b","amount":"100"}"#;
 
-    // Behind: the head's record missing.
+    // Below the baseline: its record missing.
     sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
-        .bind(head)
+        .bind(morpholog_postgres::BASELINE_VERSION)
         .execute(&pool)
         .await
         .unwrap();
@@ -4828,14 +4828,23 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
         .output()
         .unwrap();
     let init = run_cli(&["init", "--skip-if-exists"]);
-    // The repair the refusal names, so the record comes back by name.
-    morpholog_postgres::apply_migrations(&pool).await.unwrap();
+    // The record back, so the shared database is current again.
+    sqlx::query(
+        "INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, 'deployment_roles')",
+    )
+    .bind(morpholog_postgres::BASELINE_VERSION)
+    .execute(&pool)
+    .await
+    .unwrap();
+    morpholog_postgres::require_current_schema(&pool)
+        .await
+        .unwrap();
 
     for (what, (status, stdout, stderr)) in [("read", &read), ("write", &write)] {
         assert_eq!(status.code(), Some(1), "{what}: {stderr}");
         assert!(
-            stderr.contains("behind this binary") && stderr.contains("morpholog migrate"),
-            "{what} names the direction and the remedy: {stderr}"
+            stderr.contains("does not record migration") && stderr.contains("v0.0.14 binary"),
+            "{what} names the baseline and the remedy: {stderr}"
         );
         if what == "read" {
             assert!(stdout.is_empty(), "{what}: {stdout}");
@@ -4851,10 +4860,17 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
         "no ready line: {:?}",
         String::from_utf8_lossy(&session.stdout)
     );
-    assert!(String::from_utf8_lossy(&session.stderr).contains("behind this binary"));
-    assert!(!check.0.success(), "check reports a behind database");
-    let report: Value = serde_json::from_str(&check.1).unwrap();
-    assert_eq!(report["pending"].as_array().map(Vec::len), Some(1));
+    assert!(String::from_utf8_lossy(&session.stderr).contains("v0.0.14 binary"));
+    assert!(
+        !check.0.success(),
+        "check refuses a database below the baseline"
+    );
+    assert!(
+        check.2.contains("v0.0.14 binary") && check.1.is_empty(),
+        "nothing to report about such a database: {} / {}",
+        check.1,
+        check.2
+    );
     assert!(
         init.0.success(),
         "init never migrates and still provisions: {}",

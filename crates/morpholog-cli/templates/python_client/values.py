@@ -53,21 +53,19 @@ def parse_date(text: str) -> date:
 def parse_timestamp(text: str) -> datetime:
     """Wire instant (RFC 3339) -> aware ``datetime``.
 
-    Python 3.10's ``fromisoformat`` cannot parse the ``Z`` suffix the
-    binary emits (that arrived in 3.11), so it is normalised first.
     Sub-microsecond fractions are refused by name rather than silently
     truncated: ``datetime`` carries microseconds, and an exact instant
     that cannot be represented exactly should fail loudly.
     """
     text = _expect_str("a timestamp", text)
-    if text.endswith(("Z", "z")):
-        text = text[:-1] + "+00:00"
     fraction = re.search(r"\.(\d+)", text)
     if fraction and len(fraction.group(1)) > 6:
         raise CodecError(
             f"timestamp {text!r} carries sub-microsecond precision, which "
             f"Python's datetime cannot represent exactly"
         )
+    if text.endswith("z"):
+        text = text[:-1] + "+00:00"
     parsed = datetime.fromisoformat(text)
     if parsed.tzinfo is None:
         raise CodecError(f"timestamp {text!r} arrived without an offset")

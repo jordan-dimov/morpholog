@@ -1,28 +1,16 @@
 {
   "applied": [],
-  "binary_version": 14,
+  "binary_version": 25,
   "pending": [
     {
-      "name": "rejections_witness",
-      "version": 10
+      "name": "a_migration_after_the_baseline",
+      "version": 24
     },
     {
-      "name": "schema_migrations",
-      "version": 11
-    },
-    {
-      "name": "claims_hash_key",
-      "version": 12
-    },
-    {
-      "name": "checkpoint_witnesses",
-      "version": 13
-    },
-    {
-      "name": "audit_parameters",
-      "version": 14
+      "name": "another_after_it",
+      "version": 25
     }
   ],
-  "recorded_version_after": 9,
-  "recorded_version_before": 9
+  "recorded_version_after": 23,
+  "recorded_version_before": 23
 }

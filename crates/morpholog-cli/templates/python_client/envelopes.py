@@ -1577,48 +1577,17 @@ class MigrationRef:
 
 
 @dataclass(frozen=True)
-class RoleBackfill:
-    """What `morpholog.deployment_roles` holds once migration 023 has run:
-    a forecast from the database as it is now (``preview``) or read back
-    after the run (``observed``). ``no_record`` says the database records
-    no managed floor; it says nothing about which PostgreSQL privileges
-    exist."""
-
-    phase: str
-    outcome: str
-    writer_role: str | None = None
-    reader_role: str | None = None
-
-    @classmethod
-    def from_json(cls, payload: object) -> RoleBackfill:
-        data = _strict(
-            "role backfill", payload, {"phase", "outcome"}, {"writer_role", "reader_role"}
-        )
-        return cls(
-            phase=data["phase"],
-            outcome=data["outcome"],
-            writer_role=data.get("writer_role"),
-            reader_role=data.get("reader_role"),
-        )
-
-
-@dataclass(frozen=True)
 class MigrationReport:
     """What `migrate` found, and what it did about it."""
 
-    # None when the database recorded nothing - one older than the record
-    # itself. Not 0: "no record exists" and "at version zero" are different
-    # claims, and such a database may well have migrations applied.
-    recorded_version_before: int | None
-    recorded_version_after: int | None
+    recorded_version_before: int
+    recorded_version_after: int
     binary_version: int
     applied: list[MigrationRef]
     pending: list[MigrationRef]
     # Recorded by the database and unknown to this binary: the database is
     # AHEAD, which is what a rollback to an older binary looks like.
     unknown: list[MigrationRef] = field(default_factory=list)
-    # Present only when migration 023 is part of the run.
-    role_backfill: RoleBackfill | None = None
 
     @property
     def is_current(self) -> bool:
@@ -1634,9 +1603,8 @@ class MigrationReport:
             payload,
             {"recorded_version_before", "recorded_version_after", "binary_version",
              "applied", "pending"},
-            {"unknown", "role_backfill"},
+            {"unknown"},
         )
-        backfill = data.get("role_backfill")
         return cls(
             recorded_version_before=data["recorded_version_before"],
             recorded_version_after=data["recorded_version_after"],
@@ -1644,7 +1612,6 @@ class MigrationReport:
             applied=[MigrationRef.from_json(m) for m in data["applied"]],
             pending=[MigrationRef.from_json(m) for m in data["pending"]],
             unknown=[MigrationRef.from_json(m) for m in data.get("unknown", [])],
-            role_backfill=None if backfill is None else RoleBackfill.from_json(backfill),
         )
 
 

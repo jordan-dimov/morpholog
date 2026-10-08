@@ -240,51 +240,23 @@ class Migrations(unittest.TestCase):
     def test_a_database_behind_lists_what_is_outstanding(self):
         report = envelopes.MigrationReport.from_json(golden("migration_report_behind.json"))
         self.assertFalse(report.is_current)
-        self.assertEqual(report.recorded_version_before, 9)
-        self.assertEqual(report.binary_version, 14)
+        self.assertEqual(report.recorded_version_before, 23)
+        self.assertEqual(report.binary_version, 25)
         self.assertEqual(
             [m.name for m in report.pending],
-            [
-                "rejections_witness",
-                "schema_migrations",
-                "claims_hash_key",
-                "checkpoint_witnesses",
-                "audit_parameters",
-            ],
+            ["a_migration_after_the_baseline", "another_after_it"],
         )
         self.assertEqual(report.applied, [])
 
     def test_a_migrated_database_reports_what_it_applied(self):
         report = envelopes.MigrationReport.from_json(golden("migration_report_applied.json"))
         self.assertTrue(report.is_current)
-        self.assertEqual([m.version for m in report.applied], [10, 11, 12, 13, 14])
+        self.assertEqual([m.version for m in report.applied], [24, 25])
         # The version AFTER, not the one it started at - a report saying
-        # "current" and "version 9" at once would be two answers to one
+        # "current" and "version 23" at once would be two answers to one
         # question.
-        self.assertEqual(report.recorded_version_before, 9)
-        self.assertEqual(report.recorded_version_after, 14)
-
-    def test_a_pending_role_migration_forecasts_what_it_will_record(self):
-        report = envelopes.MigrationReport.from_json(
-            golden("migration_report_behind_with_backfill.json")
-        )
-        assert report.role_backfill is not None
-        self.assertEqual(report.role_backfill.phase, "preview")
-        self.assertEqual(report.role_backfill.outcome, "record_pair")
-        self.assertEqual(report.role_backfill.writer_role, "morpholog_writer")
-        self.assertEqual(report.role_backfill.reader_role, "morpholog_reader")
-
-    def test_an_applied_role_migration_reports_what_it_recorded(self):
-        report = envelopes.MigrationReport.from_json(
-            golden("migration_report_applied_with_backfill.json")
-        )
-        assert report.role_backfill is not None
-        self.assertEqual(report.role_backfill.phase, "observed")
-        self.assertEqual(report.role_backfill.outcome, "no_record")
-        self.assertIsNone(report.role_backfill.writer_role)
-        # A report without the field: migration 023 was not part of the run.
-        plain = envelopes.MigrationReport.from_json(golden("migration_report_applied.json"))
-        self.assertIsNone(plain.role_backfill)
+        self.assertEqual(report.recorded_version_before, 23)
+        self.assertEqual(report.recorded_version_after, 25)
 
     def test_a_database_ahead_of_the_binary_is_not_current(self):
         # Nothing pending, and emphatically not ready: this build cannot know
@@ -292,7 +264,7 @@ class Migrations(unittest.TestCase):
         report = envelopes.MigrationReport.from_json(golden("migration_report_ahead.json"))
         self.assertEqual(report.pending, [])
         self.assertFalse(report.is_current)
-        self.assertEqual([m.version for m in report.unknown], [15])
+        self.assertEqual([m.version for m in report.unknown], [26])
 
 
 class VersionSkew(unittest.TestCase):

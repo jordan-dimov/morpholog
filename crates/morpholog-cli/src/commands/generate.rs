@@ -34,7 +34,7 @@ const SESSION_PY: &str = include_str!("../../templates/python_client/session.py"
 
 /// The oldest Python the emitted package supports, checked at import.
 /// Raise it only deliberately.
-const PYTHON_FLOOR: (u32, u32) = (3, 10);
+const PYTHON_FLOOR: (u32, u32) = (3, 12);
 
 pub(crate) fn run(args: &GeneratePythonClientArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
@@ -147,7 +147,7 @@ fn report_drift(package_dir: &std::path::Path, files: &[(&str, &str)]) -> anyhow
 // The refusal sweep.
 // ============================================================
 
-/// Python's hard keywords (3.10 floor). Such a name cannot be a dataclass
+/// Python's hard keywords (3.12 floor). Such a name cannot be a dataclass
 /// field, and renaming it would break the link to the wire name, so it is
 /// refused.
 const PYTHON_KEYWORDS: &[&str] = &[

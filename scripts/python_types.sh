@@ -17,6 +17,6 @@ else
     echo "mypy $MYPY_VERSION is needed: pip install mypy==$MYPY_VERSION, or install uv" >&2
     exit 1
 fi
-"${mypy[@]}" --python-version 3.10 --follow-imports=silent --warn-unused-ignores \
+"${mypy[@]}" --python-version 3.12 --follow-imports=silent --warn-unused-ignores \
     --cache-dir "$root/target/mypy-cache" \
     morpholog_client/adapter.py morpholog_client/session.py type_contract.py
