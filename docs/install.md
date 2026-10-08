@@ -134,6 +134,8 @@ morpholog provision indexes a.morph b.morph                  # 6. every programm
 # 7. start every process on the new binary
 ```
 
+Step 6 provisions. `provision indexes --check` asks the same question and changes nothing, so it belongs at the start of every write path as a deploy gate: a programme running unprovisioned is refused there instead of found by its latency.
+
 Stopping first is not ceremony. A resident session and an outbox worker
 ask whether the database is theirs once, when they start, so one still
 running when the migration lands keeps writing until it is restarted;

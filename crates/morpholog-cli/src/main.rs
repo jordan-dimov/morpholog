@@ -819,8 +819,8 @@ pub(crate) struct PackTrustArgs {
     #[arg(long)]
     pub(crate) witnesses: bool,
 
-    /// Trust anchors for those witnesses: a PEM file of the timestamp
-    /// authorities' CA certificates (`verified` if a token chains to one,
+    /// Trust anchors for those witnesses: a PEM bundle of the timestamp
+    /// authorities' CA certificates, one file for every authority (`verified` if a token chains to one,
     /// `untrusted` if not, `unverified` without the file). Implies
     /// `--witnesses`. An `invalid` witness fails the command.
     #[arg(long, value_name = "FILE")]

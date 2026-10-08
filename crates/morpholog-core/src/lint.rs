@@ -212,14 +212,20 @@ impl std::fmt::Display for Lint {
                         backticked(unnamed)
                     )
                 } else {
-                    let fields = if key.len() == 1 { "field" } else { "fields" };
+                    let (fields, vars) = if key.len() == 1 {
+                        ("field", "a variable")
+                    } else {
+                        ("fields", "variables")
+                    };
                     let key = backticked(key);
                     write!(
                         f,
                         "invariant `{invariant}` checks every `{predicate}` sharing {sharing}, \
                          because its pattern leaves declared-key {fields} {key} unconstrained; \
                          constraining {key} completes a uniqueness key and narrows the case \
-                         to the one `{predicate}` a proposal identifies"
+                         to the one `{predicate}` a proposal identifies. Binding {key} to \
+                         {vars} keeps the rule's meaning and moves the programme's hash; a \
+                         literal narrows the rule"
                     )
                 }
             }
