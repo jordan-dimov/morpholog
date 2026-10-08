@@ -56,6 +56,7 @@ const OID_AA_SIGNING_CERTIFICATE_V2: &[u8] = &[
 const OID_ECDSA_WITH_SHA512: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x04];
 const OID_ECDSA_WITH_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03];
 const OID_ECDSA_WITH_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+const OID_ECDSA_WITH_SHA224: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x01];
 /// id-ecPublicKey and the named curves the SHA-512 fallback verifies on (RFC 5480).
 const OID_EC_PUBLIC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
 const OID_P256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
@@ -452,6 +453,7 @@ fn carried_certificates(
 /// re-encoding adds a NULL the authority never wrote.
 fn ecdsa_with_parameters(id: &AlgorithmIdentifier) -> Option<&'static str> {
     let name = match id.algorithm.as_ref() {
+        OID_ECDSA_WITH_SHA224 => "ecdsa-with-SHA224",
         OID_ECDSA_WITH_SHA256 => "ecdsa-with-SHA256",
         OID_ECDSA_WITH_SHA384 => "ecdsa-with-SHA384",
         OID_ECDSA_WITH_SHA512 => "ecdsa-with-SHA512",
@@ -1179,19 +1181,96 @@ mod tests {
             "{status:?}"
         );
 
-        // A carried certificate is held to the same rule on both of its identifiers.
-        let ca_cert =
+        // SHA-224 is under the same rule, whether or not this build could verify it.
+        let sha224 = rebuilt(&genuine, |sd| {
+            sd.certificates = None;
+            for signer in sd.signer_infos.iter_mut() {
+                signer.signature_algorithm.algorithm =
+                    Oid(Bytes::from_static(OID_ECDSA_WITH_SHA224));
+                signer.signature_algorithm.parameters = Some(null_parameter());
+            }
+        });
+        let status = verify_rfc3161(&sha224, &payload, Some(&ca));
+        assert!(
+            matches!(&status, WitnessStatus::Invalid { detail }
+                if detail.contains("ecdsa-with-SHA224") && detail.contains("RFC 5758")),
+            "{status:?}"
+        );
+    }
+
+    /// A carried certificate is held to the rule on the bytes the token carries, parsed as a
+    /// token carries them. Rebuilding the token with nothing changed is enough to break the
+    /// outer identifier: the library's encoder writes a NULL parameter wherever the authority
+    /// wrote none, which is the behaviour that makes reading the received bytes necessary. (It
+    /// breaks the signer's identifier the same way, so the verifier refuses the rebuilt token
+    /// there first; the certificates are therefore handed to the parser directly.)
+    #[test]
+    fn a_carried_certificate_with_a_parametered_identifier_is_refused() {
+        let re_encoded = rebuilt(&fixture("ecdsa_sha512_prime256v1.tsr"), |_| {});
+        let resp = Constructed::decode(re_encoded.as_slice(), Mode::Ber, TimeStampResp::take_from)
+            .unwrap();
+        let content = resp.time_stamp_token.unwrap().content;
+        let status = carried_certificates(&content).expect_err("refused");
+        assert!(
+            matches!(&status, WitnessStatus::Invalid { detail }
+                if detail.contains("carried certificate")
+                    && detail.contains("as its signature algorithm")
+                    && detail.contains("RFC 5758")),
+            "{status:?}"
+        );
+
+        // The inner identifier alone, which no encoder here can produce: the certificate's
+        // bytes are cut and re-joined with a NULL inside what was signed and the outer
+        // identifier as the authority wrote it, then parsed as a token carries it.
+        use bcder::encode::{PrimitiveContent as _, Values as _};
+        // The bytes as the authority wrote them: `encode_der` would re-encode, NULLs included.
+        let original =
             CapturedX509Certificate::from_pem(fixture("ecdsa_sha512_prime256v1_ca.pem")).unwrap();
-        let raw: &x509_certificate::rfc5280::Certificate = ca_cert.as_ref();
-        let mut cert = raw.clone();
-        assert_eq!(certificate_ecdsa_with_parameters(&cert), None);
-        cert.signature_algorithm.parameters = Some(null_parameter());
-        let detail = certificate_ecdsa_with_parameters(&cert).unwrap();
-        assert!(detail.contains("as its signature algorithm"), "{detail}");
-        cert.signature_algorithm.parameters = None;
-        cert.tbs_certificate.signature.parameters = Some(null_parameter());
-        let detail = certificate_ecdsa_with_parameters(&cert).unwrap();
-        assert!(detail.contains("inside its signed content"), "{detail}");
+        let der = original.constructed_data();
+        let (tbs, outer_alg, sig) = Constructed::decode(der, Mode::Ber, |cons| {
+            cons.take_sequence(|c| Ok((c.capture_one()?, c.capture_one()?, c.capture_one()?)))
+        })
+        .unwrap();
+        let (version, serial, inner_alg, rest) = tbs
+            .clone()
+            .decode(|cons| {
+                cons.take_sequence(|c| {
+                    Ok((
+                        c.capture_one()?,
+                        c.capture_one()?,
+                        c.capture_one()?,
+                        c.capture_all()?,
+                    ))
+                })
+            })
+            .unwrap();
+        let mut inner = inner_alg
+            .clone()
+            .decode(AlgorithmIdentifier::take_from)
+            .unwrap();
+        assert_eq!(inner.algorithm.as_ref(), OID_ECDSA_WITH_SHA256);
+        inner.parameters = Some(null_parameter());
+        let patched_cert = bcder::encode::sequence((
+            bcder::encode::sequence((&version, &serial, &inner, &rest)),
+            &outer_alg,
+            &sig,
+        ));
+        let signed_data = bcder::encode::sequence((
+            1u8.encode(),
+            bcder::encode::set(None::<bcder::Captured>),
+            bcder::encode::sequence(OID_CONTENT_TYPE_TST_INFO.encode_ref()),
+            bcder::encode::sequence_as(bcder::Tag::CTX_0, patched_cert),
+            bcder::encode::set(None::<bcder::Captured>),
+        ))
+        .to_captured(Mode::Ber);
+        let status = carried_certificates(&signed_data).expect_err("refused");
+        assert!(
+            matches!(&status, WitnessStatus::Invalid { detail }
+                if detail.contains("carried certificate")
+                    && detail.contains("inside its signed content")
+                    && detail.contains("RFC 5758")),
+            "{status:?}"
+        );
     }
 
     /// A certificate's signature is checked with its issuer's key type: an
