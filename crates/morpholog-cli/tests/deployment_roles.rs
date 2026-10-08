@@ -201,6 +201,10 @@ async fn init_refuses_held_roles_and_migrate_warns_about_shared_ones() {
     assert_eq!(report["role_backfill"]["phase"], "preview");
     assert_eq!(report["role_backfill"]["outcome"], "record_pair");
     assert_eq!(report["role_backfill"]["writer_role"], ROLES[0]);
+    assert!(
+        !stderr.contains("note:"),
+        "a deployment's own pair earns no note: {stderr}"
+    );
     pool_c.close().await;
     let (status, stdout, stderr) = cli(&["migrate", "--database-url", &c]);
     assert!(status.success(), "{stderr}");

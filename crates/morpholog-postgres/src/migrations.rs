@@ -296,10 +296,13 @@ pub async fn migration_status(pool: &PgPool) -> Result<MigrationReport, PgError>
 /// still pending. What `migrate --check` reports.
 pub async fn migration_check(pool: &PgPool) -> Result<MigrationReport, PgError> {
     let mut status = migration_status(pool).await?;
-    if status
-        .pending
-        .iter()
-        .any(|m| m.version == DEPLOYMENT_ROLES_VERSION)
+    // A database ahead of this binary is diagnosed as such; a newer
+    // migration may have reshaped the very table the forecast would read.
+    if status.unknown.is_empty()
+        && status
+            .pending
+            .iter()
+            .any(|m| m.version == DEPLOYMENT_ROLES_VERSION)
     {
         let roles = crate::preview_role_backfill(pool).await?;
         status.role_backfill = Some(RoleBackfill::new(BackfillPhase::Preview, roles.as_ref()));

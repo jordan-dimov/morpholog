@@ -245,10 +245,10 @@ deployment alone. If they don't, the next `migrate` warns.
 ### Moving a deployment to its own roles
 
 A deployment isolated by hand before v0.0.14, by revoking
-`morpholog_writer` and `morpholog_reader`, has had them granted back: the
-last `migrate` before migration 023 re-applied the floor to those fixed
-names, the only ones it knew, and 023 then recorded the pair it found
-granted. `migrate --check` says so before 023 runs (`role_backfill` in
+`morpholog_writer` and `morpholog_reader`, may have had them granted back:
+a `migrate` run after the revocation and before migration 023 re-applied
+the floor to those fixed names, the only ones it knew, and 023 then
+records the pair it finds granted. `migrate --check` says so before 023 runs (`role_backfill` in
 the report, with a note on stderr when the shared pair would be
 recorded), and `migrate` reports what was recorded afterwards.
 

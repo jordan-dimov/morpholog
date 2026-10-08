@@ -323,6 +323,15 @@ pub async fn preview_role_backfill(pool: &PgPool) -> Result<Option<DeploymentRol
     .await
     .map_err(classify_checked_query)?;
     if present {
+        // The migration refuses a table of another shape rather than
+        // guessing; so does the forecast, with the same words.
+        let shape = record_shape(&mut conn).await?;
+        if shape != RECORD_SHAPE {
+            return Err(PgError::InvalidState(format!(
+                "morpholog.deployment_roles exists with another shape ({shape}); migration \
+                 023 refuses to guess, so nothing can be forecast"
+            )));
+        }
         return recorded_roles(&mut conn).await;
     }
     let fixed = DeploymentRoles::default();
@@ -354,6 +363,35 @@ pub async fn preview_role_backfill(pool: &PgPool) -> Result<Option<DeploymentRol
     .await
     .map_err(classify_checked_query)?;
     Ok(would_record.then_some(fixed))
+}
+
+/// The one shape of `morpholog.deployment_roles` migration 023 accepts,
+/// rendered as the migration renders it.
+const RECORD_SHAPE: &str = "singleton boolean not null, writer_role text not null, \
+                            reader_role text not null | CHECK (singleton); NOT NULL \
+                            reader_role; NOT NULL singleton; NOT NULL writer_role; \
+                            PRIMARY KEY (singleton) | singleton default true";
+
+/// The table's columns, constraints and defaults, as migration 023 reads
+/// them before deciding whether the table is its own.
+async fn record_shape(conn: &mut sqlx::PgConnection) -> Result<String, PgError> {
+    sqlx::query_scalar!(
+        r#"SELECT concat_ws(' | ',
+             (SELECT string_agg(attname || ' ' || format_type(atttypid, atttypmod)
+                                || CASE WHEN attnotnull THEN ' not null' ELSE '' END,
+                                ', ' ORDER BY attnum)
+              FROM pg_attribute
+              WHERE attrelid = 'morpholog.deployment_roles'::regclass
+                AND attnum > 0 AND NOT attisdropped),
+             (SELECT string_agg(pg_get_constraintdef(oid), chr(59) || ' ' ORDER BY contype, conname)
+              FROM pg_constraint WHERE conrelid = 'morpholog.deployment_roles'::regclass),
+             (SELECT string_agg(attname || ' default ' || pg_get_expr(adbin, adrelid), ', ')
+              FROM pg_attrdef JOIN pg_attribute ON attrelid = adrelid AND attnum = adnum
+              WHERE adrelid = 'morpholog.deployment_roles'::regclass)) AS "shape!""#
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(classify_checked_query)
 }
 
 /// A role granted membership of a deployment role directly. Membership

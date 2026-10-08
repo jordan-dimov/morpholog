@@ -3,7 +3,9 @@
 //! tests hold the two together on isolated databases built to the shapes
 //! an upgrade meets: the fixed pair granted the floor by name, nothing
 //! granted, the floor held only through another role, one privilege short,
-//! and the record table already present with 023 still pending.
+//! the record table already present with 023 still pending, and that table
+//! in a shape the migration refuses. A database ahead of the binary gets
+//! no forecast at all.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -244,6 +246,49 @@ async fn the_preview_and_migration_023_agree_on_every_shape_an_upgrade_meets() {
     assert_eq!(
         roles,
         Some((OWN_PAIR[0].to_string(), OWN_PAIR[1].to_string()))
+    );
+    pool.close().await;
+
+    // The table present in another shape: the migration refuses to guess,
+    // and so does the forecast, in the same words.
+    let pool = pre_023_database(&admin, &base).await;
+    run(
+        &pool,
+        "CREATE TABLE morpholog.deployment_roles (
+             singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+             writer_role text NOT NULL,
+             reader_role text NOT NULL);
+         ALTER TABLE morpholog.deployment_roles DROP CONSTRAINT deployment_roles_singleton_check",
+    )
+    .await;
+    let forecast = migration_check(&pool)
+        .await
+        .expect_err("another shape cannot be forecast");
+    assert!(forecast.to_string().contains("another shape"), "{forecast}");
+    let migrated = apply_migrations(&pool)
+        .await
+        .expect_err("023 refuses another shape");
+    assert!(migrated.to_string().contains("another shape"), "{migrated}");
+    pool.close().await;
+
+    // A database ahead of this binary with 023 missing: diagnosed as ahead,
+    // nothing forecast.
+    let pool = pre_023_database(&admin, &base).await;
+    run(
+        &pool,
+        &format!(
+            "INSERT INTO morpholog.schema_migrations (version, name) \
+             VALUES ({}, 'from_a_newer_morpholog')",
+            morpholog_postgres::head_version() + 1
+        ),
+    )
+    .await;
+    let check = migration_check(&pool).await.unwrap();
+    assert_eq!(check.unknown.len(), 1, "{check:?}");
+    assert!(check.pending.iter().any(|m| m.version == 23));
+    assert_eq!(
+        check.role_backfill, None,
+        "no forecast on a database ahead: {check:?}"
     );
     pool.close().await;
 

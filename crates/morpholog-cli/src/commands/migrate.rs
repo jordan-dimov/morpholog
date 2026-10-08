@@ -7,8 +7,9 @@
 
 use anyhow::Context;
 use morpholog_postgres::{
-    BackfillOutcome, BackfillPhase, MigrationReport, PgPool, apply_migrations, deployment_roles,
-    migration_check, migration_status, other_sessions, single_connection_pool, with_default_user,
+    BackfillOutcome, BackfillPhase, DeploymentRoles, MigrationReport, PgPool, apply_migrations,
+    deployment_roles, migration_check, migration_status, other_sessions, single_connection_pool,
+    with_default_user,
 };
 
 use crate::MigrateArgs;
@@ -28,7 +29,9 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
         if !report.pending.is_empty() {
             warn_about_other_sessions(&pool).await?;
         }
-        note_backfill_preview(&report);
+        if let Some(note) = backfill_note(&report) {
+            eprintln!("{note}");
+        }
         // Ask the whole report, not just `pending`. A database ahead of
         // this binary has nothing pending but is not ready: an older binary
         // cannot know whether a newer migration still fits it.
@@ -80,19 +83,80 @@ async fn warn_about_other_sessions(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The one forecast an operator acts on before migrating: the shared pair
-/// is about to be recorded as this deployment's own.
-fn note_backfill_preview(report: &MigrationReport) {
-    if let Some(backfill) = &report.role_backfill
-        && backfill.phase == BackfillPhase::Preview
+/// The one forecast an operator acts on before migrating: the cluster-wide
+/// pair will stand recorded as this deployment's own, whether 023 records
+/// it now or finds it recorded. A deployment's own pair earns no note.
+fn backfill_note(report: &MigrationReport) -> Option<String> {
+    let backfill = report.role_backfill.as_ref()?;
+    let (writer, reader) = backfill.roles()?;
+    let fixed = DeploymentRoles::default();
+    (backfill.phase == BackfillPhase::Preview
         && backfill.outcome == BackfillOutcome::RecordPair
-        && let Some((writer, reader)) = backfill.roles()
-    {
-        eprintln!(
-            "note: from the grants it finds now, migration 023 would record `{writer}` and \
-             `{reader}` as this deployment's roles. A deployment isolated by hand should \
-             move to its own roles after migrating: see docs/install.md, \"Moving a \
+        && writer == fixed.writer()
+        && reader == fixed.reader())
+    .then(|| {
+        format!(
+            "note: migration 023 would leave `{writer}` and `{reader}` recorded as this \
+             deployment's roles. These are cluster-wide names; review whether this \
+             deployment needs roles of its own: see docs/install.md, \"Moving a \
              deployment to its own roles\""
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use morpholog_postgres::RoleBackfill;
+
+    fn report(backfill: Option<RoleBackfill>) -> MigrationReport {
+        MigrationReport {
+            recorded_version_before: Some(22),
+            recorded_version_after: Some(22),
+            binary_version: 23,
+            applied: Vec::new(),
+            pending: Vec::new(),
+            unknown: Vec::new(),
+            role_backfill: backfill,
+        }
+    }
+
+    fn pair(phase: BackfillPhase, writer: &str, reader: &str) -> RoleBackfill {
+        RoleBackfill {
+            phase,
+            outcome: BackfillOutcome::RecordPair,
+            writer_role: Some(writer.to_string()),
+            reader_role: Some(reader.to_string()),
+        }
+    }
+
+    #[test]
+    fn the_note_is_for_the_cluster_wide_pair_forecast_only() {
+        let shared = pair(
+            BackfillPhase::Preview,
+            "morpholog_writer",
+            "morpholog_reader",
         );
+        let note = backfill_note(&report(Some(shared))).expect("the shared pair earns a note");
+        assert!(note.contains("would leave `morpholog_writer` and `morpholog_reader` recorded"));
+
+        let own = pair(BackfillPhase::Preview, "acme_writer", "acme_reader");
+        assert_eq!(backfill_note(&report(Some(own))), None);
+
+        let observed = pair(
+            BackfillPhase::Observed,
+            "morpholog_writer",
+            "morpholog_reader",
+        );
+        assert_eq!(backfill_note(&report(Some(observed))), None);
+
+        let none = RoleBackfill {
+            phase: BackfillPhase::Preview,
+            outcome: BackfillOutcome::NoRecord,
+            writer_role: None,
+            reader_role: None,
+        };
+        assert_eq!(backfill_note(&report(Some(none))), None);
+        assert_eq!(backfill_note(&report(None)), None);
     }
 }
