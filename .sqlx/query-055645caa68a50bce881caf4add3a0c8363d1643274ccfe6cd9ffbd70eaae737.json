@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT coalesce(usename::text, '?') AS \"role!\", count(*) AS \"sessions!\"\n           FROM pg_stat_activity\n           WHERE datname = current_database()\n             AND pid <> pg_backend_pid()\n             AND backend_type = 'client backend'\n           GROUP BY 1\n           ORDER BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "role!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "sessions!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "055645caa68a50bce881caf4add3a0c8363d1643274ccfe6cd9ffbd70eaae737"
+}

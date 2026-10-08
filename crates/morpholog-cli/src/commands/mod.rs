@@ -277,20 +277,44 @@ pub(crate) async fn warn_if_roles_shared(
 ) -> anyhow::Result<()> {
     let others = morpholog_postgres::databases_also_reached(pool, roles).await?;
     if !others.is_empty() {
+        let members = morpholog_postgres::direct_members(pool, roles).await?;
         eprintln!(
             "warning: this deployment's roles `{}` and `{}` also hold privileges in {}; \
-             a login granted either can act there too. Give each deployment its own \
-             roles: see docs/install.md, \"Several deployments on one cluster\"",
+             a login granted either can act there too. Direct members: {}; {}. Review each \
+             member's effective access, and give each deployment its own roles: see \
+             docs/install.md, \"Several deployments on one cluster\"",
             roles.writer(),
             roles.reader(),
             others
                 .iter()
                 .map(|d| format!("`{d}`"))
                 .collect::<Vec<_>>()
-                .join(", ")
+                .join(", "),
+            members_of(roles.writer(), &members.writer),
+            members_of(roles.reader(), &members.reader),
         );
     }
     Ok(())
+}
+
+/// "`gm_human` (login) holds `morpholog_writer`", or that none does.
+/// Direct membership only; what a member can do with it is not read.
+fn members_of(role: &str, members: &[morpholog_postgres::RoleMember]) -> String {
+    if members.is_empty() {
+        return format!("none hold `{role}`");
+    }
+    let listed = members
+        .iter()
+        .map(|m| {
+            if m.can_login {
+                format!("`{}` (login)", m.member)
+            } else {
+                format!("`{}`", m.member)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{listed} hold `{role}`")
 }
 
 /// Pretty-print a value as JSON to stdout. The canonical output shape

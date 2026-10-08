@@ -109,6 +109,67 @@ pub struct MigrationReport {
     /// migration changed something it depends on.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown: Vec<MigrationRef>,
+    /// What `morpholog.deployment_roles` holds once migration 023 has run:
+    /// predicted from the database as it is now, or read back after the
+    /// run. Absent when that migration is not part of the run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_backfill: Option<RoleBackfill>,
+}
+
+/// The migration that introduced `morpholog.deployment_roles` and backfills
+/// it from the grants it finds.
+const DEPLOYMENT_ROLES_VERSION: i32 = 23;
+
+/// Whether a [`RoleBackfill`] is a forecast or a reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackfillPhase {
+    /// Computed from the database as it is now, before the migration runs.
+    /// Grants and earlier migrations can still change what it meets.
+    Preview,
+    /// Read from the database after the migration ran.
+    Observed,
+}
+
+/// Whether the record holds a pair of roles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackfillOutcome {
+    RecordPair,
+    NoRecord,
+}
+
+/// The pair `morpholog.deployment_roles` records after migration 023, or
+/// that it records none. "None" says the database records no managed
+/// floor; it says nothing about what PostgreSQL privileges exist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleBackfill {
+    pub phase: BackfillPhase,
+    pub outcome: BackfillOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer_role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reader_role: Option<String>,
+}
+
+impl RoleBackfill {
+    fn new(phase: BackfillPhase, roles: Option<&crate::DeploymentRoles>) -> Self {
+        Self {
+            phase,
+            outcome: if roles.is_some() {
+                BackfillOutcome::RecordPair
+            } else {
+                BackfillOutcome::NoRecord
+            },
+            writer_role: roles.map(|r| r.writer().to_string()),
+            reader_role: roles.map(|r| r.reader().to_string()),
+        }
+    }
+
+    /// The pair the record holds, when it holds one.
+    pub fn roles(&self) -> Option<(&str, &str)> {
+        Some((self.writer_role.as_deref()?, self.reader_role.as_deref()?))
+    }
 }
 
 impl MigrationReport {
@@ -227,7 +288,26 @@ pub async fn migration_status(pool: &PgPool) -> Result<MigrationReport, PgError>
         applied: Vec::new(),
         pending,
         unknown,
+        role_backfill: None,
     })
+}
+
+/// [`migration_status`], plus what migration 023 would record when it is
+/// still pending. What `migrate --check` reports.
+pub async fn migration_check(pool: &PgPool) -> Result<MigrationReport, PgError> {
+    let mut status = migration_status(pool).await?;
+    // A database ahead of this binary is diagnosed as such; a newer
+    // migration may have reshaped the very table the forecast would read.
+    if status.unknown.is_empty()
+        && status
+            .pending
+            .iter()
+            .any(|m| m.version == DEPLOYMENT_ROLES_VERSION)
+    {
+        let roles = crate::preview_role_backfill(pool).await?;
+        status.role_backfill = Some(RoleBackfill::new(BackfillPhase::Preview, roles.as_ref()));
+    }
+    Ok(status)
 }
 
 /// Apply every migration the database has not recorded, in order.
@@ -286,6 +366,17 @@ pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError>
         crate::reapply_least_privilege(pool).await?;
     }
     let after = migration_status(pool).await?;
+    // Read back, never the forecast: what the record holds now is the
+    // answer, whatever the preview said.
+    let role_backfill = if applied
+        .iter()
+        .any(|m| m.version == DEPLOYMENT_ROLES_VERSION)
+    {
+        let roles = crate::deployment_roles(pool).await?;
+        Some(RoleBackfill::new(BackfillPhase::Observed, roles.as_ref()))
+    } else {
+        None
+    };
     Ok(MigrationReport {
         recorded_version_before: before.recorded_version_before,
         recorded_version_after: after.recorded_version_after,
@@ -293,5 +384,6 @@ pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError>
         applied,
         pending: after.pending,
         unknown: after.unknown,
+        role_backfill,
     })
 }

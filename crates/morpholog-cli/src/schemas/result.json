@@ -1107,7 +1107,20 @@
         "binary_version": { "type": "integer" },
         "applied": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } },
         "pending": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } },
-        "unknown": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } }
+        "unknown": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } },
+        "role_backfill": { "$ref": "#/$defs/role_backfill" }
+      }
+    },
+    "role_backfill": {
+      "description": "What morpholog.deployment_roles holds once migration 023 has run: a forecast from the database as it is now (preview), or read back after the run (observed). Present only when that migration is part of the run. no_record says the database records no managed floor, nothing about which PostgreSQL privileges exist.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "outcome"],
+      "properties": {
+        "phase": { "enum": ["preview", "observed"] },
+        "outcome": { "enum": ["record_pair", "no_record"] },
+        "writer_role": { "type": "string" },
+        "reader_role": { "type": "string" }
       }
     },
     "init_report": {

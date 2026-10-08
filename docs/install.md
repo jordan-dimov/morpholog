@@ -214,6 +214,14 @@ this database only, and records them there. `migrate` re-applies the
 grants to the recorded roles and to no others. It never creates a role,
 and it refuses if a recorded role is gone.
 
+Two owner-only shapes are supported. A recorded pair with no members
+means Morpholog manages a privilege floor that no login currently holds;
+keep it if the deployment uses the least-privilege model, since an
+application connecting as the owner of the tables stands behind no such
+floor. An empty `morpholog.deployment_roles` means no managed floor, and
+`migrate` re-applies none. Neither says anything about which PostgreSQL
+privileges exist: a grant made outside Morpholog is not in the record.
+
 `init` creates a deployment's roles itself and refuses a role name that
 already exists, unless this database already records it: choose another
 prefix. `init --reset --least-privilege` binds the roles the database
@@ -235,6 +243,14 @@ name: restore onto a cluster where those roles exist and belong to this
 deployment alone. If they don't, the next `migrate` warns.
 
 ### Moving a deployment to its own roles
+
+A deployment isolated by hand before v0.0.14, by revoking
+`morpholog_writer` and `morpholog_reader`, may have had them granted back:
+a `migrate` run after the revocation and before migration 023 re-applied
+the floor to those fixed names, the only ones it knew, and 023 then
+records the pair it finds granted. `migrate --check` says so before 023 runs (`role_backfill` in
+the report, with a note on stderr when the shared pair would be
+recorded), and `migrate` reports what was recorded afterwards.
 
 If `migrate` warns, move one of the deployments to new roles. In that
 deployment's database, as the role that owns its tables, withdraw the

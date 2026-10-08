@@ -1,0 +1,16 @@
+{
+  "applied": [
+    {
+      "name": "deployment_roles",
+      "version": 23
+    }
+  ],
+  "binary_version": 23,
+  "pending": [],
+  "recorded_version_after": 23,
+  "recorded_version_before": 22,
+  "role_backfill": {
+    "outcome": "no_record",
+    "phase": "observed"
+  }
+}

@@ -308,6 +308,174 @@ async fn recorded_roles(conn: &mut sqlx::PgConnection) -> Result<Option<Deployme
     }))
 }
 
+/// What migration 023 would leave in `morpholog.deployment_roles`, read
+/// from the database as it is now: the row the table already holds, none
+/// when the table exists without one, and otherwise the fixed pair when
+/// both roles exist and hold the floor by name. The migration's own
+/// census decides; this asks the same question without writing, and an
+/// agreement test holds the two together.
+pub async fn preview_role_backfill(pool: &PgPool) -> Result<Option<DeploymentRoles>, PgError> {
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    let present = sqlx::query_scalar!(
+        "SELECT to_regclass('morpholog.deployment_roles') IS NOT NULL AS \"present!\""
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    if present {
+        // The migration refuses a table of another shape rather than
+        // guessing; so does the forecast, with the same words.
+        let shape = record_shape(&mut conn).await?;
+        if shape != RECORD_SHAPE {
+            return Err(PgError::InvalidState(format!(
+                "morpholog.deployment_roles exists with another shape ({shape}); migration \
+                 023 refuses to guess, so nothing can be forecast"
+            )));
+        }
+        return recorded_roles(&mut conn).await;
+    }
+    let fixed = DeploymentRoles::default();
+    // Grants made to the role by name only: aclexplode lists PUBLIC as
+    // grantee 0, and inheritance never appears in an ACL.
+    let would_record = sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)
+              AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $2)
+              AND (SELECT coalesce(array_agg(g), ARRAY[]::text[]) @> ARRAY[
+                       'schema:' || $1 || ':USAGE',
+                       'claims:' || $1 || ':INSERT',
+                       'claims:' || $1 || ':DELETE',
+                       'audit:' || $1 || ':INSERT',
+                       'outbox:' || $1 || ':UPDATE',
+                       'schema:' || $2 || ':USAGE',
+                       'audit:' || $2 || ':SELECT']
+                   FROM (SELECT c.relname || ':' || r.rolname || ':' || a.privilege_type AS g
+                         FROM pg_class c, aclexplode(c.relacl) a, pg_roles r
+                         WHERE c.relnamespace = 'morpholog'::regnamespace AND r.oid = a.grantee
+                         UNION ALL
+                         SELECT 'schema:' || r.rolname || ':' || a.privilege_type
+                         FROM pg_namespace n, aclexplode(n.nspacl) a, pg_roles r
+                         WHERE n.nspname = 'morpholog' AND r.oid = a.grantee) x)
+           AS "would_record!""#,
+        fixed.writer(),
+        fixed.reader(),
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(would_record.then_some(fixed))
+}
+
+/// The one shape of `morpholog.deployment_roles` migration 023 accepts,
+/// rendered as the migration renders it.
+const RECORD_SHAPE: &str = "singleton boolean not null, writer_role text not null, \
+                            reader_role text not null | CHECK (singleton); NOT NULL \
+                            reader_role; NOT NULL singleton; NOT NULL writer_role; \
+                            PRIMARY KEY (singleton) | singleton default true";
+
+/// The table's columns, constraints and defaults, as migration 023 reads
+/// them before deciding whether the table is its own.
+async fn record_shape(conn: &mut sqlx::PgConnection) -> Result<String, PgError> {
+    sqlx::query_scalar!(
+        r#"SELECT concat_ws(' | ',
+             (SELECT string_agg(attname || ' ' || format_type(atttypid, atttypmod)
+                                || CASE WHEN attnotnull THEN ' not null' ELSE '' END,
+                                ', ' ORDER BY attnum)
+              FROM pg_attribute
+              WHERE attrelid = 'morpholog.deployment_roles'::regclass
+                AND attnum > 0 AND NOT attisdropped),
+             (SELECT string_agg(pg_get_constraintdef(oid), chr(59) || ' ' ORDER BY contype, conname)
+              FROM pg_constraint WHERE conrelid = 'morpholog.deployment_roles'::regclass),
+             (SELECT string_agg(attname || ' default ' || pg_get_expr(adbin, adrelid), ', ')
+              FROM pg_attrdef JOIN pg_attribute ON attrelid = adrelid AND attnum = adnum
+              WHERE adrelid = 'morpholog.deployment_roles'::regclass)) AS "shape!""#
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(classify_checked_query)
+}
+
+/// A role granted membership of a deployment role directly. Membership
+/// through a third role, and what the member can do with it under its
+/// inheritance and `SET ROLE` settings, are not read here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleMember {
+    pub member: String,
+    pub can_login: bool,
+}
+
+/// The direct members of a deployment's two roles, each list by name.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RoleMembers {
+    pub writer: Vec<RoleMember>,
+    pub reader: Vec<RoleMember>,
+}
+
+pub async fn direct_members(
+    pool: &PgPool,
+    roles: &DeploymentRoles,
+) -> Result<RoleMembers, PgError> {
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    let names: Vec<String> = roles.both().map(str::to_string).to_vec();
+    let rows = sqlx::query!(
+        r#"SELECT g.rolname::text AS "group!", m.rolname::text AS "member!", m.rolcanlogin AS "can_login!"
+           FROM pg_auth_members am
+           JOIN pg_roles g ON g.oid = am.roleid
+           JOIN pg_roles m ON m.oid = am.member
+           WHERE g.rolname = ANY($1)
+           ORDER BY 1, 2"#,
+        &names,
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    let mut members = RoleMembers::default();
+    for row in rows {
+        let member = RoleMember {
+            member: row.member,
+            can_login: row.can_login,
+        };
+        if row.group == roles.writer() {
+            members.writer.push(member);
+        } else {
+            members.reader.push(member);
+        }
+    }
+    Ok(members)
+}
+
+/// One login's sessions on this database, other than the caller's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCount {
+    pub role: String,
+    pub sessions: i64,
+}
+
+/// The other client sessions on this database, by login, in name order.
+/// Maintenance workers and the caller's own backend are left out. A
+/// reading, not a lock: a session can open the moment after.
+pub async fn other_sessions(pool: &PgPool) -> Result<Vec<SessionCount>, PgError> {
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    let rows = sqlx::query!(
+        r#"SELECT coalesce(usename::text, '?') AS "role!", count(*) AS "sessions!"
+           FROM pg_stat_activity
+           WHERE datname = current_database()
+             AND pid <> pg_backend_pid()
+             AND backend_type = 'client backend'
+           GROUP BY 1
+           ORDER BY 1"#
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(rows
+        .into_iter()
+        .map(|r| SessionCount {
+            role: r.role,
+            sessions: r.sessions,
+        })
+        .collect())
+}
+
 /// The other databases on this cluster in which `roles` hold a privilege
 /// or own an object, or on which they hold a privilege or ownership. Read
 /// from the cluster-wide dependency catalogue, so it sees databases this

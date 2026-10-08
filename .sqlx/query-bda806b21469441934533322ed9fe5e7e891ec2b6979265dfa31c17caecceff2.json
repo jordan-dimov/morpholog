@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)\n              AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $2)\n              AND (SELECT coalesce(array_agg(g), ARRAY[]::text[]) @> ARRAY[\n                       'schema:' || $1 || ':USAGE',\n                       'claims:' || $1 || ':INSERT',\n                       'claims:' || $1 || ':DELETE',\n                       'audit:' || $1 || ':INSERT',\n                       'outbox:' || $1 || ':UPDATE',\n                       'schema:' || $2 || ':USAGE',\n                       'audit:' || $2 || ':SELECT']\n                   FROM (SELECT c.relname || ':' || r.rolname || ':' || a.privilege_type AS g\n                         FROM pg_class c, aclexplode(c.relacl) a, pg_roles r\n                         WHERE c.relnamespace = 'morpholog'::regnamespace AND r.oid = a.grantee\n                         UNION ALL\n                         SELECT 'schema:' || r.rolname || ':' || a.privilege_type\n                         FROM pg_namespace n, aclexplode(n.nspacl) a, pg_roles r\n                         WHERE n.nspname = 'morpholog' AND r.oid = a.grantee) x)\n           AS \"would_record!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "would_record!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Name",
+        "Name"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "bda806b21469441934533322ed9fe5e7e891ec2b6979265dfa31c17caecceff2"
+}

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT concat_ws(' | ',\n             (SELECT string_agg(attname || ' ' || format_type(atttypid, atttypmod)\n                                || CASE WHEN attnotnull THEN ' not null' ELSE '' END,\n                                ', ' ORDER BY attnum)\n              FROM pg_attribute\n              WHERE attrelid = 'morpholog.deployment_roles'::regclass\n                AND attnum > 0 AND NOT attisdropped),\n             (SELECT string_agg(pg_get_constraintdef(oid), chr(59) || ' ' ORDER BY contype, conname)\n              FROM pg_constraint WHERE conrelid = 'morpholog.deployment_roles'::regclass),\n             (SELECT string_agg(attname || ' default ' || pg_get_expr(adbin, adrelid), ', ')\n              FROM pg_attrdef JOIN pg_attribute ON attrelid = adrelid AND attnum = adnum\n              WHERE adrelid = 'morpholog.deployment_roles'::regclass)) AS \"shape!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "shape!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d44d31cd46e805402b5f7dd167d1db96f1948e1d11fb1f1b95cbc9f9c36b806b"
+}

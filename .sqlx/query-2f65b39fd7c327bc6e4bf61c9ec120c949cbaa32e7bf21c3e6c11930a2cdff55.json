@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.rolname::text AS \"group!\", m.rolname::text AS \"member!\", m.rolcanlogin AS \"can_login!\"\n           FROM pg_auth_members am\n           JOIN pg_roles g ON g.oid = am.roleid\n           JOIN pg_roles m ON m.oid = am.member\n           WHERE g.rolname = ANY($1)\n           ORDER BY 1, 2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "member!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "can_login!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_roles",
+            "name": "rolcanlogin"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "NameArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      true
+    ]
+  },
+  "hash": "2f65b39fd7c327bc6e4bf61c9ec120c949cbaa32e7bf21c3e6c11930a2cdff55"
+}
