@@ -235,8 +235,8 @@ jobs:
       - name: test (cli, serial)
         run: cargo test -p morpholog-cli --all-targets --locked -- --test-threads=1
 
-  test:
-    name: test (postgres ${{ matrix.postgres }})
+  test-adapter:
+    name: test (adapter, postgres ${{ matrix.postgres }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -272,7 +272,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          key: test
+          key: test-adapter
 
       - name: Apply Morpholog schema
         env:
@@ -306,6 +306,27 @@ jobs:
       # scale run. Truncates the schema, hence serial.
       - name: test (bench smoke, serial)
         run: cargo test -p morpholog-bench --all-targets --locked -- --test-threads=1
+
+  # The one check branch protection requires: green only when every
+  # test job is. It keeps its name across the split so the required
+  # check keeps covering the whole suite.
+  test:
+    name: test (postgres 18)
+    needs: [test-sync, test-cli, test-adapter]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Every test job succeeded
+        run: |
+          failed=0
+          for job in "test-sync=${{ needs.test-sync.result }}" \
+                     "test-cli=${{ needs.test-cli.result }}" \
+                     "test-adapter=${{ needs.test-adapter.result }}"; do
+            echo "$job"
+            [ "${job#*=}" = success ] || failed=1
+          done
+          exit $failed
 
   python-client:
     name: python client (3.10)
