@@ -1065,7 +1065,9 @@ fn a_pattern_that_leaves_the_declared_key_unconstrained_fires_and_names_it() {
         lint.to_string(),
         "invariant `runs_run_forwards` checks every `Run` sharing `starts_on` and `ends_on`, \
          because its pattern leaves declared-key field `run` unconstrained; constraining `run` \
-         completes a uniqueness key and narrows the case to the one `Run` a proposal identifies"
+         completes a uniqueness key and narrows the case to the one `Run` a proposal identifies. \
+         Binding `run` to a fresh variable keeps the rule's meaning and moves the programme's \
+         hash; a variable the rule already uses, or a literal, narrows the rule"
     );
 }
 

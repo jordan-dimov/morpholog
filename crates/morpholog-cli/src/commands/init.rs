@@ -92,11 +92,11 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
     // Say whether there was actually a schema to drop.
     if let Some(dropped) = dropped {
         eprintln!(
-            "{} the pre-existing `morpholog` schema before provisioning",
+            "{} `morpholog` schema before provisioning",
             if dropped.existed {
-                "dropped"
+                "dropped the pre-existing"
             } else {
-                "found no"
+                "found no pre-existing"
             }
         );
     }
