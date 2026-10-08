@@ -54,6 +54,7 @@ const ROLES: [&str; 2] = [
     "morpholog_ci_cli_roles_writer",
     "morpholog_ci_cli_roles_reader",
 ];
+const MEMBER: &str = "morpholog_ci_cli_roles_member";
 
 async fn clean(admin: &PgPool) {
     for db in DATABASES {
@@ -62,6 +63,7 @@ async fn clean(admin: &PgPool) {
     for role in ROLES {
         run(admin, &format!("DROP ROLE IF EXISTS {role}")).await;
     }
+    run(admin, &format!("DROP ROLE IF EXISTS {MEMBER}")).await;
 }
 
 #[test]
@@ -150,6 +152,12 @@ async fn init_refuses_held_roles_and_migrate_warns_about_shared_ones() {
     )
     .await;
     pool_c.close().await;
+    // The warning names who holds the shared role, directly, and says so.
+    run(
+        &admin,
+        &format!("CREATE ROLE {MEMBER} LOGIN; GRANT {} TO {MEMBER}", ROLES[0]),
+    )
+    .await;
     let (status, stdout, stderr) = cli(&["migrate", "--database-url", &c]);
     assert!(status.success(), "{stderr}");
     let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
@@ -158,6 +166,51 @@ async fn init_refuses_held_roles_and_migrate_warns_about_shared_ones() {
         stderr.contains("warning:") && stderr.contains(DATABASES[0]),
         "{stderr}"
     );
+    assert!(
+        stderr.contains(&format!(
+            "Direct members: `{MEMBER}` (login) hold `{}`; none hold `{}`",
+            ROLES[0], ROLES[1]
+        )),
+        "{stderr}"
+    );
+    assert!(
+        report.get("role_backfill").is_none(),
+        "023 was not part of this run: {stdout}"
+    );
+
+    // An upgrade outstanding while another session is on the database:
+    // the check names the login, and still reports.
+    let pool_c = PgPool::connect(&c).await.unwrap();
+    run(
+        &pool_c,
+        "DELETE FROM morpholog.schema_migrations WHERE version = 23",
+    )
+    .await;
+    let me: String = sqlx::query_scalar("SELECT current_user::text")
+        .fetch_one(&pool_c)
+        .await
+        .unwrap();
+    let (status, stdout, stderr) = cli(&["migrate", "--check", "--database-url", &c]);
+    assert!(!status.success(), "023 is pending: not ready");
+    assert!(
+        stderr.contains("other sessions are connected") && stderr.contains(&format!("`{me}`")),
+        "{stderr}"
+    );
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    // The table is already there with its pair: the forecast reports it.
+    assert_eq!(report["role_backfill"]["phase"], "preview");
+    assert_eq!(report["role_backfill"]["outcome"], "record_pair");
+    assert_eq!(report["role_backfill"]["writer_role"], ROLES[0]);
+    pool_c.close().await;
+    let (status, stdout, stderr) = cli(&["migrate", "--database-url", &c]);
+    assert!(status.success(), "{stderr}");
+    assert!(
+        !stderr.contains("other sessions"),
+        "nobody else now: {stderr}"
+    );
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(report["role_backfill"]["phase"], "observed");
+    assert_eq!(report["role_backfill"]["writer_role"], ROLES[0]);
     let (status, _, stderr) = cli(&["migrate", "--database-url", &a]);
     assert!(status.success(), "{stderr}");
     assert!(

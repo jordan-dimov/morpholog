@@ -86,8 +86,8 @@ pub use indexes::{
 };
 pub use merkle::{Digest, DigestError};
 pub use migrations::{
-    MigrationRef, MigrationReport, apply_migrations, head_version, migration_status,
-    require_current_schema,
+    BackfillOutcome, BackfillPhase, MigrationRef, MigrationReport, RoleBackfill, apply_migrations,
+    head_version, migration_check, migration_status, require_current_schema,
 };
 pub use outbox::{
     CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, OutboxStatus, OutboxUpdate,
@@ -113,8 +113,9 @@ pub use propose::{
 };
 pub(crate) use provision::reapply_least_privilege;
 pub use provision::{
-    DEFAULT_ROLE_PREFIX, DeploymentRoles, DroppedSchema, InitOutcome, RecordedRoles,
-    databases_also_reached, deployment_roles, drop_schema, initialise_schema,
+    DEFAULT_ROLE_PREFIX, DeploymentRoles, DroppedSchema, InitOutcome, RecordedRoles, RoleMember,
+    RoleMembers, SessionCount, databases_also_reached, deployment_roles, direct_members,
+    drop_schema, initialise_schema, other_sessions, preview_role_backfill,
     provision_least_privilege, rebind_least_privilege, redact_database_url,
     require_can_provision_least_privilege, require_deployment_roles, single_connection_pool,
     with_default_user, with_user,
