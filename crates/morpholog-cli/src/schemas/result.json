@@ -1375,6 +1375,18 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["status", "pack_format_version", "reads", "written_by", "detail"],
+          "properties": {
+            "status": { "const": "unsupported_pack" },
+            "pack_format_version": { "type": "integer" },
+            "reads": { "type": "integer" },
+            "written_by": { "type": ["string", "null"] },
+            "detail": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": ["status", "tree_size", "key_id", "purpose", "public_key"],
           "properties": {
             "status": { "const": "signature_invalid" },
@@ -1640,10 +1652,11 @@
       "description": "Line 1 of a complete-prefix pack written by `audit export`. The next `checkpoint_count` lines are `checkpoint`s; then exactly `tree_size` lines, each an `audit_row`, in log order.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["pack_format_version", "pack_kind", "tree_size", "root_hash", "checkpoint_hash", "checkpoint_count"],
+      "required": ["pack_format_version", "pack_kind", "morpholog_version", "tree_size", "root_hash", "checkpoint_hash", "checkpoint_count"],
       "properties": {
         "pack_format_version": { "type": "integer" },
         "pack_kind": { "type": "string" },
+        "morpholog_version": { "type": "string" },
         "tree_size": { "type": "integer" },
         "root_hash": { "type": "string" },
         "checkpoint_hash": { "type": "string" },
@@ -1662,10 +1675,11 @@
     "window_pack_manifest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["pack_format_version", "pack_kind", "from_tree_size", "to_tree_size", "from_checkpoint_hash", "to_checkpoint_hash", "from_root_hash", "to_root_hash"],
+      "required": ["pack_format_version", "pack_kind", "morpholog_version", "from_tree_size", "to_tree_size", "from_checkpoint_hash", "to_checkpoint_hash", "from_root_hash", "to_root_hash"],
       "properties": {
         "pack_format_version": { "type": "integer" },
         "pack_kind": { "type": "string" },
+        "morpholog_version": { "type": "string" },
         "from_tree_size": { "type": "integer" },
         "to_tree_size": { "type": "integer" },
         "from_checkpoint_hash": { "type": "string" },
@@ -1765,10 +1779,11 @@
     "selective_pack_manifest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["pack_format_version", "pack_kind", "tree_size", "root_hash", "checkpoint_hash"],
+      "required": ["pack_format_version", "pack_kind", "morpholog_version", "tree_size", "root_hash", "checkpoint_hash"],
       "properties": {
         "pack_format_version": { "type": "integer" },
         "pack_kind": { "type": "string" },
+        "morpholog_version": { "type": "string" },
         "tree_size": { "type": "integer" },
         "root_hash": { "type": "string" },
         "checkpoint_hash": { "type": "string" }

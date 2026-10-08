@@ -60,27 +60,16 @@ fn first_row(lines: &[Value]) -> usize {
     1 + lines[0]["checkpoint_count"].as_u64().unwrap() as usize
 }
 
-/// The same complete prefix as one JSON document, the form packs took
-/// before they were written a line at a time.
-/// The streamed pack as one document, versioned for the highest rung among
-/// its rows as the exporter would write it.
+/// The same complete prefix as one JSON document, the streamed pack's
+/// other spelling, with the manifest's head carried over.
 fn as_single_document(pack: &str) -> String {
     let lines = pack_lines(pack);
     let rows = first_row(&lines);
-    // The document version for the highest rung among the rows.
-    let has = |field: &str| lines[rows..].iter().any(|row| row.get(field).is_some());
-    let version = if has("drawn_subjects") {
-        16
-    } else if has("semantics_version") {
-        12
-    } else if has("model_hash") {
-        8
-    } else {
-        1
-    };
     serde_json::json!({
         "manifest": {
-            "pack_format_version": version,
+            "pack_format_version": lines[0]["pack_format_version"],
+            "pack_kind": lines[0]["pack_kind"],
+            "morpholog_version": lines[0]["morpholog_version"],
             "tree_size": lines[0]["tree_size"],
             "root_hash": lines[0]["root_hash"],
             "checkpoint_hash": lines[0]["checkpoint_hash"],
@@ -839,7 +828,7 @@ async fn the_pin_never_masks_a_sparse_packs_intrinsic_verdict() {
     let mut malformed = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(
         &mut malformed,
-        br#"{"manifest": {"pack_format_version": 2}}"#,
+        br#"{"manifest": {"pack_format_version": 17, "pack_kind": "window", "morpholog_version": "0.0.0"}}"#,
     )
     .unwrap();
     let malformed_path = malformed.path().to_str().unwrap();
@@ -1167,24 +1156,53 @@ async fn every_verification_report_says_what_its_exit_code_says() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn evidence_verify_names_an_unknown_future_pack_version() {
-    // A pack newer than this binary must be named as too new, never
-    // misread as a malformed older one, in either the single-document or
-    // the line-by-line spelling.
-    let newer = morpholog_postgres::NEWEST_PACK_FORMAT + 1;
-    for newer in [
-        format!(r#"{{"manifest": {{"pack_format_version": {newer}}}}}"#),
-        format!("{{\"pack_format_version\": {newer}, \"pack_kind\": \"prefix\"}}\n{{}}\n"),
+async fn evidence_verify_names_a_format_it_does_not_read() {
+    // A pack of another format, older or newer, in either spelling, is the
+    // `unsupported_pack` verdict: it names the format this binary reads and
+    // the writer the manifest claims, and establishes nothing.
+    let reads = morpholog_postgres::PACK_FORMAT;
+    let newer = reads + 1;
+    for (text, version, written_by) in [
+        (
+            format!(
+                r#"{{"manifest": {{"pack_format_version": {newer}, "pack_kind": "prefix", "morpholog_version": "9.9.9", "from_the_future": 1}}}}"#
+            ),
+            newer,
+            Value::String("9.9.9".into()),
+        ),
+        (
+            format!(
+                "{{\"pack_format_version\": {newer}, \"pack_kind\": \"prefix\", \"morpholog_version\": \"9.9.9\"}}\n{{}}\n"
+            ),
+            newer,
+            Value::String("9.9.9".into()),
+        ),
+        (
+            r#"{"manifest": {"pack_format_version": 13}}"#.to_string(),
+            13,
+            Value::Null,
+        ),
+        (
+            "{\"pack_format_version\": 13, \"pack_kind\": \"prefix\"}\n{}\n".to_string(),
+            13,
+            Value::Null,
+        ),
     ] {
-        let packfile = temp_file(newer.as_bytes());
+        let packfile = temp_file(text.as_bytes());
         let (status, stdout, _stderr) =
             run_cli_no_db(&["audit", "verify-pack", packfile.path().to_str().unwrap()]);
         assert!(!status.success());
+        let report: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(report["passes"], false, "got: {stdout}");
         let verdict = pack_verdict(&stdout);
-        assert_eq!(verdict["status"], "malformed_pack", "got: {stdout}");
+        assert_eq!(verdict["status"], "unsupported_pack", "got: {stdout}");
+        assert_eq!(verdict["pack_format_version"], version, "got: {stdout}");
+        assert_eq!(verdict["reads"], reads, "got: {stdout}");
+        assert_eq!(verdict["written_by"], written_by, "got: {stdout}");
+        let detail = verdict["detail"].as_str().unwrap();
         assert!(
-            verdict["detail"].as_str().unwrap().contains("newer"),
-            "got: {stdout}"
+            detail.contains(&format!("reads format {reads}")),
+            "the detail names the format this binary reads: {detail}"
         );
     }
 }
@@ -1206,6 +1224,23 @@ async fn evidence_verify_on_a_readable_but_invalid_pack_is_a_malformed_verdict()
         "malformed_pack",
         "got stdout={stdout:?} stderr={stderr:?}"
     );
+    // A kind this binary does not read, under the format it does, in
+    // either spelling: malformed, naming the kind.
+    for text in [
+        r#"{"manifest": {"pack_format_version": 17, "pack_kind": "ledger", "morpholog_version": "0.0.0"}}"#.to_string(),
+        "{\"pack_format_version\": 17, \"pack_kind\": \"ledger\", \"morpholog_version\": \"0.0.0\"}\n{}\n".to_string(),
+    ] {
+        let packfile = temp_file(text.as_bytes());
+        let (status, stdout, _stderr) =
+            run_cli_no_db(&["audit", "verify-pack", packfile.path().to_str().unwrap()]);
+        assert!(!status.success(), "got: {stdout}");
+        let verdict = pack_verdict(&stdout);
+        assert_eq!(verdict["status"], "malformed_pack", "got: {stdout}");
+        assert!(
+            verdict["detail"].as_str().unwrap().contains("ledger"),
+            "the verdict names the kind it refused: {stdout}"
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1217,7 +1252,9 @@ async fn evidence_verify_refuses_a_pack_whose_hash_is_not_a_digest() {
     let uppercase = format!("sha256:{}", "AB".repeat(32));
     std::io::Write::write_all(
         &mut packfile,
-        format!(r#"{{"manifest": {{"pack_format_version": 1, "root_hash": "{uppercase}"}}}}"#)
+        format!(
+            r#"{{"manifest": {{"pack_format_version": 17, "pack_kind": "prefix", "morpholog_version": "0.0.0", "root_hash": "{uppercase}"}}}}"#
+        )
             .as_bytes(),
     )
     .unwrap();

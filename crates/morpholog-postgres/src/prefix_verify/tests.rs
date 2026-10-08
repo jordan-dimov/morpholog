@@ -139,6 +139,7 @@ fn variant(v: &TreeVerification) -> &'static str {
         TreeVerification::ChainBroken { .. } => "chain_broken",
         TreeVerification::AnchorMismatch { .. } => "anchor_mismatch",
         TreeVerification::MalformedPack { .. } => "malformed_pack",
+        TreeVerification::UnsupportedPack { .. } => "unsupported_pack",
         TreeVerification::SignatureInvalid { .. } => "signature_invalid",
         TreeVerification::UnauthorizedKey { .. } => "unauthorized_key",
         TreeVerification::SignatureRequired { .. } => "signature_required",

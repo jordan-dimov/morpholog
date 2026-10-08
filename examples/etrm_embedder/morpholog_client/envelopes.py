@@ -1967,6 +1967,32 @@ class TreeMalformedPack:
 
 
 @dataclass(frozen=True)
+class TreeUnsupportedPack:
+    """An evidence pack of a format this binary does not read: nothing
+    about it is established. ``reads`` is the format this binary reads;
+    ``written_by`` is what the manifest claims of its writer, unverified."""
+
+    pack_format_version: int
+    reads: int
+    written_by: str | None
+    detail: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> TreeUnsupportedPack:
+        data = _strict(
+            "unsupported pack",
+            payload,
+            {"status", "pack_format_version", "reads", "written_by", "detail"},
+        )
+        return cls(
+            pack_format_version=data["pack_format_version"],
+            reads=data["reads"],
+            written_by=data["written_by"],
+            detail=data["detail"],
+        )
+
+
+@dataclass(frozen=True)
 class TreeSignatureInvalid:
     """A checkpoint carries a signature that does not verify over its tree
     head - corruption, or a signed checkpoint altered without re-signing."""
@@ -2052,6 +2078,7 @@ TreeVerification = (
     | TreeChainBroken
     | TreeAnchorMismatch
     | TreeMalformedPack
+    | TreeUnsupportedPack
     | TreeSignatureInvalid
     | TreeUnauthorizedKey
     | TreeSignatureRequired
@@ -2071,6 +2098,7 @@ def parse_tree_verification(payload: object) -> TreeVerification:
             "chain_broken": TreeChainBroken.from_json,
             "anchor_mismatch": TreeAnchorMismatch.from_json,
             "malformed_pack": TreeMalformedPack.from_json,
+            "unsupported_pack": TreeUnsupportedPack.from_json,
             "signature_invalid": TreeSignatureInvalid.from_json,
             "unauthorized_key": TreeUnauthorizedKey.from_json,
             "signature_required": TreeSignatureRequired.from_json,
@@ -2485,6 +2513,7 @@ class PrefixPackManifest:
 
     pack_format_version: int
     pack_kind: str
+    morpholog_version: str
     tree_size: int
     root_hash: str
     checkpoint_hash: str
@@ -2498,6 +2527,7 @@ class PrefixPackManifest:
             {
                 "pack_format_version",
                 "pack_kind",
+                "morpholog_version",
                 "tree_size",
                 "root_hash",
                 "checkpoint_hash",
@@ -2507,6 +2537,7 @@ class PrefixPackManifest:
         return cls(
             pack_format_version=data["pack_format_version"],
             pack_kind=data["pack_kind"],
+            morpholog_version=data["morpholog_version"],
             tree_size=data["tree_size"],
             root_hash=data["root_hash"],
             checkpoint_hash=data["checkpoint_hash"],
@@ -2518,6 +2549,7 @@ class PrefixPackManifest:
 class WindowPackManifest:
     pack_format_version: int
     pack_kind: str
+    morpholog_version: str
     from_tree_size: int
     to_tree_size: int
     from_checkpoint_hash: str
@@ -2533,6 +2565,7 @@ class WindowPackManifest:
             {
                 "pack_format_version",
                 "pack_kind",
+                "morpholog_version",
                 "from_tree_size",
                 "to_tree_size",
                 "from_checkpoint_hash",
@@ -2544,6 +2577,7 @@ class WindowPackManifest:
         return cls(
             pack_format_version=data["pack_format_version"],
             pack_kind=data["pack_kind"],
+            morpholog_version=data["morpholog_version"],
             from_tree_size=data["from_tree_size"],
             to_tree_size=data["to_tree_size"],
             from_checkpoint_hash=data["from_checkpoint_hash"],
@@ -2768,6 +2802,7 @@ class SelectivePackManifest:
 
     pack_format_version: int
     pack_kind: str
+    morpholog_version: str
     tree_size: int
     root_hash: str
     checkpoint_hash: str
@@ -2777,11 +2812,12 @@ class SelectivePackManifest:
         data = _strict(
             "selective pack manifest",
             payload,
-            {"pack_format_version", "pack_kind", "tree_size", "root_hash", "checkpoint_hash"},
+            {"pack_format_version", "pack_kind", "morpholog_version", "tree_size", "root_hash", "checkpoint_hash"},
         )
         return cls(
             pack_format_version=data["pack_format_version"],
             pack_kind=data["pack_kind"],
+            morpholog_version=data["morpholog_version"],
             tree_size=data["tree_size"],
             root_hash=data["root_hash"],
             checkpoint_hash=data["checkpoint_hash"],

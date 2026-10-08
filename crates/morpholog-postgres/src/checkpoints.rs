@@ -159,6 +159,17 @@ pub enum TreeVerification {
     /// An evidence pack could not be parsed into a checkable tree. Only
     /// the offline pack verifier produces this.
     MalformedPack { detail: String },
+    /// An evidence pack of a format this binary does not read: nothing
+    /// about it is established, and nothing is held against it. `reads`
+    /// is the format this binary reads; `written_by` is what the manifest
+    /// claims of its writer, unverified. Only the offline pack verifier
+    /// produces this.
+    UnsupportedPack {
+        pack_format_version: u32,
+        reads: u32,
+        written_by: Option<String>,
+        detail: String,
+    },
     /// A checkpoint carries a signature that does not verify over its tree
     /// head: corrupted, or the checkpoint was altered without re-signing.
     /// Whether a key is *authorised* is a separate check.
@@ -186,6 +197,18 @@ pub enum TreeVerification {
     /// no signature by that key. The pin only narrows which authorised
     /// signers are accepted; it never admits an unauthorised one.
     SigningKeyRequired { tree_size: i64, public_key: String },
+}
+
+impl TreeVerification {
+    /// The verdict on a pack announcing a format this binary does not read.
+    pub fn unsupported_pack(pack_format_version: u32, written_by: Option<String>) -> Self {
+        TreeVerification::UnsupportedPack {
+            detail: crate::pack::unsupported_detail(pack_format_version, written_by.as_deref()),
+            pack_format_version,
+            reads: crate::pack::PACK_FORMAT,
+            written_by,
+        }
+    }
 }
 
 /// What a verifier requires of checkpoint signatures beyond the intrinsic

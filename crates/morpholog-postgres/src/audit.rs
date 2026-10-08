@@ -85,22 +85,6 @@ pub struct AuditRow {
     pub drawn_subjects: Option<Vec<Subject>>,
 }
 
-/// How far up the leaf-format ladder a row reaches. A pack is versioned
-/// by the highest rung among the rows it discloses, so a verifier from
-/// before a rung refuses the pack by its version before reading a row it
-/// could not hash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum RowRung {
-    /// Names no programme.
-    Legacy,
-    /// Names the programme that admitted it.
-    Model,
-    /// Names the programme and the semantics that decided it.
-    Semantics,
-    /// Also records the subjects its act drew.
-    Subjects,
-}
-
 /// A leaf-rung field that is optional by omission only: absent is
 /// `None`, and a present JSON `null` is refused rather than read as
 /// absent. Presence selects the leaf encoding, so a row has one spelling
@@ -114,19 +98,6 @@ where
 }
 
 impl AuditRow {
-    /// How far up the leaf-format ladder this row reaches.
-    pub(crate) fn rung(&self) -> RowRung {
-        if self.drawn_subjects.is_some() {
-            RowRung::Subjects
-        } else if self.semantics_version.is_some() {
-            RowRung::Semantics
-        } else if self.model_hash.is_some() {
-            RowRung::Model
-        } else {
-            RowRung::Legacy
-        }
-    }
-
     /// Check the row is a shape the runtime writes: nothing extra, an
     /// attestation, an attestation plus one name per argument, those plus
     /// the model hash, those plus the semantics version, or those plus the

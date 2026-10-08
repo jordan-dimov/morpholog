@@ -498,7 +498,7 @@ class AdapterDiscrimination(unittest.TestCase):
     def test_a_failed_export_leaves_no_partial_pack(self):
         # Output the binary began before failing never reaches the path,
         # and a pack already there is left as it was.
-        self._export_stdout('{"pack_format_version": 4}\n{"tree_size":', 1)
+        self._export_stdout('{"pack_format_version": 17}\n{"tree_size":', 1)
         with tempfile.TemporaryDirectory() as out:
             path = os.path.join(out, "pack.ndjson")
             Path(path).write_text("an earlier pack")

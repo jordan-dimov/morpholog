@@ -5,11 +5,14 @@
 //! checks it against its checkpoints with no database access; against an
 //! externally held anchor, that catches a coordinated rewrite.
 //!
-//! Three kinds: the v1 *complete prefix* (every covered row), the v2
-//! *window* (consistency plus per-row inclusion between two checkpoints),
-//! and the v3 *selective* pack (chosen rows, each proven included, nothing
-//! else revealed). None proves that a pack holds *all* of one subject's
+//! Three kinds: the *complete prefix* (every covered row), the *window*
+//! (consistency plus per-row inclusion between two checkpoints), and the
+//! *selective* pack (chosen rows, each proven included, nothing else
+//! revealed). None proves that a pack holds *all* of one subject's
 //! history; that needs a subject-indexed commitment.
+//!
+//! Every pack announces one format, [`PACK_FORMAT`], its kind and the
+//! release that wrote it, before anything else.
 
 use crate::role_rebindings::{RebindingFold, RebindingScope, RoleRebindings};
 use crate::witnesses::PackVerdict;
@@ -17,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::audit::{AuditRow, RowRung};
+use crate::audit::AuditRow;
 use crate::audit_pages::AuditPages;
 use crate::checkpoints::{
     Checkpoint, TreeVerification, checkpoint_hash, load_checkpoint_chain, same_tree_head,
@@ -31,143 +34,111 @@ use crate::merkle::{
 use crate::prefix_verify::PrefixVerifier;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 
-const PACK_FORMAT_V1: u32 = 1;
-const PACK_FORMAT_V2: u32 = 2;
-const PACK_KIND_WINDOW: &str = "window";
-const PACK_FORMAT_V3: u32 = 3;
-const PACK_KIND_SELECTIVE: &str = "selective";
+/// The one evidence-pack format this binary writes and reads. Every pack
+/// announces it beside its kind and the release that wrote it, so a
+/// verifier refuses any other format by name before reading a row. A
+/// change to what a pack carries, a row field among it, moves this number
+/// once, for every kind.
+pub const PACK_FORMAT: u32 = 17;
+/// The release stamped on every pack this binary writes.
+pub(crate) const WRITER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// A pack kind's format version for each rung of the leaf-format ladder.
-/// A pack carries the version for the highest rung among the rows it
-/// discloses, so a verifier from before that rung refuses it as newer than
-/// it understands, instead of dropping a field it does not know and
-/// reporting tamper on honest history. A pack of older rows keeps the
-/// version every older verifier reads. The leaf version tells a new
-/// verifier how a row hashes; the pack version keeps an old one from
-/// judging bytes it cannot read.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct FormatLadder {
-    pub(crate) legacy: u32,
-    pub(crate) model: u32,
-    pub(crate) semantics: u32,
-    pub(crate) subjects: u32,
-}
-
-impl FormatLadder {
-    /// The version for a pack whose highest disclosed row is on `rung`.
-    pub(crate) fn version(self, rung: RowRung) -> u32 {
-        match rung {
-            RowRung::Legacy => self.legacy,
-            RowRung::Model => self.model,
-            RowRung::Semantics => self.semantics,
-            RowRung::Subjects => self.subjects,
-        }
-    }
-
-    /// The rung a version of this kind stands for, or `None` for a version
-    /// that is not this kind's.
-    pub(crate) fn rung(self, version: u32) -> Option<RowRung> {
-        [
-            RowRung::Legacy,
-            RowRung::Model,
-            RowRung::Semantics,
-            RowRung::Subjects,
-        ]
-        .into_iter()
-        .find(|&rung| self.version(rung) == version)
-    }
-
-    /// The version for a pack disclosing `rows`.
-    pub(crate) fn for_rows<'r>(self, rows: impl IntoIterator<Item = &'r AuditRow>) -> u32 {
-        self.version(highest_rung(rows))
-    }
-
-    pub(crate) fn admits(self, version: u32) -> bool {
-        self.rung(version).is_some()
-    }
-
-    /// Hold an announced version to the highest rung the pack discloses,
-    /// both ways: a version below it cannot carry those rows, and one above
-    /// it claims rows the pack does not have.
-    pub(crate) fn check(self, version: u32, disclosed: RowRung) -> Result<(), PackError> {
-        if self.rung(version) == Some(disclosed) {
-            return Ok(());
-        }
-        Err(PackError::Malformed {
-            detail: format!(
-                "pack_format_version {version} does not match its rows: the newest row it \
-                 discloses {}, and such a pack is version {}",
-                rung_description(disclosed),
-                self.version(disclosed)
-            ),
-        })
-    }
-}
-
-fn rung_description(rung: RowRung) -> &'static str {
-    match rung {
-        RowRung::Legacy => "names no programme",
-        RowRung::Model => "names its programme but not its semantics",
-        RowRung::Semantics => {
-            "names its programme and the semantics that decided it, but not its draws"
-        }
-        RowRung::Subjects => "also records the subjects its act drew",
-    }
-}
-
-pub(crate) const DOCUMENT_FORMATS: FormatLadder = FormatLadder {
-    legacy: PACK_FORMAT_V1,
-    model: 8,
-    semantics: 12,
-    subjects: 16,
-};
-const WINDOW_FORMATS: FormatLadder = FormatLadder {
-    legacy: PACK_FORMAT_V2,
-    model: 6,
-    semantics: 10,
-    subjects: 14,
-};
-const SELECTIVE_FORMATS: FormatLadder = FormatLadder {
-    legacy: PACK_FORMAT_V3,
-    model: 7,
-    semantics: 11,
-    subjects: 15,
-};
-
-/// What a pack is, by its format version.
+/// What a pack is. The name is the manifest's `pack_kind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackKind {
-    /// A complete prefix in one document.
-    PrefixDocument,
-    /// A complete prefix streamed as NDJSON, manifest first.
-    PrefixStream,
+    /// A complete prefix: every covered row, streamed as NDJSON or whole
+    /// in one document.
+    Prefix,
     Window,
     Selective,
 }
 
-/// The kind of pack a format version names, or `None` for a version this
-/// binary does not read. The one place a version number is read as a kind.
-pub fn pack_kind(version: u64) -> Option<PackKind> {
-    let version = u32::try_from(version).ok()?;
-    [
-        (DOCUMENT_FORMATS, PackKind::PrefixDocument),
-        (PREFIX_FORMATS, PackKind::PrefixStream),
-        (WINDOW_FORMATS, PackKind::Window),
-        (SELECTIVE_FORMATS, PackKind::Selective),
-    ]
-    .into_iter()
-    .find_map(|(ladder, kind)| ladder.admits(version).then_some(kind))
+impl PackKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            PackKind::Prefix => "prefix",
+            PackKind::Window => "window",
+            PackKind::Selective => "selective",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<PackKind> {
+        [PackKind::Prefix, PackKind::Window, PackKind::Selective]
+            .into_iter()
+            .find(|kind| kind.name() == name)
+    }
 }
 
-/// The highest pack format version this binary reads.
-pub const NEWEST_PACK_FORMAT: u32 = 16;
+/// What a manifest says of itself, read leniently and before anything
+/// else, so a pack of another format is refused by name rather than
+/// failing to parse. Unknown fields are tolerated here only: a format this
+/// binary does not read may carry any.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PackHead {
+    pub pack_format_version: u32,
+    #[serde(default)]
+    pub pack_kind: Option<String>,
+    #[serde(default)]
+    pub morpholog_version: Option<String>,
+}
 
-/// The highest rung among `rows`.
-pub(crate) fn highest_rung<'r>(rows: impl IntoIterator<Item = &'r AuditRow>) -> RowRung {
-    rows.into_iter()
-        .map(AuditRow::rung)
-        .max()
-        .unwrap_or(RowRung::Legacy)
+impl PackHead {
+    /// `Ok` when this binary reads the announced format.
+    pub fn check_format(&self) -> Result<(), PackError> {
+        if self.pack_format_version == PACK_FORMAT {
+            return Ok(());
+        }
+        Err(PackError::Unsupported {
+            pack_format_version: self.pack_format_version,
+            written_by: self.morpholog_version.clone(),
+        })
+    }
+
+    /// The kind the manifest names, when it is one this binary reads.
+    pub fn kind(&self) -> Option<PackKind> {
+        self.pack_kind.as_deref().and_then(PackKind::from_name)
+    }
+}
+
+/// Hold a parsed manifest to the format this binary reads and the kind
+/// its reader expects.
+pub(crate) fn check_manifest(
+    version: u32,
+    written_by: &str,
+    kind: &str,
+    expected: PackKind,
+) -> Result<(), PackError> {
+    if version != PACK_FORMAT {
+        return Err(PackError::Unsupported {
+            pack_format_version: version,
+            written_by: Some(written_by.to_string()),
+        });
+    }
+    if kind != expected.name() {
+        return Err(PackError::Malformed {
+            detail: format!("not a {} pack: pack_kind {kind:?}", expected.name()),
+        });
+    }
+    Ok(())
+}
+
+/// The sentence an unsupported format is refused with, from what the
+/// manifest says: the writer it names is a claim of the manifest, not
+/// something verified.
+pub(crate) fn unsupported_detail(pack_format_version: u32, written_by: Option<&str>) -> String {
+    let writer = match written_by {
+        Some(v) => format!("the manifest names Morpholog {v} as its writer"),
+        None => "the manifest does not name its writer".to_string(),
+    };
+    let remedy = if pack_format_version < PACK_FORMAT {
+        "export the pack again with a current release".to_string()
+    } else {
+        format!("verify it with a release that reads format {pack_format_version}")
+    };
+    format!(
+        "unsupported pack format {pack_format_version}: this verifier reads format \
+         {PACK_FORMAT} only; {writer}; {remedy}"
+    )
 }
 
 /// A convenience header summarising the covering checkpoint for a human
@@ -176,6 +147,8 @@ pub(crate) fn highest_rung<'r>(rows: impl IntoIterator<Item = &'r AuditRow>) -> 
 #[serde(deny_unknown_fields)]
 pub struct PackManifest {
     pub pack_format_version: u32,
+    pub pack_kind: String,
+    pub morpholog_version: String,
     pub tree_size: i64,
     pub root_hash: Digest,
     pub checkpoint_hash: Digest,
@@ -314,7 +287,9 @@ pub async fn export_pack(pool: &PgPool, tree_size: Option<i64>) -> Result<Eviden
 
     Ok(EvidencePack {
         manifest: PackManifest {
-            pack_format_version: DOCUMENT_FORMATS.for_rows(&rows),
+            pack_format_version: PACK_FORMAT,
+            pack_kind: PackKind::Prefix.name().to_string(),
+            morpholog_version: WRITER_VERSION.to_string(),
             tree_size: covering.tree_size,
             root_hash: covering.root_hash,
             checkpoint_hash: covering.checkpoint_hash,
@@ -334,6 +309,14 @@ pub enum PackError {
     /// manifest that disagrees with the covering checkpoint).
     #[error("malformed evidence pack: {detail}")]
     Malformed { detail: String },
+    /// The pack announces a format this binary does not read. Nothing
+    /// about it is established; the detail names the format read here and
+    /// the writer the manifest claims.
+    #[error("{}", unsupported_detail(*pack_format_version, written_by.as_deref()))]
+    Unsupported {
+        pack_format_version: u32,
+        written_by: Option<String>,
+    },
     /// A row could not be re-encoded to recompute its leaf hash.
     #[error("could not recompute a leaf hash from the pack: {0}")]
     Encoding(#[from] serde_json::Error),
@@ -362,22 +345,24 @@ pub fn verify_pack(
     Ok(verifier.finish().0)
 }
 
-/// The v1 envelope rules, checked before any cryptography. Stricter than
+/// The complete-prefix envelope rules, checked before any cryptography. Stricter than
 /// the live verifier on purpose: a pack is untrusted JSON.
 fn validate_envelope(pack: &EvidencePack) -> Result<(), PackError> {
+    // The format first: another format is unsupported whatever else is
+    // wrong with the pack, since none of its rules are this binary's.
+    let m = &pack.manifest;
+    check_manifest(
+        m.pack_format_version,
+        &m.morpholog_version,
+        &m.pack_kind,
+        PackKind::Prefix,
+    )?;
     let covering = validate_prefix_chain(&pack.checkpoints)?;
     // Exactly the rows the covering checkpoint commits to: extra rows would
     // ride along unproven.
     if pack.rows.len() as i64 != covering.tree_size {
         return Err(row_count_disagrees(pack.rows.len(), covering.tree_size));
     }
-    let m = &pack.manifest;
-    if !DOCUMENT_FORMATS.admits(m.pack_format_version) {
-        return Err(PackError::Malformed {
-            detail: format!("unsupported pack_format_version {}", m.pack_format_version),
-        });
-    }
-    DOCUMENT_FORMATS.check(m.pack_format_version, highest_rung(&pack.rows))?;
     manifest_agrees(covering, m.tree_size, &m.root_hash, &m.checkpoint_hash)
 }
 
@@ -464,6 +449,7 @@ pub struct RowInclusionProof {
 pub struct WindowPackManifest {
     pub pack_format_version: u32,
     pub pack_kind: String,
+    pub morpholog_version: String,
     pub from_tree_size: i64,
     pub to_tree_size: i64,
     pub from_checkpoint_hash: Digest,
@@ -624,8 +610,9 @@ fn assemble_window_pack(
         .collect();
 
     let manifest = WindowPackManifest {
-        pack_format_version: WINDOW_FORMATS.for_rows(&rows[from..]),
-        pack_kind: PACK_KIND_WINDOW.to_string(),
+        pack_format_version: PACK_FORMAT,
+        pack_kind: PackKind::Window.name().to_string(),
+        morpholog_version: WRITER_VERSION.to_string(),
         from_tree_size: from_checkpoint.tree_size,
         to_tree_size: to_checkpoint.tree_size,
         from_checkpoint_hash: from_checkpoint.checkpoint_hash,
@@ -724,21 +711,17 @@ fn proof_bytes(digests: &[Digest]) -> Vec<Hash> {
     digests.iter().map(|d| *d.bytes()).collect()
 }
 
-/// The v2 envelope rules, checked before any proof. A pack is untrusted
+/// The window envelope rules, checked before any proof. A pack is untrusted
 /// JSON.
 fn validate_window_envelope(pack: &WindowEvidencePack) -> Result<(), PackError> {
     let malformed = |detail: String| PackError::Malformed { detail };
     let m = &pack.manifest;
-    if !WINDOW_FORMATS.admits(m.pack_format_version) {
-        return Err(malformed(format!(
-            "unsupported pack_format_version {}",
-            m.pack_format_version
-        )));
-    }
-    WINDOW_FORMATS.check(m.pack_format_version, highest_rung(&pack.rows))?;
-    if m.pack_kind != PACK_KIND_WINDOW {
-        return Err(malformed(format!("unexpected pack_kind {:?}", m.pack_kind)));
-    }
+    check_manifest(
+        m.pack_format_version,
+        &m.morpholog_version,
+        &m.pack_kind,
+        PackKind::Window,
+    )?;
 
     let from = &pack.from_checkpoint;
     let to = &pack.to_checkpoint;
@@ -820,6 +803,7 @@ fn validate_window_envelope(pack: &WindowEvidencePack) -> Result<(), PackError> 
 pub struct SelectivePackManifest {
     pub pack_format_version: u32,
     pub pack_kind: String,
+    pub morpholog_version: String,
     pub tree_size: i64,
     pub root_hash: Digest,
     pub checkpoint_hash: Digest,
@@ -950,8 +934,9 @@ fn assemble_selective_pack(
         .collect();
 
     let manifest = SelectivePackManifest {
-        pack_format_version: SELECTIVE_FORMATS.for_rows(indices.iter().map(|&i| &rows[i])),
-        pack_kind: PACK_KIND_SELECTIVE.to_string(),
+        pack_format_version: PACK_FORMAT,
+        pack_kind: PackKind::Selective.name().to_string(),
+        morpholog_version: WRITER_VERSION.to_string(),
         tree_size: checkpoint.tree_size,
         root_hash: checkpoint.root_hash,
         checkpoint_hash: checkpoint.checkpoint_hash,
@@ -1037,22 +1022,18 @@ pub fn verify_selective(
     })
 }
 
-/// The v3 envelope rules, checked before any proof. Leaf indices carry the
+/// The selective envelope rules, checked before any proof. Leaf indices carry the
 /// proof, not row order, but must still be ascending, in range, and unique,
 /// so a malformed pack is named before any cryptography runs.
 fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackError> {
     let malformed = |detail: String| PackError::Malformed { detail };
     let m = &pack.manifest;
-    if !SELECTIVE_FORMATS.admits(m.pack_format_version) {
-        return Err(malformed(format!(
-            "unsupported pack_format_version {}",
-            m.pack_format_version
-        )));
-    }
-    SELECTIVE_FORMATS.check(m.pack_format_version, highest_rung(&pack.rows))?;
-    if m.pack_kind != PACK_KIND_SELECTIVE {
-        return Err(malformed(format!("unexpected pack_kind {:?}", m.pack_kind)));
-    }
+    check_manifest(
+        m.pack_format_version,
+        &m.morpholog_version,
+        &m.pack_kind,
+        PackKind::Selective,
+    )?;
 
     let cp = &pack.checkpoint;
     if cp.tree_size < 0 {
@@ -1106,29 +1087,24 @@ fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackE
 }
 
 mod prefix_stream;
-use prefix_stream::PREFIX_FORMATS;
 pub use prefix_stream::{
     PrefixExport, PrefixPackManifest, PrefixStreamReport, begin_prefix_export, read_prefix_stream,
-    streamed_pack_version, verify_prefix_stream,
+    streamed_pack_head, verify_prefix_stream,
 };
 
 #[cfg(test)]
 mod tests;
 
-/// A single-document pack's `manifest.pack_format_version`, read without
-/// building the whole document in memory.
-pub fn pack_format_version(bytes: &[u8]) -> Option<u64> {
+/// What a single-document pack's manifest says of itself, or `None` when
+/// the bytes are not a document with a manifest.
+pub fn document_pack_head(bytes: &[u8]) -> Option<PackHead> {
     #[derive(Deserialize)]
     struct Probe {
-        manifest: ProbeManifest,
-    }
-    #[derive(Deserialize)]
-    struct ProbeManifest {
-        pack_format_version: u64,
+        manifest: PackHead,
     }
     serde_json::from_slice::<Probe>(bytes)
         .ok()
-        .map(|probe| probe.manifest.pack_format_version)
+        .map(|probe| probe.manifest)
 }
 
 /// The role rebindings among a pack's rows, in log order, given the

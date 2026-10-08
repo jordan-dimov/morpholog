@@ -39,7 +39,9 @@ fn checkpoint(tree_size: i64) -> Checkpoint {
 
 fn manifest_for(c: &Checkpoint) -> PackManifest {
     PackManifest {
-        pack_format_version: PACK_FORMAT_V1,
+        pack_format_version: PACK_FORMAT,
+        pack_kind: "prefix".into(),
+        morpholog_version: "0.0.0".into(),
         tree_size: c.tree_size,
         root_hash: c.root_hash,
         checkpoint_hash: c.checkpoint_hash,
@@ -633,7 +635,16 @@ fn selective_envelope_rules_are_each_enforced() {
 
     let mut p = pack.clone();
     p.manifest.pack_format_version = 9;
-    expect_malformed(&p, "pack_format_version");
+    assert!(
+        matches!(
+            verify_selective(&p, None),
+            Err(PackError::Unsupported {
+                pack_format_version: 9,
+                ..
+            })
+        ),
+        "another format is unsupported, not malformed"
+    );
 
     let mut p = pack.clone();
     p.manifest.pack_kind = "window".to_string();
@@ -731,8 +742,9 @@ fn streamed_pack(n: usize, sizes: &[usize]) -> (Vec<String>, Vec<Checkpoint>) {
     }
     let covering = chain.last().unwrap();
     let manifest = PrefixPackManifest {
-        pack_format_version: 4,
+        pack_format_version: PACK_FORMAT,
         pack_kind: "prefix".into(),
+        morpholog_version: "0.0.0".into(),
         tree_size: covering.tree_size,
         root_hash: covering.root_hash,
         checkpoint_hash: covering.checkpoint_hash,
@@ -788,10 +800,13 @@ fn a_streamed_pack_verifies_and_agrees_with_the_same_rows_as_one_document() {
     assert!(matches!(report.verdict, TreeVerification::Intact { .. }));
     assert_eq!(report.verdict, verify_pack(&document, None).unwrap());
     assert_eq!(report.checkpoints, chain);
-    assert_eq!(streamed_pack_version(lines[0].as_bytes()), Some(4));
+    let head = streamed_pack_head(lines[0].as_bytes()).unwrap();
+    assert_eq!(head.pack_format_version, PACK_FORMAT);
+    assert_eq!(head.kind(), Some(PackKind::Prefix));
+    assert_eq!(head.morpholog_version.as_deref(), Some("0.0.0"));
     let one_document = serde_json::to_string(&document).unwrap();
-    assert_eq!(streamed_pack_version(one_document.as_bytes()), None);
-    assert_eq!(pack_format_version(one_document.as_bytes()), Some(1));
+    assert!(streamed_pack_head(one_document.as_bytes()).is_none());
+    assert_eq!(document_pack_head(one_document.as_bytes()), Some(head));
 }
 
 #[test]
@@ -805,7 +820,7 @@ fn every_break_in_the_line_format_is_malformed() {
 
     stream_malformed(
         &edit(&|l| l[0] = l[0].replace("\"prefix\"", "\"window\"")),
-        "not a complete-prefix pack",
+        "not a prefix pack",
     );
     stream_malformed(
         &edit(&|l| l[0] = l[0].replacen('{', "{\"extra\":1,", 1)),
@@ -903,6 +918,7 @@ fn streamed_pack_of(rows: &[AuditRow], version: u32) -> Vec<u8> {
     let manifest = PrefixPackManifest {
         pack_format_version: version,
         pack_kind: "prefix".into(),
+        morpholog_version: "0.0.0".into(),
         tree_size: cp.tree_size,
         root_hash: cp.root_hash,
         checkpoint_hash: cp.checkpoint_hash,
@@ -924,57 +940,6 @@ fn mixed_history() -> Vec<AuditRow> {
     rows
 }
 
-#[test]
-fn a_stream_disclosing_a_programme_naming_row_is_version_5_and_verifies() {
-    let rows = mixed_history();
-    assert!(matches!(
-        stream_verdict(&streamed_pack_of(&rows, 5), None),
-        Ok(TreeVerification::Intact { .. })
-    ));
-}
-
-/// A version-4 reader drops a field it does not know and hashes the rest,
-/// reporting tamper on honest history; so version 4 may not carry one.
-#[test]
-fn a_version_4_stream_cannot_disclose_a_programme_naming_row() {
-    match stream_verdict(&streamed_pack_of(&mixed_history(), 4), None) {
-        Err(PackError::Malformed { detail }) => {
-            assert!(detail.contains("such a pack is version 5"), "{detail}");
-        }
-        other => panic!("expected the version to be refused, got {other:?}"),
-    }
-}
-
-/// The fence holds both ways: version 5 announces what the pack discloses.
-#[test]
-fn a_version_5_stream_must_disclose_one() {
-    match stream_verdict(&streamed_pack_of(&rows_tagged(3, 'u'), 5), None) {
-        Err(PackError::Malformed { detail }) => {
-            assert!(detail.contains("such a pack is version 4"), "{detail}");
-        }
-        other => panic!("expected the version to be refused, got {other:?}"),
-    }
-}
-
-/// The single-document spelling follows the same rule: read whole, a
-/// version-5 stream is a version-8 document; labelled 1, it is refused.
-#[test]
-fn a_programme_naming_document_is_version_8() {
-    let pack = read_prefix_stream(&streamed_pack_of(&mixed_history(), 5)[..]).unwrap();
-    assert_eq!(pack.manifest.pack_format_version, 8);
-    assert!(matches!(
-        verify_pack(&pack, None),
-        Ok(TreeVerification::Intact { .. })
-    ));
-    let mut relabelled = pack.clone();
-    relabelled.manifest.pack_format_version = PACK_FORMAT_V1;
-    malformed("such a pack is version 8", &relabelled);
-    let unstamped = read_prefix_stream(&streamed_pack_of(&rows_tagged(2, 'v'), 4)[..]).unwrap();
-    let mut overclaimed = unstamped.clone();
-    overclaimed.manifest.pack_format_version = 8;
-    malformed("such a pack is version 1", &overclaimed);
-}
-
 /// Older rows, rows naming their programme, then rows naming their
 /// semantics too: the whole ladder, in the real chronology.
 fn semantics_history() -> Vec<AuditRow> {
@@ -991,50 +956,6 @@ fn semantics_history() -> Vec<AuditRow> {
         .collect();
     rows.extend(newest);
     rows
-}
-
-/// A stream whose newest row names its semantics is version 9 and
-/// verifies whole, the older rungs before it included.
-#[test]
-fn a_stream_disclosing_a_semantics_naming_row_is_version_9_and_verifies() {
-    assert!(matches!(
-        stream_verdict(&streamed_pack_of(&semantics_history(), 9), None),
-        Ok(TreeVerification::Intact { .. })
-    ));
-}
-
-/// A version-5 reader would drop the semantics field and report tamper on
-/// honest history, so version 5 may not carry such a row; and version 9
-/// claims one, so it must.
-#[test]
-fn the_semantics_rung_is_held_both_ways() {
-    match stream_verdict(&streamed_pack_of(&semantics_history(), 5), None) {
-        Err(PackError::Malformed { detail }) => {
-            assert!(detail.contains("such a pack is version 9"), "{detail}");
-        }
-        other => panic!("expected version 5 to be refused, got {other:?}"),
-    }
-    match stream_verdict(&streamed_pack_of(&mixed_history(), 9), None) {
-        Err(PackError::Malformed { detail }) => {
-            assert!(detail.contains("such a pack is version 5"), "{detail}");
-        }
-        other => panic!("expected version 9 to be refused, got {other:?}"),
-    }
-}
-
-/// Read whole, a version-9 stream is a version-12 document, held to the
-/// same rule.
-#[test]
-fn a_semantics_naming_document_is_version_12() {
-    let pack = read_prefix_stream(&streamed_pack_of(&semantics_history(), 9)[..]).unwrap();
-    assert_eq!(pack.manifest.pack_format_version, 12);
-    assert!(matches!(
-        verify_pack(&pack, None),
-        Ok(TreeVerification::Intact { .. })
-    ));
-    let mut relabelled = pack.clone();
-    relabelled.manifest.pack_format_version = 8;
-    malformed("such a pack is version 12", &relabelled);
 }
 
 /// The whole ladder, then rows that record their draws too: one drew two
@@ -1061,68 +982,99 @@ fn subjects_history() -> Vec<AuditRow> {
     rows
 }
 
-/// A stream whose newest row records its draws is version 13 and verifies
-/// whole, every older rung before it included.
+/// Every row shape the log has ever written travels under the one format,
+/// streamed or read whole, and the manifest's head survives the reading.
 #[test]
-fn a_stream_disclosing_a_draw_recording_row_is_version_13_and_verifies() {
+fn one_format_carries_every_row_shape() {
+    let rows = subjects_history();
+    let stream = streamed_pack_of(&rows, PACK_FORMAT);
     assert!(matches!(
-        stream_verdict(&streamed_pack_of(&subjects_history(), 13), None),
+        stream_verdict(&stream, None),
         Ok(TreeVerification::Intact { .. })
     ));
-}
-
-/// A version-9 reader would drop the draws and report tamper on honest
-/// history, so version 9 may not carry such a row; and version 13 claims
-/// one, so it must.
-#[test]
-fn the_subjects_rung_is_held_both_ways() {
-    match stream_verdict(&streamed_pack_of(&subjects_history(), 9), None) {
-        Err(PackError::Malformed { detail }) => {
-            assert!(detail.contains("such a pack is version 13"), "{detail}");
-        }
-        other => panic!("expected version 9 to be refused, got {other:?}"),
-    }
-    match stream_verdict(&streamed_pack_of(&semantics_history(), 13), None) {
-        Err(PackError::Malformed { detail }) => {
-            assert!(detail.contains("such a pack is version 9"), "{detail}");
-        }
-        other => panic!("expected version 13 to be refused, got {other:?}"),
-    }
-}
-
-/// Read whole, a version-13 stream is a version-16 document, held to the
-/// same rule.
-#[test]
-fn a_draw_recording_document_is_version_16() {
-    let pack = read_prefix_stream(&streamed_pack_of(&subjects_history(), 13)[..]).unwrap();
-    assert_eq!(pack.manifest.pack_format_version, 16);
+    let pack = read_prefix_stream(&stream[..]).unwrap();
+    assert_eq!(pack.manifest.pack_format_version, PACK_FORMAT);
+    assert_eq!(pack.manifest.pack_kind, "prefix");
+    assert_eq!(pack.manifest.morpholog_version, "0.0.0");
     assert!(matches!(
         verify_pack(&pack, None),
         Ok(TreeVerification::Intact { .. })
     ));
-    let mut relabelled = pack.clone();
-    relabelled.manifest.pack_format_version = 12;
-    malformed("such a pack is version 16", &relabelled);
 }
 
-/// Every version names one kind of pack, every rung of each kind's ladder
-/// included, and nothing past the newest.
+/// A pack of another format, older or newer, is refused by name before a
+/// row is read, naming the writer its manifest claims. The head is read
+/// leniently: a newer format may carry fields this binary has never seen.
 #[test]
-fn every_version_names_one_kind() {
-    let kinds: Vec<_> = (1..=super::NEWEST_PACK_FORMAT)
-        .map(|v| super::pack_kind(v.into()))
-        .collect();
-    assert!(kinds.iter().all(Option::is_some), "{kinds:?}");
-    assert_eq!(super::pack_kind(9), Some(super::PackKind::PrefixStream));
-    assert_eq!(super::pack_kind(10), Some(super::PackKind::Window));
-    assert_eq!(super::pack_kind(11), Some(super::PackKind::Selective));
-    assert_eq!(super::pack_kind(12), Some(super::PackKind::PrefixDocument));
-    assert_eq!(super::pack_kind(13), Some(super::PackKind::PrefixStream));
-    assert_eq!(super::pack_kind(14), Some(super::PackKind::Window));
-    assert_eq!(super::pack_kind(15), Some(super::PackKind::Selective));
-    assert_eq!(super::pack_kind(16), Some(super::PackKind::PrefixDocument));
-    assert_eq!(
-        super::pack_kind(u64::from(super::NEWEST_PACK_FORMAT) + 1),
-        None
+fn another_format_is_unsupported_not_malformed() {
+    let rows = rows_tagged(3, 'f');
+    match stream_verdict(&streamed_pack_of(&rows, 13), None) {
+        Err(PackError::Unsupported {
+            pack_format_version: 13,
+            written_by,
+        }) => assert_eq!(written_by.as_deref(), Some("0.0.0")),
+        other => panic!("expected format 13 to be unsupported, got {other:?}"),
+    }
+    let newer = b"{\"pack_format_version\": 18, \"pack_kind\": \"prefix\", \
+                  \"morpholog_version\": \"9.9.9\", \"from_the_future\": true}\nnot json\n";
+    match stream_verdict(newer, None) {
+        Err(PackError::Unsupported {
+            pack_format_version: 18,
+            written_by,
+        }) => assert_eq!(written_by.as_deref(), Some("9.9.9")),
+        other => panic!("expected format 18 to be unsupported, got {other:?}"),
+    }
+    let message = PackError::Unsupported {
+        pack_format_version: 18,
+        written_by: Some("9.9.9".into()),
+    }
+    .to_string();
+    assert!(
+        message.contains("reads format 17") && message.contains("names Morpholog 9.9.9"),
+        "{message}"
     );
+    let message = PackError::Unsupported {
+        pack_format_version: 13,
+        written_by: None,
+    }
+    .to_string();
+    assert!(
+        message.contains("does not name its writer") && message.contains("export the pack again"),
+        "{message}"
+    );
+    let mut document = read_prefix_stream(&streamed_pack_of(&rows, PACK_FORMAT)[..]).unwrap();
+    document.manifest.pack_format_version = 16;
+    assert!(matches!(
+        verify_pack(&document, None),
+        Err(PackError::Unsupported {
+            pack_format_version: 16,
+            ..
+        })
+    ));
+    // Judged before any other rule: a broken chain in another format is
+    // still unsupported, not malformed, as the window and selective
+    // verifiers already answer.
+    document.checkpoints.clear();
+    assert!(matches!(
+        verify_pack(&document, None),
+        Err(PackError::Unsupported {
+            pack_format_version: 16,
+            ..
+        })
+    ));
+}
+
+/// Under the one format the manifest must say what it is and who wrote it.
+#[test]
+fn a_manifest_of_the_format_is_held_to_its_shape() {
+    let rows = rows_tagged(2, 'k');
+    let mut pack = read_prefix_stream(&streamed_pack_of(&rows, PACK_FORMAT)[..]).unwrap();
+    pack.manifest.pack_kind = "window".into();
+    malformed("not a prefix pack", &pack);
+    let text = String::from_utf8(streamed_pack_of(&rows, PACK_FORMAT)).unwrap();
+    let without_writer = text.replacen(",\"morpholog_version\":\"0.0.0\"", "", 1);
+    assert_ne!(without_writer, text);
+    stream_malformed(without_writer.as_bytes(), "morpholog_version");
+    let another_kind = text.replacen("\"pack_kind\":\"prefix\"", "\"pack_kind\":\"window\"", 1);
+    stream_malformed(another_kind.as_bytes(), "not a prefix pack");
 }

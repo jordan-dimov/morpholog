@@ -15,7 +15,8 @@
   ],
   "manifest": {
     "checkpoint_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "pack_format_version": 3,
+    "morpholog_version": "0.0.0",
+    "pack_format_version": 17,
     "pack_kind": "selective",
     "root_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "tree_size": 3
