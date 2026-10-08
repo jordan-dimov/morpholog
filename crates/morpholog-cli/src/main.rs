@@ -427,8 +427,8 @@ pub(crate) struct VerifyArgs {
     #[arg(long, value_name = "FILE")]
     pub(crate) require_signing_key: Option<std::path::PathBuf>,
 
-    /// Trust anchors for the external witnesses checkpoints carry: a PEM
-    /// file of the timestamp authorities' CA certificates. A witness whose
+    /// Trust anchors for the external witnesses checkpoints carry: one PEM
+    /// bundle holding every timestamp authority's CA certificate. A witness whose
     /// token chains to one of them reports `verified`; one that does not,
     /// `untrusted`. Without this file every intact witness is
     /// `unverified` - present and consistent, but vouched for by no one
@@ -819,9 +819,9 @@ pub(crate) struct PackTrustArgs {
     #[arg(long)]
     pub(crate) witnesses: bool,
 
-    /// Trust anchors for those witnesses: a PEM bundle of the timestamp
-    /// authorities' CA certificates, one file for every authority (`verified` if a token chains to one,
-    /// `untrusted` if not, `unverified` without the file). Implies
+    /// Trust anchors for those witnesses: one PEM bundle holding every
+    /// timestamp authority's CA certificate (`verified` if a token chains
+    /// to one, `untrusted` if not, `unverified` without the file). Implies
     /// `--witnesses`. An `invalid` witness fails the command.
     #[arg(long, value_name = "FILE")]
     pub(crate) trusted_tsa_file: Option<std::path::PathBuf>,

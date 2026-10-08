@@ -2975,7 +2975,7 @@ async fn init_provisions_then_refuses_then_skips() {
     let (status, _stdout, stderr) = run_cli(&["init", "--reset", "--i-know-this-deletes-data"]);
     assert!(status.success());
     assert!(
-        stderr.contains("found no"),
+        stderr.contains("found no pre-existing `morpholog` schema before provisioning"),
         "with nothing to drop the report says so: {stderr}"
     );
 }
