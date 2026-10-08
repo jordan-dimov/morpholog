@@ -16,9 +16,19 @@
 #                   export DATABASE_URL='postgres:///morpholog_dev?port=55432'
 #
 # Usage:
-#   ./scripts/precommit.sh
+#   ./scripts/precommit.sh            every check
+#   ./scripts/precommit.sh --smoke    only the checks that compile nothing
+#                                     (dashes, formatting, kernel purity):
+#                                     seconds, before a commit
 
 set -euo pipefail
+
+smoke=false
+case "${1:-}" in
+    --smoke) smoke=true ;;
+    '') ;;
+    *) echo "usage: $0 [--smoke]" >&2; exit 2 ;;
+esac
 
 # Every cargo step below builds offline (SQLX_OFFLINE=true via
 # `.cargo/config.toml`), verifying SQL against the committed `.sqlx/`
@@ -54,6 +64,11 @@ cargo fmt --all -- --check
 
 step 'kernel purity: no ambient clock, randomness or outside world in morpholog-core'
 ./scripts/kernel_purity.sh
+
+if $smoke; then
+    printf '\n=== Smoke checks passed; nothing was compiled. ===\n'
+    exit 0
+fi
 
 step 'cargo clippy --workspace --all-targets --all-features --locked -- -D warnings'
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
