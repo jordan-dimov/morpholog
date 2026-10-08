@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref.
 concurrency:
@@ -144,6 +145,96 @@ jobs:
       - name: cargo audit
         run: cargo audit
 
+  # The test suites run as three jobs so the two database-backed suites,
+  # each serial within itself, no longer wait for one another. Each
+  # database job gets its own PostgreSQL service.
+  test-sync:
+    name: test (sync)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      # The same rust-lld memory bounds the coverage job carries.
+      # Serialising lld caps each link's internal parallelism, but
+      # cargo still links several test binaries concurrently, and with
+      # full debuginfo the combined peak still intermittently SIGBUSes
+      # the hosted runner (it has taken out pg-17 and pg-18 runs on
+      # different days). line-tables-only cuts each link's footprint
+      # several-fold while test backtraces keep file/line info.
+      RUSTFLAGS: "-C link-arg=-Wl,--threads=1 -C debuginfo=line-tables-only"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test-sync
+
+      # Sync, pure crates - no DB.
+      - name: test (core)
+        run: cargo test -p morpholog-core --all-targets --locked
+
+      - name: test (examples)
+        run: cargo test -p morpholog-examples --all-targets --locked
+
+      # Parser arc: lexer, layout, parser, formatter round-trip.
+      # No DB; the round-trip property test lives here.
+      - name: test (surface)
+        run: cargo test -p morpholog-surface -p morpholog-test-support --all-targets --locked
+
+  test-cli:
+    name: test (cli, postgres ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # PostgreSQL 18 is the minimum supported version.
+        postgres: [18]
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      RUSTFLAGS: "-C link-arg=-Wl,--threads=1 -C debuginfo=line-tables-only"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test-cli
+
+      - name: Apply Morpholog schema
+        env:
+          PGPASSWORD: postgres
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -1 -f crates/morpholog-core/sql/schema.sql
+
+      # PG-backed integration tests share one schema; each test
+      # truncates it on entry, so they must run serially.
+      - name: test (cli, serial)
+        run: cargo test -p morpholog-cli --all-targets --locked -- --test-threads=1
+
   test:
     name: test (postgres ${{ matrix.postgres }})
     runs-on: ubuntu-latest
@@ -170,13 +261,6 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      # The same rust-lld memory bounds the coverage job carries.
-      # Serialising lld caps each link's internal parallelism, but
-      # cargo still links several test binaries concurrently, and with
-      # full debuginfo the combined peak still intermittently SIGBUSes
-      # the hosted runner (it has taken out pg-17 and pg-18 runs on
-      # different days). line-tables-only cuts each link's footprint
-      # several-fold while test backtraces keep file/line info.
       RUSTFLAGS: "-C link-arg=-Wl,--threads=1 -C debuginfo=line-tables-only"
 
     steps:
@@ -208,23 +292,8 @@ jobs:
           SQLX_OFFLINE: "false"
         run: cargo sqlx prepare --workspace --check -- --all-targets --all-features --locked
 
-      # Sync, pure crates - no DB.
-      - name: test (core)
-        run: cargo test -p morpholog-core --all-targets --locked
-
-      - name: test (examples)
-        run: cargo test -p morpholog-examples --all-targets --locked
-
-      # Parser arc: lexer, layout, parser, formatter round-trip.
-      # No DB; the round-trip property test lives here.
-      - name: test (surface)
-        run: cargo test -p morpholog-surface -p morpholog-test-support --all-targets --locked
-
       # PG-backed integration tests share one schema; each test
       # truncates it on entry, so they must run serially.
-      - name: test (cli, serial)
-        run: cargo test -p morpholog-cli --all-targets --locked -- --test-threads=1
-
       - name: test (postgres, serial)
         run: cargo test -p morpholog-postgres --all-targets --locked -- --test-threads=1
 
@@ -309,6 +378,10 @@ jobs:
 
   coverage:
     name: coverage (llvm-cov)
+    # Visibility only, never a required check, and it reruns the whole
+    # suite instrumented: it runs on main and on request, not on every
+    # pull request.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     # A normal run takes about five minutes. The disk clean-up below
     # has taken eleven on a slow runner, so the limit leaves room for it.

@@ -69,8 +69,9 @@ them should either keep the pinning test green or move it deliberately.
 ## Validation
 
 CI is `.github/workflows/ci.yml`. The local equivalent is
-`./scripts/precommit.sh`, run in two steps: `env -u DATABASE_URL
-./scripts/precommit.sh` first (formatting, clippy, rustdoc, the Rust
+`./scripts/precommit.sh`, run in three steps: `./scripts/precommit.sh
+--smoke` (dashes, formatting, kernel purity; compiles nothing), then
+`env -u DATABASE_URL ./scripts/precommit.sh` (clippy, rustdoc, the Rust
 floor, `cargo audit`, the sync suites, the Python client), then the
 full run with `DATABASE_URL` set. The PostgreSQL-backed suites need a
 disposable **cluster**, not just a database - they truncate the schema
