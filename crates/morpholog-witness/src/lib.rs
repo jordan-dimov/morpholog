@@ -55,6 +55,7 @@ const OID_AA_SIGNING_CERTIFICATE_V2: &[u8] = &[
 /// SHA-384 sibling, used only as a stand-in so it can parse the rest of such a token.
 const OID_ECDSA_WITH_SHA512: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x04];
 const OID_ECDSA_WITH_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03];
+const OID_ECDSA_WITH_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
 /// id-ecPublicKey and the named curves the SHA-512 fallback verifies on (RFC 5480).
 const OID_EC_PUBLIC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
 const OID_P256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
@@ -327,6 +328,14 @@ fn examine(
         detail: format!("the token's time `{validity_at}` is not a representable instant"),
     })?;
 
+    for signer in asn1_sd.signer_infos.iter() {
+        if let Some(name) = ecdsa_with_parameters(&signer.signature_algorithm) {
+            return Err(invalid(format!(
+                "the token's signature algorithm identifier {name} carries parameters, which \
+                 RFC 5758 forbids"
+            )));
+        }
+    }
     let route = signature_route(&asn1_sd);
     let sd = match route {
         SignatureRoute::Cms => SignedData::try_from(&asn1_sd),
@@ -423,10 +432,45 @@ fn carried_certificates(
             })
         })
         .map_err(|e| invalid(format!("malformed SignedData certificates: {e}")))?;
-    Ok(elements
+    let carried: Vec<CapturedX509Certificate> = elements
         .into_iter()
         .filter_map(|element| CapturedX509Certificate::from_ber(element.as_slice().to_vec()).ok())
-        .collect())
+        .collect();
+    for cert in &carried {
+        if let Some(detail) = certificate_ecdsa_with_parameters(cert.as_ref()) {
+            return Err(invalid(format!(
+                "the carried certificate `{}` names {detail}, which RFC 5758 forbids",
+                common_name(cert)
+            )));
+        }
+    }
+    Ok(carried)
+}
+
+/// The name of an ECDSA signature algorithm whose identifier carries parameters, which RFC
+/// 5758 section 3.2 requires to be absent. Read on the bytes as received: the CMS crate's own
+/// re-encoding adds a NULL the authority never wrote.
+fn ecdsa_with_parameters(id: &AlgorithmIdentifier) -> Option<&'static str> {
+    let name = match id.algorithm.as_ref() {
+        OID_ECDSA_WITH_SHA256 => "ecdsa-with-SHA256",
+        OID_ECDSA_WITH_SHA384 => "ecdsa-with-SHA384",
+        OID_ECDSA_WITH_SHA512 => "ecdsa-with-SHA512",
+        _ => return None,
+    };
+    id.parameters.is_some().then_some(name)
+}
+
+/// Both of a certificate's signature algorithm identifiers (the outer one and the one inside
+/// what was signed), held to the same rule.
+fn certificate_ecdsa_with_parameters(
+    cert: &x509_certificate::rfc5280::Certificate,
+) -> Option<String> {
+    ecdsa_with_parameters(&cert.signature_algorithm)
+        .map(|name| format!("{name} with parameters as its signature algorithm"))
+        .or_else(|| {
+            ecdsa_with_parameters(&cert.tbs_certificate.signature)
+                .map(|name| format!("{name} with parameters inside its signed content"))
+        })
 }
 
 /// Who judges a token's signature: the CMS crate, for every algorithm it knows, or this crate,
@@ -544,13 +588,23 @@ fn check_ecdsa_sha512(
 /// algorithm, `invalid` when it judged and refused. Matched on the error
 /// type, never its wording.
 fn classify_cms(err: CmsError) -> WitnessStatus {
+    // Every arm of this error in x509-certificate 0.25 pairs a key the
+    // library knows with a signature algorithm of another family (an ECDSA
+    // key and an RSA signature, say): that key cannot have made it.
+    if let CmsError::X509Certificate(X509CertificateError::UnsupportedSignatureVerification(
+        key,
+        signature,
+    )) = &err
+    {
+        return invalid(format!(
+            "the signer's key ({key:?}) is of another family than the signature names \
+             ({signature:?}), so it cannot have made it"
+        ));
+    }
     let cannot_judge = match &err {
         CmsError::UnknownKeyAlgorithm(_)
         | CmsError::UnknownDigestAlgorithm(_)
         | CmsError::UnknownSignatureAlgorithm(_) => true,
-        CmsError::X509Certificate(X509CertificateError::UnsupportedSignatureVerification(..)) => {
-            true
-        }
         CmsError::X509Certificate(err) => lacks_primitive(err),
         _ => false,
     };
@@ -1039,6 +1093,105 @@ mod tests {
         // Without the intermediate in hand, the root is unreachable.
         let err = untrusted(validate_path(leaf, &chain[..1], &root, attested));
         assert!(err.contains("no certification path"), "{err}");
+    }
+
+    /// `proof` with its SignedData rebuilt after `mutate`, as DER. The signature bytes stay
+    /// what the authority wrote; only what the identifiers say about them changes.
+    fn rebuilt(proof: &[u8], mutate: impl FnOnce(&mut Asn1SignedData)) -> Vec<u8> {
+        use bcder::encode::Values as _;
+        let resp = Constructed::decode(proof, Mode::Ber, TimeStampResp::take_from).unwrap();
+        let token = resp.time_stamp_token.as_ref().unwrap();
+        let mut sd: Asn1SignedData = token
+            .content
+            .clone()
+            .decode(Asn1SignedData::take_from)
+            .unwrap();
+        mutate(&mut sd);
+        // `SignedData::encode_ref` writes the whole ContentInfo, so it stands in for the
+        // token. BER throughout: the fixture was decoded as BER, and so is every token read.
+        bcder::encode::sequence((resp.status.encode_ref(), sd.encode_ref()))
+            .to_captured(Mode::Ber)
+            .into_bytes()
+            .to_vec()
+    }
+
+    fn null_parameter() -> x509_certificate::rfc5280::AlgorithmParameter {
+        use bcder::encode::PrimitiveContent as _;
+        x509_certificate::rfc5280::AlgorithmParameter::from_captured(bcder::Captured::from_values(
+            Mode::Ber,
+            ().encode(),
+        ))
+    }
+
+    /// The generated P-256 token, its signer's algorithm renamed to sha256WithRSAEncryption:
+    /// an ECDSA key cannot have made an RSA signature, so the token is not genuine. `invalid`,
+    /// with or without trust material, where an algorithm this build lacks stays `unsupported`.
+    #[test]
+    fn a_key_of_another_family_than_the_signature_names_is_invalid_not_unsupported() {
+        let rsa_sha256: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b];
+        let proof = rebuilt(&fixture("ecdsa_sha512_prime256v1.tsr"), |sd| {
+            for signer in sd.signer_infos.iter_mut() {
+                signer.signature_algorithm.algorithm = Oid(Bytes::copy_from_slice(rsa_sha256));
+            }
+        });
+        let payload = fixture("genesis_payload.bin");
+        let ca = Anchors::from_pem(&fixture("ecdsa_sha512_prime256v1_ca.pem")).unwrap();
+        for anchors in [None, Some(&ca)] {
+            let status = verify_rfc3161(&proof, &payload, anchors);
+            assert!(
+                matches!(&status, WitnessStatus::Invalid { detail } if detail.contains("cannot have made")),
+                "{status:?}"
+            );
+        }
+        // The control: a curve this build lacks is still unsupported.
+        assert!(matches!(
+            verify_rfc3161(&fixture("ecdsa_sha512_secp521r1.tsr"), &payload, None),
+            WitnessStatus::Unsupported { .. }
+        ));
+    }
+
+    /// RFC 5758 section 3.2: an ECDSA signature algorithm identifier carries no parameters.
+    /// The same token with a NULL parameter on its signer is refused as `invalid`, before its
+    /// signature is judged; the untouched token still verifies.
+    #[test]
+    fn an_ecdsa_identifier_with_parameters_is_refused() {
+        let payload = fixture("genesis_payload.bin");
+        let ca = Anchors::from_pem(&fixture("ecdsa_sha512_prime256v1_ca.pem")).unwrap();
+        let genuine = fixture("ecdsa_sha512_prime256v1.tsr");
+        assert!(matches!(
+            verify_rfc3161(&genuine, &payload, Some(&ca)),
+            WitnessStatus::Verified { .. }
+        ));
+        // The certificates are dropped: the crate's re-encoding would give their ECDSA
+        // identifiers the same NULL, and the carried-certificate rule would refuse the token
+        // before the signer rule under test could.
+        let with_parameters = rebuilt(&genuine, |sd| {
+            sd.certificates = None;
+            for signer in sd.signer_infos.iter_mut() {
+                signer.signature_algorithm.parameters = Some(null_parameter());
+            }
+        });
+        let status = verify_rfc3161(&with_parameters, &payload, Some(&ca));
+        assert!(
+            matches!(&status, WitnessStatus::Invalid { detail }
+                if detail.contains("token's signature algorithm identifier ecdsa-with-SHA512")
+                    && detail.contains("RFC 5758")),
+            "{status:?}"
+        );
+
+        // A carried certificate is held to the same rule on both of its identifiers.
+        let ca_cert =
+            CapturedX509Certificate::from_pem(fixture("ecdsa_sha512_prime256v1_ca.pem")).unwrap();
+        let raw: &x509_certificate::rfc5280::Certificate = ca_cert.as_ref();
+        let mut cert = raw.clone();
+        assert_eq!(certificate_ecdsa_with_parameters(&cert), None);
+        cert.signature_algorithm.parameters = Some(null_parameter());
+        let detail = certificate_ecdsa_with_parameters(&cert).unwrap();
+        assert!(detail.contains("as its signature algorithm"), "{detail}");
+        cert.signature_algorithm.parameters = None;
+        cert.tbs_certificate.signature.parameters = Some(null_parameter());
+        let detail = certificate_ecdsa_with_parameters(&cert).unwrap();
+        assert!(detail.contains("inside its signed content"), "{detail}");
     }
 
     /// A certificate's signature is checked with its issuer's key type: an
