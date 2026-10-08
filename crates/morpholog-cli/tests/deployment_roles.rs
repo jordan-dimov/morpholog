@@ -253,21 +253,211 @@ async fn a_reset_binds_again_only_the_roles_the_database_recorded() {
 
     let (status, _, stderr) = reset(&kept_url, "morpholog_ci_cli_other_");
     assert!(!status.success());
-    assert!(stderr.contains("Nothing was dropped"), "{stderr}");
+    assert!(stderr.contains("nothing was dropped"), "{stderr}");
     assert_eq!(
         recorded(kept_url.clone()).await,
         (Some(roles[0].to_string()), true),
         "the refused reset left the schema and its floor in place"
     );
 
-    // A database that recorded nothing adopts nothing on a reset either.
+    // A database that recorded nothing adopts nothing on a reset either,
+    // and refuses before it drops: dropping first would leave a schema with
+    // no floor.
     let (status, _, stderr) = cli(&["init", "--database-url", &bare_url]);
     assert!(status.success(), "{stderr}");
+    let bare_pool = PgPool::connect(&bare_url).await.unwrap();
+    run(&bare_pool, "CREATE TABLE morpholog.reset_sentinel ()").await;
     run(&admin, &format!("CREATE ROLE {} NOLOGIN", roles[2])).await;
     let (status, _, stderr) = reset(&bare_url, "morpholog_ci_cli_loose_");
     assert!(!status.success());
-    assert!(stderr.contains("already exists"), "{stderr}");
+    assert!(
+        stderr.contains("already exists") && stderr.contains("nothing was dropped"),
+        "{stderr}"
+    );
+    assert!(
+        survived(&bare_pool).await,
+        "the refused reset dropped the schema"
+    );
+    bare_pool.close().await;
 
+    clean().await;
+}
+
+async fn survived(pool: &PgPool) -> bool {
+    sqlx::query_scalar::<_, bool>("SELECT to_regclass('morpholog.reset_sentinel') IS NOT NULL")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// A least-privilege database from before the role record existed: a reset
+/// cannot know which roles to bind again, so it refuses, naming `migrate`,
+/// before it drops anything.
+#[tokio::test]
+async fn a_reset_of_a_database_older_than_the_role_record_refuses_first() {
+    let Ok(base) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let base = morpholog_postgres::with_default_user(&base);
+    let admin = PgPool::connect(&with_database(&base, "postgres"))
+        .await
+        .unwrap();
+    let db = "morpholog_ci_cli_old";
+    let (writer, reader) = ("morpholog_ci_cli_old_writer", "morpholog_ci_cli_old_reader");
+    let clean = || async {
+        run(
+            &admin,
+            &format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"),
+        )
+        .await;
+        run(&admin, &format!("DROP ROLE IF EXISTS {writer}, {reader}")).await;
+    };
+    clean().await;
+    run(&admin, &format!("CREATE DATABASE {db}")).await;
+    let url = with_database(&base, db);
+    let (status, _, stderr) = cli(&[
+        "init",
+        "--least-privilege",
+        "--role-prefix",
+        "morpholog_ci_cli_old_",
+        "--database-url",
+        &url,
+    ]);
+    assert!(status.success(), "{stderr}");
+    // Back to the shape before migration 023.
+    let pool = PgPool::connect(&url).await.unwrap();
+    run(
+        &pool,
+        "DROP TABLE morpholog.deployment_roles; \
+         DELETE FROM morpholog.schema_migrations WHERE version = 23; \
+         CREATE TABLE morpholog.reset_sentinel ()",
+    )
+    .await;
+
+    let (status, _, stderr) = cli(&[
+        "init",
+        "--reset",
+        "--i-know-this-deletes-data",
+        "--least-privilege",
+        "--role-prefix",
+        "morpholog_ci_cli_old_",
+        "--database-url",
+        &url,
+    ]);
+    assert!(!status.success());
+    assert!(
+        stderr.contains("morpholog migrate") && stderr.contains("nothing was dropped"),
+        "{stderr}"
+    );
+    assert!(
+        survived(&pool).await,
+        "the refused reset dropped the schema"
+    );
+
+    // The migration recorded but its table gone: `migrate` has nothing to
+    // apply, so it is not the advice.
+    run(
+        &pool,
+        "INSERT INTO morpholog.schema_migrations (version, name) VALUES (23, 'deployment_roles')",
+    )
+    .await;
+    let (status, _, stderr) = cli(&[
+        "init",
+        "--reset",
+        "--i-know-this-deletes-data",
+        "--least-privilege",
+        "--role-prefix",
+        "morpholog_ci_cli_old_",
+        "--database-url",
+        &url,
+    ]);
+    assert!(!status.success());
+    assert!(
+        stderr.contains("restore it from a backup") && !stderr.contains("morpholog migrate"),
+        "{stderr}"
+    );
+    assert!(
+        survived(&pool).await,
+        "the refused reset dropped the schema"
+    );
+
+    pool.close().await;
+    clean().await;
+}
+
+/// A role that may not create roles cannot provision the floor, so
+/// `init --least-privilege` refuses before it creates or drops a schema.
+#[tokio::test]
+async fn least_privilege_without_createrole_refuses_before_any_change() {
+    let Ok(base) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let base = morpholog_postgres::with_default_user(&base);
+    let admin = PgPool::connect(&with_database(&base, "postgres"))
+        .await
+        .unwrap();
+    let db = "morpholog_ci_cli_nocr";
+    let owner = "morpholog_ci_cli_nocr_owner";
+    let clean = || async {
+        run(
+            &admin,
+            &format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"),
+        )
+        .await;
+        run(&admin, &format!("DROP ROLE IF EXISTS {owner}")).await;
+    };
+    clean().await;
+    run(&admin, &format!("CREATE ROLE {owner} NOLOGIN NOCREATEROLE")).await;
+    run(&admin, &format!("CREATE DATABASE {db} OWNER {owner}")).await;
+    // The binary acts as the owner, which may not create roles.
+    let url = with_database(&base, db);
+    let joiner = if url.contains('?') { '&' } else { '?' };
+    let as_owner = format!("{url}{joiner}options[role]={owner}");
+    let provision = |reset: bool| {
+        let mut args = vec!["init"];
+        if reset {
+            args.extend(["--reset", "--i-know-this-deletes-data"]);
+        }
+        args.extend([
+            "--least-privilege",
+            "--role-prefix",
+            "morpholog_ci_cli_nocr_",
+            "--database-url",
+            &as_owner,
+        ]);
+        cli(&args)
+    };
+
+    let (status, _, stderr) = provision(false);
+    assert!(!status.success());
+    assert!(
+        stderr.contains("may not create roles") && stderr.contains("nothing was provisioned"),
+        "{stderr}"
+    );
+    let pool = PgPool::connect(&with_database(&base, db)).await.unwrap();
+    let schema = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'morpholog')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!schema, "the refused init created a schema with no floor");
+
+    let (status, _, stderr) = cli(&["init", "--database-url", &as_owner]);
+    assert!(status.success(), "{stderr}");
+    run(&pool, "CREATE TABLE morpholog.reset_sentinel ()").await;
+    let (status, _, stderr) = provision(true);
+    assert!(!status.success());
+    assert!(
+        stderr.contains("may not create roles") && stderr.contains("nothing was dropped"),
+        "{stderr}"
+    );
+    assert!(
+        survived(&pool).await,
+        "the refused reset dropped the schema"
+    );
+
+    pool.close().await;
     clean().await;
 }
 

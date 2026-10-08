@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT rolsuper OR rolcreaterole AS \"may!\" FROM pg_roles WHERE rolname = current_user",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "may!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b7a0c2b86cbdf5057d29f6bdd2c5d7d021c2d2b7b3d7fdd094602947c75a21b8"
+}
