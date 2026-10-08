@@ -1051,6 +1051,17 @@ fn another_format_is_unsupported_not_malformed() {
             ..
         })
     ));
+    // Judged before any other rule: a broken chain in another format is
+    // still unsupported, not malformed, as the window and selective
+    // verifiers already answer.
+    document.checkpoints.clear();
+    assert!(matches!(
+        verify_pack(&document, None),
+        Err(PackError::Unsupported {
+            pack_format_version: 16,
+            ..
+        })
+    ));
 }
 
 /// Under the one format the manifest must say what it is and who wrote it.

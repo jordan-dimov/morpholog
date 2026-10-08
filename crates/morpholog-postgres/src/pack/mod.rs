@@ -348,12 +348,8 @@ pub fn verify_pack(
 /// The complete-prefix envelope rules, checked before any cryptography. Stricter than
 /// the live verifier on purpose: a pack is untrusted JSON.
 fn validate_envelope(pack: &EvidencePack) -> Result<(), PackError> {
-    let covering = validate_prefix_chain(&pack.checkpoints)?;
-    // Exactly the rows the covering checkpoint commits to: extra rows would
-    // ride along unproven.
-    if pack.rows.len() as i64 != covering.tree_size {
-        return Err(row_count_disagrees(pack.rows.len(), covering.tree_size));
-    }
+    // The format first: another format is unsupported whatever else is
+    // wrong with the pack, since none of its rules are this binary's.
     let m = &pack.manifest;
     check_manifest(
         m.pack_format_version,
@@ -361,6 +357,12 @@ fn validate_envelope(pack: &EvidencePack) -> Result<(), PackError> {
         &m.pack_kind,
         PackKind::Prefix,
     )?;
+    let covering = validate_prefix_chain(&pack.checkpoints)?;
+    // Exactly the rows the covering checkpoint commits to: extra rows would
+    // ride along unproven.
+    if pack.rows.len() as i64 != covering.tree_size {
+        return Err(row_count_disagrees(pack.rows.len(), covering.tree_size));
+    }
     manifest_agrees(covering, m.tree_size, &m.root_hash, &m.checkpoint_hash)
 }
 
