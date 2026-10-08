@@ -10,6 +10,7 @@ by what you want to write in a `.morph` file.
 | The problem | Start with |
 |---|---|
 | Let an AI or an optimiser propose, without trusting it | [Operational information](20_operational_information/), [Margin call run](14_margin_call_run/) |
+| Find out, from the outside world's own record, whether an action got past the system | [Closed-loop execution](21_closed_loop_execution/) |
 | Govern a trade from capture to settlement | [Trade lifecycle](10_trade_lifecycle/) |
 | Accept a batch only if it is complete, not just correct line by line | [Margin call run](14_margin_call_run/) |
 | Check authority at the moment someone acts, and withdraw it later | [Trade lifecycle](10_trade_lifecycle/), [Approval controls](04_approval_controls/) |
@@ -58,6 +59,7 @@ one act is a margin-call run.
 | let only an authorised login act under a name | [13_biometric_identification_oversight](13_biometric_identification_oversight/) | `ActorAssertionRestricted` + `ActorAssertionAuthority` |
 | watch a limit on a net position, long minus short | [10_trade_lifecycle](10_trade_lifecycle/) | `abs(...)` |
 | make a skipped process step uncommittable, not just reviewable | [16_release_governance](16_release_governance/) | `require name: ...` gates, one per checklist step |
+| list the records one source has that another lacks | [21_closed_loop_execution](21_closed_loop_execution/) | `not` over a claim pattern in a `derived` domain |
 | gate an act on completeness over a declared set | [16_release_governance](16_release_governance/) | `forall p in PlatformDeclared(p): ...` inside a `require` |
 | roll a date forward by calendar months, month-end safe | [17_covenant_reporting](17_covenant_reporting/) | `span(P3M)` shifting a `Date` |
 | count the days between two dates and refuse any other figure | [17_covenant_reporting](17_covenant_reporting/) | date subtraction, `as_of - deadline` |
