@@ -55,7 +55,7 @@ env -u DATABASE_URL ./scripts/precommit.sh   # the fast pass: everything but the
 ./scripts/precommit.sh                       # the full run, with DATABASE_URL exported as above
 ```
 
-Run them in that order. The smoke pass is for before a commit: it catches the slips that most often restart a longer run, and compiles nothing. The fast pass takes a fraction of the full run's time and catches most of what fails it (clippy, rustdoc, the sync suites); the full run is then paid once. A full run restarted for a formatting slip is ten minutes lost.
+The smoke pass is for before every commit: it catches the slips that most often restart a longer run, and compiles nothing. The fast pass is the ordinary pre-push check; it catches most of what fails CI (clippy, rustdoc, the sync suites) in a fraction of the full run's time. The full run is for when it is warranted: a migration, an envelope change, a release, or a CI failure to reproduce. Required CI is the authoritative full gate on every pull request either way.
 
 CI runs the test suites as three jobs in parallel: the sync crates, the CLI suite, and the persistence adapter with the outbox and the bench smoke. The two database-backed jobs stay serial within themselves (each test truncates the shared schema) and each has its own PostgreSQL service; one aggregate job, the required check, is green only when all three are. The coverage job runs on pushes to `main` and on request, not on pull requests.
 
