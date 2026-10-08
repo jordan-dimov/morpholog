@@ -1,199 +1,37 @@
 //! The upgrade path for an existing database.
 //!
-//! `morpholog init` never migrates, so an existing deployment upgrades by
-//! applying the numbered files in `crates/morpholog-core/sql/migrations/`.
-//! Each promises "run this and your database matches the head schema", and
-//! these tests check that. A missing column shows up on the refusal path:
-//! the rejection log insert fails, so a lawful rejection becomes a
-//! database error.
+//! `morpholog init` never migrates, so an existing deployment upgrades with
+//! `morpholog migrate`, which carries the migrations beyond the baseline
+//! inside the binary. The baseline is the schema v0.0.14 provisioned, and
+//! a database that does not record it is refused by name. A missing column
+//! shows up on the refusal path: the rejection log insert fails, so a
+//! lawful rejection becomes a database error.
 //!
 //! `reset_db` only truncates, so DDL on the shared `morpholog` schema would
 //! leak into every later test. Tests that change the schema work in a
-//! scratch schema or database they create and drop, and restore anything
-//! shared before asserting.
+//! database they create and drop, and restore anything shared before
+//! asserting.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
 
 use common::{reset_db, test_pool};
-use sqlx::{PgPool, Row};
+use morpholog_postgres::BASELINE_VERSION;
+use sqlx::PgPool;
 
-const WITNESS_MIGRATION: &str =
-    include_str!("../../morpholog-core/sql/migrations/010_rejections_witness.sql");
-const CLAIMS_KEY_MIGRATION: &str =
-    include_str!("../../morpholog-core/sql/migrations/012_claims_hash_key.sql");
-const MODEL_HASH_MIGRATION: &str =
-    include_str!("../../morpholog-core/sql/migrations/020_audit_model_hash.sql");
-const SEMANTICS_VERSION_MIGRATION: &str =
-    include_str!("../../morpholog-core/sql/migrations/021_audit_semantics_version.sql");
-const DRAWN_SUBJECTS_MIGRATION: &str =
-    include_str!("../../morpholog-core/sql/migrations/022_audit_drawn_subjects.sql");
-const DEPLOYMENT_ROLES_MIGRATION: &str =
-    include_str!("../../morpholog-core/sql/migrations/023_deployment_roles.sql");
+/// The schema v0.0.14 provisioned, as `git show v0.0.14:crates/morpholog-core/sql/schema.sql`
+/// prints it: where every deployment stands before this binary's
+/// migrations.
+const BASELINE_SCHEMA: &str = include_str!("fixtures/schema_v0.0.14.sql");
 
-/// Run one statement whose text this test owns. The scratch schema name is a
+/// Run one statement whose text this test owns. The database name is a
 /// literal here, never external input.
 async fn ddl(pool: &PgPool, sql: String) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
         .execute(pool)
         .await
         .map(|_| ())
-}
-
-/// The column shape of one table, as `(name, is_nullable, data_type)`.
-async fn columns(pool: &PgPool, schema: &str, table: &str) -> Vec<(String, String, String)> {
-    sqlx::query(
-        "SELECT column_name, is_nullable, data_type
-         FROM information_schema.columns
-         WHERE table_schema = $1 AND table_name = $2
-         ORDER BY column_name",
-    )
-    .bind(schema)
-    .bind(table)
-    .fetch_all(pool)
-    .await
-    .expect("reading the column shape")
-    .into_iter()
-    .map(|r| {
-        (
-            r.get::<String, _>("column_name"),
-            r.get::<String, _>("is_nullable"),
-            r.get::<String, _>("data_type"),
-        )
-    })
-    .collect()
-}
-
-/// The table's primary key as PostgreSQL prints it, or `None` without one.
-async fn primary_key(pool: &PgPool, table: &str) -> Option<String> {
-    sqlx::query(
-        "SELECT pg_get_constraintdef(oid) FROM pg_constraint
-         WHERE conrelid = $1::regclass AND contype = 'p'",
-    )
-    .bind(table)
-    .fetch_optional(pool)
-    .await
-    .expect("reading the primary key")
-    .map(|r| r.get::<String, _>(0))
-}
-
-/// Put a head-shaped `claims` copy back on the whole-array key.
-async fn wind_claims_key_back(pool: &PgPool, table: &str) {
-    ddl(
-        pool,
-        format!("ALTER TABLE {table} DROP COLUMN arguments_hash"),
-    )
-    .await
-    .expect("the head schema must have the digest column for this test to mean anything");
-    ddl(
-        pool,
-        format!("ALTER TABLE {table} ADD PRIMARY KEY (predicate_name, arguments)"),
-    )
-    .await
-    .unwrap();
-}
-
-/// Put a head-shaped `derived_claims` copy back on the whole-array key.
-async fn wind_derived_key_back(pool: &PgPool, table: &str) {
-    ddl(
-        pool,
-        format!("ALTER TABLE {table} ADD PRIMARY KEY (refresh_id, predicate_name, arguments)"),
-    )
-    .await
-    .unwrap();
-}
-
-/// Applying the witness migration to a pre-witness table yields exactly the
-/// head schema's shape, and leaves the rows already there alone.
-///
-/// The migration runs verbatim except that its schema name is rewritten to
-/// the scratch schema.
-#[tokio::test]
-async fn the_witness_migration_brings_an_old_table_to_the_head_shape() {
-    let pool = test_pool().await;
-    let scratch = "morpholog_migration_probe";
-    ddl(&pool, format!("DROP SCHEMA IF EXISTS {scratch} CASCADE"))
-        .await
-        .unwrap();
-    ddl(&pool, format!("CREATE SCHEMA {scratch}"))
-        .await
-        .unwrap();
-
-    // The pre-witness shape: the head table without the column.
-    ddl(
-        &pool,
-        // INCLUDING ALL keeps NOT NULLs, defaults and checks, which a bare
-        // CREATE TABLE AS would drop.
-        format!(
-            "CREATE TABLE {scratch}.rejections
-             (LIKE morpholog.rejections INCLUDING ALL)"
-        ),
-    )
-    .await
-    .unwrap();
-    ddl(
-        &pool,
-        format!("ALTER TABLE {scratch}.rejections DROP COLUMN witness"),
-    )
-    .await
-    .expect("the head schema must have the column for this test to mean anything");
-
-    // A refusal recorded before the upgrade, which must survive it.
-    ddl(
-        &pool,
-        format!(
-            "INSERT INTO {scratch}.rejections
-               (rejection_id, transformation_name, arguments, actor, kind, rule,
-                invariant_version, reason, rejected_at)
-             VALUES (gen_random_uuid(), 'post', '[]'::jsonb, '{{}}'::jsonb,
-                     'invariant', 'entry_unique_by_entry_id', 1, 'historical', now())"
-        ),
-    )
-    .await
-    .expect("the old shape accepts an old row");
-
-    let migration =
-        WITNESS_MIGRATION.replace("morpholog.rejections", &format!("{scratch}.rejections"));
-    // Twice: an operator who re-runs a migration must not be punished for it.
-    for _ in 0..2 {
-        ddl(&pool, migration.clone())
-            .await
-            .expect("the migration applies, and applies again");
-    }
-
-    assert_eq!(
-        columns(&pool, scratch, "rejections").await,
-        columns(&pool, "morpholog", "rejections").await,
-        "after migrating, the table must match the head schema column for column"
-    );
-
-    let surviving: i64 = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT count(*) FROM {scratch}.rejections WHERE witness IS NULL"
-    )))
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .get(0);
-    assert_eq!(
-        surviving, 1,
-        "the pre-upgrade row survives, with no witness invented for it"
-    );
-
-    // The constraint came with the column, not just the column.
-    let empty = ddl(
-        &pool,
-        format!("UPDATE {scratch}.rejections SET witness = '[]'::jsonb"),
-    )
-    .await;
-    assert!(
-        empty.is_err(),
-        "an empty witness must be unrepresentable after migrating too"
-    );
-
-    ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
-        .await
-        .unwrap();
 }
 
 /// An un-migrated database says so, on the path that actually breaks.
@@ -366,38 +204,25 @@ transformation post(entry_id, amount):
 /// Needs no database, so it runs even where the PG suites are skipped.
 #[test]
 fn with_database_only_moves_the_last_segment() {
-    // The CI shape: the database is itself named `postgres`, so a
-    // replace-the-name approach corrupts the scheme.
+    let ci = "postgres://postgres:postgres@localhost:5432/postgres";
     assert_eq!(
-        with_database("postgres://u:p@localhost:5432/postgres", "probe"),
-        "postgres://u:p@localhost:5432/probe"
+        with_database(ci, "probe"),
+        "postgres://postgres:postgres@localhost:5432/probe"
     );
-    // The local shape.
     assert_eq!(
         with_database("postgres:///morpholog_dev", "probe"),
         "postgres:///probe"
     );
-    // And a name colliding with the user as well as the scheme.
     assert_eq!(
-        with_database("postgres://postgres@localhost/postgres", "probe"),
-        "postgres://postgres@localhost/probe"
-    );
-    // A query string is not part of the name and must survive.
-    assert_eq!(
-        with_database("postgres://u@h:5432/postgres?sslmode=require", "probe"),
-        "postgres://u@h:5432/probe?sslmode=require"
+        with_database("postgres:///morpholog_dev?port=55432", "probe"),
+        "postgres:///probe?port=55432"
     );
 }
 
-/// The upgrade an operator actually performs, with only the binary.
-///
-/// A release ships the binary without the source tree, so the migrations
-/// come from the ones compiled in; nothing here reads the repository.
-/// The schema file records the migrations it embodies, exactly the ones
-/// this binary carries, by version and name: what makes a database
-/// provisioned from the bare file current.
+/// The bare schema file records exactly the baseline the binary starts
+/// from, and a database made from it is current.
 #[tokio::test]
-async fn the_bare_schema_file_records_exactly_the_binarys_migrations() {
+async fn the_bare_schema_file_records_the_baseline() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     sqlx::raw_sql("DROP SCHEMA morpholog CASCADE; DROP SCHEMA IF EXISTS morpholog_read CASCADE")
@@ -408,807 +233,130 @@ async fn the_bare_schema_file_records_exactly_the_binarys_migrations() {
         .execute(&pool)
         .await
         .expect("the file applies");
-    let recorded: Vec<(i32, String)> =
-        sqlx::query_as("SELECT version, name FROM morpholog.schema_migrations ORDER BY version")
+    let recorded: Vec<i32> =
+        sqlx::query_scalar("SELECT version FROM morpholog.schema_migrations ORDER BY version")
             .fetch_all(&pool)
             .await
             .unwrap();
-    let carried: Vec<(i32, String)> = {
-        // Migrate a database that recorded nothing: the report lists every
-        // migration the binary carries, in order, with its name.
-        sqlx::raw_sql("DELETE FROM morpholog.schema_migrations")
-            .execute(&pool)
-            .await
-            .unwrap();
-        morpholog_postgres::apply_migrations(&pool)
-            .await
-            .unwrap()
-            .applied
-            .into_iter()
-            .map(|m| (m.version, m.name))
-            .collect()
-    };
-    assert_eq!(recorded, carried, "the file's record is the binary's list");
-    assert_eq!(
-        recorded.last().map(|(v, _)| *v),
-        Some(morpholog_postgres::head_version())
-    );
+    assert_eq!(recorded, vec![BASELINE_VERSION]);
+    let status = morpholog_postgres::migration_status(&pool).await.unwrap();
+    assert!(status.is_current(), "{status:?}");
+    assert_eq!(status.recorded_version_before, BASELINE_VERSION);
     morpholog_postgres::require_current_schema(&pool)
         .await
         .expect("a database from the bare file is current");
 }
 
-/// What every command asks before its first query, in the order that
-/// never advises a migration against a database the binary does not
-/// understand: ahead wins over behind.
+/// The baseline is the newest migration the v0.0.14 schema records, so a
+/// database that release provisioned is exactly at it.
+#[test]
+fn the_baseline_is_the_v0_0_14_heads_version() {
+    let records = BASELINE_SCHEMA
+        .split_once("INSERT INTO schema_migrations (version, name) VALUES")
+        .expect("the fixture records its migrations")
+        .1;
+    let records = records.split_once(';').unwrap().0;
+    let newest = records
+        .split('(')
+        .skip(1)
+        .map(|row| {
+            row.split(',')
+                .next()
+                .unwrap()
+                .trim()
+                .parse::<i32>()
+                .unwrap()
+        })
+        .max()
+        .unwrap();
+    assert_eq!(newest, BASELINE_VERSION);
+}
+
+/// A database that does not record the baseline was made by an older
+/// release: refused by name, with the remedy, by every reading, and
+/// before ahead is judged. A record missing altogether says so too.
 #[tokio::test]
-async fn require_current_schema_refuses_ahead_before_behind() {
+async fn a_database_below_the_baseline_is_refused_by_name() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     morpholog_postgres::require_current_schema(&pool)
         .await
         .expect("the test database starts current");
-    let head = morpholog_postgres::head_version();
 
-    // Behind: the head's record missing.
+    // The baseline's record gone, a newer version present: the baseline
+    // wins over ahead, since nothing can be said about such a database.
     sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
-        .bind(head)
+        .bind(BASELINE_VERSION)
         .execute(&pool)
         .await
         .unwrap();
-    let behind = morpholog_postgres::require_current_schema(&pool)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(&behind, morpholog_postgres::PgError::SchemaBehind { detail } if detail.contains("1 migration(s) pending")),
-        "{behind:?}"
-    );
-    assert!(behind.to_string().contains("morpholog migrate"), "{behind}");
-
-    // Ahead as well: a version this binary does not carry. Ahead wins.
     sqlx::query("INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, 'from_a_newer_morpholog')")
-        .bind(head + 2)
+        .bind(BASELINE_VERSION + 2)
         .execute(&pool)
         .await
         .unwrap();
-    let ahead = morpholog_postgres::require_current_schema(&pool)
-        .await
-        .unwrap_err();
-    // Put the record back before asserting, so a failure cannot leave the
-    // shared database ahead.
-    sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
-        .bind(head + 2)
+    let with_newer = morpholog_postgres::require_current_schema(&pool).await;
+    let status = morpholog_postgres::migration_status(&pool).await;
+    let applied = morpholog_postgres::apply_migrations(&pool).await;
+    sqlx::raw_sql("DELETE FROM morpholog.schema_migrations")
         .execute(&pool)
         .await
         .unwrap();
-    morpholog_postgres::apply_migrations(&pool).await.unwrap();
-    assert!(
-        matches!(ahead, morpholog_postgres::PgError::SchemaAhead { recorded, binary } if recorded == head + 2 && binary == head),
-        "{ahead:?}"
-    );
-    assert!(!ahead.to_string().contains("morpholog migrate"), "{ahead}");
-    morpholog_postgres::require_current_schema(&pool)
-        .await
-        .expect("current again");
-}
-
-/// A database provisioned at the head from `schema.sql`, with no record of
-/// any version, as `psql -f` leaves it and CI makes it: every migration
-/// runs, and each finds the table it would make already there in the
-/// shape the head gives it, later additions included.
-#[tokio::test]
-async fn a_head_database_with_no_record_migrates_cleanly() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
+    let with_no_record = morpholog_postgres::require_current_schema(&pool).await;
     sqlx::raw_sql("DROP TABLE morpholog.schema_migrations")
         .execute(&pool)
         .await
-        .expect("simulate a head schema applied by psql");
-    let report = morpholog_postgres::apply_migrations(&pool)
-        .await
-        .expect("every migration adopts the head shape");
-    assert_eq!(
-        report.recorded_version_after,
-        Some(morpholog_postgres::head_version()),
-        "{report:?}"
-    );
-    let position = columns(&pool, "morpholog", "index_requirement")
-        .await
-        .into_iter()
-        .find(|(name, _, _)| name == "position");
-    assert!(
-        position.is_some(),
-        "the head's later column survives the replay"
-    );
-}
-
-#[tokio::test]
-async fn a_legacy_database_upgrades_from_the_binary_alone() {
-    let Ok(base) = std::env::var("DATABASE_URL") else {
-        return;
-    };
-    let name = format!("morpholog_upgrade_probe_{}", std::process::id());
-    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
-    let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
-    ddl(
-        &admin_pool,
-        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
-    )
-    .await
-    .unwrap();
-    ddl(&admin_pool, format!("CREATE DATABASE {name}"))
-        .await
         .unwrap();
-
-    let probe_url = morpholog_postgres::with_default_user(&with_database(&base, &name));
-    let outcome = upgrade_probe(&probe_url).await;
-
-    ddl(
-        &admin_pool,
-        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    let with_no_table = morpholog_postgres::require_current_schema(&pool).await;
+    // Put the record back before asserting, so a failure cannot leave the
+    // shared database below the baseline.
+    sqlx::raw_sql(
+        "CREATE TABLE morpholog.schema_migrations (
+             version integer PRIMARY KEY, name text NOT NULL,
+             applied_at timestamptz NOT NULL DEFAULT now());
+         INSERT INTO morpholog.schema_migrations (version, name) VALUES (23, 'deployment_roles')",
     )
+    .execute(&pool)
     .await
     .unwrap();
-    outcome.expect("the upgrade path must work end to end");
-}
-
-async fn upgrade_probe(url: &str) -> Result<(), String> {
-    let pool = sqlx::PgPool::connect(url).await.expect("probe");
-    morpholog_postgres::initialise_schema(&pool)
+    morpholog_postgres::require_current_schema(&pool)
         .await
-        .expect("provision");
+        .expect("current again");
 
-    // A fresh database is at the head: `init` records the migrations
-    // rather than running them. Checked on a database this test created,
-    // not a long-lived dev one.
-    let fresh = morpholog_postgres::migration_status(&pool)
-        .await
-        .map_err(|e| format!("status on a fresh database failed: {e}"))?;
-    if !fresh.pending.is_empty() {
-        return Err(format!(
-            "init must leave nothing pending, got {:?}",
-            fresh.pending
-        ));
-    }
-    if fresh.recorded_version_after != Some(morpholog_postgres::head_version()) {
-        return Err(format!(
-            "a fresh database is at the head, got {:?}",
-            fresh.recorded_version_after
-        ));
-    }
-
-    // Wind back to a release before the witness column, the digest key, or
-    // the record existed.
-    ddl(
-        &pool,
-        "ALTER TABLE morpholog.rejections DROP COLUMN witness".to_string(),
-    )
-    .await
-    .expect("simulate the older shape");
-    wind_claims_key_back(&pool, "morpholog.claims").await;
-    ddl(
-        &pool,
-        "ALTER TABLE morpholog.audit_checkpoints DROP COLUMN witnesses".to_string(),
-    )
-    .await
-    .expect("simulate a database from before checkpoint witnesses");
-    ddl(
-        &pool,
-        "ALTER TABLE morpholog.audit DROP COLUMN drawn_subjects".to_string(),
-    )
-    .await
-    .expect("simulate a database from before rows recorded their draws");
-    ddl(
-        &pool,
-        "ALTER TABLE morpholog.audit DROP COLUMN semantics_version".to_string(),
-    )
-    .await
-    .expect("simulate a database from before rows named their semantics");
-    ddl(
-        &pool,
-        "ALTER TABLE morpholog.audit DROP COLUMN model_hash".to_string(),
-    )
-    .await
-    .expect("simulate a database from before rows named their programme");
-    ddl(
-        &pool,
-        "ALTER TABLE morpholog.audit DROP COLUMN parameters".to_string(),
-    )
-    .await
-    .expect("simulate a database from before self-describing rows");
-    ddl(
-        &pool,
-        "DROP FUNCTION morpholog.timestamp_nanos(jsonb)".to_string(),
-    )
-    .await
-    .expect("simulate a database from before the timestamp coordinate");
-    ddl(
-        &pool,
-        "DROP FUNCTION morpholog.value_key_v1(jsonb)".to_string(),
-    )
-    .await
-    .expect("simulate a database from before the equality key");
-    ddl(
-        &pool,
-        "DROP FUNCTION morpholog.date_ordinal(jsonb)".to_string(),
-    )
-    .await
-    .expect("simulate a database from before the date coordinate");
-    ddl(
-        &pool,
-        "ALTER TABLE morpholog.index_requirement DROP COLUMN position".to_string(),
-    )
-    .await
-    .expect("simulate a database from before requirements recorded positions");
-    // The guard migration 017 drops, as a database that ran 016 has it.
-    ddl(
-        &pool,
-        "CREATE FUNCTION morpholog.declared_kind(predicate text, declared_predicate text, v jsonb, kind text, pos integer) RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT true'".to_string(),
-    )
-    .await
-    .expect("simulate a database that ran migration 016");
-    ddl(
-        &pool,
-        "COMMENT ON FUNCTION morpholog.declared_kind(text, text, jsonb, text, integer) IS 'morpholog declared kind guard v1'".to_string(),
-    )
-    .await
-    .expect("with the marker 016 wrote");
-    // A row that deployment wrote: attested, no names. The migration must
-    // carry it forward untouched.
-    sqlx::query(
-        "INSERT INTO morpholog.audit (
-            transition_id, transformation_name, arguments, actor,
-            invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents, attestation
-         ) VALUES ($1, 'historical', '[]', '{\"type\":\"subject\",\"value\":\"h\"}',
-                   1, '[]', '[]', '[]', '[]',
-                   '{\"mode\":\"gateway\",\"authenticated_by\":\"h\"}')",
-    )
-    .bind(uuid::Uuid::now_v7())
-    .execute(&pool)
-    .await
-    .expect("a historical attested row");
-    ddl(
-        &pool,
-        "DROP INDEX morpholog_read.derived_claims_generation_predicate".to_string(),
-    )
-    .await
-    .expect("simulate the older cache shape");
-    wind_derived_key_back(&pool, "morpholog_read.derived_claims").await;
-    ddl(&pool, "DROP TABLE morpholog.schema_migrations".to_string())
-        .await
-        .expect("simulate a database from before the record existed");
-
-    // A deploy gate can ask before a workload finds out.
-    let before = morpholog_postgres::migration_status(&pool)
-        .await
-        .map_err(|e| format!("status failed: {e}"))?;
-    if before.recorded_version_before.is_some() {
-        return Err(format!(
-            "a database with no record has no version, got {:?}",
-            before.recorded_version_before
-        ));
-    }
-    if before.pending.len() != usize::try_from(morpholog_postgres::head_version()).unwrap() {
-        return Err(format!(
-            "everything should be pending, got {}",
-            before.pending.len()
-        ));
-    }
-
-    let report = morpholog_postgres::apply_migrations(&pool)
-        .await
-        .map_err(|e| format!("migrate failed: {e}"))?;
-    if report.applied.len() != before.pending.len() {
-        return Err(format!(
-            "applied {} of {}",
-            report.applied.len(),
-            before.pending.len()
-        ));
-    }
-
-    // Current, and re-running changes nothing.
-    let after = morpholog_postgres::migration_status(&pool)
-        .await
-        .map_err(|e| format!("status failed: {e}"))?;
-    if !after.pending.is_empty() {
-        return Err(format!(
-            "still pending after migrating: {:?}",
-            after.pending
-        ));
-    }
-    let again = morpholog_postgres::apply_migrations(&pool)
-        .await
-        .map_err(|e| format!("second migrate failed: {e}"))?;
-    if !again.applied.is_empty() {
-        return Err(format!(
-            "re-running applied {} migrations",
-            again.applied.len()
-        ));
-    }
-
-    // Migration 016: the coordinate function is back, marked as ours.
-    let epoch: Option<rust_decimal::Decimal> = sqlx::query_scalar(
-        "SELECT morpholog.timestamp_nanos('{\"type\":\"timestamp\",\"value\":\"1970-01-01T00:00:00Z\"}'::jsonb)",
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| format!("timestamp_nanos must exist after migrating: {e}"))?;
-    if epoch != Some(rust_decimal::Decimal::ZERO) {
-        return Err(format!(
-            "timestamp_nanos must give 0 at the epoch, got {epoch:?}"
-        ));
-    }
-    let marker: Option<String> = sqlx::query_scalar(
-        "SELECT obj_description('morpholog.timestamp_nanos(jsonb)'::regprocedure, 'pg_proc')",
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| format!("marker lookup failed: {e}"))?;
-    if marker.as_deref() != Some("morpholog timestamp coordinate v1") {
-        return Err(format!(
-            "timestamp_nanos must carry its marker, got {marker:?}"
-        ));
-    }
-
-    // Migration 017: the key function is back with its marker, keys the
-    // pinned corpus as a fresh database does, and the guard is gone.
-    let marker: Option<String> = sqlx::query_scalar(
-        "SELECT obj_description('morpholog.value_key_v1(jsonb)'::regprocedure, 'pg_proc')",
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| format!("value_key_v1 must exist after migrating: {e}"))?;
-    if marker.as_deref() != Some("morpholog value key v1") {
-        return Err(format!(
-            "value_key_v1 must carry its marker, got {marker:?}"
-        ));
-    }
-    for (value, expected) in common::pinned_value_keys() {
-        let got: serde_json::Value = sqlx::query_scalar("SELECT morpholog.value_key_v1($1)")
-            .bind(value.clone())
-            .fetch_one(&pool)
-            .await
-            .map_err(|e| format!("keying {value}: {e}"))?;
-        if got != expected {
-            return Err(format!(
-                "{value} keys as {got}, a fresh database keys it as {expected}"
-            ));
-        }
-    }
-    let guard: Option<String> = sqlx::query_scalar(
-        "SELECT to_regprocedure('morpholog.declared_kind(text, text, jsonb, text, integer)')::text",
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| format!("guard lookup failed: {e}"))?;
-    if guard.is_some() {
-        return Err("migration 017 must drop morpholog.declared_kind".to_string());
-    }
-
-    // Migration 018: the date coordinate is back, marked as ours.
-    let ordinal: Option<i32> = sqlx::query_scalar(
-        "SELECT morpholog.date_ordinal('{\"type\":\"date\",\"value\":\"2026-01-01\"}'::jsonb)",
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| format!("date_ordinal must exist after migrating: {e}"))?;
-    if ordinal != Some(20_260_101) {
-        return Err(format!(
-            "date_ordinal must give 20260101 for 2026-01-01, got {ordinal:?}"
-        ));
-    }
-    let marker: Option<String> = sqlx::query_scalar(
-        "SELECT obj_description('morpholog.date_ordinal(jsonb)'::regprocedure, 'pg_proc')",
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| format!("marker lookup failed: {e}"))?;
-    if marker.as_deref() != Some("morpholog date coordinate v1") {
-        return Err(format!(
-            "date_ordinal must carry its marker, got {marker:?}"
-        ));
-    }
-
-    // Migration 019: a requirement records its position, nullable, so a
-    // binary from before it keeps recording requirements without one.
-    let position = columns(&pool, "morpholog", "index_requirement")
-        .await
-        .into_iter()
-        .find(|(name, _, _)| name == "position");
-    if position
-        != Some((
-            "position".to_string(),
-            "YES".to_string(),
-            "integer".to_string(),
-        ))
-    {
-        return Err(format!(
-            "index_requirement.position must come back as nullable integer, got {position:?}"
-        ));
-    }
-    sqlx::query(
-        "INSERT INTO morpholog.index_requirement (program_identity, spec_digest, program_hash)
-         VALUES ('older_binary', 'digest_from_before_positions', 'sha256:0')",
-    )
-    .execute(&pool)
-    .await
-    .map_err(|e| {
-        format!("an older binary's requirement without a position must still be accepted: {e}")
-    })?;
-    sqlx::query("DELETE FROM morpholog.index_requirement WHERE program_identity = 'older_binary'")
-        .execute(&pool)
-        .await
-        .map_err(|e| format!("cleanup: {e}"))?;
-
-    // It refuses a same-named column of another shape, rather than adopting
-    // one that stops an older binary writing or lets a negative position
-    // in. Run with the migration's own SQL on each twin, then the column is
-    // put back.
-    let migration_019 =
-        include_str!("../../morpholog-core/sql/migrations/019_requirement_position.sql");
-    for (label, twin) in [
-        (
-            "not null",
-            "position integer NOT NULL DEFAULT 0 CHECK (position >= 0)",
-        ),
-        ("no check", "position integer"),
-        ("another type", "position bigint CHECK (position >= 0)"),
+    for (case, outcome) in [
+        ("require", with_newer.map(|()| "ok".to_string())),
+        ("status", status.map(|r| format!("{r:?}"))),
+        ("apply", applied.map(|r| format!("{r:?}"))),
     ] {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "ALTER TABLE morpholog.index_requirement DROP COLUMN position;
-             ALTER TABLE morpholog.index_requirement ADD COLUMN {twin}"
-        )))
-        .execute(&pool)
-        .await
-        .map_err(|e| format!("shaping the twin ({label}): {e}"))?;
-        match sqlx::raw_sql(migration_019).execute(&pool).await {
-            Ok(_) => return Err(format!("migration 019 adopted a position twin ({label})")),
-            Err(e) if e.to_string().contains("another shape") => {}
-            Err(e) => {
-                return Err(format!(
-                    "migration 019 refused {label} for the wrong reason: {e}"
-                ));
-            }
-        }
+        let err = outcome.unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                morpholog_postgres::PgError::SchemaBelowBaseline { recorded: Some(v), baseline }
+                    if *v == BASELINE_VERSION + 2 && *baseline == BASELINE_VERSION
+            ),
+            "{case}: {err:?}"
+        );
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("v0.0.14") && rendered.contains("morpholog migrate"),
+            "{case}: {rendered}"
+        );
     }
-    sqlx::raw_sql("ALTER TABLE morpholog.index_requirement DROP COLUMN position")
-        .execute(&pool)
-        .await
-        .map_err(|e| format!("removing the last twin: {e}"))?;
-    sqlx::raw_sql(migration_019)
-        .execute(&pool)
-        .await
-        .map_err(|e| format!("migration 019 must add the column back: {e}"))?;
-
-    // Migration 014, checked on the migrated table: the old row survives
-    // unstamped, the column is nullable, and each named constraint refuses
-    // what it is for.
-    let stamped = columns(&pool, "morpholog", "audit")
-        .await
-        .into_iter()
-        .find(|(name, _, _)| name == "parameters");
-    if stamped
-        != Some((
-            "parameters".to_string(),
-            "YES".to_string(),
-            "jsonb".to_string(),
-        ))
-    {
-        return Err(format!(
-            "parameters must come back as nullable jsonb, got {stamped:?}"
-        ));
+    for (case, outcome) in [("no record", with_no_record), ("no table", with_no_table)] {
+        let err = outcome.unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                morpholog_postgres::PgError::SchemaBelowBaseline { recorded: None, .. }
+            ),
+            "{case}: {err:?}"
+        );
+        assert!(
+            err.to_string().contains("records no migration"),
+            "{case}: {err}"
+        );
     }
-    let historical = morpholog_postgres::list_audit_rows(&pool)
-        .await
-        .map_err(|e| format!("the historical row must still read: {e}"))?;
-    if historical.len() != 1
-        || historical[0].parameters.is_some()
-        || historical[0].model_hash.is_some()
-    {
-        return Err(format!(
-            "the historical row must survive unstamped, got {historical:?}"
-        ));
-    }
-    let named = columns(&pool, "morpholog", "audit")
-        .await
-        .into_iter()
-        .find(|(name, _, _)| name == "model_hash");
-    if named
-        != Some((
-            "model_hash".to_string(),
-            "YES".to_string(),
-            "text".to_string(),
-        ))
-    {
-        return Err(format!(
-            "model_hash must come back as nullable text, got {named:?}"
-        ));
-    }
-    let unstamped = sqlx::query(
-        "INSERT INTO morpholog.audit (
-            transition_id, transformation_name, arguments, actor,
-            invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents, attestation
-         ) VALUES ($1, 'stale_binary', '[]', '{\"type\":\"subject\",\"value\":\"s\"}',
-                   1, '[]', '[]', '[]', '[]',
-                   '{\"mode\":\"gateway\",\"authenticated_by\":\"s\"}')",
-    )
-    .bind(uuid::Uuid::now_v7())
-    .execute(&pool)
-    .await;
-    // PostgreSQL reports the first failing check by constraint name, so a
-    // row missing several later fields names any of their boundaries.
-    match unstamped {
-        Err(e)
-            if [
-                "audit_parameters_required",
-                "audit_model_hash_required",
-                "audit_semantics_version_required",
-                "audit_drawn_subjects_required",
-            ]
-            .iter()
-            .any(|c| e.to_string().contains(c)) => {}
-        other => {
-            return Err(format!(
-                "a new unstamped row must be refused by an activation constraint, got {other:?}"
-            ));
-        }
-    }
-    let unhashed = sqlx::query(
-        "INSERT INTO morpholog.audit (
-            transition_id, transformation_name, arguments, actor,
-            invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents, attestation, parameters
-         ) VALUES ($1, 'stale_binary', '[]', '{\"type\":\"subject\",\"value\":\"s\"}',
-                   1, '[]', '[]', '[]', '[]',
-                   '{\"mode\":\"gateway\",\"authenticated_by\":\"s\"}', '[]')",
-    )
-    .bind(uuid::Uuid::now_v7())
-    .execute(&pool)
-    .await;
-    match unhashed {
-        Err(e)
-            if [
-                "audit_model_hash_required",
-                "audit_semantics_version_required",
-                "audit_drawn_subjects_required",
-            ]
-            .iter()
-            .any(|c| e.to_string().contains(c)) => {}
-        other => {
-            return Err(format!(
-                "a new row naming no programme must be refused by audit_model_hash_required, got {other:?}"
-            ));
-        }
-    }
-    let versioned = columns(&pool, "morpholog", "audit")
-        .await
-        .into_iter()
-        .find(|(name, _, _)| name == "semantics_version");
-    if versioned
-        != Some((
-            "semantics_version".to_string(),
-            "YES".to_string(),
-            "bigint".to_string(),
-        ))
-    {
-        return Err(format!(
-            "semantics_version must come back as nullable bigint, got {versioned:?}"
-        ));
-    }
-    let unversioned = sqlx::query(
-        "INSERT INTO morpholog.audit (
-            transition_id, transformation_name, arguments, actor,
-            invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents, attestation, parameters,
-            model_hash
-         ) VALUES ($1, 'stale_binary', '[]', '{\"type\":\"subject\",\"value\":\"s\"}',
-                   1, '[]', '[]', '[]', '[]',
-                   '{\"mode\":\"gateway\",\"authenticated_by\":\"s\"}', '[]',
-                   'sha256:' || repeat('0', 64))",
-    )
-    .bind(uuid::Uuid::now_v7())
-    .execute(&pool)
-    .await;
-    match unversioned {
-        Err(e)
-            if e.to_string().contains("audit_semantics_version_required")
-                || e.to_string().contains("audit_drawn_subjects_required") => {}
-        other => {
-            return Err(format!(
-                "a new row naming no semantics must be refused by an activation constraint, got {other:?}"
-            ));
-        }
-    }
-    let drawn = columns(&pool, "morpholog", "audit")
-        .await
-        .into_iter()
-        .find(|(name, _, _)| name == "drawn_subjects");
-    if drawn
-        != Some((
-            "drawn_subjects".to_string(),
-            "YES".to_string(),
-            "jsonb".to_string(),
-        ))
-    {
-        return Err(format!(
-            "drawn_subjects must come back as nullable jsonb, got {drawn:?}"
-        ));
-    }
-    let undrawn = sqlx::query(
-        "INSERT INTO morpholog.audit (
-            transition_id, transformation_name, arguments, actor,
-            invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents, attestation, parameters,
-            model_hash, semantics_version
-         ) VALUES ($1, 'stale_binary', '[]', '{\"type\":\"subject\",\"value\":\"s\"}',
-                   1, '[]', '[]', '[]', '[]',
-                   '{\"mode\":\"gateway\",\"authenticated_by\":\"s\"}', '[]',
-                   'sha256:' || repeat('0', 64), 1)",
-    )
-    .bind(uuid::Uuid::now_v7())
-    .execute(&pool)
-    .await;
-    match undrawn {
-        Err(e) if e.to_string().contains("audit_drawn_subjects_required") => {}
-        other => {
-            return Err(format!(
-                "a new row recording no draws must be refused by audit_drawn_subjects_required, got {other:?}"
-            ));
-        }
-    }
-    let wrong_arity = sqlx::query(
-        "INSERT INTO morpholog.audit (
-            transition_id, transformation_name, arguments, actor,
-            invariant_epoch, invariants_checked,
-            asserted_claims, retracted_claims, emitted_intents, attestation, parameters,
-            model_hash, semantics_version, drawn_subjects
-         ) VALUES ($1, 'misshapen', '[]', '{\"type\":\"subject\",\"value\":\"m\"}',
-                   1, '[]', '[]', '[]', '[]',
-                   '{\"mode\":\"gateway\",\"authenticated_by\":\"m\"}', '[\"extra\"]',
-                   'sha256:' || repeat('0', 64), 1, '[]')",
-    )
-    .bind(uuid::Uuid::now_v7())
-    .execute(&pool)
-    .await;
-    match wrong_arity {
-        Err(e) if e.to_string().contains("audit_parameters_shape") => {}
-        other => {
-            return Err(format!(
-                "names that do not match the arguments must be refused by audit_parameters_shape, got {other:?}"
-            ));
-        }
-    }
-
-    // A lawful refusal now writes its witness instead of failing.
-    morpholog_postgres::list_rejection_rows(&pool, 10)
-        .await
-        .map_err(|e| format!("the rejection log is still unreadable: {e}"))?;
-    // The claims key came forward with everything else.
-    if primary_key(&pool, "morpholog.claims").await.as_deref()
-        != Some("PRIMARY KEY (predicate_name, arguments_hash)")
-    {
-        return Err("claims must be keyed by the digest after migrating".to_string());
-    }
-    if primary_key(&pool, "morpholog_read.derived_claims")
-        .await
-        .is_some()
-    {
-        return Err("the derived cache must have lost its whole-array key".to_string());
-    }
-
-    // Migration 015: the index registry exists, empty, since the command
-    // that fills it has not run. Correctness never depends on either table.
-    for (table, key) in [
-        ("managed_index", "spec_digest"),
-        ("index_requirement", "program_identity"),
-    ] {
-        let names: Vec<String> = columns(&pool, "morpholog", table)
-            .await
-            .into_iter()
-            .map(|(name, _, _)| name)
-            .collect();
-        if !names.iter().any(|n| n == key) {
-            return Err(format!(
-                "migration 015 must create morpholog.{table} with {key}; columns: {names:?}"
-            ));
-        }
-    }
-    // It refuses a same-named table of another shape, rather than recording
-    // the version and failing later. Run with the migration's own SQL on a
-    // wrong-shaped twin, then the tables are put back.
-    let migration_015 = include_str!("../../morpholog-core/sql/migrations/015_managed_indexes.sql");
-    // Two twins: the wrong columns, and the right columns without a
-    // constraint the command relies on.
-    for (label, twin) in [
-        (
-            "wrong columns",
-            "CREATE TABLE morpholog.managed_index (something_else integer)",
-        ),
-        (
-            "right columns, no unique index_name",
-            "CREATE TABLE morpholog.managed_index (
-                spec_digest text PRIMARY KEY, index_name text NOT NULL,
-                predicate_name text NOT NULL, position integer NOT NULL CHECK (position >= 0),
-                representation text NOT NULL, expression_sql text NOT NULL,
-                partial_predicate text NOT NULL, registered_at timestamptz NOT NULL DEFAULT now())",
-        ),
-    ] {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "DROP TABLE IF EXISTS morpholog.index_requirement; DROP TABLE IF EXISTS morpholog.managed_index; {twin}"
-        )))
-        .execute(&pool)
-        .await
-        .map_err(|e| format!("shaping the twin ({label}): {e}"))?;
-        match sqlx::raw_sql(migration_015).execute(&pool).await {
-            Ok(_) => {
-                return Err(format!(
-                    "migration 015 adopted a managed_index twin ({label})"
-                ));
-            }
-            Err(e) if e.to_string().contains("another shape") => {}
-            Err(e) => {
-                return Err(format!(
-                    "migration 015 refused {label} for the wrong reason: {e}"
-                ));
-            }
-        }
-        sqlx::raw_sql("DROP TABLE morpholog.managed_index")
-            .execute(&pool)
-            .await
-            .map_err(|e| format!("removing the twin ({label}): {e}"))?;
-    }
-    sqlx::raw_sql(migration_015)
-        .execute(&pool)
-        .await
-        .map_err(|e| format!("migration 015 must recreate the registry: {e}"))?;
-
-    Ok(())
-}
-
-/// No embedded migration may control transactions.
-///
-/// The runner applies each migration and writes its version record in one
-/// transaction, so the two cannot disagree. A `COMMIT` in a script would
-/// end that transaction early, leaving the record outside it.
-#[test]
-fn no_migration_controls_its_own_transaction() {
-    let dir =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../morpholog-core/sql/migrations");
-    let mut checked = 0;
-    let mut offenders = Vec::new();
-    for entry in std::fs::read_dir(&dir).expect("migrations directory") {
-        let path = entry.expect("dir entry").path();
-        if path.extension().is_none_or(|e| e != "sql") {
-            continue;
-        }
-        checked += 1;
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let sql = std::fs::read_to_string(&path).expect("read migration");
-        for (n, line) in sql.lines().enumerate() {
-            let bare = line
-                .split("--")
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_ascii_uppercase();
-            if matches!(bare.as_str(), "BEGIN;" | "COMMIT;" | "ROLLBACK;" | "END;") {
-                offenders.push(format!("{name}:{}", n + 1));
-            }
-        }
-    }
-    assert!(
-        checked > 5,
-        "anti-vacuity: found only {checked} migrations to scan"
-    );
-    assert!(
-        offenders.is_empty(),
-        "migrations must not open or close transactions - the runner owns them, \
-         and a COMMIT here would separate the schema change from its version \
-         record. Found at: {}",
-        offenders.join(", ")
-    );
 }
 
 /// A database recording a migration this binary has never seen is not
@@ -1262,955 +410,6 @@ async fn a_database_ahead_of_the_binary_is_not_current() {
         "migrating an ahead database must be refused by name, got {applied:?}"
     );
 }
-
-/// Applying the claims-key migration to tables on the whole-array key
-/// yields exactly the head shape (columns, key, generated digest), keeps
-/// existing rows, and refuses a table it does not recognise.
-///
-/// Table names are rewritten to the scratch schema; the digest helper is
-/// the real `morpholog.claim_digest`, so row hashes match production.
-#[tokio::test]
-async fn the_claims_key_migration_brings_old_tables_to_the_head_shape() {
-    let pool = test_pool().await;
-    let scratch = "morpholog_claims_key_probe";
-    ddl(&pool, format!("DROP SCHEMA IF EXISTS {scratch} CASCADE"))
-        .await
-        .unwrap();
-    ddl(&pool, format!("CREATE SCHEMA {scratch}"))
-        .await
-        .unwrap();
-    ddl(
-        &pool,
-        format!("CREATE TABLE {scratch}.claims (LIKE morpholog.claims INCLUDING ALL)"),
-    )
-    .await
-    .unwrap();
-    wind_claims_key_back(&pool, &format!("{scratch}.claims")).await;
-    ddl(
-        &pool,
-        format!(
-            "CREATE TABLE {scratch}.derived_claims
-             (LIKE morpholog_read.derived_claims INCLUDING ALL)"
-        ),
-    )
-    .await
-    .unwrap();
-    // INCLUDING ALL copied the lookup index under a generated name; the
-    // pre-migration cache had only its key.
-    ddl(
-        &pool,
-        format!("DROP INDEX {scratch}.derived_claims_refresh_id_predicate_name_idx"),
-    )
-    .await
-    .expect("the copied lookup index has PostgreSQL's generated name");
-    wind_derived_key_back(&pool, &format!("{scratch}.derived_claims")).await;
-
-    // Rows from before the upgrade, which must survive it, with awkward
-    // text the digest must carry intact.
-    let hostile = r#"[{"type":"subject","value":"He said \"no\" \\ ünïcode"}]"#;
-    ddl(
-        &pool,
-        format!(
-            "INSERT INTO {scratch}.claims (predicate_name, arguments, asserted_in)
-             VALUES ('Statement', '{hostile}'::jsonb, gen_random_uuid())"
-        ),
-    )
-    .await
-    .expect("the old shape accepts an old row");
-    ddl(
-        &pool,
-        format!(
-            "INSERT INTO {scratch}.derived_claims (refresh_id, predicate_name, arguments)
-             VALUES (gen_random_uuid(), 'Summary', '{hostile}'::jsonb)"
-        ),
-    )
-    .await
-    .expect("the old cache shape accepts an old row");
-
-    let migration = CLAIMS_KEY_MIGRATION
-        .replace("morpholog.claims", &format!("{scratch}.claims"))
-        .replace(
-            "morpholog_read.derived_claims",
-            &format!("{scratch}.derived_claims"),
-        );
-    // Twice: an operator who re-runs a migration must not be punished for it.
-    for _ in 0..2 {
-        ddl(&pool, migration.clone())
-            .await
-            .expect("the migration applies, and applies again");
-    }
-
-    for table in ["claims", "derived_claims"] {
-        let head_schema = if table == "claims" {
-            "morpholog"
-        } else {
-            "morpholog_read"
-        };
-        assert_eq!(
-            columns(&pool, scratch, table).await,
-            columns(&pool, head_schema, table).await,
-            "after migrating, {table} must match the head schema column for column"
-        );
-        assert_eq!(
-            primary_key(&pool, &format!("{scratch}.{table}")).await,
-            primary_key(&pool, &format!("{head_schema}.{table}")).await,
-            "after migrating, {table} must carry the head schema's key"
-        );
-    }
-
-    let digest_is_production: bool = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT bool_and(arguments_hash = morpholog.claim_digest(arguments))
-         FROM {scratch}.claims"
-    )))
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .get(0);
-    assert!(
-        digest_is_production,
-        "the pre-upgrade row survives, keyed by the digest production computes"
-    );
-    let surviving: i64 = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT count(*) FROM {scratch}.derived_claims"
-    )))
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .get(0);
-    assert_eq!(surviving, 1, "the cache row survives losing its key");
-
-    // A table in neither shape is refused, not guessed at.
-    ddl(
-        &pool,
-        format!(
-            "ALTER TABLE {scratch}.claims DROP COLUMN arguments_hash,
-             ADD PRIMARY KEY (predicate_name, asserted_in)"
-        ),
-    )
-    .await
-    .unwrap();
-    let refused = ddl(&pool, migration.clone()).await;
-    assert!(
-        refused
-            .as_ref()
-            .is_err_and(|e| e.to_string().contains("refusing to guess")),
-        "a drifted table must be refused by name, got {refused:?}"
-    );
-
-    // The head key over a column that only uses the helper with the wrong
-    // expression, so a retract could never find a row. Refused.
-    ddl(
-        &pool,
-        format!(
-            "ALTER TABLE {scratch}.claims DROP CONSTRAINT claims_pkey,
-             ADD COLUMN arguments_hash bytea NOT NULL GENERATED ALWAYS AS
-                 (morpholog.claim_digest(arguments) || '\\x00'::bytea) STORED,
-             ADD PRIMARY KEY (predicate_name, arguments_hash)"
-        ),
-    )
-    .await
-    .unwrap();
-    let refused = ddl(&pool, migration.clone()).await;
-    assert!(
-        refused
-            .as_ref()
-            .is_err_and(|e| e.to_string().contains("refusing to guess")),
-        "a transformed digest expression must be refused, got {refused:?}"
-    );
-
-    ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
-        .await
-        .unwrap();
-}
-
-/// Digests stored under another definition of the helper are refused,
-/// whether or not the real helper has since been put back. Replacing a
-/// function does not recompute stored values, so a retract could never
-/// find such a row.
-///
-/// On its own database, because it rewrites the shared helper.
-#[tokio::test]
-async fn digests_stored_under_a_foreign_helper_are_refused() {
-    let Ok(base) = std::env::var("DATABASE_URL") else {
-        return;
-    };
-    let name = format!("morpholog_digest_probe_{}", std::process::id());
-    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
-    let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
-    ddl(
-        &admin_pool,
-        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
-    )
-    .await
-    .unwrap();
-    ddl(&admin_pool, format!("CREATE DATABASE {name}"))
-        .await
-        .unwrap();
-
-    let probe_url = morpholog_postgres::with_default_user(&with_database(&base, &name));
-    let outcome = foreign_helper_probe(&probe_url).await;
-
-    ddl(
-        &admin_pool,
-        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
-    )
-    .await
-    .unwrap();
-    outcome.expect("foreign digests must be refused, and the repaired table accepted");
-}
-
-async fn foreign_helper_probe(url: &str) -> Result<(), String> {
-    const REAL: &str = "CREATE OR REPLACE FUNCTION morpholog.claim_digest(args jsonb) RETURNS bytea
-        LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
-        RETURN sha256(convert_to(args::text, 'UTF8'))";
-    const FOREIGN: &str =
-        "CREATE OR REPLACE FUNCTION morpholog.claim_digest(args jsonb) RETURNS bytea
-        LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
-        RETURN sha256(convert_to(args::text || 'x', 'UTF8'))";
-    let pool = sqlx::PgPool::connect(url).await.expect("probe");
-    morpholog_postgres::initialise_schema(&pool)
-        .await
-        .expect("provision");
-    // A row keyed under a foreign helper, then the migration asked again.
-    ddl(&pool, FOREIGN.to_string()).await.unwrap();
-    ddl(
-        &pool,
-        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
-         VALUES ('Statement', '[{\"type\":\"subject\",\"value\":\"s\"}]'::jsonb, gen_random_uuid())"
-            .to_string(),
-    )
-    .await
-    .unwrap();
-    ddl(
-        &pool,
-        "DELETE FROM morpholog.schema_migrations WHERE version = 12".to_string(),
-    )
-    .await
-    .unwrap();
-
-    let with_foreign = morpholog_postgres::apply_migrations(&pool).await;
-    match with_foreign {
-        Err(e) if e.to_string().contains("another definition") => {}
-        other => {
-            return Err(format!(
-                "a foreign helper must be refused by name, got {other:?}"
-            ));
-        }
-    }
-
-    // The helper put back by hand: the definition is right, the stored
-    // digest is not.
-    ddl(&pool, REAL.to_string()).await.unwrap();
-    let with_stale = morpholog_postgres::apply_migrations(&pool).await;
-    match with_stale {
-        Err(e) if e.to_string().contains("disagree") => {}
-        other => {
-            return Err(format!(
-                "a stale stored digest must be refused, got {other:?}"
-            ));
-        }
-    }
-    let status = morpholog_postgres::migration_status(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
-    if status.is_current() {
-        return Err("a refused migration must not be recorded".to_string());
-    }
-
-    // The repair is a rebuild of the column, after which the row is
-    // reachable and the migration accepts the table.
-    ddl(
-        &pool,
-        "ALTER TABLE morpholog.claims DROP COLUMN arguments_hash,
-         ADD COLUMN arguments_hash bytea NOT NULL GENERATED ALWAYS AS
-             (morpholog.claim_digest(arguments)) STORED,
-         ADD PRIMARY KEY (predicate_name, arguments_hash)"
-            .to_string(),
-    )
-    .await
-    .unwrap();
-    morpholog_postgres::apply_migrations(&pool)
-        .await
-        .map_err(|e| format!("the repaired table must be accepted: {e}"))?;
-    let reachable: i64 = sqlx::query(
-        "SELECT count(*) FROM morpholog.claims
-         WHERE arguments_hash = morpholog.claim_digest(arguments)",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .get(0);
-    if reachable != 1 {
-        return Err(format!(
-            "the repaired row must be keyed by the real digest, got {reachable}"
-        ));
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_witnesses_column_of_another_shape_is_refused() {
-    let Ok(base) = std::env::var("DATABASE_URL") else {
-        return;
-    };
-    let name = format!("morpholog_witness_shape_probe_{}", std::process::id());
-    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
-    let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
-    ddl(
-        &admin_pool,
-        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
-    )
-    .await
-    .unwrap();
-    ddl(&admin_pool, format!("CREATE DATABASE {name}"))
-        .await
-        .unwrap();
-
-    let probe_url = morpholog_postgres::with_default_user(&with_database(&base, &name));
-    let outcome = witness_shape_probe(&probe_url).await;
-
-    ddl(
-        &admin_pool,
-        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
-    )
-    .await
-    .unwrap();
-    outcome.expect("a foreign witnesses column must be refused, and the repaired one accepted");
-}
-
-async fn witness_shape_probe(url: &str) -> Result<(), String> {
-    let pool = sqlx::PgPool::connect(url).await.expect("probe");
-    morpholog_postgres::initialise_schema(&pool)
-        .await
-        .expect("provision");
-    // Someone's own `witnesses` column, then the migration asked again.
-    ddl(
-        &pool,
-        "ALTER TABLE morpholog.audit_checkpoints DROP COLUMN witnesses".to_string(),
-    )
-    .await
-    .unwrap();
-    ddl(
-        &pool,
-        "ALTER TABLE morpholog.audit_checkpoints ADD COLUMN witnesses text".to_string(),
-    )
-    .await
-    .unwrap();
-    ddl(
-        &pool,
-        "DELETE FROM morpholog.schema_migrations WHERE version = 13".to_string(),
-    )
-    .await
-    .unwrap();
-    match morpholog_postgres::apply_migrations(&pool).await {
-        Err(e) if e.to_string().contains("another shape") => {}
-        other => {
-            return Err(format!(
-                "a witnesses column of another shape must be refused by name, got {other:?}"
-            ));
-        }
-    }
-    // The foreign column removed: the migration adds the real one.
-    ddl(
-        &pool,
-        "ALTER TABLE morpholog.audit_checkpoints DROP COLUMN witnesses".to_string(),
-    )
-    .await
-    .unwrap();
-    morpholog_postgres::apply_migrations(&pool)
-        .await
-        .map_err(|e| format!("the repaired table must migrate: {e}"))?;
-    let shape: Option<String> = sqlx::query_scalar(
-        "SELECT format_type(atttypid, atttypmod) FROM pg_attribute
-         WHERE attrelid = 'morpholog.audit_checkpoints'::regclass AND attname = 'witnesses'",
-    )
-    .fetch_optional(&pool)
-    .await
-    .unwrap();
-    if shape.as_deref() != Some("jsonb") {
-        return Err(format!("the real column must be jsonb, got {shape:?}"));
-    }
-    Ok(())
-}
-
-/// Migration 017 replaces the key function only where it finds its own,
-/// marker and body alike, since an index is built over the function and
-/// never rebuilt for a changed body; and it drops the guard from 016 only
-/// where 016 wrote it. Attacker capability modelled: none; the foreign
-/// definitions stand for an operator's own functions of the same names.
-///
-/// On its own database, because it rewrites the shared functions.
-#[tokio::test]
-async fn a_key_function_of_another_body_and_a_foreign_guard_are_refused() {
-    let Ok(base) = std::env::var("DATABASE_URL") else {
-        return;
-    };
-    let name = format!("morpholog_key_probe_{}", std::process::id());
-    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
-    let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
-    ddl(
-        &admin_pool,
-        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
-    )
-    .await
-    .unwrap();
-    ddl(&admin_pool, format!("CREATE DATABASE {name}"))
-        .await
-        .unwrap();
-
-    let probe_url = morpholog_postgres::with_default_user(&with_database(&base, &name));
-    let outcome = key_function_probe(&probe_url).await;
-
-    ddl(
-        &admin_pool,
-        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
-    )
-    .await
-    .unwrap();
-    outcome.expect("foreign functions must be refused by name, and the honest states accepted");
-}
-
-/// Forget migration 017 and ask for it again.
-async fn rerun_017(
-    pool: &sqlx::PgPool,
-) -> Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError> {
-    ddl(
-        pool,
-        "DELETE FROM morpholog.schema_migrations WHERE version = 17".to_string(),
-    )
-    .await
-    .unwrap();
-    morpholog_postgres::apply_migrations(pool).await
-}
-
-async fn key_function_probe(url: &str) -> Result<(), String> {
-    let pool = sqlx::PgPool::connect(url).await.expect("probe");
-    morpholog_postgres::initialise_schema(&pool)
-        .await
-        .expect("provision");
-
-    // The key function under its marker, with another body.
-    let real_body: String = sqlx::query_scalar(
-        "SELECT prosrc FROM pg_proc WHERE oid = 'morpholog.value_key_v1(jsonb)'::regprocedure",
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| e.to_string())?;
-    ddl(
-        &pool,
-        "CREATE OR REPLACE FUNCTION morpholog.value_key_v1(v jsonb) RETURNS jsonb \
-         LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$ BEGIN RETURN v; END $$"
-            .to_string(),
-    )
-    .await
-    .unwrap();
-    ddl(
-        &pool,
-        "COMMENT ON FUNCTION morpholog.value_key_v1(jsonb) IS 'morpholog value key v1'".to_string(),
-    )
-    .await
-    .unwrap();
-    // With an index already built over it: entries computed by the other
-    // body would outlive a replacement, which is why none happens.
-    ddl(
-        &pool,
-        "CREATE INDEX key_probe_foreign ON morpholog.claims ((morpholog.claim_digest(morpholog.value_key_v1(arguments -> 0))))".to_string(),
-    )
-    .await
-    .unwrap();
-    match rerun_017(&pool).await {
-        Err(e) if e.to_string().contains("not the one migration 017 defines") => {}
-        other => {
-            return Err(format!(
-                "a key function of another body must be refused by name, got {other:?}"
-            ));
-        }
-    }
-    // The real body put back, the foreign index dropped: accepted, and
-    // the function left as it is.
-    ddl(&pool, "DROP INDEX morpholog.key_probe_foreign".to_string())
-        .await
-        .unwrap();
-    ddl(
-        &pool,
-        format!(
-            "CREATE OR REPLACE FUNCTION morpholog.value_key_v1(v jsonb) RETURNS jsonb \
-             LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $body${real_body}$body$"
-        ),
-    )
-    .await
-    .unwrap();
-    rerun_017(&pool)
-        .await
-        .map_err(|e| format!("the real body must be accepted: {e}"))?;
-
-    // A guard of the same name that 016 did not write: refused, and left.
-    ddl(
-        &pool,
-        "CREATE FUNCTION morpholog.declared_kind(predicate text, declared_predicate text, v jsonb, kind text, pos integer) \
-         RETURNS boolean LANGUAGE sql IMMUTABLE AS 'SELECT true'"
-            .to_string(),
-    )
-    .await
-    .unwrap();
-    match rerun_017(&pool).await {
-        Err(e) if e.to_string().contains("refusing to drop it") => {}
-        other => {
-            return Err(format!(
-                "a foreign guard must be refused by name, got {other:?}"
-            ));
-        }
-    }
-    let still_there: Option<String> = sqlx::query_scalar(
-        "SELECT to_regprocedure('morpholog.declared_kind(text, text, jsonb, text, integer)')::text",
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| e.to_string())?;
-    if still_there.is_none() {
-        return Err("a refused guard must not be dropped".to_string());
-    }
-    // Marked as 016's: dropped.
-    ddl(
-        &pool,
-        "COMMENT ON FUNCTION morpholog.declared_kind(text, text, jsonb, text, integer) IS 'morpholog declared kind guard v1'".to_string(),
-    )
-    .await
-    .unwrap();
-    rerun_017(&pool)
-        .await
-        .map_err(|e| format!("the marked guard must be dropped and the migration accepted: {e}"))?;
-    let gone: Option<String> = sqlx::query_scalar(
-        "SELECT to_regprocedure('morpholog.declared_kind(text, text, jsonb, text, integer)')::text",
-    )
-    .fetch_one(&pool)
-    .await
-    .map_err(|e| e.to_string())?;
-    if gone.is_some() {
-        return Err("the marked guard must be dropped".to_string());
-    }
-    Ok(())
-}
-
-/// The model-hash migration takes the audit table from before it to the
-/// head shape, leaves the head shape alone (fresh or migrated), and
-/// refuses any other shape by name: a column of another type, or a
-/// same-named constraint that says something else, would leave the
-/// runtime or the activation boundary resting on a definition it never
-/// checked.
-#[tokio::test]
-async fn the_model_hash_migration_accepts_two_shapes_and_refuses_the_rest() {
-    let pool = test_pool().await;
-    let scratch = "morpholog_model_hash_probe";
-    ddl(&pool, format!("DROP SCHEMA IF EXISTS {scratch} CASCADE"))
-        .await
-        .unwrap();
-    ddl(&pool, format!("CREATE SCHEMA {scratch}"))
-        .await
-        .unwrap();
-    ddl(
-        &pool,
-        format!("CREATE TABLE {scratch}.audit (LIKE morpholog.audit INCLUDING ALL)"),
-    )
-    .await
-    .unwrap();
-    let migration = MODEL_HASH_MIGRATION.replace("morpholog.audit", &format!("{scratch}.audit"));
-    let refused = |result: &Result<(), sqlx::Error>| {
-        result
-            .as_ref()
-            .is_err_and(|e| e.to_string().contains("refusing to guess"))
-    };
-
-    ddl(&pool, migration.clone())
-        .await
-        .expect("the fresh head shape is current");
-    ddl(
-        &pool,
-        format!("ALTER TABLE {scratch}.audit DROP COLUMN model_hash"),
-    )
-    .await
-    .unwrap();
-    ddl(&pool, migration.clone())
-        .await
-        .expect("the pre-migration shape migrates");
-    ddl(&pool, migration.clone())
-        .await
-        .expect("the migrated head shape is current");
-    ddl(
-        &pool,
-        format!(
-            "ALTER TABLE {scratch}.audit DROP CONSTRAINT audit_model_hash_shape;
-             ALTER TABLE {scratch}.audit ADD CONSTRAINT audit_model_hash_shape CHECK (
-                 model_hash IS NULL
-                 OR (model_hash ~ '^sha256:[0-9a-f]{{64}}$'
-                     AND attestation IS NOT NULL
-                     AND parameters IS NOT NULL)
-             ) NOT VALID"
-        ),
-    )
-    .await
-    .unwrap();
-    ddl(&pool, migration.clone())
-        .await
-        .expect("a head shape whose shape check is NOT VALID is current");
-
-    ddl(
-        &pool,
-        format!(
-            "ALTER TABLE {scratch}.audit DROP COLUMN model_hash;
-             ALTER TABLE {scratch}.audit ADD COLUMN model_hash jsonb"
-        ),
-    )
-    .await
-    .unwrap();
-    let result = ddl(&pool, migration.clone()).await;
-    assert!(refused(&result), "a column of another type: {result:?}");
-
-    ddl(
-        &pool,
-        format!(
-            "ALTER TABLE {scratch}.audit DROP COLUMN model_hash;
-             ALTER TABLE {scratch}.audit ADD COLUMN model_hash text;
-             ALTER TABLE {scratch}.audit ADD CONSTRAINT audit_model_hash_shape CHECK (true)"
-        ),
-    )
-    .await
-    .unwrap();
-    let result = ddl(&pool, migration.clone()).await;
-    assert!(refused(&result), "an impostor constraint: {result:?}");
-
-    for (what, drift) in [
-        (
-            "a default",
-            "ALTER TABLE {s}.audit ALTER COLUMN model_hash SET DEFAULT 'x'",
-        ),
-        (
-            "a NOT NULL column",
-            "UPDATE {s}.audit SET model_hash = NULL WHERE false;
-             ALTER TABLE {s}.audit ALTER COLUMN model_hash SET NOT NULL",
-        ),
-        (
-            "a required constraint that says something else",
-            "ALTER TABLE {s}.audit DROP CONSTRAINT audit_model_hash_required;
-             ALTER TABLE {s}.audit ADD CONSTRAINT audit_model_hash_required CHECK (true)",
-        ),
-    ] {
-        // Start each from the head shape, then drift one thing.
-        ddl(
-            &pool,
-            format!(
-                "ALTER TABLE {scratch}.audit DROP COLUMN model_hash;
-                 ALTER TABLE {scratch}.audit DROP CONSTRAINT IF EXISTS audit_model_hash_shape"
-            ),
-        )
-        .await
-        .unwrap();
-        ddl(&pool, migration.clone())
-            .await
-            .expect("back to the head shape");
-        ddl(&pool, drift.replace("{s}", scratch)).await.unwrap();
-        let result = ddl(&pool, migration.clone()).await;
-        assert!(refused(&result), "{what}: {result:?}");
-    }
-
-    ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
-        .await
-        .unwrap();
-}
-
-/// The semantics-version migration takes the audit table from before it to the
-/// head shape, leaves the head shape alone (fresh or migrated), and
-/// refuses any other shape by name: a column of another type, or a
-/// same-named constraint that says something else, would leave the
-/// runtime or the activation boundary resting on a definition it never
-/// checked.
-#[tokio::test]
-async fn the_semantics_version_migration_accepts_two_shapes_and_refuses_the_rest() {
-    let pool = test_pool().await;
-    let scratch = "morpholog_semantics_version_probe";
-    ddl(&pool, format!("DROP SCHEMA IF EXISTS {scratch} CASCADE"))
-        .await
-        .unwrap();
-    ddl(&pool, format!("CREATE SCHEMA {scratch}"))
-        .await
-        .unwrap();
-    ddl(
-        &pool,
-        format!("CREATE TABLE {scratch}.audit (LIKE morpholog.audit INCLUDING ALL)"),
-    )
-    .await
-    .unwrap();
-    let migration =
-        SEMANTICS_VERSION_MIGRATION.replace("morpholog.audit", &format!("{scratch}.audit"));
-    let refused = |result: &Result<(), sqlx::Error>| {
-        result
-            .as_ref()
-            .is_err_and(|e| e.to_string().contains("refusing to guess"))
-    };
-
-    ddl(&pool, migration.clone())
-        .await
-        .expect("the fresh head shape is current");
-    ddl(
-        &pool,
-        format!("ALTER TABLE {scratch}.audit DROP COLUMN semantics_version"),
-    )
-    .await
-    .unwrap();
-    ddl(&pool, migration.clone())
-        .await
-        .expect("the pre-migration shape migrates");
-    ddl(&pool, migration.clone())
-        .await
-        .expect("the migrated head shape is current");
-    ddl(
-        &pool,
-        format!(
-            "ALTER TABLE {scratch}.audit DROP CONSTRAINT audit_semantics_version_shape;
-             ALTER TABLE {scratch}.audit ADD CONSTRAINT audit_semantics_version_shape CHECK (
-                 semantics_version IS NULL
-                 OR (semantics_version BETWEEN 1 AND 4294967295
-                     AND model_hash IS NOT NULL)
-             ) NOT VALID"
-        ),
-    )
-    .await
-    .unwrap();
-    ddl(&pool, migration.clone())
-        .await
-        .expect("a head shape whose shape check is NOT VALID is current");
-
-    ddl(
-        &pool,
-        format!(
-            "ALTER TABLE {scratch}.audit DROP COLUMN semantics_version;
-             ALTER TABLE {scratch}.audit ADD COLUMN semantics_version integer"
-        ),
-    )
-    .await
-    .unwrap();
-    let result = ddl(&pool, migration.clone()).await;
-    assert!(refused(&result), "a column of another type: {result:?}");
-
-    ddl(
-        &pool,
-        format!(
-            "ALTER TABLE {scratch}.audit DROP COLUMN semantics_version;
-             ALTER TABLE {scratch}.audit ADD COLUMN semantics_version bigint;
-             ALTER TABLE {scratch}.audit ADD CONSTRAINT audit_semantics_version_shape CHECK (true)"
-        ),
-    )
-    .await
-    .unwrap();
-    let result = ddl(&pool, migration.clone()).await;
-    assert!(refused(&result), "an impostor constraint: {result:?}");
-
-    for (what, drift) in [
-        (
-            "a default",
-            "ALTER TABLE {s}.audit ALTER COLUMN semantics_version SET DEFAULT 1",
-        ),
-        (
-            "a NOT NULL column",
-            "UPDATE {s}.audit SET semantics_version = NULL WHERE false;
-             ALTER TABLE {s}.audit ALTER COLUMN semantics_version SET NOT NULL",
-        ),
-        (
-            "a required constraint that says something else",
-            "ALTER TABLE {s}.audit DROP CONSTRAINT audit_semantics_version_required;
-             ALTER TABLE {s}.audit ADD CONSTRAINT audit_semantics_version_required CHECK (true)",
-        ),
-    ] {
-        // Start each from the head shape, then drift one thing.
-        ddl(
-            &pool,
-            format!(
-                "ALTER TABLE {scratch}.audit DROP COLUMN semantics_version;
-                 ALTER TABLE {scratch}.audit DROP CONSTRAINT IF EXISTS audit_semantics_version_shape"
-            ),
-        )
-        .await
-        .unwrap();
-        ddl(&pool, migration.clone())
-            .await
-            .expect("back to the head shape");
-        ddl(&pool, drift.replace("{s}", scratch)).await.unwrap();
-        let result = ddl(&pool, migration.clone()).await;
-        assert!(refused(&result), "{what}: {result:?}");
-    }
-
-    ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
-        .await
-        .unwrap();
-}
-
-/// The drawn-subjects migration takes the audit table from before it to the
-/// head shape, leaves the head shape alone (fresh or migrated), and
-/// refuses any other shape by name, as the semantics-version migration
-/// does.
-#[tokio::test]
-async fn the_drawn_subjects_migration_accepts_two_shapes_and_refuses_the_rest() {
-    let pool = test_pool().await;
-    let scratch = "morpholog_drawn_subjects_probe";
-    ddl(&pool, format!("DROP SCHEMA IF EXISTS {scratch} CASCADE"))
-        .await
-        .unwrap();
-    ddl(&pool, format!("CREATE SCHEMA {scratch}"))
-        .await
-        .unwrap();
-    ddl(
-        &pool,
-        format!("CREATE TABLE {scratch}.audit (LIKE morpholog.audit INCLUDING ALL)"),
-    )
-    .await
-    .unwrap();
-    let migration =
-        DRAWN_SUBJECTS_MIGRATION.replace("morpholog.audit", &format!("{scratch}.audit"));
-    let refused = |result: &Result<(), sqlx::Error>| {
-        result
-            .as_ref()
-            .is_err_and(|e| e.to_string().contains("refusing to guess"))
-    };
-    let back_to_head = format!(
-        "ALTER TABLE {scratch}.audit DROP COLUMN drawn_subjects;
-         ALTER TABLE {scratch}.audit DROP CONSTRAINT IF EXISTS audit_drawn_subjects_shape;
-         ALTER TABLE {scratch}.audit DROP CONSTRAINT IF EXISTS audit_drawn_subjects_required"
-    );
-
-    ddl(&pool, migration.clone())
-        .await
-        .expect("the fresh head shape is current");
-    ddl(
-        &pool,
-        format!("ALTER TABLE {scratch}.audit DROP COLUMN drawn_subjects"),
-    )
-    .await
-    .unwrap();
-    ddl(&pool, migration.clone())
-        .await
-        .expect("the pre-migration shape migrates");
-    ddl(&pool, migration.clone())
-        .await
-        .expect("the migrated head shape is current");
-
-    for (what, drift) in [
-        (
-            "a column of another type",
-            "ALTER TABLE {s}.audit DROP COLUMN drawn_subjects;
-             ALTER TABLE {s}.audit ADD COLUMN drawn_subjects text[]",
-        ),
-        (
-            "an impostor shape check",
-            "ALTER TABLE {s}.audit DROP CONSTRAINT audit_drawn_subjects_shape;
-             ALTER TABLE {s}.audit ADD CONSTRAINT audit_drawn_subjects_shape CHECK (true)",
-        ),
-        (
-            "a shape check that forgets the semantics rung",
-            "ALTER TABLE {s}.audit DROP CONSTRAINT audit_drawn_subjects_shape;
-             ALTER TABLE {s}.audit ADD CONSTRAINT audit_drawn_subjects_shape CHECK (
-                 drawn_subjects IS NULL OR jsonb_typeof(drawn_subjects) = 'array')",
-        ),
-        (
-            "a default",
-            "ALTER TABLE {s}.audit ALTER COLUMN drawn_subjects SET DEFAULT '[]'",
-        ),
-        (
-            "a NOT NULL column",
-            "ALTER TABLE {s}.audit ALTER COLUMN drawn_subjects SET NOT NULL",
-        ),
-        (
-            "a required constraint that says something else",
-            "ALTER TABLE {s}.audit DROP CONSTRAINT audit_drawn_subjects_required;
-             ALTER TABLE {s}.audit ADD CONSTRAINT audit_drawn_subjects_required CHECK (true)",
-        ),
-    ] {
-        // Start each from the head shape, then drift one thing.
-        ddl(&pool, back_to_head.clone()).await.unwrap();
-        ddl(&pool, migration.clone())
-            .await
-            .expect("back to the head shape");
-        ddl(&pool, drift.replace("{s}", scratch)).await.unwrap();
-        let result = ddl(&pool, migration.clone()).await;
-        assert!(refused(&result), "{what}: {result:?}");
-    }
-
-    ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn the_deployment_roles_migration_holds_one_row_and_refuses_another_shape() {
-    let pool = test_pool().await;
-    let scratch = "morpholog_deployment_roles_probe";
-    ddl(&pool, format!("DROP SCHEMA IF EXISTS {scratch} CASCADE"))
-        .await
-        .unwrap();
-    ddl(&pool, format!("CREATE SCHEMA {scratch}"))
-        .await
-        .unwrap();
-    let migration = DEPLOYMENT_ROLES_MIGRATION.replace(
-        "morpholog.deployment_roles",
-        &format!("{scratch}.deployment_roles"),
-    );
-
-    ddl(&pool, migration.clone())
-        .await
-        .expect("the pre-migration shape migrates");
-    ddl(&pool, migration.clone())
-        .await
-        .expect("the head shape is current");
-    ddl(
-        &pool,
-        format!("DELETE FROM {scratch}.deployment_roles; INSERT INTO {scratch}.deployment_roles (writer_role, reader_role) VALUES ('w', 'r')"),
-    )
-    .await
-    .unwrap();
-    for second in [
-        "(writer_role, reader_role) VALUES ('w2', 'r2')",
-        "(singleton, writer_role, reader_role) VALUES (false, 'w2', 'r2')",
-    ] {
-        ddl(
-            &pool,
-            format!("INSERT INTO {scratch}.deployment_roles {second}"),
-        )
-        .await
-        .expect_err("a deployment records one pair of roles");
-    }
-
-    // Each change keeps the columns but loses what holds the table to one
-    // row, or what an insert relies on.
-    for change in [
-        "ADD COLUMN note text",
-        "DROP CONSTRAINT deployment_roles_pkey",
-        "DROP CONSTRAINT deployment_roles_singleton_check",
-        "ALTER COLUMN singleton DROP DEFAULT",
-    ] {
-        ddl(&pool, format!("DROP TABLE {scratch}.deployment_roles"))
-            .await
-            .unwrap();
-        ddl(&pool, migration.clone()).await.expect("a fresh table");
-        ddl(
-            &pool,
-            format!("ALTER TABLE {scratch}.deployment_roles {change}"),
-        )
-        .await
-        .unwrap();
-        let result = ddl(&pool, migration.clone()).await;
-        assert!(
-            result
-                .as_ref()
-                .is_err_and(|e| e.to_string().contains("refusing to guess")),
-            "{change}: another shape is refused: {result:?}"
-        );
-    }
-    ddl(&pool, format!("DROP SCHEMA {scratch} CASCADE"))
-        .await
-        .unwrap();
-}
-
-/// The schema of the first release, as its `init` provisioned it.
-const FIRST_RELEASE_SCHEMA: &str = include_str!("fixtures/schema_v0.0.1.sql");
 
 /// Everything about a database's schema but the order of its columns:
 /// columns by name with type, nullability, default, identity and
@@ -2274,13 +473,12 @@ async fn schema_but_order(pool: &PgPool) -> Vec<String> {
     schema
 }
 
-/// A database the first release provisioned, migrated to the head, has
-/// the schema a fresh `init` builds, but for two things its history
-/// decides: the order of its columns, and the audit log's required-field
-/// checks, which an upgraded database leaves unvalidated so its old rows
-/// stay lawful.
+/// A database v0.0.14 provisioned, migrated to the head, has the schema a
+/// fresh `init` builds, but for the order of its columns, which its
+/// history decides: a column a migration adds lands last. The check that
+/// holds every migration beyond the baseline to the schema file.
 #[tokio::test]
-async fn the_first_release_migrated_to_the_head_differs_from_a_fresh_schema_only_by_its_history() {
+async fn a_baseline_database_migrated_to_the_head_has_the_fresh_schema() {
     let Ok(base) = std::env::var("DATABASE_URL") else {
         return;
     };
@@ -2311,27 +509,16 @@ async fn the_first_release_migrated_to_the_head_differs_from_a_fresh_schema_only
     morpholog_postgres::initialise_schema(&fresh_pool)
         .await
         .unwrap();
-    sqlx::raw_sql(FIRST_RELEASE_SCHEMA)
+    sqlx::raw_sql(BASELINE_SCHEMA)
         .execute(&upgraded_pool)
         .await
-        .expect("the first release's schema");
-    morpholog_postgres::apply_migrations(&upgraded_pool)
+        .expect("the baseline schema");
+    let report = morpholog_postgres::apply_migrations(&upgraded_pool)
         .await
-        .expect("the first release migrates to the head");
+        .expect("the baseline migrates to the head");
 
     let expected = schema_but_order(&fresh_pool).await;
-    let mut deferred = Vec::new();
-    let found: Vec<String> = schema_but_order(&upgraded_pool)
-        .await
-        .into_iter()
-        .map(|item| match item.strip_suffix(" NOT VALID") {
-            Some(checked_later) => {
-                deferred.push(checked_later.to_string());
-                checked_later.to_string()
-            }
-            None => item,
-        })
-        .collect();
+    let found = schema_but_order(&upgraded_pool).await;
     // Dropped before asserting: the names are this process's, so a later
     // run would never drop what a failed one left behind.
     fresh_pool.close().await;
@@ -2344,6 +531,11 @@ async fn the_first_release_migrated_to_the_head_differs_from_a_fresh_schema_only
         .await
         .unwrap();
     }
+    assert_eq!(
+        report.recorded_version_after,
+        morpholog_postgres::head_version()
+    );
+    assert!(report.is_current(), "{report:?}");
     let fresh_only: Vec<_> = expected.iter().filter(|e| !found.contains(e)).collect();
     let migrated_only: Vec<_> = found.iter().filter(|f| !expected.contains(f)).collect();
     assert!(
@@ -2351,12 +543,4 @@ async fn the_first_release_migrated_to_the_head_differs_from_a_fresh_schema_only
         "fresh only: {fresh_only:#?}\nmigrated only: {migrated_only:#?}"
     );
     assert_eq!(found.len(), expected.len());
-    assert!(
-        deferred
-            .iter()
-            .all(|c| c.starts_with("constraint morpholog.audit audit_")
-                && c.contains("_required CHECK")),
-        "only the audit log's required fields are deferred: {deferred:?}"
-    );
-    assert!(!deferred.is_empty());
 }

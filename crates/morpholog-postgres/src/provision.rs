@@ -36,8 +36,8 @@ pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
     if exists.is_some() {
         return Ok(InitOutcome::AlreadyInitialised);
     }
-    // The file records the migrations it embodies, so the fresh schema
-    // says it is at the head.
+    // The file records the baseline, so the fresh schema says it is at
+    // the head.
     sqlx::raw_sql(SCHEMA_SQL)
         .execute(&mut *tx)
         .await
@@ -308,92 +308,6 @@ async fn recorded_roles(conn: &mut sqlx::PgConnection) -> Result<Option<Deployme
     }))
 }
 
-/// What migration 023 would leave in `morpholog.deployment_roles`, read
-/// from the database as it is now: the row the table already holds, none
-/// when the table exists without one, and otherwise the fixed pair when
-/// both roles exist and hold the floor by name. The migration's own
-/// census decides; this asks the same question without writing, and an
-/// agreement test holds the two together.
-pub async fn preview_role_backfill(pool: &PgPool) -> Result<Option<DeploymentRoles>, PgError> {
-    let mut conn = pool.acquire().await.map_err(classify)?;
-    let present = sqlx::query_scalar!(
-        "SELECT to_regclass('morpholog.deployment_roles') IS NOT NULL AS \"present!\""
-    )
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(classify_checked_query)?;
-    if present {
-        // The migration refuses a table of another shape rather than
-        // guessing; so does the forecast, with the same words.
-        let shape = record_shape(&mut conn).await?;
-        if shape != RECORD_SHAPE {
-            return Err(PgError::InvalidState(format!(
-                "morpholog.deployment_roles exists with another shape ({shape}); migration \
-                 023 refuses to guess, so nothing can be forecast"
-            )));
-        }
-        return recorded_roles(&mut conn).await;
-    }
-    let fixed = DeploymentRoles::default();
-    // Grants made to the role by name only: aclexplode lists PUBLIC as
-    // grantee 0, and inheritance never appears in an ACL.
-    let would_record = sqlx::query_scalar!(
-        r#"SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)
-              AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $2)
-              AND (SELECT coalesce(array_agg(g), ARRAY[]::text[]) @> ARRAY[
-                       'schema:' || $1 || ':USAGE',
-                       'claims:' || $1 || ':INSERT',
-                       'claims:' || $1 || ':DELETE',
-                       'audit:' || $1 || ':INSERT',
-                       'outbox:' || $1 || ':UPDATE',
-                       'schema:' || $2 || ':USAGE',
-                       'audit:' || $2 || ':SELECT']
-                   FROM (SELECT c.relname || ':' || r.rolname || ':' || a.privilege_type AS g
-                         FROM pg_class c, aclexplode(c.relacl) a, pg_roles r
-                         WHERE c.relnamespace = 'morpholog'::regnamespace AND r.oid = a.grantee
-                         UNION ALL
-                         SELECT 'schema:' || r.rolname || ':' || a.privilege_type
-                         FROM pg_namespace n, aclexplode(n.nspacl) a, pg_roles r
-                         WHERE n.nspname = 'morpholog' AND r.oid = a.grantee) x)
-           AS "would_record!""#,
-        fixed.writer(),
-        fixed.reader(),
-    )
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(classify_checked_query)?;
-    Ok(would_record.then_some(fixed))
-}
-
-/// The one shape of `morpholog.deployment_roles` migration 023 accepts,
-/// rendered as the migration renders it.
-const RECORD_SHAPE: &str = "singleton boolean not null, writer_role text not null, \
-                            reader_role text not null | CHECK (singleton); NOT NULL \
-                            reader_role; NOT NULL singleton; NOT NULL writer_role; \
-                            PRIMARY KEY (singleton) | singleton default true";
-
-/// The table's columns, constraints and defaults, as migration 023 reads
-/// them before deciding whether the table is its own.
-async fn record_shape(conn: &mut sqlx::PgConnection) -> Result<String, PgError> {
-    sqlx::query_scalar!(
-        r#"SELECT concat_ws(' | ',
-             (SELECT string_agg(attname || ' ' || format_type(atttypid, atttypmod)
-                                || CASE WHEN attnotnull THEN ' not null' ELSE '' END,
-                                ', ' ORDER BY attnum)
-              FROM pg_attribute
-              WHERE attrelid = 'morpholog.deployment_roles'::regclass
-                AND attnum > 0 AND NOT attisdropped),
-             (SELECT string_agg(pg_get_constraintdef(oid), chr(59) || ' ' ORDER BY contype, conname)
-              FROM pg_constraint WHERE conrelid = 'morpholog.deployment_roles'::regclass),
-             (SELECT string_agg(attname || ' default ' || pg_get_expr(adbin, adrelid), ', ')
-              FROM pg_attrdef JOIN pg_attribute ON attrelid = adrelid AND attnum = adnum
-              WHERE adrelid = 'morpholog.deployment_roles'::regclass)) AS "shape!""#
-    )
-    .fetch_one(&mut *conn)
-    .await
-    .map_err(classify_checked_query)
-}
-
 /// A role granted membership of a deployment role directly. Membership
 /// through a third role, and what the member can do with it under its
 /// inheritance and `SET ROLE` settings, are not read here.
@@ -662,9 +576,9 @@ async fn provision(pool: &PgPool, roles: &DeploymentRoles, rebinding: bool) -> R
     Ok(())
 }
 
-/// Re-apply the floor to the roles this database records, after a
-/// migration added tables a grant could not reach. Creates no role and
-/// grants to no other: a database without a record has no floor.
+/// Re-apply the floor to the roles this database records, on every
+/// `migrate`: a migration adds tables a grant could not reach. Creates no
+/// role and grants to no other: a database without a record has no floor.
 pub(crate) async fn reapply_least_privilege(pool: &PgPool) -> Result<(), PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     if let Some(roles) = recorded_roles(&mut tx).await? {

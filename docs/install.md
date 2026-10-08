@@ -110,7 +110,7 @@ morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBala
 ## 5. The worked embedder (optional, ~5 minutes)
 
 An external Python system driving a governed trade lifecycle through the
-generated client. Needs Python 3.10+ and `psql` on `PATH`, and a
+generated client. Needs Python 3.12+ and `psql` on `PATH`, and a
 DISPOSABLE database - the script resets the schema each run:
 
 ```bash
@@ -144,20 +144,21 @@ after it.
 
 The migrations are compiled into the binary, like the schema itself, so the
 released artifact is all you need. `migrate` applies whatever your database
-has not recorded, in order, and leaves an already-current one alone. A fresh
+has not recorded, in order, re-applies the privilege floor to the roles the
+database records, and otherwise leaves an already-current one alone. A fresh
 `morpholog init` needs none of them: it provisions at the head, and the
 schema records that it is.
 
+The baseline is the schema v0.0.14 provisioned. A database from an older
+release does not record it, and every command refuses it by name: bring it
+to v0.0.14 with that release's binary first, then run this one.
+
 Rollback is restoring the backup. It is never running an older binary
-against a migrated database: from this release, every command that opens
-the database refuses a
-database ahead of the binary that asks, by name, before its first query,
-and a database behind it the same way, naming `morpholog migrate`. Only
-`migrate --check` reports the state and `init` and `migrate` still reach
-such a database, since they are what make it current. The refusal exists
-from the first release that carries it; v0.0.12 and older binaries cannot
-be retrofitted, and against a newer schema they fail the way they always
-did, one query at a time.
+against a migrated database: every command that opens the database refuses
+one ahead of the binary that asks, by name, before its first query, and one
+behind it the same way, naming `morpholog migrate`. Only `migrate --check`
+reports the state and `init` and `migrate` still reach such a database,
+since they are what make it current.
 
 When several processes share one database - a web service and a nightly
 job, say - the sequence is the same for all of them at once: stop them,
@@ -172,9 +173,8 @@ provisioned with `--least-privilege`, the writer role deliberately cannot
 run DDL, so `migrate` connects as the role that owns the tables - the one
 that ran `init`. `--check` only reads, and both roles are granted `SELECT`
 on the record, so a readiness step can ask without holding the privileges
-to act. Migrations re-apply the privilege floor when they have changed
-anything, since a `GRANT` cannot reach a table that did not exist when it
-ran.
+to act. `migrate` re-applies the privilege floor on every run, since a `GRANT`
+cannot reach a table that did not exist when it ran.
 
 ## Several projects on one machine
 
@@ -244,17 +244,12 @@ deployment alone. If they don't, the next `migrate` warns.
 
 ### Moving a deployment to its own roles
 
-A deployment isolated by hand before v0.0.14, by revoking
-`morpholog_writer` and `morpholog_reader`, may have had them granted back:
-a `migrate` run after the revocation and before migration 023 re-applied
-the floor to those fixed names, the only ones it knew, and 023 then
-records the pair it finds granted. `migrate --check` says so before 023 runs (`role_backfill` in
-the report, with a note on stderr when the shared pair would be
-recorded), and `migrate` reports what was recorded afterwards.
-
-If `migrate` warns, move one of the deployments to new roles. In that
-deployment's database, as the role that owns its tables, withdraw the
-shared roles and the record:
+A deployment provisioned before v0.0.14 was recorded with the shared pair
+`morpholog_writer` and `morpholog_reader` when it granted them the floor by
+name, and `migrate` warns while that pair reaches another database. If it
+warns, move one of the deployments to new roles. In that deployment's
+database, as the role that owns its tables, withdraw the shared roles and
+the record:
 
 ```sql
 REVOKE ALL ON ALL TABLES IN SCHEMA morpholog, morpholog_read FROM morpholog_writer, morpholog_reader;

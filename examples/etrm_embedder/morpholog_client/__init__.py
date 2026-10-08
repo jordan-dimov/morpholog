@@ -7,9 +7,9 @@ regenerate when the programme changes. The model hash in
 
 import sys
 
-if sys.version_info < (3, 10):
+if sys.version_info < (3, 12):
     raise RuntimeError(
-        f"morpholog_client requires Python 3.10+ "
+        f"morpholog_client requires Python 3.12+ "
         f"(running {sys.version_info.major}.{sys.version_info.minor}); "
         f"the generated code holds a conservative floor on purpose"
     )
@@ -17,7 +17,7 @@ if sys.version_info < (3, 10):
 PROGRAM = "trade_lifecycle"
 MODEL_HASH = "sha256:8f40dc6b6e53fc332379ad889d24154e9c1d5431b9db4559df2e51789b427daa"
 MORPHOLOG_VERSION = "0.0.14"
-PYTHON_FLOOR = (3, 10)
+PYTHON_FLOOR = (3, 12)
 
 from . import envelopes, models, values  # noqa: E402
 from .adapter import Morpholog, MorphologBatchIncomplete, MorphologError, Request  # noqa: E402

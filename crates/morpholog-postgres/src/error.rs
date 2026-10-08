@@ -76,6 +76,19 @@ pub enum PgError {
          run the Morpholog the database was migrated by, or newer, rather than migrating the database"
     )]
     SchemaAhead { recorded: i32, binary: i32 },
+    /// The database does not record the baseline migration, v0.0.14's
+    /// head: an older release made it, and this binary carries nothing
+    /// that brings it forward.
+    #[error(
+        "this database does not record migration {baseline}, the baseline this binary \
+         starts from ({}); upgrade it with a v0.0.14 binary (`morpholog migrate`) first, \
+         then run this one",
+        match recorded { Some(v) => format!("its newest recorded migration is {v}"), None => "it records no migration".to_string() }
+    )]
+    SchemaBelowBaseline {
+        recorded: Option<i32>,
+        baseline: i32,
+    },
     /// A supplied `transition_id` does not name an existing audit row.
     /// Every unknown id is refused, including one that sorts between known
     /// ids.

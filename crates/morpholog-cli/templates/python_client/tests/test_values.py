@@ -1,6 +1,5 @@
-"""The value codecs, both directions, including the traps the floor
-version makes real (Z-suffix timestamps on 3.10, scientific Decimal
-rendering, naive datetimes)."""
+"""The value codecs, both directions, including the traps the standard
+library makes real (scientific Decimal rendering, naive datetimes)."""
 
 import sys
 import unittest

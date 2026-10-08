@@ -68,7 +68,7 @@ The [`morpholog_client/`](morpholog_client/) package beside the script is that o
 DATABASE_URL=postgres:///morpholog_bench python3 examples/etrm_embedder/etrm_lifecycle.py
 ```
 
-Needs **Python 3.10+** (the floor the generated client declares and enforces at import) and three things on your `PATH`: the `morpholog` CLI (set `MORPHOLOG_BIN` to point elsewhere, e.g. `target/release/morpholog`), the `psql` client (the demo-only schema reset shells out to it), and a disposable PostgreSQL database in `DATABASE_URL`. Python standard library only - no packages to install. It prints each lifecycle step, the intent it delivered, and a closing list of the interface friction it hit.
+Needs **Python 3.12+** (the floor the generated client declares and enforces at import) and three things on your `PATH`: the `morpholog` CLI (set `MORPHOLOG_BIN` to point elsewhere, e.g. `target/release/morpholog`), the `psql` client (the demo-only schema reset shells out to it), and a disposable PostgreSQL database in `DATABASE_URL`. Python standard library only - no packages to install. It prints each lifecycle step, the intent it delivered, and a closing list of the interface friction it hit.
 
 After editing the `.morph`, regenerate the client with the command above; the `MODEL_HASH` stamp in `morpholog_client/__init__.py` names the rules the package was built against, so CI can assert the generated code, the `schema --all` manifest, and the live binary all agree.
 

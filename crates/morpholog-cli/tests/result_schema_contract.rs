@@ -878,8 +878,8 @@ fn the_provisioning_actions_are_the_schemas() {
 #[test]
 fn migration_reports_serialize_as_pinned() {
     let behind = morpholog_postgres::MigrationReport {
-        recorded_version_before: Some(9),
-        recorded_version_after: Some(9),
+        recorded_version_before: 9,
+        recorded_version_after: 9,
         binary_version: 14,
         applied: Vec::new(),
         unknown: Vec::new(),
@@ -905,68 +905,24 @@ fn migration_reports_serialize_as_pinned() {
                 name: "audit_parameters".to_string(),
             },
         ],
-        role_backfill: None,
     };
     assert_golden("migration_report_behind.json", &to_value(&behind));
 
     let applied = morpholog_postgres::MigrationReport {
-        recorded_version_before: Some(9),
-        recorded_version_after: Some(14),
+        recorded_version_before: 9,
+        recorded_version_after: 14,
         binary_version: 14,
         applied: behind.pending.clone(),
         pending: Vec::new(),
         unknown: Vec::new(),
-        role_backfill: None,
     };
     assert_golden("migration_report_applied.json", &to_value(&applied));
-
-    // Migration 023 pending: the check forecasts what the record will hold;
-    // the run reads it back.
-    let behind_with_backfill = morpholog_postgres::MigrationReport {
-        recorded_version_before: Some(22),
-        recorded_version_after: Some(22),
-        binary_version: 23,
-        applied: Vec::new(),
-        pending: vec![morpholog_postgres::MigrationRef {
-            version: 23,
-            name: "deployment_roles".to_string(),
-        }],
-        unknown: Vec::new(),
-        role_backfill: Some(morpholog_postgres::RoleBackfill {
-            phase: morpholog_postgres::BackfillPhase::Preview,
-            outcome: morpholog_postgres::BackfillOutcome::RecordPair,
-            writer_role: Some("morpholog_writer".to_string()),
-            reader_role: Some("morpholog_reader".to_string()),
-        }),
-    };
-    assert_golden(
-        "migration_report_behind_with_backfill.json",
-        &to_value(&behind_with_backfill),
-    );
-    let applied_with_backfill = morpholog_postgres::MigrationReport {
-        recorded_version_before: Some(22),
-        recorded_version_after: Some(23),
-        binary_version: 23,
-        applied: behind_with_backfill.pending.clone(),
-        pending: Vec::new(),
-        unknown: Vec::new(),
-        role_backfill: Some(morpholog_postgres::RoleBackfill {
-            phase: morpholog_postgres::BackfillPhase::Observed,
-            outcome: morpholog_postgres::BackfillOutcome::NoRecord,
-            writer_role: None,
-            reader_role: None,
-        }),
-    };
-    assert_golden(
-        "migration_report_applied_with_backfill.json",
-        &to_value(&applied_with_backfill),
-    );
 
     // A database migrated by a newer binary: nothing pending, yet not
     // current.
     let ahead = morpholog_postgres::MigrationReport {
-        recorded_version_before: Some(15),
-        recorded_version_after: Some(15),
+        recorded_version_before: 15,
+        recorded_version_after: 15,
         binary_version: 14,
         applied: Vec::new(),
         pending: Vec::new(),
@@ -974,7 +930,6 @@ fn migration_reports_serialize_as_pinned() {
             version: 15,
             name: "something_this_build_never_saw".to_string(),
         }],
-        role_backfill: None,
     };
     assert!(!ahead.is_current(), "an ahead database is not current");
     assert_golden("migration_report_ahead.json", &to_value(&ahead));
@@ -2607,14 +2562,6 @@ fn every_golden_validates_against_its_defs_entry() {
         ("migration_report_behind.json", "migration_report"),
         ("migration_report_applied.json", "migration_report"),
         ("migration_report_ahead.json", "migration_report"),
-        (
-            "migration_report_behind_with_backfill.json",
-            "migration_report",
-        ),
-        (
-            "migration_report_applied_with_backfill.json",
-            "migration_report",
-        ),
         ("provision_report_applied.json", "provision_report"),
         ("provision_report_dry_run.json", "provision_report"),
         ("provision_report_conflict.json", "provision_report"),

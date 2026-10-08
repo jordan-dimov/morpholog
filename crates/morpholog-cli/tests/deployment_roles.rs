@@ -173,48 +173,7 @@ async fn init_refuses_held_roles_and_migrate_warns_about_shared_ones() {
         )),
         "{stderr}"
     );
-    assert!(
-        report.get("role_backfill").is_none(),
-        "023 was not part of this run: {stdout}"
-    );
-
-    // An upgrade outstanding while another session is on the database:
-    // the check names the login, and still reports.
-    let pool_c = PgPool::connect(&c).await.unwrap();
-    run(
-        &pool_c,
-        "DELETE FROM morpholog.schema_migrations WHERE version = 23",
-    )
-    .await;
-    let me: String = sqlx::query_scalar("SELECT current_user::text")
-        .fetch_one(&pool_c)
-        .await
-        .unwrap();
-    let (status, stdout, stderr) = cli(&["migrate", "--check", "--database-url", &c]);
-    assert!(!status.success(), "023 is pending: not ready");
-    assert!(
-        stderr.contains("other sessions are connected") && stderr.contains(&format!("`{me}`")),
-        "{stderr}"
-    );
-    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    // The table is already there with its pair: the forecast reports it.
-    assert_eq!(report["role_backfill"]["phase"], "preview");
-    assert_eq!(report["role_backfill"]["outcome"], "record_pair");
-    assert_eq!(report["role_backfill"]["writer_role"], ROLES[0]);
-    assert!(
-        !stderr.contains("note:"),
-        "a deployment's own pair earns no note: {stderr}"
-    );
-    pool_c.close().await;
-    let (status, stdout, stderr) = cli(&["migrate", "--database-url", &c]);
-    assert!(status.success(), "{stderr}");
-    assert!(
-        !stderr.contains("other sessions"),
-        "nobody else now: {stderr}"
-    );
-    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(report["role_backfill"]["phase"], "observed");
-    assert_eq!(report["role_backfill"]["writer_role"], ROLES[0]);
+    assert_eq!(report["applied"], serde_json::json!([]));
     let (status, _, stderr) = cli(&["migrate", "--database-url", &a]);
     assert!(status.success(), "{stderr}");
     assert!(
@@ -381,7 +340,7 @@ async fn a_reset_of_a_database_older_than_the_role_record_refuses_first() {
         &url,
     ]);
     assert!(status.success(), "{stderr}");
-    // Back to the shape before migration 023.
+    // Back to the shape before the baseline.
     let pool = PgPool::connect(&url).await.unwrap();
     run(
         &pool,
@@ -403,7 +362,7 @@ async fn a_reset_of_a_database_older_than_the_role_record_refuses_first() {
     ]);
     assert!(!status.success());
     assert!(
-        stderr.contains("morpholog migrate") && stderr.contains("nothing was dropped"),
+        stderr.contains("v0.0.14 binary") && stderr.contains("nothing was dropped"),
         "{stderr}"
     );
     assert!(
@@ -411,7 +370,7 @@ async fn a_reset_of_a_database_older_than_the_role_record_refuses_first() {
         "the refused reset dropped the schema"
     );
 
-    // The migration recorded but its table gone: `migrate` has nothing to
+    // The baseline recorded but its table gone: `migrate` has nothing to
     // apply, so it is not the advice.
     run(
         &pool,
