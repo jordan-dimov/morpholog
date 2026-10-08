@@ -238,7 +238,7 @@ async fn the_bare_schema_file_records_the_baseline() {
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(recorded, vec![BASELINE_VERSION]);
+    assert_eq!(recorded, (1..=BASELINE_VERSION).collect::<Vec<i32>>());
     let status = morpholog_postgres::migration_status(&pool).await.unwrap();
     assert!(status.is_current(), "{status:?}");
     assert_eq!(status.recorded_version_before, BASELINE_VERSION);

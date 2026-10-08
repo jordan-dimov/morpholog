@@ -64,6 +64,8 @@ def parse_timestamp(text: str) -> datetime:
             f"timestamp {text!r} carries sub-microsecond precision, which "
             f"Python's datetime cannot represent exactly"
         )
+    if text.endswith("z"):
+        text = text[:-1] + "+00:00"
     parsed = datetime.fromisoformat(text)
     if parsed.tzinfo is None:
         raise CodecError(f"timestamp {text!r} arrived without an offset")

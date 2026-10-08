@@ -123,9 +123,10 @@ class EncodeNamed(unittest.TestCase):
 
 
 class ParseTimestamp(unittest.TestCase):
-    def test_z_suffix_parses_on_the_floor_version(self):
-        parsed = values.parse_timestamp("2026-06-01T12:00:00Z")
-        self.assertEqual(parsed, datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc))
+    def test_either_case_of_z_is_utc(self):
+        expected = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(values.parse_timestamp("2026-06-01T12:00:00Z"), expected)
+        self.assertEqual(values.parse_timestamp("2026-06-01T12:00:00z"), expected)
 
     def test_offsetless_text_is_refused(self):
         with self.assertRaises(ValueError):

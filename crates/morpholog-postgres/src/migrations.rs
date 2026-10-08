@@ -8,7 +8,7 @@
 //!
 //! **What "pending" means.** `morpholog.schema_migrations` records applied
 //! versions. A database provisioned from `schema.sql` is at the head, and
-//! the file records the baseline, so none is pending.
+//! the file records the ledger up to the baseline, so none is pending.
 
 use crate::error::{PgError, classify, classify_checked_query};
 use serde::{Deserialize, Serialize};

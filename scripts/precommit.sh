@@ -177,7 +177,7 @@ fi
 # ----------------------------------------------------------------
 step 'generated Python client (unit tests + worked embedder)'
 if ! command -v python3 >/dev/null 2>&1; then
-    echo '  python3 not on PATH; skipping (CI runs this at the 3.10 floor).'
+    echo '  python3 not on PATH; skipping (CI runs this at the 3.12 floor).'
 else
     python3 -m unittest discover crates/morpholog-cli/templates/python_client/tests
     if [ -z "${DATABASE_URL:-}" ]; then

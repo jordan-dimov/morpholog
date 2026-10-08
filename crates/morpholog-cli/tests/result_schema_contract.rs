@@ -878,40 +878,28 @@ fn the_provisioning_actions_are_the_schemas() {
 #[test]
 fn migration_reports_serialize_as_pinned() {
     let behind = morpholog_postgres::MigrationReport {
-        recorded_version_before: 9,
-        recorded_version_after: 9,
-        binary_version: 14,
+        recorded_version_before: 23,
+        recorded_version_after: 23,
+        binary_version: 25,
         applied: Vec::new(),
         unknown: Vec::new(),
         pending: vec![
             morpholog_postgres::MigrationRef {
-                version: 10,
-                name: "rejections_witness".to_string(),
+                version: 24,
+                name: "a_migration_after_the_baseline".to_string(),
             },
             morpholog_postgres::MigrationRef {
-                version: 11,
-                name: "schema_migrations".to_string(),
-            },
-            morpholog_postgres::MigrationRef {
-                version: 12,
-                name: "claims_hash_key".to_string(),
-            },
-            morpholog_postgres::MigrationRef {
-                version: 13,
-                name: "checkpoint_witnesses".to_string(),
-            },
-            morpholog_postgres::MigrationRef {
-                version: 14,
-                name: "audit_parameters".to_string(),
+                version: 25,
+                name: "another_after_it".to_string(),
             },
         ],
     };
     assert_golden("migration_report_behind.json", &to_value(&behind));
 
     let applied = morpholog_postgres::MigrationReport {
-        recorded_version_before: 9,
-        recorded_version_after: 14,
-        binary_version: 14,
+        recorded_version_before: 23,
+        recorded_version_after: 25,
+        binary_version: 25,
         applied: behind.pending.clone(),
         pending: Vec::new(),
         unknown: Vec::new(),
@@ -921,13 +909,13 @@ fn migration_reports_serialize_as_pinned() {
     // A database migrated by a newer binary: nothing pending, yet not
     // current.
     let ahead = morpholog_postgres::MigrationReport {
-        recorded_version_before: 15,
-        recorded_version_after: 15,
-        binary_version: 14,
+        recorded_version_before: 26,
+        recorded_version_after: 26,
+        binary_version: 25,
         applied: Vec::new(),
         pending: Vec::new(),
         unknown: vec![morpholog_postgres::MigrationRef {
-            version: 15,
+            version: 26,
             name: "something_this_build_never_saw".to_string(),
         }],
     };
