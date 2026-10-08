@@ -260,7 +260,9 @@ async fn a_receipt_recomputes_from_any_form_of_the_pack_and_agrees_with_the_live
     let rows = 1 + lines[0]["checkpoint_count"].as_u64().unwrap() as usize;
     let document = json!({
         "manifest": {
-            "pack_format_version": 16,
+            "pack_format_version": lines[0]["pack_format_version"],
+            "pack_kind": lines[0]["pack_kind"],
+            "morpholog_version": lines[0]["morpholog_version"],
             "tree_size": lines[0]["tree_size"],
             "root_hash": lines[0]["root_hash"],
             "checkpoint_hash": lines[0]["checkpoint_hash"],

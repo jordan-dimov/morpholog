@@ -1,6 +1,7 @@
 {
-  "pack_format_version": 4,
+  "pack_format_version": 17,
   "pack_kind": "prefix",
+  "morpholog_version": "0.0.0",
   "tree_size": 2,
   "root_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "checkpoint_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

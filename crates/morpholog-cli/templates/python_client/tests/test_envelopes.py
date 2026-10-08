@@ -937,6 +937,7 @@ class TamperEvidence(unittest.TestCase):
             ("tree_verification_chain_broken.json", envelopes.TreeChainBroken),
             ("tree_verification_anchor_mismatch.json", envelopes.TreeAnchorMismatch),
             ("tree_verification_malformed_pack.json", envelopes.TreeMalformedPack),
+            ("tree_verification_unsupported_pack.json", envelopes.TreeUnsupportedPack),
             ("tree_verification_signature_invalid.json", envelopes.TreeSignatureInvalid),
             ("tree_verification_unauthorized_key.json", envelopes.TreeUnauthorizedKey),
             ("tree_verification_signature_required.json", envelopes.TreeSignatureRequired),
@@ -946,8 +947,9 @@ class TamperEvidence(unittest.TestCase):
 
     def test_prefix_pack_manifest(self):
         manifest = envelopes.PrefixPackManifest.from_json(golden("prefix_pack_manifest.json"))
-        self.assertEqual(manifest.pack_format_version, 4)
+        self.assertEqual(manifest.pack_format_version, 17)
         self.assertEqual(manifest.pack_kind, "prefix")
+        self.assertEqual(manifest.morpholog_version, "0.0.0")
         self.assertEqual(manifest.checkpoint_count, 1)
 
     def test_every_window_verdict_parses(self):
@@ -967,7 +969,7 @@ class TamperEvidence(unittest.TestCase):
 
     def test_window_evidence_pack_with_proofs(self):
         pack = envelopes.WindowEvidencePack.from_json(golden("window_evidence_pack.json"))
-        self.assertEqual(pack.manifest.pack_format_version, 2)
+        self.assertEqual(pack.manifest.pack_format_version, 17)
         self.assertEqual(pack.manifest.pack_kind, "window")
         self.assertIsInstance(pack.from_checkpoint, envelopes.Checkpoint)
         self.assertIsInstance(pack.to_checkpoint, envelopes.Checkpoint)
@@ -977,7 +979,7 @@ class TamperEvidence(unittest.TestCase):
 
     def test_selective_evidence_pack_and_every_verdict(self):
         pack = envelopes.SelectiveEvidencePack.from_json(golden("selective_evidence_pack.json"))
-        self.assertEqual(pack.manifest.pack_format_version, 3)
+        self.assertEqual(pack.manifest.pack_format_version, 17)
         self.assertEqual(pack.manifest.pack_kind, "selective")
         self.assertIsInstance(pack.checkpoint, envelopes.Checkpoint)
         self.assertEqual(len(pack.rows), len(pack.inclusion_proofs))

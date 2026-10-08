@@ -14,10 +14,11 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
 
 use super::{
-    DOCUMENT_FORMATS, EvidencePack, FormatLadder, PackError, PackManifest, covering_checkpoint,
-    manifest_agrees, row_count_disagrees, validate_prefix_chain,
+    EvidencePack, PACK_FORMAT, PackError, PackHead, PackKind, PackManifest, WRITER_VERSION,
+    check_manifest, covering_checkpoint, manifest_agrees, row_count_disagrees,
+    validate_prefix_chain,
 };
-use crate::audit::{AuditRow, RowRung};
+use crate::audit::AuditRow;
 use crate::audit_pages::AuditPages;
 use crate::checkpoints::{Checkpoint, TreeVerification, load_checkpoint_chain};
 use crate::error::{PgError, classify_checked_query};
@@ -26,24 +27,13 @@ use crate::prefix_verify::PrefixVerifier;
 use crate::role_rebindings::{RebindingScope, RoleRebindings};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 
-pub(crate) const PACK_FORMAT_V4: u32 = 4;
-const PACK_KIND_PREFIX: &str = "prefix";
-/// The streamed prefix's versions: 4, 5 once a covered row names its
-/// programme, 9 once one names its semantics, 13 once one records its
-/// draws. See [`FormatLadder`].
-pub(crate) const PREFIX_FORMATS: FormatLadder = FormatLadder {
-    legacy: PACK_FORMAT_V4,
-    model: 5,
-    semantics: 9,
-    subjects: 13,
-};
-
 /// Line 1 of a complete-prefix pack.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrefixPackManifest {
     pub pack_format_version: u32,
     pub pack_kind: String,
+    pub morpholog_version: String,
     pub tree_size: i64,
     pub root_hash: Digest,
     pub checkpoint_hash: Digest,
@@ -82,36 +72,11 @@ pub async fn begin_prefix_export(
             rows_present,
         });
     }
-    // The manifest goes out before the rows, so the highest rung among the
-    // covered rows is asked first, in the same snapshot and order.
-    let rung = sqlx::query_scalar!(
-        r#"SELECT coalesce(max(CASE
-                   WHEN prefix.drawn_subjects IS NOT NULL THEN 3
-                   WHEN prefix.semantics_version IS NOT NULL THEN 2
-                   WHEN prefix.model_hash IS NOT NULL THEN 1
-                   ELSE 0
-               END), 0) AS "rung!"
-           FROM (
-               SELECT model_hash, semantics_version, drawn_subjects FROM morpholog.audit
-               ORDER BY committed_at, transition_id
-               LIMIT $1
-           ) AS prefix"#,
-        covering.tree_size
-    )
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(classify_checked_query)?;
-    let highest = match rung {
-        0 => RowRung::Legacy,
-        1 => RowRung::Model,
-        2 => RowRung::Semantics,
-        _ => RowRung::Subjects,
-    };
-
     Ok(PrefixExport {
         manifest: PrefixPackManifest {
-            pack_format_version: PREFIX_FORMATS.version(highest),
-            pack_kind: PACK_KIND_PREFIX.to_string(),
+            pack_format_version: PACK_FORMAT,
+            pack_kind: PackKind::Prefix.name().to_string(),
+            morpholog_version: WRITER_VERSION.to_string(),
             tree_size: covering.tree_size,
             root_hash: covering.root_hash,
             checkpoint_hash: covering.checkpoint_hash,
@@ -143,17 +108,11 @@ impl PrefixExport<'_> {
     }
 }
 
-/// The format version line 1 of a line-oriented pack announces, or `None`
-/// when the line is not such a manifest (a single-document pack, or not a
-/// pack at all).
-pub fn streamed_pack_version(first_line: &[u8]) -> Option<u32> {
-    #[derive(Deserialize)]
-    struct Probe {
-        pack_format_version: u32,
-    }
-    serde_json::from_slice::<Probe>(first_line)
-        .ok()
-        .map(|probe| probe.pack_format_version)
+/// What line 1 of a line-oriented pack says of itself, or `None` when the
+/// line is not such a manifest (a single-document pack, or not a pack at
+/// all).
+pub fn streamed_pack_head(first_line: &[u8]) -> Option<PackHead> {
+    serde_json::from_slice::<PackHead>(first_line).ok()
 }
 
 /// What verifying a streamed pack found.
@@ -199,7 +158,9 @@ pub fn read_prefix_stream(input: impl BufRead) -> Result<EvidencePack, PackError
     let manifest = stream.manifest;
     Ok(EvidencePack {
         manifest: PackManifest {
-            pack_format_version: DOCUMENT_FORMATS.for_rows(&rows),
+            pack_format_version: manifest.pack_format_version,
+            pack_kind: manifest.pack_kind,
+            morpholog_version: manifest.morpholog_version,
             tree_size: manifest.tree_size,
             root_hash: manifest.root_hash,
             checkpoint_hash: manifest.checkpoint_hash,
@@ -217,25 +178,23 @@ struct RowStream<R> {
     manifest: PrefixPackManifest,
     fed: usize,
     previous: Option<(jiff::Timestamp, uuid::Uuid)>,
-    /// The highest rung among the rows read so far, held to the
-    /// manifest's version once the last row is in.
-    highest_seen: RowRung,
 }
 
 impl<R: BufRead> RowStream<R> {
     fn open(input: R) -> Result<(Self, Vec<Checkpoint>), PackError> {
         let mut lines = Lines::new(input);
-        let manifest: PrefixPackManifest = lines.parse("the manifest")?;
-        if !PREFIX_FORMATS.admits(manifest.pack_format_version)
-            || manifest.pack_kind != PACK_KIND_PREFIX
-        {
-            return Err(PackError::Malformed {
-                detail: format!(
-                    "not a complete-prefix pack: pack_format_version {}, pack_kind {:?}",
-                    manifest.pack_format_version, manifest.pack_kind
-                ),
-            });
-        }
+        // The format is judged from the lenient head before the manifest
+        // is held to this binary's shape, so another format is refused by
+        // name rather than failing to parse.
+        let head: PackHead = lines.parse("the manifest")?;
+        head.check_format()?;
+        let manifest: PrefixPackManifest = lines.parse_again("the manifest")?;
+        check_manifest(
+            manifest.pack_format_version,
+            &manifest.morpholog_version,
+            &manifest.pack_kind,
+            PackKind::Prefix,
+        )?;
         let mut checkpoints = Vec::new();
         for _ in 0..manifest.checkpoint_count {
             checkpoints.push(lines.parse::<Checkpoint>("a checkpoint")?);
@@ -252,7 +211,6 @@ impl<R: BufRead> RowStream<R> {
             manifest,
             fed: 0,
             previous: None,
-            highest_seen: RowRung::Legacy,
         };
         Ok((stream, checkpoints))
     }
@@ -268,7 +226,6 @@ impl<R: BufRead> RowStream<R> {
                     ),
                 });
             }
-            PREFIX_FORMATS.check(self.manifest.pack_format_version, self.highest_seen)?;
             return Ok(None);
         }
         if self.lines.at_end()? {
@@ -288,18 +245,6 @@ impl<R: BufRead> RowStream<R> {
         }
         self.previous = Some(here);
         self.fed += 1;
-        let rung = row.rung();
-        if rung > self.highest_seen {
-            self.highest_seen = rung;
-            // Refused at the row, not after the stream: a reader of the
-            // announced version must never have been handed it.
-            if PREFIX_FORMATS
-                .rung(self.manifest.pack_format_version)
-                .is_some_and(|announced| rung > announced)
-            {
-                PREFIX_FORMATS.check(self.manifest.pack_format_version, rung)?;
-            }
-        }
         Ok(Some(row))
     }
 }
@@ -332,7 +277,7 @@ impl<R: BufRead> Lines<R> {
         self.input
             .read_until(b'\n', &mut self.buf)
             .map_err(read_error)?;
-        let Some(line) = self.buf.strip_suffix(b"\n") else {
+        if !self.buf.ends_with(b"\n") {
             return Err(malformed(if self.buf.is_empty() {
                 format!(
                     "line {}: the pack ends where {what} was expected",
@@ -344,12 +289,15 @@ impl<R: BufRead> Lines<R> {
                     self.number
                 )
             }));
-        };
-        serde_json::from_slice(line).map_err(|e| {
-            malformed(format!(
-                "line {}: {what} that does not parse: {e}",
-                self.number
-            ))
+        }
+        self.parse_again(what)
+    }
+
+    /// The line last read, parsed as another shape.
+    fn parse_again<T: serde::de::DeserializeOwned>(&self, what: &str) -> Result<T, PackError> {
+        let line = self.buf.strip_suffix(b"\n").unwrap_or(&self.buf);
+        serde_json::from_slice(line).map_err(|e| PackError::Malformed {
+            detail: format!("line {}: {what} that does not parse: {e}", self.number),
         })
     }
 }

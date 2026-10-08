@@ -1831,8 +1831,9 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
     assert_golden_bytes(
         "prefix_pack_manifest.json",
         &PrefixPackManifest {
-            pack_format_version: 4,
+            pack_format_version: 17,
             pack_kind: "prefix".into(),
+            morpholog_version: "0.0.0".into(),
             tree_size: 2,
             root_hash: format!("sha256:{}", "a".repeat(64)).parse().unwrap(),
             checkpoint_hash: format!("sha256:{}", "b".repeat(64)).parse().unwrap(),
@@ -1861,6 +1862,13 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         &to_value(&TreeVerification::MalformedPack {
             detail: "pack rows do not match the manifest tree_size".into(),
         }),
+    );
+    assert_golden(
+        "tree_verification_unsupported_pack.json",
+        &to_value(&TreeVerification::unsupported_pack(
+            18,
+            Some("9.9.9".into()),
+        )),
     );
     assert_golden(
         "tree_verification_signature_invalid.json",
@@ -1899,8 +1907,9 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "window_evidence_pack.json",
         &to_value(&WindowEvidencePack {
             manifest: WindowPackManifest {
-                pack_format_version: 2,
+                pack_format_version: 17,
                 pack_kind: "window".into(),
+                morpholog_version: "0.0.0".into(),
                 from_tree_size: 2,
                 to_tree_size: 3,
                 from_checkpoint_hash: format!("sha256:{}", "b".repeat(64)).parse().unwrap(),
@@ -1979,8 +1988,9 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "selective_evidence_pack.json",
         &to_value(&SelectiveEvidencePack {
             manifest: SelectivePackManifest {
-                pack_format_version: 3,
+                pack_format_version: 17,
                 pack_kind: "selective".into(),
+                morpholog_version: "0.0.0".into(),
                 tree_size: 3,
                 root_hash: format!("sha256:{}", "c".repeat(64)).parse().unwrap(),
                 checkpoint_hash: format!("sha256:{}", "d".repeat(64)).parse().unwrap(),
@@ -2647,6 +2657,10 @@ fn every_golden_validates_against_its_defs_entry() {
             "tree_verification",
         ),
         ("tree_verification_malformed_pack.json", "tree_verification"),
+        (
+            "tree_verification_unsupported_pack.json",
+            "tree_verification",
+        ),
         (
             "tree_verification_signature_invalid.json",
             "tree_verification",

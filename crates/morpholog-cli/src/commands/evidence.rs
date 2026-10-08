@@ -9,13 +9,12 @@ use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::path::Path;
 
 use morpholog_postgres::{
-    Checkpoint, EvidencePack, NEWEST_PACK_FORMAT, PackError, PackKind, PackVerdict,
-    PackVerificationReport, RoleRebindings, SelectiveEvidencePack, SelectiveVerification,
-    SignaturePolicy, TreeVerification, WindowEvidencePack, WindowStart, WindowVerification,
-    begin_prefix_export, export_selective, export_window, pack_format_version, pack_kind,
-    pack_role_rebindings, read_prefix_stream, streamed_pack_version, verify_pack,
-    verify_prefix_stream, verify_selective, verify_window, with_anchor_signatures,
-    witnesses_report,
+    Checkpoint, EvidencePack, PackError, PackHead, PackKind, PackVerdict, PackVerificationReport,
+    RoleRebindings, SelectiveEvidencePack, SelectiveVerification, SignaturePolicy,
+    TreeVerification, WindowEvidencePack, WindowStart, WindowVerification, begin_prefix_export,
+    document_pack_head, export_selective, export_window, pack_role_rebindings, read_prefix_stream,
+    streamed_pack_head, verify_pack, verify_prefix_stream, verify_selective, verify_window,
+    with_anchor_signatures, witnesses_report,
 };
 
 use anyhow::Context;
@@ -101,9 +100,9 @@ fn write_line(out: &mut impl Write, value: &impl serde::Serialize) -> anyhow::Re
 
 /// `audit verify-pack`: check a pack offline. A prefix pack recomputes its
 /// root from every row; a window pack checks a consistency proof and
-/// per-row inclusion proofs; `pack_format_version` says which. Prints one
-/// JSON report and exits 1 on any tamper, divergence or malformed pack,
-/// like `audit verify`.
+/// per-row inclusion proofs; the manifest's `pack_kind` says which. Prints
+/// one JSON report and exits 1 on any tamper, divergence, malformed or
+/// unsupported pack, like `audit verify`.
 pub(crate) fn verify(args: EvidenceVerifyArgs) -> anyhow::Result<()> {
     let report = pack_report(&args.pack_file, &args.trust)?;
     print_json(&report)?;
@@ -134,13 +133,13 @@ pub(crate) fn pack_report_of(
     )?;
 
     // Each pack kind has its own verifier and verdict shape, chosen by the
-    // format version. An unknown future version is named as such, not read
-    // as a malformed v1. A file that is not a pack is still a verdict, not
+    // manifest. A format this binary does not read is named as such, not
+    // read as malformed. A file that is not a pack is still a verdict, not
     // an operational error.
     let (verdict, checkpoints, role_rebindings) = match input {
         PackInput::Stream(input) => verify_streamed(input, anchor.as_ref(), policy.as_ref())?,
-        PackInput::Newer(n) => (
-            newer_than_this_binary(n),
+        PackInput::Unsupported(e) => (
+            PackVerdict::Prefix(error_verdict(e)),
             Vec::new(),
             RoleRebindings::NotEvaluated,
         ),
@@ -183,10 +182,7 @@ pub(crate) fn complete_prefix_of(
     match input {
         PackInput::Stream(input) => read_prefix_stream(input).with_context(not_a_pack),
         PackInput::Document(bytes) => serde_json::from_slice(&bytes).with_context(not_a_pack),
-        PackInput::Newer(n) => Err(anyhow::anyhow!(
-            "pack_format_version {n} is newer than this binary understands"
-        ))
-        .with_context(not_a_pack),
+        PackInput::Unsupported(e) => Err(anyhow::Error::new(e)).with_context(not_a_pack),
         PackInput::Unreadable(detail) => Err(anyhow::anyhow!(detail)).with_context(not_a_pack),
     }
 }
@@ -198,7 +194,7 @@ const MANIFEST_LINE_LIMIT: u64 = 4096;
 
 pub(crate) enum PackInput<'a> {
     Stream(Box<dyn BufRead + 'a>),
-    Newer(u32),
+    Unsupported(PackError),
     Unreadable(String),
     Document(Vec<u8>),
 }
@@ -234,14 +230,23 @@ pub(crate) fn open_pack_from<'a>(
     {
         return undecodable(e).with_context(reading);
     }
-    if first.ends_with(b"\n") {
-        match streamed_pack_version(&first) {
-            Some(n) if pack_kind(n.into()) == Some(PackKind::PrefixStream) => {
-                return Ok(PackInput::Stream(Box::new(Cursor::new(first).chain(input))));
-            }
-            Some(n) if n > NEWEST_PACK_FORMAT => return Ok(PackInput::Newer(n)),
-            _ => {}
+    // Line 1 that is a manifest of its own announces a streamed pack,
+    // judged by its head before another byte is read.
+    if first.ends_with(b"\n")
+        && let Some(head) = streamed_pack_head(&first)
+    {
+        if let Err(e) = head.check_format() {
+            return Ok(PackInput::Unsupported(e));
         }
+        return match head.kind() {
+            Some(PackKind::Prefix) => {
+                Ok(PackInput::Stream(Box::new(Cursor::new(first).chain(input))))
+            }
+            _ => Ok(PackInput::Unreadable(format!(
+                "line 1 announces pack_kind {:?}, not a streamed pack this binary reads",
+                head.pack_kind
+            ))),
+        };
     }
     let mut bytes = first;
     if let Err(e) = input.read_to_end(&mut bytes) {
@@ -262,13 +267,18 @@ fn undecodable<'a>(e: std::io::Error) -> anyhow::Result<PackInput<'a>> {
     }
 }
 
-fn newer_than_this_binary(n: impl std::fmt::Display) -> PackVerdict {
-    PackVerdict::Prefix(TreeVerification::MalformedPack {
-        detail: format!(
-            "pack_format_version {n} is newer than this binary understands; \
-             upgrade morpholog to verify it"
-        ),
-    })
+/// A pack the prefix verifier could not judge, as a verdict: another
+/// format by name, anything else as malformed.
+fn error_verdict(e: PackError) -> TreeVerification {
+    match e {
+        PackError::Unsupported {
+            pack_format_version,
+            written_by,
+        } => TreeVerification::unsupported_pack(pack_format_version, written_by),
+        other => TreeVerification::MalformedPack {
+            detail: other.to_string(),
+        },
+    }
 }
 
 /// A complete-prefix pack read line by line. Policy runs only on an intact
@@ -284,9 +294,7 @@ fn verify_streamed(
         Err(PackError::Read(e)) => return Err(e).context("reading the pack"),
         Err(e) => {
             return Ok((
-                PackVerdict::Prefix(TreeVerification::MalformedPack {
-                    detail: e.to_string(),
-                }),
+                PackVerdict::Prefix(error_verdict(e)),
                 Vec::new(),
                 RoleRebindings::NotEvaluated,
             ));
@@ -310,17 +318,31 @@ fn verify_streamed(
     ))
 }
 
-/// A single-document pack (v1 complete prefix, v2 window or v3 selective),
-/// parsed once: its verdict, its checkpoints for the witness report, and
-/// the role rebindings among its rows. The bytes are dropped once parsed.
+/// A single-document pack (a complete prefix, a window or a selective
+/// pack), parsed once: its verdict, its checkpoints for the witness
+/// report, and the role rebindings among its rows. The bytes are dropped
+/// once parsed.
 fn verify_document(
     bytes: Vec<u8>,
     anchor: Option<&Checkpoint>,
     policy: Option<&SignaturePolicy>,
 ) -> anyhow::Result<(PackVerdict, Vec<Checkpoint>, RoleRebindings)> {
     let unread = |verdict| Ok((verdict, Vec::new(), RoleRebindings::NotEvaluated));
-    let version = pack_format_version(&bytes);
-    match version.and_then(pack_kind) {
+    let head = document_pack_head(&bytes);
+    if let Some(head) = &head
+        && let Err(e) = head.check_format()
+    {
+        return unread(PackVerdict::Prefix(error_verdict(e)));
+    }
+    let kind = head.as_ref().and_then(PackHead::kind);
+    if kind.is_none()
+        && let Some(named) = head.and_then(|h| h.pack_kind)
+    {
+        return unread(PackVerdict::Prefix(TreeVerification::MalformedPack {
+            detail: format!("pack_kind {named:?} is not a kind this binary reads"),
+        }));
+    }
+    match kind {
         Some(PackKind::Window) => {
             let pack: WindowEvidencePack = match serde_json::from_slice(&bytes) {
                 Ok(pack) => pack,
@@ -359,9 +381,8 @@ fn verify_document(
             let role_rebindings = pack_role_rebindings(&pack.rows, &verdict);
             Ok((verdict, vec![pack.checkpoint], role_rebindings))
         }
-        _ if version.is_some_and(|n| n > u64::from(NEWEST_PACK_FORMAT)) => {
-            unread(newer_than_this_binary(version.unwrap_or_default()))
-        }
+        // A prefix document, or bytes that are no pack at all: the prefix
+        // reader says which.
         _ => {
             let pack: EvidencePack = match serde_json::from_slice(&bytes) {
                 Ok(pack) => pack,
@@ -403,9 +424,7 @@ fn verify_prefix_pack(
     anchor: Option<&Checkpoint>,
     policy: Option<&SignaturePolicy>,
 ) -> TreeVerification {
-    let verdict = verify_pack(pack, anchor).unwrap_or_else(|e| TreeVerification::MalformedPack {
-        detail: e.to_string(),
-    });
+    let verdict = verify_pack(pack, anchor).unwrap_or_else(error_verdict);
     // Policy runs over the pack's own checkpoints, and only on an intact
     // tree, so every signature it sees is already proven and authorised.
     if let Some(policy) = policy

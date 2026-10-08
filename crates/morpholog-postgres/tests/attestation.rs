@@ -16,7 +16,8 @@ use common::{expect_committed, pg_program, propose_pg_with_test_actor, reset_db,
 use morpholog_core::EvalValue;
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    AuditAttestation, TreeVerification, list_audit_rows, verify_audit_tree, verify_pack,
+    AuditAttestation, PACK_FORMAT, TreeVerification, list_audit_rows, verify_audit_tree,
+    verify_pack,
 };
 use morpholog_test_support::{dec, subj};
 
@@ -205,41 +206,24 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         TreeVerification::Intact { .. }
     ));
 
-    // Every exporter announces the version for the highest rung it
-    // discloses, so a verifier from before a rung refuses that pack as too
-    // new rather than misjudging it, while a pack of older rows stays
-    // readable by it.
-    assert_eq!(pack.manifest.pack_format_version, 16);
-    for (size, expected) in [
-        (before.tree_size, 1),
-        (before_semantics.tree_size, 8),
-        (before_subjects.tree_size, 12),
+    // Every exporter stamps the one format, whatever rows it discloses.
+    assert_eq!(pack.manifest.pack_format_version, PACK_FORMAT);
+    for size in [
+        Some(before.tree_size),
+        Some(before_semantics.tree_size),
+        Some(before_subjects.tree_size),
+        None,
     ] {
-        let older = morpholog_postgres::export_pack(&pool, Some(size))
-            .await
-            .unwrap();
-        assert_eq!(older.manifest.pack_format_version, expected, "{size}");
-    }
-    for (size, expected) in [
-        (Some(before.tree_size), 4),
-        (Some(before_semantics.tree_size), 5),
-        (Some(before_subjects.tree_size), 9),
-        (None, 13),
-    ] {
+        let older = morpholog_postgres::export_pack(&pool, size).await.unwrap();
+        assert_eq!(older.manifest.pack_format_version, PACK_FORMAT, "{size:?}");
         let export = morpholog_postgres::begin_prefix_export(&pool, size)
             .await
             .unwrap();
-        assert_eq!(export.manifest.pack_format_version, expected, "{size:?}");
+        assert_eq!(export.manifest.pack_format_version, PACK_FORMAT, "{size:?}");
+        assert_eq!(export.manifest.pack_kind, "prefix");
+        assert!(!export.manifest.morpholog_version.is_empty());
     }
-    let window = morpholog_postgres::export_window(
-        &pool,
-        morpholog_postgres::WindowStart::TreeSize(before.tree_size),
-        Some(before_semantics.tree_size),
-    )
-    .await
-    .unwrap();
-    assert_eq!(window.manifest.pack_format_version, 6);
-    // A window across the V4-to-V5 boundary is one history, not two eras.
+    // A window across every boundary is one history, not several eras.
     let across = morpholog_postgres::export_window(
         &pool,
         morpholog_postgres::WindowStart::TreeSize(before.tree_size),
@@ -247,7 +231,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     )
     .await
     .unwrap();
-    assert_eq!(across.manifest.pack_format_version, 14);
+    assert_eq!(across.manifest.pack_format_version, PACK_FORMAT);
     assert!(
         matches!(
             morpholog_postgres::verify_window(&across, None).unwrap(),
@@ -255,23 +239,16 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         ),
         "a window across the semantics and subjects boundaries verifies"
     );
-    let to_semantics = morpholog_postgres::export_window(
-        &pool,
-        morpholog_postgres::WindowStart::TreeSize(before.tree_size),
-        Some(before_subjects.tree_size),
-    )
-    .await
-    .unwrap();
-    assert_eq!(to_semantics.manifest.pack_format_version, 10);
-    for (row, expected) in [(0, 3), (3, 7), (4, 11), (5, 15)] {
+    for row in [0, 3, 4, 5] {
         let selective =
             morpholog_postgres::export_selective(&pool, None, &[pack.rows[row].transition_id])
                 .await
                 .unwrap();
-        assert_eq!(
-            selective.manifest.pack_format_version, expected,
-            "an older row disclosed under a newer checkpoint keeps the readable version"
-        );
+        assert_eq!(selective.manifest.pack_format_version, PACK_FORMAT);
+        assert!(matches!(
+            morpholog_postgres::verify_selective(&selective, None).unwrap(),
+            morpholog_postgres::SelectiveVerification::Intact { .. }
+        ));
     }
     let regimes: Vec<[bool; 5]> = pack
         .rows
