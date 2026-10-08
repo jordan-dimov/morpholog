@@ -213,9 +213,9 @@ impl std::fmt::Display for Lint {
                     )
                 } else {
                     let (fields, vars) = if key.len() == 1 {
-                        ("field", "a variable")
+                        ("field", "a fresh variable")
                     } else {
-                        ("fields", "variables")
+                        ("fields", "fresh, distinct variables")
                     };
                     let key = backticked(key);
                     write!(
@@ -225,7 +225,7 @@ impl std::fmt::Display for Lint {
                          constraining {key} completes a uniqueness key and narrows the case \
                          to the one `{predicate}` a proposal identifies. Binding {key} to \
                          {vars} keeps the rule's meaning and moves the programme's hash; a \
-                         literal narrows the rule"
+                         variable the rule already uses, or a literal, narrows the rule"
                     )
                 }
             }
