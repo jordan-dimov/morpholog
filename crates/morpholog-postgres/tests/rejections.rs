@@ -404,16 +404,18 @@ async fn an_invariant_rejection_persists_the_values_the_rule_was_reading() {
     );
 }
 
-/// A gate refusal has no witness. The column stays NULL, not an empty
-/// array, so it reads as "nothing captured", not "the rule read nothing".
+/// A gate refusal persists the bindings its failing part was judged
+/// under, as the proposal reported them, so the log says after the fact
+/// what the refusal said at the time.
 #[tokio::test]
-async fn a_gate_rejection_persists_no_witness() {
+async fn a_gate_rejection_persists_the_bindings_it_was_judged_under() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     let p = fixture();
     let gated = p.transformation("post_approved").unwrap();
 
-    // Nothing approved, so the gate refuses before anything is staged.
+    // Nothing approved, so the gate refuses on its first claim: the
+    // bindings are the parameters it started from.
     let outcome = common::propose_pg_with_test_actor(
         &pool,
         &common::pg_program(p.clone()),
@@ -422,11 +424,18 @@ async fn a_gate_rejection_persists_no_witness() {
     )
     .await
     .expect("rejection is a lawful outcome");
-    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    let PgProposalOutcome::Rejected { witness, .. } = outcome else {
+        panic!("expected a refusal");
+    };
+    assert_eq!(
+        witness.iter().map(|w| w.var.as_str()).collect::<Vec<_>>(),
+        ["amount", "entry_id"],
+        "{witness:?}"
+    );
 
     let rows = morpholog_postgres::list_rejection_rows(&pool, 100)
         .await
         .expect("reading the log back");
     assert_eq!(rows.len(), 1);
-    assert!(rows[0].witness.is_none(), "got {:?}", rows[0].witness);
+    assert_eq!(rows[0].witness.as_deref(), Some(witness.as_slice()));
 }

@@ -1641,31 +1641,6 @@ pub(crate) fn resolve_term(
     }
 }
 
-/// On a failing proposition, return the most specific sub-proposition
-/// responsible, rendered via [`crate::format::format_prop_inline`], or
-/// `None` when no drill-down applies.
-///
-/// Called from [`crate::propose::execute_stmt`] only when a `Require` or
-/// `BindOne` fails, so the success path pays nothing.
-///
-/// Drill-down rules:
-///
-/// - `And(conjuncts)`: recurse into the first conjunct that kills the
-///   chain; render it as-is if nothing more specific is found.
-/// - `Implies { left, right }`: if `left` held, recurse into `right`;
-///   if not, the implication holds - `None`.
-/// - `Forall { binding, source, body }`: recurse into `body` under the
-///   first source match where it fails. Binding values are not
-///   substituted into the rendering.
-/// - `Defined`: recurse into the body under the call's frame, rendered
-///   as `inside <call>: <body part>`.
-/// - `Not`, `Exists`, `Or`, `Xor`, `Pre`: `None`. No single part is to
-///   blame.
-/// - Leaf expressions: `None`; already as specific as possible.
-pub(crate) fn find_failing_subexpr(prop: &Prop, ctx: &EvalContext<'_>) -> Option<String> {
-    find_failure(prop, ctx).map(|failure| failure.rendered)
-}
-
 /// The failing sub-expression with the bindings live where it failed.
 /// Found in one descent, so the rendering and the values always blame
 /// the same iteration.
@@ -1686,7 +1661,25 @@ impl Failure {
 }
 
 /// Descend to the most specific failing sub-expression, carrying the
-/// binding context. `find_failing_subexpr` is the rendering-only view.
+/// binding context; `None` when no drill-down applies.
+///
+/// Called only on a refusal, a gate's or an invariant's, so the success
+/// path pays nothing.
+///
+/// Drill-down rules:
+///
+/// - `And(conjuncts)`: recurse into the first conjunct that kills the
+///   chain; render it as-is if nothing more specific is found.
+/// - `Implies { left, right }`: if `left` held, recurse into `right`;
+///   if not, the implication holds - `None`.
+/// - `Forall { binding, source, body }`: recurse into `body` under the
+///   first source match where it fails. Binding values are not
+///   substituted into the rendering.
+/// - `Defined`: recurse into the body under the call's frame, rendered
+///   as `inside <call>: <body part>`.
+/// - `Not`, `Exists`, `Or`, `Xor`, `Pre`: `None`. No single part is to
+///   blame.
+/// - Leaf expressions: `None`; already as specific as possible.
 pub(crate) fn find_failure(prop: &Prop, ctx: &EvalContext<'_>) -> Option<Failure> {
     match prop {
         Prop::And(conjuncts) => {

@@ -497,6 +497,7 @@
             "kind": { "enum": ["require", "bind"] },
             "rule": { "type": "string" },
             "reason": { "type": "string" },
+            "witness": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/witness_binding" } },
             "rejected_at": { "type": "string", "format": "date-time" }
           }
         }
@@ -513,6 +514,7 @@
             "gate": { "type": "string" },
             "rule": { "type": "string" },
             "statement_kind": { "enum": ["require", "bind_one"] },
+            "witness": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/witness_binding" } },
             "directly_missing_claims": {
               "type": "array",
               "items": { "$ref": "#/$defs/missing_claim" }

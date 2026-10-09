@@ -880,6 +880,7 @@ pub enum morpholog_core::RejectionReason
 pub morpholog_core::RejectionReason::BindNone
 pub morpholog_core::RejectionReason::BindNone::name: core::option::Option<morpholog_core::RuleName>
 pub morpholog_core::RejectionReason::BindNone::rendered: alloc::string::String
+pub morpholog_core::RejectionReason::BindNone::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
 pub morpholog_core::RejectionReason::Invariant
 pub morpholog_core::RejectionReason::Invariant::name: morpholog_core::InvariantName
 pub morpholog_core::RejectionReason::Invariant::version: u32
@@ -887,6 +888,7 @@ pub morpholog_core::RejectionReason::Invariant::witness: alloc::vec::Vec<morphol
 pub morpholog_core::RejectionReason::Require
 pub morpholog_core::RejectionReason::Require::name: core::option::Option<morpholog_core::RuleName>
 pub morpholog_core::RejectionReason::Require::rendered: alloc::string::String
+pub morpholog_core::RejectionReason::Require::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
 impl core::clone::Clone for morpholog_core::RejectionReason
 pub fn morpholog_core::RejectionReason::clone(&self) -> morpholog_core::RejectionReason
 impl core::cmp::Eq for morpholog_core::RejectionReason
@@ -1968,6 +1970,7 @@ pub morpholog_core::GateRejection::directly_missing_claims: alloc::vec::Vec<morp
 pub morpholog_core::GateRejection::gate: alloc::string::String
 pub morpholog_core::GateRejection::rule: core::option::Option<alloc::string::String>
 pub morpholog_core::GateRejection::statement_kind: morpholog_core::GateKind
+pub morpholog_core::GateRejection::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
 impl core::clone::Clone for morpholog_core::GateRejection
 pub fn morpholog_core::GateRejection::clone(&self) -> morpholog_core::GateRejection
 impl core::cmp::Eq for morpholog_core::GateRejection

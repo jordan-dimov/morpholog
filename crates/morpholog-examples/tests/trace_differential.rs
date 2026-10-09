@@ -52,10 +52,10 @@ fn agreeing_verdict(
         )
         .then_some("invariant"),
         Ok(Outcome::Rejected {
-            reason: RejectionReason::Require { name, rendered },
+            reason: RejectionReason::Require { name, rendered, .. },
         }) => gate(GateKind::Require, name, rendered).then_some("require"),
         Ok(Outcome::Rejected {
-            reason: RejectionReason::BindNone { name, rendered },
+            reason: RejectionReason::BindNone { name, rendered, .. },
         }) => gate(GateKind::BindOne, name, rendered).then_some("bind"),
         Err(e) => matches!(
             &explanation.verdict,

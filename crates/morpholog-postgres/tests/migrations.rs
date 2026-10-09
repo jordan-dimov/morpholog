@@ -238,10 +238,11 @@ async fn the_bare_schema_file_records_the_baseline() {
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(recorded, (1..=BASELINE_VERSION).collect::<Vec<i32>>());
+    let head = morpholog_postgres::head_version();
+    assert_eq!(recorded, (1..=head).collect::<Vec<i32>>());
     let status = morpholog_postgres::migration_status(&pool).await.unwrap();
     assert!(status.is_current(), "{status:?}");
-    assert_eq!(status.recorded_version_before, BASELINE_VERSION);
+    assert_eq!(status.recorded_version_before, head);
     morpholog_postgres::require_current_schema(&pool)
         .await
         .expect("a database from the bare file is current");
@@ -314,7 +315,8 @@ async fn a_database_below_the_baseline_is_refused_by_name() {
         "CREATE TABLE morpholog.schema_migrations (
              version integer PRIMARY KEY, name text NOT NULL,
              applied_at timestamptz NOT NULL DEFAULT now());
-         INSERT INTO morpholog.schema_migrations (version, name) VALUES (23, 'deployment_roles')",
+         INSERT INTO morpholog.schema_migrations (version, name)
+         VALUES (23, 'deployment_roles'), (24, 'gate_witness')",
     )
     .execute(&pool)
     .await
@@ -461,6 +463,18 @@ async fn schema_but_order(pool: &PgPool) -> Vec<String> {
          FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
          WHERE NOT t.tgisinternal
            AND c.relnamespace IN ('morpholog'::regnamespace, 'morpholog_read'::regnamespace)
+         UNION ALL
+         SELECT 'grant ' || table_schema || '.' || table_name || ' ' || privilege_type
+                || ' to ' || grantee
+         FROM information_schema.role_table_grants
+         WHERE table_schema IN ('morpholog', 'morpholog_read')
+           AND grantee <> current_user
+         UNION ALL
+         SELECT 'policy ' || schemaname || '.' || tablename || ' ' || policyname || ' '
+                || permissive || ' ' || cmd || ' ' || coalesce(qual, '') || ' '
+                || coalesce(with_check, '')
+         FROM pg_policies
+         WHERE schemaname IN ('morpholog', 'morpholog_read')
          ORDER BY 1",
     )
     .fetch_all(&mut *conn)
@@ -543,4 +557,107 @@ async fn a_baseline_database_migrated_to_the_head_has_the_fresh_schema() {
         "fresh only: {fresh_only:#?}\nmigrated only: {migrated_only:#?}"
     );
     assert_eq!(found.len(), expected.len());
+}
+
+/// The upgrade a v0.0.14 deployment makes: its database is behind this
+/// binary until migrated and says so; migrated, it keeps the bindings a
+/// refused gate was judged under, which the baseline's constraint
+/// forbade, and reads them back.
+#[tokio::test]
+async fn a_baseline_database_is_behind_until_migrated_and_then_keeps_a_gate_witness() {
+    let Ok(base) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let name = format!("morpholog_gate_witness_{}", std::process::id());
+    let name = name.as_str();
+    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
+    let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
+    ddl(
+        &admin_pool,
+        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    )
+    .await
+    .unwrap();
+    ddl(&admin_pool, format!("CREATE DATABASE {name}"))
+        .await
+        .unwrap();
+    let url = morpholog_postgres::with_default_user(&with_database(&base, name));
+    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+    sqlx::raw_sql(BASELINE_SCHEMA)
+        .execute(&pool)
+        .await
+        .expect("the v0.0.14 schema");
+
+    let behind = morpholog_postgres::require_current_schema(&pool).await;
+    let report = morpholog_postgres::apply_migrations(&pool).await;
+    let outcome = {
+        let p = morpholog_surface::parse_program(
+            "program gated\n\
+             predicate Approved(doc: Subject, limit: Decimal)\n\
+             predicate Issued(doc: Subject, amount: Decimal)\n\
+             transformation approve(doc, limit):\n\
+             \x20   admit Approved(doc, limit)\n\
+             transformation issue(doc, amount):\n\
+             \x20   require within_limit: Approved(doc, limit) and amount <= limit\n\
+             \x20   admit Issued(doc, amount)\n",
+        )
+        .unwrap();
+        let pg = common::pg_program(p);
+        let act = |name: &str| pg.prepared().transformation(&name.into()).unwrap().clone();
+        common::propose_pg_with_test_actor(
+            &pool,
+            &pg,
+            &act("approve"),
+            vec![
+                morpholog_test_support::subj("inv_1"),
+                morpholog_test_support::dec(5000),
+            ],
+        )
+        .await
+        .map(common::expect_committed)
+        .expect("the approval commits on the migrated database");
+        common::propose_pg_with_test_actor(
+            &pool,
+            &pg,
+            &act("issue"),
+            vec![
+                morpholog_test_support::subj("inv_1"),
+                morpholog_test_support::dec(9000),
+            ],
+        )
+        .await
+    };
+    let rows = morpholog_postgres::list_rejection_rows(&pool, 10).await;
+    pool.close().await;
+    ddl(
+        &admin_pool,
+        format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        matches!(
+            behind,
+            Err(morpholog_postgres::PgError::SchemaBehind { .. })
+        ),
+        "a v0.0.14 database is behind this binary: {behind:?}"
+    );
+    let report = report.expect("the baseline migrates");
+    assert_eq!(
+        report.recorded_version_after,
+        morpholog_postgres::head_version()
+    );
+    let outcome = outcome.expect("a refusal is a lawful outcome");
+    let morpholog_postgres::PgProposalOutcome::Rejected { witness, rule, .. } = outcome else {
+        panic!("expected the gate to refuse: {outcome:?}");
+    };
+    assert_eq!(rule.as_deref(), Some("within_limit"));
+    assert_eq!(
+        witness.iter().map(|w| w.var.as_str()).collect::<Vec<_>>(),
+        ["amount", "doc", "limit"]
+    );
+    let rows = rows.expect("the log reads back");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].witness.as_deref(), Some(witness.as_slice()));
 }

@@ -408,9 +408,10 @@ CREATE TABLE rejections (
     invariant_version    bigint,                          -- NULL for gate kinds
     reason               text         NOT NULL,           -- the exact envelope string
     -- The values the refused rule was reading, same codec as the
-    -- envelope's witness. NULL when the kernel could not pin the failure
-    -- to one iteration, and for every row written before this column
-    -- existed. Diagnostic only: it inherits this table's at-most-once,
+    -- envelope's witness. NULL when no bindings were captured (an
+    -- invariant the kernel could not pin to one case, a gate refused
+    -- before migration 024) and for every row written before this
+    -- column existed. Diagnostic only: it inherits this table's at-most-once,
     -- operational standing, so it is a lead to follow and never proof of
     -- what a refusal saw.
     -- Non-empty or absent, never `[]`: absence means "nothing was
@@ -426,12 +427,6 @@ CREATE TABLE rejections (
     -- the operational evidence either way.
     CONSTRAINT rejections_kind_version_agree CHECK (
         (kind = 'invariant') = (invariant_version IS NOT NULL)
-    ),
-    -- Only an invariant refusal has values to report: a gate refusal fails
-    -- over the pre-state with no iteration to blame, so a witness on one
-    -- would be evidence from nowhere.
-    CONSTRAINT rejections_witness_is_invariant_only CHECK (
-        witness IS NULL OR kind = 'invariant'
     )
 );
 
@@ -632,4 +627,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (20, 'audit_model_hash'),
     (21, 'audit_semantics_version'),
     (22, 'audit_drawn_subjects'),
-    (23, 'deployment_roles');
+    (23, 'deployment_roles'),
+    (24, 'gate_witness');

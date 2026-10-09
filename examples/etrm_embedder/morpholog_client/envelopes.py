@@ -629,6 +629,9 @@ class GateRejection:
     # The gate's stable identifier, when its author gave it one. `gate` is
     # prose that any rewording changes; this does not move.
     rule: str | None = None
+    # The bindings the failing part was judged under, as a refusal of the
+    # same proposal would carry them. Empty when nothing was in scope.
+    witness: list[WitnessBinding] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> GateRejection:
@@ -636,7 +639,7 @@ class GateRejection:
             "gate rejection",
             payload,
             {"kind", "gate", "statement_kind", "directly_missing_claims"},
-            {"rule"},
+            {"rule", "witness"},
         )
         return cls(
             gate=data["gate"],
@@ -645,6 +648,7 @@ class GateRejection:
                 MissingClaim.from_json(m) for m in data["directly_missing_claims"]
             ],
             rule=data.get("rule"),
+            witness=[WitnessBinding.from_json(w) for w in data.get("witness", [])],
         )
 
 
@@ -866,15 +870,13 @@ class RejectionRow:
             {"invariant_version", "witness"},
         )
         witness = data.get("witness")
-        # Only an invariant refusal reports values or a version. A gate
-        # refusal carrying either is a serializer regression, not a row -
-        # so it raises here rather than becoming a model nobody can trust.
-        if data["kind"] != "invariant" and (
-            witness is not None or data.get("invariant_version") is not None
-        ):
+        # Only an invariant refusal has a version. A gate refusal carrying
+        # one is a serializer regression, not a row - so it raises here
+        # rather than becoming a model nobody can trust.
+        if data["kind"] != "invariant" and data.get("invariant_version") is not None:
             raise EnvelopeError(
-                f"rejection row: kind {data['kind']!r} cannot carry a witness or an "
-                f"invariant version, got {payload!r}"
+                f"rejection row: kind {data['kind']!r} cannot carry an invariant "
+                f"version, got {payload!r}"
             )
         return cls(
             rejection_id=data["rejection_id"],

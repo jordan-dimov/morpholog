@@ -19,7 +19,16 @@
       ],
       "gate": "Flag(account_id)",
       "kind": "gate",
-      "statement_kind": "require"
+      "statement_kind": "require",
+      "witness": [
+        {
+          "value": {
+            "type": "subject",
+            "value": "acct_1"
+          },
+          "var": "account_id"
+        }
+      ]
     }
   }
 }

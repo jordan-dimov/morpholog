@@ -20,7 +20,16 @@
       "gate": "Flag(account_id)",
       "kind": "gate",
       "rule": "account_is_not_flagged",
-      "statement_kind": "require"
+      "statement_kind": "require",
+      "witness": [
+        {
+          "value": {
+            "type": "subject",
+            "value": "acct_1"
+          },
+          "var": "account_id"
+        }
+      ]
     }
   }
 }

@@ -115,7 +115,7 @@ pub(crate) fn invariant_witness_cases(
     })
 }
 
-fn sorted_witness(bindings: Bindings) -> Vec<WitnessBinding> {
+pub(crate) fn sorted_witness(bindings: Bindings) -> Vec<WitnessBinding> {
     let mut witness: Vec<WitnessBinding> = bindings
         .into_iter()
         .map(|(var, value)| WitnessBinding { var, value })

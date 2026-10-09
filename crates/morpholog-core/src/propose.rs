@@ -13,16 +13,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::admission::{Admission, EffectiveDelta, effective_delta};
 use crate::definitions::DefinitionTable;
-use crate::derive::eval_invariant;
+use crate::derive::{eval_invariant, sorted_witness};
 use crate::eval::{
-    EvalContext, EvalError, RenderedClaim, eval_value, find_failing_subexpr, find_matches,
-    matching_claims, resolve_term, unsatisfied_positive_claims,
+    EvalContext, EvalError, RenderedClaim, eval_value, find_failure, find_matches, matching_claims,
+    resolve_term, unsatisfied_positive_claims,
 };
 use crate::format;
 use crate::impact::Impact;
 use crate::ir::{
-    Claim, Definition, Intent, Invariant, InvariantName, PredicateName, RuleName, Stmt, Subject,
-    Term, Transformation, TransformationName, Var,
+    Claim, Definition, Intent, Invariant, InvariantName, PredicateName, Prop, RuleName, Stmt,
+    Subject, Term, Transformation, TransformationName, Var,
 };
 use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
 
@@ -86,15 +86,23 @@ pub enum RejectionReason {
     ///
     /// `name` is the gate's optional stable identifier. Prefer it to
     /// `rendered`, which changes whenever the expression is reworded.
+    /// `witness` holds the bindings in scope at the sub-expression the
+    /// failure walk blames: the parameters, what earlier statements
+    /// bound, and what the conjuncts before the failing one bound under
+    /// the first surviving context. It is the context the diagnosis was
+    /// made in, not every way the gate could have held. The actor is
+    /// not among them; every envelope carries it apart.
     Require {
         name: Option<RuleName>,
         rendered: String,
+        witness: Vec<WitnessBinding>,
     },
     /// A `bind` lookup matched no candidates. (Multi-match is an
-    /// [`EvalError`], not a rejection.)
+    /// [`EvalError`], not a rejection.) `witness` as for `Require`.
     BindNone {
         name: Option<RuleName>,
         rendered: String,
+        witness: Vec<WitnessBinding>,
     },
 }
 
@@ -104,18 +112,29 @@ impl std::fmt::Display for RejectionReason {
             RejectionReason::Invariant { name, .. } => {
                 write!(f, "invariant `{name}` violated")
             }
-            RejectionReason::Require { name, rendered } => match name {
+            RejectionReason::Require { name, rendered, .. } => match name {
                 Some(n) => write!(
                     f,
                     "require `{n}` failed: {rendered} did not hold over pre-state"
                 ),
                 None => write!(f, "require failed: {rendered} did not hold over pre-state"),
             },
-            RejectionReason::BindNone { name, rendered } => match name {
+            RejectionReason::BindNone { name, rendered, .. } => match name {
                 Some(n) => write!(f, "bind `{n}` failed: {rendered} matched no candidates"),
                 None => write!(f, "bind_one failed: {rendered} matched no candidates"),
             },
         }
+    }
+}
+
+/// The failing part of a refused gate, rendered, and the bindings it
+/// failed under: the context the walk blamed, sorted by variable name.
+/// Nothing more specific than the whole gate means the bindings the gate
+/// started from.
+fn gate_failure(expr: &Prop, ctx: &EvalContext<'_>) -> (Option<String>, Vec<WitnessBinding>) {
+    match find_failure(expr, ctx) {
+        Some(failure) => (Some(failure.rendered), sorted_witness(failure.bindings)),
+        None => (None, sorted_witness(ctx.bindings.clone())),
     }
 }
 
@@ -643,27 +662,27 @@ pub(crate) fn execute_stmt(
             let matches = find_matches(expr, &ctx)?;
             if matches.is_empty() {
                 let rendered = format::format_prop_inline(expr);
+                // One descent names the failing part and the bindings it
+                // failed under, so the trace and the witness agree.
+                let (failing, witness) = gate_failure(expr, &ctx);
+                let reason = RejectionReason::Require {
+                    name: name.clone(),
+                    rendered: rendered.clone(),
+                    witness,
+                };
                 if trace.is_on() {
-                    let failing = find_failing_subexpr(expr, &ctx);
                     let directly_missing_claims = unsatisfied_positive_claims(expr, &ctx);
                     trace.push(TraceEntry::Require {
-                        expression: rendered.clone(),
+                        expression: rendered,
                         name: name.as_ref().map(ToString::to_string),
                         outcome: RequireOutcome::Rejected {
-                            reason: RejectionReason::Require {
-                                name: name.clone(),
-                                rendered: rendered.clone(),
-                            }
-                            .to_string(),
+                            reason: reason.to_string(),
                             failing_sub_expression: failing,
                             directly_missing_claims,
                         },
                     });
                 }
-                Ok(StmtOutcome::Rejected(RejectionReason::Require {
-                    name: name.clone(),
-                    rendered,
-                }))
+                Ok(StmtOutcome::Rejected(reason))
             } else {
                 if trace.is_on() {
                     trace.push(TraceEntry::Require {
@@ -685,8 +704,8 @@ pub(crate) fn execute_stmt(
             match matches.len() {
                 0 => {
                     let rendered = format::format_prop_inline(expr);
+                    let (failing, witness) = gate_failure(expr, &ctx);
                     if trace.is_on() {
-                        let failing = find_failing_subexpr(expr, &ctx);
                         let directly_missing_claims = unsatisfied_positive_claims(expr, &ctx);
                         trace.push(TraceEntry::BindOne {
                             expression: rendered.clone(),
@@ -700,6 +719,7 @@ pub(crate) fn execute_stmt(
                     Ok(StmtOutcome::Rejected(RejectionReason::BindNone {
                         name: name.clone(),
                         rendered,
+                        witness,
                     }))
                 }
                 1 => {

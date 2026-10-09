@@ -217,23 +217,26 @@ class RejectionLog(unittest.TestCase):
         self.assertEqual([w.var for w in row.witness], ["account", "exposure"])
         self.assertEqual(row.witness[1].value, Decimal("105.50"))
 
-    def test_a_gate_row_has_no_witness_and_no_version(self):
+    def test_a_gate_row_has_no_version_and_carries_its_witness_when_one_was_captured(self):
         row = envelopes.RejectionRow.from_json(golden("rejection_row_gate.json"))
         self.assertEqual(row.kind, "require")
         # None, not [] - absence means nothing was captured, and an empty
-        # list would say the rule was reading nothing.
+        # list would say the gate was judged under no bindings.
         self.assertIsNone(row.witness)
         self.assertIsNone(row.invariant_version)
+        row = envelopes.RejectionRow.from_json(golden("rejection_row_gate_with_witness.json"))
+        self.assertEqual(row.kind, "require")
+        self.assertEqual([w.var for w in row.witness], ["doc", "limit"])
+        self.assertEqual(row.witness[1].value, Decimal("5000"))
 
-    def test_invariant_only_fields_on_a_gate_row_are_drift(self):
-        # A serializer regression that attached invariant evidence to a gate
-        # refusal used to parse happily; the row is impossible, so it raises.
-        for extra in ({"witness": [{"var": "x", "value": {"type": "subject", "value": "a"}}]},
-                      {"invariant_version": 4}):
-            payload = golden("rejection_row_gate.json")
-            payload.update(extra)
-            with self.assertRaises(envelopes.EnvelopeError):
-                envelopes.RejectionRow.from_json(payload)
+    def test_a_version_on_a_gate_row_is_drift(self):
+        # A serializer regression that attached an invariant version to a
+        # gate refusal used to parse happily; the row is impossible, so it
+        # raises.
+        payload = golden("rejection_row_gate.json")
+        payload.update({"invariant_version": 4})
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.RejectionRow.from_json(payload)
 
 
 class Migrations(unittest.TestCase):
