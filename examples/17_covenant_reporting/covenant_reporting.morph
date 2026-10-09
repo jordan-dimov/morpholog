@@ -75,6 +75,7 @@ predicate Timely(period: Subject)
 -- it - which is exactly why the caller does not get to choose it.
 predicate Overdue(period: Subject, as_of: Date, days_late: Decimal)
     unique by (period)
+    append only
 
 -- ------------------------------------------------------------
 -- The calendar rules

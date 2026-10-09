@@ -15,6 +15,34 @@ use crate::ir::{
 };
 use crate::prepared::PreparedProgram;
 
+/// Python's hard keywords (3.12 floor). A declared name among them cannot
+/// be a dataclass field of the generated client, and renaming it there
+/// would break the link to the wire name.
+pub const PYTHON_KEYWORDS: &[&str] = &[
+    "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
+    "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import",
+    "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while",
+    "with", "yield",
+];
+
+/// Member names the generated client's classes define; a declared name
+/// sharing one would shadow it. The uppercase entries are class metadata.
+pub const PYTHON_CLIENT_MEMBERS: &[&str] = &[
+    "to_args_named",
+    "from_named",
+    "from_args",
+    "TRANSFORMATION",
+    "PREDICATE",
+    "INTENT",
+    "_ARG_ORDER",
+];
+
+/// Whether the generated Python client refuses `name` as a field or
+/// parameter.
+pub fn client_refuses_name(name: &str) -> bool {
+    PYTHON_KEYWORDS.contains(&name) || PYTHON_CLIENT_MEMBERS.contains(&name)
+}
+
 /// One lint finding. See the module doc for the error-vs-lint line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lint {
@@ -105,6 +133,32 @@ pub enum Lint {
         other_program: String,
         other_writers: Vec<SharedWriterPeer>,
     },
+
+    /// An authored implication whose antecedent joins an append-only
+    /// predicate with a retractable one and whose consequent reads what
+    /// the retractable pattern binds. Changing the retractable claim
+    /// (retract, admit anew) joins the new figure to every append-only
+    /// record ever admitted, so every one is checked again and a
+    /// tightening is refused by history. A hint, because re-checking
+    /// history can be the intended standing; otherwise a gate on the
+    /// act that admits the append-only record checks the figure in
+    /// force at the time.
+    ///
+    /// Claims written directly in the antecedent only; a retractable
+    /// whose figure the consequent never reads is not reported, since
+    /// retracting it makes the rule vacuous for those records.
+    ChangeRechecksHistory {
+        invariant: String,
+        append_only: String,
+        retractable: String,
+    },
+
+    /// A declared name the generated Python client cannot carry: a
+    /// Python keyword, or a member name the generated classes define.
+    /// `generate python-client` refuses the whole programme on it, after
+    /// the programme has been hashed and provisioned; this says so at
+    /// `check`. `owner` says whose name it is.
+    ClientName { owner: String, name: String },
 
     /// A variable a `require` matches, named again by a later statement
     /// of the same transformation while still unbound. A `require` keeps
@@ -296,6 +350,24 @@ impl std::fmt::Display for Lint {
                     names_first = predicates.first().map(String::as_str).unwrap_or("P"),
                 )
             }
+            Lint::ChangeRechecksHistory {
+                invariant,
+                append_only,
+                retractable,
+            } => write!(
+                f,
+                "invariant `{invariant}` joins retractable `{retractable}` with append-only \
+                 `{append_only}` and compares what `{retractable}` binds; whenever \
+                 `{retractable}` changes, every `{append_only}` ever admitted is checked \
+                 against the new figure, so tightening it is refused by old records. If \
+                 re-checking history is intended, keep it; otherwise a gate on the act that \
+                 admits `{append_only}` checks the `{retractable}` in force at the time"
+            ),
+            Lint::ClientName { owner, name } => write!(
+                f,
+                "`{name}` ({owner}) is a Python keyword or a name the generated client \
+                 reserves, so `generate python-client` refuses this programme; rename it"
+            ),
             Lint::SharedWriter {
                 transformation,
                 predicate,
@@ -400,6 +472,7 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
         }
     }
 
+    client_name_findings(program, &mut out);
     for t in &program.transformations {
         require_rematch_findings(t, &mut out);
     }
@@ -419,6 +492,7 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
         // Generated discipline invariants are not in the source, so they
         // get no hints of these kinds.
         if inv.origin == InvariantOrigin::Authored {
+            change_rechecks_history_findings(inv, &implications, &append_only, &mut out);
             case_width_findings(program, inv, &prepared.admission().plans()[index], &mut out);
             unsupplied_antecedent_findings(inv, &implications, &declared, definitions, &mut out);
             governing_selection_findings(
@@ -432,6 +506,117 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
             );
         }
     }
+    out
+}
+
+/// Declared names the generated client would refuse: predicate and
+/// intent fields, transformation parameters.
+fn client_name_findings(program: &Program, out: &mut Vec<Lint>) {
+    let mut push = |owner: String, name: &str| {
+        if client_refuses_name(name) {
+            out.push(Lint::ClientName {
+                owner,
+                name: name.to_string(),
+            });
+        }
+    };
+    for decl in &program.predicates {
+        for arg in &decl.args {
+            push(
+                format!("a field of predicate `{}`", decl.name),
+                arg.name.as_str(),
+            );
+        }
+    }
+    for decl in &program.intents {
+        for arg in &decl.args {
+            push(
+                format!("a field of intent `{}`", decl.name),
+                arg.name.as_str(),
+            );
+        }
+    }
+    for t in &program.transformations {
+        for param in &t.parameters {
+            push(
+                format!("a parameter of transformation `{}`", t.name),
+                param.as_str(),
+            );
+        }
+    }
+}
+
+/// The third gate-vs-invariant shape: an append-only record and a
+/// retractable claim joined in the antecedent, the consequent reading
+/// what the retractable pattern binds. Once per retractable predicate.
+fn change_rechecks_history_findings(
+    inv: &Invariant,
+    implications: &[CollectedImplication<'_>],
+    append_only: &BTreeSet<PredicateName>,
+    out: &mut Vec<Lint>,
+) {
+    for implication in implications {
+        if !implication.calls.is_empty() {
+            continue;
+        }
+        let patterns = direct_positive_patterns(implication.antecedent);
+        let Some(first_append_only) = patterns
+            .iter()
+            .map(|(p, _)| *p)
+            .find(|p| append_only.contains(*p))
+        else {
+            continue;
+        };
+        let mut reported: BTreeSet<&PredicateName> = BTreeSet::new();
+        for (predicate, args) in &patterns {
+            if append_only.contains(*predicate) || !reported.insert(predicate) {
+                continue;
+            }
+            let bound: Vec<&crate::ir::Var> = args
+                .iter()
+                .filter_map(|t| match t {
+                    Term::Var(v) => Some(v),
+                    _ => None,
+                })
+                .collect();
+            let read = crate::fold::any_term_in_prop(
+                implication.consequent,
+                &|t, _| matches!(t, Term::Var(v) if bound.contains(&v)),
+            );
+            if read {
+                out.push(Lint::ChangeRechecksHistory {
+                    invariant: inv.name.to_string(),
+                    append_only: first_append_only.to_string(),
+                    retractable: predicate.to_string(),
+                });
+            }
+        }
+    }
+}
+
+/// The claim patterns an antecedent asserts positively, written in it
+/// directly: through `and`, and under `not` only at the flipped
+/// polarity, which is never positive here. Calls are not followed, since
+/// the variables a body binds are its own.
+fn direct_positive_patterns(prop: &Prop) -> Vec<(&PredicateName, &[Term])> {
+    fn go<'a>(prop: &'a Prop, positive: bool, out: &mut Vec<(&'a PredicateName, &'a [Term])>) {
+        match prop {
+            Prop::Claim { predicate, args } => {
+                if positive {
+                    out.push((predicate, args));
+                }
+            }
+            Prop::Not(inner) => go(inner, !positive, out),
+            Prop::And(props) => {
+                for p in props {
+                    go(p, positive, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    go(prop, true, &mut out);
     out
 }
 

@@ -147,28 +147,7 @@ fn report_drift(package_dir: &std::path::Path, files: &[(&str, &str)]) -> anyhow
 // The refusal sweep.
 // ============================================================
 
-/// Python's hard keywords (3.12 floor). Such a name cannot be a dataclass
-/// field, and renaming it would break the link to the wire name, so it is
-/// refused.
-const PYTHON_KEYWORDS: &[&str] = &[
-    "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
-    "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import",
-    "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while",
-    "with", "yield",
-];
-
-/// Member names the generated classes define; a field sharing one would
-/// shadow it. The uppercase entries are class metadata, such as the
-/// `TRANSFORMATION` that `submit()` dispatches on.
-const RESERVED_MEMBERS: &[&str] = &[
-    "to_args_named",
-    "from_named",
-    "from_args",
-    "TRANSFORMATION",
-    "PREDICATE",
-    "INTENT",
-    "_ARG_ORDER",
-];
+use morpholog_core::{PYTHON_CLIENT_MEMBERS as RESERVED_MEMBERS, PYTHON_KEYWORDS};
 
 fn kind_supported(kind: &PredicateArgKind) -> bool {
     matches!(

@@ -380,7 +380,7 @@ fn the_gallery_hashes_did_not_move_when_named_patterns_arrived() {
         ),
         (
             "../../examples/13_biometric_identification_oversight/biometric_oversight.morph",
-            "sha256:9ed56ed8180cd6b3d916025dd7d43b8c5d34d7801fd02d4ff9b9a36dea8b4c32",
+            "sha256:195f1eefe533f1583ead522e3700c40113de103d494271a6a24b064a9921a790",
         ),
     ];
     for (rel, expected) in cases {

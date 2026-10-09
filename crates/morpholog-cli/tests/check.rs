@@ -989,3 +989,33 @@ fn check_json_keeps_the_plan_when_an_against_file_fails_the_run() {
         "{payload}"
     );
 }
+
+/// The name the generator refuses is hinted at `check`, before anything
+/// is hashed or provisioned; `--strict` makes it the error it will be.
+#[test]
+fn check_hints_a_name_the_python_client_would_refuse() {
+    let f = temp_morph(
+        "program refusals\n\
+         predicate Keyword(id: Subject, class: Decimal)\n\
+         transformation t(id, class):\n    admit Keyword(id, class)\n",
+    );
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(f.path())
+        .output()
+        .expect("morpholog check should run");
+    assert!(out.status.success(), "a hint passes the check");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("hint:")
+            && stderr.contains("`class` (a field of predicate `Keyword`)")
+            && stderr.contains("`generate python-client` refuses"),
+        "{stderr}"
+    );
+    let strict = Command::new(bin())
+        .args(["check", "--strict"])
+        .arg(f.path())
+        .output()
+        .expect("morpholog check should run");
+    assert!(!strict.status.success(), "--strict promotes the hint");
+}

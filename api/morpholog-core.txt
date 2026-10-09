@@ -633,6 +633,13 @@ pub morpholog_core::Lint::CaseWiderThanClaim::invariant: alloc::string::String
 pub morpholog_core::Lint::CaseWiderThanClaim::key: alloc::vec::Vec<alloc::string::String>
 pub morpholog_core::Lint::CaseWiderThanClaim::predicate: alloc::string::String
 pub morpholog_core::Lint::CaseWiderThanClaim::unnamed: alloc::vec::Vec<alloc::string::String>
+pub morpholog_core::Lint::ChangeRechecksHistory
+pub morpholog_core::Lint::ChangeRechecksHistory::append_only: alloc::string::String
+pub morpholog_core::Lint::ChangeRechecksHistory::invariant: alloc::string::String
+pub morpholog_core::Lint::ChangeRechecksHistory::retractable: alloc::string::String
+pub morpholog_core::Lint::ClientName
+pub morpholog_core::Lint::ClientName::name: alloc::string::String
+pub morpholog_core::Lint::ClientName::owner: alloc::string::String
 pub morpholog_core::Lint::EffectiveWithoutDeclaredTotality
 pub morpholog_core::Lint::EffectiveWithoutDeclaredTotality::predicate: alloc::string::String
 pub morpholog_core::Lint::GateVsInvariant
@@ -2978,6 +2985,8 @@ impl core::marker::Unpin for morpholog_core::WitnessBinding
 impl core::marker::UnsafeUnpin for morpholog_core::WitnessBinding
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::WitnessBinding
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::WitnessBinding
+pub const morpholog_core::PYTHON_CLIENT_MEMBERS: &[&str]
+pub const morpholog_core::PYTHON_KEYWORDS: &[&str]
 pub const morpholog_core::SCORE_FORMAT_VERSION: u32
 pub const morpholog_core::SCORE_SEMANTICS: &str
 pub const morpholog_core::SEMANTICS_VERSION: u32
@@ -2985,6 +2994,7 @@ pub trait morpholog_core::SubjectSource
 pub fn morpholog_core::SubjectSource::next_subject(&mut self) -> core::option::Option<morpholog_core::Subject>
 impl<I: core::iter::traits::iterator::Iterator<Item = morpholog_core::Subject>> morpholog_core::SubjectSource for I
 pub fn I::next_subject(&mut self) -> core::option::Option<morpholog_core::Subject>
+pub fn morpholog_core::client_refuses_name(&str) -> bool
 pub fn morpholog_core::controls(&morpholog_core::PreparedProgram) -> morpholog_core::ControlMatrix
 pub fn morpholog_core::effective_delta(&morpholog_core::State, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance]) -> morpholog_core::EffectiveDelta
 pub fn morpholog_core::finish_staged_delta_with(morpholog_core::StagedDelta, &morpholog_core::State, &morpholog_core::Admission<'_>) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>

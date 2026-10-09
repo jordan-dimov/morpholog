@@ -164,10 +164,23 @@ impl SourceMap {
     pub fn span_for_lint(&self, lint: &Lint) -> Option<Span> {
         match lint {
             Lint::GateVsInvariant { invariant, .. }
+            | Lint::ChangeRechecksHistory { invariant, .. }
             | Lint::UnsuppliedAntecedent { invariant, .. }
             | Lint::GoverningSelectionWithoutTotality { invariant, .. }
             | Lint::CaseWiderThanClaim { invariant, .. } => {
                 self.decl_span(DeclKind::Invariant, invariant)
+            }
+            // On the declaration whose name the client would refuse.
+            Lint::ClientName { owner, .. } => {
+                let (kind, name) = owner.rsplit_once('`')?.0.rsplit_once('`')?;
+                let kind = if kind.contains("predicate") {
+                    DeclKind::Predicate
+                } else if kind.contains("intent") {
+                    DeclKind::Intent
+                } else {
+                    DeclKind::Transformation
+                };
+                self.decl_span(kind, name)
             }
             // On the predicate: its effective-dating clause is the line the author can act on.
             Lint::EffectiveWithoutDeclaredTotality { predicate } => {
