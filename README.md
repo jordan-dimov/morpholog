@@ -177,6 +177,7 @@ If you came with a question rather than an industry - "can it accept a whole bat
 
 - [Operational information](examples/20_operational_information/) - an untrusted optimiser's figures are recomputed and checked before any of them is accepted.
 - [Release governance](examples/16_release_governance/) - this project's own release checklist: a release tagged before its checks passed cannot be recorded.
+- [Closed-loop execution](examples/21_closed_loop_execution/) - an untrusted agent's orders reach the venue only through a custodied executor, and the venue's own report exposes any order nobody authorised.
 
 **Language features**
 

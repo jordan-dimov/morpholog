@@ -648,6 +648,8 @@ Every commit records the version that decided it, beside the programme hash, ins
 
 A receipt says: under this programme and semantics version, over the history this checkpoint commits to, this derived read gives this answer. `audit receipt` writes one from a complete-prefix evidence pack. `audit verify-receipt` checks it offline: it rebuilds the state from the pack and evaluates the read again. The answer is never trusted for being written down.
 
+A question with nothing to compute is received the same way: may this document go out for this purpose; which orders did the venue report that nobody here authorised. The route is a derived predicate whose domain is that proposition, carrying beside its key whatever figure a reader of the finding wants, and the receipt is over it. `actor` cannot appear in a derived domain, so a receipt over a gate that consults the actor names the actor as a field of the read instead. The closed-loop execution example's `Unauthorised` is the worked case.
+
 Verification keeps its layers apart and reports each one:
 
 - **Evidence**: the pack's own verdict, exactly as `audit verify-pack` gives it, under the same trust (an anchor, a signature policy, witnesses). A witness judged invalid fails the receipt, as it fails `verify-pack`, but never subtracts from the tree's own verdict, so the layers after it are still judged.

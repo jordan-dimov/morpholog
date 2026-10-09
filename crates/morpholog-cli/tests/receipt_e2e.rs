@@ -614,3 +614,143 @@ async fn no_receipt_is_issued_for_a_read_the_programme_does_not_derive() {
         "{stderr}"
     );
 }
+
+// ============================================================
+// A receipt over a read of base claims, through a derived predicate
+// ============================================================
+
+fn closed_loop() -> PathBuf {
+    common::repo_root().join("examples/21_closed_loop_execution/closed_loop_execution.morph")
+}
+
+/// Propose against the closed-loop example as `actor`, asserting it
+/// committed, and return the claims the act admitted.
+fn propose_closed_loop(transformation: &str, actor: &str, args: &[Value]) -> Value {
+    let file = closed_loop();
+    let args = Value::Array(args.to_vec()).to_string();
+    let (status, stdout, stderr) = run(
+        &[
+            "propose",
+            file.to_str().unwrap(),
+            transformation,
+            "--actor",
+            actor,
+            "--args",
+            &args,
+        ],
+        true,
+    );
+    assert!(status.success(), "{transformation}: {stderr}");
+    let outcome: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(outcome["status"], "committed", "{stdout}");
+    outcome["asserted_claims"].clone()
+}
+
+/// The question a third party wants answered from the record alone:
+/// which orders did the venue report that nobody here authorised? The
+/// read is over base claims with nothing to compute; the derived
+/// predicate `Unauthorised` is the route to a receipt over it. The
+/// receipt states that finding over the committed history; it says
+/// nothing about whether the venue's report was complete or true.
+#[tokio::test(flavor = "current_thread")]
+async fn a_receipt_states_a_finding_over_base_claims_through_its_derived_predicate() {
+    reset_db().await;
+    let login = subject(&common::session_user(&database_url()).await);
+    propose_closed_loop("appoint_operator", "ops", &[subject("ops"), login.clone()]);
+    for principal in ["agent", "reporter"] {
+        propose_closed_loop("enrol_login", "ops", &[subject(principal), login.clone()]);
+    }
+    propose_closed_loop("declare_venue", "ops", &[subject("venue")]);
+    propose_closed_loop(
+        "grant_mandate",
+        "ops",
+        &[subject("agent"), subject("power_q1"), decimal("50")],
+    );
+    propose_closed_loop(
+        "grant_feed",
+        "ops",
+        &[subject("reporter"), subject("venue")],
+    );
+    let admitted = propose_closed_loop(
+        "place_order",
+        "agent",
+        &[
+            subject("venue"),
+            subject("power_q1"),
+            subject("buy"),
+            decimal("10"),
+            decimal("48.5"),
+        ],
+    );
+    let order = admitted
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["predicate"] == "OrderAuthorised")
+        .expect("the act admits the authorisation")["args"][0]
+        .clone();
+    // The executor placed the order; the venue reports it, and one more
+    // that nobody proposed here.
+    let venue_report = |sequence: &str, order_ref: Value, venue_order_id: &str, qty: &str| {
+        vec![
+            subject("venue"),
+            decimal(sequence),
+            order_ref,
+            subject(venue_order_id),
+            subject("power_q1"),
+            subject("buy"),
+            decimal(qty),
+            decimal("48.5"),
+        ]
+    };
+    propose_closed_loop(
+        "observe_venue_report",
+        "reporter",
+        &venue_report("1", order, "V-1001", "10"),
+    );
+    let admitted = propose_closed_loop(
+        "observe_venue_report",
+        "reporter",
+        &venue_report("2", subject("manual-1"), "V-1002", "25"),
+    );
+    let ghost = admitted
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["predicate"] == "VenueReport")
+        .expect("the act admits the report")["args"][0]
+        .clone();
+
+    // Checkpoint after the observation, so the receipt's history holds it.
+    checkpoint();
+    let dir = tempfile::tempdir().unwrap();
+    let pack = export(dir.path(), "pack.ndjson", &[]);
+    let receipt = issued(&closed_loop(), &pack, "Unauthorised");
+    assert_eq!(
+        receipt["query"],
+        json!({"kind": "derived", "predicate": "Unauthorised"})
+    );
+    assert_eq!(
+        receipt["answer"],
+        json!([{
+            "predicate": "Unauthorised",
+            "args": [ghost, subject("V-1002"), decimal("25"), decimal("48.5")]
+        }]),
+        "{receipt}"
+    );
+
+    let path = write(dir.path(), "receipt.json", &receipt.to_string());
+    let (passed, report) = verify(&closed_loop(), &path, &pack, &[]);
+    assert!(passed, "{report}");
+    assert_eq!(statuses(&report), ALL_HOLD.map(String::from));
+
+    // A receipt claiming the venue reported nothing unauthorised does
+    // not recompute.
+    let mut denial = receipt.clone();
+    denial["answer"] = json!([]);
+    let path = write(dir.path(), "denial.json", &denial.to_string());
+    let (passed, report) = verify(&closed_loop(), &path, &pack, &[]);
+    assert!(!passed, "{report}");
+    assert_eq!(report["evaluation"]["status"], "differs", "{report}");
+    assert_eq!(report["evaluation"]["missing"], 1, "{report}");
+}

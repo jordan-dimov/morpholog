@@ -1,0 +1,251 @@
+-- Closed-loop execution: an order the venue reports that nobody authorised.
+--
+-- A trading desk lets a program place orders at a venue - an exchange
+-- or a broker's platform - for power, gas, anything with a market. The
+-- program is an agent: it reads prices, decides, and proposes. Nobody
+-- on the desk trusts it with the venue's credentials, so it never holds
+-- them. It proposes an order here; if the record admits the order, a
+-- separate process, the executor, sends it to the venue and nothing
+-- else. The executor holds the credential and never decides anything.
+--
+-- That arrangement prevents a great deal. The agent cannot trade an
+-- instrument it was not given, or beyond its size, because the record
+-- refuses the proposal before any order exists. But prevention has an
+-- edge. Morpholog can refuse an unlawful order. It cannot see a second
+-- credential somebody left in an old deployment, or a venue login a
+-- person uses by hand, and an order placed that way is simply invisible
+-- to a system that only governs its own record.
+--
+-- The venue, though, keeps its own record of every order it accepted.
+-- This example closes the loop: the venue's report comes back in as
+-- claims, admitted like any other, and a deterministic read compares
+-- what the venue says happened with what this record authorised. Five
+-- findings come out of that comparison. One matters more than the
+-- rest: an order the venue reports that no admitted act authorised.
+-- The record cannot have prevented it. It can expose it.
+--
+-- Three parties act on this record, each a login of its own. A trader
+-- (the agent) proposes orders. A reporter brings the venue's reports in.
+-- An operator appoints the other two and sets what they may do. The
+-- executor is the fourth party and never proposes: it consumes admitted
+-- orders from the record's outbox and sends each one to the venue under
+-- the order's own identifier as the client reference, which is the key
+-- the venue echoes back and the reconciliation joins on.
+
+program closed_loop_execution
+
+-- The operator is the trust root. Every grant below asks "is the
+-- proposer the operator?", so a login that could merely SAY it is the
+-- operator could hand itself anything. The runtime can bind an actor's
+-- name to the database logins allowed to speak it: the first claim
+-- arms a name, the second grants one login the right to it. Once a
+-- name is armed, a proposal naming it from any other login is refused
+-- before the body runs. The two claims are separate so that withdrawing
+-- a login's last grant locks the name instead of returning it to the
+-- open - the safe direction to fail in.
+predicate Operator(operator: Subject)
+predicate ActorAssertionRestricted(actor: Subject)
+predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
+
+-- A venue the desk trades at, and who may speak for its reports.
+predicate VenueDeclared(venue: Subject)
+predicate FeedOperator(reporter: Subject, venue: Subject)
+
+-- A trader's mandate: which instrument, and the largest single order
+-- allowed. This is a cap per order, not a position or exposure limit;
+-- holding a running total under a limit is the trade-lifecycle
+-- example's job, and it needs more state than this record keeps.
+predicate TradingMandate(trader: Subject, instrument: Subject, max_qty: Decimal)
+    unique by (trader, instrument)
+
+-- An authorised order: the terms the record admitted, and the act that
+-- admitted them is the only way it comes to exist. Append only: an
+-- authorisation, once given, stays on the record whatever the venue
+-- does with it afterwards.
+predicate OrderAuthorised(order: Subject, venue: Subject, instrument: Subject,
+                          side: Subject, qty: Decimal, price: Decimal)
+    unique by (order)
+    append only
+
+-- What the venue says happened, as the venue said it. `order_ref` is
+-- the client reference the venue echoes: the order's own identifier
+-- when the executor placed it, and whatever the sender supplied
+-- otherwise. `venue_order_id` is the venue's own identifier for the
+-- order it accepted. The venue numbers its report messages, and the
+-- uniqueness on (venue, sequence) is what makes ingestion safe to
+-- repeat: a reporter that replays a message it already brought in is
+-- refused by name, and never manufactures a second venue event.
+--
+-- There is deliberately NO rule here saying a report must name an
+-- authorised order. That rule would make an unauthorised order
+-- uncommittable in this record while leaving it done at the venue -
+-- the record would hide exactly what it should expose. Evidence of a
+-- bypass is admitted as evidence.
+predicate VenueReport(report: Subject, venue: Subject, sequence: Decimal,
+                      order_ref: Subject, venue_order_id: Subject,
+                      instrument: Subject, side: Subject, qty: Decimal, price: Decimal)
+    unique by (venue, sequence)
+    append only
+
+-- The one intent: an admitted order the executor must place. Its
+-- arguments carry the order's identifier, and the executor sends that
+-- identifier as the venue's client reference on every attempt. Delivery
+-- is at least once - a crash between the venue accepting and the record
+-- noting it means the order is sent again - and the reference is what
+-- lets a venue that deduplicates act once.
+intent PlaceOrder(order: Subject, venue: Subject, instrument: Subject,
+                  side: Subject, qty: Decimal, price: Decimal)
+
+-- The record's only rule about the orders it holds. The gate on
+-- `place_order` already refuses a non-positive order; this says the
+-- state cannot hold one however it got there, which is what a reader
+-- of the record is promised.
+invariant authorised_order_is_positive:
+    OrderAuthorised(order, _, _, _, qty, price) implies 0 < qty and 0 < price
+
+-- Putting the operator on the record, and closing the door behind it
+-- in the same act. Arm first and grant later, and between the two
+-- nobody could act as the operator at all, including to issue the
+-- grant. The login named here is the only one that can act as the
+-- operator afterwards; name the wrong one and the remedy is a fresh
+-- deployment, which is the right way for a trust root to fail.
+transformation appoint_operator(operator, login_role):
+    require not Operator(_)
+    admit Operator(operator)
+    admit ActorAssertionRestricted(operator)
+    admit ActorAssertionAuthority(operator, login_role)
+
+-- Binding a name to the login that may speak it. The operator does this
+-- for the trader and the reporter before granting either anything,
+-- because authority given to a name anyone may speak is authority
+-- given to everyone.
+transformation enrol_login(principal, login_role):
+    require Operator(actor)
+    require not ActorAssertionAuthority(principal, login_role)
+    admit ActorAssertionRestricted(principal)
+    admit ActorAssertionAuthority(principal, login_role)
+
+transformation declare_venue(venue):
+    require Operator(actor)
+    admit VenueDeclared(venue)
+
+-- A mandate goes only to an armed name: the gate asks for the arming
+-- claim, not for a particular login, so the operator enrols first.
+transformation grant_mandate(trader, instrument, max_qty):
+    require Operator(actor)
+    require ActorAssertionRestricted(trader)
+    require 0 < max_qty
+    admit TradingMandate(trader, instrument, max_qty)
+
+transformation grant_feed(reporter, venue):
+    require Operator(actor)
+    require VenueDeclared(venue)
+    require ActorAssertionRestricted(reporter)
+    admit FeedOperator(reporter, venue)
+
+-- The agent's one act. The gate asks three things of the proposer: a
+-- mandate for this instrument, a size within it, and a side that is
+-- one of the two. The order's identifier is drawn fresh here - the
+-- agent cannot choose it, so it cannot collide with or impersonate
+-- another order's reference at the venue. Admitting the authorisation
+-- and emitting the intent are one act: there is no admitted order
+-- without an intent to place it, and no intent without the admitted
+-- order it carries.
+transformation place_order(venue, instrument, side, qty, price):
+    require VenueDeclared(venue)
+    require TradingMandate(actor, instrument, max_qty) and 0 < qty and qty <= max_qty
+    require 0 < price
+    require side = #buy or side = #sell
+    let order = new Subject()
+    admit OrderAuthorised(order, venue, instrument, side, qty, price)
+    emit PlaceOrder(order, venue, instrument, side, qty, price)
+
+-- The venue's report enters the record. The gate asks only whether the
+-- proposer may speak for this venue; it does not ask whether the
+-- report names an authorised order, for the reason given above.
+transformation observe_venue_report(venue, sequence, order_ref, venue_order_id, instrument, side, qty, price):
+    require FeedOperator(actor, venue)
+    let report = new Subject()
+    admit VenueReport(report, venue, sequence, order_ref, venue_order_id, instrument, side, qty, price)
+
+-- The reconciliation: five reads over the two records, each a finding
+-- per row, none of them stored. They are computed from the admitted
+-- claims whenever asked, so the answer as of any committed history is
+-- the same answer every time, and a receipt can be issued over it.
+
+-- An authorised order the venue reports on every term: the same venue,
+-- instrument, side, quantity and price under the order's own
+-- reference. Agreement on the reference alone would not do - a venue
+-- echoing the right reference against the wrong size would look
+-- matched, which is the opposite of what this read is for.
+predicate Matched(order: Subject, report: Subject, qty: Decimal)
+derived Matched(order, report):
+    over (OrderAuthorised(order, venue, instrument, side, qty, price)
+          and VenueReport(report: report, venue: venue, order_ref: order,
+                          instrument: instrument, side: side, qty: qty, price: price, ..))
+    value qty = value OrderAuthorised(order: order, qty: _, ..)
+
+-- A report whose reference names an authorised order, but on different
+-- terms. The reference was honoured and the order was not: a bypass
+-- shaped like an executor that sent the right reference with a size
+-- of its own.
+predicate Mismatched(report: Subject, order: Subject, reported_qty: Decimal, authorised_qty: Decimal)
+derived Mismatched(report, order):
+    over (VenueReport(report: report, venue: venue, order_ref: order,
+                      instrument: instrument, side: side, qty: qty, price: price, ..)
+          and OrderAuthorised(order, _, _, _, _, _)
+          and not OrderAuthorised(order, venue, instrument, side, qty, price))
+    value reported_qty = value VenueReport(report: report, qty: _, ..)
+    value authorised_qty = value OrderAuthorised(order: order, qty: _, ..)
+
+-- An authorised order the venue has not reported. There is no time
+-- bound: rules never read the clock, so this read says "as of now" and
+-- the reader decides what late means. In flight, lost, or refused by
+-- the venue all look the same from here until the venue says more.
+predicate Unobserved(order: Subject, qty: Decimal)
+derived Unobserved(order):
+    over (OrderAuthorised(order, _, _, _, _, _)
+          and not VenueReport(order_ref: order, ..))
+    value qty = value OrderAuthorised(order: order, qty: _, ..)
+
+-- The headline. A report whose reference names no authorised order:
+-- the venue accepted an order this record never admitted. Prevention
+-- was bypassed somewhere - a second credential, a login used by hand,
+-- an executor that invented an order - and the venue's own record is
+-- what exposed it. The read names the venue's identifier for the order
+-- so that someone can go and look.
+predicate Unauthorised(report: Subject, venue_order_id: Subject, qty: Decimal, price: Decimal)
+derived Unauthorised(report, venue_order_id):
+    over (VenueReport(report: report, order_ref: order_ref, venue_order_id: venue_order_id, ..)
+          and not OrderAuthorised(order_ref, _, _, _, _, _))
+    value qty = value VenueReport(report: report, qty: _, ..)
+    value price = value VenueReport(report: report, price: _, ..)
+
+-- One authorisation, two venue orders. The reports disagree about
+-- which external order this is: the venue may have acted twice on one
+-- authorisation that reached it twice, or reported one order under
+-- two identifiers, or reused a reference. This read says the record
+-- holds conflicting observations; it does not say which. `Matched`
+-- lists the individual reports for whoever investigates.
+predicate Ambiguous(order: Subject, reports: Decimal)
+derived Ambiguous(order):
+    over (OrderAuthorised(order, _, _, _, _, _)
+          and VenueReport(order_ref: order, venue_order_id: first, ..)
+          and VenueReport(order_ref: order, venue_order_id: second, ..)
+          and first != second)
+    value reports = sum(1 | VenueReport(order_ref: order, ..))
+
+-- ---------------------------------------------------------------------
+-- What this example deliberately does not cover.
+--
+-- Undoing an unauthorised order: the first rung reports; a cancelling
+-- order is an act of its own, later. The venue itself: here it is a
+-- fixture in the tests that keeps a ledger of client references and
+-- hands out its own order identifiers. Partial fills, amendments and
+-- cancellations: a report here is the venue's acceptance of an order,
+-- and the lifecycle after that is the trade-lifecycle example's
+-- territory. And three things this record asserts about its
+-- deployment rather than proves: that the executor alone holds the
+-- venue credential, that the reports brought in are all of them, and
+-- that the venue echoes client references faithfully. A report nobody
+-- brought in is invisible to any read over this record.

@@ -79,6 +79,7 @@ example_module!(carbon_credit_provenance {
 });
 example_module!(charging_years);
 example_module!(chess_transition_invariants);
+example_module!(closed_loop_execution);
 example_module!(clinical_trial_enrolment {
     pub const ROLE_RANDOMISE_PARTICIPANT: &str = "randomise_participant";
 });
