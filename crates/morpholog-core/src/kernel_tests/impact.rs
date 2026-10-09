@@ -521,3 +521,80 @@ fn a_rule_over_pre_is_never_dismissed_by_a_delta_outside_its_reads() {
         );
     }
 }
+
+#[test]
+fn an_extremum_over_a_domain_is_bounded_to_the_case_its_body_binds() {
+    use crate::ir::{ExtremumOp, Term, ValueExpr};
+    use crate::ir_builder::le;
+    // AccountLimit(account, limit) implies max(v | Observation(account, v)) <= limit
+    let inv = invariant(
+        "peak_within_limit",
+        implies(
+            claim("AccountLimit", vec![var("account"), var("limit")]),
+            le(
+                ValueExpr::Extremum {
+                    op: ExtremumOp::Max,
+                    value: Term::Var(Var::from("v")),
+                    body: Box::new(claim("Observation", vec![var("account"), var("v")])),
+                },
+                term(var("limit")),
+            ),
+        ),
+    );
+    // Account `a` already breaches; `b` is clean.
+    let universe = [
+        claim_instance("AccountLimit", &[subj("a"), dec(5)]),
+        claim_instance("AccountLimit", &[subj("b"), dec(5)]),
+        claim_instance("Observation", &[subj("a"), dec(3)]),
+        claim_instance("Observation", &[subj("a"), dec(9)]),
+        claim_instance("Observation", &[subj("b"), dec(2)]),
+        claim_instance("Observation", &[subj("b"), dec(7)]),
+    ];
+    assert_never_narrower_over(
+        &inv,
+        &[],
+        &universe,
+        &[Var::from("account"), Var::from("limit")],
+    );
+    let plan = ImpactPlan::with_definitions(&inv, &[]);
+    let bounded_to_b = Impact::Bounded(vec![case(&[("account", subj("b"))])]);
+    assert_eq!(
+        admitted(&plan, universe[5].clone()),
+        bounded_to_b,
+        "an observation on `b` reaches `b`'s peak only"
+    );
+    assert_eq!(
+        plan.classify(&[], std::slice::from_ref(&universe[4])),
+        bounded_to_b,
+        "retracting one of `b`'s observations likewise"
+    );
+    assert_eq!(
+        admitted(&plan, claim_instance("Deposit", &[subj("b")])),
+        Impact::Untouched
+    );
+}
+
+#[test]
+fn a_lookup_inside_a_builtin_still_widens() {
+    use crate::ir_builder::{abs, le, value_of};
+    // A(x, v) implies abs(value Limit(l, _)) <= v
+    let inv = invariant(
+        "within_the_absolute_limit",
+        implies(
+            claim("A", vec![var("x"), var("v")]),
+            le(
+                abs(value_of("Limit", vec![lit("l"), wildcard()])),
+                term(var("v")),
+            ),
+        ),
+    );
+    let universe = [
+        claim_instance("A", &[subj("a"), dec(1)]),
+        claim_instance("Limit", &[subj("l"), dec(5)]),
+        claim_instance("D", &[subj("a")]),
+    ];
+    assert_never_narrower(&inv, &[], &universe);
+    let plan = ImpactPlan::with_definitions(&inv, &[]);
+    assert_eq!(admitted(&plan, universe[1].clone()), Impact::Unbounded);
+    assert_eq!(admitted(&plan, universe[2].clone()), Impact::Untouched);
+}
