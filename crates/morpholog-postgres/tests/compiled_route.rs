@@ -585,3 +585,119 @@ transformation hold(x, q):
         "the batch's own row is met last, never named first: {named}"
     );
 }
+
+// ============================================================
+// The comparison a refusal blames, on both routes
+// ============================================================
+
+/// The two forms that make the compiled diagnosis do real work: a sum as
+/// an operand, computed once more under the chosen rows, and a comparison
+/// of two literals, with no claim row of its own to pin. Both routes name
+/// the same comparison with the same values, beside the same witness.
+#[tokio::test]
+async fn both_routes_blame_the_same_comparison_with_the_same_values() {
+    let pool = test_pool().await;
+    let program = morpholog_surface::parse_program(
+        "program parcels\n\
+         predicate Cap(vessel: Subject, cap: Decimal)\n\
+             unique by (vessel)\n\
+         predicate Parcel(parcel: Subject, vessel: Subject, qty: Decimal)\n\
+             unique by (parcel)\n\
+         predicate Flag(flag: Subject)\n\
+         transformation set_cap(v, c):\n    admit Cap(v, c)\n\
+         transformation load(p, v, q):\n    admit Parcel(p, v, q)\n\
+         transformation raise(f):\n    admit Flag(f)\n\
+         invariant within_capacity:\n\
+         \x20   Cap(v, cap) implies sum(q | Parcel(_, v, q)) <= cap\n\
+         invariant never_raised:\n\
+         \x20   Flag(f) implies 1 <= 0\n",
+    )
+    .unwrap();
+    let compiled = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
+    assert!(
+        matches!(compiled.plan(), InvariantPlan::Compiled),
+        "{:?}",
+        compiled.plan()
+    );
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(program.clone()).unwrap());
+    let act = |name: &str| {
+        compiled
+            .prepared()
+            .transformation(&name.into())
+            .unwrap()
+            .clone()
+    };
+    let seeded = vec![
+        ClaimInstance {
+            predicate: "Cap".into(),
+            args: vec![subj("v1"), dec(10)],
+        },
+        ClaimInstance {
+            predicate: "Parcel".into(),
+            args: vec![subj("p1"), subj("v1"), dec(6)],
+        },
+    ];
+    let refusals = |t: Transition| {
+        let compiled = &compiled;
+        let interpreted = &interpreted;
+        let seeded = &seeded;
+        let pool = &pool;
+        async move {
+            let mut out = Vec::new();
+            for route in [interpreted, compiled] {
+                reset_db(pool).await;
+                seed_claims(pool, seeded).await;
+                let outcome = propose_against_pg(pool, route, &Proposal::gateway(&t))
+                    .await
+                    .unwrap();
+                let PgProposalOutcome::Rejected {
+                    rule,
+                    witness,
+                    compared,
+                    ..
+                } = outcome
+                else {
+                    panic!("expected a refusal, got {outcome:?}");
+                };
+                out.push((rule, witness, compared));
+            }
+            out
+        }
+    };
+
+    // A sum as an operand: 6 + 7 against a cap of 10.
+    let t = Transition {
+        transformation_name: "load".into(),
+        args: vec![subj("p2"), subj("v1"), dec(7)],
+        actor: Subject::from("route_test"),
+    };
+    let both = refusals(t).await;
+    assert_eq!(both[0], both[1], "interpreted vs compiled");
+    let (rule, _, compared) = &both[1];
+    assert_eq!(rule.as_deref(), Some("within_capacity"));
+    let compared = compared.clone().expect("the comparison is blamed");
+    assert_eq!(compared.op, "<=");
+    assert_eq!(compared.left, dec(13));
+    assert_eq!(compared.right, dec(10));
+    assert_eq!(compared.holds(), Some(false));
+
+    // Two literals: no claim row of the comparison's own to pin.
+    let t = Transition {
+        transformation_name: "raise".into(),
+        args: vec![subj("f1")],
+        actor: Subject::from("route_test"),
+    };
+    let both = refusals(t).await;
+    assert_eq!(both[0], both[1], "interpreted vs compiled");
+    let (rule, _, compared) = &both[1];
+    assert_eq!(rule.as_deref(), Some("never_raised"));
+    assert_eq!(
+        compared.clone().expect("the comparison is blamed"),
+        morpholog_core::Compared {
+            op: "<=".to_string(),
+            left: dec(1),
+            right: dec(0),
+        }
+    );
+    let _ = act("set_cap");
+}

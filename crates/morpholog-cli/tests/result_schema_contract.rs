@@ -24,7 +24,7 @@ use morpholog_core::ir_builder::{
     var,
 };
 use morpholog_core::{
-    BatchScore, CandidateScorer, CaseOutcome, CaseResult, ClaimInstance, CoverageTracker,
+    BatchScore, CandidateScorer, CaseOutcome, CaseResult, ClaimInstance, Compared, CoverageTracker,
     EvalValue, IntentInstance, SplitBoundaryReport, State, Subject, Transition, WitnessBinding,
     effective_delta,
 };
@@ -178,6 +178,16 @@ fn rejected_outcome() -> PgProposalOutcome {
         reason: "invariant `no_flagged_accounts` violated".to_string(),
         rule: Some("no_flagged_accounts".to_string()),
         witness: Vec::new(),
+        compared: None,
+    }
+}
+
+/// The comparison a refused gate or rule blames, with its two values.
+fn compared_sample() -> Compared {
+    Compared {
+        op: "<=".to_string(),
+        left: EvalValue::Decimal(Decimal::from(152_000)),
+        right: EvalValue::Decimal(Decimal::new(979_118, 1)),
     }
 }
 
@@ -189,6 +199,7 @@ fn rejected_with_witness_outcome() -> PgProposalOutcome {
         reason: "invariant `no_flagged_accounts` violated".to_string(),
         rule: Some("no_flagged_accounts".to_string()),
         witness: witness_sample(),
+        compared: None,
     }
 }
 
@@ -271,6 +282,17 @@ fn run_outcomes_serialize_as_pinned() {
             reason: "require `within_approval_limit` failed: ApprovalLimit(actor, doc, limit) and amount <= limit did not hold over pre-state".to_string(),
             rule: Some("within_approval_limit".to_string()),
             witness: gate_witness_sample(),
+            compared: None,
+        }),
+    );
+    // The values the failing comparison compared, beside the witness.
+    assert_golden(
+        "rejected_gate_with_compared.json",
+        &to_value(&PgProposalOutcome::Rejected {
+            reason: "require `within_approval_limit` failed: ApprovalLimit(actor, doc, limit) and amount <= limit did not hold over pre-state".to_string(),
+            rule: Some("within_approval_limit".to_string()),
+            witness: gate_witness_sample(),
+            compared: Some(compared_sample()),
         }),
     );
     assert_golden(
@@ -412,6 +434,11 @@ fn traced_run(
                     witness: match &reason {
                         RejectionReason::Invariant { witness, .. } => witness.clone(),
                         _ => Vec::new(),
+                    },
+                    compared: match &reason {
+                        RejectionReason::Invariant { compared, .. }
+                        | RejectionReason::Require { compared, .. }
+                        | RejectionReason::BindNone { compared, .. } => compared.clone(),
                     },
                 },
             };
@@ -566,6 +593,7 @@ fn rejection_rows_serialize_as_pinned() {
         invariant_version: Some(1),
         reason: "invariant `line_net_is_the_rounded_recompute` violated".to_string(),
         witness: Some(witness_sample()),
+        compared: None,
         rejected_at: "2026-06-01T12:00:00Z".parse::<jiff::Timestamp>().unwrap(),
     };
     assert_golden("rejection_row.json", &to_value(&base));
@@ -577,6 +605,7 @@ fn rejection_rows_serialize_as_pinned() {
         invariant_version: None,
         reason: "require `actor_has_authority_for_amount` failed: MayApprove(actor, doc) did not hold over pre-state".to_string(),
         witness: None,
+        compared: None,
         ..base
     };
     assert_golden("rejection_row_gate.json", &to_value(&gate));
@@ -589,6 +618,14 @@ fn rejection_rows_serialize_as_pinned() {
     assert_golden(
         "rejection_row_gate_with_witness.json",
         &to_value(&gate_with_witness),
+    );
+    let gate_with_compared = morpholog_postgres::RejectionRow {
+        compared: Some(compared_sample()),
+        ..gate_with_witness
+    };
+    assert_golden(
+        "rejection_row_gate_with_compared.json",
+        &to_value(&gate_with_compared),
     );
 }
 
@@ -1125,6 +1162,7 @@ fn composite_envelopes_serialize_as_pinned() {
             "invariant `no_flagged_accounts` violated",
             Some("no_flagged_accounts"),
             &[],
+            None,
             explanation,
         )),
     );
@@ -1141,6 +1179,7 @@ fn composite_envelopes_serialize_as_pinned() {
             "invariant `no_flagged_accounts` violated",
             Some("no_flagged_accounts"),
             &witness_sample(),
+            None,
             explanation,
         )),
     );
@@ -1680,6 +1719,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             reason: "invariant `balance_unique_by_account` violated".to_string(),
             rule: Some("balance_unique_by_account".to_string()),
             witness: witness_sample(),
+            compared: None,
         }),
     );
     assert_golden(
@@ -1702,6 +1742,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         reason: "require `Account(account)` failed".to_string(),
         rule: None,
         witness: Vec::new(),
+        compared: None,
     });
     in_session["row"] = serde_json::json!(4);
     assert_golden("transact_rejected_session.json", &in_session);

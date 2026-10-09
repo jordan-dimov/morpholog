@@ -292,7 +292,7 @@ async fn a_database_below_the_baseline_is_refused_by_name() {
         .await
         .unwrap();
     sqlx::query("INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, 'from_a_newer_morpholog')")
-        .bind(BASELINE_VERSION + 2)
+        .bind(morpholog_postgres::head_version() + 1)
         .execute(&pool)
         .await
         .unwrap();
@@ -316,7 +316,7 @@ async fn a_database_below_the_baseline_is_refused_by_name() {
              version integer PRIMARY KEY, name text NOT NULL,
              applied_at timestamptz NOT NULL DEFAULT now());
          INSERT INTO morpholog.schema_migrations (version, name)
-         VALUES (23, 'deployment_roles'), (24, 'gate_witness')",
+         VALUES (23, 'deployment_roles'), (24, 'gate_witness'), (25, 'rejection_compared')",
     )
     .execute(&pool)
     .await
@@ -335,7 +335,7 @@ async fn a_database_below_the_baseline_is_refused_by_name() {
             matches!(
                 &err,
                 morpholog_postgres::PgError::SchemaBelowBaseline { recorded: Some(v), baseline }
-                    if *v == BASELINE_VERSION + 2 && *baseline == BASELINE_VERSION
+                    if *v == morpholog_postgres::head_version() + 1 && *baseline == BASELINE_VERSION
             ),
             "{case}: {err:?}"
         );
@@ -588,6 +588,18 @@ async fn a_baseline_database_is_behind_until_migrated_and_then_keeps_a_gate_witn
         .await
         .expect("the v0.0.14 schema");
 
+    // A refusal the old release logged, in its own shape: it survives the
+    // upgrade with nothing it did not carry.
+    sqlx::raw_sql(
+        "INSERT INTO morpholog.rejections
+             (rejection_id, transformation_name, arguments, actor, kind, rule, reason)
+         VALUES ('01900000-0000-7000-8000-000000000009', 'issue', '[]'::jsonb,
+                 '{\"type\":\"subject\",\"value\":\"alex\"}'::jsonb,
+                 'require', 'within_limit', 'require `within_limit` failed')",
+    )
+    .execute(&pool)
+    .await
+    .expect("a row in the v0.0.14 shape");
     let behind = morpholog_postgres::require_current_schema(&pool).await;
     let report = morpholog_postgres::apply_migrations(&pool).await;
     let outcome = {
@@ -658,6 +670,17 @@ async fn a_baseline_database_is_behind_until_migrated_and_then_keeps_a_gate_witn
         ["amount", "doc", "limit"]
     );
     let rows = rows.expect("the log reads back");
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 2, "the old row and the new one");
     assert_eq!(rows[0].witness.as_deref(), Some(witness.as_slice()));
+    assert_eq!(
+        rows[0].compared,
+        Some(morpholog_core::Compared {
+            op: "<=".to_string(),
+            left: morpholog_test_support::dec(9000),
+            right: morpholog_test_support::dec(5000),
+        }),
+        "the comparison the gate blamed"
+    );
+    assert_eq!(rows[1].rule, "within_limit");
+    assert!(rows[1].witness.is_none() && rows[1].compared.is_none());
 }

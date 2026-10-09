@@ -274,7 +274,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::Refre
 impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::RefreshDerivedReport
 pub struct morpholog_cli::envelopes::RejectedWithExplanation<'a, E>
 impl<'a, E> morpholog_cli::envelopes::RejectedWithExplanation<'a, E>
-pub fn morpholog_cli::envelopes::RejectedWithExplanation<'a, E>::new(&'a str, core::option::Option<&'a str>, &'a [morpholog_core::propose::WitnessBinding], E) -> Self
+pub fn morpholog_cli::envelopes::RejectedWithExplanation<'a, E>::new(&'a str, core::option::Option<&'a str>, &'a [morpholog_core::propose::WitnessBinding], core::option::Option<&'a morpholog_core::propose::Compared>, E) -> Self
 impl<'a, E> serde_core::ser::Serialize for morpholog_cli::envelopes::RejectedWithExplanation<'a, E> where E: serde_core::ser::Serialize
 pub fn morpholog_cli::envelopes::RejectedWithExplanation<'a, E>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'a, E> core::marker::Freeze for morpholog_cli::envelopes::RejectedWithExplanation<'a, E> where E: core::marker::Freeze

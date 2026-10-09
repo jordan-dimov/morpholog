@@ -226,6 +226,7 @@ fn governed_contract(obs: &ProbeObservation) -> Result<bool, String> {
                 name,
                 version,
                 witness,
+                compared,
             } = reason
             else {
                 // finish_staged_delta_with over a staged (not rejected)
@@ -261,6 +262,15 @@ fn governed_contract(obs: &ProbeObservation) -> Result<bool, String> {
                 };
                 if k != got {
                     return Err(disagreement(&format!("{label} witness"), &k, &got));
+                }
+                // The comparison blamed, values and all, on the path
+                // admission reports.
+                if label == "case-bound" && s.compared != *compared {
+                    return Err(disagreement(
+                        "case-bound compared",
+                        &format!("{compared:?}"),
+                        &format!("{:?}", s.compared),
+                    ));
                 }
             }
             Ok(false)
@@ -1295,6 +1305,7 @@ fn assert_stage1_keeps_kernel_identity(obs: &ProbeObservation) -> String {
                 name,
                 version,
                 witness,
+                ..
             },
     }) = &obs.kernel
     else {

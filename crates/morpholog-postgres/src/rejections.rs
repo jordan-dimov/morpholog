@@ -1,6 +1,6 @@
 use crate::error::{PgError, classify_checked_query};
 use jiff::Timestamp;
-use morpholog_core::{EvalValue, Subject, TransformationName, WitnessBinding};
+use morpholog_core::{Compared, EvalValue, Subject, TransformationName, WitnessBinding};
 use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -29,6 +29,11 @@ pub struct RejectionRow {
     /// lead to follow, never proof of what a refusal saw.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub witness: Option<Vec<WitnessBinding>>,
+    /// The comparison the diagnosis blamed, with its two values. Absent
+    /// when it blamed none, could not evaluate it, or on rows from
+    /// before the column existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compared: Option<Compared>,
     #[serde(with = "crate::wire_time")]
     pub rejected_at: Timestamp,
 }
@@ -41,7 +46,7 @@ pub struct RejectionRow {
 pub async fn list_rejection_rows(pool: &PgPool, limit: u32) -> Result<Vec<RejectionRow>, PgError> {
     let rows = sqlx::query!(
         "SELECT rejection_id, transformation_name, arguments, actor,
-                kind, rule, invariant_version, reason, witness, rejected_at
+                kind, rule, invariant_version, reason, witness, compared, rejected_at
          FROM morpholog.rejections
          ORDER BY rejected_at DESC, rejection_id DESC
          LIMIT $1",
@@ -72,6 +77,10 @@ pub async fn list_rejection_rows(pool: &PgPool, limit: u32) -> Result<Vec<Reject
                 witness: row
                     .witness
                     .map(serde_json::from_value::<Vec<WitnessBinding>>)
+                    .transpose()?,
+                compared: row
+                    .compared
+                    .map(serde_json::from_value::<Compared>)
                     .transpose()?,
                 rejected_at: row.rejected_at.into(),
             })

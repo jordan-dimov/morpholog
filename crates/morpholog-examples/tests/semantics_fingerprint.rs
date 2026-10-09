@@ -110,10 +110,13 @@ fn decision(result: &Result<Outcome, EvalError>) -> Value {
             }
         }),
         Ok(Outcome::Rejected { reason }) => match reason {
+            // The comparison a refusal blames is diagnosis, as a gate's
+            // witness is; neither is part of the decision's identity.
             RejectionReason::Invariant {
                 name,
                 version,
                 witness,
+                compared: _,
             } => json!({"invariant": {"name": name, "version": version, "witness": witness}}),
             // A gate's stable identity is its rule name; how the refusing
             // expression renders is diagnosis, not meaning.

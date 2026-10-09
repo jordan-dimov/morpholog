@@ -20,11 +20,18 @@ pub const BASELINE_VERSION: i32 = 23;
 /// Every migration this build carries beyond the baseline, in order, as
 /// `(version, name, sql)`; the SQL is `include_str!` of a file under
 /// `crates/morpholog-core/sql/migrations/`.
-pub(crate) const MIGRATIONS: &[(i32, &str, &str)] = &[(
-    24,
-    "gate_witness",
-    include_str!("../sql/migrations/024_gate_witness.sql"),
-)];
+pub(crate) const MIGRATIONS: &[(i32, &str, &str)] = &[
+    (
+        24,
+        "gate_witness",
+        include_str!("../sql/migrations/024_gate_witness.sql"),
+    ),
+    (
+        25,
+        "rejection_compared",
+        include_str!("../sql/migrations/025_rejection_compared.sql"),
+    ),
+];
 
 /// The newest migration this binary carries.
 pub fn head_version() -> i32 {

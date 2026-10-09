@@ -4,6 +4,7 @@
 //! Fields are declared in alphabetical order. Field order is wire order,
 //! and the goldens go through `serde_json::Value`, which sorts keys.
 
+use morpholog_core::Compared;
 use morpholog_core::WitnessBinding;
 use serde::Serialize;
 
@@ -476,6 +477,9 @@ pub struct RejectedWithExplanation<'a, E> {
     /// refusal needs them most on this path.
     #[serde(skip_serializing_if = "<[WitnessBinding]>::is_empty")]
     witness: &'a [WitnessBinding],
+    /// The comparison the refusal blamed, with its two values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compared: Option<&'a Compared>,
 }
 
 impl<'a, E> RejectedWithExplanation<'a, E> {
@@ -483,6 +487,7 @@ impl<'a, E> RejectedWithExplanation<'a, E> {
         reason: &'a str,
         rule: Option<&'a str>,
         witness: &'a [WitnessBinding],
+        compared: Option<&'a Compared>,
         explanation: E,
     ) -> Self {
         Self {
@@ -491,6 +496,7 @@ impl<'a, E> RejectedWithExplanation<'a, E> {
             rule,
             status: "rejected",
             witness,
+            compared,
         }
     }
 }

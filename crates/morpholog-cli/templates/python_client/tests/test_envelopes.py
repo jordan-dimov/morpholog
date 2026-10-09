@@ -45,6 +45,19 @@ class RunOutcomes(unittest.TestCase):
         self.assertEqual(outcome.witness[0].value, "acct_1")
         self.assertEqual(outcome.witness[1].value, Decimal("105.50"))
 
+    def test_a_refusal_carries_the_two_values_its_comparison_compared(self):
+        # The figures, not the formula: an embedder prints these and never
+        # reproduces the rule's arithmetic.
+        outcome = envelopes.parse_run_outcome(golden("rejected_gate_with_compared.json"))
+        self.assertEqual(outcome.compared.op, "<=")
+        self.assertEqual(outcome.compared.left, Decimal("152000"))
+        self.assertEqual(outcome.compared.right, Decimal("97911.8"))
+        self.assertEqual([w.var for w in outcome.witness], ["doc", "limit"])
+        plain = envelopes.parse_run_outcome(golden("rejected_with_witness.json"))
+        self.assertIsNone(plain.compared)
+        row = envelopes.RejectionRow.from_json(golden("rejection_row_gate_with_compared.json"))
+        self.assertEqual(row.compared.left, Decimal("152000"))
+
     def test_a_refusal_names_the_rule_that_refused(self):
         # The stable identifier, and the whole reason it exists: `reason` is
         # prose that any rewording changes, so a test that holds it breaks

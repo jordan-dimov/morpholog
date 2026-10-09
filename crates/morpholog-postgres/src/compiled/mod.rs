@@ -67,10 +67,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use morpholog_core::{
-    ClaimInstance, CompareOp, Definition, DefinitionName, EvalError, EvalValue, Impact, ImpactPlan,
-    Invariant, InvariantName, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Prop,
-    RejectionReason, SumSeed, Term, ValidatedProgram, Value, ValueExpr, Var, WitnessBinding,
-    literal_value, ordered_compare_error,
+    ClaimInstance, CompareOp, Compared, Definition, DefinitionName, EvalError, EvalValue, Impact,
+    ImpactPlan, Invariant, InvariantName, OrderedDomain, PredicateArgKind, PredicateDecl,
+    PredicateName, Prop, RejectionReason, SumSeed, Term, ValidatedProgram, Value, ValueExpr, Var,
+    WitnessBinding, literal_value, ordered_compare_error,
 };
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -189,6 +189,9 @@ pub(crate) struct SqlViolation {
     pub(crate) name: InvariantName,
     pub(crate) version: u32,
     pub(crate) witness: Vec<WitnessBinding>,
+    /// The comparison the diagnosis blamed, with its operands off the
+    /// chosen row, as the kernel's walk would report it.
+    pub(crate) compared: Option<Compared>,
 }
 
 impl From<SqlViolation> for RejectionReason {
@@ -197,6 +200,7 @@ impl From<SqlViolation> for RejectionReason {
             name: v.name,
             version: v.version,
             witness: v.witness,
+            compared: v.compared,
         }
     }
 }
@@ -288,11 +292,12 @@ impl CompiledInvariantSet {
                     return Err(PgError::Kernel(decode_error(&erroring)?));
                 }
             }
-            let witness = inv.diagnose(tx, case_filter.as_deref(), steps).await?;
+            let (witness, compared) = inv.diagnose(tx, case_filter.as_deref(), steps).await?;
             return Ok(Some(SqlViolation {
                 name: inv.name.clone(),
                 version: inv.version,
                 witness,
+                compared,
             }));
         }
         Ok(None)
@@ -352,6 +357,57 @@ fn order_keys(
     }
     keys.push(format!("{alias}.arguments_hash"));
     Ok(keys.join(", "))
+}
+
+/// The blamed comparison's two values. A column reads off its chosen
+/// row and a literal is itself; a sum is computed once more, under the
+/// chosen rows and the prefix that still matched, the comparison kept
+/// out of the selection so the row is there to read. Nothing is reported
+/// when a side cannot be read, or when the values do not fail the
+/// comparison: a diagnosis that disagrees with the decision says nothing
+/// rather than something wrong.
+async fn compared_off(
+    tx: &mut Transaction<'_, Postgres>,
+    label: &str,
+    chosen: &Chosen,
+    prefix: &str,
+    leaf: &LeafCompare,
+) -> Result<Option<Compared>, PgError> {
+    let mut values = Vec::with_capacity(2);
+    for side in [&leaf.left, &leaf.right] {
+        let value = match side {
+            Side::Bound(bound) => chosen.value(bound).ok(),
+            Side::Sum { lateral, total } => {
+                let sql = format!(
+                    "{label}\nSELECT ({total})::text AS \"t\"{}\nWHERE {}\nLIMIT 1",
+                    chosen.sources_clause(lateral),
+                    chosen.pins(prefix)
+                );
+                match fetch(tx, sql).await? {
+                    Some(row) => row
+                        .try_get::<String, _>("t")
+                        .ok()
+                        .and_then(|t| t.parse::<rust_decimal::Decimal>().ok())
+                        .map(EvalValue::Decimal),
+                    None => None,
+                }
+            }
+        };
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        values.push(value);
+    }
+    let mut values = values.into_iter();
+    let (Some(left), Some(right)) = (values.next(), values.next()) else {
+        return Ok(None);
+    };
+    let compared = Compared {
+        op: leaf.op.to_string(),
+        left,
+        right,
+    };
+    Ok((compared.holds() == Some(false)).then_some(compared))
 }
 
 async fn fetch(
@@ -647,6 +703,73 @@ struct Level {
     prefixes: Vec<Prefix>,
     /// Where the kernel goes when the chain dies at a conjunct.
     descents: BTreeMap<usize, Level>,
+    /// The conjuncts that are a comparison or an equality, with their
+    /// operands as the kernel would read them under the bindings at that
+    /// point: the two values a refusal reports when the chain dies there.
+    leaves: BTreeMap<usize, LeafCompare>,
+}
+
+/// A comparison the diagnosis can blame, with its operands.
+#[derive(Debug)]
+struct LeafCompare {
+    op: &'static str,
+    left: Side,
+    right: Side,
+}
+
+/// One operand of a blamed comparison: a column of a chosen row, a
+/// literal, or a sum computed once more under the chosen rows.
+#[derive(Debug)]
+enum Side {
+    Bound(Bound),
+    Sum { lateral: String, total: String },
+}
+
+/// The operand of a comparison the diagnosis may blame, or `None` for a
+/// form the compiler does not render, which the comparison itself would
+/// have refused.
+fn leaf_side(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Option<Side> {
+    match expr {
+        ValueExpr::Term(Term::Var(v)) => env.get(v).cloned().map(Side::Bound),
+        ValueExpr::Term(Term::Literal(value)) => Some(Side::Bound(Bound::Lit(value.clone()))),
+        ValueExpr::Sum { .. } => {
+            let operand = value_sql(expr, env, ctx).ok()?;
+            let rendered = ctx.pending_sums.pop()?;
+            let Ordered::Numeric { sql, .. } = operand.ordered else {
+                return None;
+            };
+            Some(Side::Sum {
+                lateral: rendered.lateral,
+                total: sql,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The comparison a conjunct is, if it is one, with its operands under
+/// `env`.
+fn leaf_compare(conjunct: &Prop, env: &Env, ctx: &mut Ctx<'_>) -> Option<LeafCompare> {
+    let (op, left, right) = match conjunct {
+        Prop::Compare {
+            op,
+            domain,
+            left,
+            right,
+        } => (
+            morpholog_core::format::compare_token(*op, *domain),
+            left,
+            right,
+        ),
+        Prop::Eq(left, right) => ("=", left, right),
+        Prop::Neq(left, right) => ("!=", left, right),
+        _ => return None,
+    };
+    Some(LeafCompare {
+        op,
+        left: leaf_side(left, env, ctx)?,
+        right: leaf_side(right, env, ctx)?,
+    })
 }
 
 #[derive(Debug)]
@@ -685,7 +808,11 @@ fn diagnostic_level(
     };
     let mut prefixes = Vec::new();
     let mut descents = BTreeMap::new();
+    let mut leaves = BTreeMap::new();
     for (k, conjunct) in conjuncts.iter().enumerate() {
+        if let Some(leaf) = leaf_compare(conjunct, &acc.env, ctx) {
+            leaves.insert(k, leaf);
+        }
         match conjunct {
             Prop::Defined { name, args } => {
                 let (def, frame) = call_frame(name, args, &acc.env, ctx)?;
@@ -754,6 +881,7 @@ fn diagnostic_level(
         entry,
         prefixes,
         descents,
+        leaves,
     })
 }
 
@@ -904,15 +1032,17 @@ impl CompiledInvariant {
             .collect()
     }
 
-    /// The witness, found as the kernel finds it (see [`Level`]).
+    /// The witness, found as the kernel finds it (see [`Level`]), and
+    /// the comparison blamed where the chain died at one, its operands
+    /// read off the chosen rows, a sum computed once more under them.
     async fn diagnose(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         case_filter: Option<&str>,
         steps: &[DeltaStep],
-    ) -> Result<Vec<WitnessBinding>, PgError> {
+    ) -> Result<(Vec<WitnessBinding>, Option<Compared>), PgError> {
         let Some(d) = &self.diagnosis else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         };
         let order = |aliases: &[(String, PredicateName)]| -> Result<String, PgError> {
             Ok(aliases
@@ -993,13 +1123,38 @@ impl CompiledInvariant {
             let killed = longest.map_or(0, |s| s + 1);
             match level.descents.get(&killed) {
                 Some(next) => level = next,
-                None => break,
+                None => {
+                    // The chain died at a leaf. When it is a comparison,
+                    // its operands are read under the successful prefix
+                    // and the pinned rows, the comparison itself kept
+                    // out of the selection, as the kernel's leaf reads
+                    // them under the bindings it reached.
+                    let compared = match level.leaves.get(&killed) {
+                        Some(leaf) => {
+                            let prefix = longest
+                                .map(|s| level.prefixes[s].where_.as_str())
+                                .unwrap_or("true");
+                            compared_off(tx, &label, &chosen, prefix, leaf).await?
+                        }
+                        None => None,
+                    };
+                    return Ok((
+                        witness
+                            .into_iter()
+                            .map(|(var, value)| WitnessBinding { var, value })
+                            .collect(),
+                        compared,
+                    ));
+                }
             }
         }
-        Ok(witness
-            .into_iter()
-            .map(|(var, value)| WitnessBinding { var, value })
-            .collect())
+        Ok((
+            witness
+                .into_iter()
+                .map(|(var, value)| WitnessBinding { var, value })
+                .collect(),
+            None,
+        ))
     }
 
     /// Bound the check to the cases a delta could have changed: core
