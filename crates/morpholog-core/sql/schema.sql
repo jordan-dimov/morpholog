@@ -408,9 +408,10 @@ CREATE TABLE rejections (
     invariant_version    bigint,                          -- NULL for gate kinds
     reason               text         NOT NULL,           -- the exact envelope string
     -- The values the refused rule was reading, same codec as the
-    -- envelope's witness. NULL when the kernel could not pin the failure
-    -- to one iteration, and for every row written before this column
-    -- existed. Diagnostic only: it inherits this table's at-most-once,
+    -- envelope's witness. NULL when no bindings were captured (an
+    -- invariant the kernel could not pin to one case, a gate refused
+    -- before migration 024) and for every row written before this
+    -- column existed. Diagnostic only: it inherits this table's at-most-once,
     -- operational standing, so it is a lead to follow and never proof of
     -- what a refusal saw.
     -- Non-empty or absent, never `[]`: absence means "nothing was

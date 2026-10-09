@@ -615,7 +615,7 @@ async fn a_baseline_database_is_behind_until_migrated_and_then_keeps_a_gate_witn
         )
         .await
         .map(common::expect_committed)
-        .ok();
+        .expect("the approval commits on the migrated database");
         common::propose_pg_with_test_actor(
             &pool,
             &pg,

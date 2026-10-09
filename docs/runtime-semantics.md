@@ -700,7 +700,7 @@ One trace entry per transformation statement and per invariant check. `For` is n
 
 **Scope: statement-level plus failure-walk on rejection paths.** Every statement that runs produces one trace entry. When a `require` or `bind_one` rejects, the trace's `failing_sub_expression` field carries the most specific responsible sub-expression - a failing conjunct of an `And`, an `Implies`'s consequent, a `Forall`'s body - recursing into compound ones; `Not`, `Exists`, and leaves return `None` (no single responsible sub-expression, or already maximally specific). The walk runs **only on rejection paths**, so success-path performance is unchanged, and the field is omitted from JSON when `None`. The same descent yields the refusal's witness, the bindings live where it stopped, so the trace's failing part and the witness on `RejectionReason::Require` / `BindNone` always blame one context: under a conjunction, the first context that survived the conjuncts before the failing one. A fuller structural trace (success-path drill-downs, binding substitution) is deferred until an example forces it.
 
-`propose` and `propose_with_trace` share a single execution path via an internal `TraceSink` enum, so there is no separate traced evaluator that could drift; the non-trace path allocates nothing.
+`propose` and `propose_with_trace` share a single execution path via an internal `TraceSink` enum, so there is no separate traced evaluator that could drift; a successful proposal pays no diagnostic cost on either path, and a refusal pays the one descent.
 
 ## Authoring-time checks (`Program::validate`)
 

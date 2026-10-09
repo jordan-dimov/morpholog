@@ -23,6 +23,7 @@ const DESK: &str = r#"
 program desk
 predicate Mandate(trader: Subject, instrument: Subject, max_qty: Decimal)
 predicate Price(instrument: Subject, px: Decimal)
+predicate Approved(instrument: Subject, max_qty: Decimal)
 predicate Order(order: Subject, instrument: Subject, qty: Decimal)
 define priced_within(instrument, qty):
     Price(instrument, px) and qty <= px
@@ -36,6 +37,10 @@ transformation quote(instrument, qty):
     admit Order(order, instrument, qty)
 transformation reprice(instrument, qty):
     bind current: Price(instrument, px)
+    let order = new Subject()
+    admit Order(order, instrument, qty)
+transformation place_approved(instrument, qty):
+    require approved: Mandate(actor, instrument, max_qty) and Approved(instrument, max_qty)
     let order = new Subject()
     admit Order(order, instrument, qty)
 "#;
@@ -219,4 +224,54 @@ fn explain_carries_the_witness_a_refusal_would() {
     };
     assert_eq!(gate.witness, witness);
     assert_eq!(gate.rule.as_deref(), Some("within_mandate"));
+}
+
+/// Two mandates survive the first conjunct and a positive claim kills
+/// both: the missing-claim walker, implemented apart from the failure
+/// walk, resolves the claim under the same context the witness names.
+#[test]
+fn the_missing_claim_is_resolved_under_the_context_the_witness_names() {
+    let state = State::from_claims(vec![
+        claim_instance("Mandate", &[subj("trader_t"), subj("power_q1"), dec(50)]),
+        claim_instance("Mandate", &[subj("trader_t"), subj("power_q1"), dec(70)]),
+    ]);
+    let t = transition("place_approved", vec![subj("power_q1"), dec(10)]);
+    let TracedProposal::Completed { outcome, trace } =
+        propose_with_trace(&desk(), &t, &state, &mut subjects(["o1"]))
+    else {
+        panic!("kernel error");
+    };
+    let Outcome::Rejected {
+        reason: RejectionReason::Require { witness, .. },
+    } = &outcome
+    else {
+        panic!("{outcome:?}");
+    };
+    let blamed = value(witness, "max_qty");
+    let EvalValue::Decimal(blamed_qty) = blamed else {
+        panic!("{blamed:?}");
+    };
+    let other = if *blamed_qty == 50.into() { "70" } else { "50" };
+    let missing = trace
+        .iter()
+        .find_map(|e| match e {
+            TraceEntry::Require {
+                outcome:
+                    morpholog_core::RequireOutcome::Rejected {
+                        directly_missing_claims,
+                        ..
+                    },
+                ..
+            } => Some(directly_missing_claims.clone()),
+            _ => None,
+        })
+        .expect("the refusing gate is in the trace");
+    assert_eq!(missing.len(), 1, "{missing:?}");
+    assert_eq!(missing[0].predicate.as_str(), "Approved");
+    assert!(
+        missing[0].rendered.contains(&blamed_qty.to_string())
+            && !missing[0].rendered.contains(other),
+        "the missing claim is resolved under the witness's context: {} vs {blamed_qty}",
+        missing[0].rendered
+    );
 }
