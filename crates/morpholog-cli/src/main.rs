@@ -180,10 +180,10 @@ enum Command {
     ///
     /// Replays the committed audit log under the candidate's invariants -
     /// which are NOT deployed - and reports, per invariant, which already-
-    /// admitted commits it would have refused: a fresh violation, where the
-    /// commit's resulting state violates an invariant the prior state
-    /// satisfied. The fitness signal for discovering controls nobody
-    /// hand-authored. Output is JSON. Scores state invariants only;
+    /// admitted commits it would have refused: exactly where admission
+    /// would have, over the cases each commit touched, so a rule checked
+    /// whole charges every commit after the first violation. The fitness
+    /// signal for discovering controls nobody hand-authored. Output is JSON. Scores state invariants only;
     /// transition-relational candidates using `pre(...)` are rejected.
     Evaluate(EvaluateArgs),
 

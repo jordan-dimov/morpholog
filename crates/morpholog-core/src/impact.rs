@@ -4,18 +4,22 @@
 //! cases.
 //!
 //! When in doubt, the answer widens toward the whole invariant; it never
-//! misses a touched case. A non-empty delta against a body holding `pre`,
-//! `or`, `xor`, membership, or any value form but a term and a
-//! term-targeted sum checks the whole invariant, and so does a defined
-//! call unless the plan was built with the definitions to follow. An empty
-//! delta touches nothing, whatever the body.
+//! misses a touched case. A delta against a body holding `pre`, `or`,
+//! `xor`, membership, a value lookup, a conditional value or a sum over
+//! an expression checks the whole invariant, and so does a defined call
+//! unless the plan was built with the definitions to follow. Arithmetic,
+//! an extremum or a builtin over terms reads nothing, so it widens
+//! nothing. A delta that touches no predicate a state rule reads leaves
+//! the rule's truth where it was, whatever its shape; a rule over `pre`
+//! judges the change itself, so only an empty delta escapes it.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rust_decimal::Decimal;
 
+use crate::analysis::predicates_referenced_by_prop;
 use crate::definitions::DefinitionTable;
-use crate::fold::{Node, walk_prop};
+use crate::fold::{Node, mentions_pre, walk_prop};
 use crate::ir::{
     Definition, DefinitionName, Invariant, PredicateName, Prop, Term, Value, ValueExpr, Var,
 };
@@ -62,6 +66,11 @@ pub struct ImpactPlan {
     occurrences: Vec<Occurrence>,
     /// The body holds a construct the bounding proof does not cover.
     conservative: bool,
+    /// Every predicate the body reads, through its calls, when a delta
+    /// outside it can be dismissed: `None` when a call was not followed,
+    /// so the set is not known, or the body reads `pre`, so the rule
+    /// judges the change and not the state.
+    footprint: Option<BTreeSet<PredicateName>>,
 }
 
 impl ImpactPlan {
@@ -71,6 +80,7 @@ impl ImpactPlan {
         let case_vars = candidate_case_variables(&inv.body);
         let mut occurrences = Vec::new();
         let mut conservative = false;
+        let mut calls = false;
         walk_prop(&inv.body, &mut |n| match classify_node(&n) {
             NodeKind::Claim(predicate, args) => {
                 let mut guards = Vec::new();
@@ -88,12 +98,17 @@ impl ImpactPlan {
                     var_map,
                 });
             }
-            NodeKind::Call(..) | NodeKind::Widens => conservative = true,
+            NodeKind::Call(..) => {
+                conservative = true;
+                calls = true;
+            }
+            NodeKind::Widens => conservative = true,
             NodeKind::Inert => {}
         });
         Self {
             occurrences,
             conservative,
+            footprint: if calls { None } else { footprint_of(inv, &[]) },
         }
     }
 
@@ -110,6 +125,7 @@ impl ImpactPlan {
         let mut out = Self {
             occurrences: Vec::new(),
             conservative: false,
+            footprint: footprint_of(inv, definitions),
         };
         let table = DefinitionTable::new(definitions);
         follow(&inv.body, &frame, table, &mut BTreeSet::new(), &mut out);
@@ -160,7 +176,20 @@ impl ImpactPlan {
             return Impact::Untouched;
         }
         if self.conservative {
-            return Impact::Unbounded;
+            // A delta outside everything the body reads changes no claim
+            // the body can see, so the truth it had over the pre-state is
+            // its truth over the candidate, whatever the shape.
+            let outside = self.footprint.as_ref().is_some_and(|footprint| {
+                asserted
+                    .iter()
+                    .chain(retracted)
+                    .all(|claim| !footprint.contains(&claim.predicate))
+            });
+            return if outside {
+                Impact::Untouched
+            } else {
+                Impact::Unbounded
+            };
         }
         // Occurrence order, deduplicated through the set so a large delta
         // stays linear in its distinct cases.
@@ -275,6 +304,7 @@ fn follow(
         // that only reads; here nothing would be unsound.
         if !followed {
             out.conservative = true;
+            out.footprint = None;
         }
     }
 }
@@ -305,7 +335,14 @@ fn classify_node<'a>(n: &Node<'a>) -> NodeKind<'a> {
             | Prop::Neq(_, _)
             | Prop::Compare { .. },
         ) => NodeKind::Inert,
-        Node::Value(ValueExpr::Term(_)) => NodeKind::Inert,
+        // Arithmetic, an extremum and a builtin read nothing themselves;
+        // their children are walked on their own.
+        Node::Value(
+            ValueExpr::Term(_)
+            | ValueExpr::Arith { .. }
+            | ValueExpr::Extremum { .. }
+            | ValueExpr::Call { .. },
+        ) => NodeKind::Inert,
         Node::Value(ValueExpr::Sum { value, .. }) => {
             if matches!(**value, ValueExpr::Term(_)) {
                 NodeKind::Inert
@@ -313,15 +350,20 @@ fn classify_node<'a>(n: &Node<'a>) -> NodeKind<'a> {
                 NodeKind::Widens
             }
         }
-        Node::Value(
-            ValueExpr::Arith { .. }
-            | ValueExpr::ValueOf { .. }
-            | ValueExpr::Extremum { .. }
-            | ValueExpr::Cond { .. }
-            | ValueExpr::Call { .. },
-        ) => NodeKind::Widens,
+        Node::Value(ValueExpr::ValueOf { .. } | ValueExpr::Cond { .. }) => NodeKind::Widens,
         Node::Stmt(_) | Node::Slot(_) | Node::Binder(_) => NodeKind::Inert,
     }
+}
+
+/// Every predicate a state rule reads, through its definitions; nothing
+/// for a rule over `pre`, which no delta outside its reads escapes.
+fn footprint_of(inv: &Invariant, definitions: &[Definition]) -> Option<BTreeSet<PredicateName>> {
+    if mentions_pre(&inv.body) {
+        return None;
+    }
+    let mut out = BTreeSet::new();
+    predicates_referenced_by_prop(&inv.body, definitions, &mut out);
+    Some(out)
 }
 
 /// The case variables: those the top-level antecedent's claim patterns

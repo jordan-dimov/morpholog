@@ -213,7 +213,7 @@ async fn a_receipt_recomputes_from_any_form_of_the_pack_and_agrees_with_the_live
     let world = World::new().await;
     let receipt = &world.receipt;
     assert_eq!(receipt["receipt_format_version"], 1);
-    assert_eq!(receipt["semantics_version"], 1);
+    assert_eq!(receipt["semantics_version"], 2);
     assert_eq!(receipt["checkpoint"]["tree_size"], 7);
     assert_eq!(
         receipt["query"],
@@ -452,11 +452,11 @@ async fn a_receipt_whose_statement_does_not_recompute_is_refused_by_layer() {
 
     // Another semantics, with every other layer holding, is not
     // re-evaluated rather than reported as a mismatch.
-    let (passed, report) = world.edited(|r| r["semantics_version"] = json!(2));
+    let (passed, report) = world.edited(|r| r["semantics_version"] = json!(99));
     assert!(!passed);
     assert_eq!(
         report["evaluation"],
-        json!({"status": "not_re_evaluated", "receipt_semantics": 2, "binary_semantics": 1})
+        json!({"status": "not_re_evaluated", "receipt_semantics": 99, "binary_semantics": 2})
     );
     assert_eq!(report["program"]["status"], "matches");
 

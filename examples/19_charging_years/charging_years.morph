@@ -75,7 +75,7 @@ invariant runs_run_forwards:
 -- computed inside the rule, each time - there is no stored boundary
 -- date anyone maintains, and no prevalidation to skip.
 invariant runs_stay_inside_one_charging_year:
-    BillingRun(_, starts_on, ends_on, _, _)
+    BillingRun(run, starts_on, ends_on, _, _)
     implies period_index(charging_epoch, span(P1Y), starts_on) = period_index(charging_epoch, span(P1Y), ends_on)
 
 -- The recorded year is the record's own computation - the same
@@ -83,7 +83,7 @@ invariant runs_stay_inside_one_charging_year:
 -- caller never chooses the figure, and a figure that disagrees by
 -- one cannot commit.
 invariant runs_record_their_own_charging_year:
-    BillingRun(_, starts_on, _, charging_year, _)
+    BillingRun(run, starts_on, _, charging_year, _)
     implies charging_year = charging_epoch_year + period_index(charging_epoch, span(P1Y), starts_on)
 
 -- The rule this example exists for: the sheet a run RECORDS must be

@@ -187,13 +187,15 @@ async fn the_first_violation_in_programme_order_is_named_whichever_evaluator_own
 
 /// An error in one evaluator and a violation in the other, in both
 /// declaration orders: the earlier wins, error or rejection, as in the
-/// kernel. The seeded ceiling figures make the sum and the addition
-/// raise; the act's amount makes the violations fire.
+/// kernel. The seeded ceiling figures make the whole-state sum raise;
+/// the act's own ceiling figure makes the addition raise, since the
+/// addition is checked over the act's case alone; the act's amount makes
+/// the violations fire.
 #[tokio::test]
 async fn the_first_error_or_violation_in_programme_order_wins_across_evaluators() {
     let pool = test_pool().await;
     let seeded = vec![big("x", MAX), big("y", MAX)];
-    let args = vec![subj("a"), dec("11"), dec("1")];
+    let args = vec![subj("a"), dec("11"), dec(MAX)];
     for order in [
         ["c_err", "i_viol"],
         ["i_viol", "c_err"],
@@ -236,11 +238,11 @@ async fn a_kernel_error_after_the_write_leaves_nothing_behind() {
         count(&pool, "SELECT count(*) FROM morpholog.rejections").await,
     );
     assert_eq!(before, (1, 0, 0, 0));
-    // Within the compiled bound and touching Big, so the interpreted run
-    // raises on the seeded ceiling figure after the write.
+    // Within the compiled bound; the act's own ceiling figure makes the
+    // interpreted run raise, after the write.
     let transition = Transition {
         transformation_name: "both".into(),
-        args: vec![subj("a"), dec("1"), dec("1")],
+        args: vec![subj("a"), dec("1"), dec(MAX)],
         actor: test_actor(),
     };
     let outcome = propose_against_pg(&pool, &mixed, &Proposal::gateway(&transition)).await;
