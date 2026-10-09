@@ -9,7 +9,7 @@ credential somebody left lying around, or a login a person uses by hand.
 
 So the loop closes. The venue's own record of what it accepted comes
 back in as claims, admitted like any other, and a deterministic read
-compares it with what this record authorised. Four findings come out,
+compares it with what this record authorised. Five findings come out,
 and one of them is the point: an order the venue reports that no
 admitted act authorised. Prevention may have been bypassed elsewhere.
 The venue's own record exposes it, provided this record is willing to
@@ -20,7 +20,11 @@ the bypass uncommittable here while leaving it done at the venue.
 Three parties act on the record, each bound to its own database login,
 so that none can speak another's name: an operator who appoints the
 other two, the agent, and a reporter who brings the venue's reports in.
-The executor is a fourth party that never proposes.
+The executor is a fourth party that never proposes. The operator is
+the trust root, and the first act appoints it: that act belongs to the
+deployment, before any untrusted party can propose at all, because
+whoever makes it names the only login that can act as the operator
+afterwards.
 
 ## The programme at a glance
 

@@ -19,8 +19,8 @@
 -- The venue, though, keeps its own record of every order it accepted.
 -- This example closes the loop: the venue's report comes back in as
 -- claims, admitted like any other, and a deterministic read compares
--- what the venue says happened with what this record authorised. Four
--- outcomes come out of that comparison. One matters more than the
+-- what the venue says happened with what this record authorised. Five
+-- findings come out of that comparison. One matters more than the
 -- rest: an order the venue reports that no admitted act authorised.
 -- The record cannot have prevented it. It can expose it.
 --
@@ -168,7 +168,7 @@ transformation observe_venue_report(venue, sequence, order_ref, venue_order_id, 
     let report = new Subject()
     admit VenueReport(report, venue, sequence, order_ref, venue_order_id, instrument, side, qty, price)
 
--- The reconciliation: four reads over the two records, each a finding
+-- The reconciliation: five reads over the two records, each a finding
 -- per row, none of them stored. They are computed from the admitted
 -- claims whenever asked, so the answer as of any committed history is
 -- the same answer every time, and a receipt can be issued over it.

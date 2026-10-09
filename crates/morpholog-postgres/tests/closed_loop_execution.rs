@@ -107,13 +107,16 @@ struct Attempt {
 
 /// The custodied executor: the only holder of the venue credential. It
 /// sends each admitted intent as a client order whose reference is the
-/// order's own subject, and decides nothing.
+/// order's own subject, and decides nothing. It is configured for one
+/// venue and fails closed on an intent that names another: the intent's
+/// arguments never choose where the credential is used.
 ///
 /// `crash_after_accept` models the ambiguous-success window once: the
 /// venue accepts, then the worker loses its lease before the record
 /// notes delivery. `scale_qty` models a tampered executor.
 struct Executor {
     venue: Arc<Venue>,
+    venue_name: String,
     attempts: Mutex<Vec<Attempt>>,
     crash_after_accept: Mutex<Option<PgPool>>,
     scale_qty: i64,
@@ -123,6 +126,7 @@ impl Executor {
     fn new(venue: &Arc<Venue>) -> Self {
         Self {
             venue: Arc::clone(venue),
+            venue_name: VENUE.to_string(),
             attempts: Mutex::new(Vec::new()),
             crash_after_accept: Mutex::new(None),
             scale_qty: 1,
@@ -145,9 +149,18 @@ fn text(value: &EvalValue) -> String {
 impl Deliverer for Executor {
     async fn deliver(&self, row: &OutboxRow) -> DeliveryOutcome {
         assert_eq!(row.intent_type, INTENT_TYPE);
-        let [order, _venue, instrument, side, qty, price] = row.arguments.as_slice() else {
+        let [order, venue, instrument, side, qty, price] = row.arguments.as_slice() else {
             panic!("PlaceOrder carries six arguments, got {:?}", row.arguments);
         };
+        if text(venue) != self.venue_name {
+            return DeliveryOutcome::NonRetryable {
+                reason: format!(
+                    "this executor places orders at {} only; the intent names {}",
+                    self.venue_name,
+                    text(venue)
+                ),
+            };
+        }
         let client_ref = text(order);
         let qty = match qty {
             EvalValue::Decimal(d) => (d * rust_decimal::Decimal::from(self.scale_qty))
@@ -484,11 +497,62 @@ async fn a_lease_lost_after_the_venue_accepted_is_redelivered_with_the_same_iden
     assert!(finding(&pool, "Unauthorised").await.is_empty());
 }
 
+#[tokio::test]
+async fn an_order_for_a_venue_the_executor_is_not_configured_for_fails_closed() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    desk(&pool).await;
+    commit_as(
+        &pool,
+        &cle::declare_venue(),
+        vec![subj("other_venue")],
+        OPERATOR,
+    )
+    .await;
+    let venue = Arc::new(Venue::default());
+    let executor = Executor::new(&venue);
+
+    let outcome = propose_pg_as(
+        &pool,
+        &program(),
+        &cle::place_order(),
+        vec![
+            subj("other_venue"),
+            subj(INSTRUMENT),
+            subj("buy"),
+            dec(10),
+            dec_str("48.5"),
+        ],
+        AGENT,
+    )
+    .await
+    .unwrap();
+    expect_committed(outcome);
+
+    let outcome = run_executor(&pool, "executor_a", &executor).await;
+    assert!(
+        matches!(&outcome, ProcessOutcome::Failed { reason, .. } if reason.contains("other_venue")),
+        "{outcome:?}"
+    );
+    assert!(
+        venue.orders().is_empty(),
+        "the configured venue never saw the order"
+    );
+    assert_eq!(outbox_status(&pool).await, vec!["failed".to_string()]);
+    assert!(executor.attempts().is_empty());
+}
+
 // ============================================================
 // A login cannot speak another party's name
 // ============================================================
 
 /// A pool that presents itself as `role`: one simulated gateway.
+///
+/// These roles are deliberately broad (every governed table, so that
+/// the proposal path runs end to end) to isolate one check: which login
+/// may assert which actor name. The test below says nothing about a
+/// login writing the tables directly; that is the least-privilege
+/// deployment `init` provisions, tested with it.
 async fn gateway_pool(role: &str) -> PgPool {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let url = morpholog_postgres::with_default_user(&url);
