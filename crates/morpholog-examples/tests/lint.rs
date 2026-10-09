@@ -1537,3 +1537,40 @@ transformation record(id, starts_at):
     );
     assert!(client_names(&clean).is_empty(), "{clean:?}");
 }
+
+/// A variable the append-only record already binds is a join key, not a
+/// figure the retractable claim supplies: the consequent reading it does
+/// not make the rule re-check history when the claim changes.
+#[test]
+fn a_join_key_read_in_the_consequent_is_not_a_compared_figure() {
+    let joined = DESK
+        .replace(
+            "predicate Entry(entry: Subject, risk: Decimal)",
+            "predicate Entry(entry: Subject, desk: Subject, risk: Decimal)",
+        )
+        .replace("    admit Entry(e, r)", "    admit Entry(e, #desk, r)")
+        .replace(
+            "transformation record(e, r):",
+            "transformation record(e, r):\n    require Open(#desk)",
+        );
+    let silent = lints_of(&joined.replace(
+        "RULE",
+        "approved_entries: Entry(e, desk, _) and Limit(desk, cap) implies Open(desk)",
+    ));
+    assert!(rechecks(&silent).is_empty(), "{silent:?}");
+    let fires = lints_of(&joined.replace(
+        "RULE",
+        "risk_within_limit: Entry(e, desk, risk) and Limit(desk, cap) implies risk <= cap",
+    ));
+    assert_eq!(rechecks(&fires), [("Entry", "Limit")]);
+}
+
+/// Two patterns of one retractable predicate: the first supplies nothing
+/// the consequent compares, the second does, and the hint names it once.
+#[test]
+fn a_later_pattern_of_the_same_predicate_still_fires_once() {
+    let found = lints_of(&desk(
+        "risk_within_limit: Entry(e, risk) and Limit(d, _) and Limit(_, cap) implies risk <= cap",
+    ));
+    assert_eq!(rechecks(&found), [("Entry", "Limit")]);
+}

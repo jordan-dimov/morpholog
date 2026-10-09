@@ -547,8 +547,11 @@ fn client_name_findings(program: &Program, out: &mut Vec<Lint>) {
 }
 
 /// The third gate-vs-invariant shape: an append-only record and a
-/// retractable claim joined in the antecedent, the consequent reading
-/// what the retractable pattern binds. Once per retractable predicate.
+/// retractable claim joined in the antecedent, the consequent comparing
+/// a value the retractable pattern introduces. A variable the append-only
+/// patterns also bind is a join key, not a figure: changing the claim
+/// cannot move the rule's truth through it. Once per retractable
+/// predicate, at the first pattern that supplies such a value.
 fn change_rechecks_history_findings(
     inv: &Invariant,
     implications: &[CollectedImplication<'_>],
@@ -567,23 +570,21 @@ fn change_rechecks_history_findings(
         else {
             continue;
         };
+        let join_keys: BTreeSet<&crate::ir::Var> = patterns
+            .iter()
+            .filter(|(p, _)| append_only.contains(*p))
+            .flat_map(|(_, args)| pattern_vars(args))
+            .collect();
+        let compared = compared_vars(implication.consequent);
         let mut reported: BTreeSet<&PredicateName> = BTreeSet::new();
         for (predicate, args) in &patterns {
-            if append_only.contains(*predicate) || !reported.insert(predicate) {
+            if append_only.contains(*predicate) || reported.contains(predicate) {
                 continue;
             }
-            let bound: Vec<&crate::ir::Var> = args
-                .iter()
-                .filter_map(|t| match t {
-                    Term::Var(v) => Some(v),
-                    _ => None,
-                })
-                .collect();
-            let read = crate::fold::any_term_in_prop(
-                implication.consequent,
-                &|t, _| matches!(t, Term::Var(v) if bound.contains(&v)),
-            );
-            if read {
+            let introduces_a_compared_figure =
+                pattern_vars(args).any(|v| !join_keys.contains(v) && compared.contains(v));
+            if introduces_a_compared_figure {
+                reported.insert(predicate);
                 out.push(Lint::ChangeRechecksHistory {
                     invariant: inv.name.to_string(),
                     append_only: first_append_only.to_string(),
@@ -592,6 +593,36 @@ fn change_rechecks_history_findings(
             }
         }
     }
+}
+
+/// The variables a claim pattern names.
+fn pattern_vars(args: &[Term]) -> impl Iterator<Item = &crate::ir::Var> {
+    args.iter().filter_map(|t| match t {
+        Term::Var(v) => Some(v),
+        _ => None,
+    })
+}
+
+/// The variables a proposition compares: those named inside the operands
+/// of its comparisons and equalities, anywhere in it.
+fn compared_vars(prop: &Prop) -> BTreeSet<&crate::ir::Var> {
+    let mut out = BTreeSet::new();
+    crate::fold::walk_prop(prop, &mut |node| {
+        let operands: &[&ValueExpr] = match node {
+            crate::fold::Node::Prop(Prop::Compare { left, right, .. })
+            | crate::fold::Node::Prop(Prop::Eq(left, right))
+            | crate::fold::Node::Prop(Prop::Neq(left, right)) => &[left, right],
+            _ => return,
+        };
+        for operand in operands {
+            crate::fold::walk_value(operand, &mut |n| {
+                if let crate::fold::Node::Value(ValueExpr::Term(Term::Var(v))) = n {
+                    out.insert(v);
+                }
+            });
+        }
+    });
+    out
 }
 
 /// The claim patterns an antecedent asserts positively, written in it
