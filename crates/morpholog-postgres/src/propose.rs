@@ -685,8 +685,9 @@ pub(crate) async fn record_refusal(
         .await
         .map_err(|e| PgError::RejectionLogFailure(Box::new(e)))?;
     let witness = match reason {
-        RejectionReason::Invariant { witness, .. } => witness.clone(),
-        RejectionReason::Require { .. } | RejectionReason::BindNone { .. } => Vec::new(),
+        RejectionReason::Invariant { witness, .. }
+        | RejectionReason::Require { witness, .. }
+        | RejectionReason::BindNone { witness, .. } => witness.clone(),
     };
     Ok(Refusal {
         reason: reason.to_string(),
@@ -1026,12 +1027,12 @@ pub(crate) async fn write_rejection(
         // A named gate stores its name, so refusals group by cause. An
         // unnamed one stores the rendered expression: unstable, but better
         // than nothing in an operational log.
-        RejectionReason::Require { name, rendered } => (
+        RejectionReason::Require { name, rendered, .. } => (
             REJECTION_KIND_REQUIRE,
             name.as_ref().map_or(rendered.as_str(), RuleName::as_str),
             None,
         ),
-        RejectionReason::BindNone { name, rendered } => (
+        RejectionReason::BindNone { name, rendered, .. } => (
             REJECTION_KIND_BIND,
             name.as_ref().map_or(rendered.as_str(), RuleName::as_str),
             None,
@@ -1039,7 +1040,11 @@ pub(crate) async fn write_rejection(
     };
     // NULL, not `[]`: "none captured", not "captured, empty".
     let witness_json: Option<serde_json::Value> = match reason {
-        RejectionReason::Invariant { witness, .. } if !witness.is_empty() => {
+        RejectionReason::Invariant { witness, .. }
+        | RejectionReason::Require { witness, .. }
+        | RejectionReason::BindNone { witness, .. }
+            if !witness.is_empty() =>
+        {
             Some(serde_json::to_value(witness).map_err(PgError::Encoding)?)
         }
         _ => None,

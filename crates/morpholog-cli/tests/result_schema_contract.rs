@@ -266,6 +266,14 @@ fn run_outcomes_serialize_as_pinned() {
     assert_golden("committed.json", &to_value(&committed_outcome()));
     assert_golden("rejected.json", &to_value(&rejected_outcome()));
     assert_golden(
+        "rejected_gate_with_witness.json",
+        &to_value(&PgProposalOutcome::Rejected {
+            reason: "require `within_approval_limit` failed: ApprovalLimit(actor, doc, limit) and amount <= limit did not hold over pre-state".to_string(),
+            rule: Some("within_approval_limit".to_string()),
+            witness: gate_witness_sample(),
+        }),
+    );
+    assert_golden(
         "rejected_with_witness.json",
         &to_value(&rejected_with_witness_outcome()),
     );
@@ -572,6 +580,31 @@ fn rejection_rows_serialize_as_pinned() {
         ..base
     };
     assert_golden("rejection_row_gate.json", &to_value(&gate));
+    // A gate refusal judged under bindings keeps them, as an invariant's
+    // row keeps its witness.
+    let gate_with_witness = morpholog_postgres::RejectionRow {
+        witness: Some(gate_witness_sample()),
+        ..gate
+    };
+    assert_golden(
+        "rejection_row_gate_with_witness.json",
+        &to_value(&gate_with_witness),
+    );
+}
+
+/// The witness a refused gate carries: the parameters and what the
+/// conjuncts before the failing one bound.
+fn gate_witness_sample() -> Vec<WitnessBinding> {
+    vec![
+        WitnessBinding {
+            var: "doc".into(),
+            value: EvalValue::Subject(Subject::from("inv_1")),
+        },
+        WitnessBinding {
+            var: "limit".into(),
+            value: EvalValue::Decimal(Decimal::from(5000)),
+        },
+    ]
 }
 
 fn provisioned_index(
@@ -2451,7 +2484,7 @@ fn every_trace_arm_appears_in_a_golden() {
 /// A gate refusal carrying an invariant version or a witness is not a row
 /// the writer can produce, so the schema must refuse it.
 #[test]
-fn a_gate_row_cannot_carry_invariant_only_fields() {
+fn a_gate_row_cannot_carry_an_invariant_version() {
     let schema = result_schema();
     let defs = schema.get("$defs").expect("$defs");
     let def = defs.get("rejection_row").expect("rejection_row");
@@ -2468,16 +2501,14 @@ fn a_gate_row_cannot_carry_invariant_only_fields() {
         "a gate refusal with an invariant version must not validate"
     );
 
-    let mut gate: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(golden_dir().join("rejection_row_gate.json")).unwrap(),
+    // A gate refusal carries the bindings it was judged under, and the
+    // schema admits them; its golden with one validates as it stands.
+    let with_witness: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(golden_dir().join("rejection_row_gate_with_witness.json"))
+            .unwrap(),
     )
     .unwrap();
-    gate["witness"] =
-        serde_json::json!([{ "var": "x", "value": { "type": "subject", "value": "a" } }]);
-    assert!(
-        validate(&gate, def, defs, "rejection_row").is_err(),
-        "a gate refusal with a witness must not validate"
-    );
+    validate(&with_witness, def, defs, "rejection_row").expect("a gate row with a witness");
 }
 
 /// No golden carries an empty `witness`. Absent means nothing was
@@ -2915,13 +2946,13 @@ fn the_manual_schema_intent_ledger_holds() {
     let ledger: Vec<(Intent, &str, bool)> = vec![
         (
             Intent::StricterThanRust,
-            "rejection_row: a gate row cannot carry invariant-only fields (the Rust struct holds independent options)",
+            "rejection_row: a gate row cannot carry an invariant version (the Rust struct holds an independent option)",
             defs["rejection_row"]["oneOf"]
                 .as_array()
                 .is_some_and(|arms| {
                     arms.iter().any(|arm| {
                         let props = &arm["properties"];
-                        props.get("invariant_version").is_none() && props.get("witness").is_none()
+                        props.get("invariant_version").is_none() && props.get("witness").is_some()
                     })
                 }),
         ),

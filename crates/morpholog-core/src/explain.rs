@@ -20,8 +20,8 @@ use crate::analysis::transformations_asserting;
 use crate::eval::{RenderedClaim, render_eval_value};
 use crate::ir::Program;
 use crate::propose::{
-    BindOneOutcome, Outcome, RequireOutcome, SubjectSource, TraceEntry, TracedProposal, Transition,
-    propose_with_trace,
+    BindOneOutcome, Outcome, RejectionReason, RequireOutcome, SubjectSource, TraceEntry,
+    TracedProposal, Transition, WitnessBinding, propose_with_trace,
 };
 use crate::state::State;
 
@@ -79,6 +79,11 @@ pub struct GateRejection {
     /// failed on something other than a missing positive claim (a present
     /// blocker, a comparison).
     pub directly_missing_claims: Vec<MissingClaim>,
+    /// The bindings the failing part was judged under, as a refusal of
+    /// this proposal would carry them. The same walk, so a dry run and
+    /// a refusal say the same values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub witness: Vec<WitnessBinding>,
 }
 
 /// Which kind of gate rejected.
@@ -165,7 +170,7 @@ pub(crate) fn explain(
         TracedProposal::Completed {
             outcome: Outcome::Rejected { reason },
             trace,
-        } => verdict_from_rejection(program, &reason.to_string(), &trace),
+        } => verdict_from_rejection(program, &reason, &trace),
     };
 
     Explanation {
@@ -231,9 +236,21 @@ impl Explanation {
 }
 
 /// Map the failing trace entry onto a structured rejection. The kernel
-/// stops at the first failure, so there is one. `reason` is a fallback
-/// for the case where none is found, which should not happen.
-fn verdict_from_rejection(program: &Program, reason: &str, trace: &[TraceEntry]) -> Verdict {
+/// stops at the first failure, so there is one. The witness comes from
+/// the reason itself, the one descent the refusal made; the trace
+/// supplies the missing claims. The reason's text is the fallback for
+/// the case where no entry is found, which should not happen.
+fn verdict_from_rejection(
+    program: &Program,
+    reason: &RejectionReason,
+    trace: &[TraceEntry],
+) -> Verdict {
+    let witness = match reason {
+        RejectionReason::Require { witness, .. } | RejectionReason::BindNone { witness, .. } => {
+            witness.clone()
+        }
+        RejectionReason::Invariant { .. } => Vec::new(),
+    };
     match failing_entry(trace) {
         Some(TraceEntry::Require {
             expression,
@@ -249,6 +266,7 @@ fn verdict_from_rejection(program: &Program, reason: &str, trace: &[TraceEntry])
             name.as_deref(),
             GateKind::Require,
             directly_missing_claims,
+            witness,
         ),
         Some(TraceEntry::BindOne {
             expression,
@@ -264,6 +282,7 @@ fn verdict_from_rejection(program: &Program, reason: &str, trace: &[TraceEntry])
             name.as_deref(),
             GateKind::BindOne,
             directly_missing_claims,
+            witness,
         ),
         Some(TraceEntry::InvariantCheck {
             name, expression, ..
@@ -285,6 +304,7 @@ fn gate_verdict(
     rule: Option<&str>,
     statement_kind: GateKind,
     missing: &[RenderedClaim],
+    witness: Vec<WitnessBinding>,
 ) -> Verdict {
     let directly_missing_claims = missing
         .iter()
@@ -302,6 +322,7 @@ fn gate_verdict(
         rule: rule.map(ToString::to_string),
         statement_kind,
         directly_missing_claims,
+        witness,
     }))
 }
 

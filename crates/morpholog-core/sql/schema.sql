@@ -426,12 +426,6 @@ CREATE TABLE rejections (
     -- the operational evidence either way.
     CONSTRAINT rejections_kind_version_agree CHECK (
         (kind = 'invariant') = (invariant_version IS NOT NULL)
-    ),
-    -- Only an invariant refusal has values to report: a gate refusal fails
-    -- over the pre-state with no iteration to blame, so a witness on one
-    -- would be evidence from nowhere.
-    CONSTRAINT rejections_witness_is_invariant_only CHECK (
-        witness IS NULL OR kind = 'invariant'
     )
 );
 
@@ -632,4 +626,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (20, 'audit_model_hash'),
     (21, 'audit_semantics_version'),
     (22, 'audit_drawn_subjects'),
-    (23, 'deployment_roles');
+    (23, 'deployment_roles'),
+    (24, 'gate_witness');

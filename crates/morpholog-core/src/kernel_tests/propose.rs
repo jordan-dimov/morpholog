@@ -124,6 +124,7 @@ fn rejection_reason_display_strings_are_pinned() {
         RejectionReason::Require {
             name: None,
             rendered: "Approved(doc)".into(),
+            witness: vec![],
         }
         .to_string(),
         "require failed: Approved(doc) did not hold over pre-state"
@@ -134,6 +135,7 @@ fn rejection_reason_display_strings_are_pinned() {
         RejectionReason::Require {
             name: Some("approval_on_file".into()),
             rendered: "Approved(doc)".into(),
+            witness: vec![],
         }
         .to_string(),
         "require `approval_on_file` failed: Approved(doc) did not hold over pre-state"
@@ -142,6 +144,7 @@ fn rejection_reason_display_strings_are_pinned() {
         RejectionReason::BindNone {
             name: None,
             rendered: "Policy(policy_id, limit)".into(),
+            witness: vec![],
         }
         .to_string(),
         "bind_one failed: Policy(policy_id, limit) matched no candidates"
@@ -150,6 +153,7 @@ fn rejection_reason_display_strings_are_pinned() {
         RejectionReason::BindNone {
             name: Some("governing_policy".into()),
             rendered: "Policy(policy_id, limit)".into(),
+            witness: vec![],
         }
         .to_string(),
         "bind `governing_policy` failed: Policy(policy_id, limit) matched no candidates"

@@ -117,8 +117,8 @@ fn decision(result: &Result<Outcome, EvalError>) -> Value {
             } => json!({"invariant": {"name": name, "version": version, "witness": witness}}),
             // A gate's stable identity is its rule name; how the refusing
             // expression renders is diagnosis, not meaning.
-            RejectionReason::Require { name, rendered: _ } => json!({"require": {"rule": name}}),
-            RejectionReason::BindNone { name, rendered: _ } => json!({"bind": {"rule": name}}),
+            RejectionReason::Require { name, .. } => json!({"require": {"rule": name}}),
+            RejectionReason::BindNone { name, .. } => json!({"bind": {"rule": name}}),
         },
         Err(e) => error(e),
     }
