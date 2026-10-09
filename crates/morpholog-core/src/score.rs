@@ -27,9 +27,9 @@ use crate::state::State;
 /// Bumped when the report shape or the scoring semantics change
 /// incompatibly, so a stored result is never misread. New optional fields
 /// do not bump it.
-pub const SCORE_FORMAT_VERSION: u32 = 3;
+pub const SCORE_FORMAT_VERSION: u32 = 4;
 /// Names the exact scoring rule, so the report is self-describing.
-pub const SCORE_SEMANTICS: &str = "case_bound_admission_v3";
+pub const SCORE_SEMANTICS: &str = "case_bound_admission_v4";
 
 /// A candidate the scorer cannot evaluate.
 #[derive(Debug, thiserror::Error)]
@@ -529,7 +529,7 @@ mod tests {
         let program = no_flag_program();
         let report = scorer(&program).unwrap().into_report();
         assert_eq!(report.score_format_version, SCORE_FORMAT_VERSION);
-        assert_eq!(report.semantics, "case_bound_admission_v3");
+        assert_eq!(report.semantics, "case_bound_admission_v4");
         assert!(report.program_hash.starts_with("sha256:"));
         // Stable: the same programme hashes identically.
         let again = scorer(&no_flag_program()).unwrap().into_report();

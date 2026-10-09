@@ -10,7 +10,7 @@ use morpholog_core::ir_builder::{
     add, and, claim, dec as dec_term, defined, eq, implies, invariant, not, subj as lit_subject,
     sum, term, value_of, var, wildcard,
 };
-use morpholog_core::{EvalValue, Impact, ImpactPlan, Invariant};
+use morpholog_core::{EvalValue, Impact, ImpactPlan, Invariant, Var};
 use morpholog_test_support::{claim_instance, dec, subj};
 
 fn ledger_balance() -> Invariant {
@@ -160,7 +160,8 @@ fn a_value_lookup_is_a_state_dependency_the_plan_never_hides() {
         plan.classify(&[claim_instance("Q", &[subj("a"), dec(1)])], &[]),
         Impact::Unbounded
     );
-    // Arithmetic in a comparison is likewise outside the proven shapes.
+    // Arithmetic over the pattern's own term reads nothing more, so the
+    // case stays the claim's own.
     let arith = invariant(
         "computed",
         implies(
@@ -173,7 +174,7 @@ fn a_value_lookup_is_a_state_dependency_the_plan_never_hides() {
     );
     assert_eq!(
         ImpactPlan::new(&arith).classify(&[claim_instance("A", &[subj("a")])], &[]),
-        Impact::Unbounded
+        Impact::Bounded(vec![BTreeMap::from([(Var::from("x"), subj("a"))])])
     );
 }
 

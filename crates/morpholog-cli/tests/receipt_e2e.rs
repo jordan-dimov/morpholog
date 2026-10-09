@@ -213,7 +213,7 @@ async fn a_receipt_recomputes_from_any_form_of_the_pack_and_agrees_with_the_live
     let world = World::new().await;
     let receipt = &world.receipt;
     assert_eq!(receipt["receipt_format_version"], 1);
-    assert_eq!(receipt["semantics_version"], 1);
+    assert_eq!(receipt["semantics_version"], 2);
     assert_eq!(receipt["checkpoint"]["tree_size"], 7);
     assert_eq!(
         receipt["query"],
@@ -451,14 +451,19 @@ async fn a_receipt_whose_statement_does_not_recompute_is_refused_by_layer() {
     );
 
     // Another semantics, with every other layer holding, is not
-    // re-evaluated rather than reported as a mismatch.
-    let (passed, report) = world.edited(|r| r["semantics_version"] = json!(2));
-    assert!(!passed);
-    assert_eq!(
-        report["evaluation"],
-        json!({"status": "not_re_evaluated", "receipt_semantics": 2, "binary_semantics": 1})
-    );
-    assert_eq!(report["program"]["status"], "matches");
+    // re-evaluated rather than reported as a mismatch: the prior
+    // version a v0.0.14 receipt carries, and one this binary has never
+    // seen, alike. A receipt whose pack is in a prior format never gets
+    // this far; the evidence layer refuses the pack first.
+    for other in [1, 99] {
+        let (passed, report) = world.edited(|r| r["semantics_version"] = json!(other));
+        assert!(!passed);
+        assert_eq!(
+            report["evaluation"],
+            json!({"status": "not_re_evaluated", "receipt_semantics": other, "binary_semantics": 2})
+        );
+        assert_eq!(report["program"]["status"], "matches");
+    }
 
     // One representation only: reordered or repeated rows, a newer
     // format and an unknown field are malformed, not normalised.

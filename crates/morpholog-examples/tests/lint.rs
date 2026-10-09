@@ -1095,14 +1095,20 @@ fn without_a_declared_key_the_advice_is_conditional() {
     );
 }
 
-/// A builtin call makes admission check the whole invariant, so naming
-/// a field would narrow nothing.
+/// A disjunction makes admission check the whole invariant, so naming
+/// a field would narrow nothing. Arithmetic and a builtin over the
+/// pattern's own terms do not: a rule using them is bounded and hinted.
 #[test]
 fn a_rule_admission_checks_whole_gets_no_case_hint() {
     let whole = RUNS.replace(
         "PATTERN implies starts_on on_or_before ends_on",
+        "Run(_, starts_on, ends_on, _) implies (starts_on on_or_before ends_on or ends_on on_or_before starts_on)",
+    );
+    let bounded = RUNS.replace(
+        "PATTERN implies starts_on on_or_before ends_on",
         "Run(_, starts_on, ends_on, _) implies (starts_on - ends_on) <= abs(ends_on - starts_on)",
     );
+    assert_eq!(case_width(&bounded).len(), 1, "{:?}", lints_of(&bounded));
     assert!(case_width(&whole).is_empty(), "{:?}", lints_of(&whole));
 }
 
