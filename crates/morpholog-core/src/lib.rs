@@ -79,7 +79,10 @@ pub use ir::{
     Program, Prop, RuleName, Stmt, Subject, SumSeed, Term, Transformation, TransformationName,
     Unit, Value, ValueExpr, Var,
 };
-pub use lint::{Lint, SharedWriterPeer, lints, shared_writer_lints};
+pub use lint::{
+    Lint, PYTHON_CLIENT_MEMBERS, PYTHON_KEYWORDS, SharedWriterPeer, client_refuses_name, lints,
+    shared_writer_lints,
+};
 pub use prepared::PreparedProgram;
 pub use propose::{
     BindOneOutcome, ForIterationTrace, Outcome, RejectionReason, RequireOutcome, StagedDelta,

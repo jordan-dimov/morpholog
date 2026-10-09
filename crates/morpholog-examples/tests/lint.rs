@@ -27,6 +27,8 @@ fn unsupplied_missing(found: &[Lint]) -> Vec<&str> {
                 Some(missing.iter().map(String::as_str).collect())
             }
             Lint::GateVsInvariant { .. }
+            | Lint::ChangeRechecksHistory { .. }
+            | Lint::ClientName { .. }
             | Lint::GoverningSelectionWithoutTotality { .. }
             | Lint::EffectiveWithoutDeclaredTotality { .. }
             | Lint::SharedWriter { .. }
@@ -48,6 +50,8 @@ fn governing_finding(found: &[Lint]) -> Option<(&str, Vec<&str>)> {
             predicates.iter().map(String::as_str).collect(),
         )),
         Lint::GateVsInvariant { .. }
+        | Lint::ChangeRechecksHistory { .. }
+        | Lint::ClientName { .. }
         | Lint::UnsuppliedAntecedent { .. }
         | Lint::EffectiveWithoutDeclaredTotality { .. }
         | Lint::SharedWriter { .. }
@@ -1394,4 +1398,179 @@ transformation total(account):
 ",
     );
     assert_eq!(rematches(&found), vec![]);
+}
+
+// ============================================================
+// Change re-checks history: a retractable figure joined to history
+// ============================================================
+
+const DESK: &str = r#"
+program desk
+predicate Entry(entry: Subject, risk: Decimal)
+    unique by (entry)
+    append only
+predicate Limit(desk: Subject, cap: Decimal)
+    unique by (desk)
+predicate Open(desk: Subject)
+transformation record(e, r):
+    admit Entry(e, r)
+invariant RULE
+"#;
+
+fn desk(rule: &str) -> String {
+    DESK.replace("RULE", rule)
+}
+
+fn rechecks(found: &[Lint]) -> Vec<(&str, &str)> {
+    found
+        .iter()
+        .filter_map(|l| match l {
+            Lint::ChangeRechecksHistory {
+                append_only,
+                retractable,
+                ..
+            } => Some((append_only.as_str(), retractable.as_str())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The options desk's rule: a retractable limit compared against every
+/// entry ever admitted, so tightening it is refused by old entries.
+#[test]
+fn a_retractable_figure_compared_against_history_is_hinted() {
+    let found = lints_of(&desk(
+        "risk_within_limit: Entry(e, risk) and Limit(_, cap) implies risk <= cap",
+    ));
+    assert_eq!(rechecks(&found), [("Entry", "Limit")]);
+    let message = found[0].to_string();
+    assert!(
+        message.contains("joins retractable `Limit` with append-only `Entry`")
+            && message.contains("a gate on the act that admits `Entry`"),
+        "{message}"
+    );
+}
+
+/// Presence alone is not the shape: retracting the claim makes the rule
+/// vacuous for those records, and nothing is compared against them.
+#[test]
+fn a_retractable_claim_read_for_presence_only_is_not_hinted() {
+    let found = lints_of(&desk(
+        "entries_need_an_open_desk: Entry(e, _) and Open(d) implies Entry(e, _)",
+    ));
+    assert!(rechecks(&found).is_empty(), "{found:?}");
+}
+
+/// Two append-only records joined are history against history: nothing
+/// changes under them.
+#[test]
+fn two_append_only_records_are_not_hinted() {
+    let found = lints_of(
+        &desk("entries_agree: Entry(e, risk) and Entry(f, other) implies risk <= other").replace(
+            "predicate Limit(desk: Subject, cap: Decimal)\n    unique by (desk)\n",
+            "predicate Limit(desk: Subject, cap: Decimal)\n    unique by (desk)\n    append only\n",
+        ),
+    );
+    assert!(rechecks(&found).is_empty(), "{found:?}");
+    let found = lints_of(
+        &desk("risk_within_limit: Entry(e, risk) and Limit(_, cap) implies risk <= cap").replace(
+            "predicate Limit(desk: Subject, cap: Decimal)\n    unique by (desk)\n",
+            "predicate Limit(desk: Subject, cap: Decimal)\n    unique by (desk)\n    append only\n",
+        ),
+    );
+    assert!(
+        rechecks(&found).is_empty(),
+        "declaring the limit append only is one honest answer: {found:?}"
+    );
+}
+
+// ============================================================
+// Names the generated client refuses
+// ============================================================
+
+fn client_names(found: &[Lint]) -> Vec<(&str, &str)> {
+    found
+        .iter()
+        .filter_map(|l| match l {
+            Lint::ClientName { owner, name } => Some((owner.as_str(), name.as_str())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A Python keyword as a field or parameter is hinted at `check`, where
+/// `generate python-client` would refuse the whole programme later.
+#[test]
+fn a_python_keyword_as_a_declared_name_is_hinted_at_check() {
+    let found = lints_of(
+        r#"
+program names
+predicate Interval(id: Subject, from: Timestamp)
+intent Raised(id: Subject, class: Decimal)
+transformation record(id, from):
+    admit Interval(id, from)
+    emit Raised(id, 1)
+"#,
+    );
+    assert_eq!(
+        client_names(&found),
+        [
+            ("a field of predicate `Interval`", "from"),
+            ("a field of intent `Raised`", "class"),
+            ("a parameter of transformation `record`", "from"),
+        ]
+    );
+    assert!(
+        found[0]
+            .to_string()
+            .contains("`generate python-client` refuses"),
+        "{}",
+        found[0]
+    );
+    let clean = lints_of(
+        r#"
+program names
+predicate Interval(id: Subject, starts_at: Timestamp)
+transformation record(id, starts_at):
+    admit Interval(id, starts_at)
+"#,
+    );
+    assert!(client_names(&clean).is_empty(), "{clean:?}");
+}
+
+/// A variable the append-only record already binds is a join key, not a
+/// figure the retractable claim supplies: the consequent reading it does
+/// not make the rule re-check history when the claim changes.
+#[test]
+fn a_join_key_read_in_the_consequent_is_not_a_compared_figure() {
+    let joined = DESK
+        .replace(
+            "predicate Entry(entry: Subject, risk: Decimal)",
+            "predicate Entry(entry: Subject, desk: Subject, risk: Decimal)",
+        )
+        .replace("    admit Entry(e, r)", "    admit Entry(e, #desk, r)")
+        .replace(
+            "transformation record(e, r):",
+            "transformation record(e, r):\n    require Open(#desk)",
+        );
+    let silent = lints_of(&joined.replace(
+        "RULE",
+        "approved_entries: Entry(e, desk, _) and Limit(desk, cap) implies Open(desk)",
+    ));
+    assert!(rechecks(&silent).is_empty(), "{silent:?}");
+    let fires = lints_of(&joined.replace(
+        "RULE",
+        "risk_within_limit: Entry(e, desk, risk) and Limit(desk, cap) implies risk <= cap",
+    ));
+    assert_eq!(rechecks(&fires), [("Entry", "Limit")]);
+}
+
+/// Two patterns of one retractable predicate: the first supplies nothing
+/// the consequent compares, the second does, and the hint names it once.
+#[test]
+fn a_later_pattern_of_the_same_predicate_still_fires_once() {
+    let found = lints_of(&desk(
+        "risk_within_limit: Entry(e, risk) and Limit(d, _) and Limit(_, cap) implies risk <= cap",
+    ));
+    assert_eq!(rechecks(&found), [("Entry", "Limit")]);
 }

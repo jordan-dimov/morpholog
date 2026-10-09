@@ -88,6 +88,7 @@ predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
 predicate UseStarted(use: Subject, system: Subject, version: Subject, reference_db: Subject, started_at: Timestamp)
 predicate UseEnded(use: Subject, ended_at: Timestamp)
     unique by (use)
+    append only
 -- The statutory records are append only, and the model now SAYS so:
 -- no transformation can retract a recorded match, a verification, or
 -- a decision. The runtime refuses the retract statement at authoring

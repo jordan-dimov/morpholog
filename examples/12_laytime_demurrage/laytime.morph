@@ -83,7 +83,7 @@ predicate NorTendered(nor: Subject, voyage: Subject, tendered_at: Timestamp)
 -- instant.
 predicate LaytimeCommenced(voyage: Subject, commenced_at: Timestamp)
     unique by (voyage)
-predicate CountingInterval(interval: Subject, voyage: Subject, from: Timestamp, to: Timestamp, len: Duration)
+predicate CountingInterval(interval: Subject, voyage: Subject, starts_at: Timestamp, ends_at: Timestamp, len: Duration)
 predicate CargoOpsCompleted(voyage: Subject, completed_at: Timestamp)
 
 -- The cargo book: what the vessel may carry, and each parcel booked
@@ -199,12 +199,12 @@ transformation commence_laytime(voyage):
 -- earlier than commencement, and it must not end before it begins.
 -- The length is computed from the ends, and the invariant above
 -- guarantees it can never drift from them.
-transformation record_counting_interval(interval, voyage, from, to):
+transformation record_counting_interval(interval, voyage, starts_at, ends_at):
     bind LaytimeCommenced(voyage, commenced_at)
-    require commenced_at at_or_before from
-    require from at_or_before to
-    let len = to - from
-    admit CountingInterval(interval, voyage, from, to, len)
+    require commenced_at at_or_before starts_at
+    require starts_at at_or_before ends_at
+    let len = ends_at - starts_at
+    admit CountingInterval(interval, voyage, starts_at, ends_at, len)
 
 -- Cargo work is done. From this instant the counted total is final
 -- (in this stage of the model) and the demurrage conversation begins.
