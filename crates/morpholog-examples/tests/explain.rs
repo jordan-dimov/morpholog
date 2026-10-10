@@ -82,6 +82,9 @@ Rejected: approve_document(doc-42, contract) proposed by alice
 
 Gate not satisfied:
   MayApprove(actor, doc_type)
+  judged under:
+    doc_id = doc-42
+    doc_type = contract
 
 Directly missing claims:
   - MayApprove(alice, contract)
@@ -345,4 +348,71 @@ fn explanation_json_is_stable_and_round_trips() {
     // Round-trips back to an identical structured object.
     let parsed: morpholog_core::Explanation = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed, explanation);
+}
+
+// ============================================================
+// A dry run names the case a refusal would: the witness and the
+// comparison on an explained invariant are the refusal's, exactly.
+// ============================================================
+
+#[test]
+fn an_explained_invariant_carries_the_refusals_witness_and_comparison() {
+    use morpholog_core::{Outcome, RejectionReason};
+    use morpholog_examples::double_entry_ledger;
+    use morpholog_test_support::date;
+    use morpholog_test_support::propose;
+
+    let program = double_entry_ledger::program();
+    // A debit of 100 split into credits of 60 and 30.
+    let t = transition(
+        "post_split_entry",
+        vec![
+            subj("entry_002"),
+            date("2026-04-16"),
+            subj("q1_2026"),
+            subj("account_cash"),
+            dec(100),
+            subj("account_revenue"),
+            dec(60),
+            subj("account_fees"),
+            dec(30),
+        ],
+        "jordan",
+    );
+    let state = State::default();
+
+    let refused = propose(&program, &t, &state, &mut morpholog_test_support::fresh())
+        .expect("no kernel error");
+    let Outcome::Rejected {
+        reason:
+            RejectionReason::Invariant {
+                name,
+                witness,
+                compared,
+                ..
+            },
+    } = refused
+    else {
+        panic!("expected an invariant refusal, got {refused:?}");
+    };
+    assert_eq!(name.as_str(), "balanced_posted_entry");
+    assert_eq!(witness.len(), 1, "the entry is the case: {witness:?}");
+    assert!(compared.is_some(), "the balance is a comparison");
+
+    let explanation = explain(&program, &t, &state, &mut morpholog_test_support::fresh());
+    let Verdict::Rejected(Rejection::Invariant(inv)) = &explanation.verdict else {
+        panic!(
+            "expected an invariant rejection, got {:?}",
+            explanation.verdict
+        );
+    };
+    assert_eq!(inv.name, "balanced_posted_entry");
+    assert_eq!(inv.witness, witness, "the same walk, the same bindings");
+    assert_eq!(inv.compared, compared);
+    let rendered = explanation.render();
+    assert!(
+        rendered
+            .contains("  judged under:\n    entry = entry_002\n  compared: 100 = 90 did not hold"),
+        "the rendering names the case before the figures: {rendered}"
+    );
 }

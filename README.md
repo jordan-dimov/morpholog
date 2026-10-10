@@ -95,7 +95,7 @@ One word before going further. Morpholog calls a record a **claim**: something s
 - **A past that cannot shift.** Rules never read the clock or the network; anything the outside world decides, like a rate or a holiday calendar, comes in as a dated record. So any report can be rebuilt exactly as it stood at any past moment.
 - **Exact arithmetic.** Decimals with no rounding drift, exact times and durations, and amounts that carry their unit, so dollars never get added to tonnes.
 - **Several changes as one decision.** `morpholog transact` saves a group of proposals together, or none of them.
-- **Ask before you act.** `explain` runs the same rules against the current records and, when it would refuse, names the rule and the figures it compared, saving nothing: a dry run for an operator's tool, an automated agent or a test.
+- **Ask before you act.** `explain` runs the same rules against the current records and, when it would refuse, names the rule, the case and the figures it compared, saving nothing: a dry run for an operator's tool, an automated agent or a test.
 - **Notifications that respect the save.** Messages to other systems are sent only after a change is saved, by a separate worker, and never for a change that was refused.
 - **Rules you can read back.** Ask what the rules forbid (`inspect guarantees`) and what each action requires (`inspect controls`); later, which rules have ever actually done any work (`inspect coverage`), and what evidence a refusal is missing (`explain --json`).
 - **A tamper-evident history.** `audit verify` proves the history has not been edited. `audit export` writes a file someone else can check offline, against a 32-byte fingerprint you gave them in advance.

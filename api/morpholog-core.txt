@@ -2342,6 +2342,7 @@ pub struct morpholog_core::InvariantRejection
 pub morpholog_core::InvariantRejection::compared: core::option::Option<morpholog_core::Compared>
 pub morpholog_core::InvariantRejection::name: alloc::string::String
 pub morpholog_core::InvariantRejection::rule: alloc::string::String
+pub morpholog_core::InvariantRejection::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
 impl core::clone::Clone for morpholog_core::InvariantRejection
 pub fn morpholog_core::InvariantRejection::clone(&self) -> morpholog_core::InvariantRejection
 impl core::cmp::Eq for morpholog_core::InvariantRejection

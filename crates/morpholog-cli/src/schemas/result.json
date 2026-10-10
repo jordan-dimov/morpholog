@@ -544,6 +544,7 @@
             "kind": { "const": "invariant" },
             "name": { "type": "string" },
             "rule": { "type": "string" },
+            "witness": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/witness_binding" } },
             "compared": { "$ref": "#/$defs/compared" }
           }
         },

@@ -240,13 +240,24 @@ fn explanation_program() -> morpholog_core::Program {
             predicate("Account").subject("account_id").build(),
             predicate("Flag").subject("account_id").build(),
         ])
-        .invariants(vec![invariant(
-            "no_flagged_accounts",
-            implies(
-                claim("Account", vec![var("a")]),
-                not(claim("Flag", vec![var("a")])),
+        .invariants(vec![
+            invariant(
+                "no_flagged_accounts",
+                implies(
+                    claim("Account", vec![var("a")]),
+                    not(claim("Flag", vec![var("a")])),
+                ),
             ),
-        )])
+            // A top-level negation binds nothing, so its violation has no
+            // witness to carry.
+            invariant(
+                "acct_2_is_never_flagged",
+                not(claim(
+                    "Flag",
+                    vec![morpholog_core::ir_builder::subj("acct_2")],
+                )),
+            ),
+        ])
         .transformations(vec![
             transformation(
                 "flag_account",
@@ -590,6 +601,20 @@ fn explanations_serialize_as_pinned() {
     );
     assert_golden("explanation_gate_named.json", &to_value(&named));
     assert_golden("explanation_invariant.json", &to_value(&invariant_violated));
+    let no_witness = explain(
+        &p,
+        &Transition {
+            transformation_name: "flag_account".into(),
+            args: vec![EvalValue::Subject(Subject::from("acct_2"))],
+            actor: Subject::from("alex"),
+        },
+        &State::from_claims(vec![]),
+        &mut morpholog_postgres::runtime_subjects(),
+    );
+    assert_golden(
+        "explanation_invariant_no_witness.json",
+        &to_value(&no_witness),
+    );
     assert_golden("explanation_error.json", &to_value(&error));
 }
 
@@ -2683,6 +2708,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("explanation_gate.json", "explanation"),
         ("explanation_gate_named.json", "explanation"),
         ("explanation_invariant.json", "explanation"),
+        ("explanation_invariant_no_witness.json", "explanation"),
         ("explanation_error.json", "explanation"),
         ("outbox_row.json", "outbox_row"),
         ("migration_report_behind.json", "migration_report"),

@@ -106,6 +106,11 @@ pub enum GateKind {
 pub struct InvariantRejection {
     pub name: String,
     pub rule: String,
+    /// The bindings at the violation, as a refusal of this proposal
+    /// would carry them: the same walk, so a dry run and a refusal name
+    /// the same case. Empty when the failing part binds nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub witness: Vec<WitnessBinding>,
     /// The comparison the diagnosis blamed, with its two values, as a
     /// refusal of this proposal would carry it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,6 +211,7 @@ impl Explanation {
                 match rejection {
                     Rejection::Gate(gate) => {
                         s.push_str(&format!("\nGate not satisfied:\n  {}\n", gate.gate));
+                        push_witness(&mut s, &gate.witness);
                         if let Some(c) = &gate.compared {
                             s.push_str(&format!("{}\n", compared_line(c)));
                         }
@@ -232,6 +238,7 @@ impl Explanation {
                             "\nWould violate invariant `{}`:\n  {}\n",
                             inv.name, inv.rule,
                         ));
+                        push_witness(&mut s, &inv.witness);
                         if let Some(c) = &inv.compared {
                             s.push_str(&format!("{}\n", compared_line(c)));
                         }
@@ -262,10 +269,9 @@ fn verdict_from_rejection(
     trace: &[TraceEntry],
 ) -> Verdict {
     let witness = match reason {
-        RejectionReason::Require { witness, .. } | RejectionReason::BindNone { witness, .. } => {
-            witness.clone()
-        }
-        RejectionReason::Invariant { .. } => Vec::new(),
+        RejectionReason::Require { witness, .. }
+        | RejectionReason::BindNone { witness, .. }
+        | RejectionReason::Invariant { witness, .. } => witness.clone(),
     };
     let compared = match reason {
         RejectionReason::Require { compared, .. }
@@ -312,6 +318,7 @@ fn verdict_from_rejection(
         }) => Verdict::Rejected(Rejection::Invariant(InvariantRejection {
             name: name.to_string(),
             rule: expression.clone(),
+            witness,
             compared,
         })),
         _ => Verdict::Rejected(Rejection::Error(ErrorRejection {
@@ -382,6 +389,22 @@ fn failing_entry(trace: &[TraceEntry]) -> Option<&TraceEntry> {
 
 /// The blamed comparison as a reader prints it: the two values and the
 /// operator, as the source spells it.
+/// The bindings a rejection was judged under, one per line, so the
+/// rendering names the case the JSON names.
+fn push_witness(s: &mut String, witness: &[WitnessBinding]) {
+    if witness.is_empty() {
+        return;
+    }
+    s.push_str("  judged under:\n");
+    for w in witness {
+        s.push_str(&format!(
+            "    {} = {}\n",
+            w.var,
+            render_eval_value(&w.value)
+        ));
+    }
+}
+
 fn compared_line(c: &Compared) -> String {
     format!(
         "  compared: {} {} {} did not hold",

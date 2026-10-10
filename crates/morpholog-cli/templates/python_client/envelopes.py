@@ -685,15 +685,21 @@ class GateRejection:
 class InvariantRejection:
     name: str
     rule: str
+    # The bindings at the violation, as a refusal of the same proposal
+    # would carry them. Empty when the failing part binds nothing.
+    witness: list[WitnessBinding] = field(default_factory=list)
     compared: Compared | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> InvariantRejection:
-        data = _strict("invariant rejection", payload, {"kind", "name", "rule"}, {"compared"})
+        data = _strict(
+            "invariant rejection", payload, {"kind", "name", "rule"}, {"witness", "compared"}
+        )
         compared = data.get("compared")
         return cls(
             name=data["name"],
             rule=data["rule"],
+            witness=[WitnessBinding.from_json(w) for w in data.get("witness", [])],
             compared=None if compared is None else Compared.from_json(compared),
         )
 
