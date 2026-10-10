@@ -283,6 +283,11 @@ async fn an_empty_subject_is_refused_on_both_reads() {
     reset_db(&pool).await;
     let tail = begin_audit_tail(&pool, None, None).await.unwrap();
     assert!(matches!(tail.mentioning(""), Err(PgError::InvalidState(_))));
+    let mut conn = pool.acquire().await.unwrap();
+    assert!(matches!(
+        list_audit_rows_page_mentioning(&mut conn, None, None, 10, "").await,
+        Err(PgError::InvalidState(_))
+    ));
     assert!(matches!(
         list_rejection_rows(&pool, 10, Some("")).await,
         Err(PgError::InvalidState(_))

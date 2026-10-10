@@ -502,15 +502,21 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
         .collect::<Vec<_>>()
         .join("\n");
     let _ = write!(out, "\n\nINTENT_PAYLOADS = {{\n{payload_entries}\n}}\n");
-    // The header last, so the time imports match the kinds the models
-    // use; an unused import is a lint finding in every embedder's CI.
-    let needs_date = out.contains(": date\n") || out.contains("list[date]");
-    let needs_datetime = out.contains(": datetime\n") || out.contains("list[datetime]");
-    let time_import = match (needs_date, needs_datetime) {
+    // The header last, so each value-kind import appears only when a
+    // field has that annotation; an unused import is a lint finding in
+    // every embedder's CI. The annotations are the ones `kind_map` emits.
+    let uses =
+        |name: &str| out.contains(&format!(": {name}\n")) || out.contains(&format!("list[{name}]"));
+    let time_import = match (uses("date"), uses("datetime")) {
         (true, true) => "from datetime import date, datetime\n",
         (true, false) => "from datetime import date\n",
         (false, true) => "from datetime import datetime\n",
         (false, false) => "",
+    };
+    let decimal_import = if uses("Decimal") {
+        "from decimal import Decimal\n"
+    } else {
+        ""
     };
     let mut header = String::new();
     module_header(
@@ -520,9 +526,8 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
     );
     header.push_str("from __future__ import annotations\n\nfrom dataclasses import dataclass\n");
     header.push_str(time_import);
-    header.push_str(
-        "from decimal import Decimal\nfrom typing import ClassVar\n\nfrom . import values\n",
-    );
+    header.push_str(decimal_import);
+    header.push_str("from typing import ClassVar\n\nfrom . import values\n");
     let out = header + &out;
     Ok(out)
 }

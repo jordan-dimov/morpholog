@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The generated Python client under a pinned ruff: the templates, their
-# tests and the committed example package pass ruff's default rules with
-# no suppressions, so an embedder's own ruff run finds nothing of ours to
-# exclude. `--isolated` ignores any configuration above these paths.
+# tests and the committed example package pass Morpholog's baseline, the
+# default rules at this version, with no suppressions. An embedder's
+# stricter configuration is its own. `--isolated` ignores any
+# configuration above these paths.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"

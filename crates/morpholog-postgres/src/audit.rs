@@ -354,6 +354,11 @@ pub async fn list_audit_rows_page_mentioning(
     limit: i64,
     subject: &str,
 ) -> Result<Vec<AuditRow>, PgError> {
+    if subject.is_empty() {
+        return Err(PgError::InvalidState(
+            "--mentions needs a subject; an empty one names nothing".into(),
+        ));
+    }
     let vars = serde_json::json!({ "s": subject });
     let rows = match (&cursor, &horizon) {
         (None, None) => {

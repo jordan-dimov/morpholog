@@ -499,3 +499,55 @@ fn check_refuses_a_programme_the_generator_refuses() {
     let checked = check(&margin_call_run(), dir.path());
     assert!(!checked.status.success());
 }
+
+/// The models import a value kind only when a field has it, so a package
+/// for a subject-only programme carries no `Decimal` or time import for
+/// an embedder's lint to flag, and one using every kind carries each.
+#[test]
+fn the_models_import_only_the_value_kinds_their_fields_use() {
+    let dir = tempfile::tempdir().unwrap();
+    let subjects_only = dir.path().join("subjects.morph");
+    std::fs::write(
+        &subjects_only,
+        "program subjects_only\n\
+         predicate Owner(owner: Subject, order_id: Subject)\n\
+         transformation own(owner, order_id):\n    admit Owner(owner, order_id)\n",
+    )
+    .unwrap();
+    let out = dir.path().join("subjects");
+    let result = generate(&subjects_only, &out);
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let models = std::fs::read_to_string(out.join("morpholog_client/models.py")).unwrap();
+    for unused in ["from decimal import", "from datetime import"] {
+        assert!(
+            !models.contains(unused),
+            "{unused} is unused here:\n{models}"
+        );
+    }
+
+    let every_kind = dir.path().join("kinds.morph");
+    std::fs::write(
+        &every_kind,
+        "program every_kind\n\
+         predicate Fill(order_id: Subject, qty: Decimal, on: Date, at: Timestamp)\n\
+         transformation fill(order_id, qty, on, at):\n    admit Fill(order_id, qty, on, at)\n",
+    )
+    .unwrap();
+    let out = dir.path().join("kinds");
+    let result = generate(&every_kind, &out);
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let models = std::fs::read_to_string(out.join("morpholog_client/models.py")).unwrap();
+    assert!(models.contains("from decimal import Decimal\n"), "{models}");
+    assert!(
+        models.contains("from datetime import date, datetime\n"),
+        "{models}"
+    );
+}
