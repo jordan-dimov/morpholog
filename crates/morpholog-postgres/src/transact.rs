@@ -11,8 +11,8 @@
 //! on.
 
 use morpholog_core::{
-    ClaimInstance, IntentInstance, Outcome, RejectionReason, StagedDelta, Subject, Transformation,
-    Transition, WitnessBinding,
+    ClaimInstance, Compared, IntentInstance, Outcome, RejectionReason, StagedDelta, Subject,
+    Transformation, Transition, WitnessBinding,
 };
 use serde::Serialize;
 use sqlx::{Postgres, Transaction};
@@ -61,6 +61,9 @@ pub enum PgAtomicOutcome {
         rule: Option<String>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         witness: Vec<WitnessBinding>,
+        /// The comparison the refusal blamed, with its two values.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        compared: Option<Compared>,
     },
 }
 
@@ -223,11 +226,13 @@ async fn refuse(
         reason,
         rule,
         witness,
+        compared,
     } = record_refusal(pool, tx, transformation, transition, &reason).await?;
     Ok(PgAtomicOutcome::Rejected {
         act: row,
         reason,
         rule,
         witness,
+        compared,
     })
 }

@@ -69,6 +69,65 @@ pub struct WitnessBinding {
     pub value: EvalValue,
 }
 
+/// The two values a refused rule compared, where the diagnosis blames a
+/// comparison or an equality: the operator as the source spells it, and
+/// the operands evaluated under the bindings the diagnosis stopped at.
+/// Kept as data for the same reason the witness is: an embedder prints
+/// values, it does not reproduce the rule's arithmetic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Compared {
+    pub op: String,
+    pub left: EvalValue,
+    pub right: EvalValue,
+}
+
+impl Compared {
+    /// Whether the comparison holds over its own operands, by the
+    /// kernel's orderings; `None` when the operator or the operands are
+    /// not of a shape it orders. A diagnosis attaches a comparison only
+    /// when this is `Some(false)`: a refusal never names a comparison
+    /// that held.
+    pub fn holds(&self) -> Option<bool> {
+        use std::cmp::Ordering;
+        let ordering = || -> Option<Ordering> {
+            match (&self.left, &self.right) {
+                (EvalValue::Decimal(l), EvalValue::Decimal(r)) => Some(l.cmp(r)),
+                (
+                    EvalValue::Quantity {
+                        amount: l,
+                        unit: lu,
+                    },
+                    EvalValue::Quantity {
+                        amount: r,
+                        unit: ru,
+                    },
+                ) if lu == ru => Some(l.cmp(r)),
+                (EvalValue::Date(l), EvalValue::Date(r)) => Some(l.cmp(r)),
+                (EvalValue::Timestamp(l), EvalValue::Timestamp(r)) => Some(l.cmp(r)),
+                (EvalValue::Duration(l), EvalValue::Duration(r)) => Some(l.cmp(r)),
+                _ => None,
+            }
+        };
+        match self.op.as_str() {
+            "=" => Some(self.left == self.right),
+            "!=" => Some(self.left != self.right),
+            "<=" | "on_or_before" | "at_or_before" | "no_longer_than" => {
+                ordering().map(|o| o != Ordering::Greater)
+            }
+            "<" | "before" | "strictly_before" | "shorter_than" => {
+                ordering().map(|o| o == Ordering::Less)
+            }
+            ">=" | "on_or_after" | "at_or_after" | "no_shorter_than" => {
+                ordering().map(|o| o != Ordering::Less)
+            }
+            ">" | "after" | "strictly_after" | "longer_than" => {
+                ordering().map(|o| o == Ordering::Greater)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Why a proposal was rejected. [`std::fmt::Display`] gives the pinned
 /// wire string used in envelopes, traces and the rejection log. To get the
 /// rule name or kind, match the variant; never parse the display text.
@@ -81,6 +140,10 @@ pub enum RejectionReason {
         name: InvariantName,
         version: u32,
         witness: Vec<WitnessBinding>,
+        /// The failing comparison's values, when the diagnosis blames
+        /// one; absent otherwise, and absent when the diagnosis could
+        /// not evaluate it.
+        compared: Option<Compared>,
     },
     /// A `require` gate found no witness over the pre-state.
     ///
@@ -96,6 +159,8 @@ pub enum RejectionReason {
         name: Option<RuleName>,
         rendered: String,
         witness: Vec<WitnessBinding>,
+        /// As for `Invariant`.
+        compared: Option<Compared>,
     },
     /// A `bind` lookup matched no candidates. (Multi-match is an
     /// [`EvalError`], not a rejection.) `witness` as for `Require`.
@@ -103,6 +168,8 @@ pub enum RejectionReason {
         name: Option<RuleName>,
         rendered: String,
         witness: Vec<WitnessBinding>,
+        /// As for `Invariant`; a `bind` is a claim pattern, so rarely.
+        compared: Option<Compared>,
     },
 }
 
@@ -127,14 +194,26 @@ impl std::fmt::Display for RejectionReason {
     }
 }
 
-/// The failing part of a refused gate, rendered, and the bindings it
-/// failed under: the context the walk blamed, sorted by variable name.
-/// Nothing more specific than the whole gate means the bindings the gate
-/// started from.
-fn gate_failure(expr: &Prop, ctx: &EvalContext<'_>) -> (Option<String>, Vec<WitnessBinding>) {
+/// The failing part of a refused gate, rendered, the bindings it failed
+/// under (the context the walk blamed, sorted by variable name) and the
+/// comparison it blames, if one. Nothing more specific than the whole
+/// gate means the bindings the gate started from, and the whole gate's
+/// own comparison when it is one.
+fn gate_failure(
+    expr: &Prop,
+    ctx: &EvalContext<'_>,
+) -> (Option<String>, Vec<WitnessBinding>, Option<Compared>) {
     match find_failure(expr, ctx) {
-        Some(failure) => (Some(failure.rendered), sorted_witness(failure.bindings)),
-        None => (None, sorted_witness(ctx.bindings.clone())),
+        Some(failure) => (
+            Some(failure.rendered),
+            sorted_witness(failure.bindings),
+            failure.compared,
+        ),
+        None => (
+            None,
+            sorted_witness(ctx.bindings.clone()),
+            crate::eval::compared_at(expr, ctx),
+        ),
     }
 }
 
@@ -611,7 +690,7 @@ pub(crate) fn finish_staged_inner(
         if !held {
             // Found only on refusal, and only among the checked cases, so
             // it never blames a case the transition did not touch.
-            let witness = match &cases {
+            let diagnosis = match &cases {
                 None => {
                     crate::derive::invariant_witness(inv, &candidate, Some(pre_state), definitions)?
                 }
@@ -627,7 +706,8 @@ pub(crate) fn finish_staged_inner(
                 reason: RejectionReason::Invariant {
                     name: inv.name.clone(),
                     version: inv.version,
-                    witness,
+                    witness: diagnosis.witness,
+                    compared: diagnosis.compared,
                 },
             });
         }
@@ -664,11 +744,12 @@ pub(crate) fn execute_stmt(
                 let rendered = format::format_prop_inline(expr);
                 // One descent names the failing part and the bindings it
                 // failed under, so the trace and the witness agree.
-                let (failing, witness) = gate_failure(expr, &ctx);
+                let (failing, witness, compared) = gate_failure(expr, &ctx);
                 let reason = RejectionReason::Require {
                     name: name.clone(),
                     rendered: rendered.clone(),
                     witness,
+                    compared,
                 };
                 if trace.is_on() {
                     let directly_missing_claims = unsatisfied_positive_claims(expr, &ctx);
@@ -704,7 +785,7 @@ pub(crate) fn execute_stmt(
             match matches.len() {
                 0 => {
                     let rendered = format::format_prop_inline(expr);
-                    let (failing, witness) = gate_failure(expr, &ctx);
+                    let (failing, witness, compared) = gate_failure(expr, &ctx);
                     if trace.is_on() {
                         let directly_missing_claims = unsatisfied_positive_claims(expr, &ctx);
                         trace.push(TraceEntry::BindOne {
@@ -720,6 +801,7 @@ pub(crate) fn execute_stmt(
                         name: name.clone(),
                         rendered,
                         witness,
+                        compared,
                     }))
                 }
                 1 => {

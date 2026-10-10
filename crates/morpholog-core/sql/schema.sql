@@ -421,6 +421,12 @@ CREATE TABLE rejections (
                              witness IS NULL
                              OR (jsonb_typeof(witness) = 'array' AND jsonb_array_length(witness) > 0)
                          ),
+    -- The comparison the refusal blamed, with its two values, same codec
+    -- as the envelope's `compared`. NULL when it blamed none, could not
+    -- evaluate it, or the row predates the column.
+    compared             jsonb                 CHECK (
+                             compared IS NULL OR jsonb_typeof(compared) = 'object'
+                         ),
     rejected_at          timestamptz  NOT NULL DEFAULT now(),
     -- The writer never emits a versioned gate or an unversioned
     -- invariant; the constraint keeps hand-edits from corrupting
@@ -628,4 +634,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (21, 'audit_semantics_version'),
     (22, 'audit_drawn_subjects'),
     (23, 'deployment_roles'),
-    (24, 'gate_witness');
+    (24, 'gate_witness'),
+    (25, 'rejection_compared');

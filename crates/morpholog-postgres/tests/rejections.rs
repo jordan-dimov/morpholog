@@ -439,3 +439,49 @@ async fn a_gate_rejection_persists_the_bindings_it_was_judged_under() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].witness.as_deref(), Some(witness.as_slice()));
 }
+
+/// The comparison a refusal blames persists beside the witness and
+/// reads back as the proposal reported it.
+#[tokio::test]
+async fn a_rejection_persists_the_comparison_it_blamed() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let p = parse_program(
+        "program capped\n\
+         predicate Cap(desk: Subject, cap: Decimal)\n\
+         predicate Entry(entry: Subject, desk: Subject, risk: Decimal)\n\
+         transformation set_cap(d, c):\n    admit Cap(d, c)\n\
+         transformation record(e, d, r):\n\
+         \x20   require within: Cap(d, cap) and r <= cap\n\
+         \x20   admit Entry(e, d, r)\n",
+    )
+    .expect("parses");
+    let pg = common::pg_program(p.clone());
+    let act = |name: &str| pg.prepared().transformation(&name.into()).unwrap().clone();
+    common::expect_committed(
+        common::propose_pg_with_test_actor(&pool, &pg, &act("set_cap"), vec![subj("d"), dec(10)])
+            .await
+            .unwrap(),
+    );
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &pg,
+        &act("record"),
+        vec![subj("e"), subj("d"), dec(25)],
+    )
+    .await
+    .expect("rejection is a lawful outcome");
+    let PgProposalOutcome::Rejected { compared, .. } = outcome else {
+        panic!("expected a refusal");
+    };
+    let compared = compared.expect("the gate failed at its comparison");
+    assert_eq!(compared.op, "<=");
+    assert_eq!(compared.left, dec(25));
+    assert_eq!(compared.right, dec(10));
+
+    let rows = morpholog_postgres::list_rejection_rows(&pool, 10)
+        .await
+        .expect("reading the log back");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].compared.as_ref(), Some(&compared));
+}

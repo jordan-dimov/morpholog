@@ -567,6 +567,7 @@ fn propose_outcome_serialises_with_status_tag() {
         reason: "require failed".to_string(),
         rule: None,
         witness: Vec::new(),
+        compared: None,
     };
     let json = serde_json::to_string(&rejected).unwrap();
     assert!(

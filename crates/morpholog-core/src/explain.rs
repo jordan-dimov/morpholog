@@ -20,7 +20,7 @@ use crate::analysis::transformations_asserting;
 use crate::eval::{RenderedClaim, render_eval_value};
 use crate::ir::Program;
 use crate::propose::{
-    BindOneOutcome, Outcome, RejectionReason, RequireOutcome, SubjectSource, TraceEntry,
+    BindOneOutcome, Compared, Outcome, RejectionReason, RequireOutcome, SubjectSource, TraceEntry,
     TracedProposal, Transition, WitnessBinding, propose_with_trace,
 };
 use crate::state::State;
@@ -45,6 +45,9 @@ pub struct TransitionRef {
 /// Admissible, or rejected with a structured reason.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+// Built once per dry run and read, never moved in bulk; boxing the
+// rejection would change every consumer's match for nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum Verdict {
     Admissible,
     Rejected(Rejection),
@@ -84,6 +87,9 @@ pub struct GateRejection {
     /// a refusal say the same values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub witness: Vec<WitnessBinding>,
+    /// The comparison the diagnosis blamed, with its two values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compared: Option<Compared>,
 }
 
 /// Which kind of gate rejected.
@@ -100,6 +106,10 @@ pub enum GateKind {
 pub struct InvariantRejection {
     pub name: String,
     pub rule: String,
+    /// The comparison the diagnosis blamed, with its two values, as a
+    /// refusal of this proposal would carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compared: Option<Compared>,
 }
 
 /// The kernel raised an error before reaching a verdict.
@@ -196,6 +206,9 @@ impl Explanation {
                 match rejection {
                     Rejection::Gate(gate) => {
                         s.push_str(&format!("\nGate not satisfied:\n  {}\n", gate.gate));
+                        if let Some(c) = &gate.compared {
+                            s.push_str(&format!("{}\n", compared_line(c)));
+                        }
                         if !gate.directly_missing_claims.is_empty() {
                             s.push_str("\nDirectly missing claims:\n");
                             for claim in &gate.directly_missing_claims {
@@ -219,6 +232,9 @@ impl Explanation {
                             "\nWould violate invariant `{}`:\n  {}\n",
                             inv.name, inv.rule,
                         ));
+                        if let Some(c) = &inv.compared {
+                            s.push_str(&format!("{}\n", compared_line(c)));
+                        }
                     }
                     Rejection::Error(err) => {
                         s.push_str(&format!("\nError: {}\n", err.message));
@@ -251,6 +267,11 @@ fn verdict_from_rejection(
         }
         RejectionReason::Invariant { .. } => Vec::new(),
     };
+    let compared = match reason {
+        RejectionReason::Require { compared, .. }
+        | RejectionReason::BindNone { compared, .. }
+        | RejectionReason::Invariant { compared, .. } => compared.clone(),
+    };
     match failing_entry(trace) {
         Some(TraceEntry::Require {
             expression,
@@ -267,6 +288,7 @@ fn verdict_from_rejection(
             GateKind::Require,
             directly_missing_claims,
             witness,
+            compared.clone(),
         ),
         Some(TraceEntry::BindOne {
             expression,
@@ -283,12 +305,14 @@ fn verdict_from_rejection(
             GateKind::BindOne,
             directly_missing_claims,
             witness,
+            compared.clone(),
         ),
         Some(TraceEntry::InvariantCheck {
             name, expression, ..
         }) => Verdict::Rejected(Rejection::Invariant(InvariantRejection {
             name: name.to_string(),
             rule: expression.clone(),
+            compared,
         })),
         _ => Verdict::Rejected(Rejection::Error(ErrorRejection {
             message: reason.to_string(),
@@ -305,6 +329,7 @@ fn gate_verdict(
     statement_kind: GateKind,
     missing: &[RenderedClaim],
     witness: Vec<WitnessBinding>,
+    compared: Option<Compared>,
 ) -> Verdict {
     let directly_missing_claims = missing
         .iter()
@@ -323,6 +348,7 @@ fn gate_verdict(
         statement_kind,
         directly_missing_claims,
         witness,
+        compared,
     }))
 }
 
@@ -352,4 +378,15 @@ fn failing_entry(trace: &[TraceEntry]) -> Option<&TraceEntry> {
         }
     }
     None
+}
+
+/// The blamed comparison as a reader prints it: the two values and the
+/// operator, as the source spells it.
+fn compared_line(c: &Compared) -> String {
+    format!(
+        "  compared: {} {} {} did not hold",
+        render_eval_value(&c.left),
+        c.op,
+        render_eval_value(&c.right)
+    )
 }

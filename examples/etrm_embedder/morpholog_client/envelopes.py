@@ -152,6 +152,24 @@ class WitnessBinding:
 
 
 @dataclass(frozen=True)
+class Compared:
+    """The two values a refused rule compared, and the operator as the source spells it."""
+
+    op: str
+    left: object
+    right: object
+
+    @classmethod
+    def from_json(cls, payload: object) -> Compared:
+        data = _strict("compared", payload, {"op", "left", "right"})
+        return cls(
+            op=data["op"],
+            left=values.decode_tagged(data["left"]),
+            right=values.decode_tagged(data["right"]),
+        )
+
+
+@dataclass(frozen=True)
 class Rejected:
     reason: str
     # The refused rule's stable identifier: an invariant's name, or a named
@@ -162,18 +180,26 @@ class Rejected:
     # Empty when the runtime could not attribute the refusal to one
     # iteration; the key is then absent from the envelope entirely.
     witness: list[WitnessBinding] = field(default_factory=list)
+    # The comparison the refusal blamed, with its two evaluated values.
+    # None when it blamed none, or could not evaluate it.
+    compared: Compared | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> Rejected:
         data = _strict(
-            "rejected outcome", payload, {"status", "reason"}, {"explanation", "rule", "witness"}
+            "rejected outcome",
+            payload,
+            {"status", "reason"},
+            {"explanation", "rule", "witness", "compared"},
         )
         explanation = data.get("explanation")
+        compared = data.get("compared")
         return cls(
             reason=data["reason"],
             rule=data.get("rule"),
             explanation=None if explanation is None else Explanation.from_json(explanation),
             witness=[WitnessBinding.from_json(w) for w in data.get("witness", [])],
+            compared=None if compared is None else Compared.from_json(compared),
         )
 
 
@@ -632,6 +658,7 @@ class GateRejection:
     # The bindings the failing part was judged under, as a refusal of the
     # same proposal would carry them. Empty when nothing was in scope.
     witness: list[WitnessBinding] = field(default_factory=list)
+    compared: Compared | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> GateRejection:
@@ -639,8 +666,9 @@ class GateRejection:
             "gate rejection",
             payload,
             {"kind", "gate", "statement_kind", "directly_missing_claims"},
-            {"rule", "witness"},
+            {"rule", "witness", "compared"},
         )
+        compared = data.get("compared")
         return cls(
             gate=data["gate"],
             statement_kind=data["statement_kind"],
@@ -649,6 +677,7 @@ class GateRejection:
             ],
             rule=data.get("rule"),
             witness=[WitnessBinding.from_json(w) for w in data.get("witness", [])],
+            compared=None if compared is None else Compared.from_json(compared),
         )
 
 
@@ -656,11 +685,17 @@ class GateRejection:
 class InvariantRejection:
     name: str
     rule: str
+    compared: Compared | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> InvariantRejection:
-        data = _strict("invariant rejection", payload, {"kind", "name", "rule"})
-        return cls(name=data["name"], rule=data["rule"])
+        data = _strict("invariant rejection", payload, {"kind", "name", "rule"}, {"compared"})
+        compared = data.get("compared")
+        return cls(
+            name=data["name"],
+            rule=data["rule"],
+            compared=None if compared is None else Compared.from_json(compared),
+        )
 
 
 @dataclass(frozen=True)
@@ -851,6 +886,9 @@ class RejectionRow:
     # column existed - so absence means "not captured", never "captured
     # nothing".
     witness: list[WitnessBinding] | None = None
+    # The comparison the refusal blamed. None when it blamed none, could
+    # not evaluate it, or the row predates the column.
+    compared: Compared | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> RejectionRow:
@@ -867,9 +905,10 @@ class RejectionRow:
                 "reason",
                 "rejected_at",
             },
-            {"invariant_version", "witness"},
+            {"invariant_version", "witness", "compared"},
         )
         witness = data.get("witness")
+        compared = data.get("compared")
         # Only an invariant refusal has a version. A gate refusal carrying
         # one is a serializer regression, not a row - so it raises here
         # rather than becoming a model nobody can trust.
@@ -889,6 +928,7 @@ class RejectionRow:
             rejected_at=values.parse_timestamp(data["rejected_at"]),
             invariant_version=data.get("invariant_version"),
             witness=None if witness is None else [WitnessBinding.from_json(w) for w in witness],
+            compared=None if compared is None else Compared.from_json(compared),
         )
 
 

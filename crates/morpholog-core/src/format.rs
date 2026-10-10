@@ -23,7 +23,7 @@ use crate::{
 /// The surface token for an ordered comparison, used by the formatter
 /// and the checker's diagnostics. The parser holds the inverse mapping;
 /// the round-trip test keeps them in step.
-pub(crate) fn compare_token(op: CompareOp, domain: OrderedDomain) -> &'static str {
+pub fn compare_token(op: CompareOp, domain: OrderedDomain) -> &'static str {
     match (domain, op) {
         (OrderedDomain::Decimal, CompareOp::Le) => "<=",
         (OrderedDomain::Decimal, CompareOp::Lt) => "<",

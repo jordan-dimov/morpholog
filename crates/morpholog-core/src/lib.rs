@@ -85,8 +85,8 @@ pub use lint::{
 };
 pub use prepared::PreparedProgram;
 pub use propose::{
-    BindOneOutcome, ForIterationTrace, Outcome, RejectionReason, RequireOutcome, StagedDelta,
-    SubjectSource, TraceEntry, TracedProposal, Transition, WitnessBinding,
+    BindOneOutcome, Compared, ForIterationTrace, Outcome, RejectionReason, RequireOutcome,
+    StagedDelta, SubjectSource, TraceEntry, TracedProposal, Transition, WitnessBinding,
     finish_staged_delta_with,
 };
 pub use reads::{KeyedPattern, KnownTerm, ReadFilter, ReadPlan};

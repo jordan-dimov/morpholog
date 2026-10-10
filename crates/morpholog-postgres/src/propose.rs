@@ -5,9 +5,9 @@ use crate::program::{PgProgram, Route};
 use crate::sql_quote::quote_literal;
 use crate::txn::{LoginRole, begin_authorised_proposal_tx};
 use morpholog_core::{
-    Admission, ClaimInstance, Definition, EffectiveDelta, EvalError, EvalValue, IntentInstance,
-    Invariant, InvariantName, Outcome, PredicateName, PreparedProgram, ReadFilter, ReadPlan,
-    RejectionReason, RuleName, StagedDelta, State, Subject, SubjectSource, TraceEntry,
+    Admission, ClaimInstance, Compared, Definition, EffectiveDelta, EvalError, EvalValue,
+    IntentInstance, Invariant, InvariantName, Outcome, PredicateName, PreparedProgram, ReadFilter,
+    ReadPlan, RejectionReason, RuleName, StagedDelta, State, Subject, SubjectSource, TraceEntry,
     TracedProposal, Transformation, TransformationName, Transition, WitnessBinding, execution,
 };
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,10 @@ pub enum PgProposalOutcome {
         /// when the kernel could not single out an iteration.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         witness: Vec<WitnessBinding>,
+        /// The comparison the diagnosis blamed, with its two evaluated
+        /// values. Omitted when it blamed none, or could not evaluate it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        compared: Option<Compared>,
     },
 }
 
@@ -664,6 +668,7 @@ pub(crate) struct Refusal {
     pub(crate) reason: String,
     pub(crate) rule: Option<String>,
     pub(crate) witness: Vec<WitnessBinding>,
+    pub(crate) compared: Option<Compared>,
 }
 
 /// Roll back, then record the refusal in `morpholog.rejections`. Every
@@ -684,15 +689,22 @@ pub(crate) async fn record_refusal(
     write_rejection(pool, transformation, transition, reason)
         .await
         .map_err(|e| PgError::RejectionLogFailure(Box::new(e)))?;
-    let witness = match reason {
-        RejectionReason::Invariant { witness, .. }
-        | RejectionReason::Require { witness, .. }
-        | RejectionReason::BindNone { witness, .. } => witness.clone(),
+    let (witness, compared) = match reason {
+        RejectionReason::Invariant {
+            witness, compared, ..
+        }
+        | RejectionReason::Require {
+            witness, compared, ..
+        }
+        | RejectionReason::BindNone {
+            witness, compared, ..
+        } => (witness.clone(), compared.clone()),
     };
     Ok(Refusal {
         reason: reason.to_string(),
         rule: rule_identity(reason),
         witness,
+        compared,
     })
 }
 
@@ -715,11 +727,13 @@ pub(crate) async fn finalise_outcome(
                 reason,
                 rule,
                 witness,
+                compared,
             } = record_refusal(pool, tx, transformation, transition, &reason).await?;
             Ok(PgProposalOutcome::Rejected {
                 reason,
                 rule,
                 witness,
+                compared,
             })
         }
         Outcome::Accepted {
@@ -1049,6 +1063,15 @@ pub(crate) async fn write_rejection(
         }
         _ => None,
     };
+    let compared_json: Option<serde_json::Value> = match reason {
+        RejectionReason::Invariant { compared, .. }
+        | RejectionReason::Require { compared, .. }
+        | RejectionReason::BindNone { compared, .. } => compared
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(PgError::Encoding)?,
+    };
     let args_json: serde_json::Value =
         serde_json::to_value(&transition.args).map_err(PgError::Encoding)?;
     let actor_json: serde_json::Value =
@@ -1057,8 +1080,8 @@ pub(crate) async fn write_rejection(
     sqlx::query!(
         "INSERT INTO morpholog.rejections (
             rejection_id, transformation_name, arguments, actor,
-            kind, rule, invariant_version, reason, witness
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            kind, rule, invariant_version, reason, witness, compared
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         Uuid::now_v7(),
         transformation.name.as_str(),
         args_json,
@@ -1068,6 +1091,7 @@ pub(crate) async fn write_rejection(
         invariant_version,
         reason.to_string(),
         witness_json,
+        compared_json,
     )
     .execute(pool)
     .await

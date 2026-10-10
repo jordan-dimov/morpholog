@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT rejection_id, transformation_name, arguments, actor,\n                kind, rule, invariant_version, reason, witness, rejected_at\n         FROM morpholog.rejections\n         ORDER BY rejected_at DESC, rejection_id DESC\n         LIMIT $1",
+  "query": "SELECT rejection_id, transformation_name, arguments, actor,\n                kind, rule, invariant_version, reason, witness, compared, rejected_at\n         FROM morpholog.rejections\n         ORDER BY rejected_at DESC, rejection_id DESC\n         LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -104,6 +104,17 @@
       },
       {
         "ordinal": 9,
+        "name": "compared",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.rejections",
+            "name": "compared"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
         "name": "rejected_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -129,8 +140,9 @@
       true,
       false,
       true,
+      true,
       false
     ]
   },
-  "hash": "8f035d48bd74dc5e1cfc82258ebf5c06b7ba1b45ea8b851da8a44733560d1222"
+  "hash": "c44c7e79413db226e47da56de94937631f052b091bc1fab0e7a717390eb30092"
 }

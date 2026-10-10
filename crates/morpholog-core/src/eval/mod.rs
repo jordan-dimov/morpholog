@@ -20,6 +20,7 @@ use crate::ir::{
     ArithOp, Builtin, CompareOp, Definition, DefinitionName, OrderedDomain, PredicateName, Prop,
     Subject, Term, Value, ValueExpr, Var,
 };
+use crate::propose::Compared;
 use crate::state::{Bindings, CandidateBucket, ClaimInstance, EvalValue, State};
 
 /// Errors raised by the evaluator and the transformation runner: an
@@ -1649,6 +1650,8 @@ pub(crate) struct Failure {
     /// Bindings in scope at the failure. Inside a definition body these
     /// are its parameters, matching the names in the rendering.
     pub(crate) bindings: Bindings,
+    /// The comparison blamed, with its operands under those bindings.
+    pub(crate) compared: Option<Compared>,
 }
 
 impl Failure {
@@ -1656,8 +1659,37 @@ impl Failure {
         Self {
             rendered: crate::format::format_prop_inline(prop),
             bindings: ctx.bindings.clone(),
+            compared: compared_at(prop, ctx),
         }
     }
+}
+
+/// The two values `prop` compares under `ctx`, when it is a comparison
+/// or an equality and the comparison is false there. The operands are
+/// evaluated again, under the bindings the decision used; an operand
+/// that errors, or a comparison that holds, yields nothing, so a refusal
+/// never carries a comparison that did not fail. Any other proposition
+/// yields nothing.
+pub(crate) fn compared_at(prop: &Prop, ctx: &EvalContext<'_>) -> Option<Compared> {
+    let (op, left, right) = match prop {
+        Prop::Compare {
+            op,
+            domain,
+            left,
+            right,
+        } => (crate::format::compare_token(*op, *domain), left, right),
+        Prop::Eq(left, right) => ("=", left, right),
+        Prop::Neq(left, right) => ("!=", left, right),
+        _ => return None,
+    };
+    let left = eval_value(left, ctx).ok()?;
+    let right = eval_value(right, ctx).ok()?;
+    let holds = !find_matches(prop, ctx).ok()?.is_empty();
+    (!holds).then(|| Compared {
+        op: op.to_string(),
+        left,
+        right,
+    })
 }
 
 /// Descend to the most specific failing sub-expression, carrying the
@@ -1763,6 +1795,7 @@ pub(crate) fn find_failure(prop: &Prop, ctx: &EvalContext<'_>) -> Option<Failure
                     inner.rendered
                 ),
                 bindings: inner.bindings,
+                compared: inner.compared,
             })
         }
         // No useful drill-down for these:

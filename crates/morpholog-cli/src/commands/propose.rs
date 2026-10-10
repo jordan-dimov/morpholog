@@ -74,6 +74,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                     reason,
                     rule,
                     witness,
+                    compared,
                 },
                 Some(explanation),
             ) => {
@@ -81,6 +82,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                     reason,
                     rule.as_deref(),
                     witness,
+                    compared.as_ref(),
                     explanation,
                 ))?;
                 return report_rejection(reason, &parsed);
@@ -499,6 +501,7 @@ pub(crate) async fn propose_row_outcome(
                 reason,
                 rule,
                 witness,
+                compared,
             },
             Some(explanation),
         ) = (&refused.outcome, refused.explanation(prepared, &transition))
@@ -507,6 +510,7 @@ pub(crate) async fn propose_row_outcome(
                 reason,
                 rule.as_deref(),
                 witness,
+                compared.as_ref(),
                 explanation,
             ))
             .context("serialising the receipt")

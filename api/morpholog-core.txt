@@ -112,6 +112,7 @@ pub fn morpholog_core::fold::walk_stmt<'a>(&'a morpholog_core::Stmt, &mut dyn co
 pub fn morpholog_core::fold::walk_value<'a>(&'a morpholog_core::ValueExpr, &mut dyn core::ops::function::FnMut(morpholog_core::fold::Node<'a>))
 pub mod morpholog_core::format
 pub fn morpholog_core::format::canonical_hash(&morpholog_core::Program) -> alloc::string::String
+pub fn morpholog_core::format::compare_token(morpholog_core::CompareOp, morpholog_core::OrderedDomain) -> &'static str
 pub fn morpholog_core::format::format_program(&morpholog_core::Program) -> alloc::string::String
 pub fn morpholog_core::format::format_prop_inline(&morpholog_core::Prop) -> alloc::string::String
 pub fn morpholog_core::format::format_prop_source(&morpholog_core::Program, &morpholog_core::Prop) -> alloc::string::String
@@ -885,14 +886,17 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Rejection
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Rejection
 pub enum morpholog_core::RejectionReason
 pub morpholog_core::RejectionReason::BindNone
+pub morpholog_core::RejectionReason::BindNone::compared: core::option::Option<morpholog_core::Compared>
 pub morpholog_core::RejectionReason::BindNone::name: core::option::Option<morpholog_core::RuleName>
 pub morpholog_core::RejectionReason::BindNone::rendered: alloc::string::String
 pub morpholog_core::RejectionReason::BindNone::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
 pub morpholog_core::RejectionReason::Invariant
+pub morpholog_core::RejectionReason::Invariant::compared: core::option::Option<morpholog_core::Compared>
 pub morpholog_core::RejectionReason::Invariant::name: morpholog_core::InvariantName
 pub morpholog_core::RejectionReason::Invariant::version: u32
 pub morpholog_core::RejectionReason::Invariant::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
 pub morpholog_core::RejectionReason::Require
+pub morpholog_core::RejectionReason::Require::compared: core::option::Option<morpholog_core::Compared>
 pub morpholog_core::RejectionReason::Require::name: core::option::Option<morpholog_core::RuleName>
 pub morpholog_core::RejectionReason::Require::rendered: alloc::string::String
 pub morpholog_core::RejectionReason::Require::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
@@ -1639,6 +1643,32 @@ impl<'a> core::marker::Unpin for morpholog_core::Claims<'a>
 impl<'a> core::marker::UnsafeUnpin for morpholog_core::Claims<'a>
 impl<'a> core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Claims<'a>
 impl<'a> core::panic::unwind_safe::UnwindSafe for morpholog_core::Claims<'a>
+pub struct morpholog_core::Compared
+pub morpholog_core::Compared::left: morpholog_core::EvalValue
+pub morpholog_core::Compared::op: alloc::string::String
+pub morpholog_core::Compared::right: morpholog_core::EvalValue
+impl morpholog_core::Compared
+pub fn morpholog_core::Compared::holds(&self) -> core::option::Option<bool>
+impl core::clone::Clone for morpholog_core::Compared
+pub fn morpholog_core::Compared::clone(&self) -> morpholog_core::Compared
+impl core::cmp::Eq for morpholog_core::Compared
+pub fn morpholog_core::Compared::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::Compared
+pub fn morpholog_core::Compared::eq(&self, &morpholog_core::Compared) -> bool
+impl core::fmt::Debug for morpholog_core::Compared
+pub fn morpholog_core::Compared::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_core::Compared
+impl serde_core::ser::Serialize for morpholog_core::Compared
+pub fn morpholog_core::Compared::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for morpholog_core::Compared
+pub fn morpholog_core::Compared::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for morpholog_core::Compared
+impl core::marker::Send for morpholog_core::Compared
+impl core::marker::Sync for morpholog_core::Compared
+impl core::marker::Unpin for morpholog_core::Compared
+impl core::marker::UnsafeUnpin for morpholog_core::Compared
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Compared
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Compared
 #[non_exhaustive] pub struct morpholog_core::ControlMatrix
 pub morpholog_core::ControlMatrix::front_line_coverage: alloc::vec::Vec<morpholog_core::InvariantFrontLoad>
 pub morpholog_core::ControlMatrix::guarantees: alloc::vec::Vec<morpholog_core::Guarantee>
@@ -1973,6 +2003,7 @@ impl core::marker::UnsafeUnpin for morpholog_core::GateRef
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::GateRef
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::GateRef
 pub struct morpholog_core::GateRejection
+pub morpholog_core::GateRejection::compared: core::option::Option<morpholog_core::Compared>
 pub morpholog_core::GateRejection::directly_missing_claims: alloc::vec::Vec<morpholog_core::MissingClaim>
 pub morpholog_core::GateRejection::gate: alloc::string::String
 pub morpholog_core::GateRejection::rule: core::option::Option<alloc::string::String>
@@ -2260,6 +2291,7 @@ impl core::marker::UnsafeUnpin for morpholog_core::InvariantName
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::InvariantName
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::InvariantName
 pub struct morpholog_core::InvariantRejection
+pub morpholog_core::InvariantRejection::compared: core::option::Option<morpholog_core::Compared>
 pub morpholog_core::InvariantRejection::name: alloc::string::String
 pub morpholog_core::InvariantRejection::rule: alloc::string::String
 impl core::clone::Clone for morpholog_core::InvariantRejection

@@ -92,6 +92,7 @@ pub async fn observe(
             reason,
             rule,
             witness,
+            ..
         } => {
             let vars: Vec<_> = witness.iter().map(|w| w.var.to_string()).collect();
             format!("rejected {reason} | rule {rule:?} | witness vars {vars:?}")

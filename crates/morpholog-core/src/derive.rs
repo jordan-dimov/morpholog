@@ -88,16 +88,18 @@ pub(crate) fn invariant_witness_cases(
     pre_state: Option<&State>,
     definitions: &[Definition],
     cases: &[BTreeMap<Var, EvalValue>],
-) -> Result<Vec<WitnessBinding>, EvalError> {
+) -> Result<Diagnosis, EvalError> {
     in_invariant_context(state, pre_state, definitions, |ctx| {
         let (left, right) = match &inv.body {
             Prop::Implies { left, right } => (left, right),
             Prop::Forall { source, body, .. } => (source, body),
-            Prop::Not(_) => return Ok(Vec::new()),
+            Prop::Not(_) => return Ok(Diagnosis::default()),
+            // A body with nothing to descend into, a comparison for one,
+            // is its own leaf: no bindings, and its operands if it is one.
             _ => {
-                return Ok(find_failure(&inv.body, ctx)
-                    .map(|f| sorted_witness(f.bindings))
-                    .unwrap_or_default());
+                return Ok(Diagnosis::of(
+                    find_failure(&inv.body, ctx).unwrap_or_else(|| Failure::here(&inv.body, ctx)),
+                ));
             }
         };
         for m in find_matches(left, ctx)? {
@@ -108,11 +110,29 @@ pub(crate) fn invariant_witness_cases(
             if find_matches(right, &ext)?.is_empty() {
                 let failure =
                     find_failure(right, &ext).unwrap_or_else(|| Failure::here(right, &ext));
-                return Ok(sorted_witness(failure.bindings));
+                return Ok(Diagnosis::of(failure));
             }
         }
-        Ok(Vec::new())
+        Ok(Diagnosis::default())
     })
+}
+
+/// What a refusal says beyond the rule: the bindings where it failed and
+/// the comparison it blames, from one descent, so they describe one
+/// failing case.
+#[derive(Debug, Default)]
+pub(crate) struct Diagnosis {
+    pub(crate) witness: Vec<WitnessBinding>,
+    pub(crate) compared: Option<crate::propose::Compared>,
+}
+
+impl Diagnosis {
+    fn of(failure: Failure) -> Self {
+        Self {
+            witness: sorted_witness(failure.bindings),
+            compared: failure.compared,
+        }
+    }
 }
 
 pub(crate) fn sorted_witness(bindings: Bindings) -> Vec<WitnessBinding> {
@@ -143,18 +163,17 @@ pub(crate) fn invariant_witness(
     state: &State,
     pre_state: Option<&State>,
     definitions: &[Definition],
-) -> Result<Vec<WitnessBinding>, EvalError> {
+) -> Result<Diagnosis, EvalError> {
     in_invariant_context(state, pre_state, definitions, |ctx| {
-        let Some(failure) = crate::eval::find_failure(&inv.body, ctx) else {
-            return Ok(Vec::new());
-        };
-        let mut witness: Vec<WitnessBinding> = failure
-            .bindings
-            .into_iter()
-            .map(|(var, value)| WitnessBinding { var, value })
-            .collect();
-        witness.sort_by(|a, b| a.var.cmp(&b.var));
-        Ok(witness)
+        // A negated body witnesses nothing, as the case-bound path says;
+        // any other body with nothing to descend into is its own leaf.
+        if matches!(inv.body, Prop::Not(_)) {
+            return Ok(Diagnosis::default());
+        }
+        Ok(Diagnosis::of(
+            crate::eval::find_failure(&inv.body, ctx)
+                .unwrap_or_else(|| Failure::here(&inv.body, ctx)),
+        ))
     })
 }
 

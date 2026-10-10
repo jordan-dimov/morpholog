@@ -87,6 +87,7 @@ fn a_failure_with_nothing_bound_has_an_empty_witness() {
     assert!(
         invariant_witness(&inv, &state, None, &[])
             .unwrap()
+            .witness
             .is_empty(),
         "nothing was bound anywhere in this failure"
     );
@@ -102,6 +103,7 @@ fn rejection_reason_display_strings_are_pinned() {
             name: "at_most_one".into(),
             version: 3,
             witness: Vec::new(),
+            compared: None,
         }
         .to_string(),
         "invariant `at_most_one` violated",
@@ -115,6 +117,7 @@ fn rejection_reason_display_strings_are_pinned() {
                 var: "account".into(),
                 value: EvalValue::Subject("acct_42".into()),
             }],
+            compared: None,
         }
         .to_string(),
         "invariant `at_most_one` violated",
@@ -125,6 +128,7 @@ fn rejection_reason_display_strings_are_pinned() {
             name: None,
             rendered: "Approved(doc)".into(),
             witness: vec![],
+            compared: None,
         }
         .to_string(),
         "require failed: Approved(doc) did not hold over pre-state"
@@ -136,6 +140,7 @@ fn rejection_reason_display_strings_are_pinned() {
             name: Some("approval_on_file".into()),
             rendered: "Approved(doc)".into(),
             witness: vec![],
+            compared: None,
         }
         .to_string(),
         "require `approval_on_file` failed: Approved(doc) did not hold over pre-state"
@@ -145,6 +150,7 @@ fn rejection_reason_display_strings_are_pinned() {
             name: None,
             rendered: "Policy(policy_id, limit)".into(),
             witness: vec![],
+            compared: None,
         }
         .to_string(),
         "bind_one failed: Policy(policy_id, limit) matched no candidates"
@@ -154,6 +160,7 @@ fn rejection_reason_display_strings_are_pinned() {
             name: Some("governing_policy".into()),
             rendered: "Policy(policy_id, limit)".into(),
             witness: vec![],
+            compared: None,
         }
         .to_string(),
         "bind `governing_policy` failed: Policy(policy_id, limit) matched no candidates"
