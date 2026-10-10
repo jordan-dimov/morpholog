@@ -20,14 +20,26 @@ pub struct CheckReport {
 }
 
 /// One invariant in programme order: `compiled` (checked in SQL) or
-/// `interpreted` (checked by the kernel), and for an interpreted one the
-/// refusal that kept it out of SQL.
+/// `interpreted` (checked by the kernel), for an interpreted one the
+/// refusal that kept it out of SQL, and the cases admission checks.
 #[derive(Serialize)]
 pub struct CheckedInvariant {
+    pub cases: CheckedCases,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<CheckRefusal>,
     pub route: &'static str,
+}
+
+/// Whether the impact plan bounds every change to the cases it touches
+/// (`bound`), or some change checks the rule whole (`whole`, with the
+/// construct responsible). A property of the plan, not of the route: an
+/// execution route may widen a bounded check on its own.
+#[derive(Serialize)]
+pub struct CheckedCases {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub because: Option<String>,
+    pub kind: &'static str,
 }
 
 /// Why an invariant is interpreted: a kind from the report's own closed

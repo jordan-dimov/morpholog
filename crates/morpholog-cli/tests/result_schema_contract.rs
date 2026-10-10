@@ -74,6 +74,20 @@ fn to_value<T: serde::Serialize>(v: &T) -> serde_json::Value {
     serde_json::to_value(v).unwrap()
 }
 
+fn bound() -> morpholog_cli::envelopes::CheckedCases {
+    morpholog_cli::envelopes::CheckedCases {
+        because: None,
+        kind: "bound",
+    }
+}
+
+fn whole(because: &str) -> morpholog_cli::envelopes::CheckedCases {
+    morpholog_cli::envelopes::CheckedCases {
+        because: Some(because.to_string()),
+        kind: "whole",
+    }
+}
+
 /// Like [`assert_golden`], but pins the exact bytes `print_json` emits
 /// rather than the `Value` form, which re-sorts keys. For envelopes whose
 /// field order (or a `flatten`) is the wire order.
@@ -1400,11 +1414,53 @@ fn report_envelopes_serialize_as_pinned() {
             file: "model.morph".to_string(),
             invariants: Some(vec![
                 CheckedInvariant {
+                    cases: bound(),
                     name: "cap".to_string(),
                     refusal: None,
                     route: "compiled",
                 },
                 CheckedInvariant {
+                    cases: whole("`or`"),
+                    name: "fuel_is_known".to_string(),
+                    refusal: Some(CheckRefusal {
+                        kind: "construct",
+                        message: "`or` is outside the compiled fragment".to_string(),
+                    }),
+                    route: "interpreted",
+                },
+            ]),
+        }),
+    );
+    // Route and cases are independent: every combination serializes.
+    assert_golden(
+        "check_report_cases.json",
+        &to_value(&CheckReport {
+            diagnostics: vec![],
+            file: "model.morph".to_string(),
+            invariants: Some(vec![
+                CheckedInvariant {
+                    cases: bound(),
+                    name: "cap".to_string(),
+                    refusal: None,
+                    route: "compiled",
+                },
+                CheckedInvariant {
+                    cases: whole("`Open` binds no case variable"),
+                    name: "while_open".to_string(),
+                    refusal: None,
+                    route: "compiled",
+                },
+                CheckedInvariant {
+                    cases: bound(),
+                    name: "within_days".to_string(),
+                    refusal: Some(CheckRefusal {
+                        kind: "comparison_domain",
+                        message: "Duration comparison is outside the compiled fragment".to_string(),
+                    }),
+                    route: "interpreted",
+                },
+                CheckedInvariant {
+                    cases: whole("`or`"),
                     name: "fuel_is_known".to_string(),
                     refusal: Some(CheckRefusal {
                         kind: "construct",
@@ -2657,6 +2713,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("audit_row_named.json", "audit_row_named"),
         ("check_report.json", "check_report"),
         ("check_report_routes.json", "check_report"),
+        ("check_report_cases.json", "check_report"),
         ("check_report_no_invariants.json", "check_report"),
         ("hash_report.json", "hash_report"),
         ("init_report.json", "init_report"),

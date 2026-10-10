@@ -95,8 +95,9 @@ One word before going further. Morpholog calls a record a **claim**: something s
 - **A past that cannot shift.** Rules never read the clock or the network; anything the outside world decides, like a rate or a holiday calendar, comes in as a dated record. So any report can be rebuilt exactly as it stood at any past moment.
 - **Exact arithmetic.** Decimals with no rounding drift, exact times and durations, and amounts that carry their unit, so dollars never get added to tonnes.
 - **Several changes as one decision.** `morpholog transact` saves a group of proposals together, or none of them.
+- **Ask before you act.** `explain` runs the same rules against the current records and answers with the same detail a refusal carries, saving nothing: a dry run for an operator's tool, an automated agent or a test.
 - **Notifications that respect the save.** Messages to other systems are sent only after a change is saved, by a separate worker, and never for a change that was refused.
-- **Rules you can read back.** Ask what the rules forbid (`inspect guarantees`) and what each action requires (`inspect controls`); later, which rules have ever actually done any work (`inspect coverage`), and what evidence a refusal is missing (`explain`).
+- **Rules you can read back.** Ask what the rules forbid (`inspect guarantees`) and what each action requires (`inspect controls`); later, which rules have ever actually done any work (`inspect coverage`), and what evidence a refusal is missing (`explain --json`).
 - **A tamper-evident history.** `audit verify` proves the history has not been edited. `audit export` writes a file someone else can check offline, against a 32-byte fingerprint you gave them in advance.
 
 ## Try it
@@ -118,8 +119,17 @@ export DATABASE_URL=postgres:///my_books
 morpholog init
 ```
 
-Post a journal entry - debit $100 to cash, credit $100 to revenue:
+Before committing an entry, you can ask whether it would be accepted. `explain` runs the rules against the current records, reports the verdict, and changes nothing; `propose` makes the change. Ask first, then post a journal entry - debit $100 to cash, credit $100 to revenue:
 
+```bash
+morpholog explain examples/03_double_entry_ledger/ledger.morph post_simple_entry \
+  --actor jordan \
+  --args-named '{"entry_id":"entry_001","posting_date":"2026-04-15","period":"q1_2026",
+                 "debit_account":"account_cash","credit_account":"account_revenue","amount":"100"}'
+```
+```text
+Admissible: post_simple_entry(entry_001, 2026-04-15, q1_2026, account_cash, account_revenue, 100) proposed by jordan
+```
 ```bash
 morpholog propose examples/03_double_entry_ledger/ledger.morph post_simple_entry \
   --actor jordan \

@@ -99,6 +99,12 @@ impl PreparedProgram {
 
     /// The rules a transition is admitted under, with the plans built
     /// at construction.
+    /// One impact plan per invariant, in programme order: the plans
+    /// admission applies, for a report that must not drift from them.
+    pub fn impact_plans(&self) -> &[ImpactPlan] {
+        &self.impact
+    }
+
     pub fn admission(&self) -> Admission<'_> {
         Admission::with_plans(
             &self.program.invariants,

@@ -1474,19 +1474,51 @@ class CheckRefusal:
         )
 
 
+_CASE_KINDS = frozenset({"bound", "whole"})
+
+
+@dataclass(frozen=True)
+class CheckedCases:
+    """The cases admission checks for one invariant: ``bound`` when the
+    impact plan bounds every change the rule sees to the cases it
+    touches, ``whole`` when some change checks the rule over the whole
+    state, with ``because`` naming the construct responsible. A property
+    of the plan, not of the route: an execution route may widen a bounded
+    check on its own. Whole is a cost and a history to know about, not a
+    mistake."""
+
+    kind: str
+    because: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> CheckedCases:
+        data = _strict("checked cases", payload, {"kind"}, {"because"})
+        kind = _member("checked cases kind", data["kind"], _CASE_KINDS)
+        if (kind == "whole") != ("because" in data):
+            raise EnvelopeError(
+                f"checked cases: a reason belongs to a whole verdict and only to one, "
+                f"got {payload!r}"
+            )
+        because = data.get("because")
+        if kind == "whole" and not isinstance(because, str):
+            raise EnvelopeError(f"checked cases: because must be a string, got {payload!r}")
+        return cls(kind=kind, because=because)
+
+
 @dataclass(frozen=True)
 class CheckedInvariant:
-    """One invariant and the route the binary plans for it: ``compiled``
+    """One invariant, the route the binary plans for it: ``compiled``
     (checked in SQL) or ``interpreted`` (checked by the kernel, with the
-    refusal that kept it out of SQL)."""
+    refusal that kept it out of SQL), and the ``cases`` admission checks."""
 
     name: str
     route: str
+    cases: CheckedCases
     refusal: CheckRefusal | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> CheckedInvariant:
-        data = _strict("checked invariant", payload, {"name", "route"}, {"refusal"})
+        data = _strict("checked invariant", payload, {"cases", "name", "route"}, {"refusal"})
         route = _member("checked invariant route", data["route"], _CHECK_ROUTES)
         if (route == "interpreted") != ("refusal" in data):
             raise EnvelopeError(
@@ -1496,6 +1528,7 @@ class CheckedInvariant:
         return cls(
             name=data["name"],
             route=route,
+            cases=CheckedCases.from_json(data["cases"]),
             refusal=CheckRefusal.from_json(data["refusal"]) if "refusal" in data else None,
         )
 

@@ -404,6 +404,8 @@ to the claims an act touched is checked over the whole record, so one old
 breach can refuse every later act. Ask of each rule: does it govern a
 decision at a moment, or must it stay true of the whole record forever?
 A limit compared against append-only history is usually the first.
+`check -v` names the rules a change may check whole and the construct
+responsible, so the question can be asked before the first act.
 
 **Many small claims, never a wider one.** A predicate's shape is part of
 every claim ever admitted under it, so a field added later makes every

@@ -1055,13 +1055,14 @@
       }
     },
     "checked_invariant": {
-      "description": "One invariant and its planned route: compiled (checked in SQL), or interpreted (checked by the kernel) with the refusal that kept it out of SQL.",
+      "description": "One invariant, its planned route (compiled: checked in SQL; interpreted: checked by the kernel, with the refusal that kept it out of SQL), and the cases admission checks. Route and cases are independent.",
       "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["name", "route"],
+          "required": ["cases", "name", "route"],
           "properties": {
+            "cases": { "$ref": "#/$defs/checked_cases" },
             "name": { "type": "string" },
             "route": { "const": "compiled" }
           }
@@ -1069,11 +1070,34 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["name", "route", "refusal"],
+          "required": ["cases", "name", "route", "refusal"],
           "properties": {
+            "cases": { "$ref": "#/$defs/checked_cases" },
             "name": { "type": "string" },
             "route": { "const": "interpreted" },
             "refusal": { "$ref": "#/$defs/check_refusal" }
+          }
+        }
+      ]
+    },
+    "checked_cases": {
+      "description": "Whether the impact plan bounds every change the rule sees to the cases it touches (bound), or some change checks the rule over the whole state (whole), with the one construct responsible as check -v prints it. A property of the plan: an execution route may widen a bounded check on its own, never the reverse. Whole is a cost and a history to be aware of, not a mistake.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "bound" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["because", "kind"],
+          "properties": {
+            "because": { "type": "string" },
+            "kind": { "const": "whole" }
           }
         }
       ]

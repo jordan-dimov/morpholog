@@ -11,6 +11,25 @@
     },
     {
       "cases": {
+        "because": "`Open` binds no case variable",
+        "kind": "whole"
+      },
+      "name": "while_open",
+      "route": "compiled"
+    },
+    {
+      "cases": {
+        "kind": "bound"
+      },
+      "name": "within_days",
+      "refusal": {
+        "kind": "comparison_domain",
+        "message": "Duration comparison is outside the compiled fragment"
+      },
+      "route": "interpreted"
+    },
+    {
+      "cases": {
         "because": "`or`",
         "kind": "whole"
       },

@@ -500,6 +500,31 @@ class CheckRoutes(unittest.TestCase):
             with self.assertRaises(envelopes.EnvelopeError):
                 envelopes.CheckReport.from_json(payload)
 
+    def test_cases_are_independent_of_the_route_and_a_reason_belongs_to_whole_only(self):
+        report = envelopes.CheckReport.from_json(golden("check_report_cases.json"))
+        self.assertEqual(
+            [(i.route, i.cases.kind, i.cases.because) for i in report.invariants],
+            [
+                ("compiled", "bound", None),
+                ("compiled", "whole", "`Open` binds no case variable"),
+                ("interpreted", "bound", None),
+                ("interpreted", "whole", "`or`"),
+            ],
+        )
+        routes = envelopes.CheckReport.from_json(golden("check_report_routes.json"))
+        self.assertEqual(routes.invariants[0].cases, envelopes.CheckedCases("bound"))
+        self.assertEqual(routes.invariants[1].cases.because, "`or`")
+        for mutate in (
+            lambda p: p["invariants"][1]["cases"].__delitem__("because"),
+            lambda p: p["invariants"][0]["cases"].__setitem__("because", "`or`"),
+            lambda p: p["invariants"][0]["cases"].__setitem__("kind", "some"),
+            lambda p: p["invariants"][0].__delitem__("cases"),
+        ):
+            payload = golden("check_report_routes.json")
+            mutate(payload)
+            with self.assertRaises(envelopes.EnvelopeError):
+                envelopes.CheckReport.from_json(payload)
+
     def test_the_client_knows_exactly_the_published_kinds(self):
         schema = json.loads((TEMPLATES_DIR.parent / "src" / "schemas" / "result.json").read_text())
         published = set(schema["$defs"]["check_refusal"]["properties"]["kind"]["enum"])

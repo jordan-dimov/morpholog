@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use super::*;
 use crate::derive::eval_invariant_cases;
+use crate::impact::{Bounding, Widening};
 use crate::ir::{Definition, DefinitionOrigin, Var};
 use crate::ir_builder::{
     and, claim, defined, implies, invariant, params, subj as lit, term, var, wildcard,
@@ -88,6 +89,7 @@ fn assert_never_narrower_over(
     vars: &[Var],
 ) {
     let plan = ImpactPlan::with_definitions(inv, defs);
+    let bound = plan.bounding() == Bounding::Bound;
     let mut domain: Vec<EvalValue> = Vec::new();
     for value in universe.iter().flat_map(|c| &c.args) {
         if !domain.contains(value) {
@@ -127,6 +129,11 @@ fn assert_never_narrower_over(
                     plan.classify(std::slice::from_ref(changed), &[]),
                 )
             };
+            assert!(
+                !(bound && impact == Impact::Unbounded),
+                "{}: the plan says bound, but {changed:?} checks it whole",
+                inv.name
+            );
             for case in &cases {
                 if truth(&pre, case) != truth(&post, case) {
                     assert!(
@@ -597,4 +604,121 @@ fn a_lookup_inside_a_builtin_still_widens() {
     let plan = ImpactPlan::with_definitions(&inv, &[]);
     assert_eq!(admitted(&plan, universe[1].clone()), Impact::Unbounded);
     assert_eq!(admitted(&plan, universe[2].clone()), Impact::Untouched);
+}
+
+/// Each construct the bounding proof does not cover is named as the
+/// source spells it, and the plan's verdict is derived from what
+/// `classify` consults.
+#[test]
+fn bounding_names_the_construct_that_checks_a_rule_whole() {
+    use crate::ir_builder::{add, cond, in_, le, or, pre, sum, value_of, xor};
+    let a = || claim("A", vec![var("x"), var("v")]);
+    let b = || claim("B", vec![var("x")]);
+    let v = || term(var("v"));
+    let shapes: Vec<(Prop, Widening)> = vec![
+        (implies(pre(b()), b()), Widening::Pre),
+        (
+            implies(a(), or(vec![b(), claim("C", vec![var("x")])])),
+            Widening::Or,
+        ),
+        (
+            implies(a(), xor(b(), claim("C", vec![var("x")]))),
+            Widening::Xor,
+        ),
+        (implies(a(), in_(var("x"), var("v"))), Widening::In),
+        (
+            implies(a(), le(value_of("Limit", vec![lit("l"), wildcard()]), v())),
+            Widening::ValueLookup,
+        ),
+        (
+            implies(a(), le(cond(b(), v(), v()), v())),
+            Widening::ConditionalValue,
+        ),
+        (
+            implies(a(), le(sum(add(v(), v()), b()), v())),
+            Widening::SumOverExpression,
+        ),
+    ];
+    for (body, expected) in shapes {
+        let inv = invariant("shape", body);
+        for plan in [
+            ImpactPlan::new(&inv),
+            ImpactPlan::with_definitions(&inv, &[]),
+        ] {
+            assert_eq!(plan.bounding(), Bounding::Whole(expected.clone()));
+        }
+    }
+    let plain = invariant("plain", implies(a(), b()));
+    assert_eq!(ImpactPlan::new(&plain).bounding(), Bounding::Bound);
+    assert_eq!(
+        Widening::SumOverExpression.to_string(),
+        "a sum over an expression"
+    );
+}
+
+/// A claim pattern binding no case variable makes the rule whole for a
+/// delta touching that pattern only; its neighbours stay bounded, and the
+/// verdict says whole while naming the pattern.
+#[test]
+fn a_pattern_without_a_case_variable_reports_whole_and_widens_only_its_own_deltas() {
+    let inv = invariant(
+        "while_open",
+        implies(
+            and(vec![
+                claim("A", vec![var("x")]),
+                claim("Open", vec![wildcard()]),
+            ]),
+            claim("B", vec![var("x")]),
+        ),
+    );
+    let universe = [
+        claim_instance("A", &[subj("a")]),
+        claim_instance("Open", &[subj("o")]),
+        claim_instance("B", &[subj("a")]),
+    ];
+    assert_never_narrower(&inv, &[], &universe);
+    for plan in [
+        ImpactPlan::new(&inv),
+        ImpactPlan::with_definitions(&inv, &[]),
+    ] {
+        assert_eq!(
+            plan.bounding(),
+            Bounding::Whole(Widening::NoCaseVariable("Open".into()))
+        );
+        assert_eq!(
+            admitted(&plan, universe[0].clone()),
+            Impact::Bounded(vec![case(&[("x", subj("a"))])])
+        );
+        assert_eq!(admitted(&plan, universe[1].clone()), Impact::Unbounded);
+    }
+}
+
+/// A call the plan follows bounds what the bare plan checks whole, and
+/// the bare plan names the call.
+#[test]
+fn a_followed_call_is_bound_where_the_bare_plan_names_the_call() {
+    let defs = [def("has", &["p"], claim("Tag", vec![var("p"), var("k")]))];
+    let inv = invariant(
+        "called",
+        implies(
+            and(vec![
+                claim("A", vec![var("x")]),
+                defined("has", vec![var("x")]),
+            ]),
+            claim("B", vec![var("x")]),
+        ),
+    );
+    assert_eq!(
+        ImpactPlan::new(&inv).bounding(),
+        Bounding::Whole(Widening::UnfollowedCall("has".into()))
+    );
+    assert_eq!(
+        ImpactPlan::with_definitions(&inv, &defs).bounding(),
+        Bounding::Bound
+    );
+    assert_eq!(
+        ImpactPlan::with_definitions(&inv, &[]).bounding(),
+        Bounding::Whole(Widening::UnfollowedCall("has".into())),
+        "an undeclared call cannot be followed"
+    );
 }

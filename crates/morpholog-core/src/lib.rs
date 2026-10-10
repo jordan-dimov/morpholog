@@ -71,7 +71,7 @@ pub use explain::{
     Rejection, TransitionRef, Verdict,
 };
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
-pub use impact::{Impact, ImpactPlan};
+pub use impact::{Bounding, Impact, ImpactPlan, Widening};
 pub use ir::{
     ArgDecl, ArithOp, Builtin, Claim, CompareOp, Definition, DefinitionName, DefinitionOrigin,
     DerivedClaim, DerivedValue, Discipline, ExtremumOp, Intent, IntentDecl, IntentName, Invariant,

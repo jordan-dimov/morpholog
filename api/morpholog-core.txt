@@ -293,6 +293,25 @@ impl core::marker::Unpin for morpholog_core::BindOneOutcome
 impl core::marker::UnsafeUnpin for morpholog_core::BindOneOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::BindOneOutcome
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::BindOneOutcome
+pub enum morpholog_core::Bounding
+pub morpholog_core::Bounding::Bound
+pub morpholog_core::Bounding::Whole(morpholog_core::Widening)
+impl core::clone::Clone for morpholog_core::Bounding
+pub fn morpholog_core::Bounding::clone(&self) -> morpholog_core::Bounding
+impl core::cmp::Eq for morpholog_core::Bounding
+pub fn morpholog_core::Bounding::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::Bounding
+pub fn morpholog_core::Bounding::eq(&self, &morpholog_core::Bounding) -> bool
+impl core::fmt::Debug for morpholog_core::Bounding
+pub fn morpholog_core::Bounding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_core::Bounding
+impl core::marker::Freeze for morpholog_core::Bounding
+impl core::marker::Send for morpholog_core::Bounding
+impl core::marker::Sync for morpholog_core::Bounding
+impl core::marker::Unpin for morpholog_core::Bounding
+impl core::marker::UnsafeUnpin for morpholog_core::Bounding
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Bounding
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Bounding
 pub enum morpholog_core::Builtin
 pub morpholog_core::Builtin::Abs
 pub morpholog_core::Builtin::Max
@@ -1473,6 +1492,34 @@ impl core::marker::Unpin for morpholog_core::VocabularyKind
 impl core::marker::UnsafeUnpin for morpholog_core::VocabularyKind
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::VocabularyKind
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::VocabularyKind
+pub enum morpholog_core::Widening
+pub morpholog_core::Widening::ConditionalValue
+pub morpholog_core::Widening::In
+pub morpholog_core::Widening::NoCaseVariable(morpholog_core::PredicateName)
+pub morpholog_core::Widening::Or
+pub morpholog_core::Widening::Pre
+pub morpholog_core::Widening::SumOverExpression
+pub morpholog_core::Widening::UnfollowedCall(morpholog_core::DefinitionName)
+pub morpholog_core::Widening::ValueLookup
+pub morpholog_core::Widening::Xor
+impl core::clone::Clone for morpholog_core::Widening
+pub fn morpholog_core::Widening::clone(&self) -> morpholog_core::Widening
+impl core::cmp::Eq for morpholog_core::Widening
+pub fn morpholog_core::Widening::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::Widening
+pub fn morpholog_core::Widening::eq(&self, &morpholog_core::Widening) -> bool
+impl core::fmt::Debug for morpholog_core::Widening
+pub fn morpholog_core::Widening::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for morpholog_core::Widening
+pub fn morpholog_core::Widening::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_core::Widening
+impl core::marker::Freeze for morpholog_core::Widening
+impl core::marker::Send for morpholog_core::Widening
+impl core::marker::Sync for morpholog_core::Widening
+impl core::marker::Unpin for morpholog_core::Widening
+impl core::marker::UnsafeUnpin for morpholog_core::Widening
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Widening
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Widening
 pub struct morpholog_core::Admission<'a>
 impl<'a> morpholog_core::Admission<'a>
 pub fn morpholog_core::Admission<'a>::definitions(&self) -> &'a [morpholog_core::Definition]
@@ -2056,6 +2103,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Guarantee
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Guarantee
 pub struct morpholog_core::ImpactPlan
 impl morpholog_core::ImpactPlan
+pub fn morpholog_core::ImpactPlan::bounding(&self) -> morpholog_core::Bounding
 pub fn morpholog_core::ImpactPlan::case_variables(&self) -> alloc::collections::btree::set::BTreeSet<morpholog_core::Var>
 pub fn morpholog_core::ImpactPlan::classify(&self, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance]) -> morpholog_core::Impact
 pub fn morpholog_core::ImpactPlan::new(&morpholog_core::Invariant) -> Self
@@ -2448,6 +2496,7 @@ pub fn morpholog_core::PreparedProgram::admission(&self) -> morpholog_core::Admi
 pub fn morpholog_core::PreparedProgram::definition(&self, &morpholog_core::DefinitionName) -> core::option::Option<&morpholog_core::Definition>
 pub fn morpholog_core::PreparedProgram::derived_claim(&self, &morpholog_core::PredicateName) -> core::option::Option<&morpholog_core::DerivedClaim>
 pub fn morpholog_core::PreparedProgram::explain(&self, &morpholog_core::Transition, &morpholog_core::State, &mut dyn morpholog_core::SubjectSource) -> morpholog_core::Explanation
+pub fn morpholog_core::PreparedProgram::impact_plans(&self) -> &[morpholog_core::ImpactPlan]
 pub fn morpholog_core::PreparedProgram::intent(&self, &morpholog_core::IntentName) -> core::option::Option<&morpholog_core::IntentDecl>
 pub fn morpholog_core::PreparedProgram::invariant(&self, &morpholog_core::InvariantName) -> core::option::Option<&morpholog_core::Invariant>
 pub fn morpholog_core::PreparedProgram::model_hash(&self) -> &str
