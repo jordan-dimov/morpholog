@@ -61,9 +61,10 @@ pub(crate) struct BoundedOccurrence<'a> {
     pub(crate) constrained: BTreeSet<usize>,
 }
 
-/// A construct the bounding proof does not cover, named as the source
-/// spells it. A body holding one is checked whole by every delta inside
-/// its reads.
+/// What stops the bounding proof, named as the source spells it: a
+/// construct, which makes every delta inside the body's reads check it
+/// whole, or a claim pattern binding no case variable, which widens
+/// only the deltas that touch that pattern.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Widening {
     Pre,
