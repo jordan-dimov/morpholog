@@ -610,7 +610,9 @@ async fn both_routes_blame_the_same_comparison_with_the_same_values() {
          invariant within_capacity:\n\
          \x20   Cap(v, cap) implies sum(q | Parcel(_, v, q)) <= cap\n\
          invariant never_raised:\n\
-         \x20   Flag(f) implies 1 <= 0\n",
+         \x20   Flag(f) implies 1 <= 0\n\
+         invariant fleet_total:\n\
+         \x20   sum(q | Parcel(_, _, q)) <= 100\n",
     )
     .unwrap();
     let compiled = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
@@ -631,6 +633,10 @@ async fn both_routes_blame_the_same_comparison_with_the_same_values() {
         ClaimInstance {
             predicate: "Cap".into(),
             args: vec![subj("v1"), dec(10)],
+        },
+        ClaimInstance {
+            predicate: "Cap".into(),
+            args: vec![subj("v2"), dec(200)],
         },
         ClaimInstance {
             predicate: "Parcel".into(),
@@ -699,5 +705,52 @@ async fn both_routes_blame_the_same_comparison_with_the_same_values() {
             right: dec(0),
         }
     );
+    // A comparison that is the whole rule, with nothing to descend
+    // into: 6 + 95 across the fleet against 100, the vessel's own cap
+    // untouched.
+    let t = Transition {
+        transformation_name: "load".into(),
+        args: vec![subj("p3"), subj("v2"), dec(95)],
+        actor: Subject::from("route_test"),
+    };
+    let both = refusals(t).await;
+    assert_eq!(both[0], both[1], "interpreted vs compiled");
+    let (rule, witness, compared) = &both[1];
+    assert_eq!(rule.as_deref(), Some("fleet_total"));
+    assert!(
+        witness.is_empty(),
+        "nothing bound at a top-level comparison"
+    );
+    assert_eq!(
+        compared.clone().expect("the comparison is blamed"),
+        morpholog_core::Compared {
+            op: "<=".to_string(),
+            left: dec(101),
+            right: dec(100),
+        }
+    );
     let _ = act("set_cap");
+}
+
+/// The one query run only to explain a refusal: a statement error in it
+/// answers nothing and leaves the transaction usable, never aborted, so
+/// the refusal already decided is what the caller gets.
+#[tokio::test]
+async fn a_failing_diagnostic_query_answers_nothing_and_keeps_the_transaction() {
+    let pool = test_pool().await;
+    let mut tx = pool.begin().await.unwrap();
+    let answer = morpholog_postgres::fetch_diagnostic(&mut tx, "SELECT 1/0 AS \"t\"".to_string())
+        .await
+        .expect("a statement error is not an operational error here");
+    assert!(answer.is_none());
+    let one: i32 = sqlx::query_scalar("SELECT 1")
+        .fetch_one(&mut *tx)
+        .await
+        .expect("the transaction is not aborted");
+    assert_eq!(one, 1);
+    let answered = morpholog_postgres::fetch_diagnostic(&mut tx, "SELECT '7' AS \"t\"".to_string())
+        .await
+        .unwrap();
+    assert!(answered.is_some(), "a sound query still answers");
+    tx.rollback().await.unwrap();
 }

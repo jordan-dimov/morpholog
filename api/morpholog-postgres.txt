@@ -2423,6 +2423,7 @@ pub async fn morpholog_postgres::earliest_pending_retry(&sqlx_postgres::PgPool, 
 pub async fn morpholog_postgres::export_pack(&sqlx_postgres::PgPool, core::option::Option<i64>) -> core::result::Result<morpholog_postgres::EvidencePack, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::export_selective(&sqlx_postgres::PgPool, core::option::Option<i64>, &[uuid::Uuid]) -> core::result::Result<morpholog_postgres::SelectiveEvidencePack, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::export_window(&sqlx_postgres::PgPool, morpholog_postgres::WindowStart, core::option::Option<i64>) -> core::result::Result<morpholog_postgres::WindowEvidencePack, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::fetch_diagnostic(&mut sqlx_core::transaction::Transaction<'_, sqlx_postgres::database::Postgres>, alloc::string::String) -> core::result::Result<core::option::Option<sqlx_postgres::row::PgRow>, morpholog_postgres::PgError>
 pub fn morpholog_postgres::generate_signing_key() -> ed25519_dalek::signing::SigningKey
 pub fn morpholog_postgres::head_version() -> i32
 pub async fn morpholog_postgres::initialise_schema(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::InitOutcome, morpholog_postgres::PgError>

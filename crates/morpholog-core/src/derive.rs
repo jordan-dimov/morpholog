@@ -94,10 +94,12 @@ pub(crate) fn invariant_witness_cases(
             Prop::Implies { left, right } => (left, right),
             Prop::Forall { source, body, .. } => (source, body),
             Prop::Not(_) => return Ok(Diagnosis::default()),
+            // A body with nothing to descend into, a comparison for one,
+            // is its own leaf: no bindings, and its operands if it is one.
             _ => {
-                return Ok(find_failure(&inv.body, ctx)
-                    .map(Diagnosis::of)
-                    .unwrap_or_default());
+                return Ok(Diagnosis::of(
+                    find_failure(&inv.body, ctx).unwrap_or_else(|| Failure::here(&inv.body, ctx)),
+                ));
             }
         };
         for m in find_matches(left, ctx)? {
@@ -163,9 +165,15 @@ pub(crate) fn invariant_witness(
     definitions: &[Definition],
 ) -> Result<Diagnosis, EvalError> {
     in_invariant_context(state, pre_state, definitions, |ctx| {
-        Ok(crate::eval::find_failure(&inv.body, ctx)
-            .map(Diagnosis::of)
-            .unwrap_or_default())
+        // A negated body witnesses nothing, as the case-bound path says;
+        // any other body with nothing to descend into is its own leaf.
+        if matches!(inv.body, Prop::Not(_)) {
+            return Ok(Diagnosis::default());
+        }
+        Ok(Diagnosis::of(
+            crate::eval::find_failure(&inv.body, ctx)
+                .unwrap_or_else(|| Failure::here(&inv.body, ctx)),
+        ))
     })
 }
 

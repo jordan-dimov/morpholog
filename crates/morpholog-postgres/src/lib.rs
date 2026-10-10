@@ -77,6 +77,8 @@ pub use checkpoints::{
 pub use claims::{
     ClaimFilter, list_claims, list_claims_for_predicates, list_claims_where, load_scoped_state,
 };
+#[doc(hidden)]
+pub use compiled::fetch_diagnostic;
 pub use compiled::{CompileReason, CompileRefusal};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
 pub use error::PgError;

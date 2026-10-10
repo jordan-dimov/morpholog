@@ -383,7 +383,7 @@ async fn compared_off(
                     chosen.sources_clause(lateral),
                     chosen.pins(prefix)
                 );
-                match fetch(tx, sql).await? {
+                match fetch_diagnostic(tx, sql).await? {
                     Some(row) => row
                         .try_get::<String, _>("t")
                         .ok()
@@ -408,6 +408,40 @@ async fn compared_off(
         right,
     };
     Ok((compared.holds() == Some(false)).then_some(compared))
+}
+
+/// A query run only to explain a refusal already decided. A statement
+/// error in it must not replace the refusal, and would leave the
+/// transaction aborted, so it runs under a savepoint: on an error the
+/// savepoint is rolled back and the answer is simply none. An error on
+/// the savepoint itself is the connection's, and operational.
+pub async fn fetch_diagnostic(
+    tx: &mut Transaction<'_, Postgres>,
+    sql: String,
+) -> Result<Option<sqlx::postgres::PgRow>, PgError> {
+    sqlx::raw_sql("SAVEPOINT morpholog_diagnosis")
+        .execute(&mut **tx)
+        .await
+        .map_err(classify)?;
+    let fetched = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .fetch_optional(&mut **tx)
+        .await;
+    match fetched {
+        Ok(row) => {
+            sqlx::raw_sql("RELEASE SAVEPOINT morpholog_diagnosis")
+                .execute(&mut **tx)
+                .await
+                .map_err(classify)?;
+            Ok(row)
+        }
+        Err(_) => {
+            sqlx::raw_sql("ROLLBACK TO SAVEPOINT morpholog_diagnosis")
+                .execute(&mut **tx)
+                .await
+                .map_err(classify)?;
+            Ok(None)
+        }
+    }
 }
 
 async fn fetch(

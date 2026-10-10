@@ -526,3 +526,85 @@ fn explain_carries_the_comparison_a_refusal_would() {
     );
     assert!(inv.compared.is_some());
 }
+
+const TYPED: &str = r#"
+program typed
+predicate Hold(vessel: Subject, capacity: Decimal[t])
+    unique by (vessel)
+predicate Cargo(parcel: Subject, vessel: Subject, weight: Decimal[t])
+    unique by (parcel)
+predicate Window(voyage: Subject, closes_at: Timestamp)
+    unique by (voyage)
+predicate Note(voyage: Subject, at: Timestamp)
+    unique by (voyage)
+predicate Owner(asset: Subject, holder: Subject)
+    unique by (asset)
+transformation load(p, v, w):
+    require fits: Hold(v, capacity) and w <= capacity
+    admit Cargo(p, v, w)
+transformation note(v, at):
+    require in_window: Window(v, closes_at) and at at_or_before closes_at
+    admit Note(v, at)
+transformation transfer(a, to):
+    require changes_hands: Owner(a, holder) and holder != to
+    admit Owner(a, to)
+"#;
+
+fn typed_refusal(state: &State, name: &str, args: Vec<EvalValue>) -> RejectionReason {
+    let p = parse_program(TYPED).expect("parses");
+    p.validate().expect("validates");
+    let t = transition(name, args);
+    match propose(&p, &t, state, &mut subjects(["x"])).expect("no kernel error") {
+        Outcome::Rejected { reason } => reason,
+        Outcome::Accepted { .. } => panic!("expected a refusal"),
+    }
+}
+
+/// A quantity carries its unit on both sides, a timestamp its own
+/// operator spelling, and an inequality `!=` with the two subjects.
+#[test]
+fn quantities_timestamps_and_inequalities_carry_their_own_values() {
+    use morpholog_test_support::{qty, ts};
+    let state = State::from_claims(vec![claim_instance("Hold", &[subj("v"), qty("50", "t")])]);
+    let reason = typed_refusal(&state, "load", vec![subj("p"), subj("v"), qty("60", "t")]);
+    assert_eq!(
+        compared_of(&reason),
+        Some(Compared {
+            op: "<=".to_string(),
+            left: qty("60", "t"),
+            right: qty("50", "t"),
+        })
+    );
+
+    let state = State::from_claims(vec![claim_instance(
+        "Window",
+        &[subj("voy"), ts("2026-10-10T12:00:00Z")],
+    )]);
+    let reason = typed_refusal(
+        &state,
+        "note",
+        vec![subj("voy"), ts("2026-10-10T18:30:00Z")],
+    );
+    assert_eq!(
+        compared_of(&reason),
+        Some(Compared {
+            op: "at_or_before".to_string(),
+            left: ts("2026-10-10T18:30:00Z"),
+            right: ts("2026-10-10T12:00:00Z"),
+        })
+    );
+
+    let state = State::from_claims(vec![claim_instance(
+        "Owner",
+        &[subj("asset"), subj("alice")],
+    )]);
+    let reason = typed_refusal(&state, "transfer", vec![subj("asset"), subj("alice")]);
+    assert_eq!(
+        compared_of(&reason),
+        Some(Compared {
+            op: "!=".to_string(),
+            left: subj("alice"),
+            right: subj("alice"),
+        })
+    );
+}
