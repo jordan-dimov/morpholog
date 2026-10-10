@@ -1,0 +1,16 @@
+{
+  "transition": {
+    "actor": "alex",
+    "args": [
+      "acct_2"
+    ],
+    "transformation": "flag_account"
+  },
+  "verdict": {
+    "rejected": {
+      "kind": "invariant",
+      "name": "acct_2_is_never_flagged",
+      "rule": "not Flag(#acct_2)"
+    }
+  }
+}

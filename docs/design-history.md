@@ -1264,3 +1264,13 @@ Code review then moved the assurance verdict out of the library. A public verifi
 **What the review changed:** `bound` is a property of the plan, not an end-to-end promise, because the SQL route can widen a bounded case it cannot seek on; the docs say so rather than the PR proving the widening unreachable. The reason is one deterministic construct, not the first in source order, since a followed definition's body is walked after the call site. `cases` is a nested object with a two-arm schema, so a reason belongs to `whole` and only to `whole` structurally. The verbose line says a rule *may* check whole, because a change outside its reads dismisses even a whole rule.
 
 **What was skipped:** a per-predicate verdict for a rule whole on one pattern and bound on another; every construct in a rule rather than one; spans for the construct; any change to `explain` itself.
+
+### A dry run names the case a refusal would
+
+**Forced by:** the review of the previous entry (#541). Billing `explain` as the second verb exposed that its invariant verdict carried the rule and the comparison but not the witness: `verdict_from_rejection` copied the bindings for a gate and dropped them for an invariant, though the structured reason held them. The desk's third report asked, in the same breath, for the documented path when a predicate needs one more field (#533).
+
+**Landed:** the invariant verdict carries `witness` as the gate verdict does, read off the same reason, with the schema arm, a golden from a real run, the Python model and a test holding an explained invariant's witness and comparison to the refusal's exactly, on the ledger's unbalanced split entry. The rendering prints the bindings under the rule for both verdict kinds, which it had not done for gates either. The embedder guide says, beside the named read's skew contract, that a predicate with history is not widened: a sibling claim keyed the same way is the move, and the sheet shows it.
+
+**What the review changed:** the compatibility claim. The field is optional, but a generated client is strict by design and refuses an unknown field, so a client from before it must be regenerated; the guide says so instead of claiming nothing refuses. The existing invariant golden gained its witness rather than being preserved as empty, since it had been empty only because `explain` dropped it; a top-level negation, which binds nothing, is the golden for absence. A retract-and-re-admit migration is not named as a path: the worked predicate is append only, and such an act could not retract it.
+
+**What was skipped:** several violators (#255); the gate's name in coverage (#486); any change to how the failure is selected.

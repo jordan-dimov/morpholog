@@ -419,6 +419,12 @@ class Explanations(unittest.TestCase):
         )
         invariant = envelopes.Explanation.from_json(golden("explanation_invariant.json"))
         self.assertIsInstance(invariant.rejection, envelopes.InvariantRejection)
+        # The dry run names the case the refusal would.
+        self.assertEqual([w.var for w in invariant.rejection.witness], ["a"])
+        self.assertEqual(invariant.rejection.witness[0].value, "acct_1")
+        bare = envelopes.Explanation.from_json(golden("explanation_invariant_no_witness.json"))
+        self.assertNotIn("witness", golden("explanation_invariant_no_witness.json")["verdict"]["rejected"])
+        self.assertEqual(bare.rejection.witness, [])
         error = envelopes.Explanation.from_json(golden("explanation_error.json"))
         self.assertIsInstance(error.rejection, envelopes.ErrorRejection)
 

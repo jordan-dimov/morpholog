@@ -10,7 +10,16 @@
     "rejected": {
       "kind": "invariant",
       "name": "no_flagged_accounts",
-      "rule": "Account(a) implies (not Flag(a))"
+      "rule": "Account(a) implies (not Flag(a))",
+      "witness": [
+        {
+          "value": {
+            "type": "subject",
+            "value": "acct_1"
+          },
+          "var": "a"
+        }
+      ]
     }
   }
 }
