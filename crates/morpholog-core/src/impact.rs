@@ -14,6 +14,7 @@
 //! judges the change itself, so only an empty delta escapes it.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fmt;
 
 use rust_decimal::Decimal;
 
@@ -60,12 +61,59 @@ pub(crate) struct BoundedOccurrence<'a> {
     pub(crate) constrained: BTreeSet<usize>,
 }
 
+/// What stops the bounding proof, named as the source spells it: a
+/// construct, which makes every delta inside the body's reads check it
+/// whole, or a claim pattern binding no case variable, which widens
+/// only the deltas that touch that pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Widening {
+    Pre,
+    Or,
+    Xor,
+    In,
+    ValueLookup,
+    ConditionalValue,
+    SumOverExpression,
+    UnfollowedCall(DefinitionName),
+    /// A claim pattern binding no case variable: a delta touching it has
+    /// no case to be bounded to.
+    NoCaseVariable(PredicateName),
+}
+
+impl fmt::Display for Widening {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Widening::Pre => f.write_str("`pre`"),
+            Widening::Or => f.write_str("`or`"),
+            Widening::Xor => f.write_str("`xor`"),
+            Widening::In => f.write_str("`in`"),
+            Widening::ValueLookup => f.write_str("`value`"),
+            Widening::ConditionalValue => f.write_str("`if`"),
+            Widening::SumOverExpression => f.write_str("a sum over an expression"),
+            Widening::UnfollowedCall(name) => {
+                write!(f, "`{name}` is a call that could not be followed")
+            }
+            Widening::NoCaseVariable(p) => write!(f, "`{p}` binds no case variable"),
+        }
+    }
+}
+
+/// Whether admission can bound every delta the rule sees to the cases it
+/// touches, or some delta checks the rule whole. A property of the plan:
+/// an execution route may still widen a bounded check on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Bounding {
+    Bound,
+    Whole(Widening),
+}
+
 /// An invariant's impact plan, built once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImpactPlan {
     occurrences: Vec<Occurrence>,
-    /// The body holds a construct the bounding proof does not cover.
-    conservative: bool,
+    /// The first construct the bounding proof does not cover, when the
+    /// body holds one.
+    widening: Option<Widening>,
     /// Every predicate the body reads, through its calls, when a delta
     /// outside it can be dismissed: `None` when a call was not followed,
     /// so the set is not known, or the body reads `pre`, so the rule
@@ -79,7 +127,7 @@ impl ImpactPlan {
     pub fn new(inv: &Invariant) -> Self {
         let case_vars = candidate_case_variables(&inv.body);
         let mut occurrences = Vec::new();
-        let mut conservative = false;
+        let mut widening = None;
         let mut calls = false;
         walk_prop(&inv.body, &mut |n| match classify_node(&n) {
             NodeKind::Claim(predicate, args) => {
@@ -98,16 +146,18 @@ impl ImpactPlan {
                     var_map,
                 });
             }
-            NodeKind::Call(..) => {
-                conservative = true;
+            NodeKind::Call(name, _) => {
+                widening.get_or_insert_with(|| Widening::UnfollowedCall(name.clone()));
                 calls = true;
             }
-            NodeKind::Widens => conservative = true,
+            NodeKind::Widens(w) => {
+                widening.get_or_insert(w);
+            }
             NodeKind::Inert => {}
         });
         Self {
             occurrences,
-            conservative,
+            widening,
             footprint: if calls { None } else { footprint_of(inv, &[]) },
         }
     }
@@ -124,7 +174,7 @@ impl ImpactPlan {
             .collect();
         let mut out = Self {
             occurrences: Vec::new(),
-            conservative: false,
+            widening: None,
             footprint: footprint_of(inv, definitions),
         };
         let table = DefinitionTable::new(definitions);
@@ -148,7 +198,7 @@ impl ImpactPlan {
     /// pattern, and the pattern binds a case variable (one that binds
     /// none leaves a touching delta unbounded).
     pub(crate) fn single_bounded_occurrence(&self) -> Option<BoundedOccurrence<'_>> {
-        if self.conservative {
+        if self.widening.is_some() {
             return None;
         }
         let [occ] = self.occurrences.as_slice() else {
@@ -169,13 +219,28 @@ impl ImpactPlan {
         })
     }
 
+    /// Whether every delta the body sees is bounded to its cases, or some
+    /// delta checks the rule whole, with one construct responsible: the
+    /// first the plan met, or the first claim pattern binding no case
+    /// variable. Derived from what `classify` consults, never stored
+    /// apart from it.
+    pub fn bounding(&self) -> Bounding {
+        if let Some(w) = &self.widening {
+            return Bounding::Whole(w.clone());
+        }
+        match self.occurrences.iter().find(|occ| occ.var_map.is_empty()) {
+            Some(occ) => Bounding::Whole(Widening::NoCaseVariable(occ.predicate.clone())),
+            None => Bounding::Bound,
+        }
+    }
+
     /// The cases the delta can affect.
     pub fn classify(&self, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) -> Impact {
         // Nothing changed, so nothing is affected, whatever the body holds.
         if asserted.is_empty() && retracted.is_empty() {
             return Impact::Untouched;
         }
-        if self.conservative {
+        if self.widening.is_some() {
             // A delta outside everything the body reads changes no claim
             // the body can see, so the truth it had over the pre-state is
             // its truth over the candidate, whatever the shape.
@@ -279,7 +344,9 @@ fn follow(
             });
         }
         NodeKind::Call(name, args) => calls.push((name.clone(), args.to_vec())),
-        NodeKind::Widens => out.conservative = true,
+        NodeKind::Widens(w) => {
+            out.widening.get_or_insert(w);
+        }
         NodeKind::Inert => {}
     });
     for (name, args) in calls {
@@ -303,7 +370,8 @@ fn follow(
         // An undeclared or cyclic call contributes nothing to a walker
         // that only reads; here nothing would be unsound.
         if !followed {
-            out.conservative = true;
+            out.widening
+                .get_or_insert_with(|| Widening::UnfollowedCall(name.clone()));
             out.footprint = None;
         }
     }
@@ -314,7 +382,7 @@ enum NodeKind<'a> {
     Claim(&'a PredicateName, &'a [Term]),
     Call(&'a DefinitionName, &'a [Term]),
     /// A construct the bounding proof does not cover.
-    Widens,
+    Widens(Widening),
     Inert,
 }
 
@@ -322,9 +390,10 @@ fn classify_node<'a>(n: &Node<'a>) -> NodeKind<'a> {
     match n {
         Node::Prop(Prop::Claim { predicate, args }) => NodeKind::Claim(predicate, args),
         Node::Prop(Prop::Defined { name, args }) => NodeKind::Call(name, args),
-        Node::Prop(Prop::Pre(_) | Prop::Or(_) | Prop::Xor(_, _) | Prop::In(_, _)) => {
-            NodeKind::Widens
-        }
+        Node::Prop(Prop::Pre(_)) => NodeKind::Widens(Widening::Pre),
+        Node::Prop(Prop::Or(_)) => NodeKind::Widens(Widening::Or),
+        Node::Prop(Prop::Xor(_, _)) => NodeKind::Widens(Widening::Xor),
+        Node::Prop(Prop::In(_, _)) => NodeKind::Widens(Widening::In),
         Node::Prop(
             Prop::And(_)
             | Prop::Not(_)
@@ -347,10 +416,11 @@ fn classify_node<'a>(n: &Node<'a>) -> NodeKind<'a> {
             if matches!(**value, ValueExpr::Term(_)) {
                 NodeKind::Inert
             } else {
-                NodeKind::Widens
+                NodeKind::Widens(Widening::SumOverExpression)
             }
         }
-        Node::Value(ValueExpr::ValueOf { .. } | ValueExpr::Cond { .. }) => NodeKind::Widens,
+        Node::Value(ValueExpr::ValueOf { .. }) => NodeKind::Widens(Widening::ValueLookup),
+        Node::Value(ValueExpr::Cond { .. }) => NodeKind::Widens(Widening::ConditionalValue),
         Node::Stmt(_) | Node::Slot(_) | Node::Binder(_) => NodeKind::Inert,
     }
 }

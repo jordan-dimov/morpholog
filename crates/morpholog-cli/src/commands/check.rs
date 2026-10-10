@@ -3,7 +3,10 @@
 use crate::CheckArgs;
 use crate::commands::{AlreadyReported, colour, print_json};
 use anyhow::Context;
-use morpholog_cli::envelopes::{CheckDiagnostic, CheckRefusal, CheckReport, CheckedInvariant};
+use morpholog_cli::envelopes::{
+    CheckDiagnostic, CheckRefusal, CheckReport, CheckedCases, CheckedInvariant,
+};
+use morpholog_core::Bounding;
 use morpholog_core::{PreparedProgram, Program};
 use morpholog_postgres::{CompileReason, InvariantPlan, PgProgram};
 use morpholog_surface::{Diagnostic, Span, parse_program_with_sources};
@@ -378,18 +381,32 @@ fn invariant_routes(pg: &PgProgram) -> anyhow::Result<Vec<CheckedInvariant>> {
         InvariantPlan::Compiled => &[][..],
         InvariantPlan::Interpreted { refusals } | InvariantPlan::Mixed { refusals, .. } => refusals,
     };
-    pg.prepared()
+    let prepared = pg.prepared();
+    prepared
         .program()
         .invariants
         .iter()
-        .map(|inv| {
+        .zip(prepared.impact_plans())
+        .map(|(inv, plan)| {
+            let cases = match plan.bounding() {
+                Bounding::Bound => CheckedCases {
+                    because: None,
+                    kind: "bound",
+                },
+                Bounding::Whole(widening) => CheckedCases {
+                    because: Some(widening.to_string()),
+                    kind: "whole",
+                },
+            };
             Ok(match refusals.iter().find(|r| r.invariant == inv.name) {
                 None => CheckedInvariant {
+                    cases,
                     name: inv.name.to_string(),
                     refusal: None,
                     route: "compiled",
                 },
                 Some(r) => CheckedInvariant {
+                    cases,
                     name: inv.name.to_string(),
                     refusal: Some(CheckRefusal {
                         kind: refusal_kind(&r.reason)?,
@@ -423,8 +440,9 @@ fn refusal_kind(reason: &CompileReason) -> anyhow::Result<&'static str> {
 }
 
 /// The `--verbose` success summary: the file path, programme name, a count
-/// per declaration kind, and how invariants are checked (compiled to SQL,
-/// interpreted, or mixed, with each refusal named).
+/// per declaration kind, how invariants are checked (compiled to SQL,
+/// interpreted, or mixed, with each refusal named), and which a change
+/// may check whole, with the construct responsible.
 fn summary(p: &Program, routes: &[CheckedInvariant], file: &Path) -> String {
     let mut out = format!(
         "ok: {}\nprogram: {}\n  predicates: {}\n  definitions: {}\n  invariants: {}\n  transformations: {}\n  intents: {}\n  derived claims: {}\n",
@@ -458,6 +476,21 @@ fn summary(p: &Program, routes: &[CheckedInvariant], file: &Path) -> String {
     }
     for (name, message) in refused {
         out.push_str(&format!("    {name}: {message}\n"));
+    }
+    let whole: Vec<(&str, &str)> = routes
+        .iter()
+        .filter_map(|r| r.cases.because.as_deref().map(|b| (r.name.as_str(), b)))
+        .collect();
+    if whole.is_empty() {
+        out.push_str("  invariant cases: all bound\n");
+    } else {
+        out.push_str(&format!(
+            "  invariant cases: {} may check whole\n",
+            whole.len()
+        ));
+    }
+    for (name, because) in whole {
+        out.push_str(&format!("    {name}: {because}\n"));
     }
     out
 }
@@ -513,7 +546,7 @@ mod tests {
         let s = summary(p.prepared().program(), &routes, Path::new("demo.morph"));
         assert_eq!(
             s,
-            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant checks: compiled\n"
+            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant checks: compiled\n  invariant cases: all bound\n"
         );
     }
 }

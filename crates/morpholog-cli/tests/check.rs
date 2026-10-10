@@ -64,7 +64,7 @@ fn check_verbose_clean_program_prints_summary() {
         String::from_utf8_lossy(&out.stderr)
     );
     let expected = format!(
-        "ok: {}\nprogram: demo\n  predicates: 1\n  definitions: 0\n  invariants: 1\n  transformations: 1\n  intents: 1\n  derived claims: 0\n  invariant checks: compiled\n",
+        "ok: {}\nprogram: demo\n  predicates: 1\n  definitions: 0\n  invariants: 1\n  transformations: 1\n  intents: 1\n  derived claims: 0\n  invariant checks: compiled\n  invariant cases: all bound\n",
         tmp.path().display()
     );
     assert_eq!(
@@ -107,6 +107,10 @@ fn check_verbose_reports_a_mixed_programme_with_its_counts() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("  invariant checks: mixed, 1 compiled, 1 interpreted\n    sticky: "),
+        "got: {stdout}"
+    );
+    assert!(
+        stdout.ends_with("  invariant cases: 1 may check whole\n    sticky: `pre`\n"),
         "got: {stdout}"
     );
 }
@@ -821,7 +825,23 @@ fn verbose_lines_from_routes(invariants: &[serde_json::Value]) -> String {
             refused.len()
         )
     };
-    verdict + &refused.concat()
+    let whole: Vec<String> = invariants
+        .iter()
+        .filter(|i| i["cases"]["kind"] == "whole")
+        .map(|i| {
+            format!(
+                "    {}: {}\n",
+                i["name"].as_str().unwrap(),
+                i["cases"]["because"].as_str().unwrap()
+            )
+        })
+        .collect();
+    let cases = if whole.is_empty() {
+        "  invariant cases: all bound\n".to_string()
+    } else {
+        format!("  invariant cases: {} may check whole\n", whole.len())
+    };
+    verdict + &refused.concat() + &cases + &whole.concat()
 }
 
 /// `check --json` and `check -v` report one plan. For every worked
@@ -920,7 +940,7 @@ fn check_json_names_each_invariants_route_and_refusal() {
     );
     assert_eq!(
         invariants[1],
-        serde_json::json!({"name": "small", "route": "compiled"})
+        serde_json::json!({"cases": {"kind": "bound"}, "name": "small", "route": "compiled"})
     );
 }
 
@@ -1018,4 +1038,55 @@ fn check_hints_a_name_the_python_client_would_refuse() {
         .output()
         .expect("morpholog check should run");
     assert!(!strict.status.success(), "--strict promotes the hint");
+}
+
+/// The report says which cases admission checks beside where it checks
+/// them, and the two are independent: a compiled rule can be whole.
+#[test]
+fn check_json_reports_the_cases_beside_the_route() {
+    let tmp = temp_morph(
+        "program demo\n\
+         predicate Foo(x: Subject)\n\
+         predicate Open(o: Subject)\n\
+         predicate Amount(x: Subject, v: Decimal)\n\
+         invariant cap: Amount(x, v) implies v <= 10\n\
+         invariant while_open: Foo(x) and Open(_) implies Amount(x, _)\n\
+         invariant sticky: pre(Foo(x)) implies Foo(x)\n\
+         transformation t(x):\n    admit Foo(x)\n",
+    );
+    let (payload, ok) = check_json(tmp.path(), false);
+    assert!(ok, "got: {payload}");
+    let rows: Vec<(String, String, serde_json::Value)> = payload["invariants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["name"].as_str().unwrap().to_string(),
+                i["route"].as_str().unwrap().to_string(),
+                i["cases"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "cap".to_string(),
+                "compiled".to_string(),
+                serde_json::json!({ "kind": "bound" })
+            ),
+            (
+                "while_open".to_string(),
+                "compiled".to_string(),
+                serde_json::json!({ "because": "`Open` binds no case variable", "kind": "whole" })
+            ),
+            (
+                "sticky".to_string(),
+                "interpreted".to_string(),
+                serde_json::json!({ "because": "`pre`", "kind": "whole" })
+            ),
+        ],
+        "got: {payload}"
+    );
 }

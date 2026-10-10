@@ -108,7 +108,20 @@ impl core::marker::Unpin for morpholog_cli::envelopes::CheckReport
 impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::CheckReport
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::CheckReport
 impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::CheckReport
+pub struct morpholog_cli::envelopes::CheckedCases
+pub morpholog_cli::envelopes::CheckedCases::because: core::option::Option<alloc::string::String>
+pub morpholog_cli::envelopes::CheckedCases::kind: &'static str
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::CheckedCases
+pub fn morpholog_cli::envelopes::CheckedCases::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::CheckedCases
+impl core::marker::Send for morpholog_cli::envelopes::CheckedCases
+impl core::marker::Sync for morpholog_cli::envelopes::CheckedCases
+impl core::marker::Unpin for morpholog_cli::envelopes::CheckedCases
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::CheckedCases
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::CheckedCases
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::CheckedCases
 pub struct morpholog_cli::envelopes::CheckedInvariant
+pub morpholog_cli::envelopes::CheckedInvariant::cases: morpholog_cli::envelopes::CheckedCases
 pub morpholog_cli::envelopes::CheckedInvariant::name: alloc::string::String
 pub morpholog_cli::envelopes::CheckedInvariant::refusal: core::option::Option<morpholog_cli::envelopes::CheckRefusal>
 pub morpholog_cli::envelopes::CheckedInvariant::route: &'static str

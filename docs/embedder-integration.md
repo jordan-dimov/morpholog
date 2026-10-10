@@ -16,7 +16,7 @@ This document is the public contract. What it pins is what an embedder can rely 
         |                       |
         v                       v
    morpholog schema       morpholog propose / explain
-   (input contract)       (commit / diagnose)
+   (input contract)       (commit / rehearse)
         |                       |
         v                       v
   embedder validates       embedder parses
@@ -197,7 +197,9 @@ Sizing, measured on a five-argument claim: a witness is roughly 700 bytes and ab
 
 Stdout is the `Explanation` JSON: the verdict (admissible or rejected), the gate that failed, the directly-missing claims, or the violated invariant. Without `--json` the same structure renders as claim-shaped prose.
 
-Read-only. Exit code is always zero on a parsed-and-validated programme, whether the verdict is admissible or rejected; explaining is answering a question, not taking an action. Only operational failures exit non-zero.
+Read-only. Exit code is always zero on a parsed-and-validated programme, whether the verdict is admissible or rejected; explaining is answering a question, not taking an action. Only operational failures exit non-zero. So exit zero means the explanation completed, never that the act was admissible: read `verdict`, which is the string `admissible` or an object under `rejected` carrying the kind, the rule and the diagnostics.
+
+`explain` is the second verb after `propose`, not a debugging aid. It evaluates the same rules against the current state and commits nothing; a rejection names the failing rule with the two values it compared and, for a gate, the bindings it was judged under (an invariant's witness is on the refusal, not yet on the explanation). An agent, a risk engine or an operator's tool asks it "would you permit this, and if not, why" before acting; a property test submits hypothetical acts against one live database without resetting it between cases, because nothing it asks changes the state. Two things it is not. It does not authorise the login, below. And it is a rehearsal, not a reservation: it reads a snapshot, and a later `propose` is its own transaction against whatever the state is then, so an admissible answer is not a promise that the commit will succeed.
 
 The `--actor` you give takes part in the rules as `actor`, but `explain` does not check that the login running it may assert that actor (see "Restricting who may assert an actor"). `propose`, `transact` and the session do. So an admissible verdict from `explain` does not mean this login's proposal would be accepted.
 
@@ -221,15 +223,27 @@ The authoring gate's machine-readable shape, for an embedder (or its authoring A
 
 One entry per finding - parse errors, validation errors, and lints uniformly - with `severity` either `"error"` or `"hint"`. `start`/`end` are byte offsets into the file, `line`/`column` 1-based; a finding with no source anchor (one against a generated discipline invariant, say) carries only `severity` and `message`. A clean programme emits an empty `diagnostics` array. Exit semantics match the plain form: `0` when nothing failed, `1` on any error, and `--strict` promotes hints to errors (in the JSON too). Without `--json`, the same findings render as ariadne caret blocks on stderr and stdout stays script-silent.
 
-When parsing and validation leave a programme, the report also carries `invariants`: one entry per invariant in programme order, with the route this binary plans for it. `compiled` means SQL checks it inside the proposal's transaction; `interpreted` means the kernel does, and the entry carries the refusal that kept it out of SQL, a `kind` from a closed list and the `message` that `check -v` prints:
+When parsing and validation leave a programme, the report also carries `invariants`: one entry per invariant in programme order, with the route this binary plans for it and the cases admission checks. `compiled` means SQL checks it inside the proposal's transaction; `interpreted` means the kernel does, and the entry carries the refusal that kept it out of SQL, a `kind` from a closed list and the `message` that `check -v` prints. `cases` is `bound` when the impact plan can bound every change the rule sees to the cases that change touches, and `whole` when some change checks the rule over the whole state, with `because` naming the one construct responsible as `check -v` prints it:
 
 ```json
 "invariants": [
-  { "name": "cap", "route": "compiled" },
+  { "name": "cap", "route": "compiled", "cases": { "kind": "bound" } },
   { "name": "fuel_is_known", "route": "interpreted",
+    "cases": { "kind": "whole", "because": "`or`" },
     "refusal": { "kind": "construct", "message": "`or` is outside the compiled fragment" } }
 ]
 ```
+
+Route and cases are independent dimensions:
+
+| `route` | `cases` | What a touching change may pay |
+|---|---|---|
+| `compiled` | `bound` | SQL checks the touched cases |
+| `compiled` | `whole` | SQL checks the rule over the whole state |
+| `interpreted` | `bound` | the kernel checks the touched cases |
+| `interpreted` | `whole` | the kernel checks the rule over the whole state |
+
+`cases` is a property of the plan, not a promise about execution: a route may widen a bounded check on its own (a case the SQL cannot seek on, say), never the reverse. `whole` means some change may re-evaluate the entire rule, not that every change does: a change to the rule's other patterns may still get a bounded check, and one outside its reads leaves it untouched. What it means for a deployment is history: where the record already violates a whole rule, the changes that re-evaluate it are refused even when they introduce no new violation, where a bound rule refuses only the acts that touch the violating case. That is a cost and a consequence to know before promotion, not a mistake. Some rules are whole by nature, a count over the whole board or a limit over all positions, and rewriting one to earn `bound` would change what it says. The constructs that make a rule whole are `pre`, `or`, `xor`, membership, a value lookup, a conditional value, a sum over an expression, a defined call the plan could not follow, and a claim pattern that binds no case variable; `check -v` lists the whole rules under `invariant cases`.
 
 The field is present even when the run fails on a promoted lint or an `--against` finding, since there was still a programme to plan; it is absent only when parsing or validation left none, and an empty array is a programme with no invariants. There is no summary field: compiled, interpreted or mixed follows from the entries, and the generated client's `CheckReport.route` says which (`None` when there is no plan). The route belongs to the programme and the binary together, so a deployment that must stay compiled pins both the client's version and `route == "compiled"`; the programme's hash does not change when the route does.
 
