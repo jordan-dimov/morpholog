@@ -108,8 +108,8 @@ asset across facilities, with a re-pledge at a different value refused.
   multiplication. It is left out because as a hard invariant it is
   unsatisfiable for a single-obligor pool (the first pledge is always 100%
   of the pool), and the realistic model reduces an obligor's *eligible*
-  value down to the cap - which needs a `min`, an operator the kernel does
-  not yet have. A forcing example for `min` is the natural next step.
+  value down to the cap - which needs the `min` the insurance example forced; this one
+  keeps the simpler rule.
 - **Repayments and revolving draws.** A real facility nets repayments
   against drawdowns. Here drawdowns only accumulate; modelling repayment is
   more claims, no new arithmetic.

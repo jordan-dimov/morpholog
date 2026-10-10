@@ -1,6 +1,6 @@
-# Morpholog: IR and Runtime Semantics (v0)
+# Morpholog: IR and Runtime Semantics
 
-Status: design doctrine. The IR and runtime are implemented in `crates/morpholog-core`; the `.morph` parser is implemented in `crates/morpholog-surface`. This document is the authoritative source for what the runtime *means*; the code is one realisation of them.
+The IR and runtime are implemented in `crates/morpholog-core`; the `.morph` parser is implemented in `crates/morpholog-surface`. This document is the authoritative source for what the runtime *means*; the code is one realisation of them.
 
 Companion to [`scope-and-ambition.md`](scope-and-ambition.md), which fixes what Morpholog is for, what it should grow into, and what it must never become - and to [`design-history.md`](design-history.md), which records retrospectively which worked example forced each design decision.
 
@@ -118,7 +118,8 @@ Transition                       -- the value object proposed against a Transfor
 Term                             -- a node inside a claim's args, a comprehension binding, etc.
   Var(name)                      -- bound by surrounding context
   Wildcard                       -- matches anything
-  Literal(Value)                 -- IR literal (Subject, Decimal, or Date)
+  Literal(Value)                 -- IR literal: subject, decimal, quantity, date,
+                                    timestamp, duration, calendar span or bool
   Actor                          -- resolves to the proposing transition's actor;
                                     in invariant bodies it raises EvalError::UnboundActor
                                     (authority checks live in `require`, not in invariants)
@@ -161,19 +162,21 @@ AuditRecord
   parameters                     -- the transformation's parameter names, one per argument
   model_hash                     -- the canonical hash of the whole programme that
                                     admitted the row (`morpholog hash`)
+  semantics_version              -- the kernel semantics that decided it
+  drawn_subjects                 -- the subjects `new Subject()` drew, in order
 ```
 
 ## Surface-to-IR mapping
 
-The `.morph` surface verbs map one-to-one onto the IR constructs above. The renames are domain-flavour and layout only: the surface is more business-native than the IR but never more expressive than it (the doctrine, and what it rules out, is in [`scope-and-ambition.md`](scope-and-ambition.md#surface-syntax-and-the-ir)). This table is the exact correspondence, with the reason each surface form is spelled the way it is.
+The `.morph` surface verbs map one-to-one onto the IR constructs above. The renames are domain-flavour and layout only: the surface is more business-native than the IR but never more expressive than it (the doctrine, and what it rules out, is in [`scope-and-ambition.md`](scope-and-ambition.md#surface-syntax-and-the-ir)). This table is the exact correspondence, with the reason each surface form is spelled the way it is; how each form is written, with a parsed example of every construct, is in [`surface-syntax.md`](surface-syntax.md).
 
 | Surface verb | IR construct | Reason |
 |---|---|---|
 | `admit X(args)` | `Stmt::Assert` | Matches the runtime doctrine of "admitted claims". `assert` belongs to test frameworks; `admit` belongs to governed state. |
 | `bind X(args)` | `Stmt::BindOne` | The `_one` suffix is redundant - there is no `bind_many`. `bind` reads as the binding-statement it is. |
 | `require name: expr` / `bind name: X(args)` | `name` on `Stmt::{Require, BindOne}` | An optional stable identifier for a refusing statement. A refusal otherwise quotes the rendered expression, which reads well and identifies nothing - reword the rule and anything holding that text breaks. Optional because a transformation with one gate is already unambiguous, and most gates are one self-evident line; the name earns its place where several rules could each be the one that said no. Unique per transformation, not per programme: two acts legitimately carry the same gate verbatim. The name is contextual, not reserved - `ident :` cannot open a proposition, so no keyword is spent. |
-| `unique by (fields)`, `append only`, `current pointer by (fields)`, `superseded via L`, `effective by (keys) on (date) [partial]` (clauses on a `predicate` declaration) | `Discipline::{UniqueBy, AppendOnly, CurrentPointerBy, SupersededVia, EffectiveBy}` on `PredicateDecl.disciplines` | Claim disciplines (see "Claim disciplines" above). Every clause word is contextual, not reserved - the `before`/`duration` precedent - so all stay usable as variable names. Clauses sit inline after the argument list or on indented continuation lines. |
-| `define name(params): body` / `name(args)` at call sites | `Definition` / `Prop::Defined` | A named, parameterised proposition (see "Definitions: named propositions" above). The call is spelled exactly like a claim reference - a condition should read no differently from the evidence it checks - and resolves by name against the declared definitions, which is why definition and predicate names share one namespace and may not collide. Definition names are snake_case by convention (they name rules, like invariants), predicates CamelCase (they name claim shapes); the convention aids the reader, not the resolver. |
+| `unique by (fields)`, `append only`, `current pointer by (fields)`, `superseded via L`, `effective by (keys) on (date) [partial]` (clauses on a `predicate` declaration) | `Discipline::{UniqueBy, AppendOnly, CurrentPointerBy, SupersededVia, EffectiveBy}` on `PredicateDecl.disciplines` | Claim disciplines (see "Claim disciplines" below). Every clause word is contextual, not reserved - the `before`/`duration` precedent - so all stay usable as variable names. Clauses sit inline after the argument list or on indented continuation lines. |
+| `define name(params): body` / `name(args)` at call sites | `Definition` / `Prop::Defined` | A named, parameterised proposition (see "Definitions: named propositions" below). The call is spelled exactly like a claim reference - a condition should read no differently from the evidence it checks - and resolves by name against the declared definitions, which is why definition and predicate names share one namespace and may not collide. Definition names are snake_case by convention (they name rules, like invariants), predicates CamelCase (they name claim shapes); the convention aids the reader, not the resolver. |
 | `actor` (no parens) | `Term::Actor` | A special variable bound by transition context, not a function. Parens would suggest function-call semantics it does not have. |
 | `<=` `<` `>=` `>` (infix) | `Prop::Compare { op, domain: Decimal }` | Business mathematics reads with infix comparators. The operator is first-class - `amount > limit` renders and round-trips as written, never as `not (amount <= limit)` - while the ordered domain is a field, not a per-operator variant. The decimal domain admits two flavours: bare decimals, and unit-tagged quantities of the SAME unit (a `Decimal[U]` IS a decimal, under a contract label the comparison must respect - `Decimal[USD]` against `Decimal[t]` is refused by name). The domain is carried explicitly, so there is no operator overloading by operand kind. |
 | `on_or_before` `before` `on_or_after` `after` (infix) | `Prop::Compare { op, domain: Date }` | Distinct keywords (not overloaded `<=`) for civil-date comparison; `on_or_*` are inclusive, `before`/`after` strict. Reads as business prose and aligns with the `[from, to]` inclusive-window doctrine. `before`/`after` are matched contextually (comparator position only), so they remain usable as variable names. Operands are enforced against the domain twice: refused by name at authoring (a decimal under `on_or_before` suggests `<=`, a date under `<=` suggests `on_or_before`), and as a runtime `TypeMismatch` for hand-built IR that skips validation. |
@@ -238,7 +241,9 @@ consulted by any gate or invariant. The audit log remains the only
 legitimacy-grade record. Each row carries who proposed what and which
 rule refused (kind `invariant`/`require`/`bind` plus the rule name or
 rendered gate expression, taken from the structured rejection reason,
-never parsed back out of the display string). Recording is default-on
+never parsed back out of the display string), with the refusal's witness
+and the comparison it blamed, as the envelope carries them; the row's
+shape is in the embedder guide. Recording is default-on
 with no flag; a failed insert surfaces as an operational error, not a
 rejected envelope. In-memory `propose()` records nothing (the pure
 kernel does no I/O), and `morpholog explain` records nothing - a
@@ -259,10 +264,12 @@ different leaves. Format money at the presentation edge rather than
 echoing the wire string.
 
 **A refusal names the offending values.** "invariant `x` violated" tells a
-reader which rule stopped them and nothing about why, so an invariant
-refusal also carries a *witness*: the variables and values that were live
-where the rule failed, sorted by variable so one failure always reads the
-same way. It is diagnosed only after the refusal is decided - the
+reader which rule stopped them and nothing about why, so a refusal, an
+invariant's or a gate's, also carries a *witness*: the variables and values
+that were live where the rule failed, sorted by variable so one failure
+always reads the same way; and, where the part it blames is a comparison,
+`compared`: the operator and the two values that failed it, so a reader
+prints the figures and never reproduces the rule's arithmetic. It is diagnosed only after the refusal is decided - the
 accepting path never pays for it - and it is structured rather than
 rendered into the reason, because the reason string is a pinned wire
 format and an embedder should read a value, not parse prose. The `Display`
@@ -281,9 +288,8 @@ PostgreSQL path therefore loads claims in primary-key order, so the same
 database explains a refusal the same way twice; a hand-built `State` gets
 whatever order it was built in. The key order rather than the causal one
 because any total order gives determinism and this one the index already
-provides - ordering by admission time forces a sort worth ~1.8x on propose
-latency, which every accepted proposal would pay so that refusals
-reproduce. Naming every violator, and
+provides - ordering by admission time would force a sort every accepted
+proposal paid so that refusals reproduce. Naming every violator, and
 attributing an aggregate discrepancy (a sealed total disagreeing with its
 lines cannot blame one line from its bindings alone), are separate
 problems.
@@ -293,10 +299,11 @@ which depends on what was bound where the drill-down stopped rather than
 on which operator failed. A comparison failing under a quantifier or an
 implication witnesses the variables its antecedent bound - that is the
 metered-billing case above. The same comparison as an entire invariant
-body witnesses nothing, because nothing was ever bound; a prohibition like
-`not Flag(acct_1)` is the same. In that case the field is absent rather
-than empty, so those envelopes stay byte-identical to what they were
-before witnesses existed.
+body witnesses nothing, because nothing was ever bound, though it still
+carries its `compared`; a prohibition like `not Flag(acct_1)` is the same.
+In that case the field is absent rather than empty. A gate's witness is
+the bindings in scope at the part of the gate the walk blames, the actor
+never among them.
 
 **A derived claim is a read model, and no rule may name one.** Derived
 claims are computed from admitted claims and refreshed out of band; the
@@ -306,7 +313,7 @@ derived's domain are all refused at check time when they name one - and
 so are `admit` and `retract`, which would give a single name two sources,
 the view the runtime computes and the rows a transformation wrote - the
 alternative is a design that passes `check --strict` and fails only
-against a live database, which is exactly how a trial lost an hour.
+against a live database.
 
 The refusal is a modelling rule, not a claim that the reference could
 never match. State outlives a source file, so rows admitted under that
@@ -514,8 +521,7 @@ templates. The discipline clauses:
   **When the gaps are intended**, say so on the declaration:
   `effective by (keys) on (date) partial`. That is what an author reaches for
   when a rule genuinely should not apply before the first version exists -
-  under `--strict` the hint is a refusal, so without this there was no way to
-  express a correct partial model except by abandoning strict checking.
+  under `--strict` the hint is a refusal.
   Declaring both `partial` and a `total over` for the same predicate is a
   validation error: they say opposite things, and resolving it by precedence
   would leave an author having written something they did not mean.
@@ -527,8 +533,7 @@ templates. The discipline clauses:
   hand-rolled dated selections too, and declaring the backstop is how an
   author settles it.
 
-  The declaration also settles the governing-selection lint, which
-  previously had to recognise a backstop by its shape. Declared, the
+  The declaration also settles the governing-selection lint. Declared, the
   pairing is checked: an unusual-but-intended backstop counts, and a shape
   that matched by accident does not.
 
@@ -666,7 +671,7 @@ A receipt proves its statement, not its origin. It is unsigned, so a receipt rew
 
 ## Admission: case-local revalidation
 
-An invariant says what lawful state means, and `explain` and the verifiers ask exactly that of a whole state. Admitting a transition asks less, on purpose, and `evaluate` asks the same as admission: it charges a candidate invariant exactly where the commit gate would have refused, case-local, never the whole state. The runtime computes the transition's effective delta - what the candidate holds that the pre-state did not, and the reverse, so a duplicate admit, a retract of what is absent, or a retract followed by a re-admit change nothing - and revalidates each invariant over the cases that delta could affect: untouched cases may remain as history left them; every touched case must satisfy the invariant afterwards; where the impact cannot be bounded safely (`pre`, `or`, `xor`, membership, a value lookup, a conditional value, a sum over an expression), the whole invariant is checked. Arithmetic, an extremum or a builtin over terms the pattern bound reads nothing and bounds nothing wider. A transition that changes nothing is admitted whatever the history holds, and so is one that changes no predicate the invariant reads, whatever its shape. Inherited dirt therefore blocks only the transitions that touch it, which is what adopting a stricter rule version on a live ledger and admitting exception claims both need, and touching a dirty case without fully repairing it still refuses.
+An invariant says what lawful state means, and `explain` and the verifiers ask exactly that of a whole state. Admitting a transition asks less, on purpose, and `evaluate` asks the same as admission: it charges a candidate invariant exactly where the commit gate would have refused, case-local, never the whole state. The runtime computes the transition's effective delta - what the candidate holds that the pre-state did not, and the reverse, so a duplicate admit, a retract of what is absent, or a retract followed by a re-admit change nothing - and revalidates each invariant over the cases that delta could affect: untouched cases may remain as history left them; every touched case must satisfy the invariant afterwards; where the impact cannot be bounded safely (`pre`, `or`, `xor`, membership, a value lookup, a conditional value, a sum over an expression), the whole invariant is checked. Arithmetic, an extremum or a builtin over terms the pattern bound reads nothing and bounds nothing wider. A transition that changes nothing is admitted whatever the history holds, and so is one that changes no predicate the invariant reads, whatever its shape, unless the rule reads `pre(...)`, which judges the change itself and is checked on every one. Inherited dirt therefore blocks only the transitions that touch it, which is what adopting a stricter rule version on a live ledger and admitting exception claims both need, and touching a dirty case without fully repairing it still refuses.
 
 The same rule runs on both evaluators: one impact plan per invariant, built once beside the programme, tells the interpreter which bindings to evaluate and the compiled checker which cases to bound its SQL to. A case is traced through defined calls: an argument carries a case variable into the claims the definition reads, while the definition's own variables carry none, so a change reached only through them checks the whole invariant. A refusal's witness is drawn from the touched cases, never from a case the transition did not reach; the trace records only the obligations actually evaluated; an evaluation error anywhere in an evaluated obligation dominates a violation in it, and an untouched case can raise none. The audit row's `invariants_checked` names every active invariant the transition was admitted under, each discharged because the delta could not affect it, because every affected case satisfied it, or because the whole invariant was evaluated and held.
 
@@ -690,7 +695,7 @@ All predicates live in one `claims` table. PostgreSQL remembers reads row by row
 - Proposals whose reads and writes fall in different predicates conflict less often still.
 - On a new, nearly empty ledger most proposals conflict, because a tiny table is read whole however it is asked.
 
-Reading an invariant's predicates only for the cases the change touches on the interpreted route, and the tiny-table scan, are the open remainder of #396. The measured numbers are in the embedder guide and the bench's notes.
+Reading an invariant's predicates only for the cases the change touches on the interpreted route, and the tiny-table scan, remain open. The measured numbers are in the bench's README.
 
 ## Tracing proposals
 
@@ -710,11 +715,11 @@ The check is one traversal of every invariant, transformation, and derived-claim
 
 1. **Structural**: every claim reference must name a declared predicate, every `emit` reference must name a declared intent, every reference must match the declared arity, and no two declarations in the same vocabulary share a name. A derived claim's output arity must equal `keys.len() + values.len()`. Predicates and intents live in separate namespaces.
 
-2. **Kind/type compatibility**: every value flowing into a slot must have a compatible kind. Declarations carry per-argument kinds (`Subject`, `Decimal`, `Date`, `Timestamp`, `Duration`, `Bool`, `Collection`, `Any`); comparators have fixed expected kinds per domain (`<=` Decimal, `on_or_before` Date, `at_or_before` Timestamp, `no_longer_than` Duration); `+`/`-` follow the time-arithmetic rule matrix - instants with durations, dates with calendar spans and with each other (a pair of known kinds with no rule is `NoArithRule` at authoring time) - while `*`/`/`/`%` stay Decimal-only; `sum` produces the kind it sums (Decimal or Duration, never mixed); equality (`=` / `!=`) is strict (`Subject == Decimal` is a kind error, not a silent coercion); variables are inferred-and-refined as they flow through claim slots, intent emits, comparators, and let-bindings.
+2. **Kind/type compatibility**: every value flowing into a slot must have a compatible kind. Declarations carry per-argument kinds (`Subject`, `Decimal`, `Decimal[U]`, `Date`, `Timestamp`, `Duration`, `Bool`, `Collection`, `Any`); comparators have fixed expected kinds per domain (`<=` Decimal, `on_or_before` Date, `at_or_before` Timestamp, `no_longer_than` Duration); `+`/`-` follow the time-arithmetic rule matrix - instants with durations, dates with calendar spans and with each other (a pair of known kinds with no rule is `NoArithRule` at authoring time) - while `*`/`/`/`%` stay Decimal-only; `sum` produces the kind it sums (a decimal, a same-unit quantity or a duration, never mixed); equality (`=` / `!=`) is strict (`Subject == Decimal` is a kind error, not a silent coercion); variables are inferred-and-refined as they flow through claim slots, intent emits, comparators, and let-bindings.
 
 3. **Binding flow**: a variable consumed where a bound value is required - an `admit`/`retract`/`emit` argument, a comparator or arithmetic operand, a `value` lookup key, a `sum` target - must have been bound first. The static walk follows the runtime exactly: parameters, `bind`, `let`, `for`, and claim matches in predicate position bind names; a `require` match does **not** export to later statements; a disjunction exports only the names bound in *every* branch (whichever branch's witness the runtime carries forward); `in` binds its element when it is otherwise unbound. A use of an unbound name is flagged as `UnboundVariable` - the same the kernel would raise.
 
-4. **Shape**: enforced by the type system, not the checker. The two-sort IR (`Prop` searches state; `ValueExpr` computes a value) makes a value expression at a predicate position - or the reverse - unrepresentable, so neither the parser nor `ir_builder` can construct it. The former static shape check and the `NotPredicate` / `NotValue` kernel errors are gone; the evaluators are total over their sorts.
+4. **Shape**: enforced by the type system, not the checker. The two-sort IR (`Prop` searches state; `ValueExpr` computes a value) makes a value expression at a predicate position - or the reverse - unrepresentable, so neither the parser nor `ir_builder` can construct it.
 
 5. **Actor context**: `Term::Actor` referenced in an invariant or derived-claim body - where no proposing transition is in scope - is flagged (the kernel would raise `UnboundActor`). Authority checks belong in a `require`, not an invariant.
 
@@ -722,7 +727,7 @@ The check is one traversal of every invariant, transformation, and derived-claim
 
 7. **Definitions**: the reference graph must be acyclic (checked before anything walks through calls); a definition may not share a name with a predicate; `actor` and `pre(...)` inside a body are refused (bodies are context-free); every parameter must be referenced by the body; call arity must match; a call argument for a use-only parameter must arrive bound; and the depth guard charges each call its callee's expanded depth, computed callees-first. Parameter kinds are inferred from the body (callees-first) and call arguments check against them, so a kind mistake at a call site reports like any claim-argument mismatch.
 
-The kind and binding-flow walks share the require/bind_one/let/for quartet's export rules over one scoped environment, so a `require` body's refinements and bindings stay local while `bind_one` and `let` flow forward; `Sum`'s body is walked under a scoped env so iteration-variable refinements stay local, and the value term must resolve to Decimal; `ValueOf`'s extraction slot determines its result kind and its optional default must agree. `Any` is treated as *unconstrained*, not as "compatible with everything forever once attached to a variable": a variable seen first in an `Any` slot stays open, and a later specific use refines it. `Any` is an escape hatch for declarations, not a kind-eraser for inference.
+The kind and binding-flow walks share the require/bind_one/let/for quartet's export rules over one scoped environment, so a `require` body's refinements and bindings stay local while `bind_one` and `let` flow forward; `Sum`'s body is walked under a scoped env so iteration-variable refinements stay local, and the target must resolve to a kind a sum can add; `ValueOf`'s extraction slot determines its result kind and its optional default must agree. `Any` is treated as *unconstrained*, not as "compatible with everything forever once attached to a variable": a variable seen first in an `Any` slot stays open, and a later specific use refines it. `Any` is an escape hatch for declarations, not a kind-eraser for inference.
 
 The kernel IR carries no source spans - a `Program` can be hand-built or deserialised, and the kernel stays source-agnostic. Spans live on the surface side: the parser keeps every declaration's span (and every top-level transformation-body statement's span) in a `SourceMap` returned by `parse_program_with_sources`, and the map resolves a `ValidationError` or `Lint` back to source - context-carrying errors through their context, declaration-naming errors by name, anything unresolvable (a generated discipline invariant) to no span and a plain-text rendering. The one position the kernel does carry is an index, not a span: `ValidationContext::Transformation` records which top-level body statement a finding was made in (a finding inside a `for` keeps the `for`'s index), and the rendered message appends `, statement N`. Granularity is declaration + top-level statement; sub-expression spans are a later tier. Each error still names the predicate / operator / variable involved and its context, so a finding over hand-built IR remains locatable from grep alone.
 

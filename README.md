@@ -134,10 +134,24 @@ morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBala
 morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBalanceRow --as-of <transition_id>
 ```
 
-The second answer is exactly what an auditor would have seen at that moment, rebuilt from the audit log. An unbalanced entry is refused with the rule named, and the line of your rules file it broke:
+The second answer is exactly what an auditor would have seen at that moment, rebuilt from the audit log. An unbalanced entry, a debit of $100 split into credits of $60 and $30, is refused with the rule named, the entry it blames, the two figures that failed to agree, and the line of your rules file it broke:
 
+```bash
+morpholog propose examples/03_double_entry_ledger/ledger.morph post_split_entry \
+  --actor jordan \
+  --args-named '{"entry_id":"entry_002","posting_date":"2026-04-16","period":"q1_2026",
+                 "debit_account":"account_cash","debit_amount":"100",
+                 "credit_a_account":"account_revenue","credit_a_amount":"60",
+                 "credit_b_account":"account_fees","credit_b_amount":"30"}'
+```
 ```json
-{ "status": "rejected", "reason": "invariant `balanced_posted_entry` violated" }
+{
+  "status": "rejected",
+  "reason": "invariant `balanced_posted_entry` violated",
+  "rule": "balanced_posted_entry",
+  "witness": [{ "var": "entry", "value": { "type": "subject", "value": "entry_002" } }],
+  "compared": { "op": "=", "left": { "type": "decimal", "value": "100" }, "right": { "type": "decimal", "value": "90" } }
+}
 ```
 
 New to Morpholog? [The developer introduction](docs/developer-intro.md) is the hands-on start. Written for someone who knows Python and SQL, it builds a small governed ledger end to end: a reported figure, a decision that relies on it, the honest correction, and the replay that keeps both answers true.

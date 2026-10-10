@@ -1,14 +1,14 @@
-# Outbox worker: doctrine
+# The outbox worker
 
-Status: doctrine doc. The substrate, single-row processor with compensation lease, polling worker with smart sleep, and `StdoutDeliverer` are all in tree as of this writing - see the [`morpholog-outbox`](../crates/morpholog-outbox/) and [`morpholog-postgres`](../crates/morpholog-postgres/) crates for the actual code. The remaining slice is the supervisor (JoinSet-based restart-with-intensity), per-target circuit breaker, and `HttpDeliverer`. This doc pins the load-bearing doctrine - the **Morpholog plus an Outside Coordinator** framing, what the runtime is and is not - while implementation detail lives in the code.
+The substrate, single-row processor with compensation lease, polling worker with smart sleep, and `StdoutDeliverer` are in tree - see the [`morpholog-outbox`](../crates/morpholog-outbox/) and [`morpholog-postgres`](../crates/morpholog-postgres/) crates for the actual code. The remaining slice is the supervisor (JoinSet-based restart-with-intensity), per-target circuit breaker, and `HttpDeliverer`. This doc pins the load-bearing doctrine - the **Morpholog plus an Outside Coordinator** framing, what the runtime is and is not - while implementation detail lives in the code.
 
 ## Problem
 
-Every committed transformation enqueues outbox rows. Nobody consumes them. The audit log says "we sent X" while the external world has heard nothing. This is a known v0 gap, but it has become structural: a regulated user who wires Morpholog into a real workflow today gets a runtime that commits to deliveries it never makes.
+When a transformation commits, the intents it emits are saved to the outbox in the same database transaction. A separately operated worker attempts delivery, retries transient failures and records permanent ones; external delivery is never part of the commit. Without that worker the audit log would say "we sent X" while the external world had heard nothing: a runtime that commits to deliveries it never makes.
 
 The deeper concern is what happens when a delivery *should have* succeeded but didn't. A lending drawdown commits locally; the runtime emits a `DispatchWire` intent; forty-five seconds later, the SEPA network rejects the wire due to an out-of-band AML routing lock. The Morpholog ledger now states a definitive lie: that money was legitimately drawn down. Reality contradicts the books, and the runtime has no path back to consistency.
 
-The architectural answer - phrased crisply by a recent strategic review - is **Morpholog plus an Outside Coordinator**:
+The architectural answer is **Morpholog plus an Outside Coordinator**:
 
 - Morpholog stays a strict local transactional gatekeeper. The IR does not learn about networks, retries, or distributed consensus. If it did, the language would stop being decidable and start being a worse-than-Camunda workflow engine.
 - An outside coordinator (the outbox worker) owns the asynchronous conversation with the real world. It tries to deliver, retries on transient failure, gives up on systemic failure.
@@ -22,7 +22,7 @@ The rest of this doc pins the coordinator's doctrine - what it is, what it is no
 
 The worker exists; the doctrine is realised in code. The shape:
 
-- A new crate, [`morpholog-outbox`](../crates/morpholog-outbox/), separate from `morpholog-postgres` because it has a different dependency profile (tokio, HTTP client, eventual circuit breaker) and because the worker is replaceable - a deployment can write its own.
+- A new crate, [`morpholog-outbox`](../crates/morpholog-outbox/), separate from `morpholog-postgres` because it has a different dependency profile (tokio, an eventual HTTP client and circuit breaker) and because the worker is replaceable - a deployment can write its own.
 - A `Deliverer` trait with a three-way outcome: `Delivered`, `Transient { next_attempt_at }`, `NonRetryable { reason }`. The vocabulary is from MassTransit / NServiceBus. `Transient` carries an absolute retry instant so the deliverer chooses the schedule; `NonRetryable` carries a reason that lands in the failure audit trail.
 - `StdoutDeliverer` ships as the canonical first deliverer. `HttpDeliverer` (POST to a configured URL; route 5xx/connection-errors to `Transient`, 4xx-except-408/429 to `NonRetryable`, 2xx to `Delivered`) is the remaining slice.
 - Compensation pairing lives in worker configuration, not in the IR. A `CompensationSpec` per intent type owns the programme the compensation runs under and names its compensating transformation and an args mapper; the compensation is checked against every invariant that programme declares, and its audit row names that programme. This keeps `Intent` ontologically simple (just name + args) and lets one program run under different compensation policies in different deployments.
@@ -124,7 +124,7 @@ That is the contract: the kernel does not call out, the kernel does not pause, t
 
 The result of the compute does not get "patched in" to the original intent's audit row. It comes back through a fresh transformation - `record_result` in the sketch above - because the result is its own admission and deserves its own invariant gates:
 
-- *Was the result produced by an authorised compute worker?* An invariant referencing the proposing actor.
+- *Was the result produced by an authorised compute worker?* A `require` on the proposing actor in the admitting act; an invariant cannot read the actor.
 - *Does the result reference an original request that is still in flight?* An invariant pairing the result with a pending `ComputeRequested` claim.
 - *Is the numerical result within plausible bounds?* A regulated decision (`PriceMustBePositive`, `HeadroomCannotGoNegative`) baked into the invariant set.
 
@@ -132,4 +132,4 @@ The original transformation cannot have anticipated these checks - it ran before
 
 ### What this leaves open
 
-The round-trip story's original gap - stringly-typed intents - is now closed. `IntentDecl` mirrors `PredicateDecl`: every `emit X(args)` must target a declared intent, and `morpholog check` validates emit name, arity, and arg kinds the same way it validates a claim against its predicate. A misspelled intent name is a validation error, not a silent dead outbox partition. The KYC sanctions-screening example forced it. The read-side view closed too: `morpholog schema --intent <Type>` hands a non-Rust deliverer the declared payload contract as JSON Schema, forced by the worked embedder having to decode payloads by name rather than hand-coded position. What remains open is per-intent delivery-target metadata, which is outbox-worker configuration rather than vocabulary.
+`IntentDecl` mirrors `PredicateDecl`: every `emit X(args)` must target a declared intent, and `morpholog check` validates emit name, arity, and arg kinds the same way it validates a claim against its predicate. A misspelled intent name is a validation error, not a silent dead outbox partition. The KYC sanctions-screening example forced it. The read-side view closed too: `morpholog schema --intent <Type>` hands a non-Rust deliverer the declared payload contract as JSON Schema, forced by the worked embedder having to decode payloads by name rather than hand-coded position. What remains open is per-intent delivery-target metadata, which is outbox-worker configuration rather than vocabulary.

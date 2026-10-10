@@ -15,7 +15,7 @@ This document states eight guarantees. For each it names what makes it true toda
 A decision over a validated programme, finite admitted state and a finite proposal takes finitely many steps.
 
 - **Holds by:** definitions call each other acyclically; nesting is bounded; everything evaluation ranges over is finite; a transformation body reads the state before it, never its own writes. The argument is [below](#termination).
-- **Checked by:** `crates/morpholog-examples/tests/definitions.rs` (cycles refused), `crates/morpholog-core/tests/definitions_adversarial.rs` and `crates/morpholog-core/tests/check_properties.rs` (depth refused, not overflowed), `crates/morpholog-core/src/check/tests.rs` (no rule or derived claim reads a derived claim), `crates/morpholog-examples/tests/computational_model.rs` (every construct names what it ranges over; a body never reads what it admits).
+- **Checked by:** `crates/morpholog-examples/tests/definitions.rs` (cycles refused), `crates/morpholog-core/src/kernel_tests/definitions_adversarial.rs` and `crates/morpholog-core/tests/check_properties.rs` (depth refused, not overflowed), `crates/morpholog-core/src/check/tests.rs` (no rule or derived claim reads a derived claim), `crates/morpholog-examples/tests/computational_model.rs` (every construct names what it ranges over; a body never reads what it admits).
 - **Gap:** a deeply nested value can exhaust the host stack before the steps finish (see [the implementation](#the-statement)).
 
 ### 2. Deterministic decisions
@@ -120,7 +120,7 @@ The argument works at the level of the language's own operations. Library operat
 | | Premise | Pinned by |
 |---|---|---|
 | T1 | Definitions call each other acyclically. | `DefinitionCycle`; `crates/morpholog-examples/tests/definitions.rs` |
-| T2 | Nesting, counting a definition call at its body's depth, stays within a fixed limit. This bounds the evaluator's call stack. | `NestingTooDeep`; `crates/morpholog-core/tests/check_properties.rs`, `crates/morpholog-core/tests/definitions_adversarial.rs` |
+| T2 | Nesting, counting a definition call at its body's depth, stays within a fixed limit. This bounds the evaluator's call stack. | `NestingTooDeep`; `crates/morpholog-core/tests/check_properties.rs`, `crates/morpholog-core/src/kernel_tests/definitions_adversarial.rs` |
 | T3 | No construct ranges over anything but the finite state, a finite collection, its own children, a definition's body or the subject input, apart from the self-bounded loops above. | the construct census, `crates/morpholog-examples/tests/computational_model.rs` |
 | T4 | Derived claims form one layer: a derived claim is computed from admitted claims only, and no rule reads one. There are no recursive views. | `crates/morpholog-core/src/check/tests.rs` |
 | T5 | A body never reads its own staged writes, so nothing feeds back into the state it reads. | `a_transformation_never_reads_what_it_admits` |
