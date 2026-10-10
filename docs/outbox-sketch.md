@@ -4,7 +4,7 @@ The substrate, single-row processor with compensation lease, polling worker with
 
 ## Problem
 
-Every committed transformation enqueues outbox rows, and a worker delivers them. Without that worker the audit log would say "we sent X" while the external world had heard nothing, which is the gap the worker exists to close: a regulated user who wires Morpholog into a real workflow today gets a runtime that commits to deliveries it never makes.
+When a transformation commits, the intents it emits are saved to the outbox in the same database transaction. A separately operated worker attempts delivery, retries transient failures and records permanent ones; external delivery is never part of the commit. Without that worker the audit log would say "we sent X" while the external world had heard nothing: a runtime that commits to deliveries it never makes.
 
 The deeper concern is what happens when a delivery *should have* succeeded but didn't. A lending drawdown commits locally; the runtime emits a `DispatchWire` intent; forty-five seconds later, the SEPA network rejects the wire due to an out-of-band AML routing lock. The Morpholog ledger now states a definitive lie: that money was legitimately drawn down. Reality contradicts the books, and the runtime has no path back to consistency.
 

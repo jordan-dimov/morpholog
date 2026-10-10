@@ -486,8 +486,11 @@ morpholog propose revenue.morph run_covenant_test --actor bank_credit_cttee \
 ```json
 { "status": "rejected",
   "reason": "require failed: CurrentFigure(asset, period, figure_id) did not hold over pre-state",
-  "witness": [{ "var": "asset", "value": { "type": "subject", "value": "a1" } },
-              { "var": "period", "value": { "type": "subject", "value": "2026-q1" } }] }
+  "witness": [{ "var": "amount",    "value": { "type": "decimal", "value": "1000" } },
+              { "var": "asset",     "value": { "type": "subject", "value": "battery_07" } },
+              { "var": "figure_id", "value": { "type": "subject", "value": "f1" } },
+              { "var": "period",    "value": { "type": "subject", "value": "q1_2026" } },
+              { "var": "test_id",   "value": { "type": "subject", "value": "covtest_august" } }] }
 ```
 
 Refused. The exit code is non-zero; nothing was admitted - no claims
@@ -695,8 +698,11 @@ receipt = propose("report_revenue", "verifier_anna", {
     "amount": "1000", "figure_id": "f1",
 })
 if receipt["status"] == "rejected":
-    ...  # hold receipt["rule"], print receipt["witness"] and receipt["compared"];
-         # with --explain-on-reject the receipt carries the missing-evidence account too
+    rule = receipt.get("rule")          # absent for an unnamed gate
+    witness = receipt.get("witness")    # absent when nothing was bound
+    compared = receipt.get("compared")  # absent unless a comparison failed
+    ...  # receipt["reason"] is always there; with --explain-on-reject the
+         # receipt carries the missing-evidence account too
 ```
 
 A business refusal is data, not an exception. That is why the snippet does not
@@ -885,8 +891,8 @@ conditions instead of one twenty-line gate.)
 
 ## Questions you are probably asking
 
-The broader pitch questions - the dual-write worry, raw `psql` access, whether
-writing twice, a record whose shape changes once history exists, a process per request, GDPR erasure, and whether one generic table is slow.
+For the questions about writing twice, database access, a record whose shape
+changes, performance and GDPR, see the
 [README's common questions](../README.md#common-questions). What this guide
 raises specifically:
 

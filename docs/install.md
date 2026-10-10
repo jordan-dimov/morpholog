@@ -120,7 +120,7 @@ DATABASE_URL=postgres:///morpholog_scratch python3 examples/etrm_embedder/etrm_l
 
 ## Upgrading an existing database
 
-Evidence packs and receipts exported by an older release are refused by a newer verifier as `unsupported_pack` (one pack format at a time); export them again from the upgraded database.
+A verifier reads one evidence-pack format, its own. A pack in an older format is refused as `unsupported_pack`; export it again from the upgraded database. That does not change the semantics version an older receipt was decided under: its integrity can verify while the current release reports `not_re_evaluated` for its answer (see [semantics versions](runtime-semantics.md#semantics-versions)).
 
 `morpholog init` provisions a schema; it never migrates one. That is
 deliberate - it means running `init` against a live database cannot alter
