@@ -76,7 +76,7 @@ the gap.
 
 It may exist and be spelled differently:
 [`docs/runtime-semantics.md`](../docs/runtime-semantics.md) has the full
-surface-to-IR table, which is the complete list of what the language can say.
+surface-to-IR table, which says what each form compiles into; [the surface syntax on one page](../docs/surface-syntax.md) shows how each is written.
 `morpholog --help` is the same for the tooling.
 
 Or it may genuinely be missing, in which case the useful thing to send us is

@@ -89,8 +89,9 @@ that the channel builds for more than one platform.
 
 The pull-request lifecycle (review-fix and land-together rules) - that
 is a second programme wanting live GitHub events, not hand admission.
-Migration and floor claims wait until a release that ships a migration
-forces their shape. The platform matrix is monotonic in this first
+Migration and floor claims are not on the register yet, though releases
+have shipped migrations since; whether the register should carry them
+is open. The platform matrix is monotonic in this first
 version: platforms may be added but not retired or temporarily
 excluded. And `AssetPublished` is a checklist assertion, not evidence
 tying the announcement to particular bytes - a later version can carry

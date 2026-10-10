@@ -1,6 +1,6 @@
 # Morpholog: Scope and Ambition
 
-Status: design doctrine. Companion to [`runtime-semantics.md`](runtime-semantics.md) and to [`design-history.md`](design-history.md), which records (retrospectively) which specific examples forced which design decisions.
+Companion to [`runtime-semantics.md`](runtime-semantics.md) and to [`design-history.md`](design-history.md), which records (retrospectively) which specific examples forced which design decisions.
 
 This document fixes what Morpholog is *for*, what it should grow into, and - equally important - what it must never become. It is a defence against two opposite mistakes: under-claiming the value, and over-claiming the surface.
 
@@ -23,7 +23,7 @@ A corollary that has become the centre of the bet, not a footnote to it: since a
 
 Those are the *constitutional* concepts: claims are the admitted state; invariants and transformations are the only first-class constructs over it - the rules and the actions. The other declarations a programme carries (`predicate`, `intent`, `define`, `derived`) are vocabulary, body grammar, and read-side, in the supporting tier below; none is a modelling primitive. Everything the implementation has grown is **supporting machinery**, and the discipline is to keep it subordinate so it never becomes the identity of the project:
 
-- **Vocabulary** - `predicate` and `intent` declarations: the shapes claims and outbox effects may take, including declared *claim disciplines* (`unique by`, `append only`, `current pointer by`, `superseded via`) - properties of a claim shape, lowered to ordinary generated invariants or enforced statically, never a rule-template system.
+- **Vocabulary** - `predicate` and `intent` declarations: the shapes claims and outbox effects may take, including declared *claim disciplines* (`unique by`, `append only`, `current pointer by`, `superseded via`, `effective by`) - properties of a claim shape, lowered to ordinary generated invariants or enforced statically, never a rule-template system.
 - **Body grammar** - the expression syntax of invariant and transformation *bodies*, including `define` (a named, parameterised proposition: a recurring condition written once and called by the name the business uses for it). Supporting syntax, not a user-facing modelling concept; it exists only so that a rule, or a computation inside one, has an honest shape. A definition names a proposition; it is not a view system and does not replace `derived` - `define` answers "does this condition hold?", `derived` enumerates claims.
 - **Read side** - derived claims are named reads over admitted claims. They never mutate governed state; for a derived result to carry legitimacy, a transformation must admit it as an ordinary claim.
 - **Execution account** - the trace and `explain`: a rendering of why a transformation was or was not admitted, never a separate reasoning engine.
@@ -100,7 +100,7 @@ These affordances unlock the categories above. Together they are far less than t
 ```
 predicate BankRecognisedRevenue(
     asset: Subject,
-    period: Period,
+    period: Subject,
     amount: Decimal,
     recognition: Subject
 )
@@ -219,7 +219,7 @@ The boundary discipline holds across every one of these: Morpholog governs the *
 These are floors. They do not get relaxed by accumulation of pressure; they get relaxed only by explicit revisit with reasons recorded.
 
 - **No entities, classes, services, or ORM** in the surface language. Subjects are opaque identifiers; predicates attach to subjects; that is the entire object model.
-- **No general workflow engine.** Lifecycle is conjunctions of admitted claims (and, eventually, derived claims). Morpholog is not Camunda and must not grow toward it.
+- **No general workflow engine.** Lifecycle is conjunctions of admitted claims, read through derived claims where a view is wanted. Morpholog is not Camunda and must not grow toward it.
 - **No arbitrary computation inside transformations.** Pure expressions over admitted claims, plus assertions, retractions, intents. External computation lives outside; its results may be admitted back as claims with provenance.
 - **No BI / analytics / reporting engine.** Derived claims govern reproducible read-side outputs; everything else is a separate concern with a separate tool.
 - **No optimisation / solver runtime.** ETRM scheduling, AP payment runs, dispatch - outside. Morpholog governs the inputs and admits the outputs.

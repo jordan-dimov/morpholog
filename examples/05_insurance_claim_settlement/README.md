@@ -103,7 +103,7 @@ Each pattern below is either already pinned by an earlier example or genuinely d
 - **Coverage correction.** Restating a coverage basis with `Supersedes`, retracting standing on the prior basis, leaving historical decisions admitted - the verified-revenue example already pins this shape.
 - **Reserve estimates.** Setting and revising loss reserves brings restatement-with-supersession into a domain where the current value is read frequently. A natural next example.
 - **Standing for purpose.** "This coverage basis may be relied on for reserve-setting but not for final settlement" is the verified-revenue `AdmissibleFor` pattern. Adding it here would re-illustrate without teaching.
-- **Effective time as a separate axis.** Whether the policy was in force at the loss date, whether the authority was active at the authorisation date - both are answerable today by admitting effective-time claims and querying as-of. A worked example that combines admission time with effective time across many transitions is on the roadmap.
+- **Effective time as a separate axis.** Whether the policy was in force at the loss date, whether the authority was active at the authorisation date - both are answerable today by admitting effective-time claims and querying as-of. The charging-years and covenant-reporting examples combine the two across many transitions, with `effective by` naming the claim in force on a date.
 - **Vulnerable customer handling and consumer-duty gates.** Real and load-bearing for the FCA story; they sit naturally as additional require clauses against admitted vulnerability flags.
 - **Per-target reinsurance, treaty cessions, retrocession.** A full insurance evidence regime eventually reaches into reinsurance. Each layer is its own forcing scenario.
 

@@ -157,17 +157,7 @@ The `README.md` is the example's **browsable face** - what renders when someone 
 
 ## Reference
 
-- [`docs/developer-intro.md`](docs/developer-intro.md) - the guided first hour: a programme, a database, a proposal, a refusal.
-- [`docs/install.md`](docs/install.md) - the prebuilt-binary path and how a deployment upgrades.
-- [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) - **read first** when reasoning about whether a direction fits the project.
-- [`docs/roadmap.md`](docs/roadmap.md) - what's imminent, deferred, and out of scope.
-- [`docs/runtime-semantics.md`](docs/runtime-semantics.md) - what the kernel means.
-- [`docs/refactoring-playbook.md`](docs/refactoring-playbook.md) - how to make a codebase-wide type change safely.
-- [`docs/benchmarking.md`](docs/benchmarking.md) - the benchmark suite's discipline: what may be made fast, and what may not be made easier.
-- [`docs/design-history.md`](docs/design-history.md) - for each significant IR decision, the worked example that forced it.
-- [`docs/embedder-integration.md`](docs/embedder-integration.md) - the pinned public contract for non-Rust integrations, including the generated Python client.
-- [`docs/prior-art.md`](docs/prior-art.md) - the influences behind the roadmap directions, with the calibrations that survived review.
-- [`docs/outbox-sketch.md`](docs/outbox-sketch.md) - the "Morpholog plus an Outside Coordinator" doctrine for the outbox worker.
+The documentation map is [`docs/README.md`](docs/README.md): every page, by what you want to know. Read [`docs/scope-and-ambition.md`](docs/scope-and-ambition.md) first when reasoning about whether a direction fits the project.
 
 ## License
 

@@ -24,7 +24,7 @@ anchor.
 
 It also forced the inverse, `period_start_of(anchor, span, index)`:
 the boundary date back from the coordinate. The forcing pressure
-(the embedder's #300 report): the year's published rate sheet is
+(the embedder's report): the year's published rate sheet is
 keyed by the day it begins, the run records the year as a number,
 and without the inverse those are two disconnected claims nobody's
 rule can reconcile - the rules could compute a date's index but

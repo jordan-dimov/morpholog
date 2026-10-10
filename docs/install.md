@@ -120,6 +120,8 @@ DATABASE_URL=postgres:///morpholog_scratch python3 examples/etrm_embedder/etrm_l
 
 ## Upgrading an existing database
 
+Evidence packs and receipts exported by an older release are refused by a newer verifier as `unsupported_pack` (one pack format at a time); export them again from the upgraded database.
+
 `morpholog init` provisions a schema; it never migrates one. That is
 deliberate - it means running `init` against a live database cannot alter
 it. Upgrading is its own verb, and it sits in a sequence:
@@ -234,8 +236,7 @@ schema behind or ahead of the binary (behind: run `morpholog migrate`
 first). A reset without
 `--least-privilege` drops the record and leaves the roles on the cluster,
 so their prefix is refused until you drop them or choose another. `migrate` warns when this deployment's roles also hold privileges
-in, or on, another database. Deployments provisioned
-before this check existed can be in that state.
+in, or on, another database. A deployment can be in that state.
 
 A login granted two deployments' writers holds both, so grant each login
 the roles of one deployment. A `pg_dump` restore carries grants by role

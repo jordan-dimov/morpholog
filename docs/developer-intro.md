@@ -485,7 +485,9 @@ morpholog propose revenue.morph run_covenant_test --actor bank_credit_cttee \
 ```
 ```json
 { "status": "rejected",
-  "reason": "require failed: CurrentFigure(asset, period, figure_id) did not hold over pre-state" }
+  "reason": "require failed: CurrentFigure(asset, period, figure_id) did not hold over pre-state",
+  "witness": [{ "var": "asset", "value": { "type": "subject", "value": "a1" } },
+              { "var": "period", "value": { "type": "subject", "value": "2026-q1" } }] }
 ```
 
 Refused. The exit code is non-zero; nothing was admitted - no claims
@@ -693,8 +695,8 @@ receipt = propose("report_revenue", "verifier_anna", {
     "amount": "1000", "figure_id": "f1",
 })
 if receipt["status"] == "rejected":
-    ...  # show receipt["reason"] (propose with --explain-on-reject and the
-         # receipt carries the full missing-evidence account too)
+    ...  # hold receipt["rule"], print receipt["witness"] and receipt["compared"];
+         # with --explain-on-reject the receipt carries the missing-evidence account too
 ```
 
 A business refusal is data, not an exception. That is why the snippet does not
@@ -750,7 +752,8 @@ things to try with the program you already have:
    refuses it:
 
    ```json
-   { "status": "rejected", "reason": "invariant `one_figure_in_force_per_period` violated" }
+   { "status": "rejected", "reason": "invariant `one_figure_in_force_per_period` violated",
+     "rule": "one_figure_in_force_per_period", "witness": [ ... ] }
    ```
 
    (And on stderr, a courtesy line points at the violated rule's exact
@@ -877,14 +880,13 @@ a name you chose. The worked examples in the repository use the declaration
 form throughout - and when your own programmes grow past a handful of rules,
 so should you. (The same instinct - name the idea, not the plumbing - has a
 second tool: `define` lets you name a condition once and use it from several
-gates and invariants. The clinical-trial example reads as five named
+gates and invariants. The clinical-trial example reads as a few named
 conditions instead of one twenty-line gate.)
 
 ## Questions you are probably asking
 
 The broader pitch questions - the dual-write worry, raw `psql` access, whether
-a generic claims table is an EAV trap, GDPR erasure, and why not OPA, Datomic,
-or Datalog - are answered in the
+writing twice, a record whose shape changes once history exists, a process per request, GDPR erasure, and whether one generic table is slow.
 [README's common questions](../README.md#common-questions). What this guide
 raises specifically:
 
@@ -903,8 +905,8 @@ to enter as admitted claims from an authority you choose, never as a hidden
 runtime lookup table.
 
 **"Does this scale beyond one small file?"**
-The programmes are deliberately small so far, and `.morph` has no imports or
-namespaces yet - they arrive when a real codebase forces them. What exists now
+The programmes are deliberately small, and `.morph` has no imports or
+namespaces by design: one programme, one file, so a rule is read whole. What exists now
 for keeping a rule set legible: named conditions (`define`) keep large gates
 readable, claim disciplines put the structural rules on the declarations
 (the previous section), `morpholog inspect guarantees` lists what a model

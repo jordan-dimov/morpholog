@@ -137,7 +137,13 @@ morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBala
 The second answer is exactly what an auditor would have seen at that moment, rebuilt from the audit log. An unbalanced entry is refused with the rule named, and the line of your rules file it broke:
 
 ```json
-{ "status": "rejected", "reason": "invariant `balanced_posted_entry` violated" }
+{
+  "status": "rejected",
+  "reason": "invariant `balanced_posted_entry` violated",
+  "rule": "balanced_posted_entry",
+  "witness": [{ "var": "entry", "value": { "type": "subject", "value": "e_7" } }],
+  "compared": { "op": "=", "left": { "type": "decimal", "value": "100" }, "right": { "type": "decimal", "value": "90" } }
+}
 ```
 
 New to Morpholog? [The developer introduction](docs/developer-intro.md) is the hands-on start. Written for someone who knows Python and SQL, it builds a small governed ledger end to end: a reported figure, a decision that relies on it, the honest correction, and the replay that keeps both answers true.

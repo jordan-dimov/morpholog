@@ -36,7 +36,7 @@ in the [glossary](#glossary) at the end.
 ## Reference and design
 
 - [Runtime semantics](runtime-semantics.md) - exactly what the rules mean,
-  including the full table of what the language can say.
+  including the table of what each surface form compiles into.
 - [Design history](design-history.md) - which worked example forced each
   design decision, and why.
 - [Prior art](prior-art.md) - the theory underneath, and what was
