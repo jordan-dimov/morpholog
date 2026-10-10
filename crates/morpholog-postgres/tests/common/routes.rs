@@ -98,7 +98,7 @@ pub async fn observe(
             format!("rejected {reason} | rule {rule:?} | witness vars {vars:?}")
         }
     };
-    let rejection = list_rejection_rows(pool, 10)
+    let rejection = list_rejection_rows(pool, 10, None)
         .await
         .unwrap()
         .into_iter()

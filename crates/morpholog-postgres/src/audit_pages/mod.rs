@@ -17,7 +17,7 @@ use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
 use uuid::Uuid;
 
-use crate::audit::{AuditRow, REPLAY_CHUNK, list_audit_rows_page};
+use crate::audit::{AuditRow, REPLAY_CHUNK, list_audit_rows_page, list_audit_rows_page_mentioning};
 use crate::error::{PgError, classify};
 
 /// The paging state both projections share.
@@ -99,6 +99,8 @@ impl ReplayPages {
 pub(crate) struct AuditPages {
     keyset: Keyset,
     horizon: Option<Timestamp>,
+    /// Only rows mentioning this subject; the bounds apply either way.
+    mentions: Option<String>,
 }
 
 impl AuditPages {
@@ -110,7 +112,15 @@ impl AuditPages {
         AuditPages {
             keyset: Keyset::new(None, chunk),
             horizon,
+            mentions: None,
         }
+    }
+
+    /// Only the rows mentioning this subject, through the filtered
+    /// statements; the unfiltered walk keeps its own.
+    pub(crate) fn mentioning(mut self, subject: &str) -> Self {
+        self.mentions = Some(subject.to_string());
+        self
     }
 
     /// Start strictly after this coordinate rather than at the beginning.
@@ -128,8 +138,22 @@ impl AuditPages {
         if self.keyset.done {
             return Ok(Vec::new());
         }
-        let rows =
-            list_audit_rows_page(conn, self.keyset.cursor, self.horizon, self.keyset.chunk).await?;
+        let rows = match &self.mentions {
+            None => {
+                list_audit_rows_page(conn, self.keyset.cursor, self.horizon, self.keyset.chunk)
+                    .await?
+            }
+            Some(subject) => {
+                list_audit_rows_page_mentioning(
+                    conn,
+                    self.keyset.cursor,
+                    self.horizon,
+                    self.keyset.chunk,
+                    subject,
+                )
+                .await?
+            }
+        };
         self.keyset.advance(
             rows.len(),
             rows.last().map(|r| (r.committed_at, r.transition_id)),

@@ -370,15 +370,6 @@ fn module_header(out: &mut String, what: &str, program: &Program) {
 
 fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow::Result<String> {
     let mut out = String::new();
-    module_header(&mut out, "Typed request, read, and payload models", program);
-    out.push_str(
-        "from __future__ import annotations\n\n\
-         from dataclasses import dataclass\n\
-         from datetime import date, datetime\n\
-         from decimal import Decimal\n\
-         from typing import ClassVar\n\n\
-         from . import values\n",
-    );
 
     // Request models: one frozen dataclass per transformation, fields in
     // declaration order (as in x-morpholog-arg-order), each able to encode
@@ -511,6 +502,28 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
         .collect::<Vec<_>>()
         .join("\n");
     let _ = write!(out, "\n\nINTENT_PAYLOADS = {{\n{payload_entries}\n}}\n");
+    // The header last, so the time imports match the kinds the models
+    // use; an unused import is a lint finding in every embedder's CI.
+    let needs_date = out.contains(": date\n") || out.contains("list[date]");
+    let needs_datetime = out.contains(": datetime\n") || out.contains("list[datetime]");
+    let time_import = match (needs_date, needs_datetime) {
+        (true, true) => "from datetime import date, datetime\n",
+        (true, false) => "from datetime import date\n",
+        (false, true) => "from datetime import datetime\n",
+        (false, false) => "",
+    };
+    let mut header = String::new();
+    module_header(
+        &mut header,
+        "Typed request, read, and payload models",
+        program,
+    );
+    header.push_str("from __future__ import annotations\n\nfrom dataclasses import dataclass\n");
+    header.push_str(time_import);
+    header.push_str(
+        "from decimal import Decimal\nfrom typing import ClassVar\n\nfrom . import values\n",
+    );
+    let out = header + &out;
     Ok(out)
 }
 

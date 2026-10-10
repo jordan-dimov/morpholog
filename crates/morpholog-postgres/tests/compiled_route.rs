@@ -360,7 +360,10 @@ async fn a_failing_compiled_check_is_an_operational_error_never_a_decision() {
         "the written delta rolled back"
     );
     assert!(
-        list_rejection_rows(&pool, 10).await.unwrap().is_empty(),
+        list_rejection_rows(&pool, 10, None)
+            .await
+            .unwrap()
+            .is_empty(),
         "an error is not a refusal"
     );
 }

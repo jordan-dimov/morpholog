@@ -8,7 +8,7 @@ regenerate when the programme changes. The model hash in
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from typing import ClassVar
 

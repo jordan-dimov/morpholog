@@ -66,7 +66,7 @@ pub use as_of::{
 pub use attestation::{ActorAttestation, AuditAttestation, Proposal};
 pub use audit::{
     AuditRow, AuditTail, audit_cursor_for, audit_resume_watermark, begin_audit_tail,
-    list_audit_rows, list_audit_rows_page,
+    list_audit_rows, list_audit_rows_page, list_audit_rows_page_mentioning,
 };
 pub use checkpoints::{
     Checkpoint, CheckpointOutcome, CheckpointSigner, SignaturePolicy, SignaturePolicyViolation,

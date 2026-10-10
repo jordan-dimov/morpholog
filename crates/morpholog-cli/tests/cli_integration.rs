@@ -5072,3 +5072,81 @@ async fn the_stamp_covers_the_whole_programme() {
         "a declaration no commit touches still changes the programme named"
     );
 }
+
+/// `--mentions` on both reads, end to end: the tail keeps only the
+/// transitions naming the subject, the log only the refusals naming it,
+/// and an empty subject is refused before any query.
+#[tokio::test]
+async fn inspect_audit_and_rejections_keep_only_the_rows_mentioning_a_subject() {
+    reset_db().await;
+    for (entry, date) in [("entry_001", "2026-04-15"), ("entry_002", "2026-04-16")] {
+        let (status, ..) = run_cli(&[
+            "propose",
+            &ledger_morph(),
+            "post_simple_entry",
+            "--actor",
+            "alex",
+            "--args",
+            &ledger_args_json(entry, date, "q1_2026", "100"),
+        ]);
+        assert!(status.success(), "{entry} posts");
+    }
+    let (status, ..) = run_cli(&[
+        "propose",
+        &ledger_morph(),
+        "close_period",
+        "--actor",
+        "alex",
+        "--args",
+        r#"[{"type":"subject","value":"q1_2026"}]"#,
+    ]);
+    assert!(status.success());
+    let (status, ..) = run_cli(&[
+        "propose",
+        &ledger_morph(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args",
+        &ledger_args_json("entry_003", "2026-04-17", "q1_2026", "100"),
+    ]);
+    assert!(!status.success(), "the closed period refuses entry_003");
+
+    let (status, stdout, _) = run_cli(&["inspect", "audit", "--mentions", "entry_002"]);
+    assert!(status.success());
+    let lines: Vec<Value> = stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1, "one transition names entry_002: {stdout}");
+    assert_eq!(lines[0]["arguments"][0]["value"], "entry_002");
+    let (status, stdout, _) = run_cli(&["inspect", "audit", "--mentions", "q1_2026"]);
+    assert!(status.success());
+    assert_eq!(
+        stdout.lines().count(),
+        3,
+        "two postings and the close name the period: {stdout}"
+    );
+    let (status, stdout, _) = run_cli(&["inspect", "audit", "--mentions", "entry_003"]);
+    assert!(status.success());
+    assert!(
+        stdout.is_empty(),
+        "a refused entry is in no transition: {stdout}"
+    );
+
+    let (status, stdout, _) = run_cli(&["inspect", "rejections", "--mentions", "entry_003"]);
+    assert!(status.success());
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1, "{stdout}");
+    assert_eq!(rows[0]["transformation_name"], "post_simple_entry");
+    let (status, stdout, _) = run_cli(&["inspect", "rejections", "--mentions", "entry_001"]);
+    assert!(status.success());
+    assert_eq!(stdout.trim(), "[]", "entry_001 was never refused: {stdout}");
+
+    for read in [&["inspect", "audit"][..], &["inspect", "rejections"][..]] {
+        let args: Vec<&str> = read.iter().copied().chain(["--mentions", ""]).collect();
+        let (status, _, stderr) = run_cli(&args);
+        assert!(!status.success(), "an empty subject is refused: {stderr}");
+        assert!(stderr.contains("names nothing"), "{stderr}");
+    }
+}

@@ -7,7 +7,6 @@ is an UNKNOWN outcome, never a plain error."""
 
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -15,9 +14,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from _support import GOLDEN_DIR, add_client_to_path
-
-add_client_to_path()
+from _support import GOLDEN_DIR
 
 from python_client import envelopes
 from python_client.session import (
@@ -223,12 +220,12 @@ class SessionHarness(unittest.TestCase):
 
     def recorded(self):
         lines = self.record.read_text(encoding="utf-8").splitlines()
-        return [l for l in lines if not l.startswith(("ARGV ", "HAS_DATABASE_URL "))]
+        return [line for line in lines if not line.startswith(("ARGV ", "HAS_DATABASE_URL "))]
 
     def stub_meta(self):
         lines = self.record.read_text(encoding="utf-8").splitlines()
-        argv = json.loads(next(l for l in lines if l.startswith("ARGV "))[5:])
-        has_url = next(l for l in lines if l.startswith("HAS_DATABASE_URL "))
+        argv = json.loads(next(line for line in lines if line.startswith("ARGV "))[5:])
+        has_url = next(line for line in lines if line.startswith("HAS_DATABASE_URL "))
         return argv, has_url.endswith("True")
 
 

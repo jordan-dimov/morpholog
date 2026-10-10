@@ -1,17 +1,18 @@
 """The value codecs, both directions, including the traps the standard
 library makes real (scientific Decimal rendering, naive datetimes)."""
 
-import sys
 import unittest
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from _support import add_client_to_path
-
-add_client_to_path()
-
+from _support import TEMPLATES_DIR
 from python_client import values
+
+
+class ModuleUnderTest(unittest.TestCase):
+    def test_the_codec_under_test_is_the_template_not_an_installed_copy(self):
+        self.assertEqual(Path(values.__file__).resolve().parent, TEMPLATES_DIR / "python_client")
 
 
 class DecodeTagged(unittest.TestCase):

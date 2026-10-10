@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT rejection_id, transformation_name, arguments, actor,\n                kind, rule, invariant_version, reason, witness, compared, rejected_at\n         FROM morpholog.rejections\n         ORDER BY rejected_at DESC, rejection_id DESC\n         LIMIT $1",
+  "query": "SELECT rejection_id, transformation_name, arguments, actor,\n                        kind, rule, invariant_version, reason, witness, compared, rejected_at\n                 FROM morpholog.rejections\n                 ORDER BY rejected_at DESC, rejection_id DESC\n                 LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -144,5 +144,5 @@
       false
     ]
   },
-  "hash": "c44c7e79413db226e47da56de94937631f052b091bc1fab0e7a717390eb30092"
+  "hash": "7365e7f441197ace609b9a16aedd09ce8f67b74f99ff9496910af8140bd854af"
 }
