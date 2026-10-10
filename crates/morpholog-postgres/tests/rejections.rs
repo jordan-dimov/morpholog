@@ -390,7 +390,7 @@ async fn an_invariant_rejection_persists_the_values_the_rule_was_reading() {
     };
     assert!(!witness.is_empty(), "the live envelope carries a witness");
 
-    let rows = morpholog_postgres::list_rejection_rows(&pool, 100)
+    let rows = morpholog_postgres::list_rejection_rows(&pool, 100, None)
         .await
         .expect("reading the log back");
     assert_eq!(rows.len(), 1);
@@ -433,7 +433,7 @@ async fn a_gate_rejection_persists_the_bindings_it_was_judged_under() {
         "{witness:?}"
     );
 
-    let rows = morpholog_postgres::list_rejection_rows(&pool, 100)
+    let rows = morpholog_postgres::list_rejection_rows(&pool, 100, None)
         .await
         .expect("reading the log back");
     assert_eq!(rows.len(), 1);
@@ -479,7 +479,7 @@ async fn a_rejection_persists_the_comparison_it_blamed() {
     assert_eq!(compared.left, dec(25));
     assert_eq!(compared.right, dec(10));
 
-    let rows = morpholog_postgres::list_rejection_rows(&pool, 10)
+    let rows = morpholog_postgres::list_rejection_rows(&pool, 10, None)
         .await
         .expect("reading the log back");
     assert_eq!(rows.len(), 1);

@@ -1,0 +1,200 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT transition_id, transformation_name, arguments, actor,\n                        invariant_epoch, invariants_checked,\n                        asserted_claims, retracted_claims, emitted_intents, committed_at,\n                attestation, parameters, model_hash, semantics_version, drawn_subjects\n                 FROM morpholog.audit\n                 WHERE (committed_at, transition_id) > ($2, $3)\n                   AND committed_at < $4\n                   AND jsonb_path_exists(\n                     jsonb_build_array(arguments, asserted_claims, retracted_claims, emitted_intents),\n                     '$.** ? (@.type == \"subject\" && @.value == $s)', $5)\n                 ORDER BY committed_at, transition_id\n                 LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transition_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "transition_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "transformation_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "transformation_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "arguments",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "arguments"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "actor",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "actor"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "invariant_epoch",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "invariant_epoch"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "invariants_checked",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "invariants_checked"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "asserted_claims",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "asserted_claims"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "retracted_claims",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "retracted_claims"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "emitted_intents",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "emitted_intents"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "committed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "committed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "attestation",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "attestation"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "parameters",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "parameters"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "model_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "model_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "semantics_version",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "semantics_version"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "drawn_subjects",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "drawn_subjects"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamptz",
+        "Uuid",
+        "Timestamptz",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "1c61ed82682bcc26767000f8ac40e36f42d8c382c682601a2e9da290c4c34bd6"
+}

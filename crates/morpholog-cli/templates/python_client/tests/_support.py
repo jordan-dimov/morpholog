@@ -17,6 +17,11 @@ def add_client_to_path() -> None:
     sys.path.insert(0, str(TEMPLATES_DIR))
 
 
+# Importing this module puts the templates on the path, so a test's
+# imports of the client sit at the top of its file with the others.
+add_client_to_path()
+
+
 def golden(name: str):
     return json.loads((GOLDEN_DIR / name).read_text())
 

@@ -38,23 +38,72 @@ pub struct RejectionRow {
     pub rejected_at: Timestamp,
 }
 
+/// One row as the table holds it; both statements read into it.
+struct RejectionRaw {
+    rejection_id: Uuid,
+    transformation_name: String,
+    arguments: serde_json::Value,
+    actor: serde_json::Value,
+    kind: String,
+    rule: String,
+    invariant_version: Option<i64>,
+    reason: String,
+    witness: Option<serde_json::Value>,
+    compared: Option<serde_json::Value>,
+    rejected_at: jiff_sqlx::Timestamp,
+}
+
 /// The most recent `limit` refusals, newest first.
 ///
 /// Bounded on purpose: the log grows with every refusal, so an unbounded
 /// read would fail hardest during a storm of refusals, just when it matters.
 /// Deeper history comes from a larger limit.
-pub async fn list_rejection_rows(pool: &PgPool, limit: u32) -> Result<Vec<RejectionRow>, PgError> {
-    let rows = sqlx::query!(
-        "SELECT rejection_id, transformation_name, arguments, actor,
-                kind, rule, invariant_version, reason, witness, compared, rejected_at
-         FROM morpholog.rejections
-         ORDER BY rejected_at DESC, rejection_id DESC
-         LIMIT $1",
-        i64::from(limit),
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(classify_checked_query)?;
+///
+/// With `mentions`, only the refusals naming that subject in their
+/// arguments, witness or compared values; the limit then counts
+/// matching rows. An empty subject is refused.
+pub async fn list_rejection_rows(
+    pool: &PgPool,
+    limit: u32,
+    mentions: Option<&str>,
+) -> Result<Vec<RejectionRow>, PgError> {
+    // Bound as a jsonpath variable, never spliced into the path.
+    let vars = serde_json::json!({ "s": mentions.unwrap_or_default() });
+    let rows = match mentions {
+        None => sqlx::query_as!(
+            RejectionRaw,
+            "SELECT rejection_id, transformation_name, arguments, actor,
+                        kind, rule, invariant_version, reason, witness, compared, rejected_at
+                 FROM morpholog.rejections
+                 ORDER BY rejected_at DESC, rejection_id DESC
+                 LIMIT $1",
+            i64::from(limit),
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(classify_checked_query),
+        Some("") => {
+            return Err(PgError::InvalidState(
+                "--mentions needs a subject; an empty one names nothing".into(),
+            ));
+        }
+        Some(_) => sqlx::query_as!(
+            RejectionRaw,
+            r#"SELECT rejection_id, transformation_name, arguments, actor,
+                        kind, rule, invariant_version, reason, witness, compared, rejected_at
+                 FROM morpholog.rejections
+                 WHERE jsonb_path_exists(
+                     jsonb_build_array(arguments, witness, compared),
+                     '$.** ? (@.type == "subject" && @.value == $s)', $2)
+                 ORDER BY rejected_at DESC, rejection_id DESC
+                 LIMIT $1"#,
+            i64::from(limit),
+            vars,
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(classify_checked_query),
+    }?;
 
     rows.into_iter()
         .map(|row| {

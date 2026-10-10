@@ -163,7 +163,7 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
         Inspect::Audit(args) => inspect_audit(args).await,
         Inspect::Rejections(args) => {
             let pool = connect(&args.db.database_url).await?;
-            let rows = list_rejection_rows(&pool, args.limit)
+            let rows = list_rejection_rows(&pool, args.limit, args.mentions.as_deref())
                 .await
                 .context("list_rejection_rows failed")?;
             print_json(&rows)
@@ -205,6 +205,11 @@ async fn inspect_audit(args: crate::InspectAuditArgs) -> anyhow::Result<()> {
     let mut tail = begin_audit_tail(&pool, args.after, args.writers.as_writers())
         .await
         .context("opening the audit tail")?;
+    if let Some(subject) = &args.mentions {
+        tail = tail
+            .mentioning(subject)
+            .context("filtering the audit tail")?;
+    }
     loop {
         let page = tail.next_page().await.context("reading an audit page")?;
         if page.is_empty() {

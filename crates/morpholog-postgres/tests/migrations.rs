@@ -639,7 +639,7 @@ async fn a_baseline_database_is_behind_until_migrated_and_then_keeps_a_gate_witn
         )
         .await
     };
-    let rows = morpholog_postgres::list_rejection_rows(&pool, 10).await;
+    let rows = morpholog_postgres::list_rejection_rows(&pool, 10, None).await;
     pool.close().await;
     ddl(
         &admin_pool,

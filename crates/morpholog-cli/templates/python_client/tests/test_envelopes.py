@@ -3,15 +3,11 @@ test pins byte-equal to the binary's real serialization - one sample
 set holding the binary, result.json, and this client together."""
 
 import json
-import sys
 import unittest
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from pathlib import Path
 
-from _support import GOLDEN_DIR, TEMPLATES_DIR, add_client_to_path, golden
-
-add_client_to_path()
+from _support import GOLDEN_DIR, TEMPLATES_DIR, golden
 
 from python_client import envelopes
 

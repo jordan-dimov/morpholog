@@ -50,6 +50,15 @@ fn at(second: i64) -> Timestamp {
 // Hand-inserted audit rows carry an attestation, as every row the
 // adapter writes does.
 async fn insert(pool: &PgPool, transition_id: Uuid, committed_at: Timestamp) {
+    insert_with_arguments(pool, transition_id, committed_at, "[]").await;
+}
+
+async fn insert_with_arguments(
+    pool: &PgPool,
+    transition_id: Uuid,
+    committed_at: Timestamp,
+    arguments: &str,
+) {
     sqlx::query(
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor,
@@ -57,14 +66,16 @@ async fn insert(pool: &PgPool, transition_id: Uuid, committed_at: Timestamp) {
             asserted_claims, retracted_claims, emitted_intents,
             attestation, parameters, model_hash, semantics_version, drawn_subjects,
             committed_at
-         ) VALUES ($1, 'post', '[]'::jsonb,
+         ) VALUES ($1, 'post', ($3::text)::jsonb,
                    '{\"type\":\"subject\",\"value\":\"pager\"}'::jsonb,
                    1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
                    '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb,
-                   '[]'::jsonb, 'sha256:' || repeat('0', 64), 1, '[]'::jsonb, $2)",
+                   coalesce((SELECT jsonb_agg('p' || i) FROM generate_series(1, jsonb_array_length(($3::text)::jsonb)) i), '[]'::jsonb),
+                   'sha256:' || repeat('0', 64), 1, '[]'::jsonb, $2)",
     )
     .bind(transition_id)
     .bind(jiff_sqlx::ToSqlx::to_sqlx(committed_at))
+    .bind(arguments)
     .execute(pool)
     .await
     .unwrap();
@@ -200,5 +211,28 @@ async fn a_walk_resumed_after_a_row_starts_strictly_after_it() {
         )
         .await,
         ids(&[4, 5, 6])
+    );
+}
+
+/// The filtered walk pages matching rows in replay order across chunk
+/// boundaries, tied timestamps included, each once and none skipped:
+/// rows 1, 3, 4 and 6 name the subject, 3 and 4 tied at t2, chunk two.
+#[tokio::test]
+async fn a_filtered_walk_pages_matching_rows_in_order_across_chunks_and_ties() {
+    let pool = pool().await;
+    let names = r#"[{"type":"subject","value":"s"}]"#;
+    insert_with_arguments(&pool, id(1), at(1), names).await;
+    insert(&pool, id(2), at(2)).await;
+    insert_with_arguments(&pool, id(4), at(2), names).await;
+    insert_with_arguments(&pool, id(3), at(2), names).await;
+    insert(&pool, id(5), at(3)).await;
+    insert_with_arguments(&pool, id(6), at(4), names).await;
+    let walked = audit_walk(&pool, AuditPages::with_chunk(None, 2).mentioning("s")).await;
+    assert_eq!(walked, ids(&[1, 3, 4, 6]));
+    let whole = audit_walk(&pool, AuditPages::with_chunk(None, 2)).await;
+    assert_eq!(
+        whole,
+        ids(&[1, 2, 3, 4, 5, 6]),
+        "the unfiltered walk is untouched"
     );
 }

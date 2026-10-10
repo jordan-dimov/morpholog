@@ -750,7 +750,9 @@ class Morpholog:
         payload = self._json(*argv, "--database-url", self.database_url)
         return [parse(c) for c in cast("list[object]", payload)]
 
-    def rejections(self, *, limit: int = 100) -> list[envelopes.RejectionRow]:
+    def rejections(
+        self, *, limit: int = 100, mentions: str | None = None
+    ) -> list[envelopes.RejectionRow]:
         """The most recent refusals, newest first, with the values the refused
         rule was reading where the kernel could pin them.
 
@@ -763,10 +765,14 @@ class Morpholog:
         refusal unrecorded; audit remains the only legitimacy-grade record.
         Read a row as a lead to follow, and never as proof of what did or
         did not happen.
+
+        ``mentions`` keeps only the refusals naming that subject in their
+        arguments, witness or compared values; ``limit`` then counts those.
         """
         payload = self._json(
             "inspect",
             "rejections",
+            *self._mentions(mentions),
             "--limit",
             str(limit),
             "--database-url",
@@ -820,7 +826,11 @@ class Morpholog:
         return [parse(c) for c in cast("list[object]", payload)]
 
     def audit(
-        self, after: str | None = None, *, writer_roles: list[str] | None = None
+        self,
+        after: str | None = None,
+        *,
+        writer_roles: list[str] | None = None,
+        mentions: str | None = None,
     ) -> list[envelopes.AuditRow]:
         """The audit tail: committed transitions in commit order, one
         ``AuditRow`` per NDJSON line. ``after`` resumes strictly after
@@ -834,27 +844,53 @@ class Morpholog:
         against the catalog; superuser writes are the residue the
         assertion explicitly accepts, and role grants, memberships,
         and login attributes must stay unchanged until the command
-        establishes its read snapshot."""
+        establishes its read snapshot.
+
+        ``mentions`` keeps only the transitions naming that subject in
+        their arguments, claims or intents. ``after`` and the watermark
+        apply as without it, so a filtered tail withholds and resumes
+        exactly as the whole one; a sparse subject means the binary
+        walks the tail to find it, and an empty result moves no cursor."""
         return [
             envelopes.AuditRow.from_json(row)
-            for row in self._audit_lines(after, named=False, writer_roles=writer_roles)
+            for row in self._audit_lines(
+                after, named=False, writer_roles=writer_roles, mentions=mentions
+            )
         ]
 
     def audit_named(
-        self, after: str | None = None, *, writer_roles: list[str] | None = None
+        self,
+        after: str | None = None,
+        *,
+        writer_roles: list[str] | None = None,
+        mentions: str | None = None,
     ) -> list[envelopes.AuditRowNamed]:
         """The audit tail with asserted/retracted claims decoded by
         declared field name under this programme's authority (skew is
         a hard error on the binary side). ``arguments`` and intent
         payloads stay positional - a different vocabulary.
-        ``writer_roles`` as on ``audit``."""
+        ``writer_roles`` and ``mentions`` as on ``audit``."""
         return [
             envelopes.AuditRowNamed.from_json(row)
-            for row in self._audit_lines(after, named=True, writer_roles=writer_roles)
+            for row in self._audit_lines(
+                after, named=True, writer_roles=writer_roles, mentions=mentions
+            )
         ]
 
+    @staticmethod
+    def _mentions(subject: str | None) -> list[str]:
+        if subject is None:
+            return []
+        if subject == "":
+            raise ValueError("mentions needs a subject; an empty one names nothing")
+        return ["--mentions", subject]
+
     def _audit_lines(
-        self, after: str | None, named: bool, writer_roles: list[str] | None = None
+        self,
+        after: str | None,
+        named: bool,
+        writer_roles: list[str] | None = None,
+        mentions: str | None = None,
     ) -> list[dict[str, object]]:
         # Not _invoke: an empty tail is a lawful empty stdout, not a
         # protocol violation - so the discrimination here is on the
@@ -864,6 +900,7 @@ class Morpholog:
             argv.extend(["--after", after])
         if named:
             argv.extend(["--named", self.file])
+        argv += self._mentions(mentions)
         argv += self._repeat("--writer-role", writer_roles)
         argv.extend(["--database-url", self.database_url])
         proc = self._run(argv, timeout=self.timeout)

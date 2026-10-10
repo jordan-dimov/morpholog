@@ -510,3 +510,29 @@ pub fn pinned_value_keys() -> Vec<(serde_json::Value, serde_json::Value)> {
         ),
     ]
 }
+
+/// [`insert_in_flight_audit_row`] whose arguments name a subject, for the
+/// filtered tail's withholding test.
+pub async fn insert_in_flight_audit_row_mentioning(
+    conn: &mut sqlx::PgConnection,
+    transition_id: Uuid,
+    subject: &str,
+) {
+    sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents,
+            attestation, parameters, model_hash, semantics_version, drawn_subjects
+         ) VALUES ($1, 'post', jsonb_build_array(jsonb_build_object('type', 'subject', 'value', $2::text)),
+                   '{\"type\":\"subject\",\"value\":\"in_flight\"}'::jsonb,
+                   1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb,
+                   '[\"entry_id\"]'::jsonb, 'sha256:' || repeat('0', 64), 1, '[]'::jsonb)",
+    )
+    .bind(transition_id)
+    .bind(subject)
+    .execute(conn)
+    .await
+    .unwrap();
+}

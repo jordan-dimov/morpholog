@@ -150,6 +150,8 @@ async fn every_audit_walk_is_an_index_walk_with_its_bounds_as_index_conditions()
         "'01900000-0000-7000-8000-000000000001'::uuid",
     );
     let after = "ROW(committed_at, transition_id) > ROW($2, $3)";
+    let mentions_at = r#"jsonb_path_exists(jsonb_build_array(arguments, asserted_claims, retracted_claims, emitted_intents), '$.** ? (@.type == "subject" && @.value == $s)', $"#;
+    let vars = r#"'{"s":"x"}'::jsonb"#;
     let cases: Vec<(String, String, Vec<&str>)> = vec![
         (format!("{replay} {order}"), "1024".into(), vec![]),
         (
@@ -185,6 +187,32 @@ async fn every_audit_walk_is_an_index_walk_with_its_bounds_as_index_conditions()
                 "{full} WHERE (committed_at, transition_id) > ($2, $3) AND committed_at < $4 {order}"
             ),
             format!("1024, {at}, {id}, {at}"),
+            vec![after, "committed_at < $4"],
+        ),
+        // The `--mentions` statements: the same walk and bounds, the
+        // subject test a filter on each row, never a second scan.
+        (
+            format!("{full} WHERE {mentions_at}2) {order}"),
+            format!("1024, {vars}"),
+            vec![],
+        ),
+        (
+            format!(
+                "{full} WHERE (committed_at, transition_id) > ($2, $3) AND {mentions_at}4) {order}"
+            ),
+            format!("1024, {at}, {id}, {vars}"),
+            vec![after],
+        ),
+        (
+            format!("{full} WHERE committed_at < $2 AND {mentions_at}3) {order}"),
+            format!("1024, {at}, {vars}"),
+            vec!["committed_at < $2"],
+        ),
+        (
+            format!(
+                "{full} WHERE (committed_at, transition_id) > ($2, $3) AND committed_at < $4 AND {mentions_at}5) {order}"
+            ),
+            format!("1024, {at}, {id}, {at}, {vars}"),
             vec![after, "committed_at < $4"],
         ),
     ];

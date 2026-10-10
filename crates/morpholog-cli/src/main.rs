@@ -381,6 +381,10 @@ pub(crate) struct RejectionsArgs {
     /// back; there is no cursor yet, so depth comes from raising this.
     #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..))]
     pub(crate) limit: u32,
+    /// Only the refusals that mention this subject in their arguments,
+    /// witness or compared values; `--limit` then counts those.
+    #[arg(long, value_name = "SUBJECT", value_parser = non_empty_subject)]
+    pub(crate) mentions: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -1111,8 +1115,22 @@ pub(crate) struct InspectAuditArgs {
     #[arg(long, value_name = "FILE")]
     pub(crate) named: Option<PathBuf>,
 
+    /// Only the transitions that mention this subject in their
+    /// arguments, asserted or retracted claims, or emitted intents.
+    /// `--after` and the resume watermark apply as without it.
+    #[arg(long, value_name = "SUBJECT", value_parser = non_empty_subject)]
+    pub(crate) mentions: Option<String>,
+
     #[command(flatten)]
     pub(crate) writers: WriterRoleArgs,
+}
+
+fn non_empty_subject(s: &str) -> Result<String, String> {
+    if s.is_empty() {
+        Err("a subject; an empty one names nothing".to_string())
+    } else {
+        Ok(s.to_string())
+    }
 }
 
 /// Arguments for `inspect predicates`. No `--as-of`; predicate

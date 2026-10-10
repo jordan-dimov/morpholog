@@ -7,15 +7,12 @@ object - settles the outcome; anything else is unknown."""
 import json
 import os
 import stat
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from _support import GOLDEN_DIR, add_client_to_path, recording_argv
-
-add_client_to_path()
+from _support import GOLDEN_DIR, recording_argv
 
 from python_client import envelopes
 from python_client.adapter import (
@@ -746,6 +743,30 @@ class AdapterDiscrimination(unittest.TestCase):
             argv = argv_after(lambda: self.client.audit())
             self.assertNotIn("--after", argv)
             self.assertNotIn("--named", argv)
+
+    def test_mentions_lands_on_the_audit_and_rejections_argv_and_an_empty_one_is_refused(self):
+        self._mode("record_argv_empty")
+        with recording_argv() as argv_after:
+            argv = argv_after(lambda: self.client.audit(mentions="order_7"))
+            self.assertEqual(argv[argv.index("--mentions") + 1], "order_7")
+            argv = argv_after(lambda: self.client.audit_named(mentions="order_7"))
+            self.assertIn("--mentions", argv)
+            self.assertIn("--named", argv)
+            argv = argv_after(lambda: self.client.audit())
+            self.assertNotIn("--mentions", argv)
+        self._mode("record_argv_stdout")
+        os.environ["STUB_STDOUT"] = "[]"
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with recording_argv() as argv_after:
+            argv = argv_after(lambda: self.client.rejections(mentions="order_7", limit=5))
+            self.assertEqual(argv[argv.index("--mentions") + 1], "order_7")
+            self.assertEqual(argv[argv.index("--limit") + 1], "5")
+        for call in (
+            lambda: self.client.audit(mentions=""),
+            lambda: self.client.rejections(mentions=""),
+        ):
+            with self.assertRaises(ValueError):
+                call()
 
     def test_writer_roles_repeat_on_the_audit_and_checkpoint_argv(self):
         # The managed-Postgres assertion: one --writer-role pair per

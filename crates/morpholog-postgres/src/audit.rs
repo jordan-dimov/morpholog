@@ -339,6 +339,118 @@ pub async fn list_audit_rows_page(
     .map_err(classify)?;
     rows.into_iter().map(decode_audit_row).collect()
 }
+
+/// [`list_audit_rows_page`] restricted to the transitions that mention a
+/// subject in their arguments, asserted or retracted claims, or emitted
+/// intents: the tagged subject at any depth, a collection included, found
+/// by a jsonpath whose subject is a bound variable, never spliced in. Its
+/// own statements, so the unfiltered page keeps its plans; the bounds and
+/// the order are the same, and the limit counts matching rows, so a short
+/// page still means the bound was reached.
+pub async fn list_audit_rows_page_mentioning(
+    conn: &mut sqlx::PgConnection,
+    cursor: Option<(Timestamp, Uuid)>,
+    horizon: Option<Timestamp>,
+    limit: i64,
+    subject: &str,
+) -> Result<Vec<AuditRow>, PgError> {
+    if subject.is_empty() {
+        return Err(PgError::InvalidState(
+            "--mentions needs a subject; an empty one names nothing".into(),
+        ));
+    }
+    let vars = serde_json::json!({ "s": subject });
+    let rows = match (&cursor, &horizon) {
+        (None, None) => {
+            sqlx::query_as!(
+                AuditRowRaw,
+                r#"SELECT transition_id, transformation_name, arguments, actor,
+                        invariant_epoch, invariants_checked,
+                        asserted_claims, retracted_claims, emitted_intents, committed_at,
+                attestation, parameters, model_hash, semantics_version, drawn_subjects
+                 FROM morpholog.audit
+                 WHERE jsonb_path_exists(
+                     jsonb_build_array(arguments, asserted_claims, retracted_claims, emitted_intents),
+                     '$.** ? (@.type == "subject" && @.value == $s)', $2)
+                 ORDER BY committed_at, transition_id
+                 LIMIT $1"#,
+                limit,
+                vars,
+            )
+            .fetch_all(&mut *conn)
+            .await
+        }
+        (Some((at, id)), None) => {
+            sqlx::query_as!(
+                AuditRowRaw,
+                r#"SELECT transition_id, transformation_name, arguments, actor,
+                        invariant_epoch, invariants_checked,
+                        asserted_claims, retracted_claims, emitted_intents, committed_at,
+                attestation, parameters, model_hash, semantics_version, drawn_subjects
+                 FROM morpholog.audit
+                 WHERE (committed_at, transition_id) > ($2, $3)
+                   AND jsonb_path_exists(
+                     jsonb_build_array(arguments, asserted_claims, retracted_claims, emitted_intents),
+                     '$.** ? (@.type == "subject" && @.value == $s)', $4)
+                 ORDER BY committed_at, transition_id
+                 LIMIT $1"#,
+                limit,
+                at.to_sqlx(),
+                *id,
+                vars,
+            )
+            .fetch_all(&mut *conn)
+            .await
+        }
+        (None, Some(h)) => {
+            sqlx::query_as!(
+                AuditRowRaw,
+                r#"SELECT transition_id, transformation_name, arguments, actor,
+                        invariant_epoch, invariants_checked,
+                        asserted_claims, retracted_claims, emitted_intents, committed_at,
+                attestation, parameters, model_hash, semantics_version, drawn_subjects
+                 FROM morpholog.audit
+                 WHERE committed_at < $2
+                   AND jsonb_path_exists(
+                     jsonb_build_array(arguments, asserted_claims, retracted_claims, emitted_intents),
+                     '$.** ? (@.type == "subject" && @.value == $s)', $3)
+                 ORDER BY committed_at, transition_id
+                 LIMIT $1"#,
+                limit,
+                h.to_sqlx(),
+                vars,
+            )
+            .fetch_all(&mut *conn)
+            .await
+        }
+        (Some((at, id)), Some(h)) => {
+            sqlx::query_as!(
+                AuditRowRaw,
+                r#"SELECT transition_id, transformation_name, arguments, actor,
+                        invariant_epoch, invariants_checked,
+                        asserted_claims, retracted_claims, emitted_intents, committed_at,
+                attestation, parameters, model_hash, semantics_version, drawn_subjects
+                 FROM morpholog.audit
+                 WHERE (committed_at, transition_id) > ($2, $3)
+                   AND committed_at < $4
+                   AND jsonb_path_exists(
+                     jsonb_build_array(arguments, asserted_claims, retracted_claims, emitted_intents),
+                     '$.** ? (@.type == "subject" && @.value == $s)', $5)
+                 ORDER BY committed_at, transition_id
+                 LIMIT $1"#,
+                limit,
+                at.to_sqlx(),
+                *id,
+                h.to_sqlx(),
+                vars,
+            )
+            .fetch_all(&mut *conn)
+            .await
+        }
+    }
+    .map_err(classify)?;
+    rows.into_iter().map(decode_audit_row).collect()
+}
 use crate::audit_pages::AuditPages;
 
 /// A streaming audit tail with the lossless-resume order built in.
@@ -377,6 +489,20 @@ pub async fn begin_audit_tail<'p>(
     })
 }
 impl AuditTail<'_> {
+    /// Only the transitions that mention this subject in their arguments,
+    /// claims or intents. The cursor and the horizon are unchanged, so
+    /// the filtered tail withholds and resumes exactly as the whole one.
+    /// An empty subject is refused.
+    pub fn mentioning(mut self, subject: &str) -> Result<Self, PgError> {
+        if subject.is_empty() {
+            return Err(PgError::InvalidState(
+                "--mentions needs a subject; an empty one names nothing".into(),
+            ));
+        }
+        self.pages = self.pages.mentioning(subject);
+        Ok(self)
+    }
+
     /// The next page of transitions in `(committed_at, transition_id)`
     /// order; empty once the tail reaches the horizon.
     pub async fn next_page(&mut self) -> Result<Vec<AuditRow>, PgError> {

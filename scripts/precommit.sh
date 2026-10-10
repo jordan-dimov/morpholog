@@ -200,4 +200,9 @@ fi
 step 'generated Python client types (mypy)'
 ./scripts/python_types.sh
 
+# The templates, their tests and the committed package under the ruff
+# version the script pins: an embedder's own run finds nothing of ours.
+step 'generated Python client lint (ruff)'
+./scripts/python_lint.sh
+
 printf '\n=== All checks passed. ===\n'
