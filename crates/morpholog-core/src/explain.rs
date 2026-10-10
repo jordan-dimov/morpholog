@@ -387,8 +387,6 @@ fn failing_entry(trace: &[TraceEntry]) -> Option<&TraceEntry> {
     None
 }
 
-/// The blamed comparison as a reader prints it: the two values and the
-/// operator, as the source spells it.
 /// The bindings a rejection was judged under, one per line, so the
 /// rendering names the case the JSON names.
 fn push_witness(s: &mut String, witness: &[WitnessBinding]) {
@@ -405,6 +403,8 @@ fn push_witness(s: &mut String, witness: &[WitnessBinding]) {
     }
 }
 
+/// The blamed comparison as a reader prints it: the two values and the
+/// operator, as the source spells it.
 fn compared_line(c: &Compared) -> String {
     format!(
         "  compared: {} {} {} did not hold",
