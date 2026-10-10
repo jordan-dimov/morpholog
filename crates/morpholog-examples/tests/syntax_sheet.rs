@@ -167,3 +167,59 @@ fn a_balance_is_replaced_by_retracting_the_old_one() {
         "the old amount is gone, so the stale replacement is refused"
     );
 }
+
+/// A large entry is posted first and decided after: the rule asks that an
+/// outcome has its entry, never that an entry has its outcome already, so
+/// the two acts do not wait on each other.
+#[test]
+fn a_large_entry_is_posted_then_decided() {
+    let p = block_named("rules");
+    let state = accepted(act(&p, "open_period", vec![subj("p1")], &State::default()));
+    let state = accepted(act(
+        &p,
+        "post",
+        vec![subj("big"), subj("p1"), dec(20_000)],
+        &state,
+    ));
+    let state = accepted(act(
+        &p,
+        "decide",
+        vec![subj("big"), subj("accepted")],
+        &state,
+    ));
+    let orphan = act(&p, "decide", vec![subj("nobody"), subj("accepted")], &state);
+    assert!(
+        matches!(orphan, Outcome::Rejected { .. }),
+        "an outcome for an entry that does not exist is refused"
+    );
+}
+
+/// Consent given after the day asked about is no consent for that day.
+#[test]
+fn consent_counts_from_the_day_it_was_given() {
+    use morpholog_test_support::date;
+    let p = block_named("definitions_and_reads");
+    let state = accepted(act(
+        &p,
+        "issue_form",
+        vec![subj("f1"), date("2026-01-01"), date("2026-12-31")],
+        &State::default(),
+    ));
+    let state = accepted(act(
+        &p,
+        "consent",
+        vec![subj("pat"), subj("f1"), date("2026-06-15")],
+        &state,
+    ));
+    let early = act(&p, "enrol", vec![subj("pat"), date("2026-03-01")], &state);
+    assert!(
+        matches!(early, Outcome::Rejected { .. }),
+        "consent did not exist on 1 March"
+    );
+    accepted(act(
+        &p,
+        "enrol",
+        vec![subj("pat"), date("2026-07-01")],
+        &state,
+    ));
+}

@@ -9,7 +9,7 @@ the runtime does. What each form *means* is in
 is writing the file.
 
 Three words first. A **claim** is a statement the record has accepted,
-`Account(#alice, 100)`. A **transformation** is an act that proposes
+`Account(#acct_1, #alice, 100)`. A **transformation** is an act that proposes
 claims to admit or retract. An **invariant** is a condition every
 accepted change must leave true. Claims are admitted and retracted,
 never edited: `admit` adds a claim, it does not update one.
@@ -36,14 +36,10 @@ transformation open(account, owner, deposit):
     require not Account(account, _, _)
     admit Account(account, owner, deposit)
     emit AccountOpened(account)
-
--- A claim is replaced by retracting it and admitting another; nothing
--- edits a claim in place.
-transformation move_funds(account, from_balance, to_balance):
-    require Account(account, _, from_balance)
-    retract Account(account, _, from_balance)
-    admit Account(account, #unchanged_owner, to_balance)
 ```
+
+A claim is replaced by retracting it and admitting another, never edited
+in place; `rebalance` under declarations below shows the shape.
 
 A file is one programme; declarations, rules and acts may come in any
 order. Comments start with `--`. Indentation is layout: a body is the
@@ -105,7 +101,8 @@ and who it really is must be settled at the integration boundary.
 The forms: `implies`, `and`, `or`, `not`, `xor`, `forall x in source:
 body`, `exists x: body`, `pre(...)` for the state before the change,
 `x in xs` for membership, and the comparators. A rule may open with
-`let` lines naming a figure it uses more than once.
+`let` lines naming a figure, as `invoices_follow_signing` does under
+dates below.
 
 ```morph
 program rules
@@ -151,15 +148,17 @@ transformation allow(verdicts):
 invariant entries_are_positive:
     Entry(e, _, amount) implies 0 < amount < 1000000
 
-invariant large_entries_carry_a_verdict:
-    Entry(e, _, amount) and 10000 <= amount implies (exists v: Outcome(e, v))
+-- A rule must describe a state the acts can reach: requiring a verdict
+-- before a large entry may exist would leave `post` and `decide`
+-- waiting on each other.
+invariant outcomes_have_entries:
+    Outcome(e, _) implies (exists amount: Entry(e, _, amount))
 
 invariant one_verdict_or_the_other:
     Outcome(e, v) implies (v = #accepted xor v = #rejected)
 
 invariant verdicts_are_allowed:
-    let one = (1)
-    Outcome(e, v) and Allowed(vs) implies v in vs and one <= one
+    Outcome(e, v) and Allowed(vs) implies v in vs
 
 invariant every_allowed_verdict_is_a_symbol:
     Allowed(vs) implies (forall v in vs: v != #none)
@@ -266,6 +265,10 @@ invariant delivered_within_the_hold:
 
 invariant notice_is_at_least_a_day:
     Contract(c, _, _, notice, _) implies duration(PT24H) no_longer_than notice
+
+invariant invoices_follow_signing:
+    let deadline = (signed_on + span(P1Y))
+    Contract(c, signed_on, _, _, _) and Invoice(i, c, issued_on, _, _) implies signed_on on_or_before issued_on and issued_on before deadline
 ```
 
 Literals: a date `@2026-05-22`; an instant `@2026-10-24T14:00:00Z`, or
@@ -364,7 +367,7 @@ predicate Journal(entry: Subject, account: Subject, debit: Decimal, credit: Deci
 -- One condition, named once, used by a gate and a rule. A body is
 -- context-free: no `actor` and no `pre(...)` inside it.
 define consented_on(participant, day):
-    Consent(participant, form, _) and Form(form, from, to) and from on_or_before day and day on_or_before to
+    Consent(participant, form, given_on) and given_on on_or_before day and Form(form, from, to) and from on_or_before day and day on_or_before to
 
 transformation issue_form(form, valid_from, valid_to):
     admit Form(form, valid_from, valid_to)
@@ -428,6 +431,7 @@ transformation quote(order, bid, ask):
     require Entry(order, _, _)
     admit Quote(order, bid, ask)
 
+-- Checks the price where a quote exists; it does not require one.
 invariant priced_inside_the_quote:
     Entry(o, _, price) and Quote(o, bid, ask) implies bid <= price <= ask
 ```
