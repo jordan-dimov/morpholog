@@ -757,9 +757,9 @@ envelopes the one-shot commands print - one compact line per request,
 in order. This is the escape from the per-call subprocess and
 connection tax when an embedder drives many operations
 (`scripts/embedder_latency.sh` measures both paths side by side; a
-steady-state session proposal runs a few times faster than a one-shot
-`propose` locally, and over a remote link it also removes a
-connection handshake per call). The generated Python client wraps it
+steady-state session proposal took about half the time of a one-shot
+`propose` locally, as recorded in `docs/benchmarking.md`, and over a
+remote link it also removes a connection handshake per call). The generated Python client wraps it
 as a context manager with the same method names the one-shot client
 carries, opened through the generated `open_session`:
 
@@ -895,6 +895,40 @@ deployment that needs `authenticated_by` to discriminate callers runs
 one session per PostgreSQL role. The session holds exactly one
 connection, so many application workers each holding a session stay
 bounded on the database.
+
+**Behind a multi-worker web server.** Use a resident session when repeated
+governed operations need lower latency; a one-shot `propose` per request
+is correct too, and on a local workload of a few hundred proposals it
+was already fast enough for a few a second. The session is an efficiency,
+not a prerequisite. The pattern:
+
+- One session per worker process. Open it in the worker, after the
+  server forks - never in a prefork master, whose child process would be
+  shared by every worker. Open it lazily on the first request, or when
+  the worker starts, and close it when the worker shuts down.
+- One request at a time per session. The client serialises callers with
+  a lock, so threads in one worker queue behind each other rather than
+  run concurrently; more throughput means more workers, each with its
+  own session and its own database connection.
+- `open_session` checks the ready line against the package's stamps;
+  `ping()` checks, when you want to, that the database still answers and
+  its migrations still suit the binary.
+- A session that has died or been poisoned stays unusable: every call
+  refuses. Replace it by opening a new one, never by reusing its stream.
+- Replacing a session never settles the request that broke it. A
+  proposal whose response was lost raised `MorphologOutcomeUnknown`; it
+  may have committed. Reconcile it against the record before deciding to
+  propose it again; the new session only makes new requests possible.
+  A `commit_outcome_unknown` receipt raises the same error without
+  poisoning the session, because the wire stayed in step.
+- Retry automatically only on `serialization_failure`, a bounded number
+  of times. That code says the proposal was decided as not committed;
+  every other refusal is the programme's answer, and an unknown outcome
+  is reconciled, not retried.
+
+What was not measured: several workers proposing at once, and the time
+inside a web request. How a burst before a deadline behaves depends on
+the programme's own rules and state; measure it against that programme.
 
 The whole conversation is pinned: the session's envelopes are in
 `schema --result` and the golden set, and a golden transcript

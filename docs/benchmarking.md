@@ -59,3 +59,25 @@ Every optimisation passes the correctness harnesses unchanged: the same-snapshot
 ## External ownership
 
 The strongest held-out benchmark is one this repository cannot see: embedders keeping replay wall-clock in their own CI over their own corpora. An optimisation that improves `morpholog-bench` but not the embedders' replay time gets flagged by someone who is not the optimiser. Ask for that number when a performance arc starts; treat its drift reports as forcing evidence.
+
+## Measurements on record
+
+### Resident session against one-shot proposals (2026-10-11)
+
+Forced by Gate Closure (#421): a web site proposing a few hundred entries in the minute before a daily close, one subprocess per proposal. The question was what a resident `morpholog session` buys over that.
+
+The claim: **on one machine, a resident session takes about half the time per proposal of a one-shot `morpholog propose`**, the same ratio in three runs. That is a protocol-level result, measured with `scripts/embedder_latency.sh` in Bash. It is not a measurement of the generated Python client inside a web framework, and the parts of each call (spawn, parse, connect, the commit and the session exchange) were not timed separately.
+
+| | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| `check` (spawn, parse, validate), ms per call | 4.05 | 3.96 | 3.91 |
+| one-shot `propose`, ms per call | 21.35 | 21.70 | 20.63 |
+| session startup to ready, ms once | 7.02 | 10.35 | 10.78 |
+| session first request, ms | 8.88 | 8.12 | 9.58 |
+| session steady-state median, ms | 10.97 | 10.91 | 10.07 |
+| session steady-state p95, ms | 18.04 | 18.65 | 17.41 |
+| speed-up, mean against mean | 2.0x | 2.0x | 2.0x |
+
+Invocation: `DATABASE_URL=<disposable database> ./scripts/embedder_latency.sh 300`, three runs a few seconds apart, each started once the one-minute load average was under 1.5. Release binary at commit `cbb7f36`, sha256 `bf437a7e5c705d6f826a033f3d2d4437192a4e906d10f98cf2c2558ec3489cc2`; PostgreSQL 18.6 on the same host, an Intel Core Ultra 7 155H laptop on mains power, no thermal events in the kernel log. The workload is the ledger example's `post_simple_entry`, one worker, proposals in sequence.
+
+Not measured: several workers proposing at once, and the time inside a web request. Whether a burst in the last seconds before a close completes in time, and how often concurrent workers meet serialization failures, depend on the deploying programme's own rules and state; measure them against that programme when they matter.
