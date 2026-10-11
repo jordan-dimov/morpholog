@@ -522,6 +522,15 @@ pub struct NamedClaim {
     pub predicate: morpholog_core::PredicateName,
 }
 
+/// One claim of `inspect claims --named`: the named claim and the
+/// transition whose commit made it present.
+#[derive(Serialize)]
+pub struct NamedClaimRead {
+    pub args: serde_json::Map<String, serde_json::Value>,
+    pub asserted_in: uuid::Uuid,
+    pub predicate: morpholog_core::PredicateName,
+}
+
 /// The `--named` audit row: the tagged row with its two claim arrays
 /// replaced by named claims; everything else is unchanged. Shared with the
 /// contract test so there is one definition.

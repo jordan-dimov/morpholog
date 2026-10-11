@@ -1536,11 +1536,34 @@ fn report_envelopes_serialize_as_pinned() {
     );
 }
 
-// The two array shapes `inspect claims` and `inspect derived` print:
-// the whole stdout is the pinned value, not just each row.
+// The array shapes `inspect derived` and `inspect claims` print: the
+// whole stdout is the pinned value, not just each row. A claims read also
+// names the transition that made each claim present.
 #[test]
 fn claim_arrays_serialize_as_pinned() {
-    use morpholog_cli::envelopes::NamedClaim;
+    use morpholog_cli::envelopes::{NamedClaim, NamedClaimRead};
+
+    let asserted_in = uuid::Uuid::parse_str("01900000-0000-7000-8000-000000000001").unwrap();
+    assert_golden_bytes(
+        "claim_reads.json",
+        &vec![morpholog_postgres::ClaimRead {
+            claim: kitchen_sink_claim(),
+            asserted_in,
+        }],
+    );
+    assert_golden_bytes(
+        "named_claim_reads.json",
+        &vec![NamedClaimRead {
+            args: [
+                ("trade".to_string(), serde_json::json!("trade_1")),
+                ("quantity".to_string(), serde_json::json!("100.5")),
+            ]
+            .into_iter()
+            .collect(),
+            asserted_in,
+            predicate: "TradeCaptured".into(),
+        }],
+    );
 
     // Direct serialization, as print_json prints it, so the golden keeps
     // the wire order (`predicate` before `args`).
@@ -2764,6 +2787,8 @@ fn every_golden_validates_against_its_defs_entry() {
         ("named_claim.json", "named_claim"),
         ("claim_instances.json", "claim_instance_array"),
         ("named_claims.json", "named_claim_array"),
+        ("claim_reads.json", "claim_read_array"),
+        ("named_claim_reads.json", "named_claim_read_array"),
         ("refresh_derived_report.json", "refresh_derived_report"),
         (
             "refresh_derived_report_no_transitions.json",
@@ -2936,8 +2961,10 @@ fn every_session_transcript_answer_validates_against_its_defs_entry() {
             match request["op"].as_str().unwrap() {
                 "propose" => "batch_receipt",
                 "transact" => "atomic_outcome",
-                "claims" | "derived" if named => "named_claim_array",
-                "claims" | "derived" => "claim_instance_array",
+                "claims" if named => "named_claim_read_array",
+                "claims" => "claim_read_array",
+                "derived" if named => "named_claim_array",
+                "derived" => "claim_instance_array",
                 "audit" if named => "audit_row_named_array",
                 "audit" => "audit_row_array",
                 "rejections" => "rejection_row_array",

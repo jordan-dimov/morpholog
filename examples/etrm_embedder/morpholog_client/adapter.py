@@ -708,26 +708,27 @@ class Morpholog:
     # Reading governed state back.
     # ------------------------------------------------------------
 
-    def claims(self, *predicates: str, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
+    def claims(self, *predicates: str, as_of: str | None = None) -> list[envelopes.ClaimRead]:
         """The bare read: the claims table is the authority, an unknown
         predicate matches nothing. Tagged args decoded to bare values.
+        Each claim names the transition that made it present.
 
         `as_of` reads the claims as they were at a past moment - a
         transition id, or an RFC 3339 timestamp resolved to the last
         transition committed at or before it.
         """
-        return self._claims(predicates, envelopes.ClaimInstance.from_json, named=False, as_of=as_of)
+        return self._claims(predicates, envelopes.ClaimRead.from_json, named=False, as_of=as_of)
 
     def claims_named(
         self,
         *predicates: str,
         as_of: str | None = None,
         where: dict[str, str] | None = None,
-    ) -> list[envelopes.NamedClaim]:
+    ) -> list[envelopes.NamedClaimRead]:
         """The named read: the programme is the authority, skew is a
         hard error on the binary side. Values stay wire-true; the
-        generated read models parse them by declared kind. `as_of` as
-        on ``claims``.
+        generated read models parse them by declared kind. `as_of` and
+        `asserted_in` as on ``claims``.
 
         `where` narrows by argument value - ``where={"invoice_id": "inv_1"}``
         - so rows that cannot match are never transferred or decoded.
@@ -739,7 +740,7 @@ class Morpholog:
         `as_of`, where the state is replayed first.
         """
         return self._claims(
-            predicates, envelopes.NamedClaim.from_json, named=True, as_of=as_of, where=where
+            predicates, envelopes.NamedClaimRead.from_json, named=True, as_of=as_of, where=where
         )
 
     def _claims(

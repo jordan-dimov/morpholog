@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT predicate_name, arguments\n         FROM morpholog.claims\n         WHERE predicate_name = ANY($1)\n         ORDER BY asserted_at, predicate_name, arguments::text",
+  "query": "SELECT predicate_name, arguments, asserted_in\n         FROM morpholog.claims\n         WHERE predicate_name = ANY($1)\n         ORDER BY asserted_at, predicate_name, arguments::text",
   "describe": {
     "columns": [
       {
@@ -24,6 +24,17 @@
             "name": "arguments"
           }
         }
+      },
+      {
+        "ordinal": 2,
+        "name": "asserted_in",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "morpholog.claims",
+            "name": "asserted_in"
+          }
+        }
       }
     ],
     "parameters": {
@@ -33,8 +44,9 @@
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "4d5690005750a3dc9e52940d2f7263f325bcb216061a692487043e9f44ab0f43"
+  "hash": "13969e39d21e5ef2c1b34e88363da3b6ed4b0dcab10b38e804dd877af1214517"
 }

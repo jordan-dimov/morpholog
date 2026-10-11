@@ -5,9 +5,9 @@
 use anyhow::{Context, anyhow, bail};
 use morpholog_core::ClaimInstance;
 use morpholog_postgres::{
-    PgPool, begin_audit_tail, list_claims, list_claims_at, list_claims_at_for_predicates,
-    list_claims_for_predicates, list_claims_where, list_derived, list_derived_at, list_outbox_rows,
-    list_rejection_rows, resolve_transition_at_or_before,
+    ClaimRead, PgPool, begin_audit_tail, list_derived, list_derived_at, list_outbox_rows,
+    list_rejection_rows, read_claims, read_claims_at, read_claims_at_for_predicates,
+    read_claims_for_predicates, read_claims_where, resolve_transition_at_or_before,
 };
 use std::path::Path;
 use uuid::Uuid;
@@ -49,35 +49,55 @@ pub(crate) async fn claims_rows(
     predicates: &[String],
     filters: &[FieldFilter],
     declared_arity: i32,
-) -> anyhow::Result<Vec<ClaimInstance>> {
+) -> anyhow::Result<Vec<ClaimRead>> {
     let claims = match (as_of, predicates) {
-        (Some(tid), []) => list_claims_at(pool, tid)
+        (Some(tid), []) => read_claims_at(pool, tid)
             .await
-            .context("list_claims_at failed")?,
-        (Some(tid), preds) => list_claims_at_for_predicates(pool, tid, preds)
+            .context("read_claims_at failed")?,
+        (Some(tid), preds) => read_claims_at_for_predicates(pool, tid, preds)
             .await
-            .context("list_claims_at_for_predicates failed")?,
-        (None, []) => list_claims(pool).await.context("list_claims failed")?,
+            .context("read_claims_at_for_predicates failed")?,
+        (None, []) => read_claims(pool).await.context("read_claims failed")?,
         (None, [predicate]) if !filters.is_empty() => {
             // The arity comes from the declaration, so a row that
             // disagrees still comes back and the decoder refuses it. The
             // filter must not hide a mismatch the plain read would catch.
-            list_claims_where(pool, predicate, &pg_filters(filters)?, declared_arity)
+            read_claims_where(pool, predicate, &pg_filters(filters)?, declared_arity)
                 .await
-                .context("list_claims_where failed")?
+                .context("read_claims_where failed")?
         }
-        (None, preds) => list_claims_for_predicates(pool, preds)
+        (None, preds) => read_claims_for_predicates(pool, preds)
             .await
-            .context("list_claims_for_predicates failed")?,
+            .context("read_claims_for_predicates failed")?,
     };
     Ok(if filters.is_empty() || as_of.is_none() {
         claims
     } else {
         claims
             .into_iter()
-            .filter(|c| crate::commands::filter::matches(&c.args, filters))
+            .filter(|c| crate::commands::filter::matches(&c.claim.args, filters))
             .collect()
     })
+}
+
+/// [`decode_claims_named`] for the claims read, keeping each claim's
+/// `asserted_in` beside its named arguments.
+pub(crate) fn decode_claim_reads_named(
+    program: &morpholog_core::Program,
+    file: &Path,
+    reads: &[ClaimRead],
+) -> anyhow::Result<Vec<morpholog_cli::envelopes::NamedClaimRead>> {
+    let claims: Vec<ClaimInstance> = reads.iter().map(|r| r.claim.clone()).collect();
+    let named = decode_claims_named(program, file, &claims)?;
+    Ok(named
+        .into_iter()
+        .zip(reads)
+        .map(|(claim, read)| morpholog_cli::envelopes::NamedClaimRead {
+            args: claim.args,
+            asserted_in: read.asserted_in,
+            predicate: claim.predicate,
+        })
+        .collect())
 }
 
 /// The derived read, shared by `inspect derived` and the session. It
@@ -156,7 +176,9 @@ pub(crate) async fn run(what: Inspect) -> anyhow::Result<()> {
             )
             .await?;
             match named_program {
-                Some((program, file)) => print_json(&decode_claims_named(&program, file, &claims)?),
+                Some((program, file)) => {
+                    print_json(&decode_claim_reads_named(&program, file, &claims)?)
+                }
                 None => print_json(&claims),
             }
         }

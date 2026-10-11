@@ -579,8 +579,12 @@ morpholog inspect claims --predicate CurrentFigure --named revenue.morph
 ```
 ```json
 [{ "predicate": "CurrentFigure",
-   "args": { "asset": "battery_07", "period": "q1_2026", "figure_id": "f2" } }]
+   "args": { "asset": "battery_07", "period": "q1_2026", "figure_id": "f2" },
+   "asserted_in": "019e937d-..." }]
 ```
+
+`asserted_in` is the transition whose commit made the claim present: here,
+the correction.
 
 But a screen does not want the pointer. It wants the joined answer: asset,
 period, the figure in force, its amount. In SQL you would write a view - or,

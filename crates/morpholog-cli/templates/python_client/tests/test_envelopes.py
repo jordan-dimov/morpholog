@@ -540,6 +540,19 @@ class CheckRoutes(unittest.TestCase):
 
 
 class Reports(unittest.TestCase):
+    def test_a_claims_read_names_the_transition_and_old_classes_refuse_it(self):
+        (read,) = [envelopes.ClaimRead.from_json(c) for c in golden("claim_reads.json")]
+        (named,) = [envelopes.NamedClaimRead.from_json(c) for c in golden("named_claim_reads.json")]
+        for row in (read, named):
+            self.assertEqual(row.asserted_in, "01900000-0000-7000-8000-000000000001")
+        self.assertEqual(named.args["trade"], "trade_1")
+        # A client generated before the field decoded claims reads with
+        # these; the extra key is drift it must refuse, never drop.
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "regenerate"):
+            envelopes.ClaimInstance.from_json(golden("claim_reads.json")[0])
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "regenerate"):
+            envelopes.NamedClaim.from_json(golden("named_claim_reads.json")[0])
+
     def test_check_hash_init_and_named_claim(self):
         check = envelopes.CheckReport.from_json(golden("check_report.json"))
         self.assertEqual(check.diagnostics[0].line, 19)

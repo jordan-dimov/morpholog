@@ -60,8 +60,8 @@ pub use actor_policy::{
     AUTHORITY_PREDICATE, PolicyDeclarationError, RESTRICTED_PREDICATE, validate_declarations,
 };
 pub use as_of::{
-    list_claims_at, list_claims_at_for_predicates, reconstruct_state_at,
-    resolve_transition_at_or_before,
+    list_claims_at, list_claims_at_for_predicates, read_claims_at, read_claims_at_for_predicates,
+    reconstruct_state_at, resolve_transition_at_or_before,
 };
 pub use attestation::{ActorAttestation, AuditAttestation, Proposal};
 pub use audit::{
@@ -75,7 +75,8 @@ pub use checkpoints::{
     with_anchor_signatures,
 };
 pub use claims::{
-    ClaimFilter, list_claims, list_claims_for_predicates, list_claims_where, load_scoped_state,
+    ClaimFilter, ClaimRead, list_claims, list_claims_for_predicates, list_claims_where,
+    load_scoped_state, read_claims, read_claims_for_predicates, read_claims_where,
 };
 #[doc(hidden)]
 pub use compiled::fetch_diagnostic;

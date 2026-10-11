@@ -1,11 +1,12 @@
 use crate::audit::audit_cursor_for;
 use crate::audit_pages::ReplayPages;
+use crate::claims::ClaimRead;
 use crate::error::{PgError, classify, classify_checked_query};
 use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
 use morpholog_core::{ClaimInstance, State};
 use sqlx::PgPool;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 /// Reconstruct the full [`State`] that existed immediately after
 /// `transition_id` committed.
@@ -24,7 +25,7 @@ use uuid::Uuid;
 /// Replay cost is O(transitions up to T).
 pub async fn reconstruct_state_at(pool: &PgPool, transition_id: Uuid) -> Result<State, PgError> {
     let mut conn = pool.acquire().await.map_err(classify)?;
-    reconstruct_inner(&mut conn, transition_id, None).await
+    reconstruct_inner(&mut conn, transition_id, None, None).await
 }
 /// Like [`reconstruct_state_at`] but keeps only claims whose predicate
 /// is in `predicates`: the as-of analogue of
@@ -40,6 +41,15 @@ pub(crate) async fn reconstruct_state_at_for_predicates(
     transition_id: Uuid,
     predicates: &[String],
 ) -> Result<State, PgError> {
+    reconstruct_scoped(pool, transition_id, predicates, None).await
+}
+
+async fn reconstruct_scoped(
+    pool: &PgPool,
+    transition_id: Uuid,
+    predicates: &[String],
+    asserted_in: Option<&mut HashMap<ClaimInstance, Uuid>>,
+) -> Result<State, PgError> {
     if predicates.is_empty() {
         // The "as of this committed transition" contract still
         // requires the target to exist, even with an empty footprint.
@@ -54,7 +64,7 @@ pub(crate) async fn reconstruct_state_at_for_predicates(
         return Ok(State::default());
     }
     let mut conn = pool.acquire().await.map_err(classify)?;
-    reconstruct_inner(&mut conn, transition_id, Some(predicates)).await
+    reconstruct_inner(&mut conn, transition_id, Some(predicates), asserted_in).await
 }
 /// Returns the claims admitted as of `transition_id`, in audit replay
 /// order: live claims keep the order the replay first admitted them,
@@ -71,6 +81,16 @@ pub async fn list_claims_at(
     let state = reconstruct_state_at(pool, transition_id).await?;
     Ok(state.claims().to_vec())
 }
+
+/// [`list_claims_at`] with each claim's [`ClaimRead::asserted_in`], taken
+/// from the replay: the transition that admitted the claim while it was
+/// absent, at or before `transition_id`. Never the `claims` table's column.
+pub async fn read_claims_at(pool: &PgPool, transition_id: Uuid) -> Result<Vec<ClaimRead>, PgError> {
+    let mut asserted_in = HashMap::new();
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    let state = reconstruct_inner(&mut conn, transition_id, None, Some(&mut asserted_in)).await?;
+    Ok(with_asserted_in(&state, &asserted_in))
+}
 /// Returns the claims of the given predicates admitted as of
 /// `transition_id`: the historical counterpart of
 /// [`crate::list_claims_for_predicates`], replaying only those predicates.
@@ -85,6 +105,30 @@ pub async fn list_claims_at_for_predicates(
 ) -> Result<Vec<ClaimInstance>, PgError> {
     let state = reconstruct_state_at_for_predicates(pool, transition_id, predicates).await?;
     Ok(state.claims().to_vec())
+}
+
+/// [`list_claims_at_for_predicates`] with each claim's
+/// [`ClaimRead::asserted_in`], taken from the replay as [`read_claims_at`]
+/// takes it.
+pub async fn read_claims_at_for_predicates(
+    pool: &PgPool,
+    transition_id: Uuid,
+    predicates: &[String],
+) -> Result<Vec<ClaimRead>, PgError> {
+    let mut asserted_in = HashMap::new();
+    let state = reconstruct_scoped(pool, transition_id, predicates, Some(&mut asserted_in)).await?;
+    Ok(with_asserted_in(&state, &asserted_in))
+}
+
+fn with_asserted_in(state: &State, asserted_in: &HashMap<ClaimInstance, Uuid>) -> Vec<ClaimRead> {
+    state
+        .claims()
+        .iter()
+        .map(|claim| ClaimRead {
+            claim: claim.clone(),
+            asserted_in: asserted_in[claim],
+        })
+        .collect()
 }
 /// Resolve a wall-clock instant to the last transition committed at or
 /// before it.
@@ -116,10 +160,15 @@ where
 /// Shared replay behind [`reconstruct_state_at`] (`predicates` is `None`)
 /// and [`reconstruct_state_at_for_predicates`]. Out-of-scope claims are
 /// skipped during replay, never held in memory.
+///
+/// With `asserted_in`, the map ends holding each live claim and the
+/// transition that admitted it while absent, as the commit path's
+/// insert-if-absent records it.
 pub(crate) async fn reconstruct_inner(
     conn: &mut sqlx::PgConnection,
     transition_id: Uuid,
     predicates: Option<&[String]>,
+    mut asserted_in: Option<&mut HashMap<ClaimInstance, Uuid>>,
 ) -> Result<State, PgError> {
     // A missing target is TransitionNotFound.
     let target = audit_cursor_for(&mut *conn, transition_id).await?;
@@ -144,6 +193,14 @@ pub(crate) async fn reconstruct_inner(
             let retracted = in_scope(row.retracted_claims)?;
             // The kernel's own order within a transition: retractions
             // first, then assertions.
+            if let Some(map) = asserted_in.as_deref_mut() {
+                for claim in &retracted {
+                    map.remove(claim);
+                }
+                for claim in &asserted {
+                    map.entry(claim.clone()).or_insert(row.transition_id);
+                }
+            }
             state.apply(&asserted, &retracted);
         }
     }

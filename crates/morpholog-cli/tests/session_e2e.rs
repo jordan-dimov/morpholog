@@ -76,7 +76,7 @@ fn spawn_session(file: &std::path::Path) -> std::process::Child {
 /// they sit: ids, instants, the login that proposed, and the version.
 fn stable(key: &str) -> Option<serde_json::Value> {
     match key {
-        "transition_id" | "rejection_id" => {
+        "transition_id" | "rejection_id" | "asserted_in" => {
             Some(serde_json::json!("00000000-0000-0000-0000-000000000000"))
         }
         "committed_at" | "rejected_at" => Some(serde_json::json!("2000-01-01T00:00:00Z")),

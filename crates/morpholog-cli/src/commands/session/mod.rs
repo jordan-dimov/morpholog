@@ -35,7 +35,8 @@ use std::io::{BufRead, Write};
 use crate::SessionArgs;
 use crate::commands::filter::FieldFilter;
 use crate::commands::inspect::{
-    audit_row_named_json, claims_rows, decode_claims_named, derived_rows, resolve_as_of,
+    audit_row_named_json, claims_rows, decode_claim_reads_named, decode_claims_named, derived_rows,
+    resolve_as_of,
 };
 use crate::commands::propose::{BatchRow, RowError, classify_pg_error, propose_row_outcome};
 use crate::commands::transact::{Act, decode_acts};
@@ -333,7 +334,7 @@ async fn handle_claims(
     if body.named {
         // A mismatch between programme and stored rows is not the
         // request's fault, so it aborts, as the one-shot read errors.
-        let rows = decode_claims_named(program, &args.file, &claims)
+        let rows = decode_claim_reads_named(program, &args.file, &claims)
             .map_err(SessionFailure::Operational)?;
         serde_json::to_value(rows).map_err(|e| SessionFailure::Operational(e.into()))
     } else {
