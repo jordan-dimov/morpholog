@@ -839,14 +839,16 @@ async fn verify_audit_tree_walk(
     let mut verifier = PrefixVerifier::new(&checkpoints, anchor.as_ref());
     let mut fed = 0;
     let mut pages = AuditPages::new(None);
-    'pages: loop {
+    loop {
         let page = pages.next(&mut tx).await?;
         if page.is_empty() {
             break;
         }
+        let mut past_the_checkpoint = false;
         for row in &page {
             if fed >= max_size {
-                break 'pages;
+                past_the_checkpoint = true;
+                break;
             }
             verifier.push(row)?;
             fed += 1;
@@ -856,6 +858,9 @@ async fn verify_audit_tree_walk(
             done: u64::try_from(fed).unwrap_or(0),
             total: u64::try_from(max_size).unwrap_or(0),
         });
+        if past_the_checkpoint {
+            break;
+        }
     }
     let (verdict, rebindings) = verifier.finish();
 
