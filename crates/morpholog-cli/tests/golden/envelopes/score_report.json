@@ -1,6 +1,6 @@
 {
-  "score_format_version": 4,
-  "semantics": "case_bound_admission_v4",
+  "score_format_version": 5,
+  "semantics": "case_bound_admission_v5",
   "program": "candidate",
   "program_hash": "sha256:f174ba2fc4b95b609d39b6436135f2161bc83db73e23be48200dd0e356ac1aa6",
   "transitions_replayed": 1,

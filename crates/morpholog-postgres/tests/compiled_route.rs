@@ -757,3 +757,139 @@ async fn a_failing_diagnostic_query_answers_nothing_and_keeps_the_transaction() 
     assert!(answered.is_some(), "a sound query still answers");
     tx.rollback().await.unwrap();
 }
+
+/// A consequent `or` on both routes: either branch admits, neither
+/// refuses with the entry witness and no comparison blamed, and the
+/// kernel's non-short-circuit error rule holds: a later branch that
+/// raises raises whether or not an earlier one held, and the first
+/// raising branch names the error. The raising is kind drift, a stored
+/// subject where the rule compares a decimal.
+#[tokio::test]
+async fn a_consequent_or_decides_and_raises_as_the_kernel_does_on_both_routes() {
+    let pool = test_pool().await;
+    let program = morpholog_surface::parse_program(
+        "program either\n\
+         predicate A(x: Subject, v: Decimal, w: Date)\n\
+         predicate B(x: Subject)\n\
+         predicate C(x: Subject)\n\
+         transformation note(x, v, w):\n    admit A(x, v, w)\n\
+         transformation mark_b(x):\n    admit B(x)\n\
+         invariant either_record:\n\
+         \x20   A(x, _, _) implies (B(x) or C(x))\n\
+         invariant marked_or_small:\n\
+         \x20   A(x, v, w) implies (B(x) or v <= 10 or w on_or_before @2026-12-31)\n",
+    )
+    .unwrap();
+    let compiled = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
+    assert!(
+        matches!(compiled.plan(), InvariantPlan::Compiled),
+        "{:?}",
+        compiled.plan()
+    );
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(program.clone()).unwrap());
+    let run = |seeded: Vec<ClaimInstance>, t: Transition| {
+        let compiled = &compiled;
+        let interpreted = &interpreted;
+        let pool = &pool;
+        async move {
+            let mut out = Vec::new();
+            for route in [interpreted, compiled] {
+                reset_db(pool).await;
+                seed_claims(pool, &seeded).await;
+                out.push(
+                    propose_against_pg(pool, route, &Proposal::gateway(&t))
+                        .await
+                        .map(|o| match o {
+                            PgProposalOutcome::Committed { .. } => "committed".to_string(),
+                            PgProposalOutcome::Rejected {
+                                rule,
+                                witness,
+                                compared,
+                                ..
+                            } => format!("rejected {rule:?} {witness:?} {compared:?}"),
+                        })
+                        .map_err(|e| e.to_string()),
+                );
+            }
+            assert_eq!(out[0], out[1], "interpreted vs compiled");
+            out.remove(1)
+        }
+    };
+    let note = |x: &str, v: i64, w: &str| Transition {
+        transformation_name: "note".into(),
+        args: vec![subj(x), dec(v), morpholog_test_support::date(w)],
+        actor: Subject::from("route_test"),
+    };
+    let claim = |p: &str, args: Vec<EvalValue>| ClaimInstance {
+        predicate: p.into(),
+        args,
+    };
+
+    // Either branch admits; both admit; neither refuses with the entry
+    // witness and nothing compared, though a branch is a comparison.
+    assert_eq!(
+        run(
+            vec![claim("B", vec![subj("x1")])],
+            note("x1", 1, "2026-01-01")
+        )
+        .await,
+        Ok("committed".into())
+    );
+    assert_eq!(
+        run(
+            vec![claim("C", vec![subj("x1")])],
+            note("x1", 1, "2026-01-01")
+        )
+        .await,
+        Ok("committed".into())
+    );
+    assert_eq!(
+        run(
+            vec![claim("B", vec![subj("x1")]), claim("C", vec![subj("x1")])],
+            note("x1", 1, "2026-01-01")
+        )
+        .await,
+        Ok("committed".into())
+    );
+    let refused = run(vec![], note("x1", 1, "2026-01-01")).await.unwrap();
+    assert!(
+        refused.starts_with("rejected Some(\"either_record\")"),
+        "{refused}"
+    );
+    assert!(
+        refused.contains("Var(\"x\")") && refused.ends_with("None"),
+        "{refused}"
+    );
+
+    // Marking x2 touches the case of a stored row that holds a subject
+    // where the rule compares a decimal: every antecedent variable is
+    // part of a case, so only a change through `B(x)` reaches that row.
+    // B holds for it, the later branch raises, and the kernel's error
+    // wins over the branch that held.
+    let mark_b = |x: &str| Transition {
+        transformation_name: "mark_b".into(),
+        args: vec![subj(x)],
+        actor: Subject::from("route_test"),
+    };
+    let drifted = |x: &str, v: EvalValue, w: EvalValue| vec![claim("A", vec![subj(x), v, w])];
+    let one = run(
+        drifted(
+            "x2",
+            subj("first"),
+            morpholog_test_support::date("2026-01-01"),
+        ),
+        mark_b("x2"),
+    )
+    .await;
+    let one = one.expect_err("a raising branch raises whatever held");
+    // Two raising branches: the first names the error, so the message
+    // is the one-drift message exactly.
+    let two = run(drifted("x2", subj("first"), subj("second")), mark_b("x2")).await;
+    assert_eq!(two.expect_err("both raise"), one);
+    let second_only = run(drifted("x2", dec(1), subj("second")), mark_b("x2")).await;
+    assert_ne!(
+        second_only.expect_err("the later branch raises on its own"),
+        one,
+        "the two drifts are in different domains and word differently"
+    );
+}

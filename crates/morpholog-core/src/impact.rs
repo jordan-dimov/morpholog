@@ -126,10 +126,11 @@ impl ImpactPlan {
     /// whole invariant.
     pub fn new(inv: &Invariant) -> Self {
         let case_vars = candidate_case_variables(&inv.body);
+        let antecedent = antecedent_nodes(&inv.body);
         let mut occurrences = Vec::new();
         let mut widening = None;
         let mut calls = false;
-        walk_prop(&inv.body, &mut |n| match classify_node(&n) {
+        walk_prop(&inv.body, &mut |n| match classify_node(&n, &antecedent) {
             NodeKind::Claim(predicate, args) => {
                 let mut guards = Vec::new();
                 let mut var_map = Vec::new();
@@ -178,7 +179,14 @@ impl ImpactPlan {
             footprint: footprint_of(inv, definitions),
         };
         let table = DefinitionTable::new(definitions);
-        follow(&inv.body, &frame, table, &mut BTreeSet::new(), &mut out);
+        follow(
+            &inv.body,
+            &frame,
+            table,
+            &mut BTreeSet::new(),
+            &mut out,
+            &antecedent_nodes(&inv.body),
+        );
         out
     }
 
@@ -320,36 +328,46 @@ fn follow(
     table: DefinitionTable<'_>,
     seen: &mut BTreeSet<DefinitionName>,
     out: &mut ImpactPlan,
+    antecedent: &HashSet<*const Prop>,
 ) {
     let mut calls = Vec::new();
-    walk_prop(body, &mut |n| match classify_node(&n) {
-        NodeKind::Claim(predicate, args) => {
-            let mut guards = Vec::new();
-            let mut var_map = Vec::new();
-            for (i, term) in args.iter().enumerate() {
-                match term {
-                    Term::Literal(v) => guards.push((i, v.clone())),
-                    Term::Var(v) => match frame.get(v) {
-                        Some(Traced::Case(case)) => var_map.push((i, case.clone())),
-                        Some(Traced::Literal(lit)) => guards.push((i, lit.clone())),
-                        None => {}
-                    },
-                    Term::Wildcard | Term::Actor => {}
+    walk_prop(body, &mut |n| {
+        let here = match &n {
+            Node::Prop(q) => Some(std::ptr::from_ref(*q)),
+            _ => None,
+        };
+        match classify_node(&n, antecedent) {
+            NodeKind::Claim(predicate, args) => {
+                let mut guards = Vec::new();
+                let mut var_map = Vec::new();
+                for (i, term) in args.iter().enumerate() {
+                    match term {
+                        Term::Literal(v) => guards.push((i, v.clone())),
+                        Term::Var(v) => match frame.get(v) {
+                            Some(Traced::Case(case)) => var_map.push((i, case.clone())),
+                            Some(Traced::Literal(lit)) => guards.push((i, lit.clone())),
+                            None => {}
+                        },
+                        Term::Wildcard | Term::Actor => {}
+                    }
                 }
+                out.occurrences.push(Occurrence {
+                    predicate: predicate.clone(),
+                    guards,
+                    var_map,
+                });
             }
-            out.occurrences.push(Occurrence {
-                predicate: predicate.clone(),
-                guards,
-                var_map,
-            });
+            NodeKind::Call(name, args) => {
+                let in_antecedent = here.is_some_and(|p| antecedent.contains(&p));
+                calls.push((name.clone(), args.to_vec(), in_antecedent));
+            }
+            NodeKind::Widens(w) => {
+                out.widening.get_or_insert(w);
+            }
+            NodeKind::Inert => {}
         }
-        NodeKind::Call(name, args) => calls.push((name.clone(), args.to_vec())),
-        NodeKind::Widens(w) => {
-            out.widening.get_or_insert(w);
-        }
-        NodeKind::Inert => {}
     });
-    for (name, args) in calls {
+    for (name, args, in_antecedent) in calls {
         let followed = table.enter(&name, seen, |def, seen| {
             let callee: Frame = def
                 .parameters
@@ -364,7 +382,14 @@ fn follow(
                     Some((param.clone(), traced))
                 })
                 .collect();
-            follow(&def.body, &callee, table, seen, out);
+            // A body called from the antecedent is antecedent whole; one
+            // called elsewhere has its own antecedent, if it is a rule.
+            let inner = if in_antecedent {
+                every_node(&def.body)
+            } else {
+                antecedent_nodes(&def.body)
+            };
+            follow(&def.body, &callee, table, seen, out, &inner);
             true
         });
         // An undeclared or cyclic call contributes nothing to a walker
@@ -386,12 +411,41 @@ enum NodeKind<'a> {
     Inert,
 }
 
-fn classify_node<'a>(n: &Node<'a>) -> NodeKind<'a> {
+/// Every proposition node inside the top-level antecedent, the one
+/// place a disjunction takes part in which cases exist. An `or`
+/// anywhere else is a truth test over the case's claims: its branches'
+/// occurrences bind the case variables at their own positions, as a
+/// conjunct's do, so it widens nothing.
+fn antecedent_nodes(body: &Prop) -> HashSet<*const Prop> {
+    match body {
+        Prop::Implies { left, .. } => every_node(left),
+        Prop::Forall { source, .. } => every_node(source),
+        _ => HashSet::new(),
+    }
+}
+
+fn every_node(p: &Prop) -> HashSet<*const Prop> {
+    let mut out = HashSet::new();
+    walk_prop(p, &mut |n| {
+        if let Node::Prop(q) = n {
+            out.insert(std::ptr::from_ref(q));
+        }
+    });
+    out
+}
+
+fn classify_node<'a>(n: &Node<'a>, antecedent: &HashSet<*const Prop>) -> NodeKind<'a> {
     match n {
         Node::Prop(Prop::Claim { predicate, args }) => NodeKind::Claim(predicate, args),
         Node::Prop(Prop::Defined { name, args }) => NodeKind::Call(name, args),
         Node::Prop(Prop::Pre(_)) => NodeKind::Widens(Widening::Pre),
-        Node::Prop(Prop::Or(_)) => NodeKind::Widens(Widening::Or),
+        Node::Prop(q @ Prop::Or(_)) => {
+            if antecedent.contains(&std::ptr::from_ref(*q)) {
+                NodeKind::Widens(Widening::Or)
+            } else {
+                NodeKind::Inert
+            }
+        }
         Node::Prop(Prop::Xor(_, _)) => NodeKind::Widens(Widening::Xor),
         Node::Prop(Prop::In(_, _)) => NodeKind::Widens(Widening::In),
         Node::Prop(

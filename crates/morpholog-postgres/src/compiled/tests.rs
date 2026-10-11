@@ -181,7 +181,7 @@ predicate A(x: Subject)
 predicate B(x: Subject)
 
 invariant uses_or:
-    A(x) implies (B(x) or A(x))
+    (A(x) or B(x)) implies A(x)
 
 invariant uses_pre:
     pre(A(x)) implies A(x)
@@ -867,4 +867,78 @@ fn a_statistics_name_is_read_back_only_as_this_build_spells_it() {
     }
     let spec = StatisticsSpec { position: 7 };
     assert_eq!(StatisticsSpec::from_name(&spec.name()), Some(spec));
+}
+
+/// A consequent `or` compiles in each of its shapes, and the shapes
+/// outside it refuse by variant: a conjunct after it, a call that would
+/// bind a parameter through it, and an `or` anywhere but a consequent.
+#[test]
+fn a_consequent_or_compiles_and_its_boundary_refuses_by_variant() {
+    let source = "\
+program consequent_or
+
+predicate A(x: Subject, k: Subject)
+predicate B(x: Subject)
+predicate C(x: Subject)
+predicate Lim(x: Subject, q: Decimal)
+
+define allowed(k):
+    k = #a or k = #b
+
+define marked(x):
+    B(x) or C(x)
+
+invariant either_record:
+    A(x, _) implies (B(x) or C(x))
+
+invariant vocabulary:
+    A(x, k) implies allowed(k)
+
+invariant branch_with_a_comparison:
+    A(x, _) implies ((Lim(x, q) and q <= 10) or C(x))
+
+invariant or_then_a_conjunct:
+    A(x, _) implies ((B(x) or C(x)) and Lim(x, _))
+
+invariant call_binding_through_an_or:
+    A(x, _) implies marked(y)
+
+invariant or_under_not:
+    A(x, _) implies not (B(x) or C(x))
+
+invariant or_in_an_antecedent:
+    (B(x) or C(x)) implies A(x, _)
+";
+    let program = morpholog_surface::parse_program(source).expect("parses");
+    let refused = refusals(&program);
+    let by_name: std::collections::BTreeMap<&str, &CompileReason> = refused
+        .iter()
+        .map(|r| (r.invariant.as_str(), &r.reason))
+        .collect();
+    for compiled in ["either_record", "vocabulary", "branch_with_a_comparison"] {
+        assert!(
+            !by_name.contains_key(compiled),
+            "{compiled} compiles: {by_name:?}"
+        );
+    }
+    assert_eq!(
+        by_name["or_then_a_conjunct"],
+        &CompileReason::DisjunctionShape {
+            detail: "a conjunct after an `or` in its scope"
+        }
+    );
+    assert_eq!(
+        by_name["call_binding_through_an_or"],
+        &CompileReason::DisjunctionShape {
+            detail: "a call whose `or` would bind a parameter"
+        }
+    );
+    assert_eq!(
+        by_name["or_under_not"],
+        &CompileReason::Construct { construct: "or" }
+    );
+    assert_eq!(
+        by_name["or_in_an_antecedent"],
+        &CompileReason::Construct { construct: "or" }
+    );
 }

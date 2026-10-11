@@ -416,3 +416,51 @@ fn an_explained_invariant_carries_the_refusals_witness_and_comparison() {
         "the rendering names the case before the figures: {rendered}"
     );
 }
+
+// ============================================================
+// A consequent `or` over a history that already violates it: a change
+// to the valid case is admitted, a change to the violated case is
+// refused. The semantics fingerprint pins the same pair by hash; this
+// is the pair in words.
+// ============================================================
+
+#[test]
+fn a_consequent_or_is_judged_over_the_touched_case_alone() {
+    use morpholog_core::Outcome;
+    use morpholog_test_support::propose;
+    let program = parse_program(
+        "program either_way\n\
+         predicate A(x: Subject, k: Subject)\n\
+         predicate B(x: Subject)\n\
+         predicate C(x: Subject)\n\
+         invariant either_record:\n    A(x, _) implies (B(x) or C(x))\n\
+         transformation note(x, k):\n    admit A(x, k)\n\
+         transformation mark_b(x):\n    admit B(x)\n",
+    )
+    .unwrap();
+    // Case a holds (C names it); case b is violated already.
+    let dirty = State::from_claims(vec![
+        claim_instance("A", &[subj("a"), subj("k1")]),
+        claim_instance("A", &[subj("b"), subj("k1")]),
+        claim_instance("C", &[subj("a")]),
+    ]);
+    let run = |name: &str, args: Vec<morpholog_core::EvalValue>| {
+        propose(
+            &program,
+            &transition(name, args, "ops"),
+            &dirty,
+            &mut morpholog_test_support::fresh(),
+        )
+        .unwrap()
+    };
+    let admitted = run("mark_b", vec![subj("a")]);
+    assert!(
+        matches!(admitted, Outcome::Accepted { .. }),
+        "case a stays valid and case b is untouched: {admitted:?}"
+    );
+    let refused = run("note", vec![subj("b"), subj("k2")]);
+    let Outcome::Rejected { reason } = refused else {
+        panic!("case b is touched and still names no record: {refused:?}");
+    };
+    assert!(reason.to_string().contains("either_record"), "{reason}");
+}

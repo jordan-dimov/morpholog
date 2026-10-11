@@ -111,7 +111,7 @@ pub use validate::{ValidatedProgram, ValidationContext, ValidationError, Vocabul
 /// Version 1 is the first semantics recorded, not the semantics of
 /// everything before it. `runtime-semantics.md` lists what each version
 /// changed.
-pub const SEMANTICS_VERSION: u32 = 2;
+pub const SEMANTICS_VERSION: u32 = 3;
 
 #[cfg(test)]
 mod kernel_tests;
