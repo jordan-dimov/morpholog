@@ -1316,3 +1316,9 @@ Code review then moved the assurance verdict out of the library. A public verifi
 **What the plan review changed:** filtering by `model_hash` was dropped before any code: the hash names one exact version of a programme, so it would hide this programme's own history from before its last edit, and rejection rows carry none. A gate's recorded rule stays as recorded: the log keeps a name or a rendered expression in one column, telling them apart would mean parsing the reason text, and guessing from today's gate names would present a guess as a fact. The compatibility note says what a client generated before the field does: it refuses a report carrying `refusals` and reads one without, checked against the v0.0.14 client. The sections are called declared and not declared, never "the programme's own", because the shared-name test shows a declared transformation can carry another programme's history.
 
 **What was skipped:** programme identity on audit or rejection rows; version-specific attribution of historical refusals; filtering foreign history.
+
+### `check` follows the runtime into closed propositions
+
+**Forced by:** a negated domain in example 21 (#479) showed `check` and the runtime disagreeing (#519): `require not Seen(item) and item = tag` passed `check`, and the first proposal stopped with "unbound variable: item".
+
+**Landed:** `not`, `implies`, `exists` and `forall` export nothing at runtime, so the checker walks each in its own scope, carrying out only kind evidence about names bound before it, as `if(...)` already did. Declaring a quantifier's name no longer binds it; only the body, or `forall`'s source, does. `pre(...)` exports and is unchanged. `check` is stricter: it refuses programmes whose binding flow can raise an unbound variable at runtime. No decision changes, so the semantics version stays.
