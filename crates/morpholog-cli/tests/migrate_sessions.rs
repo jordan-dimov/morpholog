@@ -1,6 +1,8 @@
 //! `migrate` warns when other logins are connected to a database with a
 //! migration pending: a process on the old binary keeps writing until it
-//! is restarted. A warning, never a refusal.
+//! is restarted. A warning, never a refusal. Every run that migrates ends
+//! by pointing at `provision indexes --check`, since a new binary can need
+//! other indexes and `migrate` cannot see the programmes.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -82,4 +84,10 @@ async fn migrate_names_the_other_sessions_while_a_migration_is_pending() {
         !again_stderr.contains("other sessions"),
         "nothing pending, nobody else connected: {again_stderr}"
     );
+    for stderr in [&stderr, &again_stderr] {
+        assert!(
+            stderr.contains("hint:") && stderr.contains("provision indexes --check"),
+            "with or without a migration to apply: {stderr}"
+        );
+    }
 }
