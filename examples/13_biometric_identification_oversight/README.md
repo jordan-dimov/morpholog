@@ -34,13 +34,17 @@ committed at all, and the Article 12 log is that record, read back.
   time may verify, or decide. Revoking that assignment stops their future
   acts and leaves every past verification and decision a valid record of
   what was done then.
-- **A name only its authorised login can use.** A verifier's name, once
-  restricted, can be asserted only by a database login authorised for it.
-  The deployer, who restricts verifier names and authorises their logins,
-  is restricted the same way. Two names are two people only when their
-  logins belong to separate applications and credentials (see below).
-- **Matches recorded under the system's name.** A match may only be
-  recorded with the AI system as its actor.
+- **One trust root.** The record holds one deployment, proposed by the
+  deployer it names. Only that deployer puts model versions into service,
+  assigns and revokes oversight, restricts names and grants logins. Only
+  the AI system starts and ends its uses and records its matches.
+- **A name only its authorised login can use.** Oversight goes only to a
+  restricted name, and a verifier's name must still be restricted when they
+  verify or decide. A restricted name can be asserted only over a database
+  login granted it; withdrawing the last grant locks the name rather than
+  freeing it. The deployer's name and the AI system's own name are
+  restricted the same way when the system is deployed, so a match recorded
+  under the system's name arrived over the system's login.
 
 ## What it refuses
 
@@ -73,12 +77,17 @@ proposal the runtime refuses, with the reason named:
 6. **A use period cannot be closed earlier than a match it already
    produced.** Backdating the end of a use to exclude an awkward match is not
    forbidden by policy; it is uncommittable.
+7. **Nobody speaks for a name they were not granted.** Another login cannot
+   record a match as the system, or verify as a second overseer, and a second
+   deployment cannot be used to grant someone an existing verifier's name.
+   These refusals come from the PostgreSQL adapter, which checks the login a
+   proposal arrives over, so they are shown in
+   `crates/morpholog-postgres/tests/biometric_identification_oversight.rs`.
 
 Note who proposes `record_match`: the AI system, as the actor, and
-`require actor = system` holds the match to the system's name. A machine
-actor passes the same gates as a human one. This example does not restrict
-the system's own name, as it does the verifiers', so any login could still
-assert it; restricting it takes the same two claims. The thing producing
+`require actor = system` holds the match to the system's name, and that
+name is restricted to the login the system runs under. A machine actor
+passes the same gates as a human one. The thing producing
 candidates does not have to be trusted to behave; it only gets to
 *propose*, and what may be admitted is enforced outside it.
 
@@ -119,7 +128,7 @@ final regulation, not the draft):
 | Art. 12(3)(c) | Record the input data for which the search led to a match | `input_ref` on `MatchRecorded` |
 | Art. 12(3)(d) | Record the identity of the natural persons who verified the results | `MatchVerified(match, verifier, verified_at)` - the verifier is the proposing actor, recorded in the claim and the audit row |
 | Art. 14(5) | No action or decision on an identification unless separately verified by at least two natural persons | The `decide_on_identification` gate and the `decision_rests_on_two_distinct_prior_verifications` invariant - two verification records with distinct verifiers, **both at or before the decision**, or the decision cannot commit |
-| Art. 26(2) | Deployers assign oversight to natural persons with competence, training and authority | `OversightAssigned`, granted and revoked by `assign_oversight` / `revoke_oversight`; consulted as a gate at each verification |
+| Art. 26(2) | Deployers assign oversight to natural persons with competence, training and authority | `OversightAssigned`, granted and revoked by the recorded deployer through `assign_oversight` / `revoke_oversight`, only to restricted names; consulted as a gate at each verification |
 | Art. 19(1), 26(6) | Providers and deployers keep logs at least six months | No machinery needed: the substrate never deletes, so any retention minimum is trivially exceeded |
 | Art. 86(1) | An affected person may demand a clear and meaningful explanation of the decision | The evidence for that explanation, in one as-of lookup: the decision, its match, the input reference, both verifier identities, the version in service, and the oversight assignments in force - all at the decision's transition |
 
@@ -144,11 +153,16 @@ final regulation, not the draft):
   role can write claims and audit rows directly, so two verifier identities
   are genuinely distinct only when the two applications and their credentials
   are genuinely separate.
-- Who may assign oversight, and whose names must be restricted. Here any
-  login may call `assign_oversight` or `revoke_oversight`, a verifier's
-  name need not be restricted before it verifies, and the AI system's own
-  name is not restricted. A real deployment would gate the first on the
-  deployer and restrict every name that may verify or record a match.
+- What the record proves about people. It proves two distinct verifier
+  names, each asserted over a login granted that name. It does not prove two
+  natural persons: one login may be granted two names, and one person may
+  hold two credentials. Keeping each verifier's credentials their own is the
+  deployment's job.
+- Who may make the first deployment. Nothing before it can vouch for the
+  deployer, so the application hosting the record decides who may make that
+  first act. There is one deployment because a grant to speak as a name holds
+  wherever the name appears: a second deployment would hand its deployer the
+  enrolment acts, and with them an existing verifier's name.
 - Hash-chained or blockchain-style logging solves a different problem:
   tamper-evidence, proof that nobody altered the record after the fact. This
   example demonstrates the layer above - invalid records were never

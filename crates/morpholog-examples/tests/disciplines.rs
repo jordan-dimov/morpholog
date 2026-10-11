@@ -473,8 +473,13 @@ fn bio_state_with_decision() -> State {
     for (t, args, actor) in [
         (
             "deploy_system",
-            vec![subj("sys"), subj("authority"), subj("ops_login")],
-            "ops",
+            vec![
+                subj("sys"),
+                subj("authority"),
+                subj("ops_login"),
+                subj("sys_login"),
+            ],
+            "authority",
         ),
         (
             "place_version_in_service",
@@ -484,10 +489,28 @@ fn bio_state_with_decision() -> State {
                 ts("2026-10-01T00:00:00Z"),
                 ts("2026-12-31T00:00:00Z"),
             ],
-            "ops",
+            "authority",
         ),
-        ("assign_oversight", vec![subj("anna"), subj("sys")], "ops"),
-        ("assign_oversight", vec![subj("boris"), subj("sys")], "ops"),
+        (
+            "restrict_verifier_identity",
+            vec![subj("anna"), subj("sys")],
+            "authority",
+        ),
+        (
+            "restrict_verifier_identity",
+            vec![subj("boris"), subj("sys")],
+            "authority",
+        ),
+        (
+            "assign_oversight",
+            vec![subj("anna"), subj("sys")],
+            "authority",
+        ),
+        (
+            "assign_oversight",
+            vec![subj("boris"), subj("sys")],
+            "authority",
+        ),
         (
             "start_use",
             vec![
@@ -497,7 +520,7 @@ fn bio_state_with_decision() -> State {
                 subj("watchlist"),
                 ts("2026-10-12T09:00:00Z"),
             ],
-            "ops",
+            "sys",
         ),
         (
             "record_match",

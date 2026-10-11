@@ -373,16 +373,10 @@ fn parse_expression_has_no_declarations_to_resolve_against() {
 fn the_gallery_hashes_did_not_move_when_named_patterns_arrived() {
     // Hashes of the positional spellings of files that now use named patterns. Matching them
     // shows the hash renders positionally, so a named source shares its positional twin's hash.
-    let cases = [
-        (
-            "../../examples/15_metered_billing/metered_billing.morph",
-            "sha256:9bbd6c4313dd7a8d22bd97579bbe75eeaeb8d4063790ce15bedc22d5d63cc591",
-        ),
-        (
-            "../../examples/13_biometric_identification_oversight/biometric_oversight.morph",
-            "sha256:195f1eefe533f1583ead522e3700c40113de103d494271a6a24b064a9921a790",
-        ),
-    ];
+    let cases = [(
+        "../../examples/15_metered_billing/metered_billing.morph",
+        "sha256:9bbd6c4313dd7a8d22bd97579bbe75eeaeb8d4063790ce15bedc22d5d63cc591",
+    )];
     for (rel, expected) in cases {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
         let src = fs::read_to_string(&path).unwrap();
@@ -412,6 +406,44 @@ fn the_gallery_hashes_did_not_move_when_named_patterns_arrived() {
         canonical_hash(&parse_program(&before).unwrap()),
         "sha256:5777060fd9d8f488c726c55c4fe1678a63bdecaaced234361bb834c1aee96ef3",
         "the pre-respelling metered billing no longer hashes as it did"
+    );
+}
+
+/// The biometric example's named patterns hash as their positional
+/// spelling, rebuilt here as for metered billing below.
+#[test]
+fn biometric_oversight_hashes_as_its_positional_twin() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/13_biometric_identification_oversight/biometric_oversight.morph");
+    let named = fs::read_to_string(&path).unwrap();
+    let mut positional = named.clone();
+    for (from, to) in [
+        (
+            "UseStarted(use: use, system: system, started_at: started_at, ..)",
+            "UseStarted(use, system, _, _, started_at)",
+        ),
+        (
+            "UseStarted(use: use, system: system, ..)",
+            "UseStarted(use, system, _, _, _)",
+        ),
+    ] {
+        assert!(
+            positional.contains(from),
+            "the file no longer spells `{from}`"
+        );
+        positional = positional.replace(from, to);
+    }
+    let code: String = positional
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("--"))
+        .collect();
+    assert!(
+        !code.contains("..)"),
+        "a named pattern was left unrewritten"
+    );
+    assert_eq!(
+        canonical_hash(&parse_program(&named).unwrap()),
+        canonical_hash(&parse_program(&positional).unwrap())
     );
 }
 

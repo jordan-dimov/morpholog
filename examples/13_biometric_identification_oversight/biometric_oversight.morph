@@ -73,9 +73,9 @@ predicate OversightAssigned(person: Subject, system: Subject)
 -- person. They are separate on purpose: if the grants alone did the
 -- arming, then withdrawing someone's last grant - the thing you do
 -- the moment you suspect trouble - would hand their name back to
--- everybody. Withdrawing the last grant instead locks the name; to
--- return it to the open, you retract the arming claim, and that is
--- its own act on the record.
+-- everybody. Withdrawing the last grant instead locks the name, and
+-- the arming claim is append only, so a name never returns to the
+-- open.
 --
 -- The runtime recognises these two by name and shape. What it can
 -- prove is narrow and worth saying plainly: that the proposal
@@ -84,6 +84,7 @@ predicate OversightAssigned(person: Subject, system: Subject)
 -- the runtime's own database credentials could not write to the
 -- tables directly.
 predicate ActorAssertionRestricted(actor: Subject)
+    append only
 predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
 predicate UseStarted(use: Subject, system: Subject, version: Subject, reference_db: Subject, started_at: Timestamp)
 predicate UseEnded(use: Subject, ended_at: Timestamp)
@@ -188,23 +189,37 @@ invariant decision_rests_on_two_distinct_prior_verifications:
 -- must itself be restricted, or the restriction underneath it is
 -- decoration.
 --
--- One consequence to bootstrap carefully: the login named here is the
--- only one that can act as this deployer afterwards. Name the wrong
--- one and this system has no reachable enrolment authority - the
--- remedy is a fresh deployment, which is the safe direction for a
--- trust root to fail in.
-transformation deploy_system(system, deployer, deployer_login_role):
-    require not DeployedSystem(system, _)
+-- The system's own name is armed in the same act, for the login the
+-- system runs under, so nobody else can put a match on the record in
+-- its name.
+--
+-- There is one deployment. The grants are not per system: a grant to
+-- speak as a name holds wherever that name appears. A second
+-- deployment would give its deployer the enrolment acts below, and
+-- with them a way to grant themselves an existing verifier's name. So
+-- one deployment is the trust root for the whole record, and whoever
+-- proposes it must be the deployer it names.
+--
+-- That first act is the one nothing here can authenticate: the
+-- application hosting the record decides who may make it. The login
+-- named here is the only one that can act as the deployer afterwards;
+-- name the wrong one and there is no reachable enrolment authority,
+-- which is the safe direction for a trust root to fail in.
+transformation deploy_system(system, deployer, deployer_login_role, system_login_role):
+    require not DeployedSystem(_, _)
+    require actor = deployer
     admit DeployedSystem(system, deployer)
     admit ActorAssertionRestricted(deployer)
     admit ActorAssertionAuthority(deployer, deployer_login_role)
+    admit ActorAssertionRestricted(system)
+    admit ActorAssertionAuthority(system, system_login_role)
 
 -- A model version enters service for a window - the period its
 -- assessment covers. The window is the unit of accountability: every
 -- use binds the version it ran under, so "which model produced this
 -- match?" is always one lookup.
 transformation place_version_in_service(system, version, in_service_from, in_service_to):
-    require DeployedSystem(system, _)
+    require DeployedSystem(system, actor)
     require in_service_from strictly_before in_service_to
     require not VersionInService(system, version, _, _)
     admit VersionInService(system, version, in_service_from, in_service_to)
@@ -212,13 +227,17 @@ transformation place_version_in_service(system, version, in_service_from, in_ser
 -- Article 26(2): oversight is assigned to named people - and
 -- revoked. Grant and retract, not validity windows: a lapsed
 -- training certificate or a role change is a revocation event, and
--- the whole point is that revocation governs the future only.
+-- the whole point is that revocation governs the future only. The
+-- deployer assigns and revokes, and only to a name already armed, so
+-- an overseer is always someone only their own logins can speak for.
 transformation assign_oversight(person, system):
-    require DeployedSystem(system, _)
+    require DeployedSystem(system, actor)
+    require ActorAssertionRestricted(person)
     require not OversightAssigned(person, system)
     admit OversightAssigned(person, system)
 
 transformation revoke_oversight(person, system):
+    require DeployedSystem(system, actor)
     require OversightAssigned(person, system)
     retract OversightAssigned(person, system)
 
@@ -255,17 +274,20 @@ transformation withdraw_verifier_login(person, login_role, system):
 -- as a violation caught later, but as a proposal that never commits.
 -- The use binds its version here, once: a use is one continuous
 -- operation of one assessed version, which is why the rules below
--- need only ask "inside this use?".
+-- need only ask "inside this use?". The system starts and ends its
+-- own uses, as it records its own matches.
 transformation start_use(use, system, version, reference_db, started_at):
+    require actor = system
     require (VersionInService(system, version, f, t) and f at_or_before started_at and started_at at_or_before t)
     require not UseStarted(use, _, _, _, _)
     admit UseStarted(use, system, version, reference_db, started_at)
 
 -- The AI system's raw output enters the record - and only the
 -- deployed system's own identity may put it there. `require actor =
--- system` binds the proposer to the system bound from the use: a
--- match attributed to this system genuinely originated from it, not
--- from an analyst typing one in. A machine actor passes through the
+-- system` binds the proposer to the system bound from the use, and
+-- the system's name is armed, so the match arrived over a login
+-- authorised to speak as the system - not from an analyst typing one
+-- in under its name. A machine actor passes through the
 -- same gates as a human one - the runtime does not care whose hand
 -- is on the action, only whether the record is admissible - and here
 -- the actor's identity is itself part of what makes it admissible.
@@ -281,7 +303,8 @@ transformation record_match(match, use, input_ref, candidate, matched_at):
     emit MatchAwaitingVerification(match)
 
 transformation end_use(use, ended_at):
-    bind UseStarted(use: use, started_at: started_at, ..)
+    bind UseStarted(use: use, system: system, started_at: started_at, ..)
+    require actor = system
     require started_at at_or_before ended_at
     require not UseEnded(use, _)
     admit UseEnded(use, ended_at)
@@ -290,11 +313,15 @@ transformation end_use(use, ended_at):
 -- live oversight for this system. The authority check is a gate, not
 -- an invariant, and that placement is the doctrine: it governs what
 -- may be done NEXT. Yesterday's verification under yesterday's
--- authority stays a valid record even after today's revocation.
+-- authority stays a valid record even after today's revocation. The
+-- verifier's name must be armed when they act, not only when they
+-- were assigned, so an assignment the record held before that rule
+-- cannot carry an open name into a verification.
 transformation verify_match(match, verified_at):
     bind MatchRecorded(match, use, _, _, matched_at)
     bind UseStarted(use: use, system: system, ..)
     require OversightAssigned(actor, system)
+    require ActorAssertionRestricted(actor)
     require not MatchVerified(match, actor, _)
     require matched_at at_or_before verified_at
     admit MatchVerified(match, actor, verified_at)
@@ -313,6 +340,7 @@ transformation decide_on_identification(decision, match, outcome, decided_at):
     bind MatchRecorded(match, use, _, _, _)
     bind UseStarted(use: use, system: system, ..)
     require OversightAssigned(actor, system)
+    require ActorAssertionRestricted(actor)
     require two_distinct_prior_verifications(match, decided_at)
     require not IdentificationDecision(_, match, _, _, _)
     admit IdentificationDecision(decision, match, outcome, decided_at, actor)
