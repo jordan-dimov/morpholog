@@ -1119,3 +1119,9 @@ The scope document now states the principle the design history had settled case 
 **Forced by:** a negated domain in example 21 (#479) showed `check` and the runtime disagreeing (#519): `require not Seen(item) and item = tag` passed `check`, and the first proposal stopped with "unbound variable: item".
 
 **Landed:** `not`, `implies`, `exists` and `forall` export nothing at runtime, so the checker walks each in its own scope, carrying out only kind evidence about names bound before it, as `if(...)` already did. Declaring a quantifier's name no longer binds it; only the body, or `forall`'s source, does. `pre(...)` exports and is unchanged. `check` is stricter: it refuses programmes whose binding flow can raise an unbound variable at runtime. No decision changes, so the semantics version stays.
+
+### `migrate` points at the index check
+
+**Forced by:** an embedder's v0.0.14 upgrade (#507). `provision indexes --prune` created four indexes the earlier release had not required, and nothing had said the requirements could change.
+
+**Landed:** every `migrate` that applies, with or without a migration to run, ends with a `hint:` on stderr naming `provision indexes --check <programmes>`; the report on stdout is unchanged and `--check` prints no hint. `migrate` cannot compute the requirements itself, because they depend on the programmes. A release now plans the gallery's indexes under the previous binary and the new one, and its notes list any difference.

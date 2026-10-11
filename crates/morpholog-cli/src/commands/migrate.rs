@@ -49,7 +49,15 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     if let Some(roles) = deployment_roles(&pool).await? {
         warn_if_roles_shared(&pool, &roles).await?;
     }
-    print_json(&report)
+    print_json(&report)?;
+    // Also with nothing to apply: the index requirements come from the
+    // binary and the programmes, so an upgrade can change them with no
+    // migration at all, and this command cannot see the programmes.
+    eprintln!(
+        "hint: this binary may need different indexes; run `morpholog provision indexes \
+         --check <programmes>` before the first write"
+    );
+    Ok(())
 }
 
 /// Other logins on the database while an upgrade is outstanding. A
