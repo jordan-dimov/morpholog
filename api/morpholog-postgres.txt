@@ -973,6 +973,26 @@ impl core::marker::Unpin for morpholog_postgres::VerifyOutcome
 impl core::marker::UnsafeUnpin for morpholog_postgres::VerifyOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::VerifyOutcome
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::VerifyOutcome
+pub enum morpholog_postgres::VerifyPass
+pub morpholog_postgres::VerifyPass::Replay
+pub morpholog_postgres::VerifyPass::Tree
+impl core::clone::Clone for morpholog_postgres::VerifyPass
+pub fn morpholog_postgres::VerifyPass::clone(&self) -> morpholog_postgres::VerifyPass
+impl core::clone::TrivialClone for morpholog_postgres::VerifyPass
+impl core::cmp::Eq for morpholog_postgres::VerifyPass
+impl core::cmp::PartialEq for morpholog_postgres::VerifyPass
+pub fn morpholog_postgres::VerifyPass::eq(&self, &morpholog_postgres::VerifyPass) -> bool
+impl core::fmt::Debug for morpholog_postgres::VerifyPass
+pub fn morpholog_postgres::VerifyPass::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_postgres::VerifyPass
+impl core::marker::StructuralPartialEq for morpholog_postgres::VerifyPass
+impl core::marker::Freeze for morpholog_postgres::VerifyPass
+impl core::marker::Send for morpholog_postgres::VerifyPass
+impl core::marker::Sync for morpholog_postgres::VerifyPass
+impl core::marker::Unpin for morpholog_postgres::VerifyPass
+impl core::marker::UnsafeUnpin for morpholog_postgres::VerifyPass
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::VerifyPass
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::VerifyPass
 pub enum morpholog_postgres::ViewRefusal
 pub morpholog_postgres::ViewRefusal::IdentifierTooLong
 pub morpholog_postgres::ViewRefusal::IdentifierTooLong::name: alloc::string::String
@@ -2264,6 +2284,28 @@ impl core::marker::Unpin for morpholog_postgres::TreeHeadSignature
 impl core::marker::UnsafeUnpin for morpholog_postgres::TreeHeadSignature
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::TreeHeadSignature
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::TreeHeadSignature
+pub struct morpholog_postgres::VerifyProgress
+pub morpholog_postgres::VerifyProgress::done: u64
+pub morpholog_postgres::VerifyProgress::pass: morpholog_postgres::VerifyPass
+pub morpholog_postgres::VerifyProgress::total: u64
+impl core::clone::Clone for morpholog_postgres::VerifyProgress
+pub fn morpholog_postgres::VerifyProgress::clone(&self) -> morpholog_postgres::VerifyProgress
+impl core::clone::TrivialClone for morpholog_postgres::VerifyProgress
+impl core::cmp::Eq for morpholog_postgres::VerifyProgress
+pub fn morpholog_postgres::VerifyProgress::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::VerifyProgress
+pub fn morpholog_postgres::VerifyProgress::eq(&self, &morpholog_postgres::VerifyProgress) -> bool
+impl core::fmt::Debug for morpholog_postgres::VerifyProgress
+pub fn morpholog_postgres::VerifyProgress::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_postgres::VerifyProgress
+impl core::marker::StructuralPartialEq for morpholog_postgres::VerifyProgress
+impl core::marker::Freeze for morpholog_postgres::VerifyProgress
+impl core::marker::Send for morpholog_postgres::VerifyProgress
+impl core::marker::Sync for morpholog_postgres::VerifyProgress
+impl core::marker::Unpin for morpholog_postgres::VerifyProgress
+impl core::marker::UnsafeUnpin for morpholog_postgres::VerifyProgress
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::VerifyProgress
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::VerifyProgress
 pub struct morpholog_postgres::VerifyReport
 pub morpholog_postgres::VerifyReport::replay: morpholog_postgres::VerifyOutcome
 pub morpholog_postgres::VerifyReport::role_rebindings: morpholog_postgres::RoleRebindings
@@ -2522,10 +2564,10 @@ pub fn morpholog_postgres::tree_head_witness_bytes(&morpholog_postgres::TreeHead
 pub fn morpholog_postgres::validate_declarations(&morpholog_core::ir::Program) -> alloc::vec::Vec<morpholog_postgres::PolicyDeclarationError>
 pub async fn morpholog_postgres::verify_audit_tree(&sqlx_postgres::PgPool, core::option::Option<morpholog_postgres::Checkpoint>) -> core::result::Result<morpholog_postgres::TreeVerification, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::verify_audit_tree_under(&sqlx_postgres::PgPool, core::option::Option<morpholog_postgres::Checkpoint>, core::option::Option<&morpholog_postgres::SignaturePolicy>) -> core::result::Result<morpholog_postgres::TreeVerification, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::verify_audit_tree_with_chain(&sqlx_postgres::PgPool, core::option::Option<morpholog_postgres::Checkpoint>, core::option::Option<&morpholog_postgres::SignaturePolicy>) -> core::result::Result<(morpholog_postgres::TreeVerification, alloc::vec::Vec<morpholog_postgres::Checkpoint>, morpholog_postgres::RoleRebindings), morpholog_postgres::PgError>
+pub async fn morpholog_postgres::verify_audit_tree_with_chain(&sqlx_postgres::PgPool, core::option::Option<morpholog_postgres::Checkpoint>, core::option::Option<&morpholog_postgres::SignaturePolicy>, &mut dyn core::ops::function::FnMut(morpholog_postgres::VerifyProgress)) -> core::result::Result<(morpholog_postgres::TreeVerification, alloc::vec::Vec<morpholog_postgres::Checkpoint>, morpholog_postgres::RoleRebindings), morpholog_postgres::PgError>
 pub fn morpholog_postgres::verify_pack(&morpholog_postgres::EvidencePack, core::option::Option<&morpholog_postgres::Checkpoint>) -> core::result::Result<morpholog_postgres::TreeVerification, morpholog_postgres::PackError>
 pub fn morpholog_postgres::verify_prefix_stream(impl alloc::io::buf_read::BufRead, core::option::Option<&morpholog_postgres::Checkpoint>) -> core::result::Result<morpholog_postgres::PrefixStreamReport, morpholog_postgres::PackError>
-pub async fn morpholog_postgres::verify_replay(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::VerifyOutcome, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::verify_replay(&sqlx_postgres::PgPool, &mut dyn core::ops::function::FnMut(morpholog_postgres::VerifyProgress)) -> core::result::Result<morpholog_postgres::VerifyOutcome, morpholog_postgres::PgError>
 pub fn morpholog_postgres::verify_selective(&morpholog_postgres::SelectiveEvidencePack, core::option::Option<&morpholog_postgres::Checkpoint>) -> core::result::Result<morpholog_postgres::SelectiveVerification, morpholog_postgres::PackError>
 pub fn morpholog_postgres::verify_tree_head(&ed25519_dalek::verifying::VerifyingKey, &ed25519::Signature, &str, &str, &morpholog_postgres::TreeHead<'_>) -> bool
 pub async fn morpholog_postgres::verify_views(&sqlx_postgres::PgPool, &str) -> core::result::Result<morpholog_postgres::ViewsVerification, morpholog_postgres::PgError>

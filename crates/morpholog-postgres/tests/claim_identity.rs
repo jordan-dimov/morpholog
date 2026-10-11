@@ -144,7 +144,7 @@ async fn verify_pages_the_claims_table_by_its_key() {
     .await
     .unwrap();
 
-    match verify_replay(&pool).await.unwrap() {
+    match verify_replay(&pool, &mut |_| {}).await.unwrap() {
         VerifyOutcome::Divergent {
             only_in_claims_table,
             only_in_replay,

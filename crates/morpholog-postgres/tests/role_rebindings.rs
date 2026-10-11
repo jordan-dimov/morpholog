@@ -101,7 +101,7 @@ async fn a_recreated_role_is_reported_and_the_tree_stays_intact() {
     let second = commit_entry(&pool_as(ROLE).await, "rebind_2").await;
     make_checkpoint(&pool).await;
 
-    let (tree, _, rebindings) = verify_audit_tree_with_chain(&pool, None, None)
+    let (tree, _, rebindings) = verify_audit_tree_with_chain(&pool, None, None, &mut |_| {})
         .await
         .unwrap();
     assert!(matches!(tree, TreeVerification::Intact { .. }), "{tree:?}");
@@ -175,7 +175,7 @@ async fn a_tampered_oid_breaks_the_tree_and_reports_nothing() {
     .await
     .unwrap();
 
-    let (tree, _, rebindings) = verify_audit_tree_with_chain(&pool, None, None)
+    let (tree, _, rebindings) = verify_audit_tree_with_chain(&pool, None, None, &mut |_| {})
         .await
         .unwrap();
     assert!(

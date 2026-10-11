@@ -223,6 +223,25 @@ pub async fn verify_views(pool: &PgPool, schema: &str) -> Result<ViewsVerificati
     }
 }
 
+/// Which pass of `audit verify` is reading the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyPass {
+    /// Replaying every transition to rebuild the claims.
+    Replay,
+    /// Recomputing the Merkle tree up to the latest checkpoint.
+    Tree,
+}
+
+/// How far a pass has read: rows done out of the rows it will read.
+/// Reported after each page, so a long verification can say it is
+/// working.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifyProgress {
+    pub pass: VerifyPass,
+    pub done: u64,
+    pub total: u64,
+}
+
 /// The live definition hash of one view, as the seal records it:
 /// `sha256(pg_get_viewdef(oid, true))`. `None` when no view of that name
 /// exists in the schema.
@@ -388,7 +407,10 @@ pub async fn coverage_replay(
 /// An empty database is consistent. The comparison is an
 /// order-insensitive multiset diff; divergences are sorted by
 /// `(predicate, args)` so the report is deterministic.
-pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
+pub async fn verify_replay(
+    pool: &PgPool,
+    on_progress: &mut dyn FnMut(VerifyProgress),
+) -> Result<VerifyOutcome, PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
     let latest = sqlx::query!(
         "SELECT transition_id FROM morpholog.audit
@@ -405,10 +427,20 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
         .map_err(classify_checked_query)?
         .count;
     let replayed = match latest {
-        Some(row) => reconstruct_inner(&mut tx, row.transition_id, None, None)
-            .await?
-            .claims()
-            .to_vec(),
+        Some(row) => {
+            let total = u64::try_from(transitions).unwrap_or(0);
+            let mut on_page = |done| {
+                on_progress(VerifyProgress {
+                    pass: VerifyPass::Replay,
+                    done,
+                    total,
+                });
+            };
+            reconstruct_inner(&mut tx, row.transition_id, None, None, Some(&mut on_page))
+                .await?
+                .claims()
+                .to_vec()
+        }
         None => Vec::new(),
     };
     // Keyset over the primary key: the diff ignores order, and the claims

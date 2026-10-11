@@ -3,8 +3,8 @@
 
 use anyhow::Context;
 use morpholog_postgres::{
-    SignaturePolicy, VerifyReport, WitnessAnchors, parse_public_key, render_public_key,
-    verify_audit_tree_with_chain, verify_replay, verify_views, witnesses_report,
+    SignaturePolicy, VerifyPass, VerifyProgress, VerifyReport, WitnessAnchors, parse_public_key,
+    render_public_key, verify_audit_tree_with_chain, verify_replay, verify_views, witnesses_report,
 };
 
 use crate::VerifyArgs;
@@ -16,7 +16,15 @@ use crate::commands::{AlreadyReported, connect, print_json, read_anchor};
 pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
     let pool = connect(&args.db.database_url).await?;
 
-    let replay = verify_replay(&pool).await.context("verify_replay failed")?;
+    let mut progress = ProgressLine::default();
+    let mut on_progress = |p| {
+        if let Some(line) = progress.line(p) {
+            eprintln!("{line}");
+        }
+    };
+    let replay = verify_replay(&pool, &mut on_progress)
+        .await
+        .context("verify_replay failed")?;
 
     let anchor = read_anchor(args.anchor_file.as_deref())?;
     // The signature policy is checked in the same snapshot, over the chain
@@ -27,7 +35,7 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
         args.require_signing_key.as_deref(),
     )?;
     let (tree, chain, role_rebindings) =
-        verify_audit_tree_with_chain(&pool, anchor, policy.as_ref())
+        verify_audit_tree_with_chain(&pool, anchor, policy.as_ref(), &mut on_progress)
             .await
             .context("verify_audit_tree failed")?;
     // Witnesses are judged on the same chain but apart from the tree
@@ -61,6 +69,40 @@ pub(crate) async fn run(args: VerifyArgs) -> anyhow::Result<()> {
         return Err(AlreadyReported.into());
     }
     Ok(())
+}
+
+/// Rows between progress lines.
+const PROGRESS_EVERY: u64 = 10_000;
+
+/// A line for stderr each time a pass crosses another `PROGRESS_EVERY`
+/// rows, so a long verification says it is working. A short one says
+/// nothing; stdout is only ever the report.
+#[derive(Default)]
+struct ProgressLine {
+    pass: Option<VerifyPass>,
+    shown: u64,
+}
+
+impl ProgressLine {
+    fn line(&mut self, progress: VerifyProgress) -> Option<String> {
+        if self.pass != Some(progress.pass) {
+            self.pass = Some(progress.pass);
+            self.shown = 0;
+        }
+        let reached = progress.done / PROGRESS_EVERY;
+        if reached <= self.shown {
+            return None;
+        }
+        self.shown = reached;
+        let verb = match progress.pass {
+            VerifyPass::Replay => "replayed",
+            VerifyPass::Tree => "hashed",
+        };
+        Some(format!(
+            "audit verify: {verb} {} of {} transitions",
+            progress.done, progress.total
+        ))
+    }
 }
 
 /// The timestamp-authority trust anchors the verifier named, or none.
@@ -106,4 +148,49 @@ pub(crate) fn signature_policy(
         from_tree_size: from.unwrap_or(0),
         required_public_key,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pages(pass: VerifyPass, total: u64) -> Vec<String> {
+        let mut progress = ProgressLine::default();
+        (1..=total.div_ceil(1024))
+            .filter_map(|page| {
+                progress.line(VerifyProgress {
+                    pass,
+                    done: (page * 1024).min(total),
+                    total,
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_line_each_ten_thousand_rows_and_none_for_a_short_record() {
+        assert!(pages(VerifyPass::Replay, 9_000).is_empty());
+        assert_eq!(
+            pages(VerifyPass::Replay, 25_000),
+            [
+                "audit verify: replayed 10240 of 25000 transitions",
+                "audit verify: replayed 20480 of 25000 transitions",
+            ]
+        );
+    }
+
+    #[test]
+    fn each_pass_counts_from_its_own_start() {
+        let mut progress = ProgressLine::default();
+        let at = |pass, done| VerifyProgress {
+            pass,
+            done,
+            total: 30_000,
+        };
+        assert!(progress.line(at(VerifyPass::Replay, 20_480)).is_some());
+        assert_eq!(
+            progress.line(at(VerifyPass::Tree, 10_240)).as_deref(),
+            Some("audit verify: hashed 10240 of 30000 transitions")
+        );
+    }
 }

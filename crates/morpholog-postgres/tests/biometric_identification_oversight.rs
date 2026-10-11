@@ -19,8 +19,7 @@ use uuid::Uuid;
 
 mod common;
 use common::{
-    drop_roles_if_present, expect_committed, gateway_pool, propose_pg_as, recreate_gateway_roles,
-    session_is_superuser, subj,
+    expect_committed, gateway_pool, propose_pg_as, session_is_superuser, subj, with_gateway_roles,
 };
 use common::{reset_db, test_pool};
 use morpholog_test_support::ts;
@@ -299,15 +298,7 @@ async fn each_name_reaches_the_record_only_over_its_own_login() {
         eprintln!("skipping: needs a superuser test role");
         return;
     }
-    recreate_gateway_roles(&pool, &LOGINS).await;
-    // The roles belong to the whole cluster, so they are dropped even when
-    // the walk fails: left behind, they would fail other suites' census of
-    // who can write the audit log.
-    let walked = tokio::spawn(walk_the_boundary()).await;
-    drop_roles_if_present(&pool, &LOGINS).await;
-    if let Err(failure) = walked {
-        std::panic::resume_unwind(failure.into_panic());
-    }
+    with_gateway_roles(&pool, &LOGINS, walk_the_boundary()).await;
 }
 
 const LOGINS: [&str; 5] = [
