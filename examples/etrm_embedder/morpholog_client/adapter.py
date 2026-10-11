@@ -357,6 +357,7 @@ class Morpholog:
         least_privilege: bool = False,
         reset: bool = False,
         i_know_this_deletes_data: bool = False,
+        role_prefix: str | None = None,
     ) -> envelopes.InitReport:
         """Provision the Morpholog tables.
 
@@ -365,6 +366,12 @@ class Morpholog:
         it. Both flags are passed straight through, so the pairing is
         enforced in one place - the binary - rather than re-implemented
         here where it could drift.
+
+        `role_prefix` names the deployment's roles `<prefix>writer` and
+        `<prefix>reader`, which the report's `least_privilege` carries.
+        Roles belong to the whole cluster, so a second deployment on one
+        needs its own. It goes with `least_privilege`; the binary refuses
+        it alone, and refuses an unlawful prefix.
         """
         args = ["init", "--database-url", self.database_url]
         if skip_if_exists:
@@ -375,6 +382,8 @@ class Morpholog:
             args.append("--reset")
         if i_know_this_deletes_data:
             args.append("--i-know-this-deletes-data")
+        if role_prefix is not None:
+            args.extend(["--role-prefix", role_prefix])
         return envelopes.InitReport.from_json(self._json(*args))
 
     def migrate(self, *, check: bool = False) -> envelopes.MigrationReport:

@@ -187,6 +187,29 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertNotIn("--reset", argv)
             self.assertNotIn("--i-know-this-deletes-data", argv)
 
+    def test_init_passes_a_role_prefix_and_reads_back_the_roles(self):
+        self._mode("record_argv_stdout")
+        report = json.loads((GOLDEN_DIR / "init_report_least_privilege.json").read_text())
+        report["least_privilege"]["writer_role"] = "acme_writer"
+        report["least_privilege"]["reader_role"] = "acme_reader"
+        os.environ["STUB_STDOUT"] = json.dumps(report)
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        reports = []
+        with recording_argv() as argv_after:
+            argv = argv_after(
+                lambda: reports.append(
+                    self.client.init(least_privilege=True, role_prefix="acme_")
+                )
+            )
+            self.assertEqual(argv[argv.index("--role-prefix") + 1], "acme_")
+            self.assertIn("--least-privilege", argv)
+
+            argv = argv_after(lambda: self.client.init(least_privilege=True))
+            self.assertNotIn("--role-prefix", argv)
+
+        floor = reports[0].least_privilege
+        self.assertEqual((floor.writer_role, floor.reader_role), ("acme_writer", "acme_reader"))
+
     def test_provisioning_names_every_programme_and_asks_for_the_envelope(self):
         self._mode("record_argv_stdout")
         os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "provision_report_pruned.json").read_text()
