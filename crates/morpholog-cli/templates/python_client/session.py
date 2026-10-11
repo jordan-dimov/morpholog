@@ -143,6 +143,13 @@ def _decode_rows(parse: Callable[[object], _T]) -> Callable[[object, int], list[
     return decode
 
 
+def _subject(mentions: str | None) -> str | None:
+    """A ``mentions`` filter, refused when empty, as on the one-shot client."""
+    if mentions == "":
+        raise ValueError("mentions needs a subject; an empty one names nothing")
+    return mentions
+
+
 class Session:
     """A context manager over one resident ``morpholog session`` child.
 
@@ -587,6 +594,112 @@ class Session:
         if where:
             body["where"] = dict(where)
         return self._read_rows(body, envelopes.NamedClaim.from_json)
+
+    def audit(
+        self,
+        after: str | None = None,
+        *,
+        writer_roles: list[str] | None = None,
+        mentions: str | None = None,
+        limit: int | None = None,
+    ) -> list[envelopes.AuditRow]:
+        """The audit tail through the session, as on the one-shot client:
+        committed transitions in commit order, ``after`` resuming strictly
+        after a seen transition id, rows of writers still in flight
+        withheld for a later call and never skipped. ``writer_roles`` and
+        ``mentions`` as on the one-shot client, except that an empty
+        ``writer_roles`` is refused here rather than read as no assertion.
+
+        The answer arrives whole, not streamed, so a resident loop should
+        pass ``limit``: at most that many rows come back, and the next call
+        resumes ``after`` the last of them. A full page does not mean more
+        rows are waiting, and a short one does not mean the tail is done;
+        keep reading until a call returns nothing.
+
+        A database that cannot give a sound resume horizon ends the
+        session rather than answering with a short list."""
+        body = self._audit_body(after, False, writer_roles, mentions, limit)
+        return self._read_rows(body, envelopes.AuditRow.from_json)
+
+    def audit_named(
+        self,
+        after: str | None = None,
+        *,
+        writer_roles: list[str] | None = None,
+        mentions: str | None = None,
+        limit: int | None = None,
+    ) -> list[envelopes.AuditRowNamed]:
+        """``audit`` with asserted and retracted claims decoded by
+        declared field name under the programme the session pinned."""
+        body = self._audit_body(after, True, writer_roles, mentions, limit)
+        return self._read_rows(body, envelopes.AuditRowNamed.from_json)
+
+    def rejections(
+        self, *, limit: int = 100, mentions: str | None = None
+    ) -> list[envelopes.RejectionRow]:
+        """The most recent refusals, newest first, as on the one-shot
+        client, with the values the refused rule was reading where the
+        kernel could pin them.
+
+        **An operational floor, not a ledger.** Writes are at-most-once and
+        happen after rollback, so a storm or an insert failure can leave a
+        refusal unrecorded; audit remains the only legitimacy-grade record.
+        Read a row as a lead to follow, and never as proof of what did or
+        did not happen."""
+        body: dict[str, object] = {"limit": limit, "op": "rejections"}
+        if _subject(mentions) is not None:
+            body["mentions"] = mentions
+        return self._read_rows(body, envelopes.RejectionRow.from_json)
+
+    def ping(self) -> envelopes.SessionReady:
+        """Check the session can reach its database and that the database's
+        recorded migrations still suit its binary, then answer with the
+        ready line again. An answer says both held just now; it does not promise the next
+        proposal will commit. A session that cannot reach its database
+        ends, and this raises like any lost response. A ready line other
+        than the handshake's poisons the session."""
+        return self._exchange({"op": "ping"}, commitful=False, decode=self._decode_ping)
+
+    def _decode_ping(self, payload: object, _expected_row: int) -> envelopes.SessionReady:
+        try:
+            ready = envelopes.SessionReady.from_json(payload)
+        except envelopes.EnvelopeError as exc:
+            raise _ResponseContract(
+                "a ping response did not match the ready line contract",
+                f"malformed ping response: {exc}",
+            ) from None
+        if ready != self.ready:
+            raise _ResponseContract(
+                "a ping answered with another ready line",
+                f"the session answered a ping with {ready}, not its handshake's {self.ready}",
+            )
+        return ready
+
+    def _audit_body(
+        self,
+        after: str | None,
+        named: bool,
+        writer_roles: list[str] | None,
+        mentions: str | None,
+        limit: int | None,
+    ) -> dict[str, object]:
+        body: dict[str, object] = {"op": "audit"}
+        if after is not None:
+            body["after"] = after
+        if named:
+            body["named"] = True
+        if _subject(mentions) is not None:
+            body["mentions"] = mentions
+        if writer_roles is not None:
+            if not writer_roles:
+                raise ValueError(
+                    "writer_roles asserts who writes audit; an empty list asserts nothing, "
+                    "so pass None for the default horizon"
+                )
+            body["writer_roles"] = list(writer_roles)
+        if limit is not None:
+            body["limit"] = limit
+        return body
 
     def _claims_body(
         self, predicates: tuple[str, ...], named: bool, as_of: str | None

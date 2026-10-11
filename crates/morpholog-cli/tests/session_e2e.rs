@@ -1,8 +1,8 @@
 //! End-to-end tests for `morpholog session`, the resident stdio process.
 //! The conversation is pinned as a golden transcript
 //! (`tests/golden/session/transcript.ndjson`): the ready line, then
-//! alternating requests and responses, with transition ids and the binary
-//! version normalised. The generated Python client's tests read the same
+//! alternating requests and responses, with the values that change per
+//! run or per machine normalised. The generated Python client's tests read the same
 //! transcript, so both sides answer to one conversation.
 //!
 //! Regenerate after a deliberate protocol change:
@@ -51,6 +51,13 @@ const REQUESTS: &[&str] = &[
     r#"{"name":"BookTotal","named":true,"op":"derived"}"#,
     r#"{"actor":"teller","args_named":{},"op":"propose","transformation":"no_such_act"}"#,
     r#"{"as_of":"not-a-coordinate","op":"claims"}"#,
+    // Reads between two proposals: the resident loop's shape.
+    r#"{"named":true,"op":"audit"}"#,
+    r#"{"limit":1,"op":"audit"}"#,
+    r#"{"limit":100,"op":"rejections"}"#,
+    r#"{"op":"ping"}"#,
+    r#"{"after":"00000000-0000-0000-0000-000000000000","op":"audit"}"#,
+    r#"{"actor":"teller","args_named":{"account":"acct_2","opened_on":"2026-02-01"},"op":"propose","transformation":"open_account"}"#,
 ];
 
 fn spawn_session(file: &std::path::Path) -> std::process::Child {
@@ -65,23 +72,40 @@ fn spawn_session(file: &std::path::Path) -> std::process::Child {
         .expect("spawn morpholog session")
 }
 
-/// Normalise the fields that change per run or per release: transition
-/// ids and the version.
+/// The fields that change per run, per machine or per release, wherever
+/// they sit: ids, instants, the login that proposed, and the version.
+fn stable(key: &str) -> Option<serde_json::Value> {
+    match key {
+        "transition_id" | "rejection_id" => {
+            Some(serde_json::json!("00000000-0000-0000-0000-000000000000"))
+        }
+        "committed_at" | "rejected_at" => Some(serde_json::json!("2000-01-01T00:00:00Z")),
+        "authenticated_by" => Some(serde_json::json!("login")),
+        "authenticated_by_oid" => Some(serde_json::json!(0)),
+        "morpholog_version" => Some(serde_json::json!("0.0.0")),
+        _ => None,
+    }
+}
+
 fn normalised(line: &str) -> String {
+    fn walk(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(obj) => {
+                for (key, v) in obj.iter_mut() {
+                    match stable(key) {
+                        Some(replacement) => *v = replacement,
+                        None => walk(v),
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(walk),
+            _ => {}
+        }
+    }
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(line) else {
         return line.to_string();
     };
-    if let Some(obj) = value.as_object_mut() {
-        if obj.contains_key("transition_id") {
-            obj.insert(
-                "transition_id".to_string(),
-                serde_json::json!("00000000-0000-0000-0000-000000000000"),
-            );
-        }
-        if obj.contains_key("morpholog_version") {
-            obj.insert("morpholog_version".to_string(), serde_json::json!("0.0.0"));
-        }
-    }
+    walk(&mut value);
     serde_json::to_string(&value).unwrap()
 }
 
@@ -526,4 +550,268 @@ async fn a_session_commit_names_the_programme_the_session_loaded() {
     )
     .unwrap();
     assert_eq!(row["model_hash"], ready["model_hash"]);
+}
+
+/// Lines from a running session, read on a thread so a test can wait
+/// with a deadline.
+fn lines_of(child: &mut std::process::Child) -> std::sync::mpsc::Receiver<String> {
+    let stdout = child.stdout.take().unwrap();
+    let (send, recv) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let _ = send.send(line.unwrap());
+        }
+    });
+    recv
+}
+
+fn answer(
+    stdin: &mut std::process::ChildStdin,
+    recv: &std::sync::mpsc::Receiver<String>,
+    request: &serde_json::Value,
+) -> serde_json::Value {
+    writeln!(stdin, "{request}").unwrap();
+    let line = recv
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap_or_else(|e| panic!("no answer to {request}: {e}"));
+    serde_json::from_str(&line).unwrap()
+}
+
+#[tokio::test]
+async fn an_audit_read_resumes_after_its_last_row_and_bad_arguments_are_receipts() {
+    reset_db().await;
+    let fixture = common::write_fixture("session_fixture", FIXTURE);
+    let mut child = spawn_session(&fixture.path);
+    let mut stdin = child.stdin.take().unwrap();
+    let recv = lines_of(&mut child);
+    let ready: serde_json::Value = serde_json::from_str(
+        &recv
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap(),
+    )
+    .unwrap();
+    for account in ["a1", "a2", "a3"] {
+        let receipt = answer(
+            &mut stdin,
+            &recv,
+            &serde_json::json!({"op": "propose", "transformation": "open_account",
+                "actor": "teller", "args_named": {"account": account, "opened_on": "2026-01-15"}}),
+        );
+        assert_eq!(receipt["status"], "committed", "{receipt}");
+    }
+
+    let first = answer(
+        &mut stdin,
+        &recv,
+        &serde_json::json!({"op": "audit", "limit": 2}),
+    );
+    let first = first.as_array().unwrap();
+    assert_eq!(first.len(), 2, "the limit caps the answer");
+    let cursor = first[1]["transition_id"].as_str().unwrap();
+    let rest = answer(
+        &mut stdin,
+        &recv,
+        &serde_json::json!({"op": "audit", "after": cursor}),
+    );
+    let rest = rest.as_array().unwrap();
+    assert_eq!(rest.len(), 1, "the next read resumes after the last row");
+    assert_eq!(rest[0]["arguments"][0]["value"], "a3");
+    let end = rest[0]["transition_id"].as_str().unwrap();
+    let none = answer(
+        &mut stdin,
+        &recv,
+        &serde_json::json!({"op": "audit", "after": end}),
+    );
+    assert_eq!(none, serde_json::json!([]));
+    let mentioning = answer(
+        &mut stdin,
+        &recv,
+        &serde_json::json!({"op": "audit", "mentions": "a2"}),
+    );
+    assert_eq!(mentioning.as_array().unwrap().len(), 1, "{mentioning}");
+
+    // Each of these the caller can correct, so each is a coded receipt
+    // and the session keeps answering.
+    for bad in [
+        serde_json::json!({"op": "audit", "after": "not-an-id"}),
+        serde_json::json!({"op": "audit", "after": "00000000-0000-0000-0000-000000000000"}),
+        serde_json::json!({"op": "audit", "mentions": ""}),
+        serde_json::json!({"op": "audit", "writer_roles": []}),
+        serde_json::json!({"op": "audit", "writer_roles": ["morpholog_ci_no_such_role"]}),
+        serde_json::json!({"op": "audit", "limit": 0}),
+        serde_json::json!({"op": "rejections", "mentions": ""}),
+    ] {
+        let receipt = answer(&mut stdin, &recv, &bad);
+        assert_eq!(receipt["code"], "invalid_arguments", "{bad}: {receipt}");
+    }
+    for misspelt in [
+        serde_json::json!({"op": "audit", "afer": "x"}),
+        serde_json::json!({"op": "ping", "deep": true}),
+    ] {
+        let receipt = answer(&mut stdin, &recv, &misspelt);
+        assert_eq!(receipt["code"], "invalid_request", "{misspelt}: {receipt}");
+    }
+    let pong = answer(&mut stdin, &recv, &serde_json::json!({"op": "ping"}));
+    assert_eq!(pong, ready, "a ping answers with the ready line");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+/// A database of the test's own, with the schema, so a test can break it
+/// without touching the shared one. Dropped by [`OwnDatabase::drop_it`].
+struct OwnDatabase {
+    admin: morpholog_postgres::PgPool,
+    name: String,
+    url: String,
+}
+
+impl OwnDatabase {
+    async fn new(tag: &str) -> Self {
+        let base = database_url();
+        let name = format!("morpholog_cli_{tag}_{}", std::process::id());
+        let admin = morpholog_postgres::PgPool::connect(&common::with_database(&base, "postgres"))
+            .await
+            .unwrap();
+        let db = OwnDatabase {
+            url: common::with_database(&base, &name),
+            admin,
+            name,
+        };
+        db.run(&format!("DROP DATABASE IF EXISTS {} WITH (FORCE)", db.name))
+            .await;
+        db.run(&format!("CREATE DATABASE {}", db.name)).await;
+        let init = Command::new(common::bin())
+            .args(["init", "--database-url", &db.url])
+            .output()
+            .unwrap();
+        assert!(
+            init.status.success(),
+            "{}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        db
+    }
+
+    async fn run(&self, sql: &str) {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string()))
+            .execute(&self.admin)
+            .await
+            .unwrap();
+    }
+
+    async fn drop_it(self) {
+        self.run(&format!(
+            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+            self.name
+        ))
+        .await;
+    }
+}
+
+/// A session on `url` that has answered one ping, with its ready line.
+fn pinged_session(
+    url: &str,
+) -> (
+    std::process::Child,
+    std::process::ChildStdin,
+    std::sync::mpsc::Receiver<String>,
+) {
+    let fixture = common::write_fixture("session_fixture", FIXTURE);
+    let mut child = Command::new(common::bin())
+        .arg("session")
+        .arg(&fixture.path)
+        .args(["--database-url", url])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let recv = lines_of(&mut child);
+    let ready: serde_json::Value = serde_json::from_str(
+        &recv
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap(),
+    )
+    .unwrap();
+    let pong = answer(&mut stdin, &recv, &serde_json::json!({"op": "ping"}));
+    assert_eq!(pong, ready, "a ping answers with the ready line");
+    (child, stdin, recv)
+}
+
+/// Ping, then wait for the session to end without answering. An answer
+/// or a hang is the error.
+fn ping_expecting_abort(
+    mut child: std::process::Child,
+    mut stdin: std::process::ChildStdin,
+    recv: &std::sync::mpsc::Receiver<String>,
+) -> Result<(), String> {
+    writeln!(stdin, r#"{{"op":"ping"}}"#).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    loop {
+        if let Ok(line) = recv.try_recv() {
+            child.kill().unwrap();
+            return Err(format!(
+                "the session answered a ping it could not make: {line}"
+            ));
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            if status.success() {
+                return Err("the session exited 0 on a failed ping".to_string());
+            }
+            let leftover: Vec<String> = recv.try_iter().collect();
+            return match leftover.is_empty() {
+                true => Ok(()),
+                false => Err(format!("no answer to the ping; got {leftover:?}")),
+            };
+        }
+        if std::time::Instant::now() > deadline {
+            child.kill().unwrap();
+            return Err("the session hung on a failed ping".to_string());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// A ping reaches the database, so a session whose database stops
+/// accepting connections aborts on it rather than answering. Ending the
+/// session's connection alone is not enough, because the pool reconnects;
+/// the database is also closed to new ones.
+#[tokio::test]
+async fn a_ping_aborts_the_session_when_the_database_is_unreachable() {
+    let db = OwnDatabase::new("ping_closed").await;
+    let (child, stdin, recv) = pinged_session(&db.url);
+    db.run(&format!(
+        "ALTER DATABASE {} ALLOW_CONNECTIONS false",
+        db.name
+    ))
+    .await;
+    db.run(&format!(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{}'",
+        db.name
+    ))
+    .await;
+    let outcome = ping_expecting_abort(child, stdin, &recv);
+    db.drop_it().await;
+    outcome.unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// A ping also checks the schema, so a database migrated past this binary
+/// under a running session aborts it on the next ping.
+#[tokio::test]
+async fn a_ping_aborts_the_session_when_the_database_moved_past_its_binary() {
+    let db = OwnDatabase::new("ping_ahead").await;
+    let (child, stdin, recv) = pinged_session(&db.url);
+    let pool = morpholog_postgres::PgPool::connect(&db.url).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO morpholog.schema_migrations (version, name) \
+         VALUES (9999, 'from_a_later_binary')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+    let outcome = ping_expecting_abort(child, stdin, &recv);
+    db.drop_it().await;
+    outcome.unwrap_or_else(|e| panic!("{e}"));
 }

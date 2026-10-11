@@ -1191,6 +1191,7 @@ pub struct morpholog_postgres::AuditTail<'p>
 impl morpholog_postgres::AuditTail<'_>
 pub fn morpholog_postgres::AuditTail<'_>::mentioning(self, &str) -> core::result::Result<Self, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::AuditTail<'_>::next_page(&mut self) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::AuditTail<'_>::next_page_up_to(&mut self, usize) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
 impl<'p> core::marker::Freeze for morpholog_postgres::AuditTail<'p>
 impl<'p> core::marker::Send for morpholog_postgres::AuditTail<'p>
 impl<'p> core::marker::Sync for morpholog_postgres::AuditTail<'p>

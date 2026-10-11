@@ -24,20 +24,6 @@ fn cli(args: &[&str]) -> (std::process::ExitStatus, String, String) {
 }
 
 /// The same connection URL, pointing at another database.
-fn with_database(url: &str, name: &str) -> String {
-    let (base, query) = url
-        .split_once('?')
-        .map_or((url, None), |(b, q)| (b, Some(q)));
-    let swapped = match base.rsplit_once('/') {
-        Some((prefix, _)) => format!("{prefix}/{name}"),
-        None => base.to_string(),
-    };
-    match query {
-        Some(q) => format!("{swapped}?{q}"),
-        None => swapped,
-    }
-}
-
 async fn run(pool: &PgPool, sql: &str) {
     sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string()))
         .execute(pool)
@@ -97,14 +83,14 @@ async fn init_refuses_held_roles_and_migrate_warns_about_shared_ones() {
         return;
     };
     let base = morpholog_postgres::with_default_user(&base);
-    let admin = PgPool::connect(&with_database(&base, "postgres"))
+    let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await
         .unwrap();
     clean(&admin).await;
     for db in DATABASES {
         run(&admin, &format!("CREATE DATABASE {db}")).await;
     }
-    let [a, b, c] = DATABASES.map(|db| with_database(&base, db));
+    let [a, b, c] = DATABASES.map(|db| common::with_database(&base, db));
     let prefix = "morpholog_ci_cli_roles_";
 
     let (status, stdout, stderr) = cli(&[
@@ -193,7 +179,7 @@ async fn a_reset_binds_again_only_the_roles_the_database_recorded() {
         return;
     };
     let base = morpholog_postgres::with_default_user(&base);
-    let admin = PgPool::connect(&with_database(&base, "postgres"))
+    let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await
         .unwrap();
     let (kept, bare) = ("morpholog_ci_cli_reset_a", "morpholog_ci_cli_reset_b");
@@ -218,7 +204,10 @@ async fn a_reset_binds_again_only_the_roles_the_database_recorded() {
     for db in [kept, bare] {
         run(&admin, &format!("CREATE DATABASE {db}")).await;
     }
-    let (kept_url, bare_url) = (with_database(&base, kept), with_database(&base, bare));
+    let (kept_url, bare_url) = (
+        common::with_database(&base, kept),
+        common::with_database(&base, bare),
+    );
     let reset = |url: &str, prefix: &str| {
         cli(&[
             "init",
@@ -315,7 +304,7 @@ async fn a_reset_of_a_database_older_than_the_role_record_refuses_first() {
         return;
     };
     let base = morpholog_postgres::with_default_user(&base);
-    let admin = PgPool::connect(&with_database(&base, "postgres"))
+    let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await
         .unwrap();
     let db = "morpholog_ci_cli_old";
@@ -330,7 +319,7 @@ async fn a_reset_of_a_database_older_than_the_role_record_refuses_first() {
     };
     clean().await;
     run(&admin, &format!("CREATE DATABASE {db}")).await;
-    let url = with_database(&base, db);
+    let url = common::with_database(&base, db);
     let (status, _, stderr) = cli(&[
         "init",
         "--least-privilege",
@@ -409,7 +398,7 @@ async fn least_privilege_without_createrole_refuses_before_any_change() {
         return;
     };
     let base = morpholog_postgres::with_default_user(&base);
-    let admin = PgPool::connect(&with_database(&base, "postgres"))
+    let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await
         .unwrap();
     let db = "morpholog_ci_cli_nocr";
@@ -426,7 +415,7 @@ async fn least_privilege_without_createrole_refuses_before_any_change() {
     run(&admin, &format!("CREATE ROLE {owner} NOLOGIN NOCREATEROLE")).await;
     run(&admin, &format!("CREATE DATABASE {db} OWNER {owner}")).await;
     // The binary acts as the owner, which may not create roles.
-    let url = with_database(&base, db);
+    let url = common::with_database(&base, db);
     let joiner = if url.contains('?') { '&' } else { '?' };
     let as_owner = format!("{url}{joiner}options[role]={owner}");
     let provision = |reset: bool| {
@@ -450,7 +439,9 @@ async fn least_privilege_without_createrole_refuses_before_any_change() {
         stderr.contains("may not create roles") && stderr.contains("nothing was provisioned"),
         "{stderr}"
     );
-    let pool = PgPool::connect(&with_database(&base, db)).await.unwrap();
+    let pool = PgPool::connect(&common::with_database(&base, db))
+        .await
+        .unwrap();
     let schema = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'morpholog')",
     )
@@ -485,7 +476,7 @@ async fn a_reset_never_recreates_a_missing_recorded_role() {
         return;
     };
     let base = morpholog_postgres::with_default_user(&base);
-    let admin = PgPool::connect(&with_database(&base, "postgres"))
+    let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await
         .unwrap();
     let db = "morpholog_ci_cli_gone";
@@ -503,7 +494,7 @@ async fn a_reset_never_recreates_a_missing_recorded_role() {
     };
     clean().await;
     run(&admin, &format!("CREATE DATABASE {db}")).await;
-    let url = with_database(&base, db);
+    let url = common::with_database(&base, db);
     let (status, _, stderr) = cli(&[
         "init",
         "--least-privilege",

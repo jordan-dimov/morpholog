@@ -141,6 +141,18 @@
       "type": "array",
       "items": { "$ref": "#/$defs/named_claim" }
     },
+    "audit_row_array": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/audit_row" }
+    },
+    "audit_row_named_array": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/audit_row_named" }
+    },
+    "rejection_row_array": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/rejection_row" }
+    },
     "committed": {
       "type": "object",
       "additionalProperties": false,

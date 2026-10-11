@@ -764,6 +764,12 @@ against, so a binary serving other rules is refused at the handshake
 rather than part-way through a run. Constructing `Session` directly
 is the lower-level escape hatch for a deliberately unpinned open.
 
+`open_session` raises `MorphologError` when the binary cannot start or
+its handshake cannot be trusted. Handle that on purpose, and never
+switch to one-shot calls without saying so: after a proposal whose
+outcome is unknown, a quiet fallback can submit the same proposal
+twice.
+
 **The protocol is lockstep.** One request line in, one response line
 out, strictly in order, no correlation ids. The first line out -
 unprompted - is the ready line (`session_ready` in the pinned
@@ -795,10 +801,44 @@ parameters. Unknown fields are refused, not ignored - a misspelt
 - `{"op": "transact", "acts": [...]}` - several proposals as one
   decision (the section above), answered with the atomic outcome plus
   `row`.
+- `{"op": "audit", "after"?: ..., "named"?: true, "mentions"?: ...,
+  "writer_roles"?: [...], "limit"?: n}` - the audit tail, answered
+  with an array of `audit_row` (or `audit_row_named`).
+- `{"op": "rejections", "limit"?: n, "mentions"?: ...}` - the
+  rejection log, newest first, answered with an array of
+  `rejection_row`. The default limit is 100, as on the one-shot read.
+- `{"op": "ping"}` - a database check, answered with the ready line
+  again.
 
-The streaming reads stay one-shot commands: the audit tail holds a
-read transaction open and coverage replays the whole log under a
-deferrable snapshot - neither fits a lockstep wire.
+**The audit read is the one-shot tail, answered whole.** Each request
+opens its own tail, so the horizon and the lossless resume work as in
+`inspect audit`: rows of writers still in flight are held back for a
+later request, never skipped. The difference is the answer. The
+one-shot command streams one line per row; the session returns one
+array. So a resident loop passes `limit` and resumes `after` the last
+row it got. The session reads no more rows from the database than the
+limit asks for. A full page does not mean more rows are waiting, and a
+short one does not mean the tail is done: read until an answer is
+empty. A database that cannot give a sound horizon (hidden sessions,
+an incomplete writer set) aborts the session, because an empty answer
+would read as "nothing happened". Coverage stays a one-shot command:
+it replays the whole log.
+
+**A ping proves the database answered, not that the next commit
+will.** It reads the database's recorded migrations and checks they
+still suit the binary, so a migration under a running session shows up
+on the next ping. That is a few small queries, not one. The connection pool reconnects on its own after a dropped
+connection, so a ping that answers says the database was reachable
+just now. One that cannot reach it ends the session like any
+operational failure. The generated client's `ping()` checks the
+answer against the handshake and poisons the session if they differ.
+
+**New requests do not move the protocol number.** `protocol` changes
+when an existing exchange changes meaning. A request added to the
+session leaves it alone: an older client never sends the new request,
+and an older binary answers it with `unknown_operation`. The pinned
+`open_session` refuses a binary of another version at the handshake
+anyway.
 
 **Per-request failure is a coded receipt; operational failure aborts.**
 A malformed line, an unknown operation or transformation, undecodable
