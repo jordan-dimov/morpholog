@@ -25,8 +25,8 @@ use morpholog_core::ir_builder::{
 };
 use morpholog_core::{
     BatchScore, CandidateScorer, CaseOutcome, CaseResult, ClaimInstance, Compared, CoverageTracker,
-    EvalValue, IntentInstance, SplitBoundaryReport, State, Subject, Transition, WitnessBinding,
-    effective_delta,
+    EvalValue, IntentInstance, RefusalKind, SplitBoundaryReport, State, Subject, Transition,
+    WitnessBinding, effective_delta,
 };
 use morpholog_postgres::{
     AtomicAct, AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, CheckpointWitnesses,
@@ -1345,9 +1345,26 @@ fn coverage_report_serializes_as_pinned() {
     tracker
         .observe(&with_ref, &with_ref, &delta_flag, "t2", "renamed_long_ago")
         .unwrap();
-    tracker.observe_rejection(Some("no_flagged_accounts"), "flag_account", "r1");
-    tracker.observe_rejection(None, "open_account", "r2");
-    tracker.observe_rejection(Some("retired_rule"), "renamed_long_ago", "r3");
+    tracker.observe_rejection(
+        RefusalKind::Invariant,
+        "no_flagged_accounts",
+        "flag_account",
+        "r1",
+    );
+    tracker.observe_rejection(RefusalKind::Require, "has_account", "open_account", "r2");
+    tracker.observe_rejection(
+        RefusalKind::Invariant,
+        "retired_rule",
+        "renamed_long_ago",
+        "r3",
+    );
+    // An unnamed gate is recorded by its rendered expression.
+    tracker.observe_rejection(
+        RefusalKind::Bind,
+        "Account(account_id)",
+        "flag_account",
+        "r4",
+    );
     assert_golden("coverage_report.json", &to_value(&tracker.into_report()));
 }
 

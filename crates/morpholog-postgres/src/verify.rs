@@ -4,14 +4,15 @@ use crate::audit_pages::{ReplayPages, ReplayRow};
 use crate::checkpoints::TreeVerification;
 use crate::claims::decode_claim_rows;
 use crate::error::{PgError, classify, classify_checked_query};
-use crate::propose::REJECTION_KIND_INVARIANT;
+use crate::propose::{REJECTION_KIND_BIND, REJECTION_KIND_INVARIANT, REJECTION_KIND_REQUIRE};
 use crate::role_rebindings::RoleRebindings;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use crate::witnesses::WitnessesReport;
 use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
 use morpholog_core::{
-    ClaimInstance, CoverageReport, CoverageTracker, PredicateName, State, ValidatedProgram,
+    ClaimInstance, CoverageReport, CoverageTracker, PredicateName, RefusalKind, State,
+    ValidatedProgram,
 };
 use serde::Serialize;
 use sqlx::PgPool;
@@ -352,9 +353,20 @@ pub async fn coverage_replay(
         rej_cursor = Some((last.rejected_at, last.rejection_id));
         let exhausted = (rows.len() as i64) < REPLAY_CHUNK;
         for row in rows {
-            let invariant = (row.kind == REJECTION_KIND_INVARIANT).then_some(row.rule.as_str());
+            let kind = match row.kind.as_str() {
+                REJECTION_KIND_INVARIANT => RefusalKind::Invariant,
+                REJECTION_KIND_REQUIRE => RefusalKind::Require,
+                REJECTION_KIND_BIND => RefusalKind::Bind,
+                other => {
+                    return Err(PgError::InvalidState(format!(
+                        "rejection {} records kind `{other}`, which this binary does not know",
+                        row.rejection_id
+                    )));
+                }
+            };
             tracker.observe_rejection(
-                invariant,
+                kind,
+                &row.rule,
                 &row.transformation_name,
                 &row.rejection_id.to_string(),
             );

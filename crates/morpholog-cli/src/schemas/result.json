@@ -927,6 +927,20 @@
               "first": { "type": "string" },
               "last": { "type": "string" },
               "proposals_refused": { "type": "integer", "minimum": 1 },
+              "refusals": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "rule", "proposals_refused"],
+                  "properties": {
+                    "kind": { "enum": ["require", "bind", "invariant"] },
+                    "rule": { "type": "string" },
+                    "proposals_refused": { "type": "integer", "minimum": 1 }
+                  }
+                }
+              },
               "not_in_programme": { "type": "boolean" }
             }
           }

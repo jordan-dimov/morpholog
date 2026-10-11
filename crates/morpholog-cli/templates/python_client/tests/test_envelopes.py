@@ -618,7 +618,7 @@ class Coverage(unittest.TestCase):
     def test_the_coverage_report_round_trips_the_golden(self):
         report = envelopes.CoverageReport.from_json(golden("coverage_report.json"))
         self.assertEqual(report.transitions_replayed, 2)
-        self.assertEqual(report.rejections_replayed, 3)
+        self.assertEqual(report.rejections_replayed, 4)
         fired = report.invariants[0]
         self.assertEqual(fired.verdict, "fired")
         self.assertEqual(fired.first_fired, "t1")
@@ -654,6 +654,30 @@ class Coverage(unittest.TestCase):
             t for t in report.transformations if t.transformation == "renamed_long_ago"
         )
         self.assertTrue(drifted.not_in_programme)
+        flagged = next(
+            t for t in report.transformations if t.transformation == "flag_account"
+        )
+        self.assertEqual(
+            [(c.kind, c.rule, c.proposals_refused) for c in flagged.refusals],
+            [("bind", "Account(account_id)", 1), ("invariant", "no_flagged_accounts", 1)],
+        )
+        self.assertEqual(
+            sum(c.proposals_refused for c in flagged.refusals), flagged.proposals_refused
+        )
+
+    def test_a_report_without_refusal_causes_still_reads(self):
+        # What a binary from before the field prints.
+        payload = golden("coverage_report.json")
+        for usage in payload["transformations"]:
+            usage.pop("refusals", None)
+        report = envelopes.CoverageReport.from_json(payload)
+        self.assertTrue(all(t.refusals == [] for t in report.transformations))
+
+    def test_an_unknown_refusal_cause_key_raises(self):
+        payload = golden("coverage_report.json")
+        payload["transformations"][0]["refusals"][0]["surprise"] = 1
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.CoverageReport.from_json(payload)
 
 
 class RefreshDerived(unittest.TestCase):

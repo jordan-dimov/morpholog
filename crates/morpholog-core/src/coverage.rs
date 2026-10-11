@@ -23,7 +23,10 @@
 //! antecedent" verdict; proving a condition can never match is a static
 //! question this module does not ask.
 //!
-//! Coverage measures today's rules over the whole history.
+//! Coverage measures today's rules over the whole history of the
+//! database, whichever programme wrote it. Refusals are attributed by the
+//! names the rejection log recorded, so a matching name does not prove
+//! today's declaration did the refusing.
 //!
 //! Classification looks through definition calls, so an implication behind
 //! a named condition still counts. An antecedent inside a definition is
@@ -95,6 +98,35 @@ fn is_zero(n: &u64) -> bool {
     *n == 0
 }
 
+/// Which kind of rule refused a proposal, as the rejection log records it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefusalKind {
+    Require,
+    Bind,
+    Invariant,
+}
+
+impl RefusalKind {
+    fn word(self) -> &'static str {
+        match self {
+            RefusalKind::Require => "require",
+            RefusalKind::Bind => "bind",
+            RefusalKind::Invariant => "invariant",
+        }
+    }
+}
+
+/// The refusals of one transformation by one rule. For a gate, `rule` is
+/// its name, or its rendered expression if it had none; the rejection log
+/// does not record which.
+#[derive(Debug, Clone, Serialize)]
+pub struct RefusalCause {
+    pub kind: RefusalKind,
+    pub rule: String,
+    pub proposals_refused: u64,
+}
+
 /// Usage of one transformation over the replayed history. Declared
 /// transformations appear even when never used. A name seen in history but
 /// no longer declared appears too, flagged.
@@ -110,6 +142,10 @@ pub struct TransformationUsage {
     /// gates or by any invariant.
     #[serde(skip_serializing_if = "is_zero")]
     pub proposals_refused: u64,
+    /// What refused them, ordered by kind, then rule; the counts sum to
+    /// `proposals_refused`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub refusals: Vec<RefusalCause>,
     /// True when history names a transformation the current programme
     /// no longer declares.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -186,7 +222,30 @@ struct Usage {
     transitions: u64,
     first: Option<String>,
     last: Option<String>,
-    proposals_refused: u64,
+    refusals: BTreeMap<(RefusalKind, String), u64>,
+}
+
+impl Usage {
+    fn into_entry(self, transformation: String, not_in_programme: bool) -> TransformationUsage {
+        let refusals: Vec<RefusalCause> = self
+            .refusals
+            .into_iter()
+            .map(|((kind, rule), proposals_refused)| RefusalCause {
+                kind,
+                rule,
+                proposals_refused,
+            })
+            .collect();
+        TransformationUsage {
+            transformation,
+            transitions: self.transitions,
+            first: self.first,
+            last: self.last,
+            proposals_refused: refusals.iter().map(|c| c.proposals_refused).sum(),
+            refusals,
+            not_in_programme,
+        }
+    }
 }
 
 /// Accumulates coverage over a transition-by-transition replay.
@@ -280,29 +339,34 @@ impl<'p> CoverageTracker<'p> {
         }
     }
 
-    /// Record one rejection-log row. Counts only; evaluates nothing.
+    /// Record one rejection-log row, with the kind and rule it recorded.
+    /// Counts only; evaluates nothing.
     ///
-    /// `invariant` names the refusing invariant, or is `None` for a gate
-    /// (`require` / `bind`) refusal. A gate refusal counts for the
-    /// transformation only; an invariant refusal counts for both. Unknown
-    /// invariant names are kept separately and reported flagged.
+    /// Every refusal counts for its transformation, by kind and rule. An
+    /// invariant refusal counts for the invariant of that name too; an
+    /// invariant name the programme does not declare is kept separately
+    /// and reported flagged.
     pub fn observe_rejection(
         &mut self,
-        invariant: Option<&str>,
+        kind: RefusalKind,
+        rule: &str,
         transformation: &str,
         rejection_id: &str,
     ) {
         self.rejections += 1;
-        self.usage
+        *self
+            .usage
             .entry(transformation.to_string())
             .or_default()
-            .proposals_refused += 1;
-        if let Some(name) = invariant {
-            if let Some(&i) = self.entry_index.get(name) {
+            .refusals
+            .entry((kind, rule.to_string()))
+            .or_default() += 1;
+        if kind == RefusalKind::Invariant {
+            if let Some(&i) = self.entry_index.get(rule) {
                 self.entries[i].refusals.record(rejection_id);
             } else {
                 self.unmatched_refusals
-                    .entry(name.to_string())
+                    .entry(rule.to_string())
                     .or_default()
                     .record(rejection_id);
             }
@@ -437,25 +501,11 @@ impl<'p> CoverageTracker<'p> {
         let mut transformations = Vec::new();
         for name in &self.declared_transformations {
             let usage = self.usage.remove(name).unwrap_or_default();
-            transformations.push(TransformationUsage {
-                transformation: name.clone(),
-                transitions: usage.transitions,
-                first: usage.first,
-                last: usage.last,
-                proposals_refused: usage.proposals_refused,
-                not_in_programme: false,
-            });
+            transformations.push(usage.into_entry(name.clone(), false));
         }
         // Whatever remains was seen in history but is not declared today.
         for (name, usage) in self.usage {
-            transformations.push(TransformationUsage {
-                transformation: name,
-                transitions: usage.transitions,
-                first: usage.first,
-                last: usage.last,
-                proposals_refused: usage.proposals_refused,
-                not_in_programme: true,
-            });
+            transformations.push(usage.into_entry(name, true));
         }
 
         CoverageReport {
@@ -478,88 +528,61 @@ pub fn render_coverage(report: &CoverageReport) -> String {
     );
 
     out.push_str("\ninvariants:\n");
-    for inv in &report.invariants {
-        match inv.verdict {
-            CoverageVerdict::Constrained => {
+    for inv in report.invariants.iter().filter(|i| !i.not_in_programme) {
+        render_invariant(&mut out, inv);
+    }
+    out.push_str("\ntransformations:\n");
+    for t in report
+        .transformations
+        .iter()
+        .filter(|t| !t.not_in_programme)
+    {
+        render_transformation(&mut out, t);
+    }
+
+    let undeclared_invariants: Vec<_> = report
+        .invariants
+        .iter()
+        .filter(|i| i.not_in_programme)
+        .collect();
+    let undeclared_transformations: Vec<_> = report
+        .transformations
+        .iter()
+        .filter(|t| t.not_in_programme)
+        .collect();
+    if !undeclared_invariants.is_empty() || !undeclared_transformations.is_empty() {
+        out.push_str(
+            "\nnames in history that this programme does not declare:\n  They may belong \
+             to another programme on this database or to an earlier version of this one; \
+             the record cannot tell which.\n",
+        );
+        if !undeclared_invariants.is_empty() {
+            out.push_str("\n  invariants:\n");
+            for inv in undeclared_invariants {
                 out.push_str(&format!(
-                    "\n  {} - CONSTRAINED: refused {} proposal(s); the rule has \
-                     demonstrably done its job\n",
+                    "\n    {} - refused {} proposal(s)\n",
                     inv.invariant, inv.proposals_refused
                 ));
                 if let (Some(first), Some(last)) = (&inv.first_refused, &inv.last_refused) {
                     out.push_str(&format!(
-                        "    first refusal: {first}\n    last refusal:  {last}\n"
+                        "      first refusal: {first}\n      last refusal:  {last}\n"
                     ));
                 }
-                if inv.transitions_fired > 0 {
-                    out.push_str(&format!(
-                        "    also fired in {} committed transition(s)\n",
-                        inv.transitions_fired
-                    ));
-                }
-                if inv.not_in_programme {
-                    out.push_str(
-                        "    note: appears in the rejection log but the current programme \
-                         does not declare it\n",
-                    );
-                }
             }
-            CoverageVerdict::Fired => {
-                out.push_str(&format!(
-                    "\n  {} - fired in {} transition(s)\n",
-                    inv.invariant, inv.transitions_fired
-                ));
-                if let (Some(first), Some(last)) = (&inv.first_fired, &inv.last_fired) {
-                    out.push_str(&format!("    first: {first}\n    last:  {last}\n"));
+        }
+        if !undeclared_transformations.is_empty() {
+            out.push_str("\n  transformations:\n");
+            for t in undeclared_transformations {
+                let mut entry = String::new();
+                render_transformation(&mut entry, t);
+                for line in entry.lines() {
+                    if !line.is_empty() {
+                        out.push_str("  ");
+                    }
+                    out.push_str(line);
+                    out.push('\n');
                 }
             }
-            CoverageVerdict::NeverFired => {
-                out.push_str(&format!(
-                    "\n  {} - NEVER FIRED: its condition never matched anything across \
-                     the whole history; the rule has not yet done any work\n",
-                    inv.invariant
-                ));
-            }
-            CoverageVerdict::AlwaysOn => {
-                out.push_str(&format!(
-                    "\n  {} - always on: holds over every committed state; no recorded \
-                     refusals yet\n",
-                    inv.invariant
-                ));
-            }
-        }
-        if let Some(from) = &inv.from {
-            out.push_str(&format!("    from: {from}\n"));
-        }
-    }
-
-    out.push_str("\ntransformations:\n");
-    for t in &report.transformations {
-        if t.transitions == 0 && t.proposals_refused == 0 {
-            out.push_str(&format!("\n  {} - never used\n", t.transformation));
-        } else if t.transitions == 0 {
-            // Only ever refused: "0 transition(s)" would read as never
-            // proposed.
-            out.push_str(&format!(
-                "\n  {} - never committed a transition\n",
-                t.transformation
-            ));
-        } else {
-            out.push_str(&format!(
-                "\n  {} - {} transition(s)\n",
-                t.transformation, t.transitions
-            ));
-        }
-        if t.proposals_refused > 0 {
-            out.push_str(&format!(
-                "    refused: {} proposal(s)\n",
-                t.proposals_refused
-            ));
-        }
-        if t.not_in_programme {
-            out.push_str(
-                "    note: appears in history but the current programme does not declare it\n",
-            );
         }
     }
 
@@ -571,7 +594,93 @@ pub fn render_coverage(report: &CoverageReport) -> String {
          real records and the rule was genuinely evaluated (but never refused); \
          `never fired` means it has only ever been trivially true. Replay cannot \
          prove a condition could never match (that is static analysis, not replay). \
-         Coverage evaluates the current programme's rules over the recorded history.",
+         Coverage evaluates the current programme's rules over the whole history of \
+         the database, whichever programme wrote it. Refusals are attributed by the \
+         rule and transformation names the rejection log recorded, so a matching name \
+         does not prove that today's declaration did the refusing. A gate's recorded \
+         rule is its name, or its expression if it had none; the log does not say \
+         which.",
     );
     out
+}
+
+fn render_invariant(out: &mut String, inv: &InvariantCoverage) {
+    match inv.verdict {
+        CoverageVerdict::Constrained => {
+            out.push_str(&format!(
+                "\n  {} - CONSTRAINED: refused {} proposal(s); the rule has \
+                 demonstrably done its job\n",
+                inv.invariant, inv.proposals_refused
+            ));
+            if let (Some(first), Some(last)) = (&inv.first_refused, &inv.last_refused) {
+                out.push_str(&format!(
+                    "    first refusal: {first}\n    last refusal:  {last}\n"
+                ));
+            }
+            if inv.transitions_fired > 0 {
+                out.push_str(&format!(
+                    "    also fired in {} committed transition(s)\n",
+                    inv.transitions_fired
+                ));
+            }
+        }
+        CoverageVerdict::Fired => {
+            out.push_str(&format!(
+                "\n  {} - fired in {} transition(s)\n",
+                inv.invariant, inv.transitions_fired
+            ));
+            if let (Some(first), Some(last)) = (&inv.first_fired, &inv.last_fired) {
+                out.push_str(&format!("    first: {first}\n    last:  {last}\n"));
+            }
+        }
+        CoverageVerdict::NeverFired => {
+            out.push_str(&format!(
+                "\n  {} - NEVER FIRED: its condition never matched anything across \
+                 the whole history; the rule has not yet done any work\n",
+                inv.invariant
+            ));
+        }
+        CoverageVerdict::AlwaysOn => {
+            out.push_str(&format!(
+                "\n  {} - always on: holds over every committed state; no recorded \
+                 refusals yet\n",
+                inv.invariant
+            ));
+        }
+    }
+    if let Some(from) = &inv.from {
+        out.push_str(&format!("    from: {from}\n"));
+    }
+}
+
+fn render_transformation(out: &mut String, t: &TransformationUsage) {
+    if t.transitions == 0 && t.proposals_refused == 0 {
+        out.push_str(&format!("\n  {} - never used\n", t.transformation));
+    } else if t.transitions == 0 {
+        // Only ever refused: "0 transition(s)" would read as never
+        // proposed.
+        out.push_str(&format!(
+            "\n  {} - never committed a transition\n",
+            t.transformation
+        ));
+    } else {
+        out.push_str(&format!(
+            "\n  {} - {} transition(s)\n",
+            t.transformation, t.transitions
+        ));
+    }
+    if t.proposals_refused > 0 {
+        out.push_str(&format!(
+            "    refused: {} proposal(s)\n",
+            t.proposals_refused
+        ));
+        for cause in &t.refusals {
+            out.push_str(&format!(
+                "      {} `{}`: {}\n",
+                cause.kind.word(),
+                cause.rule,
+                cause.proposals_refused
+            ));
+        }
+    }
 }

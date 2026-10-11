@@ -879,6 +879,33 @@ impl core::marker::Unpin for morpholog_core::ReadFilter
 impl core::marker::UnsafeUnpin for morpholog_core::ReadFilter
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::ReadFilter
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::ReadFilter
+pub enum morpholog_core::RefusalKind
+pub morpholog_core::RefusalKind::Bind
+pub morpholog_core::RefusalKind::Invariant
+pub morpholog_core::RefusalKind::Require
+impl core::clone::Clone for morpholog_core::RefusalKind
+pub fn morpholog_core::RefusalKind::clone(&self) -> morpholog_core::RefusalKind
+impl core::clone::TrivialClone for morpholog_core::RefusalKind
+impl core::cmp::Eq for morpholog_core::RefusalKind
+impl core::cmp::Ord for morpholog_core::RefusalKind
+pub fn morpholog_core::RefusalKind::cmp(&self, &morpholog_core::RefusalKind) -> core::cmp::Ordering
+impl core::cmp::PartialEq for morpholog_core::RefusalKind
+pub fn morpholog_core::RefusalKind::eq(&self, &morpholog_core::RefusalKind) -> bool
+impl core::cmp::PartialOrd for morpholog_core::RefusalKind
+pub fn morpholog_core::RefusalKind::partial_cmp(&self, &morpholog_core::RefusalKind) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for morpholog_core::RefusalKind
+pub fn morpholog_core::RefusalKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_core::RefusalKind
+impl core::marker::StructuralPartialEq for morpholog_core::RefusalKind
+impl serde_core::ser::Serialize for morpholog_core::RefusalKind
+pub fn morpholog_core::RefusalKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::RefusalKind
+impl core::marker::Send for morpholog_core::RefusalKind
+impl core::marker::Sync for morpholog_core::RefusalKind
+impl core::marker::Unpin for morpholog_core::RefusalKind
+impl core::marker::UnsafeUnpin for morpholog_core::RefusalKind
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::RefusalKind
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::RefusalKind
 pub enum morpholog_core::Rejection
 pub morpholog_core::Rejection::Error(morpholog_core::ErrorRejection)
 pub morpholog_core::Rejection::Gate(morpholog_core::GateRejection)
@@ -1766,7 +1793,7 @@ pub fn morpholog_core::CoverageTracker<'p>::into_report(self) -> morpholog_core:
 pub fn morpholog_core::CoverageTracker<'p>::needs_pre_state(&self) -> bool
 pub fn morpholog_core::CoverageTracker<'p>::new(morpholog_core::ValidatedProgram<'p>) -> Self
 pub fn morpholog_core::CoverageTracker<'p>::observe(&mut self, &morpholog_core::State, &morpholog_core::State, &alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>, &str, &str) -> core::result::Result<(), morpholog_core::EvalError>
-pub fn morpholog_core::CoverageTracker<'p>::observe_rejection(&mut self, core::option::Option<&str>, &str, &str)
+pub fn morpholog_core::CoverageTracker<'p>::observe_rejection(&mut self, morpholog_core::RefusalKind, &str, &str, &str)
 impl<'p> core::marker::Freeze for morpholog_core::CoverageTracker<'p>
 impl<'p> core::marker::Send for morpholog_core::CoverageTracker<'p>
 impl<'p> core::marker::Sync for morpholog_core::CoverageTracker<'p>
@@ -2578,6 +2605,23 @@ impl core::marker::Unpin for morpholog_core::ReadPlan
 impl core::marker::UnsafeUnpin for morpholog_core::ReadPlan
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::ReadPlan
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::ReadPlan
+pub struct morpholog_core::RefusalCause
+pub morpholog_core::RefusalCause::kind: morpholog_core::RefusalKind
+pub morpholog_core::RefusalCause::proposals_refused: u64
+pub morpholog_core::RefusalCause::rule: alloc::string::String
+impl core::clone::Clone for morpholog_core::RefusalCause
+pub fn morpholog_core::RefusalCause::clone(&self) -> morpholog_core::RefusalCause
+impl core::fmt::Debug for morpholog_core::RefusalCause
+pub fn morpholog_core::RefusalCause::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::RefusalCause
+pub fn morpholog_core::RefusalCause::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::RefusalCause
+impl core::marker::Send for morpholog_core::RefusalCause
+impl core::marker::Sync for morpholog_core::RefusalCause
+impl core::marker::Unpin for morpholog_core::RefusalCause
+impl core::marker::UnsafeUnpin for morpholog_core::RefusalCause
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::RefusalCause
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::RefusalCause
 pub struct morpholog_core::RenderedClaim
 pub morpholog_core::RenderedClaim::predicate: alloc::string::String
 pub morpholog_core::RenderedClaim::rendered: alloc::string::String
@@ -2877,6 +2921,7 @@ pub morpholog_core::TransformationUsage::first: core::option::Option<alloc::stri
 pub morpholog_core::TransformationUsage::last: core::option::Option<alloc::string::String>
 pub morpholog_core::TransformationUsage::not_in_programme: bool
 pub morpholog_core::TransformationUsage::proposals_refused: u64
+pub morpholog_core::TransformationUsage::refusals: alloc::vec::Vec<morpholog_core::RefusalCause>
 pub morpholog_core::TransformationUsage::transformation: alloc::string::String
 pub morpholog_core::TransformationUsage::transitions: u64
 impl core::clone::Clone for morpholog_core::TransformationUsage
