@@ -1,7 +1,9 @@
 //! Integration tests for the approval controls example
 //! (`examples/04_approval_controls/`).
 //!
-//! One section per authority shape:
+//! A document is put on the record once, with its kind and, if it is about
+//! money, its amount. An approver names only the document; the record
+//! supplies the rest and decides the route.
 //!
 //! - **Unconditional** (`MayApprove`, `approve_document`): the actor is
 //!   consulted via `Term::Actor`, no grant means rejection, the `Approval`
@@ -12,8 +14,9 @@
 //!   amount-against-limit, the boundary, stacked grants, per-doc-type scope,
 //!   and an ill-typed limit.
 //!
-//! Plus kernel checks: `Term::Actor` in an invariant raises `UnboundActor`,
-//! whatever its argument position.
+//! - **The route**: a document with an amount cannot take the unconditional
+//!   route, and no sequence of submissions can give a document an amount, or
+//!   take one away, after it is registered.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -45,67 +48,114 @@ fn grant_limit(state: State, actor: &str, doc_type: &str, limit: i64) -> State {
     )
 }
 
+fn submit(state: State, doc_id: &str, doc_type: &str) -> State {
+    ex().must_accept(
+        &approval_controls::submit_document(),
+        vec![subj(doc_id), subj(doc_type)],
+        state,
+    )
+}
+
+fn submit_amount(state: State, doc_id: &str, doc_type: &str, amount: i64) -> State {
+    ex().must_accept(
+        &approval_controls::submit_monetary_document(),
+        vec![subj(doc_id), subj(doc_type), dec(amount)],
+        state,
+    )
+}
+
+fn approve(state: State, doc_id: &str, actor: &str) -> State {
+    ex().must_accept_as(
+        &approval_controls::approve_document(),
+        vec![subj(doc_id)],
+        actor,
+        state,
+    )
+}
+
+fn approve_within(state: State, doc_id: &str, actor: &str) -> State {
+    ex().must_accept_as(
+        &approval_controls::approve_within_limit(),
+        vec![subj(doc_id)],
+        actor,
+        state,
+    )
+}
+
+fn refuse_approve(state: &State, doc_id: &str, actor: &str) {
+    ex().must_reject_as(
+        &approval_controls::approve_document(),
+        vec![subj(doc_id)],
+        actor,
+        state,
+    );
+}
+
+fn refuse_within(state: &State, doc_id: &str, actor: &str) {
+    ex().must_reject_as(
+        &approval_controls::approve_within_limit(),
+        vec![subj(doc_id)],
+        actor,
+        state,
+    );
+}
+
+/// A vendor onboarding document, which has no amount.
+fn onboarding() -> State {
+    submit(State::default(), "doc_001", "vendor_onboarding")
+}
+
 // ============================================================
 // Unconditional authority
 // ============================================================
 
 #[test]
 fn approve_without_authority_is_rejected_at_require() {
-    let pre = State::default();
     let reason = ex().must_reject_as(
         &approval_controls::approve_document(),
-        vec![subj("doc_001"), subj("vendor_onboarding")],
+        vec![subj("doc_001")],
         "jordan",
-        &pre,
+        &onboarding(),
     );
     assert!(
-        reason.to_string().contains("require"),
+        reason.to_string().contains("MayApprove"),
         "got reason: {reason}"
     );
 }
 
 #[test]
 fn approve_with_authority_carries_proposing_actor_on_asserted_claim() {
-    let pre = grant_authority(State::default(), "jordan", "vendor_onboarding");
-    let post = ex().must_accept_as(
-        &approval_controls::approve_document(),
-        vec![subj("doc_001"), subj("vendor_onboarding")],
-        "jordan",
-        pre,
-    );
+    let pre = grant_authority(onboarding(), "jordan", "vendor_onboarding");
+    let post = approve(pre, "doc_001", "jordan");
     assert!(
         has_claim(
             &post,
             "Approval",
             &[subj("doc_001"), subj("vendor_onboarding"), subj("jordan")],
         ),
-        "Approval must carry the proposing actor as its third arg",
+        "Approval must carry the proposing actor and the recorded kind",
     );
 }
 
 #[test]
 fn approve_uses_proposing_actor_not_a_caller_parameter() {
     // jordan has authority; alice does not. alice cannot approve on
-    // jordan's behalf because $actor binds to the proposing actor,
-    // not to a parameter the caller controls.
+    // jordan's behalf because `actor` is the proposing actor, not a
+    // parameter the caller controls.
+    let pre = grant_authority(onboarding(), "jordan", "vendor_onboarding");
+    refuse_approve(&pre, "doc_001", "alice");
+}
+
+#[test]
+fn an_unregistered_document_cannot_be_approved() {
     let pre = grant_authority(State::default(), "jordan", "vendor_onboarding");
-    ex().must_reject_as(
-        &approval_controls::approve_document(),
-        vec![subj("doc_001"), subj("vendor_onboarding")],
-        "alice",
-        &pre,
-    );
+    refuse_approve(&pre, "doc_001", "jordan");
 }
 
 #[test]
 fn revoked_authority_blocks_future_but_preserves_past() {
-    let pre = grant_authority(State::default(), "jordan", "vendor_onboarding");
-    let after_approval = ex().must_accept_as(
-        &approval_controls::approve_document(),
-        vec![subj("doc_001"), subj("vendor_onboarding")],
-        "jordan",
-        pre,
-    );
+    let pre = grant_authority(onboarding(), "jordan", "vendor_onboarding");
+    let after_approval = approve(pre, "doc_001", "jordan");
     let after_revoke = ex().must_accept(
         &approval_controls::revoke_approval_authority(),
         vec![subj("jordan"), subj("vendor_onboarding")],
@@ -123,12 +173,8 @@ fn revoked_authority_blocks_future_but_preserves_past() {
         "MayApprove",
         &[subj("jordan"), subj("vendor_onboarding")],
     ));
-    ex().must_reject_as(
-        &approval_controls::approve_document(),
-        vec![subj("doc_002"), subj("vendor_onboarding")],
-        "jordan",
-        &after_revoke,
-    );
+    let after_revoke = submit(after_revoke, "doc_002", "vendor_onboarding");
+    refuse_approve(&after_revoke, "doc_002", "jordan");
 }
 
 // ============================================================
@@ -137,23 +183,15 @@ fn revoked_authority_blocks_future_but_preserves_past() {
 
 #[test]
 fn limit_approval_without_grant_is_rejected() {
-    ex().must_reject_as(
-        &approval_controls::approve_within_limit(),
-        vec![subj("inv_001"), subj("invoice"), dec(100)],
-        "jordan",
-        &State::default(),
-    );
+    let pre = submit_amount(State::default(), "inv_001", "invoice", 100);
+    refuse_within(&pre, "inv_001", "jordan");
 }
 
 #[test]
 fn limit_approval_under_limit_commits_with_actor_and_amount() {
     let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
-    let post = ex().must_accept_as(
-        &approval_controls::approve_within_limit(),
-        vec![subj("inv_001"), subj("invoice"), dec(750)],
-        "jordan",
-        pre,
-    );
+    let pre = submit_amount(pre, "inv_001", "invoice", 750);
+    let post = approve_within(pre, "inv_001", "jordan");
     assert!(has_claim(
         &post,
         "LimitedApproval",
@@ -163,14 +201,10 @@ fn limit_approval_under_limit_commits_with_actor_and_amount() {
 
 #[test]
 fn limit_approval_exactly_at_limit_commits() {
-    // Le is inclusive at the boundary.
+    // The ceiling is inclusive.
     let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
-    let post = ex().must_accept_as(
-        &approval_controls::approve_within_limit(),
-        vec![subj("inv_at_limit"), subj("invoice"), dec(1000)],
-        "jordan",
-        pre,
-    );
+    let pre = submit_amount(pre, "inv_at_limit", "invoice", 1000);
+    let post = approve_within(pre, "inv_at_limit", "jordan");
     assert!(has_claim(
         &post,
         "LimitedApproval",
@@ -186,34 +220,21 @@ fn limit_approval_exactly_at_limit_commits() {
 #[test]
 fn limit_approval_above_limit_is_rejected() {
     let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
-    ex().must_reject_as(
-        &approval_controls::approve_within_limit(),
-        vec![subj("inv_over"), subj("invoice"), dec(1001)],
-        "jordan",
-        &pre,
-    );
+    let pre = submit_amount(pre, "inv_over", "invoice", 1001);
+    refuse_within(&pre, "inv_over", "jordan");
 }
 
 #[test]
 fn limit_grant_is_per_actor_and_per_doc_type() {
     // jordan has an invoice limit but not a contract limit.
     let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
+    let pre = submit_amount(pre, "inv_alice", "invoice", 10);
+    let pre = submit_amount(pre, "ct_001", "contract", 10);
 
     // alice cannot approve under jordan's invoice limit.
-    ex().must_reject_as(
-        &approval_controls::approve_within_limit(),
-        vec![subj("inv_alice"), subj("invoice"), dec(10)],
-        "alice",
-        &pre,
-    );
-
+    refuse_within(&pre, "inv_alice", "alice");
     // jordan cannot use her invoice limit for contracts.
-    ex().must_reject_as(
-        &approval_controls::approve_within_limit(),
-        vec![subj("ct_001"), subj("contract"), dec(10)],
-        "jordan",
-        &pre,
-    );
+    refuse_within(&pre, "ct_001", "jordan");
 }
 
 #[test]
@@ -223,12 +244,8 @@ fn multiple_grants_take_the_satisfying_one() {
     // shape of the require finds *some* satisfying limit.
     let pre = grant_limit(State::default(), "jordan", "invoice", 500);
     let pre = grant_limit(pre, "jordan", "invoice", 5000);
-    let post = ex().must_accept_as(
-        &approval_controls::approve_within_limit(),
-        vec![subj("inv_3k"), subj("invoice"), dec(3000)],
-        "jordan",
-        pre,
-    );
+    let pre = submit_amount(pre, "inv_3k", "invoice", 3000);
+    let post = approve_within(pre, "inv_3k", "jordan");
     assert!(has_claim(
         &post,
         "LimitedApproval",
@@ -239,12 +256,9 @@ fn multiple_grants_take_the_satisfying_one() {
 #[test]
 fn revoking_a_limit_blocks_future_but_preserves_past() {
     let pre = grant_limit(State::default(), "jordan", "invoice", 1000);
-    let after_approval = ex().must_accept_as(
-        &approval_controls::approve_within_limit(),
-        vec![subj("inv_001"), subj("invoice"), dec(800)],
-        "jordan",
-        pre,
-    );
+    let pre = submit_amount(pre, "inv_001", "invoice", 800);
+    let pre = submit_amount(pre, "inv_002", "invoice", 500);
+    let after_approval = approve_within(pre, "inv_001", "jordan");
     let after_revoke = ex().must_accept(
         &approval_controls::revoke_approval_limit(),
         vec![subj("jordan"), subj("invoice"), dec(1000)],
@@ -262,12 +276,7 @@ fn revoking_a_limit_blocks_future_but_preserves_past() {
         "ApprovalLimit",
         &[subj("jordan"), subj("invoice"), dec(1000)],
     ));
-    ex().must_reject_as(
-        &approval_controls::approve_within_limit(),
-        vec![subj("inv_002"), subj("invoice"), dec(500)],
-        "jordan",
-        &after_revoke,
-    );
+    refuse_within(&after_revoke, "inv_002", "jordan");
 }
 
 #[test]
@@ -275,18 +284,22 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
     // An ill-typed claim in state is corruption, not a business rejection:
     // a non-decimal limit makes `amount <= limit` raise
     // `EvalError::TypeMismatch`.
-    let pre = State::from_claims(vec![claim_instance(
+    let mut claims = submit_amount(State::default(), "inv_001", "invoice", 100)
+        .claims()
+        .to_vec();
+    claims.push(claim_instance(
         "ApprovalLimit",
         &[
             subj("jordan"),
             subj("invoice"),
             EvalValue::Subject("not_a_decimal".into()),
         ],
-    )]);
+    ));
+    let pre = State::from_claims(claims);
 
     let mut transition = common::test_transition(
         &approval_controls::approve_within_limit(),
-        vec![subj("inv_001"), subj("invoice"), dec(100)],
+        vec![subj("inv_001")],
     );
     transition.actor = Subject::from("jordan");
 
@@ -305,6 +318,71 @@ fn non_decimal_limit_in_authority_claim_surfaces_as_type_mismatch() {
             );
         }
         other => panic!("expected TypeMismatch, got {other:?}"),
+    }
+}
+
+// ============================================================
+// The route: the record decides it, once
+// ============================================================
+
+#[test]
+fn a_document_with_an_amount_cannot_take_the_unconditional_route() {
+    // jordan holds both kinds of authority for invoices. The £4,300
+    // invoice is over the ceiling, and the sign-off route is closed to it
+    // because it carries an amount.
+    let pre = grant_authority(State::default(), "jordan", "invoice");
+    let pre = grant_limit(pre, "jordan", "invoice", 1000);
+    let pre = submit_amount(pre, "inv_4300", "invoice", 4300);
+    refuse_approve(&pre, "inv_4300", "jordan");
+    refuse_within(&pre, "inv_4300", "jordan");
+}
+
+#[test]
+fn a_document_without_an_amount_cannot_take_the_limited_route() {
+    let pre = grant_limit(onboarding(), "jordan", "vendor_onboarding", 1000);
+    refuse_within(&pre, "doc_001", "jordan");
+}
+
+#[test]
+fn an_amount_cannot_be_added_after_an_unconditional_approval() {
+    // Registered without an amount, approved by sign-off, then submitted
+    // again with the amount the invoice really carries.
+    let pre = grant_authority(State::default(), "jordan", "invoice");
+    let pre = submit(pre, "inv_42", "invoice");
+    let approved = approve(pre, "inv_42", "jordan");
+    ex().must_reject(
+        &approval_controls::submit_monetary_document(),
+        vec![subj("inv_42"), subj("invoice"), dec(4300)],
+        &approved,
+    );
+    assert!(
+        !approved
+            .claims()
+            .iter()
+            .any(|c| c.predicate.as_str() == "DocumentAmount")
+    );
+}
+
+#[test]
+fn a_monetary_document_cannot_be_registered_again_without_its_amount() {
+    let pre = submit_amount(State::default(), "inv_42", "invoice", 4300);
+    for doc_type in ["invoice", "vendor_onboarding"] {
+        ex().must_reject(
+            &approval_controls::submit_document(),
+            vec![subj("inv_42"), subj(doc_type)],
+            &pre,
+        );
+    }
+}
+
+#[test]
+fn an_amount_must_be_positive() {
+    for amount in [0, -1_000_000] {
+        ex().must_reject(
+            &approval_controls::submit_monetary_document(),
+            vec![subj("inv_neg"), subj("invoice"), dec(amount)],
+            &State::default(),
+        );
     }
 }
 

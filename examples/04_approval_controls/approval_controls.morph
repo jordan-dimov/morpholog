@@ -34,8 +34,15 @@
 --     state, then revoking someone's authority would suddenly break
 --     every document they ever approved - or force the system to erase
 --     that history. Neither is honest. So there are deliberately *no*
---     standing rules here; every approval is checked once, at the
---     moment it is made, and the record then stands on its own.
+--     standing rules about authority here; every approval is checked
+--     once, at the moment it is made, and the record then stands on its
+--     own.
+--   * The approver chooses WHICH document to approve, never the facts
+--     that decide whether they may. A document is put on the record
+--     first, once, with its kind and - if it is about money - its
+--     amount. The approval reads both from the record, so nobody can
+--     approve an invoice as if it were a vendor onboarding, or state a
+--     smaller amount than the invoice carries.
 
 program approval_controls
 
@@ -56,6 +63,18 @@ predicate ApprovalLimit(actor: Subject, doc_type: Subject, limit: Decimal)
 predicate LimitedApproval(doc_id: Subject, doc_type: Subject, amount: Decimal, actor: Subject)
     append only
 
+-- The documents themselves. A document's kind, and its amount if it has
+-- one, are fixed the moment it is put on the record: one kind and one
+-- amount per document, never changed afterwards. A document with an
+-- amount can only be approved against a ceiling. If an invoice's amount
+-- really changes, that is a new document, not an edit to this one.
+predicate Document(doc_id: Subject, doc_type: Subject)
+    unique by (doc_id)
+    append only
+predicate DocumentAmount(doc_id: Subject, amount: Decimal)
+    unique by (doc_id)
+    append only
+
 -- Intents are messages the system sends to the outside world after a
 -- change commits - "authority was granted", "a document was approved".
 -- They are how this corner of the business tells the rest of it, and
@@ -66,6 +85,27 @@ intent DocumentApproved(doc_id: Subject, actor: Subject)
 intent ApprovalLimitGranted(principal: Subject, doc_type: Subject, limit: Decimal)
 intent ApprovalLimitRevoked(principal: Subject, doc_type: Subject, limit: Decimal)
 intent DocumentApprovedWithinLimit(doc_id: Subject, actor: Subject, amount: Decimal)
+
+
+-- ===========================================================
+-- Putting a document on the record.
+-- ===========================================================
+
+-- Each registers a document once. The gate refuses an id already on the
+-- record, so a document cannot gain an amount later and slip from one
+-- approval route to the other. Amounts here are positive: credit notes
+-- and refunds would need rules of their own. Whoever submits is trusted
+-- to record the document's true kind and amount - checking that against
+-- the paper invoice is a separate control.
+transformation submit_document(doc_id, doc_type):
+    require not Document(doc_id, _)
+    admit Document(doc_id, doc_type)
+
+transformation submit_monetary_document(doc_id, doc_type, amount):
+    require not Document(doc_id, _)
+    require 0 < amount
+    admit Document(doc_id, doc_type)
+    admit DocumentAmount(doc_id, amount)
 
 
 -- ===========================================================
@@ -88,11 +128,15 @@ transformation revoke_approval_authority(principal, doc_type):
     emit ApprovalAuthorityRevoked(principal, doc_type)
 
 
--- Approve a document. The gate checks that whoever is proposing this -
--- the actor - holds the matching authority right now. If they do, the
--- approval is recorded with their identity stamped on it; if not, the
--- whole action is refused and nothing is recorded.
-transformation approve_document(doc_id, doc_type):
+-- Approve a document. Its kind comes from the record, and a document
+-- with an amount is refused here: it must go through its ceiling. The
+-- gate checks that whoever is proposing this - the actor - holds the
+-- matching authority right now. If they do, the approval is recorded
+-- with their identity stamped on it; if not, the whole action is
+-- refused and nothing is recorded.
+transformation approve_document(doc_id):
+    bind Document(doc_id, doc_type)
+    require not DocumentAmount(doc_id, _)
     require MayApprove(actor, doc_type)
     admit Approval(doc_id, doc_type, actor)
     emit DocumentApproved(doc_id, actor)
@@ -118,13 +162,16 @@ transformation revoke_approval_limit(principal, doc_type, limit):
     emit ApprovalLimitRevoked(principal, doc_type, limit)
 
 
--- Approve a document for a given amount. The gate does two things at
--- once: it finds an approval ceiling the proposing actor holds for this
+-- Approve a document against a ceiling. Its kind and amount come from
+-- the record, not from the approver. The gate does two things at once:
+-- it finds an approval ceiling the proposing actor holds for this
 -- document kind, and it checks the amount fits within that ceiling
 -- (the comparison is inclusive - exactly at the ceiling is allowed).
 -- Pass the gate and the approval is recorded with the actor and the
 -- authorised amount; fail it and nothing is recorded.
-transformation approve_within_limit(doc_id, doc_type, amount):
+transformation approve_within_limit(doc_id):
+    bind Document(doc_id, doc_type)
+    bind DocumentAmount(doc_id, amount)
     require ApprovalLimit(actor, doc_type, limit) and amount <= limit
     admit LimitedApproval(doc_id, doc_type, amount, actor)
     emit DocumentApprovedWithinLimit(doc_id, actor, amount)

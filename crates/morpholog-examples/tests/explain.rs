@@ -19,6 +19,12 @@ use morpholog_examples::approval_controls;
 use morpholog_surface::parse_program;
 use morpholog_test_support::explain;
 
+/// A registered document with no amount: the approval's question is then
+/// authority alone.
+fn registered(doc_id: &str, doc_type: &str) -> morpholog_core::ClaimInstance {
+    claim_instance("Document", &[subj(doc_id), subj(doc_type)])
+}
+
 fn transition(name: &str, args: Vec<morpholog_core::EvalValue>, actor: &str) -> Transition {
     Transition {
         transformation_name: name.into(),
@@ -36,12 +42,8 @@ fn transition(name: &str, args: Vec<morpholog_core::EvalValue>, actor: &str) -> 
 fn rejected_approve_names_the_missing_authority_claim_and_its_supplier() {
     let program = approval_controls::program();
     // No MayApprove granted: approve_document's require fails.
-    let state = State::default();
-    let t = transition(
-        "approve_document",
-        vec![subj("doc-42"), subj("contract")],
-        "alice",
-    );
+    let state = State::from_claims(vec![registered("doc-42", "contract")]);
+    let t = transition("approve_document", vec![subj("doc-42")], "alice");
 
     let explanation = explain(&program, &t, &state, &mut morpholog_test_support::fresh());
 
@@ -65,20 +67,16 @@ fn rejected_approve_names_the_missing_authority_claim_and_its_supplier() {
 #[test]
 fn rendered_rejection_is_the_auditor_facing_artifact() {
     let program = approval_controls::program();
-    let t = transition(
-        "approve_document",
-        vec![subj("doc-42"), subj("contract")],
-        "alice",
-    );
+    let t = transition("approve_document", vec![subj("doc-42")], "alice");
     let explanation = explain(
         &program,
         &t,
-        &State::default(),
+        &State::from_claims(vec![registered("doc-42", "contract")]),
         &mut morpholog_test_support::fresh(),
     );
 
     let expected = "\
-Rejected: approve_document(doc-42, contract) proposed by alice
+Rejected: approve_document(doc-42) proposed by alice
 
 Gate not satisfied:
   MayApprove(actor, doc_type)
@@ -100,22 +98,18 @@ Directly missing claims:
 fn admissible_transition_explains_as_admissible() {
     let program = approval_controls::program();
     // Grant authority first, then approve: admissible.
-    let state = State::from_claims(vec![claim_instance(
-        "MayApprove",
-        &[subj("alice"), subj("contract")],
-    )]);
-    let t = transition(
-        "approve_document",
-        vec![subj("doc-42"), subj("contract")],
-        "alice",
-    );
+    let state = State::from_claims(vec![
+        registered("doc-42", "contract"),
+        claim_instance("MayApprove", &[subj("alice"), subj("contract")]),
+    ]);
+    let t = transition("approve_document", vec![subj("doc-42")], "alice");
 
     let explanation = explain(&program, &t, &state, &mut morpholog_test_support::fresh());
 
     assert_eq!(explanation.verdict, Verdict::Admissible);
     assert_eq!(
         explanation.render(),
-        "Admissible: approve_document(doc-42, contract) proposed by alice",
+        "Admissible: approve_document(doc-42) proposed by alice",
     );
 }
 
@@ -127,17 +121,18 @@ fn admissible_transition_explains_as_admissible() {
 #[test]
 fn comparator_failure_carries_no_directly_missing_claim() {
     let program = approval_controls::program();
-    // Authority granted at limit 100; propose 500 (over limit). The And
-    // gate's chain-killer is the `<=` comparator, not a positive claim.
-    let state = State::from_claims(vec![claim_instance(
-        "ApprovalLimit",
-        &[subj("alice"), subj("contract"), dec(100)],
-    )]);
-    let t = transition(
-        "approve_within_limit",
-        vec![subj("doc-9"), subj("contract"), dec(500)],
-        "alice",
-    );
+    // Authority granted at limit 100; the document carries 500 (over
+    // limit). The And gate's chain-killer is the `<=` comparator, not a
+    // positive claim.
+    let state = State::from_claims(vec![
+        registered("doc-9", "contract"),
+        claim_instance("DocumentAmount", &[subj("doc-9"), dec(500)]),
+        claim_instance(
+            "ApprovalLimit",
+            &[subj("alice"), subj("contract"), dec(100)],
+        ),
+    ]);
+    let t = transition("approve_within_limit", vec![subj("doc-9")], "alice");
 
     let explanation = explain(&program, &t, &state, &mut morpholog_test_support::fresh());
 
@@ -276,9 +271,13 @@ transformation flag(customer):
 #[test]
 fn kernel_error_uses_the_error_rejection_shape() {
     let program = approval_controls::program();
-    // approve_document expects two arguments; one is a kernel-level error,
+    // approve_document expects one argument; two is a kernel-level error,
     // not a business rejection - so it must not become a fake gate.
-    let t = transition("approve_document", vec![subj("doc-1")], "alice");
+    let t = transition(
+        "approve_document",
+        vec![subj("doc-1"), subj("contract")],
+        "alice",
+    );
 
     let explanation = explain(
         &program,
@@ -291,7 +290,7 @@ fn kernel_error_uses_the_error_rejection_shape() {
         panic!("expected an error rejection, got {:?}", explanation.verdict);
     };
     assert!(
-        err.message.contains("expects 2 args"),
+        err.message.contains("expects 1 args"),
         "message was: {}",
         err.message,
     );
@@ -322,15 +321,11 @@ fn unknown_transformation_is_an_error_rejection() {
 #[test]
 fn explanation_json_is_stable_and_round_trips() {
     let program = approval_controls::program();
-    let t = transition(
-        "approve_document",
-        vec![subj("doc-42"), subj("contract")],
-        "alice",
-    );
+    let t = transition("approve_document", vec![subj("doc-42")], "alice");
     let explanation = explain(
         &program,
         &t,
-        &State::default(),
+        &State::from_claims(vec![registered("doc-42", "contract")]),
         &mut morpholog_test_support::fresh(),
     );
 

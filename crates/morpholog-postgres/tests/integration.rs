@@ -1777,6 +1777,36 @@ async fn approval_controls_full_chain_through_pg() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
+    // The documents go on the record first; an approval names only the id.
+    for (t, args) in [
+        (
+            approval_controls::submit_document(),
+            vec![subj("doc_001"), subj("vendor_onboarding")],
+        ),
+        (
+            approval_controls::submit_document(),
+            vec![subj("doc_002"), subj("vendor_onboarding")],
+        ),
+        (
+            approval_controls::submit_monetary_document(),
+            vec![subj("inv_001"), subj("invoice"), dec(750)],
+        ),
+        (
+            approval_controls::submit_monetary_document(),
+            vec![subj("inv_over"), subj("invoice"), dec(2000)],
+        ),
+    ] {
+        let outcome = common::propose_pg_with_test_actor(
+            &pool,
+            &common::pg_program(approval_controls::program()),
+            &t,
+            args,
+        )
+        .await
+        .expect("submitting a document should not error");
+        assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+    }
+
     // ---------- Unconditional authority ----------
 
     // 1. jordan is granted unconditional authority for vendor onboarding.
@@ -1795,7 +1825,7 @@ async fn approval_controls_full_chain_through_pg() {
         &pool,
         &common::pg_program(approval_controls::program()),
         &approval_controls::approve_document(),
-        vec![subj("doc_001"), subj("vendor_onboarding")],
+        vec![subj("doc_001")],
         "jordan",
     )
     .await
@@ -1834,7 +1864,7 @@ async fn approval_controls_full_chain_through_pg() {
         &pool,
         &common::pg_program(approval_controls::program()),
         &approval_controls::approve_document(),
-        vec![subj("doc_002"), subj("vendor_onboarding")],
+        vec![subj("doc_002")],
         "alice",
     )
     .await
@@ -1870,7 +1900,7 @@ async fn approval_controls_full_chain_through_pg() {
         &pool,
         &common::pg_program(approval_controls::program()),
         &approval_controls::approve_within_limit(),
-        vec![subj("inv_001"), subj("invoice"), dec(750)],
+        vec![subj("inv_001")],
         "jordan",
     )
     .await
@@ -1921,7 +1951,7 @@ async fn approval_controls_full_chain_through_pg() {
         &pool,
         &common::pg_program(approval_controls::program()),
         &approval_controls::approve_within_limit(),
-        vec![subj("inv_over"), subj("invoice"), dec(2000)],
+        vec![subj("inv_over")],
         "jordan",
     )
     .await
@@ -1931,6 +1961,32 @@ async fn approval_controls_full_chain_through_pg() {
     assert_eq!(
         list_pending_outbox(&pool).await.unwrap().len(),
         outbox_before
+    );
+
+    // 8. Sign-off authority for invoices does not open the other route: the
+    // over-limit invoice carries an amount, so approve_document refuses it.
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &common::pg_program(approval_controls::program()),
+        &approval_controls::grant_approval_authority(),
+        vec![subj("jordan"), subj("invoice")],
+    )
+    .await
+    .expect("grant_approval_authority should not error");
+    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+    let outcome = common::propose_pg_as(
+        &pool,
+        &common::pg_program(approval_controls::program()),
+        &approval_controls::approve_document(),
+        vec![subj("inv_over")],
+        "jordan",
+    )
+    .await
+    .expect("propose should not error");
+    assert!(
+        matches!(&outcome, PgProposalOutcome::Rejected { reason, .. }
+            if reason.to_string().contains("DocumentAmount")),
+        "{outcome:?}"
     );
 
     // ---------- Durable cross-cuts ----------

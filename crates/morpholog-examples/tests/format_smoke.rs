@@ -27,8 +27,12 @@ fn every_program_pretty_prints_with_header_and_recognisable_content() {
                 p.name
             );
         }
-        // If invariants exist, the keyword appears.
-        if !p.invariants.is_empty() {
+        // If authored invariants exist, the keyword appears. A generated
+        // one renders as the `unique by` clause it came from.
+        if p.invariants
+            .iter()
+            .any(|i| i.origin == morpholog_core::InvariantOrigin::Authored)
+        {
             assert!(
                 s.contains("invariant "),
                 "expected `invariant` keyword in render of {}",
