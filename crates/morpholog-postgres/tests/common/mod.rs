@@ -536,3 +536,43 @@ pub async fn insert_in_flight_audit_row_mentioning(
     .await
     .unwrap();
 }
+
+/// Logins standing in for gateway processes. Each can hold its own
+/// session and reach the governed tables, like a real embedder.
+pub async fn recreate_gateway_roles(pool: &PgPool, roles: &[&str]) {
+    let statements: Vec<String> = roles
+        .iter()
+        .flat_map(|r| {
+            [
+                format!("CREATE ROLE {r} LOGIN"),
+                format!("GRANT USAGE ON SCHEMA morpholog TO {r}"),
+                format!("GRANT ALL ON ALL TABLES IN SCHEMA morpholog TO {r}"),
+            ]
+        })
+        .collect();
+    let borrowed: Vec<&str> = statements.iter().map(String::as_str).collect();
+    recreate_roles(pool, roles, &borrowed).await;
+}
+
+/// A pool that presents itself as `role`: one simulated gateway.
+pub async fn gateway_pool(role: impl Into<String>) -> PgPool {
+    let role = role.into();
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let url = morpholog_postgres::with_default_user(&url);
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .after_connect(move |conn, _| {
+            let role = role.clone();
+            Box::pin(async move {
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                    "SET SESSION AUTHORIZATION {role}"
+                )))
+                .execute(&mut *conn)
+                .await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap()
+}

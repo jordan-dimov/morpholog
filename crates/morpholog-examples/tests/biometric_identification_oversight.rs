@@ -22,6 +22,17 @@ fn ex() -> &'static Example {
     EX.get_or_init(|| Example::new(&bio::program()))
 }
 
+/// The deployer restricts a verifier's name, so only logins granted it
+/// can speak as that verifier.
+fn arm(person: &str, state: State) -> State {
+    ex().must_accept_as(
+        &bio::restrict_verifier_identity(),
+        vec![subj(person), subj("cam_system")],
+        "city_operator",
+        state,
+    )
+}
+
 /// Fixture: a deployed system with model version v1 in service for
 /// October 2026, two trained overseers (anna, ben) assigned, a use
 /// started on 12 October against the missing-persons register, and
@@ -34,8 +45,9 @@ fn match_awaiting_verification() -> State {
             subj("cam_system"),
             subj("city_operator"),
             subj("operator_login"),
+            subj("system_login"),
         ],
-        "compliance_office",
+        "city_operator",
         State::default(),
     );
     let state = ex().must_accept_as(
@@ -46,19 +58,21 @@ fn match_awaiting_verification() -> State {
             ts("2026-10-01T00:00:00Z"),
             ts("2026-10-31T23:59:59Z"),
         ],
-        "compliance_office",
+        "city_operator",
         state,
     );
+    let state = arm("anna", state);
+    let state = arm("ben", state);
     let state = ex().must_accept_as(
         &bio::assign_oversight(),
         vec![subj("anna"), subj("cam_system")],
-        "compliance_office",
+        "city_operator",
         state,
     );
     let state = ex().must_accept_as(
         &bio::assign_oversight(),
         vec![subj("ben"), subj("cam_system")],
-        "compliance_office",
+        "city_operator",
         state,
     );
     let state = ex().must_accept_as(
@@ -106,8 +120,9 @@ fn use_cannot_start_under_a_version_not_in_service() {
             subj("cam_system"),
             subj("city_operator"),
             subj("operator_login"),
+            subj("system_login"),
         ],
-        "compliance_office",
+        "city_operator",
         State::default(),
     );
     let state = ex().must_accept_as(
@@ -118,7 +133,7 @@ fn use_cannot_start_under_a_version_not_in_service() {
             ts("2026-10-01T00:00:00Z"),
             ts("2026-10-31T23:59:59Z"),
         ],
-        "compliance_office",
+        "city_operator",
         state,
     );
     // November is outside the assessed window: refused.
@@ -336,7 +351,7 @@ fn revocation_stops_future_verifications_and_leaves_past_decisions_standing() {
     let state = ex().must_accept_as(
         &bio::revoke_oversight(),
         vec![subj("anna"), subj("cam_system")],
-        "compliance_office",
+        "city_operator",
         state,
     );
     // A second match arrives; anna can no longer verify it.
@@ -450,5 +465,162 @@ fn decision_with_no_verifications_is_a_lawful_rejection() {
             ts("2026-10-12T11:00:00Z"),
         ],
         &state,
+    );
+}
+
+// ---------------------------------------------------------------------
+// The trust boundary: who may do what. The login a name arrives over is
+// checked by the PostgreSQL adapter (its tests prove that half); here
+// the programme's own gates are held to the deployer and the system.
+// ---------------------------------------------------------------------
+
+#[test]
+fn only_the_deployer_assigns_and_revokes_oversight() {
+    let state = arm("carl", match_awaiting_verification());
+    ex().must_reject_as(
+        &bio::assign_oversight(),
+        vec![subj("carl"), subj("cam_system")],
+        "anna",
+        &state,
+    );
+    ex().must_reject_as(
+        &bio::revoke_oversight(),
+        vec![subj("ben"), subj("cam_system")],
+        "anna",
+        &state,
+    );
+}
+
+#[test]
+fn oversight_goes_only_to_a_restricted_name() {
+    let state = match_awaiting_verification();
+    ex().must_reject_as(
+        &bio::assign_oversight(),
+        vec![subj("carl"), subj("cam_system")],
+        "city_operator",
+        &state,
+    );
+}
+
+// An assignment the record held before names had to be restricted
+// cannot carry an open name into a verification or a decision.
+#[test]
+fn an_overseer_with_an_open_name_cannot_verify_or_decide() {
+    // Two real verifications, so only the open name can refuse the decision.
+    let state = ex().must_accept_as(
+        &bio::verify_match(),
+        vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
+        "anna",
+        match_awaiting_verification(),
+    );
+    let state = ex().must_accept_as(
+        &bio::verify_match(),
+        vec![subj("match_1"), ts("2026-10-12T10:20:00Z")],
+        "ben",
+        state,
+    );
+    let mut claims = state.claims().to_vec();
+    claims.push(common::claim_instance(
+        "OversightAssigned",
+        &[subj("carl"), subj("cam_system")],
+    ));
+    let state = State::from_claims(claims);
+    ex().must_reject_as(
+        &bio::verify_match(),
+        vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
+        "carl",
+        &state,
+    );
+    ex().must_reject_as(
+        &bio::decide_on_identification(),
+        vec![
+            subj("decision_1"),
+            subj("match_1"),
+            subj("confirmed_identification"),
+            ts("2026-10-12T11:00:00Z"),
+        ],
+        "carl",
+        &state,
+    );
+}
+
+#[test]
+fn only_the_deployer_puts_a_version_in_service() {
+    let state = match_awaiting_verification();
+    ex().must_reject_as(
+        &bio::place_version_in_service(),
+        vec![
+            subj("cam_system"),
+            subj("model_v2"),
+            ts("2026-10-01T00:00:00Z"),
+            ts("2026-10-31T23:59:59Z"),
+        ],
+        "rogue_analyst",
+        &state,
+    );
+}
+
+#[test]
+fn only_the_system_starts_and_ends_its_uses() {
+    let state = match_awaiting_verification();
+    ex().must_reject_as(
+        &bio::start_use(),
+        vec![
+            subj("use_2"),
+            subj("cam_system"),
+            subj("model_v1"),
+            subj("missing_persons_register"),
+            ts("2026-10-12T12:00:00Z"),
+        ],
+        "rogue_analyst",
+        &state,
+    );
+    ex().must_reject_as(
+        &bio::end_use(),
+        vec![subj("use_1"), ts("2026-10-12T16:30:00Z")],
+        "rogue_analyst",
+        &state,
+    );
+}
+
+// The grants are not per system, so a second deployment would hand its
+// deployer the enrolment acts, and with them an existing verifier's
+// name. There is one deployment, proposed by the deployer it names.
+#[test]
+fn a_second_deployment_cannot_take_an_existing_name() {
+    let state = match_awaiting_verification();
+    for deployer in ["mallory", "anna"] {
+        ex().must_reject_as(
+            &bio::deploy_system(),
+            vec![
+                subj("camera_b"),
+                subj(deployer),
+                subj("mallory_login"),
+                subj("mallory_login"),
+            ],
+            deployer,
+            &state,
+        );
+    }
+    ex().must_reject_as(
+        &bio::authorise_verifier_login(),
+        vec![subj("anna"), subj("mallory_login"), subj("cam_system")],
+        "mallory",
+        &state,
+    );
+}
+
+#[test]
+fn the_deployment_is_proposed_by_the_deployer_it_names() {
+    ex().must_reject_as(
+        &bio::deploy_system(),
+        vec![
+            subj("cam_system"),
+            subj("city_operator"),
+            subj("operator_login"),
+            subj("system_login"),
+        ],
+        "someone_else",
+        &State::default(),
     );
 }

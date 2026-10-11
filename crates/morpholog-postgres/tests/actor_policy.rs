@@ -14,14 +14,17 @@
 //! that takes its own identity via `SET SESSION AUTHORIZATION`. That
 //! needs superuser, hence the skip. A superuser can change
 //! `session_user`; `SET ROLE` cannot.
+//!
+//! The programme here is the smallest that uses the policy, so these
+//! tests hold the adapter to it whatever the gallery's rules become.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
 
 use common::{
-    drop_roles_if_present, expect_committed, pg_program, propose_pg_as, recreate_roles, reset_db,
-    session_is_superuser, test_pool,
+    drop_roles_if_present, expect_committed, gateway_pool, pg_program, propose_pg_as,
+    recreate_gateway_roles, reset_db, session_is_superuser, test_pool,
 };
 use morpholog_core::{EvalValue, Subject, Transformation, Transition};
 use morpholog_postgres::PgProgram;
@@ -30,98 +33,90 @@ use morpholog_postgres::{
 };
 use sqlx::postgres::PgPoolOptions;
 
-const DEPLOYER: &str = "deployer_1";
+const DEPLOYER: &str = "admin_1";
 
 /// Roles are cluster-wide and these tests run in parallel, so each test
 /// uses its own names.
 fn deployer_login(tag: &str) -> String {
     format!("mtest_gw_{tag}_dep")
 }
-const SYSTEM: &str = "system_1";
 const CHEN: &str = "verifier_chen";
 const OKAFOR: &str = "verifier_okafor";
 
+/// An administrator, appointed once and restricted to its login, who
+/// restricts names and grants logins; and an act anyone may propose.
+const POLICY: &str = "\
+program actor_policy
+
+predicate ActorAssertionRestricted(actor: Subject)
+predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
+predicate Administrator(admin: Subject)
+predicate Note(text: Subject, author: Subject)
+
+transformation appoint(admin, login_role):
+    require not Administrator(_)
+    require actor = admin
+    admit Administrator(admin)
+    admit ActorAssertionRestricted(admin)
+    admit ActorAssertionAuthority(admin, login_role)
+
+transformation restrict(person):
+    require Administrator(actor)
+    admit ActorAssertionRestricted(person)
+
+transformation grant(person, login_role):
+    require Administrator(actor)
+    require ActorAssertionRestricted(person)
+    admit ActorAssertionAuthority(person, login_role)
+
+transformation withdraw(person, login_role):
+    require Administrator(actor)
+    require ActorAssertionAuthority(person, login_role)
+    retract ActorAssertionAuthority(person, login_role)
+
+transformation note(text):
+    admit Note(text, actor)
+";
+
 fn program() -> PgProgram {
-    pg_program(morpholog_examples::biometric_identification_oversight::program())
+    pg_program(morpholog_surface::parse_program(POLICY).unwrap())
 }
 
 fn subj(s: &str) -> EvalValue {
     EvalValue::Subject(Subject::from(s))
 }
 
-/// Logins standing in for gateway processes. Each can hold its own
-/// session and reach the governed tables, like a real embedder.
-async fn recreate_gateway_roles(pool: &PgPool, roles: &[&str]) {
-    let statements: Vec<String> = roles
-        .iter()
-        .flat_map(|r| {
-            [
-                format!("CREATE ROLE {r} LOGIN"),
-                format!("GRANT USAGE ON SCHEMA morpholog TO {r}"),
-                format!("GRANT ALL ON ALL TABLES IN SCHEMA morpholog TO {r}"),
-            ]
-        })
-        .collect();
-    let borrowed: Vec<&str> = statements.iter().map(String::as_str).collect();
-    recreate_roles(pool, roles, &borrowed).await;
-}
-
-/// A pool that presents itself as `role`: one simulated gateway.
-async fn gateway_pool(role: impl Into<String>) -> PgPool {
-    let role = role.into();
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let url = morpholog_postgres::with_default_user(&url);
-    PgPoolOptions::new()
-        .max_connections(2)
-        .after_connect(move |conn, _| {
-            let role = role.clone();
-            Box::pin(async move {
-                sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-                    "SET SESSION AUTHORIZATION {role}"
-                )))
-                .execute(&mut *conn)
-                .await?;
-                Ok(())
-            })
-        })
-        .connect(&url)
-        .await
-        .unwrap()
-}
-
-/// The system on the record, both verifiers holding live oversight.
-///
-/// The bootstrap act restricts the deployer to this pool's login, so
+/// The administrator on the record, restricted to this pool's login, so
 /// every later enrolment act must come through the same pool.
 async fn deploy(pool: &PgPool, deployer_login: &str) {
     let p = program();
-    for (name, args) in [
-        (
-            "deploy_system",
-            vec![subj(SYSTEM), subj(DEPLOYER), subj(deployer_login)],
-        ),
-        ("assign_oversight", vec![subj(CHEN), subj(SYSTEM)]),
-        ("assign_oversight", vec![subj(OKAFOR), subj(SYSTEM)]),
-    ] {
-        let t = p.prepared().transformation(&name.into()).unwrap().clone();
-        let actor = if name == "deploy_system" {
-            DEPLOYER
-        } else {
-            CHEN
-        };
-        expect_committed(propose_pg_as(pool, &p, &t, args, actor).await.unwrap());
-    }
+    let t = p
+        .prepared()
+        .transformation(&"appoint".into())
+        .unwrap()
+        .clone();
+    expect_committed(
+        propose_pg_as(
+            pool,
+            &p,
+            &t,
+            vec![subj(DEPLOYER), subj(deployer_login)],
+            DEPLOYER,
+        )
+        .await
+        .unwrap(),
+    );
 }
 
 async fn arm(pool: &PgPool, person: &str) {
     let p = program();
     let t = p
         .prepared()
-        .transformation(&"restrict_verifier_identity".into())
+        .transformation(&"restrict".into())
         .unwrap()
         .clone();
     expect_committed(
-        propose_pg_as(pool, &p, &t, vec![subj(person), subj(SYSTEM)], DEPLOYER)
+        propose_pg_as(pool, &p, &t, vec![subj(person)], DEPLOYER)
             .await
             .unwrap(),
     );
@@ -131,19 +126,13 @@ async fn grant(pool: &PgPool, person: &str, role: &str) {
     let p = program();
     let t = p
         .prepared()
-        .transformation(&"authorise_verifier_login".into())
+        .transformation(&"grant".into())
         .unwrap()
         .clone();
     expect_committed(
-        propose_pg_as(
-            pool,
-            &p,
-            &t,
-            vec![subj(person), subj(role), subj(SYSTEM)],
-            DEPLOYER,
-        )
-        .await
-        .unwrap(),
+        propose_pg_as(pool, &p, &t, vec![subj(person), subj(role)], DEPLOYER)
+            .await
+            .unwrap(),
     );
 }
 
@@ -155,15 +144,11 @@ fn proposal(t: &Transformation, args: Vec<EvalValue>, actor: &str) -> Proposal {
     })
 }
 
-/// `assign_oversight`, the simplest governed act to propose as an actor.
-fn oversight_of(person: &str) -> (Transformation, Vec<EvalValue>) {
+/// An act with no gate on its actor, to propose as an actor.
+fn note_of(text: &str) -> (Transformation, Vec<EvalValue>) {
     let p = program();
-    let t = p
-        .prepared()
-        .transformation(&"assign_oversight".into())
-        .unwrap()
-        .clone();
-    (t, vec![subj(person), subj(SYSTEM)])
+    let t = p.prepared().transformation(&"note".into()).unwrap().clone();
+    (t, vec![subj(text)])
 }
 
 #[tokio::test]
@@ -181,7 +166,7 @@ async fn an_unarmed_actor_is_asserted_by_anyone_exactly_as_before() {
 
     // No ActorAssertionRestricted claim exists, so nothing is restricted.
     let gateway = gateway_pool("mtest_gw_a").await;
-    let (t, args) = oversight_of("verifier_new");
+    let (t, args) = note_of("verifier_new");
     let outcome = propose_against_pg(&gateway, &program(), &proposal(&t, args, CHEN))
         .await
         .expect("an unarmed actor stays assertable by any role");
@@ -210,7 +195,7 @@ async fn an_armed_actor_is_refused_to_an_unauthorised_role_and_records_nothing()
     let outbox_before = outbox_count(&pool).await;
 
     let rogue = gateway_pool("mtest_gw_rogue").await;
-    let (t, args) = oversight_of("verifier_new");
+    let (t, args) = note_of("verifier_new");
     let err = propose_against_pg(&rogue, &program(), &proposal(&t, args, CHEN))
         .await
         .expect_err("an unauthorised role may not speak for an armed actor");
@@ -248,7 +233,7 @@ async fn the_authorised_role_proceeds() {
     grant(&deployer, CHEN, "mtest_gw_chen2").await;
 
     let gateway = gateway_pool("mtest_gw_chen2").await;
-    let (t, args) = oversight_of("verifier_new");
+    let (t, args) = note_of("verifier_new");
     let outcome = propose_against_pg(&gateway, &program(), &proposal(&t, args, CHEN))
         .await
         .expect("the granted role speaks for its actor");
@@ -274,7 +259,7 @@ async fn asking_for_a_trace_does_not_get_round_the_policy() {
     arm(&deployer, CHEN).await;
 
     let rogue = gateway_pool("mtest_gw_trace").await;
-    let (t, args) = oversight_of("verifier_new");
+    let (t, args) = note_of("verifier_new");
     let err = propose_against_pg_with_trace(&rogue, &program(), &proposal(&t, args, CHEN))
         .await
         .expect_err("the traced path must take the same gate");
@@ -307,7 +292,7 @@ async fn withdrawing_the_last_grant_locks_the_actor_out_rather_than_freeing_it()
     let p = program();
     let withdraw = p
         .prepared()
-        .transformation(&"withdraw_verifier_login".into())
+        .transformation(&"withdraw".into())
         .unwrap()
         .clone();
     expect_committed(
@@ -315,7 +300,7 @@ async fn withdrawing_the_last_grant_locks_the_actor_out_rather_than_freeing_it()
             &deployer,
             &p,
             &withdraw,
-            vec![subj(CHEN), subj("mtest_gw_last"), subj(SYSTEM)],
+            vec![subj(CHEN), subj("mtest_gw_last")],
             DEPLOYER,
         )
         .await
@@ -324,7 +309,7 @@ async fn withdrawing_the_last_grant_locks_the_actor_out_rather_than_freeing_it()
 
     // The formerly-granted gateway is now refused...
     let former = gateway_pool("mtest_gw_last").await;
-    let (t, args) = oversight_of("verifier_new");
+    let (t, args) = note_of("verifier_new");
     assert!(
         matches!(
             propose_against_pg(&former, &program(), &proposal(&t, args, CHEN)).await,
@@ -334,7 +319,7 @@ async fn withdrawing_the_last_grant_locks_the_actor_out_rather_than_freeing_it()
     );
     // ...and so is everyone else. No downgrade to open.
     let other = gateway_pool("mtest_gw_other").await;
-    let (t, args) = oversight_of("verifier_new2");
+    let (t, args) = note_of("verifier_new2");
     assert!(
         matches!(
             propose_against_pg(&other, &program(), &proposal(&t, args, CHEN)).await,
@@ -390,7 +375,7 @@ async fn set_role_does_not_change_who_the_policy_thinks_you_are() {
         .await
         .unwrap();
 
-    let (t, args) = oversight_of("verifier_new");
+    let (t, args) = note_of("verifier_new");
     let err = propose_against_pg(&borrowing, &program(), &proposal(&t, args, CHEN))
         .await
         .expect_err("SET ROLE must not borrow another role's authority");
@@ -424,14 +409,14 @@ async fn two_verifiers_through_one_gateway_cannot_both_be_asserted() {
 
     let one = gateway_pool("mtest_gw_one").await;
     // Chen's own gateway speaks for Chen.
-    let (t, args) = oversight_of("verifier_new");
+    let (t, args) = note_of("verifier_new");
     expect_committed(
         propose_against_pg(&one, &program(), &proposal(&t, args, CHEN))
             .await
             .expect("Chen's own gateway speaks for Chen"),
     );
     // The same gateway cannot then be Okafor.
-    let (t, args) = oversight_of("verifier_new2");
+    let (t, args) = note_of("verifier_new2");
     assert!(
         matches!(
             propose_against_pg(&one, &program(), &proposal(&t, args, OKAFOR)).await,
@@ -441,7 +426,7 @@ async fn two_verifiers_through_one_gateway_cannot_both_be_asserted() {
     );
     // Okafor's own gateway can.
     let two = gateway_pool("mtest_gw_two").await;
-    let (t, args) = oversight_of("verifier_new3");
+    let (t, args) = note_of("verifier_new3");
     expect_committed(
         propose_against_pg(&two, &program(), &proposal(&t, args, OKAFOR))
             .await
@@ -493,15 +478,11 @@ async fn a_rogue_gateway_cannot_escalate_through_an_unrestricted_deployer() {
     let p = program();
     let t = p
         .prepared()
-        .transformation(&"authorise_verifier_login".into())
+        .transformation(&"grant".into())
         .unwrap()
         .clone();
     for person in [CHEN, OKAFOR] {
-        let pr = proposal(
-            &t,
-            vec![subj(person), subj("mtest_gw_esc"), subj(SYSTEM)],
-            DEPLOYER,
-        );
+        let pr = proposal(&t, vec![subj(person), subj("mtest_gw_esc")], DEPLOYER);
         let r = propose_against_pg(&rogue, &program(), &pr).await;
         assert!(
             matches!(r, Err(PgError::ActorAssertionUnauthorised { .. })),
