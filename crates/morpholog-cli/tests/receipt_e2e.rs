@@ -213,7 +213,10 @@ async fn a_receipt_recomputes_from_any_form_of_the_pack_and_agrees_with_the_live
     let world = World::new().await;
     let receipt = &world.receipt;
     assert_eq!(receipt["receipt_format_version"], 1);
-    assert_eq!(receipt["semantics_version"], 2);
+    assert_eq!(
+        receipt["semantics_version"],
+        morpholog_core::SEMANTICS_VERSION
+    );
     assert_eq!(receipt["checkpoint"]["tree_size"], 7);
     assert_eq!(
         receipt["query"],
@@ -460,7 +463,7 @@ async fn a_receipt_whose_statement_does_not_recompute_is_refused_by_layer() {
         assert!(!passed);
         assert_eq!(
             report["evaluation"],
-            json!({"status": "not_re_evaluated", "receipt_semantics": other, "binary_semantics": 2})
+            json!({"status": "not_re_evaluated", "receipt_semantics": other, "binary_semantics": morpholog_core::SEMANTICS_VERSION})
         );
         assert_eq!(report["program"]["status"], "matches");
     }

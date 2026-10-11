@@ -67,7 +67,7 @@ invariant lines_name_a_declared_charge:
 -- A source the rules do not know is refused at the declaration, so
 -- the selection can never meet a third case it has no branch for.
 invariant sources_are_the_known_two:
-    TariffCharge(_, source) implies (source = #meter or source = #caller)
+    TariffCharge(charge, source) implies (source = #meter or source = #caller)
 
 -- The selection itself, re-checked over every committed line: the
 -- applied figure IS the declared source's figure. For a metered

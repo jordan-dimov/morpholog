@@ -180,6 +180,8 @@ pub morpholog_postgres::CompileReason::ComparisonShape
 pub morpholog_postgres::CompileReason::ComparisonShape::detail: &'static str
 pub morpholog_postgres::CompileReason::Construct
 pub morpholog_postgres::CompileReason::Construct::construct: &'static str
+pub morpholog_postgres::CompileReason::DisjunctionShape
+pub morpholog_postgres::CompileReason::DisjunctionShape::detail: &'static str
 pub morpholog_postgres::CompileReason::Literal
 pub morpholog_postgres::CompileReason::Literal::kind: &'static str
 pub morpholog_postgres::CompileReason::SumShape

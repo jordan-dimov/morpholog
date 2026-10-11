@@ -1289,8 +1289,8 @@ async fn evaluate_scores_a_candidate_against_history() {
         "evaluate should succeed; {stderr}\n{stdout}"
     );
     let report: Value = serde_json::from_str(&stdout).expect("report is JSON");
-    assert_eq!(report["score_format_version"], 4);
-    assert_eq!(report["semantics"], "case_bound_admission_v4");
+    assert_eq!(report["score_format_version"], 5);
+    assert_eq!(report["semantics"], "case_bound_admission_v5");
     assert!(
         report["program_hash"]
             .as_str()
@@ -1420,7 +1420,7 @@ async fn evaluate_against_a_pack_needs_no_database() {
         "pack-mode evaluate should pass with no DB; {stderr}\n{stdout}"
     );
     let report: Value = serde_json::from_str(&stdout).expect("report is JSON");
-    assert_eq!(report["semantics"], "case_bound_admission_v4");
+    assert_eq!(report["semantics"], "case_bound_admission_v5");
     assert_eq!(report["invariants"][0]["would_refuse"], 2, "got: {stdout}");
 
     // A tampered pack is refused, not scored.
@@ -1489,7 +1489,7 @@ async fn evaluate_packs_batches_offline_sorted_by_file_name() {
         "batch evaluate should pass with no DB; {stderr}\n{stdout}"
     );
     let report: Value = serde_json::from_str(&stdout).expect("report is JSON");
-    assert_eq!(report["semantics"], "case_bound_admission_v4");
+    assert_eq!(report["semantics"], "case_bound_admission_v5");
     let cases = report["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 3);
     // Deterministic, by file name, regardless of creation order.

@@ -258,6 +258,61 @@ transformation share(amount, parts):
         &input,
         &decided,
     );
+
+    // A consequent `or` over a history that already violates it: a
+    // change to the valid case `a` is admitted, a change to the
+    // violated case `b` is still refused. Which cases admission checks
+    // is what this pair pins.
+    use morpholog_test_support::subj;
+    let program = morpholog_surface::parse_program(
+        "
+program either_way
+
+predicate A(x: Subject, k: Subject)
+predicate B(x: Subject)
+predicate C(x: Subject)
+
+invariant either_record:
+    A(x, _) implies (B(x) or C(x))
+
+transformation note(x, k):
+    admit A(x, k)
+
+transformation mark_b(x):
+    admit B(x)
+",
+    )
+    .unwrap();
+    let dirty = State::from_claims(vec![
+        morpholog_core::ClaimInstance {
+            predicate: "A".into(),
+            args: vec![subj("a"), subj("k1")],
+        },
+        morpholog_core::ClaimInstance {
+            predicate: "A".into(),
+            args: vec![subj("b"), subj("k1")],
+        },
+        morpholog_core::ClaimInstance {
+            predicate: "C".into(),
+            args: vec![subj("a")],
+        },
+    ]);
+    let t = program.transformation("mark_b").unwrap();
+    let (input, decided) = proposal_case(&program, t, vec![subj("a")], &dirty);
+    record(
+        out,
+        "fixture/consequent_or/untouched_case_admits".to_string(),
+        &input,
+        &decided,
+    );
+    let t = program.transformation("note").unwrap();
+    let (input, decided) = proposal_case(&program, t, vec![subj("b"), subj("k2")], &dirty);
+    record(
+        out,
+        "fixture/consequent_or/touched_case_is_judged".to_string(),
+        &input,
+        &decided,
+    );
 }
 
 fn corpus() -> BTreeMap<String, Fingerprints> {

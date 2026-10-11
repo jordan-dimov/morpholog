@@ -459,7 +459,7 @@ async fn an_interpreted_programme_requires_the_indexes_its_loads_seek_on() {
 /// A programme whose transformation only admits a predicate: on the
 /// interpreted route its load seeks that predicate for the admitted
 /// claim's membership, so one coordinate of the admit is provisioned
-/// although no read keys it. The invariant's `or` keeps the programme
+/// although no read keys it. The invariant's `xor` keeps the programme
 /// interpreted without asking.
 #[tokio::test]
 async fn an_admit_no_read_keys_still_provisions_one_coordinate() {
@@ -471,7 +471,7 @@ async fn an_admit_no_read_keys_still_provisions_one_coordinate() {
 predicate P(k: Subject, v: Decimal)
 predicate Flag(k: Subject)
 invariant flagged_or_not:
-    P(k, _) implies (Flag(k) or not Flag(k))
+    P(k, _) implies (Flag(k) xor not Flag(k))
 transformation put(k, v):
     admit P(k, v)
 ",
@@ -483,7 +483,7 @@ transformation put(k, v):
             pg.plan(),
             morpholog_postgres::InvariantPlan::Interpreted { .. }
         ),
-        "the `or` keeps it interpreted"
+        "the `xor` keeps it interpreted"
     );
     let report = plan_indexes(&pool, &[&pg], false).await.unwrap();
     let creates: Vec<(String, usize)> = report
