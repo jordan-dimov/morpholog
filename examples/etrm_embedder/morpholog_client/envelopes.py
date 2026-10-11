@@ -1352,12 +1352,37 @@ class InvariantCoverage:
 
 
 @dataclass(frozen=True)
+class RefusalCause:
+    """The refusals of one transformation by one rule. ``kind`` is
+    ``require``, ``bind`` or ``invariant``. For a gate, ``rule`` is its
+    name, or its rendered expression if it had none; the rejection log
+    does not record which."""
+
+    kind: str
+    rule: str
+    proposals_refused: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> RefusalCause:
+        data = _strict("refusal cause", payload, {"kind", "rule", "proposals_refused"})
+        return cls(
+            kind=data["kind"],
+            rule=data["rule"],
+            proposals_refused=data["proposals_refused"],
+        )
+
+
+@dataclass(frozen=True)
 class TransformationUsage:
+    """``refusals`` breaks ``proposals_refused`` down by kind and rule,
+    as recorded under this transformation's name."""
+
     transformation: str
     transitions: int
     first: str | None = None
     last: str | None = None
     proposals_refused: int = 0
+    refusals: list[RefusalCause] = field(default_factory=list)
     not_in_programme: bool = False
 
     @classmethod
@@ -1366,7 +1391,7 @@ class TransformationUsage:
             "transformation usage",
             payload,
             {"transformation", "transitions"},
-            {"first", "last", "proposals_refused", "not_in_programme"},
+            {"first", "last", "proposals_refused", "refusals", "not_in_programme"},
         )
         return cls(
             transformation=data["transformation"],
@@ -1374,6 +1399,7 @@ class TransformationUsage:
             first=data.get("first"),
             last=data.get("last"),
             proposals_refused=data.get("proposals_refused", 0),
+            refusals=[RefusalCause.from_json(c) for c in data.get("refusals", [])],
             not_in_programme=data.get("not_in_programme", False),
         )
 

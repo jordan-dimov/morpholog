@@ -193,6 +193,14 @@ Refused proposals, newest first, as `rejection_row` objects: the transformation 
 
 Sizing, measured on a five-argument claim: a witness is roughly 700 bytes and about two thirds of a row's variable payload, so a hundred thousand refusals carry on the order of 70 MB of witness data. Default-on, with no flag - the whole value is being able to review a refusal after the process that saw it has gone.
 
+### `morpholog inspect coverage --json`
+
+Which rules have done work over the recorded history, as a `coverage_report`. Each transformation's `refusals` says what refused its proposals: one entry per `kind` (`require`, `bind` or `invariant`) and `rule`, counted from the rejection log, summing to `proposals_refused`. For a gate, `rule` is its name, or its rendered expression if it had none; the log does not record which, so name a gate (`require in_force: ...`) to give it a stable identity in this report. A transformation never refused has neither field.
+
+The report reads the whole database's history by name. On a database several programmes write to, a transformation another programme shares a name with counts that programme's transitions and refusals too, and a name the supplied programme does not declare is flagged `not_in_programme`, which says only that: not that another programme owns it, nor that it was renamed. Likewise an invariant refusal counts for today's invariant of the recorded name, which does not prove today's declaration did the refusing. The prose report lists the undeclared names in a section of their own.
+
+`refusals` is new in this release. A client generated before it refuses a report that carries the field, by design, so regenerate the client; it still reads a report in which nothing was refused.
+
 ### `morpholog explain --json`
 
 Stdout is the `Explanation` JSON: the verdict (admissible or rejected), the gate that failed, the directly-missing claims, or the violated invariant. Without `--json` the same structure renders as claim-shaped prose.

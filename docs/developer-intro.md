@@ -843,9 +843,12 @@ transformations:
   correct_revenue - 1 transition(s)
   run_covenant_test - 1 transition(s)
     refused: 1 proposal(s)
+      require `CurrentFigure(asset, period, figure_id)`: 1
 ```
 
-That `refused: 1 proposal(s)` is the August attempt you watched bounce - a
+That `refused: 1 proposal(s)` is the August attempt you watched bounce, and
+the line under it is the gate that said no. The gate has no name, so the
+report shows its expression; `require in_force: ...` would show the name. A
 rule that has actually said no is the strongest evidence it is alive. The
 verdict to watch for is the opposite one: a transformation or rule showing
 `never` here is dead text wearing a load-bearing name, and now it gets named

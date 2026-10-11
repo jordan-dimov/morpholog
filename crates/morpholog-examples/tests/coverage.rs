@@ -7,7 +7,8 @@
 use std::collections::BTreeSet;
 
 use morpholog_core::{
-    ClaimInstance, CoverageTracker, CoverageVerdict, EvalValue, PredicateName, State, Subject,
+    ClaimInstance, CoverageTracker, CoverageVerdict, EvalValue, PredicateName, RefusalKind, State,
+    Subject,
 };
 use morpholog_surface::parse_program;
 
@@ -367,7 +368,12 @@ fn the_prose_render_carries_verdicts_and_the_legend() {
     let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
     // Refuse under an implication-shaped rule so every verdict appears:
     // ghosts_never_fire stays never-fired and the prohibition always-on.
-    tracker.observe_rejection(Some("flagged_accounts_exist"), "flag_account", "r1");
+    tracker.observe_rejection(
+        RefusalKind::Invariant,
+        "flagged_accounts_exist",
+        "flag_account",
+        "r1",
+    );
     let report = tracker.into_report();
     let prose = morpholog_core::render_coverage(&report);
     assert!(prose.contains("NEVER FIRED"));
@@ -399,8 +405,18 @@ fn a_refusal_beats_fired_and_records_first_and_last_ids() {
             "flag_account",
         )
         .unwrap();
-    tracker.observe_rejection(Some("flagged_accounts_exist"), "flag_account", "r1");
-    tracker.observe_rejection(Some("flagged_accounts_exist"), "flag_account", "r2");
+    tracker.observe_rejection(
+        RefusalKind::Invariant,
+        "flagged_accounts_exist",
+        "flag_account",
+        "r1",
+    );
+    tracker.observe_rejection(
+        RefusalKind::Invariant,
+        "flagged_accounts_exist",
+        "flag_account",
+        "r2",
+    );
 
     let report = tracker.into_report();
     let inv = report
@@ -421,7 +437,12 @@ fn a_refusal_beats_fired_and_records_first_and_last_ids() {
 fn an_always_on_prohibition_with_a_refusal_is_constrained() {
     let program = parsed();
     let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
-    tracker.observe_rejection(Some("no_flag_without_account_ever"), "flag_account", "r1");
+    tracker.observe_rejection(
+        RefusalKind::Invariant,
+        "no_flag_without_account_ever",
+        "flag_account",
+        "r1",
+    );
     let report = tracker.into_report();
     let inv = report
         .invariants
@@ -437,7 +458,7 @@ fn an_always_on_prohibition_with_a_refusal_is_constrained() {
 fn a_gate_refusal_counts_for_the_transformation_not_any_invariant() {
     let program = parsed();
     let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
-    tracker.observe_rejection(None, "flag_account", "r1");
+    tracker.observe_rejection(RefusalKind::Require, "has_account", "flag_account", "r1");
     let report = tracker.into_report();
     assert!(
         report
@@ -460,7 +481,12 @@ fn a_gate_refusal_counts_for_the_transformation_not_any_invariant() {
 fn refusals_naming_undeclared_rules_and_transformations_surface_flagged() {
     let program = parsed();
     let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&program));
-    tracker.observe_rejection(Some("retired_rule"), "renamed_long_ago", "r1");
+    tracker.observe_rejection(
+        RefusalKind::Invariant,
+        "retired_rule",
+        "renamed_long_ago",
+        "r1",
+    );
     let report = tracker.into_report();
 
     let drifted = report

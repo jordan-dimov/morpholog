@@ -27,17 +27,36 @@
     }
   ],
   "program": "envelopes_coverage",
-  "rejections_replayed": 3,
+  "rejections_replayed": 4,
   "transformations": [
     {
       "proposals_refused": 1,
+      "refusals": [
+        {
+          "kind": "require",
+          "proposals_refused": 1,
+          "rule": "has_account"
+        }
+      ],
       "transformation": "open_account",
       "transitions": 0
     },
     {
       "first": "t1",
       "last": "t1",
-      "proposals_refused": 1,
+      "proposals_refused": 2,
+      "refusals": [
+        {
+          "kind": "bind",
+          "proposals_refused": 1,
+          "rule": "Account(account_id)"
+        },
+        {
+          "kind": "invariant",
+          "proposals_refused": 1,
+          "rule": "no_flagged_accounts"
+        }
+      ],
       "transformation": "flag_account",
       "transitions": 1
     },
@@ -46,6 +65,13 @@
       "last": "t2",
       "not_in_programme": true,
       "proposals_refused": 1,
+      "refusals": [
+        {
+          "kind": "invariant",
+          "proposals_refused": 1,
+          "rule": "retired_rule"
+        }
+      ],
       "transformation": "renamed_long_ago",
       "transitions": 1
     }

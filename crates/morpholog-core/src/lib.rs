@@ -60,8 +60,8 @@ pub use controls::{
     controls, render_controls,
 };
 pub use coverage::{
-    CoverageReport, CoverageTracker, CoverageVerdict, InvariantCoverage, TransformationUsage,
-    render_coverage,
+    CoverageReport, CoverageTracker, CoverageVerdict, InvariantCoverage, RefusalCause, RefusalKind,
+    TransformationUsage, render_coverage,
 };
 pub use definitions::resolve_defined_calls;
 pub use disciplines::{in_force_define_name, lower_discipline_definitions, lower_disciplines};
