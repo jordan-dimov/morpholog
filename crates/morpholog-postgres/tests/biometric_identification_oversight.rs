@@ -299,14 +299,28 @@ async fn each_name_reaches_the_record_only_over_its_own_login() {
         eprintln!("skipping: needs a superuser test role");
         return;
     }
-    let logins = [
-        "mtest_bio_dep",
-        "mtest_bio_sys",
-        "mtest_bio_anna",
-        "mtest_bio_ben",
-        "mtest_bio_rogue",
-    ];
-    recreate_gateway_roles(&pool, &logins).await;
+    recreate_gateway_roles(&pool, &LOGINS).await;
+    // The roles belong to the whole cluster, so they are dropped even when
+    // the walk fails: left behind, they would fail other suites' census of
+    // who can write the audit log.
+    let walked = tokio::spawn(walk_the_boundary()).await;
+    drop_roles_if_present(&pool, &LOGINS).await;
+    if let Err(failure) = walked {
+        std::panic::resume_unwind(failure.into_panic());
+    }
+}
+
+const LOGINS: [&str; 5] = [
+    "mtest_bio_dep",
+    "mtest_bio_sys",
+    "mtest_bio_anna",
+    "mtest_bio_ben",
+    "mtest_bio_rogue",
+];
+
+async fn walk_the_boundary() {
+    let pool = test_pool().await;
+    let logins = LOGINS;
     let deployer = gateway_pool(logins[0]).await;
     let system = gateway_pool(logins[1]).await;
     let anna = gateway_pool(logins[2]).await;
@@ -445,35 +459,42 @@ async fn each_name_reaches_the_record_only_over_its_own_login() {
     )
     .await;
 
-    // A second deployment cannot hand the rogue an existing name: there
-    // is one deployment, so it is refused, and anna's grants stand as
-    // they were.
+    // A second deployment cannot hand anyone an existing name, and anna's
+    // grants stand as they were.
     let anna_grants = grants_of(&pool, "anna").await;
-    for deployer_name in ["mallory", "anna"] {
+    let second_deployment = |deployer_name: &str| -> Args {
+        vec![
+            subj("camera_b"),
+            subj(deployer_name),
+            subj(logins[4]),
+            subj(logins[4]),
+        ]
+    };
+    // The rogue under its own name, and anna over her own login: both
+    // reach the programme, and its one-deployment gate refuses them.
+    for (gateway, name) in [(&rogue, "mallory"), (&anna, "anna")] {
         let outcome = propose_against_pg(
-            &rogue,
+            gateway,
             &common::pg_program(bio::program()),
-            &proposal(
-                &bio::deploy_system(),
-                vec![
-                    subj("camera_b"),
-                    subj(deployer_name),
-                    subj(logins[4]),
-                    subj(logins[4]),
-                ],
-                deployer_name,
-            ),
+            &proposal(&bio::deploy_system(), second_deployment(name), name),
         )
-        .await;
+        .await
+        .unwrap();
         assert!(
-            matches!(
-                outcome,
-                Ok(PgProposalOutcome::Rejected { .. })
-                    | Err(PgError::ActorAssertionUnauthorised { .. })
-            ),
-            "a second deployment naming {deployer_name}: {outcome:?}"
+            matches!(&outcome, PgProposalOutcome::Rejected { reason, .. }
+                if reason.to_string().contains("DeployedSystem(_, _)")),
+            "a second deployment proposed as {name}: {outcome:?}"
         );
     }
+    // The rogue cannot even speak as anna to try.
+    refused_as(
+        &rogue,
+        bio::deploy_system(),
+        second_deployment("anna"),
+        "anna",
+        logins[4],
+    )
+    .await;
     assert_eq!(
         grants_of(&pool, "anna").await,
         anna_grants,
@@ -509,5 +530,4 @@ async fn each_name_reaches_the_record_only_over_its_own_login() {
     for gateway in [deployer, system, anna, ben, rogue] {
         gateway.close().await;
     }
-    drop_roles_if_present(&pool, &logins).await;
 }
