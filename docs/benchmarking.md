@@ -77,7 +77,11 @@ The claim: **on one machine, a resident session takes about half the time per pr
 | session steady-state median, ms | 10.97 | 10.91 | 10.07 |
 | session steady-state p95, ms | 18.04 | 18.65 | 17.41 |
 | speed-up, mean against mean | 2.0x | 2.0x | 2.0x |
+| session steady-state mean implied, ms | 10.68 | 10.85 | 10.31 |
+| one-minute load at start | 1.47 | 1.36 | 1.31 |
 
-Invocation: `DATABASE_URL=<disposable database> ./scripts/embedder_latency.sh 300`, three runs a few seconds apart, each started once the one-minute load average was under 1.5. Release binary at commit `cbb7f36`, sha256 `bf437a7e5c705d6f826a033f3d2d4437192a4e906d10f98cf2c2558ec3489cc2`; PostgreSQL 18.6 on the same host, an Intel Core Ultra 7 155H laptop on mains power, no thermal events in the kernel log. The workload is the ledger example's `post_simple_entry`, one worker, proposals in sequence.
+The script prints the speed-up rounded to one decimal and does not print the session's mean, so the implied mean is the one-shot time divided by 2.0: with the rounding, each lies within about 2.5% of the printed value. The startup figure starts its clock after the shell has launched the session process, so it leaves out part of the launch; the speed-up rests on the proposal timings alone.
+
+Invocation: `DATABASE_URL=<disposable database> ./scripts/embedder_latency.sh 300`, three runs a few seconds apart, each started once the one-minute load average was under 1.5 (readings above). Release binary at commit `cbb7f36`, sha256 `bf437a7e5c705d6f826a033f3d2d4437192a4e906d10f98cf2c2558ec3489cc2`; PostgreSQL 18.6 on the same host, an Intel Core Ultra 7 155H laptop on mains power, no thermal events in the kernel log. The workload is the ledger example's `post_simple_entry`, one worker, proposals in sequence.
 
 Not measured: several workers proposing at once, and the time inside a web request. Whether a burst in the last seconds before a close completes in time, and how often concurrent workers meet serialization failures, depend on the deploying programme's own rules and state; measure them against that programme when they matter.
