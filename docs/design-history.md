@@ -1124,4 +1124,4 @@ The scope document now states the principle the design history had settled case 
 
 **Forced by:** an embedder's v0.0.14 upgrade (#507). `provision indexes --prune` created four indexes the earlier release had not required, and nothing had said the requirements could change.
 
-**Landed:** every `migrate` that applies, with or without a migration to run, ends with a `hint:` on stderr naming `provision indexes --check <programmes>`; the report on stdout is unchanged and `--check` stays silent. `migrate` cannot compute the requirements itself, because they depend on the programmes. A release now plans the gallery's indexes under the previous binary and the new one, and its notes list any difference.
+**Landed:** every `migrate` that applies, with or without a migration to run, ends with a `hint:` on stderr naming `provision indexes --check <programmes>`; the report on stdout is unchanged and `--check` prints no hint. `migrate` cannot compute the requirements itself, because they depend on the programmes. A release now plans the gallery's indexes under the previous binary and the new one, and its notes list any difference.
