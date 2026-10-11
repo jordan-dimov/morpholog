@@ -140,7 +140,8 @@ pub use signing::{
 };
 pub use transact::{AtomicAct, PgAtomicOutcome, propose_all_against_pg};
 pub use verify::{
-    VerifyOutcome, VerifyReport, ViewsVerification, coverage_replay, verify_replay, verify_views,
+    VerifyOutcome, VerifyPass, VerifyProgress, VerifyReport, ViewsVerification, coverage_replay,
+    verify_replay, verify_views,
 };
 pub use witnesses::{
     CheckpointWitnesses, PackVerdict, PackVerificationReport, WitnessAnchors, WitnessStanding,

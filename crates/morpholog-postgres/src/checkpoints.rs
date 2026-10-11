@@ -41,6 +41,7 @@ use crate::prefix_verify::PrefixVerifier;
 use crate::role_rebindings::{RebindingFold, RebindingScope, RoleRebindings};
 use crate::signing;
 use crate::txn::{TxIsolation, begin_isolated_tx};
+use crate::verify::{VerifyPass, VerifyProgress};
 
 /// What an `AuditSigningKey` claim authorises a key for. Bound into the
 /// signed payload, so a checkpoint key cannot sign another kind of
@@ -796,7 +797,7 @@ pub async fn verify_audit_tree_under(
     anchor: Option<Checkpoint>,
     policy: Option<&SignaturePolicy>,
 ) -> Result<TreeVerification, PgError> {
-    verify_audit_tree_with_chain(pool, anchor, policy)
+    verify_audit_tree_with_chain(pool, anchor, policy, &mut |_| {})
         .await
         .map(|(verdict, _, _)| verdict)
 }
@@ -804,13 +805,16 @@ pub async fn verify_audit_tree_under(
 /// [`verify_audit_tree_under`], also returning the checkpoint chain the
 /// verdict saw, so witnesses are judged on exactly those checkpoints, and
 /// the role rebindings in the rows the verdict covered, read in the same
-/// walk that hashed them.
+/// walk that hashed them. `on_progress` hears the rows hashed so far after
+/// each page.
 pub async fn verify_audit_tree_with_chain(
     pool: &PgPool,
     anchor: Option<Checkpoint>,
     policy: Option<&SignaturePolicy>,
+    on_progress: &mut dyn FnMut(VerifyProgress),
 ) -> Result<(TreeVerification, Vec<Checkpoint>, RoleRebindings), PgError> {
-    let (verdict, checkpoints, rebindings) = verify_audit_tree_walk(pool, anchor, policy).await?;
+    let (verdict, checkpoints, rebindings) =
+        verify_audit_tree_walk(pool, anchor, policy, on_progress).await?;
     let established = matches!(verdict, TreeVerification::Intact { .. });
     Ok((
         verdict,
@@ -823,6 +827,7 @@ async fn verify_audit_tree_walk(
     pool: &PgPool,
     anchor: Option<Checkpoint>,
     policy: Option<&SignaturePolicy>,
+    on_progress: &mut dyn FnMut(VerifyProgress),
 ) -> Result<(TreeVerification, Vec<Checkpoint>, RebindingFold), PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
 
@@ -846,6 +851,11 @@ async fn verify_audit_tree_walk(
             verifier.push(row)?;
             fed += 1;
         }
+        on_progress(VerifyProgress {
+            pass: VerifyPass::Tree,
+            done: u64::try_from(fed).unwrap_or(0),
+            total: u64::try_from(max_size).unwrap_or(0),
+        });
     }
     let (verdict, rebindings) = verifier.finish();
 

@@ -25,7 +25,7 @@ use uuid::Uuid;
 /// Replay cost is O(transitions up to T).
 pub async fn reconstruct_state_at(pool: &PgPool, transition_id: Uuid) -> Result<State, PgError> {
     let mut conn = pool.acquire().await.map_err(classify)?;
-    reconstruct_inner(&mut conn, transition_id, None, None).await
+    reconstruct_inner(&mut conn, transition_id, None, None, None).await
 }
 /// Like [`reconstruct_state_at`] but keeps only claims whose predicate
 /// is in `predicates`: the as-of analogue of
@@ -64,7 +64,14 @@ async fn reconstruct_scoped(
         return Ok(State::default());
     }
     let mut conn = pool.acquire().await.map_err(classify)?;
-    reconstruct_inner(&mut conn, transition_id, Some(predicates), asserted_in).await
+    reconstruct_inner(
+        &mut conn,
+        transition_id,
+        Some(predicates),
+        asserted_in,
+        None,
+    )
+    .await
 }
 /// Returns the claims admitted as of `transition_id`, in audit replay
 /// order: live claims keep the order the replay first admitted them,
@@ -88,7 +95,8 @@ pub async fn list_claims_at(
 pub async fn read_claims_at(pool: &PgPool, transition_id: Uuid) -> Result<Vec<ClaimRead>, PgError> {
     let mut asserted_in = HashMap::new();
     let mut conn = pool.acquire().await.map_err(classify)?;
-    let state = reconstruct_inner(&mut conn, transition_id, None, Some(&mut asserted_in)).await?;
+    let state =
+        reconstruct_inner(&mut conn, transition_id, None, Some(&mut asserted_in), None).await?;
     Ok(with_asserted_in(&state, &asserted_in))
 }
 /// Returns the claims of the given predicates admitted as of
@@ -163,12 +171,14 @@ where
 ///
 /// With `asserted_in`, the map ends holding each live claim and the
 /// transition that admitted it while absent, as the commit path's
-/// insert-if-absent records it.
+/// insert-if-absent records it. `on_page` hears the transitions replayed
+/// so far after each page.
 pub(crate) async fn reconstruct_inner(
     conn: &mut sqlx::PgConnection,
     transition_id: Uuid,
     predicates: Option<&[String]>,
     mut asserted_in: Option<&mut HashMap<ClaimInstance, Uuid>>,
+    mut on_page: Option<&mut dyn FnMut(u64)>,
 ) -> Result<State, PgError> {
     // A missing target is TransitionNotFound.
     let target = audit_cursor_for(&mut *conn, transition_id).await?;
@@ -176,11 +186,13 @@ pub(crate) async fn reconstruct_inner(
         predicates.map(|preds| preds.iter().map(String::as_str).collect());
     let mut state = State::default();
     let mut pages = ReplayPages::new(Some(target));
+    let mut replayed = 0u64;
     loop {
         let rows = pages.next(&mut *conn).await?;
         if rows.is_empty() {
             break;
         }
+        replayed += rows.len() as u64;
         for row in rows {
             let in_scope = |claims: serde_json::Value| -> Result<Vec<ClaimInstance>, PgError> {
                 let mut claims: Vec<ClaimInstance> = serde_json::from_value(claims)?;
@@ -202,6 +214,9 @@ pub(crate) async fn reconstruct_inner(
                 }
             }
             state.apply(&asserted, &retracted);
+        }
+        if let Some(report) = on_page.as_deref_mut() {
+            report(replayed);
         }
     }
     Ok(state)

@@ -23,8 +23,8 @@
 mod common;
 
 use common::{
-    drop_roles_if_present, expect_committed, gateway_pool, pg_program, propose_pg_as,
-    recreate_gateway_roles, reset_db, session_is_superuser, test_pool,
+    expect_committed, gateway_pool, pg_program, propose_pg_as, reset_db, session_is_superuser,
+    test_pool, with_gateway_roles,
 };
 use morpholog_core::{EvalValue, Subject, Transformation, Transition};
 use morpholog_postgres::PgProgram;
@@ -160,19 +160,22 @@ async fn an_unarmed_actor_is_asserted_by_anyone_exactly_as_before() {
         return;
     }
     let dep = deployer_login("a");
-    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_a"]).await;
-    let deployer = gateway_pool(dep.clone()).await;
-    deploy(&deployer, &dep).await;
+    with_gateway_roles(&pool, &[&dep, "mtest_gw_a"], {
+        let dep = dep.clone();
+        async move {
+            let deployer = gateway_pool(dep.clone()).await;
+            deploy(&deployer, &dep).await;
 
-    // No ActorAssertionRestricted claim exists, so nothing is restricted.
-    let gateway = gateway_pool("mtest_gw_a").await;
-    let (t, args) = note_of("verifier_new");
-    let outcome = propose_against_pg(&gateway, &program(), &proposal(&t, args, CHEN))
-        .await
-        .expect("an unarmed actor stays assertable by any role");
-    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
-
-    drop_roles_if_present(&pool, &[&dep, "mtest_gw_a"]).await;
+            // No ActorAssertionRestricted claim exists, so nothing is restricted.
+            let gateway = gateway_pool("mtest_gw_a").await;
+            let (t, args) = note_of("verifier_new");
+            let outcome = propose_against_pg(&gateway, &program(), &proposal(&t, args, CHEN))
+                .await
+                .expect("an unarmed actor stays assertable by any role");
+            assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+        }
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -184,37 +187,41 @@ async fn an_armed_actor_is_refused_to_an_unauthorised_role_and_records_nothing()
         return;
     }
     let dep = deployer_login("chen");
-    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_chen", "mtest_gw_rogue"]).await;
-    let deployer = gateway_pool(dep.clone()).await;
-    deploy(&deployer, &dep).await;
-    arm(&deployer, CHEN).await;
-    grant(&deployer, CHEN, "mtest_gw_chen").await;
+    with_gateway_roles(&pool, &[&dep, "mtest_gw_chen", "mtest_gw_rogue"], {
+        let pool = pool.clone();
+        let dep = dep.clone();
+        async move {
+            let deployer = gateway_pool(dep.clone()).await;
+            deploy(&deployer, &dep).await;
+            arm(&deployer, CHEN).await;
+            grant(&deployer, CHEN, "mtest_gw_chen").await;
 
-    let audit_before = audit_count(&pool).await;
-    let rejections_before = rejection_count(&pool).await;
-    let outbox_before = outbox_count(&pool).await;
+            let audit_before = audit_count(&pool).await;
+            let rejections_before = rejection_count(&pool).await;
+            let outbox_before = outbox_count(&pool).await;
 
-    let rogue = gateway_pool("mtest_gw_rogue").await;
-    let (t, args) = note_of("verifier_new");
-    let err = propose_against_pg(&rogue, &program(), &proposal(&t, args, CHEN))
-        .await
-        .expect_err("an unauthorised role may not speak for an armed actor");
-    assert!(
-        matches!(&err, PgError::ActorAssertionUnauthorised { actor, login_role }
-            if actor.as_str() == CHEN && login_role == "mtest_gw_rogue"),
-        "{err:?}"
-    );
+            let rogue = gateway_pool("mtest_gw_rogue").await;
+            let (t, args) = note_of("verifier_new");
+            let err = propose_against_pg(&rogue, &program(), &proposal(&t, args, CHEN))
+                .await
+                .expect_err("an unauthorised role may not speak for an armed actor");
+            assert!(
+                matches!(&err, PgError::ActorAssertionUnauthorised { actor, login_role }
+                    if actor.as_str() == CHEN && login_role == "mtest_gw_rogue"),
+                "{err:?}"
+            );
 
-    // A refused assertion must not record that the actor attempted anything.
-    assert_eq!(audit_count(&pool).await, audit_before, "audit grew");
-    assert_eq!(
-        rejection_count(&pool).await,
-        rejections_before,
-        "the rejection log is for business refusals only"
-    );
-    assert_eq!(outbox_count(&pool).await, outbox_before, "outbox grew");
-
-    drop_roles_if_present(&pool, &[&dep, "mtest_gw_chen", "mtest_gw_rogue"]).await;
+            // A refused assertion must not record that the actor attempted anything.
+            assert_eq!(audit_count(&pool).await, audit_before, "audit grew");
+            assert_eq!(
+                rejection_count(&pool).await,
+                rejections_before,
+                "the rejection log is for business refusals only"
+            );
+            assert_eq!(outbox_count(&pool).await, outbox_before, "outbox grew");
+        }
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -226,20 +233,23 @@ async fn the_authorised_role_proceeds() {
         return;
     }
     let dep = deployer_login("chen2");
-    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_chen2"]).await;
-    let deployer = gateway_pool(dep.clone()).await;
-    deploy(&deployer, &dep).await;
-    arm(&deployer, CHEN).await;
-    grant(&deployer, CHEN, "mtest_gw_chen2").await;
+    with_gateway_roles(&pool, &[&dep, "mtest_gw_chen2"], {
+        let dep = dep.clone();
+        async move {
+            let deployer = gateway_pool(dep.clone()).await;
+            deploy(&deployer, &dep).await;
+            arm(&deployer, CHEN).await;
+            grant(&deployer, CHEN, "mtest_gw_chen2").await;
 
-    let gateway = gateway_pool("mtest_gw_chen2").await;
-    let (t, args) = note_of("verifier_new");
-    let outcome = propose_against_pg(&gateway, &program(), &proposal(&t, args, CHEN))
-        .await
-        .expect("the granted role speaks for its actor");
-    assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
-
-    drop_roles_if_present(&pool, &[&dep, "mtest_gw_chen2"]).await;
+            let gateway = gateway_pool("mtest_gw_chen2").await;
+            let (t, args) = note_of("verifier_new");
+            let outcome = propose_against_pg(&gateway, &program(), &proposal(&t, args, CHEN))
+                .await
+                .expect("the granted role speaks for its actor");
+            assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+        }
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -253,22 +263,25 @@ async fn asking_for_a_trace_does_not_get_round_the_policy() {
         return;
     }
     let dep = deployer_login("trace");
-    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_trace"]).await;
-    let deployer = gateway_pool(dep.clone()).await;
-    deploy(&deployer, &dep).await;
-    arm(&deployer, CHEN).await;
+    with_gateway_roles(&pool, &[&dep, "mtest_gw_trace"], {
+        let dep = dep.clone();
+        async move {
+            let deployer = gateway_pool(dep.clone()).await;
+            deploy(&deployer, &dep).await;
+            arm(&deployer, CHEN).await;
 
-    let rogue = gateway_pool("mtest_gw_trace").await;
-    let (t, args) = note_of("verifier_new");
-    let err = propose_against_pg_with_trace(&rogue, &program(), &proposal(&t, args, CHEN))
-        .await
-        .expect_err("the traced path must take the same gate");
-    assert!(
-        matches!(&err, PgError::ActorAssertionUnauthorised { .. }),
-        "{err:?}"
-    );
-
-    drop_roles_if_present(&pool, &[&dep, "mtest_gw_trace"]).await;
+            let rogue = gateway_pool("mtest_gw_trace").await;
+            let (t, args) = note_of("verifier_new");
+            let err = propose_against_pg_with_trace(&rogue, &program(), &proposal(&t, args, CHEN))
+                .await
+                .expect_err("the traced path must take the same gate");
+            assert!(
+                matches!(&err, PgError::ActorAssertionUnauthorised { .. }),
+                "{err:?}"
+            );
+        }
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -283,52 +296,55 @@ async fn withdrawing_the_last_grant_locks_the_actor_out_rather_than_freeing_it()
         return;
     }
     let dep = deployer_login("last");
-    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_last", "mtest_gw_other"]).await;
-    let deployer = gateway_pool(dep.clone()).await;
-    deploy(&deployer, &dep).await;
-    arm(&deployer, CHEN).await;
-    grant(&deployer, CHEN, "mtest_gw_last").await;
+    with_gateway_roles(&pool, &[&dep, "mtest_gw_last", "mtest_gw_other"], {
+        let dep = dep.clone();
+        async move {
+            let deployer = gateway_pool(dep.clone()).await;
+            deploy(&deployer, &dep).await;
+            arm(&deployer, CHEN).await;
+            grant(&deployer, CHEN, "mtest_gw_last").await;
 
-    let p = program();
-    let withdraw = p
-        .prepared()
-        .transformation(&"withdraw".into())
-        .unwrap()
-        .clone();
-    expect_committed(
-        propose_pg_as(
-            &deployer,
-            &p,
-            &withdraw,
-            vec![subj(CHEN), subj("mtest_gw_last")],
-            DEPLOYER,
-        )
-        .await
-        .unwrap(),
-    );
+            let p = program();
+            let withdraw = p
+                .prepared()
+                .transformation(&"withdraw".into())
+                .unwrap()
+                .clone();
+            expect_committed(
+                propose_pg_as(
+                    &deployer,
+                    &p,
+                    &withdraw,
+                    vec![subj(CHEN), subj("mtest_gw_last")],
+                    DEPLOYER,
+                )
+                .await
+                .unwrap(),
+            );
 
-    // The formerly-granted gateway is now refused...
-    let former = gateway_pool("mtest_gw_last").await;
-    let (t, args) = note_of("verifier_new");
-    assert!(
-        matches!(
-            propose_against_pg(&former, &program(), &proposal(&t, args, CHEN)).await,
-            Err(PgError::ActorAssertionUnauthorised { .. })
-        ),
-        "the withdrawn grant must stop working"
-    );
-    // ...and so is everyone else. No downgrade to open.
-    let other = gateway_pool("mtest_gw_other").await;
-    let (t, args) = note_of("verifier_new2");
-    assert!(
-        matches!(
-            propose_against_pg(&other, &program(), &proposal(&t, args, CHEN)).await,
-            Err(PgError::ActorAssertionUnauthorised { .. })
-        ),
-        "withdrawing the last grant must LOCK the actor, never free it"
-    );
-
-    drop_roles_if_present(&pool, &[&dep, "mtest_gw_last", "mtest_gw_other"]).await;
+            // The formerly-granted gateway is now refused...
+            let former = gateway_pool("mtest_gw_last").await;
+            let (t, args) = note_of("verifier_new");
+            assert!(
+                matches!(
+                    propose_against_pg(&former, &program(), &proposal(&t, args, CHEN)).await,
+                    Err(PgError::ActorAssertionUnauthorised { .. })
+                ),
+                "the withdrawn grant must stop working"
+            );
+            // ...and so is everyone else. No downgrade to open.
+            let other = gateway_pool("mtest_gw_other").await;
+            let (t, args) = note_of("verifier_new2");
+            assert!(
+                matches!(
+                    propose_against_pg(&other, &program(), &proposal(&t, args, CHEN)).await,
+                    Err(PgError::ActorAssertionUnauthorised { .. })
+                ),
+                "withdrawing the last grant must LOCK the actor, never free it"
+            );
+        }
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -342,50 +358,54 @@ async fn set_role_does_not_change_who_the_policy_thinks_you_are() {
         return;
     }
     let dep = deployer_login("setrole");
-    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_real", "mtest_gw_borrowed"]).await;
-    let deployer = gateway_pool(dep.clone()).await;
-    deploy(&deployer, &dep).await;
-    arm(&deployer, CHEN).await;
-    grant(&deployer, CHEN, "mtest_gw_borrowed").await;
-    // Membership, so the SET ROLE below succeeds: borrowing a role is
-    // allowed, it just does not change who the policy judges.
-    sqlx::raw_sql(sqlx::AssertSqlSafe(
-        "GRANT mtest_gw_borrowed TO mtest_gw_real".to_string(),
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
+    with_gateway_roles(&pool, &[&dep, "mtest_gw_real", "mtest_gw_borrowed"], {
+        let pool = pool.clone();
+        let dep = dep.clone();
+        async move {
+            let deployer = gateway_pool(dep.clone()).await;
+            deploy(&deployer, &dep).await;
+            arm(&deployer, CHEN).await;
+            grant(&deployer, CHEN, "mtest_gw_borrowed").await;
+            // Membership, so the SET ROLE below succeeds: borrowing a role is
+            // allowed, it just does not change who the policy judges.
+            sqlx::raw_sql(sqlx::AssertSqlSafe(
+                "GRANT mtest_gw_borrowed TO mtest_gw_real".to_string(),
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
 
-    let url = std::env::var("DATABASE_URL").unwrap();
-    let url = morpholog_postgres::with_default_user(&url);
-    let borrowing = PgPoolOptions::new()
-        .max_connections(1)
-        .after_connect(|conn, _| {
-            Box::pin(async move {
-                sqlx::raw_sql(sqlx::AssertSqlSafe(
-                    "SET SESSION AUTHORIZATION mtest_gw_real; SET ROLE mtest_gw_borrowed"
-                        .to_string(),
-                ))
-                .execute(&mut *conn)
-                .await?;
-                Ok(())
-            })
-        })
-        .connect(&url)
-        .await
-        .unwrap();
+            let url = std::env::var("DATABASE_URL").unwrap();
+            let url = morpholog_postgres::with_default_user(&url);
+            let borrowing = PgPoolOptions::new()
+                .max_connections(1)
+                .after_connect(|conn, _| {
+                    Box::pin(async move {
+                        sqlx::raw_sql(sqlx::AssertSqlSafe(
+                            "SET SESSION AUTHORIZATION mtest_gw_real; SET ROLE mtest_gw_borrowed"
+                                .to_string(),
+                        ))
+                        .execute(&mut *conn)
+                        .await?;
+                        Ok(())
+                    })
+                })
+                .connect(&url)
+                .await
+                .unwrap();
 
-    let (t, args) = note_of("verifier_new");
-    let err = propose_against_pg(&borrowing, &program(), &proposal(&t, args, CHEN))
-        .await
-        .expect_err("SET ROLE must not borrow another role's authority");
-    assert!(
-        matches!(&err, PgError::ActorAssertionUnauthorised { login_role, .. }
-            if login_role == "mtest_gw_real"),
-        "the policy must judge the authenticated login, not the assumed role: {err:?}"
-    );
-
-    drop_roles_if_present(&pool, &[&dep, "mtest_gw_real", "mtest_gw_borrowed"]).await;
+            let (t, args) = note_of("verifier_new");
+            let err = propose_against_pg(&borrowing, &program(), &proposal(&t, args, CHEN))
+                .await
+                .expect_err("SET ROLE must not borrow another role's authority");
+            assert!(
+                matches!(&err, PgError::ActorAssertionUnauthorised { login_role, .. }
+                    if login_role == "mtest_gw_real"),
+                "the policy must judge the authenticated login, not the assumed role: {err:?}"
+            );
+        }
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -399,41 +419,44 @@ async fn two_verifiers_through_one_gateway_cannot_both_be_asserted() {
         return;
     }
     let dep = deployer_login("one");
-    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_one", "mtest_gw_two"]).await;
-    let deployer = gateway_pool(dep.clone()).await;
-    deploy(&deployer, &dep).await;
-    arm(&deployer, CHEN).await;
-    arm(&deployer, OKAFOR).await;
-    grant(&deployer, CHEN, "mtest_gw_one").await;
-    grant(&deployer, OKAFOR, "mtest_gw_two").await;
+    with_gateway_roles(&pool, &[&dep, "mtest_gw_one", "mtest_gw_two"], {
+        let dep = dep.clone();
+        async move {
+            let deployer = gateway_pool(dep.clone()).await;
+            deploy(&deployer, &dep).await;
+            arm(&deployer, CHEN).await;
+            arm(&deployer, OKAFOR).await;
+            grant(&deployer, CHEN, "mtest_gw_one").await;
+            grant(&deployer, OKAFOR, "mtest_gw_two").await;
 
-    let one = gateway_pool("mtest_gw_one").await;
-    // Chen's own gateway speaks for Chen.
-    let (t, args) = note_of("verifier_new");
-    expect_committed(
-        propose_against_pg(&one, &program(), &proposal(&t, args, CHEN))
-            .await
-            .expect("Chen's own gateway speaks for Chen"),
-    );
-    // The same gateway cannot then be Okafor.
-    let (t, args) = note_of("verifier_new2");
-    assert!(
-        matches!(
-            propose_against_pg(&one, &program(), &proposal(&t, args, OKAFOR)).await,
-            Err(PgError::ActorAssertionUnauthorised { .. })
-        ),
-        "one gateway must not be able to play both verifiers"
-    );
-    // Okafor's own gateway can.
-    let two = gateway_pool("mtest_gw_two").await;
-    let (t, args) = note_of("verifier_new3");
-    expect_committed(
-        propose_against_pg(&two, &program(), &proposal(&t, args, OKAFOR))
-            .await
-            .expect("Okafor's own gateway speaks for Okafor"),
-    );
-
-    drop_roles_if_present(&pool, &[&dep, "mtest_gw_one", "mtest_gw_two"]).await;
+            let one = gateway_pool("mtest_gw_one").await;
+            // Chen's own gateway speaks for Chen.
+            let (t, args) = note_of("verifier_new");
+            expect_committed(
+                propose_against_pg(&one, &program(), &proposal(&t, args, CHEN))
+                    .await
+                    .expect("Chen's own gateway speaks for Chen"),
+            );
+            // The same gateway cannot then be Okafor.
+            let (t, args) = note_of("verifier_new2");
+            assert!(
+                matches!(
+                    propose_against_pg(&one, &program(), &proposal(&t, args, OKAFOR)).await,
+                    Err(PgError::ActorAssertionUnauthorised { .. })
+                ),
+                "one gateway must not be able to play both verifiers"
+            );
+            // Okafor's own gateway can.
+            let two = gateway_pool("mtest_gw_two").await;
+            let (t, args) = note_of("verifier_new3");
+            expect_committed(
+                propose_against_pg(&two, &program(), &proposal(&t, args, OKAFOR))
+                    .await
+                    .expect("Okafor's own gateway speaks for Okafor"),
+            );
+        }
+    })
+    .await;
 }
 
 async fn audit_count(pool: &PgPool) -> i64 {
@@ -466,28 +489,32 @@ async fn a_rogue_gateway_cannot_escalate_through_an_unrestricted_deployer() {
         return;
     }
     let dep = deployer_login("esc");
-    recreate_gateway_roles(&pool, &[&dep, "mtest_gw_esc"]).await;
-    let deployer = gateway_pool(dep.clone()).await;
-    deploy(&deployer, &dep).await;
-    arm(&deployer, CHEN).await;
-    arm(&deployer, OKAFOR).await;
+    with_gateway_roles(&pool, &[&dep, "mtest_gw_esc"], {
+        let dep = dep.clone();
+        async move {
+            let deployer = gateway_pool(dep.clone()).await;
+            deploy(&deployer, &dep).await;
+            arm(&deployer, CHEN).await;
+            arm(&deployer, OKAFOR).await;
 
-    // The rogue never touches SQL. It simply proposes as the DEPLOYER,
-    // whom nobody armed, and grants itself both verifiers.
-    let rogue = gateway_pool("mtest_gw_esc").await;
-    let p = program();
-    let t = p
-        .prepared()
-        .transformation(&"grant".into())
-        .unwrap()
-        .clone();
-    for person in [CHEN, OKAFOR] {
-        let pr = proposal(&t, vec![subj(person), subj("mtest_gw_esc")], DEPLOYER);
-        let r = propose_against_pg(&rogue, &program(), &pr).await;
-        assert!(
-            matches!(r, Err(PgError::ActorAssertionUnauthorised { .. })),
-            "granting authority through an unrestricted deployer must be refused, got {r:?}"
-        );
-    }
-    drop_roles_if_present(&pool, &[&dep, "mtest_gw_esc"]).await;
+            // The rogue never touches SQL. It simply proposes as the DEPLOYER,
+            // whom nobody armed, and grants itself both verifiers.
+            let rogue = gateway_pool("mtest_gw_esc").await;
+            let p = program();
+            let t = p
+                .prepared()
+                .transformation(&"grant".into())
+                .unwrap()
+                .clone();
+            for person in [CHEN, OKAFOR] {
+                let pr = proposal(&t, vec![subj(person), subj("mtest_gw_esc")], DEPLOYER);
+                let r = propose_against_pg(&rogue, &program(), &pr).await;
+                assert!(
+                    matches!(r, Err(PgError::ActorAssertionUnauthorised { .. })),
+                    "granting authority through an unrestricted deployer must be refused, got {r:?}"
+                );
+            }
+        }
+    })
+    .await;
 }

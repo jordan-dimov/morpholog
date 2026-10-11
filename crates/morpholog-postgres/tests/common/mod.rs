@@ -576,3 +576,19 @@ pub async fn gateway_pool(role: impl Into<String>) -> PgPool {
         .await
         .unwrap()
 }
+
+/// Run `scenario` with these cluster-wide gateway roles, dropping them
+/// afterwards even when it panics: left behind, they would fail other
+/// suites' census of who can write the audit log.
+pub async fn with_gateway_roles(
+    pool: &PgPool,
+    roles: &[&str],
+    scenario: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    recreate_gateway_roles(pool, roles).await;
+    let outcome = tokio::spawn(scenario).await;
+    drop_roles_if_present(pool, roles).await;
+    if let Err(failure) = outcome {
+        std::panic::resume_unwind(failure.into_panic());
+    }
+}
