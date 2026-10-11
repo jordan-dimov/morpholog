@@ -1,6 +1,6 @@
 use crate::audit::audit_cursor_for;
 use crate::audit_pages::ReplayPages;
-use crate::claims::{ClaimRead, claims_of};
+use crate::claims::ClaimRead;
 use crate::error::{PgError, classify, classify_checked_query};
 use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
@@ -103,9 +103,8 @@ pub async fn list_claims_at_for_predicates(
     transition_id: Uuid,
     predicates: &[String],
 ) -> Result<Vec<ClaimInstance>, PgError> {
-    read_claims_at_for_predicates(pool, transition_id, predicates)
-        .await
-        .map(claims_of)
+    let state = reconstruct_state_at_for_predicates(pool, transition_id, predicates).await?;
+    Ok(state.claims().to_vec())
 }
 
 /// [`list_claims_at_for_predicates`] with each claim's
