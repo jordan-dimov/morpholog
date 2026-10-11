@@ -230,7 +230,7 @@ async fn inspect_audit(args: crate::InspectAuditArgs) -> anyhow::Result<()> {
 /// by field name. Everything else, including `arguments` and
 /// `emitted_intents`, stays tagged: those follow parameter kinds, not
 /// predicate declarations.
-fn audit_row_named_json(
+pub(crate) fn audit_row_named_json(
     program: &morpholog_core::Program,
     file: &std::path::Path,
     row: &morpholog_postgres::AuditRow,

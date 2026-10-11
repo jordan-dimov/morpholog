@@ -10,20 +10,6 @@ use std::process::Command;
 
 use sqlx::PgPool;
 
-fn with_database(url: &str, name: &str) -> String {
-    let (base, query) = url
-        .split_once('?')
-        .map_or((url, None), |(b, q)| (b, Some(q)));
-    let swapped = match base.rsplit_once('/') {
-        Some((prefix, _)) => format!("{prefix}/{name}"),
-        None => base.to_string(),
-    };
-    match query {
-        Some(q) => format!("{swapped}?{q}"),
-        None => swapped,
-    }
-}
-
 fn migrate(url: &str) -> (std::process::ExitStatus, String, String) {
     let output = Command::new(common::bin())
         .args(["migrate", "--database-url", url])
@@ -40,7 +26,7 @@ fn migrate(url: &str) -> (std::process::ExitStatus, String, String) {
 async fn migrate_names_the_other_sessions_while_a_migration_is_pending() {
     let base = morpholog_postgres::with_default_user(&common::database_url());
     let name = format!("morpholog_cli_sessions_{}", std::process::id());
-    let admin = PgPool::connect(&with_database(&base, "postgres"))
+    let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await
         .unwrap();
     for sql in [
@@ -52,7 +38,7 @@ async fn migrate_names_the_other_sessions_while_a_migration_is_pending() {
             .await
             .unwrap();
     }
-    let url = with_database(&base, &name);
+    let url = common::with_database(&base, &name);
     let fixture = std::fs::read_to_string(
         common::repo_root().join("crates/morpholog-postgres/tests/fixtures/schema_v0.0.14.sql"),
     )

@@ -47,6 +47,21 @@ pub fn database_url() -> String {
     morpholog_postgres::with_default_user(&url)
 }
 
+/// The same connection string, naming another database.
+pub fn with_database(url: &str, name: &str) -> String {
+    let (base, query) = url
+        .split_once('?')
+        .map_or((url, None), |(b, q)| (b, Some(q)));
+    let swapped = match base.rsplit_once('/') {
+        Some((prefix, _)) => format!("{prefix}/{name}"),
+        None => base.to_string(),
+    };
+    match query {
+        Some(q) => format!("{swapped}?{q}"),
+        None => swapped,
+    }
+}
+
 /// Truncate the schema before a test, so the suites run serially
 /// without crosstalk.
 pub async fn reset_db() {

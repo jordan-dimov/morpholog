@@ -11,6 +11,12 @@
 //! `not_committed` when nothing was recorded, `commit_outcome_unknown`
 //! when COMMIT failed without a verdict.
 //!
+//! `ping` answers with the ready line again after a database round
+//! trip, and `audit` and `rejections` are the one-shot reads with the
+//! same parameters, each answered as one JSON array. An `audit` request
+//! opens its own tail, so its horizon and resume rules are the one-shot
+//! tail's; `limit` caps the rows a resident loop holds in one answer.
+//!
 //! The process aborts, non-zero, only on a failure that cannot be a
 //! receipt: a broken stream, an operational failure on a read, or a
 //! proposal's receipt that could not be serialised after the adapter
@@ -28,14 +34,15 @@ use std::io::{BufRead, Write};
 
 use crate::SessionArgs;
 use crate::commands::filter::FieldFilter;
-use crate::commands::inspect::{claims_rows, decode_claims_named, derived_rows, resolve_as_of};
+use crate::commands::inspect::{
+    audit_row_named_json, claims_rows, decode_claims_named, derived_rows, resolve_as_of,
+};
 use crate::commands::propose::{BatchRow, RowError, classify_pg_error, propose_row_outcome};
 use crate::commands::transact::{Act, decode_acts};
 use crate::commands::{parse_or_report, prepare_or_report};
 use morpholog_cli::envelopes::{ErrorCode, ErrorReceipt, SessionReady};
 use morpholog_core::PreparedProgram;
-use morpholog_postgres::PgPool;
-use morpholog_postgres::PgProgram;
+use morpholog_postgres::{PgError, PgPool, PgProgram};
 
 /// A runaway guard, not a working limit. A longer request line aborts the
 /// session: a half-read line cannot be resynchronised, so it cannot be a
@@ -73,7 +80,8 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
         morpholog_core::format::canonical_hash(prepared.program()),
         prepared.program().name.clone(),
     );
-    write_line(&mut out, &serde_json::to_value(&ready)?)?;
+    let ready = serde_json::to_value(&ready)?;
+    write_line(&mut out, &ready)?;
 
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
@@ -88,7 +96,7 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
         if line.trim().is_empty() {
             continue; // Skipped without a receipt, like a batch blank.
         }
-        match handle_line(&args, &program, &pool, line.trim(), row).await {
+        match handle_line(&args, &program, &pool, &ready, line.trim(), row).await {
             Ok(response) => write_line(&mut out, &response)?,
             Err(SessionFailure::Request { code, reason }) => {
                 let receipt = ErrorReceipt::new(code, format!("{reason:#}"), row);
@@ -153,6 +161,7 @@ async fn handle_line(
     args: &SessionArgs,
     program: &PgProgram,
     pool: &PgPool,
+    ready: &serde_json::Value,
     line: &str,
     row: u64,
 ) -> Result<serde_json::Value, SessionFailure> {
@@ -175,11 +184,14 @@ async fn handle_line(
         "transact" => handle_transact(args, program, pool, value, row).await,
         "claims" => handle_claims(args, program.prepared(), pool, value).await,
         "derived" => handle_derived(args, program.prepared(), pool, value).await,
+        "audit" => handle_audit(args, program.prepared(), pool, value).await,
+        "rejections" => handle_rejections(pool, value).await,
+        "ping" => handle_ping(pool, ready, value).await,
         other => Err(SessionFailure::request(
             ErrorCode::UnknownOperation,
             anyhow!(
                 "unknown operation `{other}`; this session answers propose, transact, claims, \
-                 derived"
+                 derived, audit, rejections, ping"
             ),
         )),
     }
@@ -416,4 +428,159 @@ async fn parse_as_of(
     resolve_as_of(pool, Some(parsed))
         .await
         .map_err(SessionFailure::Operational)
+}
+
+/// The ping body: nothing beyond the operation.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PingBody {}
+
+/// The ready line again, after a round trip that also checks the
+/// database still has the schema this binary was started against. It
+/// says the session could reach the database just now, not that the next
+/// proposal will commit: the pool reconnects on its own after a dropped
+/// connection.
+async fn handle_ping(
+    pool: &PgPool,
+    ready: &serde_json::Value,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, SessionFailure> {
+    let _: PingBody = serde_json::from_value(body)
+        .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
+    morpholog_postgres::require_current_schema(pool)
+        .await
+        .context("checking the database")
+        .map_err(SessionFailure::Operational)?;
+    Ok(ready.clone())
+}
+
+/// The rejections read body: the generated client's `rejections`
+/// parameters, verbatim.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RejectionsBody {
+    #[serde(default = "default_rejections_limit")]
+    limit: u32,
+    #[serde(default)]
+    mentions: Option<String>,
+}
+
+/// The one-shot `inspect rejections` default.
+fn default_rejections_limit() -> u32 {
+    100
+}
+
+async fn handle_rejections(
+    pool: &PgPool,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, SessionFailure> {
+    let body: RejectionsBody = serde_json::from_value(body)
+        .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
+    refuse_empty_mentions(body.mentions.as_deref())?;
+    let rows = morpholog_postgres::list_rejection_rows(pool, body.limit, body.mentions.as_deref())
+        .await
+        .context("reading the rejection log")
+        .map_err(SessionFailure::Operational)?;
+    serde_json::to_value(rows).map_err(|e| SessionFailure::Operational(e.into()))
+}
+
+/// The audit read body: the generated client's `audit`/`audit_named`
+/// parameters, plus `limit`, which only the session has: the one-shot
+/// tail streams, and this answer is held whole.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuditBody {
+    #[serde(default)]
+    after: Option<String>,
+    #[serde(default)]
+    named: bool,
+    #[serde(default)]
+    mentions: Option<String>,
+    #[serde(default)]
+    writer_roles: Option<Vec<String>>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+/// A tail opened for this request alone, read to its horizon or to
+/// `limit` rows. Stopping early loses nothing: the rows come in resume
+/// order, so the next request resumes after the last one returned.
+async fn handle_audit(
+    args: &SessionArgs,
+    prepared: &PreparedProgram,
+    pool: &PgPool,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, SessionFailure> {
+    let body: AuditBody = serde_json::from_value(body)
+        .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
+    refuse_empty_mentions(body.mentions.as_deref())?;
+    if body.limit == Some(0) {
+        return Err(invalid_arguments(anyhow!(
+            "a limit of 0 reads nothing; omit it to read to the horizon"
+        )));
+    }
+    let after = body
+        .after
+        .as_deref()
+        .map(uuid::Uuid::parse_str)
+        .transpose()
+        .map_err(|e| invalid_arguments(anyhow!("`after` is not a transition id: {e}")))?;
+    let limit = body
+        .limit
+        .map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX));
+    let mut tail = morpholog_postgres::begin_audit_tail(pool, after, body.writer_roles.as_deref())
+        .await
+        .map_err(audit_failure)?;
+    if let Some(subject) = &body.mentions {
+        tail = tail.mentioning(subject).map_err(audit_failure)?;
+    }
+    let mut rows = Vec::new();
+    while rows.len() < limit {
+        let page = tail.next_page().await.map_err(audit_failure)?;
+        if page.is_empty() {
+            break;
+        }
+        rows.extend(page);
+    }
+    rows.truncate(limit);
+    let program = prepared.program();
+    let lines = rows
+        .iter()
+        .map(|row| {
+            if body.named {
+                audit_row_named_json(program, &args.file, row)
+            } else {
+                serde_json::to_value(row).map_err(Into::into)
+            }
+        })
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map_err(SessionFailure::Operational)?;
+    Ok(serde_json::Value::Array(lines))
+}
+
+/// What the request can correct is a receipt; a database that cannot
+/// give a sound horizon aborts, so an empty answer never stands in for
+/// one it could not compute.
+fn audit_failure(e: PgError) -> SessionFailure {
+    match e {
+        PgError::TransitionNotFound(_)
+        | PgError::WriterRoleUnknown { .. }
+        | PgError::WriterAssertionEmpty => invalid_arguments(e.into()),
+        other => {
+            SessionFailure::Operational(anyhow::Error::new(other).context("reading the audit tail"))
+        }
+    }
+}
+
+fn refuse_empty_mentions(mentions: Option<&str>) -> Result<(), SessionFailure> {
+    if mentions == Some("") {
+        return Err(invalid_arguments(anyhow!(
+            "`mentions` needs a subject; an empty one names nothing"
+        )));
+    }
+    Ok(())
+}
+
+fn invalid_arguments(reason: anyhow::Error) -> SessionFailure {
+    SessionFailure::request(ErrorCode::InvalidArguments, reason)
 }

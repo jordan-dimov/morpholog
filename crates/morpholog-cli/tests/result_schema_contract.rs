@@ -2895,6 +2895,50 @@ fn every_golden_validates_against_its_defs_entry() {
     }
 }
 
+// The session answers with the pinned shapes: every response in its
+// transcript validates against the entry its request names, so a read the
+// session adds cannot drift from the schema unseen.
+#[test]
+fn every_session_transcript_answer_validates_against_its_defs_entry() {
+    let schema = result_schema();
+    let defs = schema.get("$defs").expect("result.json has $defs");
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/session/transcript.ndjson");
+    let transcript = std::fs::read_to_string(&path).unwrap();
+    let lines: Vec<serde_json::Value> = transcript
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let mut answers = vec![("session_ready", &lines[0])];
+    for pair in lines[1..].chunks(2) {
+        let (request, response) = (&pair[0], &pair[1]);
+        let named = request["named"] == serde_json::json!(true);
+        let def = if response["status"] == "error" {
+            "session_error_receipt"
+        } else {
+            match request["op"].as_str().unwrap() {
+                "propose" => "batch_receipt",
+                "transact" => "atomic_outcome",
+                "claims" | "derived" if named => "named_claim_array",
+                "claims" | "derived" => "claim_instance_array",
+                "audit" if named => "audit_row_named_array",
+                "audit" => "audit_row_array",
+                "rejections" => "rejection_row_array",
+                "ping" => "session_ready",
+                other => panic!("the transcript has an op this test does not map: {other}"),
+            }
+        };
+        answers.push((def, response));
+    }
+    for (def, answer) in answers {
+        let entry = defs
+            .get(def)
+            .unwrap_or_else(|| panic!("result.json lacks $defs entry `{def}`"));
+        validate(answer, entry, defs, def)
+            .unwrap_or_else(|e| panic!("{answer} does not match $defs/{def}: {e}"));
+    }
+}
+
 // Every $ref in the schema resolves to a $defs entry.
 #[test]
 fn every_internal_ref_resolves() {

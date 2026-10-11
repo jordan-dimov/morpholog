@@ -157,6 +157,10 @@ for request in sys.stdin:
         sys.stderr.write("x" * 1000000)
         sys.stderr.flush()
         say("[]")
+    elif mode == "empty_rows":
+        say("[]")
+    elif mode == "other_ready":
+        say(READY.replace("1" * 64, "2" * 64))
     elif mode == "slow_echo":
         time.sleep(0.2)
         say("[]")
@@ -267,9 +271,60 @@ class TranscriptConversation(SessionHarness):
             with self.assertRaises(MorphologRequestError) as bad_as_of:
                 s.claims(as_of="not-a-coordinate")
             self.assertEqual(bad_as_of.exception.code, "invalid_arguments")
+            # Reads between two proposals: the resident loop's shape.
+            history = s.audit_named()
+            self.assertEqual(
+                [row.transformation_name for row in history], ["open_account", "post_balance"]
+            )
+            self.assertEqual(history[0].asserted_claims[0].args["account"], "acct_1")
+            self.assertEqual(len(s.audit(limit=1)), 1)
+            refusals = s.rejections()
+            self.assertEqual(refusals[0].rule, "balances_name_an_account")
+            self.assertEqual(s.ping(), s.ready)
+            with self.assertRaises(MorphologRequestError) as unknown_cursor:
+                s.audit(after="00000000-0000-0000-0000-000000000000")
+            self.assertEqual(unknown_cursor.exception.code, "invalid_arguments")
+            after_reads = s.propose(
+                "open_account", "teller", {"account": "acct_2", "opened_on": "2026-02-01"}
+            )
+            self.assertIsInstance(after_reads, envelopes.Committed)
             # Request errors do not poison: the session still answers.
             self.assertFalse(s._poisoned)
         self.assertEqual(self.recorded(), pinned_requests)
+
+    def test_a_ping_answered_with_another_ready_line_poisons(self):
+        with self.session("other_ready") as s:
+            with self.assertRaises(MorphologError) as other:
+                s.ping()
+            self.assertIn("not its handshake's", str(other.exception))
+            self.assertIsNotNone(s._poisoned)
+
+    def test_audit_and_rejections_send_the_one_shot_parameters(self):
+        with self.session("empty_rows") as s:
+            self.assertEqual(s.audit(writer_roles=[]), [])
+            self.assertEqual(
+                s.audit_named("t1", writer_roles=["w"], mentions="acct_1", limit=5), []
+            )
+            self.assertEqual(s.rejections(limit=3, mentions="acct_1"), [])
+            with self.assertRaises(ValueError):
+                s.audit(mentions="")
+            with self.assertRaises(ValueError):
+                s.rejections(mentions="")
+        self.assertEqual(
+            [json.loads(line) for line in self.recorded()],
+            [
+                {"op": "audit"},
+                {
+                    "after": "t1",
+                    "limit": 5,
+                    "mentions": "acct_1",
+                    "named": True,
+                    "op": "audit",
+                    "writer_roles": ["w"],
+                },
+                {"limit": 3, "mentions": "acct_1", "op": "rejections"},
+            ],
+        )
 
     def test_a_request_error_is_not_a_poisoned_session(self):
         with self.session() as s:
