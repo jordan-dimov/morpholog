@@ -236,3 +236,18 @@ async fn a_filtered_walk_pages_matching_rows_in_order_across_chunks_and_ties() {
         "the unfiltered walk is untouched"
     );
 }
+
+#[tokio::test]
+async fn a_bounded_page_asks_only_for_what_it_needs_and_the_walk_resumes_after_it() {
+    let pool = seeded().await;
+    let mut conn = pool.acquire().await.unwrap();
+    let mut pages = AuditPages::with_chunk(None, 4);
+    let mut next = async |max| {
+        let page = pages.next_up_to(&mut conn, max).await.unwrap();
+        page.iter().map(|r| r.transition_id).collect::<Vec<_>>()
+    };
+    assert_eq!(next(1).await, ids(&[1]));
+    assert_eq!(next(10).await, ids(&[2, 3, 4, 5]), "capped at a chunk");
+    assert_eq!(next(1).await, ids(&[6]));
+    assert_eq!(next(1).await, ids(&[]), "a full page did not end the walk");
+}

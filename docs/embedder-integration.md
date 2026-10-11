@@ -807,8 +807,8 @@ parameters. Unknown fields are refused, not ignored - a misspelt
 - `{"op": "rejections", "limit"?: n, "mentions"?: ...}` - the
   rejection log, newest first, answered with an array of
   `rejection_row`. The default limit is 100, as on the one-shot read.
-- `{"op": "ping"}` - one round trip to the database, answered with
-  the ready line again.
+- `{"op": "ping"}` - a database check, answered with the ready line
+  again.
 
 **The audit read is the one-shot tail, answered whole.** Each request
 opens its own tail, so the horizon and the lossless resume work as in
@@ -816,17 +816,18 @@ opens its own tail, so the horizon and the lossless resume work as in
 later request, never skipped. The difference is the answer. The
 one-shot command streams one line per row; the session returns one
 array. So a resident loop passes `limit` and resumes `after` the last
-row it got. A full page does not mean more rows are waiting, and a
+row it got. The session reads no more rows from the database than the
+limit asks for. A full page does not mean more rows are waiting, and a
 short one does not mean the tail is done: read until an answer is
 empty. A database that cannot give a sound horizon (hidden sessions,
 an incomplete writer set) aborts the session, because an empty answer
 would read as "nothing happened". Coverage stays a one-shot command:
 it replays the whole log.
 
-**A ping proves a round trip, not the next commit.** It also checks
-that the database still has the schema the binary was started
-against, so a migration under a running session shows up on the next
-ping. The connection pool reconnects on its own after a dropped
+**A ping proves the database answered, not that the next commit
+will.** It reads the database's recorded migrations and checks they
+still suit the binary, so a migration under a running session shows up
+on the next ping. That is a few small queries, not one. The connection pool reconnects on its own after a dropped
 connection, so a ping that answers says the database was reachable
 just now. One that cannot reach it ends the session like any
 operational failure. The generated client's `ping()` checks the

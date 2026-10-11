@@ -39,15 +39,15 @@ impl Keyset {
         }
     }
 
-    /// A short page ends the walk, and so does a page ending on the
-    /// `through` target, saving an empty query.
-    fn advance(&mut self, len: usize, last: Option<(Timestamp, Uuid)>) {
+    /// A page shorter than the `asked` size ends the walk, and so does a
+    /// page ending on the `through` target, saving an empty query.
+    fn advance(&mut self, asked: i64, len: usize, last: Option<(Timestamp, Uuid)>) {
         let Some(last) = last else {
             self.done = true;
             return;
         };
         self.cursor = Some(last);
-        self.done = (len as i64) < self.chunk || self.through == Some(last);
+        self.done = (len as i64) < asked || self.through == Some(last);
     }
 }
 
@@ -86,6 +86,7 @@ impl ReplayPages {
         }
         let rows = replay_page(conn, self.0.cursor, self.0.through, self.0.chunk).await?;
         self.0.advance(
+            self.0.chunk,
             rows.len(),
             rows.last().map(|r| (r.committed_at, r.transition_id)),
         );
@@ -135,26 +136,36 @@ impl AuditPages {
         &mut self,
         conn: &mut sqlx::PgConnection,
     ) -> Result<Vec<AuditRow>, PgError> {
+        self.next_up_to(conn, self.keyset.chunk).await
+    }
+
+    /// As [`AuditPages::next`], asking the database for at most `max` rows
+    /// (and never more than a chunk), so a caller that wants few rows
+    /// reads only those.
+    pub(crate) async fn next_up_to(
+        &mut self,
+        conn: &mut sqlx::PgConnection,
+        max: i64,
+    ) -> Result<Vec<AuditRow>, PgError> {
         if self.keyset.done {
             return Ok(Vec::new());
         }
+        let asked = max.clamp(1, self.keyset.chunk);
         let rows = match &self.mentions {
-            None => {
-                list_audit_rows_page(conn, self.keyset.cursor, self.horizon, self.keyset.chunk)
-                    .await?
-            }
+            None => list_audit_rows_page(conn, self.keyset.cursor, self.horizon, asked).await?,
             Some(subject) => {
                 list_audit_rows_page_mentioning(
                     conn,
                     self.keyset.cursor,
                     self.horizon,
-                    self.keyset.chunk,
+                    asked,
                     subject,
                 )
                 .await?
             }
         };
         self.keyset.advance(
+            asked,
             rows.len(),
             rows.last().map(|r| (r.committed_at, r.transition_id)),
         );

@@ -301,7 +301,7 @@ class TranscriptConversation(SessionHarness):
 
     def test_audit_and_rejections_send_the_one_shot_parameters(self):
         with self.session("empty_rows") as s:
-            self.assertEqual(s.audit(writer_roles=[]), [])
+            self.assertEqual(s.audit(), [])
             self.assertEqual(
                 s.audit_named("t1", writer_roles=["w"], mentions="acct_1", limit=5), []
             )
@@ -310,6 +310,8 @@ class TranscriptConversation(SessionHarness):
                 s.audit(mentions="")
             with self.assertRaises(ValueError):
                 s.rejections(mentions="")
+            with self.assertRaises(ValueError):
+                s.audit(writer_roles=[])
         self.assertEqual(
             [json.loads(line) for line in self.recorded()],
             [

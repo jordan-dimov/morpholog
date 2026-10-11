@@ -508,6 +508,14 @@ impl AuditTail<'_> {
     pub async fn next_page(&mut self) -> Result<Vec<AuditRow>, PgError> {
         self.pages.next(&mut self.tx).await
     }
+
+    /// [`AuditTail::next_page`], reading at most `max` transitions from the
+    /// database, for a caller that holds its answer whole. The next page
+    /// resumes after the last row returned.
+    pub async fn next_page_up_to(&mut self, max: usize) -> Result<Vec<AuditRow>, PgError> {
+        let max = i64::try_from(max).unwrap_or(i64::MAX);
+        self.pages.next_up_to(&mut self.tx, max).await
+    }
 }
 /// Resolve a transition id to the `(committed_at, transition_id)`
 /// keyset cursor every audit read orders by. An unknown id is

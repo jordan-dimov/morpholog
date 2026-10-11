@@ -657,44 +657,70 @@ async fn an_audit_read_resumes_after_its_last_row_and_bad_arguments_are_receipts
     assert!(child.wait().unwrap().success());
 }
 
-/// A ping is a round trip to the database, so a session whose database
-/// stops accepting connections aborts on it rather than answering. The
-/// database is the test's own, closed to new connections and with its
-/// backends ended, so the pool's reconnect fails too.
-#[tokio::test]
-async fn a_ping_aborts_the_session_when_the_database_is_unreachable() {
-    let base = database_url();
-    let name = format!("morpholog_cli_ping_{}", std::process::id());
-    let admin = morpholog_postgres::PgPool::connect(&common::with_database(&base, "postgres"))
-        .await
-        .unwrap();
-    let run = |sql: String| {
-        let admin = admin.clone();
-        async move {
-            sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
-                .execute(&admin)
-                .await
-                .unwrap();
-        }
-    };
-    run(format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)")).await;
-    run(format!("CREATE DATABASE {name}")).await;
-    let url = common::with_database(&base, &name);
-    let init = Command::new(common::bin())
-        .args(["init", "--database-url", &url])
-        .output()
-        .unwrap();
-    assert!(
-        init.status.success(),
-        "{}",
-        String::from_utf8_lossy(&init.stderr)
-    );
+/// A database of the test's own, with the schema, so a test can break it
+/// without touching the shared one. Dropped by [`OwnDatabase::drop_it`].
+struct OwnDatabase {
+    admin: morpholog_postgres::PgPool,
+    name: String,
+    url: String,
+}
 
+impl OwnDatabase {
+    async fn new(tag: &str) -> Self {
+        let base = database_url();
+        let name = format!("morpholog_cli_{tag}_{}", std::process::id());
+        let admin = morpholog_postgres::PgPool::connect(&common::with_database(&base, "postgres"))
+            .await
+            .unwrap();
+        let db = OwnDatabase {
+            url: common::with_database(&base, &name),
+            admin,
+            name,
+        };
+        db.run(&format!("DROP DATABASE IF EXISTS {} WITH (FORCE)", db.name))
+            .await;
+        db.run(&format!("CREATE DATABASE {}", db.name)).await;
+        let init = Command::new(common::bin())
+            .args(["init", "--database-url", &db.url])
+            .output()
+            .unwrap();
+        assert!(
+            init.status.success(),
+            "{}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        db
+    }
+
+    async fn run(&self, sql: &str) {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string()))
+            .execute(&self.admin)
+            .await
+            .unwrap();
+    }
+
+    async fn drop_it(self) {
+        self.run(&format!(
+            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
+            self.name
+        ))
+        .await;
+    }
+}
+
+/// A session on `url` that has answered one ping, with its ready line.
+fn pinged_session(
+    url: &str,
+) -> (
+    std::process::Child,
+    std::process::ChildStdin,
+    std::sync::mpsc::Receiver<String>,
+) {
     let fixture = common::write_fixture("session_fixture", FIXTURE);
     let mut child = Command::new(common::bin())
         .arg("session")
         .arg(&fixture.path)
-        .args(["--database-url", &url])
+        .args(["--database-url", url])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -709,41 +735,83 @@ async fn a_ping_aborts_the_session_when_the_database_is_unreachable() {
     )
     .unwrap();
     let pong = answer(&mut stdin, &recv, &serde_json::json!({"op": "ping"}));
-    assert_eq!(pong, ready);
+    assert_eq!(pong, ready, "a ping answers with the ready line");
+    (child, stdin, recv)
+}
 
-    run(format!("ALTER DATABASE {name} ALLOW_CONNECTIONS false")).await;
-    run(format!(
-        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{name}'"
-    ))
-    .await;
+/// Ping, then wait for the session to end without answering. An answer
+/// or a hang is the error.
+fn ping_expecting_abort(
+    mut child: std::process::Child,
+    mut stdin: std::process::ChildStdin,
+    recv: &std::sync::mpsc::Receiver<String>,
+) -> Result<(), String> {
     writeln!(stdin, r#"{{"op":"ping"}}"#).unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
-    let outcome = loop {
+    loop {
         if let Ok(line) = recv.try_recv() {
             child.kill().unwrap();
-            break Err(format!(
+            return Err(format!(
                 "the session answered a ping it could not make: {line}"
             ));
         }
         if let Some(status) = child.try_wait().unwrap() {
-            break Ok(status);
+            if status.success() {
+                return Err("the session exited 0 on a failed ping".to_string());
+            }
+            let leftover: Vec<String> = recv.try_iter().collect();
+            return match leftover.is_empty() {
+                true => Ok(()),
+                false => Err(format!("no answer to the ping; got {leftover:?}")),
+            };
         }
         if std::time::Instant::now() > deadline {
             child.kill().unwrap();
-            break Err("the session hung on an unreachable database".to_string());
+            return Err("the session hung on a failed ping".to_string());
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
-    };
-    let leftover: Vec<String> = recv.try_iter().collect();
-    run(format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)")).await;
+    }
+}
 
-    let status = outcome.unwrap_or_else(|e| panic!("{e}"));
-    assert!(
-        !status.success(),
-        "an unreachable database aborts the session"
-    );
-    assert!(
-        leftover.is_empty(),
-        "no answer to the ping; got {leftover:?}"
-    );
+/// A ping reaches the database, so a session whose database stops
+/// accepting connections aborts on it rather than answering. Ending the
+/// session's connection alone is not enough, because the pool reconnects;
+/// the database is also closed to new ones.
+#[tokio::test]
+async fn a_ping_aborts_the_session_when_the_database_is_unreachable() {
+    let db = OwnDatabase::new("ping_closed").await;
+    let (child, stdin, recv) = pinged_session(&db.url);
+    db.run(&format!(
+        "ALTER DATABASE {} ALLOW_CONNECTIONS false",
+        db.name
+    ))
+    .await;
+    db.run(&format!(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{}'",
+        db.name
+    ))
+    .await;
+    let outcome = ping_expecting_abort(child, stdin, &recv);
+    db.drop_it().await;
+    outcome.unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// A ping also checks the schema, so a database migrated past this binary
+/// under a running session aborts it on the next ping.
+#[tokio::test]
+async fn a_ping_aborts_the_session_when_the_database_moved_past_its_binary() {
+    let db = OwnDatabase::new("ping_ahead").await;
+    let (child, stdin, recv) = pinged_session(&db.url);
+    let pool = morpholog_postgres::PgPool::connect(&db.url).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO morpholog.schema_migrations (version, name) \
+         VALUES (9999, 'from_a_later_binary')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+    let outcome = ping_expecting_abort(child, stdin, &recv);
+    db.drop_it().await;
+    outcome.unwrap_or_else(|e| panic!("{e}"));
 }

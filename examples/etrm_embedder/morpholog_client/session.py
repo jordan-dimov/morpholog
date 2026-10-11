@@ -607,7 +607,8 @@ class Session:
         committed transitions in commit order, ``after`` resuming strictly
         after a seen transition id, rows of writers still in flight
         withheld for a later call and never skipped. ``writer_roles`` and
-        ``mentions`` as on the one-shot client.
+        ``mentions`` as on the one-shot client, except that an empty
+        ``writer_roles`` is refused here rather than read as no assertion.
 
         The answer arrives whole, not streamed, so a resident loop should
         pass ``limit``: at most that many rows come back, and the next call
@@ -651,9 +652,9 @@ class Session:
         return self._read_rows(body, envelopes.RejectionRow.from_json)
 
     def ping(self) -> envelopes.SessionReady:
-        """One round trip to the database, answered with the ready line
-        again. An answer says the session reached its database just now,
-        on the schema its binary expects; it does not promise the next
+        """Check the session can reach its database and that the database's
+        recorded migrations still suit its binary, then answer with the
+        ready line again. An answer says both held just now; it does not promise the next
         proposal will commit. A session that cannot reach its database
         ends, and this raises like any lost response. A ready line other
         than the handshake's poisons the session."""
@@ -689,8 +690,12 @@ class Session:
             body["named"] = True
         if _subject(mentions) is not None:
             body["mentions"] = mentions
-        # As on the one-shot client, an empty list asserts nothing.
-        if writer_roles:
+        if writer_roles is not None:
+            if not writer_roles:
+                raise ValueError(
+                    "writer_roles asserts who writes audit; an empty list asserts nothing, "
+                    "so pass None for the default horizon"
+                )
             body["writer_roles"] = list(writer_roles)
         if limit is not None:
             body["limit"] = limit

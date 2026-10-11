@@ -435,8 +435,8 @@ async fn parse_as_of(
 #[serde(deny_unknown_fields)]
 struct PingBody {}
 
-/// The ready line again, after a round trip that also checks the
-/// database still has the schema this binary was started against. It
+/// The ready line again, after reading the database's recorded migrations
+/// and checking they still suit this binary. It
 /// says the session could reach the database just now, not that the next
 /// proposal will commit: the pool reconnects on its own after a dropped
 /// connection.
@@ -536,13 +536,15 @@ async fn handle_audit(
     }
     let mut rows = Vec::new();
     while rows.len() < limit {
-        let page = tail.next_page().await.map_err(audit_failure)?;
+        let page = tail
+            .next_page_up_to(limit - rows.len())
+            .await
+            .map_err(audit_failure)?;
         if page.is_empty() {
             break;
         }
         rows.extend(page);
     }
-    rows.truncate(limit);
     let program = prepared.program();
     let lines = rows
         .iter()
