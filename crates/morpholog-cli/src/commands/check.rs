@@ -432,6 +432,7 @@ fn refusal_kind(reason: &CompileReason) -> anyhow::Result<&'static str> {
         CompileReason::Literal { .. } => "literal",
         CompileReason::SumShape { .. } => "sum_shape",
         CompileReason::ComparisonShape { .. } => "comparison_shape",
+        CompileReason::DisjunctionShape { .. } => "disjunction_shape",
         other => anyhow::bail!(
             "the check report has no kind for the refusal \"{other}\"; \
              the result schema must name it before check can report it"
@@ -518,6 +519,7 @@ mod tests {
             CompileReason::Literal { kind: "duration" },
             CompileReason::SumShape { detail: "shape" },
             CompileReason::ComparisonShape { detail: "shape" },
+            CompileReason::DisjunctionShape { detail: "shape" },
         ];
         let emitted: BTreeSet<&str> = reachable.iter().map(|r| refusal_kind(r).unwrap()).collect();
         assert_eq!(emitted.len(), reachable.len(), "two reasons share a kind");

@@ -440,13 +440,135 @@ fn a_delta_outside_the_footprint_touches_nothing_even_when_the_body_is_checked_w
         ImpactPlan::new(&inv),
         ImpactPlan::with_definitions(&inv, &[]),
     ] {
-        assert_eq!(admitted(&plan, universe[1].clone()), Impact::Unbounded);
+        // A consequent `or` is a truth test over the case's claims: a
+        // change to a branch's pattern touches that case alone.
+        assert_eq!(plan.bounding(), Bounding::Bound);
+        assert_eq!(
+            admitted(&plan, universe[1].clone()),
+            Impact::Bounded(vec![case(&[("x", subj("a"))])])
+        );
         assert_eq!(
             admitted(&plan, universe[3].clone()),
             Impact::Untouched,
             "`D` is read nowhere in the body"
         );
     }
+}
+
+/// An `or` in the antecedent takes part in which cases exist, so it
+/// still widens; a consequent `or` whose branch binds no case variable
+/// is whole on that pattern's touch and bounded on the others; and the
+/// consequent `or` stays bounded through a definition the plan follows.
+#[test]
+fn an_or_widens_only_where_it_decides_the_cases() {
+    use crate::ir_builder::or;
+    let in_antecedent = invariant(
+        "either_way_in",
+        implies(
+            or(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
+            claim("C", vec![var("x")]),
+        ),
+    );
+    let universe = [
+        claim_instance("A", &[subj("a")]),
+        claim_instance("B", &[subj("a")]),
+        claim_instance("C", &[subj("a")]),
+    ];
+    assert_never_narrower(&in_antecedent, &[], &universe);
+    for plan in [
+        ImpactPlan::new(&in_antecedent),
+        ImpactPlan::with_definitions(&in_antecedent, &[]),
+    ] {
+        assert_eq!(plan.bounding(), Bounding::Whole(Widening::Or));
+        assert_eq!(admitted(&plan, universe[0].clone()), Impact::Unbounded);
+    }
+
+    let free_branch = invariant(
+        "marked_or_open",
+        implies(
+            claim("A", vec![var("x")]),
+            or(vec![
+                claim("B", vec![var("x")]),
+                claim("Open", vec![var("o")]),
+            ]),
+        ),
+    );
+    let universe = [
+        claim_instance("A", &[subj("a")]),
+        claim_instance("B", &[subj("a")]),
+        claim_instance("Open", &[subj("o")]),
+    ];
+    assert_never_narrower(&free_branch, &[], &universe);
+    let plan = ImpactPlan::with_definitions(&free_branch, &[]);
+    assert_eq!(
+        plan.bounding(),
+        Bounding::Whole(Widening::NoCaseVariable("Open".into()))
+    );
+    assert_eq!(
+        admitted(&plan, universe[1].clone()),
+        Impact::Bounded(vec![case(&[("x", subj("a"))])])
+    );
+    assert_eq!(admitted(&plan, universe[2].clone()), Impact::Unbounded);
+
+    let defs = [def(
+        "marked",
+        &["p"],
+        or(vec![claim("B", vec![var("p")]), claim("C", vec![var("p")])]),
+    )];
+    let through_a_call = invariant(
+        "either_way_called",
+        implies(
+            claim("A", vec![var("x")]),
+            defined("marked", vec![var("x")]),
+        ),
+    );
+    let universe = [
+        claim_instance("A", &[subj("a")]),
+        claim_instance("B", &[subj("a")]),
+        claim_instance("C", &[subj("a")]),
+    ];
+    assert_never_narrower(&through_a_call, &defs, &universe);
+    let plan = ImpactPlan::with_definitions(&through_a_call, &defs);
+    assert_eq!(plan.bounding(), Bounding::Bound);
+    assert_eq!(
+        admitted(&plan, universe[2].clone()),
+        Impact::Bounded(vec![case(&[("x", subj("a"))])])
+    );
+    let called_in_antecedent = invariant(
+        "either_way_called_in",
+        implies(
+            defined("marked", vec![var("x")]),
+            claim("A", vec![var("x")]),
+        ),
+    );
+    assert_never_narrower(&called_in_antecedent, &defs, &universe);
+    assert_eq!(
+        ImpactPlan::with_definitions(&called_in_antecedent, &defs).bounding(),
+        Bounding::Whole(Widening::Or)
+    );
+}
+
+/// A delta of several claims across two cases, an admit and a retract,
+/// is the union of the cases each touches.
+#[test]
+fn a_delta_over_two_cases_is_bounded_to_both() {
+    use crate::ir_builder::or;
+    let inv = invariant(
+        "either_way",
+        implies(
+            claim("A", vec![var("x")]),
+            or(vec![claim("B", vec![var("x")]), claim("C", vec![var("x")])]),
+        ),
+    );
+    let plan = ImpactPlan::with_definitions(&inv, &[]);
+    let impact = plan.classify(
+        &[claim_instance("B", &[subj("a")])],
+        &[claim_instance("C", &[subj("b")])],
+    );
+    assert_eq!(
+        impact,
+        Impact::Bounded(vec![case(&[("x", subj("a"))]), case(&[("x", subj("b"))])])
+    );
 }
 
 #[test]
@@ -618,7 +740,7 @@ fn bounding_names_the_construct_that_checks_a_rule_whole() {
     let shapes: Vec<(Prop, Widening)> = vec![
         (implies(pre(b()), b()), Widening::Pre),
         (
-            implies(a(), or(vec![b(), claim("C", vec![var("x")])])),
+            implies(or(vec![a(), claim("C", vec![var("x")])]), b()),
             Widening::Or,
         ),
         (

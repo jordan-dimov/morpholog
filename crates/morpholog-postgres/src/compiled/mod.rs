@@ -99,6 +99,11 @@ pub enum CompileReason {
     /// A quantity or timestamp ordering outside the compiled shape: it can
     /// raise, so it must close its scope, like a sum comparison.
     ComparisonShape { detail: &'static str },
+    /// An `or` outside the compiled shape: it compiles only as the last
+    /// conjunct of a consequent, exporting no binding, so a conjunct
+    /// after it or a call that would bind a parameter through it is
+    /// refused.
+    DisjunctionShape { detail: &'static str },
     /// A shape a validated programme cannot exhibit (defensive: reachable
     /// only through IR that skipped `Program::validated`).
     UnvalidatedShape { detail: String },
@@ -122,6 +127,9 @@ impl std::fmt::Display for CompileReason {
             ),
             CompileReason::Literal { kind } => {
                 write!(f, "{kind} literals are outside the compiled fragment")
+            }
+            CompileReason::DisjunctionShape { detail } => {
+                write!(f, "`or` outside the compiled shape: {detail}")
             }
             CompileReason::SumShape { detail } => {
                 write!(f, "sum outside the compiled fragment: {detail}")
@@ -1473,6 +1481,9 @@ struct Ctx<'a> {
     /// Rendering a sum's body, where a call's internal multiplicity
     /// would count.
     in_sum: bool,
+    /// Rendering a consequent, the one place an `or` compiles: a
+    /// disjunction there is a truth test over bindings already made.
+    in_consequent: bool,
     counter: usize,
     /// Every (predicate, position) the SQL seeks on, collected where the
     /// seek is emitted: the index specification.
@@ -1567,6 +1578,10 @@ struct Rendered {
     /// and it cannot sit under a nested scope: the sum fragment's
     /// boundary, until a forcing example moves it.
     closes_scope: bool,
+    /// An `or` ended this scope: it exported no binding, so nothing may
+    /// follow it in the scope and a call through it may bind no
+    /// parameter.
+    disjoins: bool,
     /// How many `from` items and conjuncts each conjunct of a
     /// conjunction had contributed by its end, so a later reader can
     /// take the prefix through the conjunct that bound a variable.
@@ -1828,6 +1843,7 @@ fn compile_invariant(
         decls,
         defs,
         in_sum: false,
+        in_consequent: false,
         counter: 0,
         required: BTreeSet::new(),
         pending_sums: Vec::new(),
@@ -1911,7 +1927,7 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
         // denial.
         return generic_denial_implies(left, right, ctx);
     }
-    let cons = render_prop(right, ant.env.clone(), ctx)?;
+    let cons = in_consequent(ctx, |ctx| render_prop(right, ant.env.clone(), ctx))?;
     if cons.closes_scope && !cons.from.is_empty() {
         return Err(CompileReason::SumShape {
             detail: "sum beside claim patterns in a consequent",
@@ -1955,13 +1971,15 @@ fn compile_denial(left: &Prop, right: &Prop, ctx: &mut Ctx<'_>) -> Result<Denial
         where_: where_.clone(),
         aliases: ant.aliases(),
     };
-    let diagnosis = diagnostic_level(
-        &conjuncts_of(right),
-        ant.env.clone(),
-        entry,
-        Some(choice),
-        ctx,
-    )?;
+    let diagnosis = in_consequent(ctx, |ctx| {
+        diagnostic_level(
+            &conjuncts_of(right),
+            ant.env.clone(),
+            entry,
+            Some(choice),
+            ctx,
+        )
+    })?;
     Ok((
         format!("SELECT 1 AS \"w\"\nFROM {from}\nWHERE {where_}"),
         format!("\nORDER BY {}\nLIMIT 1", violation_order(&ant)),
@@ -2025,7 +2043,7 @@ fn generic_denial_implies(
     ctx: &mut Ctx<'_>,
 ) -> Result<Denial, CompileReason> {
     let l = render_prop(left, Env::new(), ctx)?;
-    let r = render_prop(right, l.env.clone(), ctx)?;
+    let r = in_consequent(ctx, |ctx| render_prop(right, l.env.clone(), ctx))?;
     if l.closes_scope || r.closes_scope {
         return Err(CompileReason::SumShape {
             detail: "sum in a filter-only implication",
@@ -2059,13 +2077,15 @@ fn generic_denial_implies(
         aliases: Vec::new(),
     };
     let entry = l.env.iter().map(|(v, b)| (v.clone(), b.clone())).collect();
-    let diagnosis = diagnostic_level(
-        &conjuncts_of(right),
-        l.env.clone(),
-        entry,
-        Some(choice),
-        ctx,
-    )?;
+    let diagnosis = in_consequent(ctx, |ctx| {
+        diagnostic_level(
+            &conjuncts_of(right),
+            l.env.clone(),
+            entry,
+            Some(choice),
+            ctx,
+        )
+    })?;
     let where_ = if scope.laterals.is_empty() {
         format!("({})", items.join(" AND "))
     } else {
@@ -2252,6 +2272,11 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
                         detail: "a sum comparison must be the last conjunct of its scope",
                     });
                 }
+                if acc.disjoins {
+                    return Err(CompileReason::DisjunctionShape {
+                        detail: "a conjunct after an `or` in its scope",
+                    });
+                }
                 let mut r = render_prop(p, acc.env.clone(), ctx)?;
                 // A violation query returns a row of the whole
                 // conjunction, so a binding that raises before a join and
@@ -2272,12 +2297,15 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
                 acc.probes.extend(r.probes);
                 acc.env = r.env;
                 acc.closes_scope = r.closes_scope;
+                acc.disjoins = r.disjoins;
                 acc.stages.push((acc.from.len(), acc.where_.len()));
             }
             Ok(acc)
         }
         Prop::Not(inner) => {
-            let r = nested_scope(render_prop(inner, env.clone(), ctx)?)?;
+            let r = nested_scope(outside_consequent(ctx, |ctx| {
+                render_prop(inner, env.clone(), ctx)
+            })?)?;
             let clause = if r.from.is_empty() {
                 format!("NOT ({})", r.conjunction())
             } else {
@@ -2291,7 +2319,9 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             })
         }
         Prop::Exists { binding: _, body } => {
-            let r = nested_scope(render_prop(body, env.clone(), ctx)?)?;
+            let r = nested_scope(outside_consequent(ctx, |ctx| {
+                render_prop(body, env.clone(), ctx)
+            })?)?;
             Ok(Rendered {
                 where_: vec![r.exists_sql()],
                 probes: lifted_scopes(&r.probes),
@@ -2300,8 +2330,12 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             })
         }
         Prop::Implies { left, right } => {
-            let l = nested_scope(render_prop(left, env.clone(), ctx)?)?;
-            let r = nested_scope(render_prop(right, l.env.clone(), ctx)?)?;
+            let l = nested_scope(outside_consequent(ctx, |ctx| {
+                render_prop(left, env.clone(), ctx)
+            })?)?;
+            let r = nested_scope(in_consequent(ctx, |ctx| {
+                render_prop(right, l.env.clone(), ctx)
+            })?)?;
             let not_r = if r.from.is_empty() {
                 format!("NOT ({})", r.conjunction())
             } else {
@@ -2356,7 +2390,35 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             }
             OrderedDomain::Duration => Err(CompileReason::ComparisonDomain { domain: *domain }),
         },
-        Prop::Or(_) => Err(CompileReason::Construct { construct: "or" }),
+        Prop::Or(branches) => {
+            if !ctx.in_consequent {
+                return Err(CompileReason::Construct { construct: "or" });
+            }
+            // Each branch is its own scope under the bindings on entry;
+            // the disjunction is their truth joined, exporting nothing.
+            // The kernel evaluates every branch, so every branch's
+            // raising scopes lift, in branch order.
+            let mut tests = Vec::new();
+            let mut drafts = Vec::new();
+            for branch in branches {
+                let r = nested_scope(render_prop(branch, env.clone(), ctx)?)?;
+                tests.push(if !r.from.is_empty() {
+                    r.exists_sql()
+                } else if r.has_errors() {
+                    format!("({})", and_all(&r.where_))
+                } else {
+                    format!("({})", r.conjunction())
+                });
+                drafts.extend(r.probes);
+            }
+            Ok(Rendered {
+                where_: vec![format!("({})", tests.join(" OR "))],
+                probes: lifted_scopes(&drafts),
+                env,
+                disjoins: true,
+                ..Rendered::default()
+            })
+        }
         Prop::Xor(_, _) => Err(CompileReason::Construct { construct: "xor" }),
         Prop::Pre(_) => Err(CompileReason::Construct { construct: "pre" }),
         Prop::Defined { name, args } => render_defined(name, args, env, ctx),
@@ -2435,6 +2497,13 @@ fn render_defined(
         if frame.contains_key(param) {
             continue;
         }
+        if truth.disjoins {
+            // The kernel would bind the parameter from whichever branch
+            // matched; the SQL test keeps the branches' bindings inside.
+            return Err(CompileReason::DisjunctionShape {
+                detail: "a call whose `or` would bind a parameter",
+            });
+        }
         let Some(Bound::Col(generated)) = truth.env.get(param) else {
             return Err(CompileReason::UnvalidatedShape {
                 detail: format!("{name} never binds its parameter {param}"),
@@ -2485,8 +2554,26 @@ fn render_defined(
         probes,
         env,
         closes_scope: truth.closes_scope,
+        disjoins: truth.disjoins,
         stages: Vec::new(),
     })
+}
+
+/// Render under the consequent position, where an `or` compiles.
+fn in_consequent<T>(ctx: &mut Ctx<'_>, f: impl FnOnce(&mut Ctx<'_>) -> T) -> T {
+    let outside = std::mem::replace(&mut ctx.in_consequent, true);
+    let out = f(ctx);
+    ctx.in_consequent = outside;
+    out
+}
+
+/// Render a nested scope that is not a consequent: an `or` there stays
+/// outside the fragment.
+fn outside_consequent<T>(ctx: &mut Ctx<'_>, f: impl FnOnce(&mut Ctx<'_>) -> T) -> T {
+    let outside = std::mem::replace(&mut ctx.in_consequent, false);
+    let out = f(ctx);
+    ctx.in_consequent = outside;
+    out
 }
 
 fn render_claim(
@@ -2873,7 +2960,7 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                 });
             }
             let outside = std::mem::replace(&mut ctx.in_sum, true);
-            let r = render_prop(body, env.clone(), ctx);
+            let r = outside_consequent(ctx, |ctx| render_prop(body, env.clone(), ctx));
             ctx.in_sum = outside;
             let r = r?;
             if r.from.is_empty() {

@@ -1450,6 +1450,7 @@ _REFUSAL_KINDS = frozenset(
         "literal",
         "sum_shape",
         "comparison_shape",
+        "disjunction_shape",
     }
 )
 

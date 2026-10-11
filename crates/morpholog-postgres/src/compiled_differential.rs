@@ -689,6 +689,37 @@ transformation hold_strictly_after(x, s, e):
 transformation set_deadline(x, t):
     admit Deadline(x, t)
 ",
+    // The compiled `or`: the last conjunct of a consequent, each branch
+    // a claim, an equality on a bound variable, or a conjunction with a
+    // comparison; direct and through a definition whose parameter the
+    // call binds. The kernel evaluates every branch, so the sweep holds
+    // the truth, the witness and the errors to it.
+    "program consequent_or
+predicate A(x: Subject, k: Subject)
+predicate B(x: Subject)
+predicate C(x: Subject)
+predicate Lim(x: Subject, q: Decimal)
+define allowed(k):
+    k = #a or k = #b
+invariant either_record:
+    A(x, _) implies (B(x) or C(x))
+invariant vocabulary:
+    A(x, k) implies allowed(k)
+invariant vocabulary_inline:
+    A(x, k) implies (k = #a or k = #b)
+invariant under_limit_or_marked:
+    A(x, _) implies ((Lim(x, q) and q <= 10) or C(x))
+invariant after_a_claim:
+    A(x, _) and Lim(x, q) implies (q <= 5 or C(x))
+transformation note(x, k):
+    admit A(x, k)
+transformation mark_b(x):
+    admit B(x)
+transformation mark_c(x):
+    admit C(x)
+transformation limit(x, q):
+    admit Lim(x, q)
+",
 ];
 
 #[tokio::test]

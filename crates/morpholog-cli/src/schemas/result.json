@@ -1111,7 +1111,7 @@
         "kind": {
           "enum": [
             "construct", "comparison_domain", "argument_kind", "literal",
-            "sum_shape", "comparison_shape"
+            "sum_shape", "comparison_shape", "disjunction_shape"
           ]
         },
         "message": { "type": "string" }

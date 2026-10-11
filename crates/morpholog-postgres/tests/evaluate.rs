@@ -75,7 +75,7 @@ async fn a_candidate_history_violates_reports_the_introducing_commit() {
     .unwrap();
 
     assert_eq!(report.transitions_replayed, 2);
-    assert_eq!(report.semantics, "case_bound_admission_v4");
+    assert_eq!(report.semantics, "case_bound_admission_v5");
     assert!(report.program_hash.starts_with("sha256:"));
 
     let scored = &report.invariants[0];
@@ -296,7 +296,7 @@ async fn batch_over_packs_equals_individual_scores() {
         score_candidate_against_packs(morpholog_test_support::validated(&candidate), &cases)
             .unwrap();
     assert_eq!(batch.cases.len(), 3);
-    assert_eq!(batch.semantics, "case_bound_admission_v4");
+    assert_eq!(batch.semantics, "case_bound_admission_v5");
 
     // Each batch case matches its single-pack score (the batch reports
     // the candidate's identity once).
