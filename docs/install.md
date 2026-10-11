@@ -211,6 +211,9 @@ own:
 morpholog init --least-privilege --role-prefix acme_ --database-url postgres:///acme
 ```
 
+The generated client takes the same prefix:
+`init(least_privilege=True, role_prefix="acme_")`.
+
 This creates `acme_writer` and `acme_reader`, grants them privileges in
 this database only, and records them there. `migrate` re-applies the
 grants to the recorded roles and to no others. It never creates a role,
