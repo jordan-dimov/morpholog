@@ -6,9 +6,11 @@ Three quarters from now, when an auditor asks *who admitted this £4,300 payment
 
 ## The scenario
 
+Every document goes on the record before anyone approves it: its kind, and if it is about money, its amount. The approver names only the document. Which approval route applies, and what amount the ceiling is measured against, come from the record, never from the approver.
+
 **Vendor onboarding** is a simple sign-off. The compliance officer holds the authority; the marketing intern does not. When the intern tries, the runtime refuses. When the compliance officer does, the durable record carries the compliance officer's identity. No amount is involved.
 
-**Invoice approval** is amount-sensitive. A junior clerk may approve invoices up to £1,000; a finance manager up to £10,000; the CFO up to £100,000. The £4,300 invoice the junior tries is refused; the £4,300 the manager tries admits. The durable record carries both the approver and the amount that was authorised.
+**Invoice approval** is amount-sensitive. A junior clerk may approve invoices up to £1,000; a finance manager up to £10,000; the CFO up to £100,000. The £4,300 invoice the junior tries is refused; the £4,300 the manager tries admits. The durable record carries both the approver and the amount that was authorised. Because the invoice was registered with its amount, the sign-off route is closed to it: holding unconditional authority for invoices does not let anyone approve this one without its ceiling.
 
 Across both: revocation of authority prevents *future* approvals. It does not invalidate the historical record. The junior who is later promoted and loses their clerk-level authority still has approved invoices in the books from the period when their authority was current.
 
@@ -24,23 +26,29 @@ See [`approval_controls.morph`](approval_controls.morph) for the surface syntax.
 | `ApprovalLimit(actor, doc_type, limit)` | Quantitative authority. Retractable. Multiple grants for the same `(actor, doc_type)` stack - the require finds *some* satisfying grant. |
 | `Approval(doc_id, doc_type, actor)` | Recorded unconditional approval. Append-only. Third arg is the proposing actor. |
 | `LimitedApproval(doc_id, doc_type, amount, actor)` | Recorded quantitative approval. Append-only. Fourth arg is the proposing actor; third is the authorised amount. |
+| `Document(doc_id, doc_type)` | A registered document and its kind. One kind per document, append-only. |
+| `DocumentAmount(doc_id, amount)` | The amount of a monetary document. One amount per document, append-only. Its presence is what sends a document down the limited route. |
 
 ### Invariants
 
-None. The absence is load-bearing.
+Document identity is constrained by invariants; approval authority is not.
 
-Tying recorded approvals to live authority via an invariant would force the runtime to either reject every revocation (because historical approvals would violate the rule) or cascade-retract those historical approvals. Neither matches the business. The gate lives in `require`; admission is checked once, at the moment of the transition; the record stands. Same lesson as the verified-revenue example, applied here.
+A document id determines one kind and, where it has one, one amount: the two `unique by (doc_id)` clauses. These are lasting properties of the document.
+
+Approval authority is different. It is checked when an approval is proposed. Tying recorded approvals to live authority with an invariant would force the runtime either to refuse every revocation, because past approvals would break the rule, or to erase those approvals. Neither matches the business. The gate lives in `require`, checked once at the moment of approval, and the record stands. Same lesson as the verified-revenue example.
 
 ### Transformations
 
 | Transformation | Effect |
 | --- | --- |
-| `grant_approval_authority(actor, doc_type)` | Asserts `MayApprove`. Ungated in v0. |
-| `revoke_approval_authority(actor, doc_type)` | Requires the authority to be currently held; retracts it. |
-| `approve_document(doc_id, doc_type)` | The unconditional approval. **Declares no `actor` parameter.** The proposing actor flows through transition context, is consulted via `$actor` in the require, and is stamped onto the asserted `Approval`. |
-| `grant_approval_limit(actor, doc_type, limit)` | Asserts `ApprovalLimit`. Ungated. |
-| `revoke_approval_limit(actor, doc_type, limit)` | Requires the specific `(actor, doc_type, limit)` triple; retracts it. |
-| `approve_within_limit(doc_id, doc_type, amount)` | The quantitative approval. No `actor` parameter. Require: `ApprovalLimit($actor, doc_type, limit) and amount <= limit` - binds `limit` from the authority claim; the `<=` comparison checks the proposed amount. Boundary equality is inclusive. |
+| `grant_approval_authority(principal, doc_type)` | Asserts `MayApprove` for the principal, the person receiving authority (the proposer is the `actor`). Ungated. |
+| `revoke_approval_authority(principal, doc_type)` | Requires the authority to be currently held; retracts it. |
+| `submit_document(doc_id, doc_type)` | Registers a document with no amount. Refused if the id is already on the record. |
+| `submit_monetary_document(doc_id, doc_type, amount)` | Registers a document with a positive amount. Refused if the id is already on the record, so a document cannot gain or lose an amount after it is registered. |
+| `approve_document(doc_id)` | The unconditional approval. Reads the kind from the record and refuses a document with an amount. **Declares no `actor` parameter.** The proposing actor comes from the transition, is consulted as `actor` in the require, and is stamped onto the asserted `Approval`. |
+| `grant_approval_limit(principal, doc_type, limit)` | Asserts `ApprovalLimit`. Ungated. |
+| `revoke_approval_limit(principal, doc_type, limit)` | Requires the specific `(principal, doc_type, limit)` triple; retracts it. |
+| `approve_within_limit(doc_id)` | The quantitative approval. Reads the kind and amount from the record. No `actor` parameter. Require: `ApprovalLimit(actor, doc_type, limit) and amount <= limit` - binds `limit` from the authority claim; the `<=` comparison checks the recorded amount. Boundary equality is inclusive. |
 
 ## How to run it
 
@@ -54,7 +62,7 @@ DATABASE_URL=postgres:///morpholog_dev \
     approval_controls_full_chain_through_pg
 ```
 
-In-memory tests cover both shapes, the rule that revoking authority preserves the history of decisions made under it, boundary equality on amount limits, scoping (per-actor, per-doc-type), stacked grants, and runtime safety pins on the proposing-actor reference and non-decimal limits. The PG integration test walks the whole story end to end.
+In-memory tests cover both shapes, the rule that revoking authority preserves the history of decisions made under it, boundary equality on amount limits, scoping (per-actor, per-doc-type), stacked grants, the route the record decides (a monetary document refused the sign-off route; no later submission adding or dropping an amount), and runtime safety pins on the proposing-actor reference and non-decimal limits. The PG integration test walks the whole story end to end.
 
 ---
 
@@ -64,20 +72,18 @@ In-memory tests cover both shapes, the rule that revoking authority preserves th
 
 The `<=` comparison requires both operands to evaluate to `EvalValue::Decimal`. A non-decimal value in the `limit` position of an admitted `ApprovalLimit` makes the require raise `TypeMismatch`, not a business rejection. That is correct: a structurally-malformed claim is corruption, not lawful rejection.
 
-Typed predicate declarations and `morpholog check` now catch the *static* form of this mistake: a non-decimal literal in the `limit` slot, or a variable whose kind conflicts with the `Decimal` declaration, fails validation before the programme runs. What stays trusted to the caller is the *runtime* argument value - `propose`'s tagged-JSON args are not yet checked against declared kinds, so a caller passing a subject where a decimal belongs still surfaces as `TypeMismatch` at evaluation rather than a pre-admission rejection.
+Typed predicate declarations and `morpholog check` catch the *static* form of this mistake: a non-decimal literal in the `limit` slot, or a variable whose kind conflicts with the `Decimal` declaration, fails validation before the programme runs. At runtime, `propose --args-named` checks each argument against the kind its parameter is used as; the lower-level tagged codec, `--args`, does not, so a subject passed where a decimal belongs surfaces there as `TypeMismatch` at evaluation.
 
-### Routing policy is conventional, not enforced
+### The record decides the route
 
-The example uses `MayApprove` for non-monetary documents and `ApprovalLimit` for monetary ones. This is the right convention.
+A document with an amount can only be approved against a ceiling. `MayApprove(jordan, invoice)` and `ApprovalLimit(jordan, invoice, 1000)` can coexist, and jordan still cannot approve a £4,300 invoice through `approve_document`: the invoice's recorded amount closes that route. The approver chooses which document to approve, never the kind or amount that decide whether they may.
 
-The runtime does **not** enforce mutual exclusion. Both `MayApprove(jordan, invoice)` and `ApprovalLimit(jordan, invoice, 1000)` could coexist; jordan could then approve an invoice for any amount by routing through `approve_document` (no amount parameter), bypassing the limit. The v0 honest position.
-
-A complete policy model would either add typed document classes (so a `doc_type` declares which approval shape applies) or unify both shapes under a higher-order `ApprovalPolicy(actor, predicate_pattern, limit_or_unbounded)`. Both await their forcing examples. Until then, routing discipline is deployment convention.
+That holds for documents as registered. The example assumes the submitting system records each document's true kind and amount: register a £4,300 invoice with no amount, and the record will treat it as a sign-off. Authenticating the source and checking the registration against the paper invoice are separate controls. Amounts are positive here; credit notes and refunds would need approval rules of their own.
 
 ### What this example deliberately does not cover
 
-- **Strict comparison (`<`, `>`, `>=`).** `Le` lands here; the others arrive when an example needs them.
 - **Cumulative limits across a window.** "Up to £10,000 total per day" needs `Sum` over a time-bounded subset plus audit-log lookup from inside a require.
-- **Administrative authority for granting.** Both grant transformations are ungated; a real system gates them on `MayGrant($actor, ...)` once the higher-order shape is justified.
+- **Who is acting.** The example governs approval authority, not who the approver is. It takes the actor the proposing application names; nothing here stops one application naming another approver. [Example 13](../13_biometric_identification_oversight/) shows how to restrict which database logins may speak for which names.
+- **Administrative authority for granting and submitting.** The grant and submission transformations are ungated; a real system gates them on authority of their own, such as `MayGrant(actor, ...)`, once that shape is justified.
 - **Predicate-pattern matching.** `ApprovalAuthorityFor(actor, predicate_pattern, limit)` - one claim governing a family of transformations. Deferred until forced.
 - **Delegation and segregation of duties.** Mentioned in [`docs/scope-and-ambition.md`](../../docs/scope-and-ambition.md); both await their forcing examples.

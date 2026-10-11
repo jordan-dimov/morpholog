@@ -192,7 +192,7 @@ If you came with a question rather than an industry - "can it accept a whole bat
 
 **Evidence, authority and regulation**
 
-- [Approval controls](examples/04_approval_controls/) - authority checked at the moment someone approves, and withdrawn later; approvals given while it held stay valid.
+- [Approval controls](examples/04_approval_controls/) - authority checked at the moment someone approves, and withdrawn later; approvals given while it held stay valid, and the document's recorded amount, not the approver, decides whether a ceiling applies.
 - [Clinical trial enrolment](examples/06_clinical_trial_enrolment/) - protocol, consent and eligibility must all be valid on the day a patient is enrolled.
 - [KYC sanctions screening](examples/08_kyc_sanctions_screening/) - onboarding blocked by an out-of-date screening or an unresolved match.
 - [Carbon-credit provenance](examples/09_carbon_credit_provenance/) - no green claim without evidence behind it, and no credit counted twice.

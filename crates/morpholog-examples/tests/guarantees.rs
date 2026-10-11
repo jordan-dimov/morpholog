@@ -77,15 +77,32 @@ fn render_is_deterministic_prose() {
 
 #[test]
 fn a_program_with_no_invariants_guarantees_nothing_structurally() {
-    // approval_controls declares no invariants - revocation prevents
-    // future approvals via a gate, not an invariant.
-    let program = approval_controls::program();
+    let program = morpholog_surface::parse_program(
+        "program gates_only\n\npredicate Note(text: Subject)\n\ntransformation note(text):\n    admit Note(text)\n",
+    )
+    .unwrap();
     let gs = guarantees(&prepared(&program));
     assert!(gs.is_empty());
     assert!(
         render_guarantees(&program.name, &gs).contains("nothing structurally impossible"),
         "render was: {}",
         render_guarantees(&program.name, &gs),
+    );
+}
+
+#[test]
+fn approval_controls_guarantees_document_identity_and_nothing_about_authority() {
+    // Revocation stops future approvals through a gate, so no standing
+    // rule ties a past approval to live authority. What the record does
+    // guarantee is that a document keeps one kind and one amount.
+    let gs = guarantees(&prepared(&approval_controls::program()));
+    let names: Vec<&str> = gs.iter().map(|g| g.invariant.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "document_unique_by_doc_id",
+            "document_amount_unique_by_doc_id"
+        ]
     );
 }
 
