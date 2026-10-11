@@ -1155,3 +1155,9 @@ The scope document now states the principle the design history had settled case 
 **Forced by:** Gate Closure (#421), a web site that proposes through one subprocess per request, with a few hundred entries in the minute before a daily close.
 
 **Landed:** a measurement and a pattern, no code. Across three runs of `scripts/embedder_latency.sh` at 300 proposals, a resident session took about half the time per proposal of a one-shot `propose`, recorded in `docs/benchmarking.md` as a ratio with the absolute times as context. The embedder guide gives the web-server pattern with the session the client already has: one session per worker opened after fork, replace a dead session without replaying its interrupted request, retry only `serialization_failure`. Not done: concurrent workers and in-request timing, which depend on the deploying programme and belong to a measurement against it.
+
+### Names for old audit rows stay outside the record
+
+**Forced by:** etrmbiz's upgrade report (#382, #489): rows committed before migration 014 carry no `parameters`, and an optional `inspect audit --names-from <file.morph>` could fill them in, marked as inferred.
+
+**Landed:** the embedder guide says how to read such a row - a candidate programme's `x-morpholog-arg-order` from `schema --all` - and that the names are that programme's interpretation. Nothing on a pre-014 row identifies the programme that wrote it (`model_hash` arrived with migration 020), and a matching name and argument count cannot show the parameters kept their order or meaning. Rejected: the flag with an `inferred_parameters` field carrying the hash of the file used. That hash would name the programme that made the inference, not one shown to have written the row, and the field would add to two pinned envelopes and every client for a closed set of old rows. The record shows what it does not know rather than supply a likely answer.
