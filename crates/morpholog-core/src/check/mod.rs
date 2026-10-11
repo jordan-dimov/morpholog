@@ -138,7 +138,7 @@ impl BoundEnv {
     }
 
     /// The bound names, for carrying kind evidence back out of a
-    /// conditional's condition.
+    /// proposition that exports nothing.
     fn names(&self) -> impl Iterator<Item = &Var> {
         self.bound.iter()
     }
@@ -571,31 +571,32 @@ impl CheckCtx<'_> {
                 merged.intersect_with(&rb.bound);
                 scope.bound = merged;
             }
-            Prop::Not(inner) | Prop::Pre(inner) => {
+            Prop::Pre(inner) => {
                 self.walk_prop(inner, scope);
             }
-            Prop::Implies { left, right } => {
-                self.walk_prop(left, scope);
-                self.walk_prop(right, scope);
+            Prop::Not(inner) => {
+                self.walk_closed(scope, |cx, scoped| cx.walk_prop(inner, scoped));
             }
-            Prop::Exists { binding, body } => {
-                // The quantifier binds it before the body. An outer
-                // variable of the same name is not shadowed (the runtime
-                // unifies).
-                scope.bound.bind(binding);
-                self.walk_prop(body, scope);
+            Prop::Implies { left, right } => {
+                self.walk_closed(scope, |cx, scoped| {
+                    cx.walk_prop(left, scoped);
+                    cx.walk_prop(right, scoped);
+                });
+            }
+            // Declaring a quantifier's name does not bind it: at runtime
+            // only the body, or `forall`'s source, gives it a value.
+            Prop::Exists { binding: _, body } => {
+                self.walk_closed(scope, |cx, scoped| cx.walk_prop(body, scoped));
             }
             Prop::Forall {
-                binding,
+                binding: _,
                 source,
                 body,
             } => {
-                // Bound for both the source (`e in coll`) and the body.
-                // Walked in the live scope, so the name may stay visible
-                // afterwards; that avoids false positives.
-                scope.bound.bind(binding);
-                self.walk_prop(source, scope);
-                self.walk_prop(body, scope);
+                self.walk_closed(scope, |cx, scoped| {
+                    cx.walk_prop(source, scoped);
+                    cx.walk_prop(body, scoped);
+                });
             }
             Prop::Compare {
                 op,
@@ -653,6 +654,23 @@ impl CheckCtx<'_> {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Walk a proposition that answers yes or no and exports nothing,
+    /// so names it binds are gone afterwards. Kind evidence about a
+    /// name bound before it does carry out (`Member(who)` pins
+    /// `who: Subject`); dropping it would let later uses refine the
+    /// name to a contradictory kind.
+    fn walk_closed(&mut self, scope: &mut Scope, walk: impl FnOnce(&mut Self, &mut Scope)) {
+        let mut scoped = scope.clone();
+        walk(self, &mut scoped);
+        let entry_bound: Vec<Var> = scope.bound.names().cloned().collect();
+        for name in entry_bound {
+            let refined = scoped.kinds.lookup(&name);
+            if matches!(refined, InferredKind::Known(_)) {
+                self.observe_or_report(scope, &name, refined);
             }
         }
     }
@@ -1044,19 +1062,7 @@ impl CheckCtx<'_> {
                 then,
                 otherwise,
             } => {
-                let mut scoped = scope.clone();
-                self.walk_prop(when, &mut scoped);
-                // Bindings do not export, but kind evidence about an
-                // already-bound variable does (`Member(who)` pins
-                // `who: Subject`). Dropping it would let the branches
-                // refine the variable to a contradictory kind.
-                let entry_bound: Vec<Var> = scope.bound.names().cloned().collect();
-                for name in entry_bound {
-                    let refined = scoped.kinds.lookup(&name);
-                    if matches!(refined, InferredKind::Known(_)) {
-                        self.observe_or_report(scope, &name, refined);
-                    }
-                }
+                self.walk_closed(scope, |cx, scoped| cx.walk_prop(when, scoped));
                 let then_op = (self.infer_value(then, scope), value_var_name(then));
                 let otherwise_op = (
                     self.infer_value(otherwise, scope),
