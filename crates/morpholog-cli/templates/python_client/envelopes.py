@@ -108,6 +108,46 @@ class NamedClaim:
 
 
 @dataclass(frozen=True)
+class ClaimRead:
+    """One claim of the claims read, with `asserted_in`: the transition
+    whose commit made it present. Read now, that is the database's own
+    record, which no audit leaf covers; read `as_of` a transition, it is
+    taken from replaying the audit history."""
+
+    predicate: str
+    args: list[object]
+    asserted_in: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> ClaimRead:
+        data = _strict("claim read", payload, {"predicate", "args", "asserted_in"})
+        return cls(
+            predicate=data["predicate"],
+            args=[values.decode_tagged(a) for a in data["args"]],
+            asserted_in=data["asserted_in"],
+        )
+
+
+@dataclass(frozen=True)
+class NamedClaimRead:
+    """One row of the named claims read, with `asserted_in` as on
+    ``ClaimRead``."""
+
+    predicate: str
+    args: dict[str, object]
+    asserted_in: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> NamedClaimRead:
+        data = _strict("named claim read", payload, {"predicate", "args", "asserted_in"})
+        return cls(
+            predicate=data["predicate"],
+            args=dict(data["args"]),
+            asserted_in=data["asserted_in"],
+        )
+
+
+@dataclass(frozen=True)
 class Committed:
     transition_id: str
     actor: str

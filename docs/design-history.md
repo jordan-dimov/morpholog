@@ -1125,3 +1125,9 @@ The scope document now states the principle the design history had settled case 
 **Forced by:** an embedder's v0.0.14 upgrade (#507). `provision indexes --prune` created four indexes the earlier release had not required, and nothing had said the requirements could change.
 
 **Landed:** every `migrate` that applies, with or without a migration to run, ends with a `hint:` on stderr naming `provision indexes --check <programmes>`; the report on stdout is unchanged and `--check` prints no hint. `migrate` cannot compute the requirements itself, because they depend on the programmes. A release now plans the gallery's indexes under the previous binary and the new one, and its notes list any difference.
+
+### A claims read names the transition that made each claim present
+
+**Forced by:** etrmbiz's certificate needs "the transition that closed this publication's import", and recovered it by folding the evidence pack (#389).
+
+**Landed:** every claims read - `inspect claims`, tagged and `--named`, the session's `claims`, the client's `claims()` and `claims_named()` - carries `asserted_in`, the transition that admitted the claim while it was absent. Read now, it is the claims table's column, which no audit leaf covers and `audit verify` does not check; read as of a transition, it comes from the audit replay, which tracks it beside the state. Only the replay is checkable: one audit row listing the claim is not enough, since admitting a present claim is recorded too. The claims read has its own `$defs`; `claim_instance` stays the claim itself, shared by audit rows, receipts and derived reads. The field is always on, so a client generated before it must be regenerated. Not done: `audit verify` comparing the column with the replay, which would decide whether it verifies the recorded history only or also what the table holds now.

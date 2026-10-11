@@ -48,6 +48,8 @@ BARE = {list, dict, set, tuple, frozenset}
 NOT_A_SINGLE_ENVELOPE = {
     "claim_instances.json": "a JSON array of claims; the adapter maps over it",
     "named_claims.json": "a JSON array of named claims",
+    "claim_reads.json": "a JSON array of claim reads",
+    "named_claim_reads.json": "a JSON array of named claim reads",
     "outbox_claim.json": "wrapped as {'row': ...}",
     "outbox_claim_null.json": "wrapped as {'row': null}",
     "batch_score.json": "a score report keyed by case, not one envelope",

@@ -405,7 +405,7 @@ pub async fn verify_replay(pool: &PgPool) -> Result<VerifyOutcome, PgError> {
         .map_err(classify_checked_query)?
         .count;
     let replayed = match latest {
-        Some(row) => reconstruct_inner(&mut tx, row.transition_id, None)
+        Some(row) => reconstruct_inner(&mut tx, row.transition_id, None, None)
             .await?
             .claims()
             .to_vec(),

@@ -559,25 +559,25 @@ class Session:
 
     def claims(
         self, *predicates: str, as_of: str | None = None
-    ) -> list[envelopes.ClaimInstance]:
+    ) -> list[envelopes.ClaimRead]:
         """The bare claims read, as on the one-shot client: the claims
         table is the authority, an unknown predicate matches nothing."""
         body = self._claims_body(predicates, named=False, as_of=as_of)
-        return self._read_rows(body, envelopes.ClaimInstance.from_json)
+        return self._read_rows(body, envelopes.ClaimRead.from_json)
 
     def claims_named(
         self,
         *predicates: str,
         as_of: str | None = None,
         where: dict[str, str] | None = None,
-    ) -> list[envelopes.NamedClaim]:
+    ) -> list[envelopes.NamedClaimRead]:
         """The named claims read: the programme the session pinned is
         the authority; skew is a hard session error, not a request
         error."""
         body = self._claims_body(predicates, named=True, as_of=as_of)
         if where:
             body["where"] = dict(where)
-        return self._read_rows(body, envelopes.NamedClaim.from_json)
+        return self._read_rows(body, envelopes.NamedClaimRead.from_json)
 
     def derived(self, name: str, *, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
         """Compute a read-side view through the session - always live,

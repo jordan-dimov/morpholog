@@ -141,6 +141,37 @@
       "type": "array",
       "items": { "$ref": "#/$defs/named_claim" }
     },
+    "claim_read": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predicate", "args", "asserted_in"],
+      "properties": {
+        "predicate": { "type": "string" },
+        "args": { "type": "array", "items": { "$ref": "#/$defs/tagged_value" } },
+        "asserted_in": { "type": "string", "format": "uuid" }
+      }
+    },
+    "named_claim_read": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predicate", "args", "asserted_in"],
+      "properties": {
+        "predicate": { "type": "string" },
+        "args": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/bare_value" }
+        },
+        "asserted_in": { "type": "string", "format": "uuid" }
+      }
+    },
+    "claim_read_array": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/claim_read" }
+    },
+    "named_claim_read_array": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/named_claim_read" }
+    },
     "audit_row_array": {
       "type": "array",
       "items": { "$ref": "#/$defs/audit_row" }

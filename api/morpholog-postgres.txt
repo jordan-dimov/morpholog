@@ -1295,6 +1295,27 @@ impl core::marker::Unpin for morpholog_postgres::ClaimFilter
 impl core::marker::UnsafeUnpin for morpholog_postgres::ClaimFilter
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ClaimFilter
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ClaimFilter
+pub struct morpholog_postgres::ClaimRead
+pub morpholog_postgres::ClaimRead::asserted_in: uuid::Uuid
+pub morpholog_postgres::ClaimRead::claim: morpholog_core::state::ClaimInstance
+impl core::clone::Clone for morpholog_postgres::ClaimRead
+pub fn morpholog_postgres::ClaimRead::clone(&self) -> morpholog_postgres::ClaimRead
+impl core::cmp::Eq for morpholog_postgres::ClaimRead
+pub fn morpholog_postgres::ClaimRead::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::ClaimRead
+pub fn morpholog_postgres::ClaimRead::eq(&self, &morpholog_postgres::ClaimRead) -> bool
+impl core::fmt::Debug for morpholog_postgres::ClaimRead
+pub fn morpholog_postgres::ClaimRead::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::ClaimRead
+impl serde_core::ser::Serialize for morpholog_postgres::ClaimRead
+pub fn morpholog_postgres::ClaimRead::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::ClaimRead
+impl core::marker::Send for morpholog_postgres::ClaimRead
+impl core::marker::Sync for morpholog_postgres::ClaimRead
+impl core::marker::Unpin for morpholog_postgres::ClaimRead
+impl core::marker::UnsafeUnpin for morpholog_postgres::ClaimRead
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ClaimRead
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ClaimRead
 pub struct morpholog_postgres::CompensationSpec
 impl morpholog_postgres::CompensationSpec
 pub fn morpholog_postgres::CompensationSpec::new(morpholog_core::prepared::PreparedProgram, morpholog_core::ir::TransformationName, alloc::boxed::Box<(dyn core::ops::function::Fn(&morpholog_postgres::OutboxRow) -> alloc::vec::Vec<morpholog_core::state::EvalValue> + core::marker::Send + core::marker::Sync)>) -> core::result::Result<Self, morpholog_postgres::PgError>
@@ -2466,6 +2487,11 @@ pub async fn morpholog_postgres::propose_against_pg_with_trace(&sqlx_postgres::P
 pub async fn morpholog_postgres::propose_all_against_pg(&sqlx_postgres::PgPool, &morpholog_postgres::PgProgram, &[morpholog_postgres::Proposal]) -> core::result::Result<morpholog_postgres::PgAtomicOutcome, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::provision_indexes(&sqlx_postgres::PgPool, &[&morpholog_postgres::PgProgram], bool) -> core::result::Result<morpholog_postgres::ProvisionReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::provision_least_privilege(&sqlx_postgres::PgPool, &morpholog_postgres::DeploymentRoles) -> core::result::Result<(), morpholog_postgres::PgError>
+pub async fn morpholog_postgres::read_claims(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::ClaimRead>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::read_claims_at(&sqlx_postgres::PgPool, uuid::Uuid) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::ClaimRead>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::read_claims_at_for_predicates(&sqlx_postgres::PgPool, uuid::Uuid, &[alloc::string::String]) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::ClaimRead>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::read_claims_for_predicates(&sqlx_postgres::PgPool, &[alloc::string::String]) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::ClaimRead>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::read_claims_where(&sqlx_postgres::PgPool, &str, &[morpholog_postgres::ClaimFilter], i32) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::ClaimRead>, morpholog_postgres::PgError>
 pub fn morpholog_postgres::read_prefix_stream(impl alloc::io::buf_read::BufRead) -> core::result::Result<morpholog_postgres::EvidencePack, morpholog_postgres::PackError>
 pub async fn morpholog_postgres::rebind_least_privilege(&sqlx_postgres::PgPool, morpholog_postgres::RecordedRoles) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::reconstruct_state_at(&sqlx_postgres::PgPool, uuid::Uuid) -> core::result::Result<morpholog_core::state::State, morpholog_postgres::PgError>

@@ -2,6 +2,26 @@ use crate::error::{PgError, classify_checked_query};
 use crate::propose::{Reads, compute_load_scope};
 use morpholog_core::{ClaimInstance, PredicateName, PreparedProgram, State, TransformationName};
 use sqlx::PgPool;
+use uuid::Uuid;
+
+/// A claim as a read reports it: the claim, and the transition whose
+/// commit made it present. Admitting a claim already present leaves it
+/// alone; a retraction ends it, and a later admission starts another.
+///
+/// At the head this is the `claims` table's own column, which no audit
+/// leaf covers. Read as of a transition, it is taken from the audit
+/// replay instead.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ClaimRead {
+    #[serde(flatten)]
+    pub claim: ClaimInstance,
+    pub asserted_in: Uuid,
+}
+
+pub(crate) fn claims_of(reads: Vec<ClaimRead>) -> Vec<ClaimInstance> {
+    reads.into_iter().map(|read| read.claim).collect()
+}
+
 /// Return every currently-admitted claim from `morpholog.claims`.
 ///
 /// Ordered by `(asserted_at, predicate_name, arguments::text)`: admission
@@ -9,20 +29,26 @@ use sqlx::PgPool;
 ///
 /// Reads the whole table; meant for tests, demos and small states.
 pub async fn list_claims(pool: &PgPool) -> Result<Vec<ClaimInstance>, PgError> {
+    read_claims(pool).await.map(claims_of)
+}
+
+/// [`list_claims`] with each claim's [`ClaimRead::asserted_in`].
+pub async fn read_claims(pool: &PgPool) -> Result<Vec<ClaimRead>, PgError> {
     let rows = sqlx::query!(
-        "SELECT predicate_name, arguments
+        "SELECT predicate_name, arguments, asserted_in
          FROM morpholog.claims
          ORDER BY asserted_at, predicate_name, arguments::text",
     )
     .fetch_all(pool)
     .await
     .map_err(classify_checked_query)?;
-    decode_claim_rows(
+    decode_claim_reads(
         rows.into_iter()
-            .map(|r| (r.predicate_name, r.arguments))
+            .map(|r| (r.predicate_name, r.arguments, r.asserted_in))
             .collect(),
     )
 }
+
 /// Decode `(predicate_name, arguments)` rows into `ClaimInstance`s.
 pub(crate) fn decode_claim_rows(
     rows: Vec<(String, serde_json::Value)>,
@@ -36,6 +62,23 @@ pub(crate) fn decode_claim_rows(
         })
         .collect()
 }
+
+fn decode_claim_reads(
+    rows: Vec<(String, serde_json::Value, Uuid)>,
+) -> Result<Vec<ClaimRead>, PgError> {
+    rows.into_iter()
+        .map(|(predicate, args_json, asserted_in)| {
+            Ok(ClaimRead {
+                claim: ClaimInstance {
+                    predicate: PredicateName::from(predicate),
+                    args: serde_json::from_value(args_json)?,
+                },
+                asserted_in,
+            })
+        })
+        .collect()
+}
+
 /// Return every currently-admitted claim whose `predicate_name` is in
 /// `predicates`. Empty `predicates` returns `Ok(vec![])` without a query:
 /// an empty footprint is meaningful, not an error.
@@ -45,11 +88,22 @@ pub async fn list_claims_for_predicates(
     pool: &PgPool,
     predicates: &[String],
 ) -> Result<Vec<ClaimInstance>, PgError> {
+    read_claims_for_predicates(pool, predicates)
+        .await
+        .map(claims_of)
+}
+
+/// [`list_claims_for_predicates`] with each claim's
+/// [`ClaimRead::asserted_in`].
+pub async fn read_claims_for_predicates(
+    pool: &PgPool,
+    predicates: &[String],
+) -> Result<Vec<ClaimRead>, PgError> {
     if predicates.is_empty() {
         return Ok(Vec::new());
     }
     let rows = sqlx::query!(
-        "SELECT predicate_name, arguments
+        "SELECT predicate_name, arguments, asserted_in
          FROM morpholog.claims
          WHERE predicate_name = ANY($1)
          ORDER BY asserted_at, predicate_name, arguments::text",
@@ -58,12 +112,13 @@ pub async fn list_claims_for_predicates(
     .fetch_all(pool)
     .await
     .map_err(classify_checked_query)?;
-    decode_claim_rows(
+    decode_claim_reads(
         rows.into_iter()
-            .map(|r| (r.predicate_name, r.arguments))
+            .map(|r| (r.predicate_name, r.arguments, r.asserted_in))
             .collect(),
     )
 }
+
 /// One argument-level equality test: which position to compare, the
 /// value to compare against, and whether the comparison is numeric.
 ///
@@ -105,6 +160,18 @@ pub async fn list_claims_where(
     filters: &[ClaimFilter],
     declared_arity: i32,
 ) -> Result<Vec<ClaimInstance>, PgError> {
+    read_claims_where(pool, predicate, filters, declared_arity)
+        .await
+        .map(claims_of)
+}
+
+/// [`list_claims_where`] with each claim's [`ClaimRead::asserted_in`].
+pub async fn read_claims_where(
+    pool: &PgPool,
+    predicate: &str,
+    filters: &[ClaimFilter],
+    declared_arity: i32,
+) -> Result<Vec<ClaimRead>, PgError> {
     // Built from whole filters so the arrays cannot differ in length:
     // `unnest` pads a short one with NULLs, which `bool_and` ignores,
     // silently widening the answer.
@@ -112,7 +179,7 @@ pub async fn list_claims_where(
     let values: Vec<serde_json::Value> = filters.iter().map(|f| f.value.clone()).collect();
     let numeric: Vec<bool> = filters.iter().map(|f| f.numeric).collect();
     let rows = sqlx::query!(
-        "SELECT predicate_name, arguments
+        "SELECT predicate_name, arguments, asserted_in
          FROM morpholog.claims
          WHERE predicate_name = $1
            AND (jsonb_array_length(arguments) <> $5 OR COALESCE(
@@ -135,9 +202,9 @@ pub async fn list_claims_where(
     .fetch_all(pool)
     .await
     .map_err(classify_checked_query)?;
-    decode_claim_rows(
+    decode_claim_reads(
         rows.into_iter()
-            .map(|r| (r.predicate_name, r.arguments))
+            .map(|r| (r.predicate_name, r.arguments, r.asserted_in))
             .collect(),
     )
 }

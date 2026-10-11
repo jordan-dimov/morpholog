@@ -203,6 +203,19 @@ impl core::marker::Unpin for morpholog_cli::envelopes::NamedClaim
 impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::NamedClaim
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::NamedClaim
 impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::NamedClaim
+pub struct morpholog_cli::envelopes::NamedClaimRead
+pub morpholog_cli::envelopes::NamedClaimRead::args: serde_json::map::Map<alloc::string::String, serde_json::value::Value>
+pub morpholog_cli::envelopes::NamedClaimRead::asserted_in: uuid::Uuid
+pub morpholog_cli::envelopes::NamedClaimRead::predicate: morpholog_core::ir::PredicateName
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::NamedClaimRead
+pub fn morpholog_cli::envelopes::NamedClaimRead::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::NamedClaimRead
+impl core::marker::Send for morpholog_cli::envelopes::NamedClaimRead
+impl core::marker::Sync for morpholog_cli::envelopes::NamedClaimRead
+impl core::marker::Unpin for morpholog_cli::envelopes::NamedClaimRead
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::NamedClaimRead
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::NamedClaimRead
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::NamedClaimRead
 pub struct morpholog_cli::envelopes::ProvisionReport<'a>
 pub morpholog_cli::envelopes::ProvisionReport::applied: bool
 pub morpholog_cli::envelopes::ProvisionReport::dry_run: bool
