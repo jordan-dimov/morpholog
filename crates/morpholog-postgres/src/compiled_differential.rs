@@ -711,6 +711,8 @@ invariant under_limit_or_marked:
     A(x, _) implies ((Lim(x, q) and q <= 10) or C(x))
 invariant after_a_claim:
     A(x, _) and Lim(x, q) implies (q <= 5 or C(x))
+invariant either_evidence:
+    A(x, _) implies (Lim(x, q) and (q <= 5 or C(x)))
 transformation note(x, k):
     admit A(x, k)
 transformation mark_b(x):

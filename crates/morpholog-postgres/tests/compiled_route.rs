@@ -772,10 +772,15 @@ async fn a_consequent_or_decides_and_raises_as_the_kernel_does_on_both_routes() 
          predicate A(x: Subject, v: Decimal, w: Date)\n\
          predicate B(x: Subject)\n\
          predicate C(x: Subject)\n\
+         predicate Link(x: Subject, y: Subject)\n\
+         predicate Seen(y: Subject)\n\
          transformation note(x, v, w):\n    admit A(x, v, w)\n\
          transformation mark_b(x):\n    admit B(x)\n\
+         transformation link(x, y):\n    admit Link(x, y)\n\
          invariant either_record:\n\
          \x20   A(x, _, _) implies (B(x) or C(x))\n\
+         invariant either_evidence:\n\
+         \x20   Link(x, y) implies (A(x, _, _) and (Seen(y) or C(x)))\n\
          invariant marked_or_small:\n\
          \x20   A(x, v, w) implies (B(x) or v <= 10 or w on_or_before @2026-12-31)\n",
     )
@@ -858,6 +863,45 @@ async fn a_consequent_or_decides_and_raises_as_the_kernel_does_on_both_routes() 
     );
     assert!(
         refused.contains("Var(\"x\")") && refused.ends_with("None"),
+        "{refused}"
+    );
+
+    // An `or` after a conjunct that bound a variable: the refusal names
+    // what the conjunct bound, as the kernel's walk does.
+    let link = |x: &str, y: &str| Transition {
+        transformation_name: "link".into(),
+        args: vec![subj(x), subj(y)],
+        actor: Subject::from("route_test"),
+    };
+    let a_row = |x: &str| {
+        claim(
+            "A",
+            vec![subj(x), dec(1), morpholog_test_support::date("2026-01-01")],
+        )
+    };
+    assert_eq!(
+        run(
+            vec![
+                a_row("x4"),
+                claim("B", vec![subj("x4")]),
+                claim("Seen", vec![subj("y4")])
+            ],
+            link("x4", "y4")
+        )
+        .await,
+        Ok("committed".into())
+    );
+    let refused = run(
+        vec![a_row("x4"), claim("B", vec![subj("x4")])],
+        link("x4", "y4"),
+    )
+    .await
+    .unwrap();
+    assert!(
+        refused.starts_with("rejected Some(\"either_evidence\")")
+            && refused.contains("Var(\"x\")")
+            && refused.contains("Var(\"y\")")
+            && refused.ends_with("None"),
         "{refused}"
     );
 

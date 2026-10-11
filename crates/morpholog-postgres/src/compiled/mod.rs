@@ -1481,8 +1481,10 @@ struct Ctx<'a> {
     /// Rendering a sum's body, where a call's internal multiplicity
     /// would count.
     in_sum: bool,
-    /// Rendering a consequent, the one place an `or` compiles: a
-    /// disjunction there is a truth test over bindings already made.
+    /// Rendering the rule's own consequent, the one place an `or`
+    /// compiles: a disjunction there is a truth test over bindings
+    /// already made. Cleared under `not`, `exists`, a sum and a nested
+    /// implication.
     in_consequent: bool,
     counter: usize,
     /// Every (predicate, position) the SQL seeks on, collected where the
@@ -2330,10 +2332,13 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             })
         }
         Prop::Implies { left, right } => {
+            // A nested implication's consequent is not the rule's: an
+            // `or` there stays outside the fragment until a workload
+            // asks for it.
             let l = nested_scope(outside_consequent(ctx, |ctx| {
                 render_prop(left, env.clone(), ctx)
             })?)?;
-            let r = nested_scope(in_consequent(ctx, |ctx| {
+            let r = nested_scope(outside_consequent(ctx, |ctx| {
                 render_prop(right, l.env.clone(), ctx)
             })?)?;
             let not_r = if r.from.is_empty() {

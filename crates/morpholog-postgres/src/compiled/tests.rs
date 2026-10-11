@@ -897,6 +897,9 @@ invariant vocabulary:
 invariant branch_with_a_comparison:
     A(x, _) implies ((Lim(x, q) and q <= 10) or C(x))
 
+invariant after_a_binding_conjunct:
+    A(x, _) implies (Lim(x, q) and (B(x) or q <= 10))
+
 invariant or_then_a_conjunct:
     A(x, _) implies ((B(x) or C(x)) and Lim(x, _))
 
@@ -908,6 +911,15 @@ invariant or_under_not:
 
 invariant or_in_an_antecedent:
     (B(x) or C(x)) implies A(x, _)
+
+invariant or_in_a_nested_consequent_under_not:
+    A(x, _) implies not (B(x) implies (C(x) or Lim(x, _)))
+
+invariant or_in_a_nested_consequent:
+    A(x, _) implies (B(x) implies (C(x) or Lim(x, _)))
+
+invariant or_under_exists:
+    A(x, _) implies (exists y: (Lim(x, y) and (B(x) or C(x))))
 ";
     let program = morpholog_surface::parse_program(source).expect("parses");
     let refused = refusals(&program);
@@ -915,7 +927,12 @@ invariant or_in_an_antecedent:
         .iter()
         .map(|r| (r.invariant.as_str(), &r.reason))
         .collect();
-    for compiled in ["either_record", "vocabulary", "branch_with_a_comparison"] {
+    for compiled in [
+        "either_record",
+        "vocabulary",
+        "branch_with_a_comparison",
+        "after_a_binding_conjunct",
+    ] {
         assert!(
             !by_name.contains_key(compiled),
             "{compiled} compiles: {by_name:?}"
@@ -937,8 +954,16 @@ invariant or_in_an_antecedent:
         by_name["or_under_not"],
         &CompileReason::Construct { construct: "or" }
     );
-    assert_eq!(
-        by_name["or_in_an_antecedent"],
-        &CompileReason::Construct { construct: "or" }
-    );
+    for outside in [
+        "or_in_an_antecedent",
+        "or_in_a_nested_consequent_under_not",
+        "or_in_a_nested_consequent",
+        "or_under_exists",
+    ] {
+        assert_eq!(
+            by_name[outside],
+            &CompileReason::Construct { construct: "or" },
+            "{outside}"
+        );
+    }
 }
