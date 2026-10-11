@@ -2,7 +2,7 @@
 
 Design archaeology. Companion to [`scope-and-ambition.md`](scope-and-ambition.md) (forward-looking doctrine) and [`runtime-semantics.md`](runtime-semantics.md) (what the kernel means). This file records each design move and the worked example that forced it.
 
-The entries are compressed - each a Forced-by/Landed stub, with the per-PR detail and the considered-and-rejected alternatives left to git, and the rationale that became doctrine referenced inline. The one fuller passage is the parser-arc narrative below, kept whole because it orients a reader of the parser rather than recording a single move. A new entry takes the same shape: what forced the move, then what landed and why, in a few sentences. How a PR was reviewed, and what each review changed, belongs to the PR; a rejected approach a reader might propose again stays, as one sentence.
+The entries are compressed - most a Forced-by/Landed stub, with the per-PR detail and the considered-and-rejected alternatives left to git, and the rationale that became doctrine referenced inline. The one fuller passage is the parser-arc narrative below, kept whole because it orients a reader of the parser rather than recording a single move. A new entry takes the same shape: what forced the move, then what landed and why, in a few sentences. How a PR was reviewed, and what each review changed, belongs to the PR; a rejected approach a reader might propose again stays, as one sentence.
 
 ## Pre-parser-arc IR moves (compressed)
 
@@ -154,7 +154,7 @@ The arc is complete for v0: every worked example parses end-to-end. `morpholog r
 
 ## After the parser arc
 
-Post-parser kernel and tooling moves, each a Forced-by/Landed stub (the per-PR blow-by-blow and the considered-and-rejected alternatives live in git; only the rationale that became reusable doctrine is kept inline).
+Post-parser kernel and tooling moves, most a Forced-by/Landed stub (the per-PR blow-by-blow and the considered-and-rejected alternatives live in git; only the rationale that became reusable doctrine is kept inline).
 
 ### `Expr::Or` predicate-shaped disjunction
 
