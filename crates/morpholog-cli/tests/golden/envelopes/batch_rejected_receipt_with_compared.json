@@ -1,0 +1,32 @@
+{
+  "compared": {
+    "left": {
+      "type": "decimal",
+      "value": "152000"
+    },
+    "op": "<=",
+    "right": {
+      "type": "decimal",
+      "value": "97911.8"
+    }
+  },
+  "reason": "require failed: amount <= 100 did not hold over pre-state",
+  "row": 3,
+  "status": "rejected",
+  "witness": [
+    {
+      "value": {
+        "type": "subject",
+        "value": "acct_1"
+      },
+      "var": "account"
+    },
+    {
+      "value": {
+        "type": "decimal",
+        "value": "105.50"
+      },
+      "var": "exposure"
+    }
+  ]
+}

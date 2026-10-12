@@ -1310,6 +1310,16 @@ fn composite_envelopes_serialize_as_pinned() {
         .unwrap()
         .insert("row".to_string(), serde_json::json!(2));
     assert_golden("batch_rejected_receipt.json", &batch_rejected);
+    // A batch row's rejection is the single-run envelope, so it carries
+    // the comparison the refusal blamed too.
+    let mut batch_compared = to_value(&PgProposalOutcome::Rejected {
+        reason: "require failed: amount <= 100 did not hold over pre-state".to_string(),
+        rule: None,
+        witness: witness_sample(),
+        compared: Some(compared_sample()),
+    });
+    batch_compared["row"] = serde_json::json!(3);
+    assert_golden("batch_rejected_receipt_with_compared.json", &batch_compared);
     assert_golden(
         "batch_error_receipt.json",
         &to_value(&morpholog_cli::envelopes::ErrorReceipt::new(
@@ -1865,7 +1875,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             reason: "invariant `balance_unique_by_account` violated".to_string(),
             rule: Some("balance_unique_by_account".to_string()),
             witness: witness_sample(),
-            compared: None,
+            compared: Some(compared_sample()),
         }),
     );
     assert_golden(
@@ -2756,6 +2766,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("traced_errored.json", "traced_envelope"),
         ("batch_committed_receipt.json", "batch_receipt"),
         ("batch_rejected_receipt.json", "batch_receipt"),
+        ("batch_rejected_receipt_with_compared.json", "batch_receipt"),
         ("batch_error_receipt.json", "batch_receipt"),
         ("batch_error_receipt_not_committed.json", "batch_receipt"),
         ("transact_committed.json", "atomic_outcome"),

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import ClassVar
+from typing import ClassVar, Protocol
 
 from . import values
 
@@ -175,13 +175,12 @@ class TradeCapturedClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeCapturedClaim:
-        raw = args["trade"]
-        trade = raw
-        raw = args["commodity"]
-        commodity = raw
-        raw = args["direction"]
-        direction = raw
-        return cls(trade=trade, commodity=commodity, direction=direction)
+        values.named_fields("TradeCaptured", args, ("trade", "commodity", "direction"))
+        return cls(
+            trade=values.named_text("TradeCaptured.trade", args["trade"]),
+            commodity=values.named_text("TradeCaptured.commodity", args["commodity"]),
+            direction=values.named_text("TradeCaptured.direction", args["direction"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -198,17 +197,14 @@ class TradeTermsClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeTermsClaim:
-        raw = args["trade"]
-        trade = raw
-        raw = args["version_id"]
-        version_id = raw
-        raw = args["quantity"]
-        quantity = values.parse_decimal(raw)
-        raw = args["delivery_period"]
-        delivery_period = raw
-        raw = args["effective_from"]
-        effective_from = values.parse_date(raw)
-        return cls(trade=trade, version_id=version_id, quantity=quantity, delivery_period=delivery_period, effective_from=effective_from)
+        values.named_fields("TradeTerms", args, ("trade", "version_id", "quantity", "delivery_period", "effective_from"))
+        return cls(
+            trade=values.named_text("TradeTerms.trade", args["trade"]),
+            version_id=values.named_text("TradeTerms.version_id", args["version_id"]),
+            quantity=values.named_decimal("TradeTerms.quantity", args["quantity"]),
+            delivery_period=values.named_text("TradeTerms.delivery_period", args["delivery_period"]),
+            effective_from=values.named_date("TradeTerms.effective_from", args["effective_from"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -222,11 +218,11 @@ class TradeTermsSupersedesClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeTermsSupersedesClaim:
-        raw = args["new_version_id"]
-        new_version_id = raw
-        raw = args["prior_version_id"]
-        prior_version_id = raw
-        return cls(new_version_id=new_version_id, prior_version_id=prior_version_id)
+        values.named_fields("TradeTermsSupersedes", args, ("new_version_id", "prior_version_id"))
+        return cls(
+            new_version_id=values.named_text("TradeTermsSupersedes.new_version_id", args["new_version_id"]),
+            prior_version_id=values.named_text("TradeTermsSupersedes.prior_version_id", args["prior_version_id"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -240,11 +236,11 @@ class CapturedPriceClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> CapturedPriceClaim:
-        raw = args["trade"]
-        trade = raw
-        raw = args["price"]
-        price = values.parse_decimal(raw)
-        return cls(trade=trade, price=price)
+        values.named_fields("CapturedPrice", args, ("trade", "price"))
+        return cls(
+            trade=values.named_text("CapturedPrice.trade", args["trade"]),
+            price=values.named_decimal("CapturedPrice.price", args["price"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -258,11 +254,11 @@ class MayConfirmClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> MayConfirmClaim:
-        raw = args["principal"]
-        principal = raw
-        raw = args["commodity"]
-        commodity = raw
-        return cls(principal=principal, commodity=commodity)
+        values.named_fields("MayConfirm", args, ("principal", "commodity"))
+        return cls(
+            principal=values.named_text("MayConfirm.principal", args["principal"]),
+            commodity=values.named_text("MayConfirm.commodity", args["commodity"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -278,15 +274,13 @@ class TradeConfirmedClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeConfirmedClaim:
-        raw = args["trade"]
-        trade = raw
-        raw = args["counterparty"]
-        counterparty = raw
-        raw = args["confirmation_id"]
-        confirmation_id = raw
-        raw = args["confirmed_by"]
-        confirmed_by = raw
-        return cls(trade=trade, counterparty=counterparty, confirmation_id=confirmation_id, confirmed_by=confirmed_by)
+        values.named_fields("TradeConfirmed", args, ("trade", "counterparty", "confirmation_id", "confirmed_by"))
+        return cls(
+            trade=values.named_text("TradeConfirmed.trade", args["trade"]),
+            counterparty=values.named_text("TradeConfirmed.counterparty", args["counterparty"]),
+            confirmation_id=values.named_text("TradeConfirmed.confirmation_id", args["confirmation_id"]),
+            confirmed_by=values.named_text("TradeConfirmed.confirmed_by", args["confirmed_by"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -301,13 +295,12 @@ class OfficialPriceClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> OfficialPriceClaim:
-        raw = args["trade"]
-        trade = raw
-        raw = args["price"]
-        price = values.parse_decimal(raw)
-        raw = args["official_price_id"]
-        official_price_id = raw
-        return cls(trade=trade, price=price, official_price_id=official_price_id)
+        values.named_fields("OfficialPrice", args, ("trade", "price", "official_price_id"))
+        return cls(
+            trade=values.named_text("OfficialPrice.trade", args["trade"]),
+            price=values.named_decimal("OfficialPrice.price", args["price"]),
+            official_price_id=values.named_text("OfficialPrice.official_price_id", args["official_price_id"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -321,11 +314,11 @@ class CurrentOfficialPriceClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> CurrentOfficialPriceClaim:
-        raw = args["trade"]
-        trade = raw
-        raw = args["official_price_id"]
-        official_price_id = raw
-        return cls(trade=trade, official_price_id=official_price_id)
+        values.named_fields("CurrentOfficialPrice", args, ("trade", "official_price_id"))
+        return cls(
+            trade=values.named_text("CurrentOfficialPrice.trade", args["trade"]),
+            official_price_id=values.named_text("CurrentOfficialPrice.official_price_id", args["official_price_id"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -339,11 +332,11 @@ class OfficialPriceSupersedesClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> OfficialPriceSupersedesClaim:
-        raw = args["new_official_price_id"]
-        new_official_price_id = raw
-        raw = args["prior_official_price_id"]
-        prior_official_price_id = raw
-        return cls(new_official_price_id=new_official_price_id, prior_official_price_id=prior_official_price_id)
+        values.named_fields("OfficialPriceSupersedes", args, ("new_official_price_id", "prior_official_price_id"))
+        return cls(
+            new_official_price_id=values.named_text("OfficialPriceSupersedes.new_official_price_id", args["new_official_price_id"]),
+            prior_official_price_id=values.named_text("OfficialPriceSupersedes.prior_official_price_id", args["prior_official_price_id"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -360,17 +353,14 @@ class TradeSettledClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TradeSettledClaim:
-        raw = args["trade"]
-        trade = raw
-        raw = args["settled_qty"]
-        settled_qty = values.parse_decimal(raw)
-        raw = args["settlement_id"]
-        settlement_id = raw
-        raw = args["official_price_id"]
-        official_price_id = raw
-        raw = args["effective_on"]
-        effective_on = values.parse_date(raw)
-        return cls(trade=trade, settled_qty=settled_qty, settlement_id=settlement_id, official_price_id=official_price_id, effective_on=effective_on)
+        values.named_fields("TradeSettled", args, ("trade", "settled_qty", "settlement_id", "official_price_id", "effective_on"))
+        return cls(
+            trade=values.named_text("TradeSettled.trade", args["trade"]),
+            settled_qty=values.named_decimal("TradeSettled.settled_qty", args["settled_qty"]),
+            settlement_id=values.named_text("TradeSettled.settlement_id", args["settlement_id"]),
+            official_price_id=values.named_text("TradeSettled.official_price_id", args["official_price_id"]),
+            effective_on=values.named_date("TradeSettled.effective_on", args["effective_on"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -384,11 +374,11 @@ class PositionLimitClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> PositionLimitClaim:
-        raw = args["commodity"]
-        commodity = raw
-        raw = args["limit"]
-        limit = values.parse_decimal(raw)
-        return cls(commodity=commodity, limit=limit)
+        values.named_fields("PositionLimit", args, ("commodity", "limit"))
+        return cls(
+            commodity=values.named_text("PositionLimit.commodity", args["commodity"]),
+            limit=values.named_decimal("PositionLimit.limit", args["limit"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -402,11 +392,11 @@ class SettledUnderTermsClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> SettledUnderTermsClaim:
-        raw = args["settlement_id"]
-        settlement_id = raw
-        raw = args["version_id"]
-        version_id = raw
-        return cls(settlement_id=settlement_id, version_id=version_id)
+        values.named_fields("SettledUnderTerms", args, ("settlement_id", "version_id"))
+        return cls(
+            settlement_id=values.named_text("SettledUnderTerms.settlement_id", args["settlement_id"]),
+            version_id=values.named_text("SettledUnderTerms.version_id", args["version_id"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -423,17 +413,14 @@ class TermsTimelineClaim:
 
     @classmethod
     def from_named(cls, args: dict[str, object]) -> TermsTimelineClaim:
-        raw = args["trade"]
-        trade = raw
-        raw = args["version_id"]
-        version_id = raw
-        raw = args["delivery_period"]
-        delivery_period = raw
-        raw = args["effective_from"]
-        effective_from = values.parse_date(raw)
-        raw = args["quantity"]
-        quantity = values.parse_decimal(raw)
-        return cls(trade=trade, version_id=version_id, delivery_period=delivery_period, effective_from=effective_from, quantity=quantity)
+        values.named_fields("TermsTimeline", args, ("trade", "version_id", "delivery_period", "effective_from", "quantity"))
+        return cls(
+            trade=values.named_text("TermsTimeline.trade", args["trade"]),
+            version_id=values.named_text("TermsTimeline.version_id", args["version_id"]),
+            delivery_period=values.named_text("TermsTimeline.delivery_period", args["delivery_period"]),
+            effective_from=values.named_date("TermsTimeline.effective_from", args["effective_from"]),
+            quantity=values.named_decimal("TermsTimeline.quantity", args["quantity"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -441,7 +428,7 @@ class TradeCapturedAdmittedPayload:
     """Payload of an emitted `TradeCapturedAdmitted` intent."""
 
     INTENT: ClassVar[str] = "TradeCapturedAdmitted"
-    _ARG_ORDER: ClassVar[tuple] = ("trade",)
+    _ARG_ORDER: ClassVar[tuple[str, ...]] = ("trade",)
 
     trade: str
 
@@ -450,11 +437,13 @@ class TradeCapturedAdmittedPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 1:
-            raise ValueError(
+            raise values.CodecError(
                 f"TradeCapturedAdmitted: payload arity {len(args)} != contract arity 1 "
                 f"(schema/payload skew)"
             )
-        return cls(*args)
+        return cls(
+            trade=values.decoded("TradeCapturedAdmitted.trade", args[0], str),
+        )
 
 
 @dataclass(frozen=True)
@@ -462,7 +451,7 @@ class TradeTermsAmendedPayload:
     """Payload of an emitted `TradeTermsAmended` intent."""
 
     INTENT: ClassVar[str] = "TradeTermsAmended"
-    _ARG_ORDER: ClassVar[tuple] = ("trade", "new_version_id", "prior_version_id",)
+    _ARG_ORDER: ClassVar[tuple[str, ...]] = ("trade", "new_version_id", "prior_version_id",)
 
     trade: str
     new_version_id: str
@@ -473,11 +462,15 @@ class TradeTermsAmendedPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 3:
-            raise ValueError(
+            raise values.CodecError(
                 f"TradeTermsAmended: payload arity {len(args)} != contract arity 3 "
                 f"(schema/payload skew)"
             )
-        return cls(*args)
+        return cls(
+            trade=values.decoded("TradeTermsAmended.trade", args[0], str),
+            new_version_id=values.decoded("TradeTermsAmended.new_version_id", args[1], str),
+            prior_version_id=values.decoded("TradeTermsAmended.prior_version_id", args[2], str),
+        )
 
 
 @dataclass(frozen=True)
@@ -485,7 +478,7 @@ class ConfirmAuthorityGrantedPayload:
     """Payload of an emitted `ConfirmAuthorityGranted` intent."""
 
     INTENT: ClassVar[str] = "ConfirmAuthorityGranted"
-    _ARG_ORDER: ClassVar[tuple] = ("principal", "commodity",)
+    _ARG_ORDER: ClassVar[tuple[str, ...]] = ("principal", "commodity",)
 
     principal: str
     commodity: str
@@ -495,11 +488,14 @@ class ConfirmAuthorityGrantedPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 2:
-            raise ValueError(
+            raise values.CodecError(
                 f"ConfirmAuthorityGranted: payload arity {len(args)} != contract arity 2 "
                 f"(schema/payload skew)"
             )
-        return cls(*args)
+        return cls(
+            principal=values.decoded("ConfirmAuthorityGranted.principal", args[0], str),
+            commodity=values.decoded("ConfirmAuthorityGranted.commodity", args[1], str),
+        )
 
 
 @dataclass(frozen=True)
@@ -507,7 +503,7 @@ class TradeConfirmedAdmittedPayload:
     """Payload of an emitted `TradeConfirmedAdmitted` intent."""
 
     INTENT: ClassVar[str] = "TradeConfirmedAdmitted"
-    _ARG_ORDER: ClassVar[tuple] = ("trade", "confirmation_id", "official_price_id",)
+    _ARG_ORDER: ClassVar[tuple[str, ...]] = ("trade", "confirmation_id", "official_price_id",)
 
     trade: str
     confirmation_id: str
@@ -518,11 +514,15 @@ class TradeConfirmedAdmittedPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 3:
-            raise ValueError(
+            raise values.CodecError(
                 f"TradeConfirmedAdmitted: payload arity {len(args)} != contract arity 3 "
                 f"(schema/payload skew)"
             )
-        return cls(*args)
+        return cls(
+            trade=values.decoded("TradeConfirmedAdmitted.trade", args[0], str),
+            confirmation_id=values.decoded("TradeConfirmedAdmitted.confirmation_id", args[1], str),
+            official_price_id=values.decoded("TradeConfirmedAdmitted.official_price_id", args[2], str),
+        )
 
 
 @dataclass(frozen=True)
@@ -530,7 +530,7 @@ class OfficialPriceCorrectedPayload:
     """Payload of an emitted `OfficialPriceCorrected` intent."""
 
     INTENT: ClassVar[str] = "OfficialPriceCorrected"
-    _ARG_ORDER: ClassVar[tuple] = ("trade", "new_official_price_id", "prior_official_price_id",)
+    _ARG_ORDER: ClassVar[tuple[str, ...]] = ("trade", "new_official_price_id", "prior_official_price_id",)
 
     trade: str
     new_official_price_id: str
@@ -541,11 +541,15 @@ class OfficialPriceCorrectedPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 3:
-            raise ValueError(
+            raise values.CodecError(
                 f"OfficialPriceCorrected: payload arity {len(args)} != contract arity 3 "
                 f"(schema/payload skew)"
             )
-        return cls(*args)
+        return cls(
+            trade=values.decoded("OfficialPriceCorrected.trade", args[0], str),
+            new_official_price_id=values.decoded("OfficialPriceCorrected.new_official_price_id", args[1], str),
+            prior_official_price_id=values.decoded("OfficialPriceCorrected.prior_official_price_id", args[2], str),
+        )
 
 
 @dataclass(frozen=True)
@@ -553,7 +557,7 @@ class TradeSettlementRequestedPayload:
     """Payload of an emitted `TradeSettlementRequested` intent."""
 
     INTENT: ClassVar[str] = "TradeSettlementRequested"
-    _ARG_ORDER: ClassVar[tuple] = ("settlement_id", "trade", "settled_qty",)
+    _ARG_ORDER: ClassVar[tuple[str, ...]] = ("settlement_id", "trade", "settled_qty",)
 
     settlement_id: str
     trade: str
@@ -564,11 +568,15 @@ class TradeSettlementRequestedPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 3:
-            raise ValueError(
+            raise values.CodecError(
                 f"TradeSettlementRequested: payload arity {len(args)} != contract arity 3 "
                 f"(schema/payload skew)"
             )
-        return cls(*args)
+        return cls(
+            settlement_id=values.decoded("TradeSettlementRequested.settlement_id", args[0], str),
+            trade=values.decoded("TradeSettlementRequested.trade", args[1], str),
+            settled_qty=values.decoded("TradeSettlementRequested.settled_qty", args[2], Decimal),
+        )
 
 
 @dataclass(frozen=True)
@@ -576,7 +584,7 @@ class PositionLimitSetPayload:
     """Payload of an emitted `PositionLimitSet` intent."""
 
     INTENT: ClassVar[str] = "PositionLimitSet"
-    _ARG_ORDER: ClassVar[tuple] = ("commodity", "limit",)
+    _ARG_ORDER: ClassVar[tuple[str, ...]] = ("commodity", "limit",)
 
     commodity: str
     limit: Decimal
@@ -586,14 +594,27 @@ class PositionLimitSetPayload:
         """Build from the decoded positional values of an outbox
         row's `arguments` (the adapter decodes; this names)."""
         if len(args) != 2:
-            raise ValueError(
+            raise values.CodecError(
                 f"PositionLimitSet: payload arity {len(args)} != contract arity 2 "
                 f"(schema/payload skew)"
             )
-        return cls(*args)
+        return cls(
+            commodity=values.decoded("PositionLimitSet.commodity", args[0], str),
+            limit=values.decoded("PositionLimitSet.limit", args[1], Decimal),
+        )
 
 
-INTENT_PAYLOADS = {
+class IntentPayloadModel(Protocol):
+    """What every payload model offers: its intent's name, and a build from
+    an outbox row's decoded arguments."""
+
+    INTENT: ClassVar[str]
+
+    @classmethod
+    def from_args(cls, args: list[object]) -> IntentPayloadModel: ...
+
+
+INTENT_PAYLOADS: dict[str, type[IntentPayloadModel]] = {
     "TradeCapturedAdmitted": TradeCapturedAdmittedPayload,
     "TradeTermsAmended": TradeTermsAmendedPayload,
     "ConfirmAuthorityGranted": ConfirmAuthorityGrantedPayload,

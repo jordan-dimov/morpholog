@@ -12,6 +12,7 @@ import tempfile
 import time
 import threading
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 from _support import GOLDEN_DIR
@@ -123,7 +124,8 @@ for request in sys.stdin:
     elif mode == "commit_outcome_unknown_receipt":
         say(json.dumps({"code": "commit_outcome_unknown", "error": "the commit outcome is unknown - read the record before re-submitting: connection reset by peer", "row": n, "status": "error"}))
     elif mode == "transact_rejected":
-        say(json.dumps({"act": 1, "reason": "require `Account(account)` failed", "row": n, "status": "rejected"}))
+        compared = {"op": "<=", "left": {"type": "decimal", "value": "2"}, "right": {"type": "decimal", "value": "1"}}
+        say(json.dumps({"act": 1, "compared": compared, "reason": "require `Account(account)` failed", "row": n, "status": "rejected"}))
     elif mode == "empty_batch_receipt":
         say(json.dumps({"code": "invalid_request", "error": "an atomic batch needs at least one act", "row": n, "status": "error"}))
     elif mode == "unpublished_code_receipt":
@@ -146,6 +148,8 @@ for request in sys.stdin:
                 }
             )
         )
+    elif mode == "wrong_value_in_receipt":
+        say(committed.replace('"transition_id":"00000000-0000-0000-0000-000000000000"', '"transition_id":7').replace('"row":1', f'"row":{n}'))
     elif mode == "bad_tag_in_row":
         say(json.dumps([{"args": [{"type": "unknown-new-tag", "value": "a"}], "predicate": "P"}]))
     elif mode == "bad_row_in_error":
@@ -352,6 +356,7 @@ class TranscriptConversation(SessionHarness):
             rejected = s.transact(acts)
             self.assertIsInstance(rejected, envelopes.AtomicRejected)
             self.assertEqual(rejected.act, 1)
+            self.assertEqual(rejected.compared.left, Decimal("2"))
             self.assertIsNone(s._poisoned)
         request = json.loads(self.recorded()[0])
         self.assertEqual(request["op"], "transact")
@@ -400,13 +405,14 @@ class TranscriptConversation(SessionHarness):
 
 
     def test_an_unpublished_code_on_a_proposal_is_outcome_unknown(self):
-        # Only a published code can say a proposal did not commit. The
-        # receipt arrived in step, so the session stays usable.
+        # Only a published code can say a proposal did not commit. A code
+        # outside the schema is drift, so the session stops trusting the
+        # stream as well.
         with self.session("unpublished_code_receipt") as s:
             with self.assertRaises(MorphologOutcomeUnknown) as unknown:
                 s.propose("open_account", "teller", {"account": "a", "opened_on": "2026-01-15"})
             self.assertIn("a_future_code", str(unknown.exception))
-            self.assertIsNone(s._poisoned)
+            self.assertIsNotNone(s._poisoned)
 
 
 class Lifecycle(SessionHarness):
@@ -592,14 +598,22 @@ class Lifecycle(SessionHarness):
         """The receipt frames correctly but carries a value tag this
         client does not know. The proposal was submitted, so the only
         honest answer is UNDECIDED - and the contract has demonstrably
-        drifted, so the session must not serve another request. The
-        envelope parsers reach value codecs that raise their own
-        exception types, which is why the seam cannot recognise a
-        broken contract by one exception class."""
+        drifted, so the session must not serve another request."""
         with self.session(mode="bad_tag_in_receipt") as s:
             with self.assertRaises(MorphologOutcomeUnknown):
                 s.propose("t", "a", {})
             self.assertIsNotNone(s._poisoned)
+
+    def test_a_well_keyed_receipt_with_a_wrong_value_poisons_and_is_outcome_unknown(self):
+        """Right keys, wrong type: the receipt is not understood, so the
+        proposal is undecided, and the session takes nothing further from
+        the stream."""
+        with self.session(mode="wrong_value_in_receipt") as s:
+            with self.assertRaises(MorphologOutcomeUnknown):
+                s.propose("t", "a", {})
+            self.assertIsNotNone(s._poisoned)
+            with self.assertRaises(MorphologError):
+                s.propose("t", "a", {})
 
     def test_a_malformed_value_inside_a_read_row_poisons_but_stays_operational(self):
         """The same drift on a read: nothing was submitted, so it is a

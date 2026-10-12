@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from _support import GOLDEN_DIR, recording_argv
+from _support import GOLDEN_DIR, golden, recording_argv
 
 from python_client import envelopes
 from python_client.adapter import (
@@ -174,7 +174,7 @@ class AdapterDiscrimination(unittest.TestCase):
         # its own generated client. Both flags pass straight through: the
         # binary owns the pairing rule, this layer does not re-implement it.
         self._mode("record_argv_stdout")
-        os.environ["STUB_STDOUT"] = json.dumps({"status": "created", "schema": "morpholog"})
+        os.environ["STUB_STDOUT"] = json.dumps({"status": "initialised", "schema": "morpholog"})
         self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
         with recording_argv() as argv_after:
             argv = argv_after(
@@ -623,6 +623,45 @@ class AdapterDiscrimination(unittest.TestCase):
         receipts = self.client.propose_batch([row])
         self.assertEqual(receipts[0].outcome.code, "commit_outcome_unknown")
 
+    def test_a_batch_rejection_carries_the_comparison_it_blamed(self):
+        self._mode("stdout_then_exit")
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        row = {"transformation": "t", "actor": "a", "args_named": {}}
+        os.environ["STUB_STDOUT"] = "".join(
+            json.dumps({**golden("batch_rejected_receipt_with_compared.json"), "row": n}) + "\n"
+            for n in (1, 2)
+        )
+        receipts = self.client.propose_batch([row, row])
+        self.assertEqual(receipts[1].outcome.compared.op, "<=")
+
+    def test_a_batch_receipt_with_a_wrong_value_keeps_the_receipts_before_it(self):
+        # A receipt with the right keys and a wrong value is as untrusted
+        # as a missing one: the receipts before it stand, and its row and
+        # every row after it are unknown.
+        self._mode("stdout_then_exit")
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        row = {"transformation": "t", "actor": "a", "args_named": {}}
+        committed = (
+            '{{"row": 2, "status": "committed", "transition_id": {tid}, '
+            '"actor": {actor}, "asserted_claims": [{claim}], "retracted_claims": [], '
+            '"emitted_intents": []}}\n'
+        )
+        subject = '{"type": "subject", "value": "a"}'
+        claim = '{"predicate": "P", "args": [%s]}'
+        for tid, actor, arg in (
+            ('"t2"', subject, '{"type": "decimal", "value": "x"}'),
+            ("7", subject, subject),
+            ('"t2"', '{"type": "decimal", "value": "1"}', subject),
+        ):
+            os.environ["STUB_STDOUT"] = (
+                '{"row": 1, "status": "rejected", "reason": "closed"}\n'
+                + committed.format(tid=tid, actor=actor, claim=claim % arg)
+            )
+            with self.assertRaises(MorphologBatchIncomplete, msg=(tid, actor, arg)) as caught:
+                self.client.propose_batch([row, row, row])
+            self.assertEqual([r.row for r in caught.exception.receipts], [1])
+            self.assertEqual(caught.exception.unknown_rows, [2, 3])
+
     def test_a_proposal_is_not_committed_only_when_the_binary_says_so(self):
         # The doctrine line: no exit code, stderr text, silence or signal
         # proves a non-commit. Only a strictly parsed error object with a
@@ -857,6 +896,8 @@ class AdapterDiscrimination(unittest.TestCase):
         rejected = self.client.transact(acts)
         self.assertIsInstance(rejected, envelopes.AtomicRejected)
         self.assertEqual(rejected.act, 2)
+        # A refusal that names its comparison is still a decided refusal.
+        self.assertEqual(rejected.compared.op, "<=")
 
         # The error object is raised with its code; only a serialization
         # failure is retriable, and the predicate says so.

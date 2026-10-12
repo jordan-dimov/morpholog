@@ -52,11 +52,11 @@ READ_SURFACE_FRICTION = (
 )
 
 
-def deliver(morph: Morpholog, outcome: object) -> None:
+def deliver(morph: Morpholog, outcome: object) -> envelopes.Committed:
     """The deliverer side: for each intent the commit emitted, claim it,
     decode its payload through the generated model (the arg order was
     baked at generation time under the model hash), and resolve the
-    lease."""
+    lease. Returns the commit, for its transition id."""
     if not isinstance(outcome, envelopes.Committed):
         raise MorphologError(f"expected a commit, got {outcome}")
     emitted = ", ".join(i.name for i in outcome.emitted_intents) or "none"
@@ -65,11 +65,14 @@ def deliver(morph: Morpholog, outcome: object) -> None:
         row = morph.outbox_claim(intent.name)
         if row is None:
             continue
+        if row.locked_by is None:
+            raise MorphologError(f"claimed {intent.name} without a lease: {row}")
         payload = models.INTENT_PAYLOADS[intent.name].from_args(row.arguments)
         print(f"    delivered {intent.name} -> {payload}")
         applied = morph.outbox_complete(row.intent_id, row.locked_by)
         if not applied.applied:
             raise MorphologError(f"lease lost completing {intent.name}: {applied}")
+    return outcome
 
 
 def reset_schema(morph: Morpholog) -> None:
@@ -129,14 +132,13 @@ def main() -> None:
     print(f"    explain -> {verdict.rejection}")
 
     print("4. middle office confirms and sets the official price")
-    confirmed = morph.submit(
+    confirmed = deliver(morph, morph.submit(
         models.ConfirmTradeRequest(
             trade=trade, counterparty="acme", confirmation_id="conf1",
             official_price_id="op1", confirmed_price=Decimal("45.20"),
         ),
         desk,
-    )
-    deliver(morph, confirmed)
+    ))
 
     print("5. the official price is corrected (restatement; prior settlements stand)")
     deliver(morph, morph.submit(
@@ -177,14 +179,13 @@ def main() -> None:
         if f.trade == trade and f.official_price_id == pointer.official_price_id
     )
     print(f"    in-force official price for {trade}: {figure.price} under {figure.official_price_id}")
-    settled = morph.submit(
+    settled = deliver(morph, morph.submit(
         models.SettleTradeRequest(
             trade=trade, settled_qty=Decimal("60"), settlement_id="s1",
             official_price_id=pointer.official_price_id, effective_on=date(2026, 6, 30),
         ),
         desk,
-    )
-    deliver(morph, settled)
+    ))
 
     print("7. an over-cap second settlement (60 + 60 > 100) is refused")
     over = morph.submit(

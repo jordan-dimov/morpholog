@@ -141,5 +141,57 @@ class ParseTimestamp(unittest.TestCase):
         self.assertIn("sub-microsecond", str(caught.exception))
 
 
+
+class WireFormats(unittest.TestCase):
+    """Decoding reads only what the schema publishes, and every refusal is
+    a `CodecError`, never the standard library's own exception."""
+
+    def refused(self, tagged):
+        with self.assertRaises(values.CodecError, msg=repr(tagged)):
+            values.decode_tagged(tagged)
+
+    def test_decimal_text_outside_the_wire_pattern_is_refused(self):
+        for text in ("NaN", "Infinity", "1e5", "01", "1.", ".5", "+1", " 1", "1_000"):
+            self.refused({"type": "decimal", "value": text})
+            self.refused({"type": "quantity", "value": {"amount": text, "unit": "USD"}})
+
+    def test_dates_outside_yyyy_mm_dd_or_the_calendar_are_refused(self):
+        for text in ("20260102", "2026-W01-1", "2026-02-30", "2026-1-2", "0000-01-01", ""):
+            self.refused({"type": "date", "value": text})
+
+    def test_timestamps_outside_rfc_3339_are_refused(self):
+        for text in (
+            "2026-06-01 12:00:00Z",
+            "2026-06-01T12:00Z",
+            "2026-06-01T12:00:00",
+            "2026-06-01T12:00:00+0000",
+            "2026-06-01T25:00:00Z",
+            "20260601T120000Z",
+        ):
+            self.refused({"type": "timestamp", "value": text})
+
+    def test_a_quantity_unit_must_be_a_string(self):
+        for unit in (None, 7, ["USD"]):
+            self.refused({"type": "quantity", "value": {"amount": "1", "unit": unit}})
+
+    def test_durations_outside_exact_spans_are_refused(self):
+        for text in ("6H", "P1D", "PT", "PT1.S", "PT6h", ""):
+            self.refused({"type": "duration", "value": text})
+
+    def test_the_spellings_the_contract_allows_are_read(self):
+        cases = [
+            ({"type": "decimal", "value": "-0.50"}, Decimal("-0.50")),
+            (
+                {"type": "timestamp", "value": "2026-06-01t13:30:00+01:30"},
+                datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+            ),
+            ({"type": "duration", "value": "-PT1H30M"}, "-PT1H30M"),
+            ({"type": "duration", "value": "PT0.5S"}, "PT0.5S"),
+            ({"type": "date", "value": "0001-01-01"}, date(1, 1, 1)),
+        ]
+        for tagged, expected in cases:
+            self.assertEqual(values.decode_tagged(tagged), expected, tagged)
+
+
 if __name__ == "__main__":
     unittest.main()

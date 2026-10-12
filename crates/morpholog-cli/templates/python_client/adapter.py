@@ -23,7 +23,7 @@ import os
 import subprocess
 import threading
 import tempfile
-from typing import IO, Callable, ClassVar, Protocol, Sequence, TypeVar, cast
+from typing import IO, Callable, ClassVar, Protocol, Sequence, TypeVar
 
 from . import envelopes
 
@@ -758,7 +758,7 @@ class Morpholog:
         if named:
             argv += ["--named", self.file]
         payload = self._json(*argv, "--database-url", self.database_url)
-        return [parse(c) for c in cast("list[object]", payload)]
+        return envelopes.parse_list(payload, parse)
 
     def rejections(
         self, *, limit: int = 100, mentions: str | None = None
@@ -788,7 +788,7 @@ class Morpholog:
             "--database-url",
             self.database_url,
         )
-        return [envelopes.RejectionRow.from_json(r) for r in cast("list[object]", payload)]
+        return envelopes.parse_list(payload, envelopes.RejectionRow.from_json)
 
     def derived(self, name: str, *, as_of: str | None = None) -> list[envelopes.ClaimInstance]:
         """Compute a read-side view (a derived claim) directly from the
@@ -833,7 +833,7 @@ class Morpholog:
         argv += self._opt("--as-of", as_of)
         argv += self._repeat("--where", [f"{k}={v}" for k, v in (where or {}).items()])
         payload = self._json(*argv, "--database-url", self.database_url)
-        return [parse(c) for c in cast("list[object]", payload)]
+        return envelopes.parse_list(payload, parse)
 
     def audit(
         self,

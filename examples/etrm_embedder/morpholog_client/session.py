@@ -488,11 +488,11 @@ class Session:
                     raise MorphologOutcomeUnknown(exc.detail) from None
                 raise MorphologError(exc.detail) from None
             except Exception as exc:
-                # A decoder reaches value codecs that raise their own
-                # types, so the contract cannot be recognised by one
-                # exception class. Anything a decoder throws means the
-                # response was not understood, and a submitted proposal
-                # whose response was not understood is UNDECIDED - the
+                # A broken contract raises EnvelopeError, and a defect in
+                # a decoder must not pass for a decided outcome either:
+                # anything a decoder throws means the response was not
+                # understood, and a submitted proposal whose response was
+                # not understood is UNDECIDED - the
                 # one thing this client must never report as an
                 # ordinary error. BaseException is deliberately not
                 # caught: an interrupt still means what it says.
