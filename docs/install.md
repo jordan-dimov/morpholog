@@ -269,10 +269,13 @@ read.
 
 It changes nothing when it cannot move faithfully: a named login that is
 not a direct member of the old pair, cannot log in, or holds it with the
-admin option; a new role name that already exists; or anything the old pair
-holds here beyond Morpholog's floor - a privilege granted by hand, an object
-it owns, a policy or default privilege naming it, a privilege on the
-database. It lists what it found; remove it, or keep the old roles. The old
+admin option; a new role name that already exists; an old role that is
+itself a member of another role, which may reach this database however the
+move revokes; a privilege PUBLIC holds on Morpholog's schemas or tables,
+which granting the floor would revoke; or anything the old pair holds here
+beyond Morpholog's floor - a privilege granted by hand, an object it owns, a
+policy or default privilege naming it, a privilege on the database. It lists
+what it found; remove it, or keep the old roles. The old
 roles, and every membership in them, stay: they belong to the whole
 cluster, and another deployment may still use them. Remove a login's old
 membership only once no deployment needs it.

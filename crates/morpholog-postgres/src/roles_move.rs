@@ -74,7 +74,8 @@ struct Membership {
 /// recorded and still exists, `to` differs from it and neither of its
 /// roles exists, the caller may create roles, and every named login can
 /// log in and is a direct member of the old pair without the admin
-/// option. It also refuses when the old pair holds anything in this
+/// option. It refuses while either old role is a member of another role,
+/// or PUBLIC holds anything the floor would revoke from it. It also refuses when the old pair holds anything in this
 /// database beyond the floor `to` has just been granted - a privilege
 /// granted by hand, an object it owns, a policy or default privilege
 /// naming it, a privilege on the database itself - so nothing is revoked
@@ -86,6 +87,13 @@ pub async fn move_deployment_roles(
     logins: &[String],
 ) -> Result<RolesMoveReport, PgError> {
     crate::migrations::require_current_schema(pool).await?;
+    let mut named: Vec<String> = Vec::new();
+    for login in logins {
+        if !named.contains(login) {
+            named.push(login.clone());
+        }
+    }
+    let logins = named.as_slice();
     let mut tx = pool.begin().await.map_err(classify)?;
     sqlx::raw_sql("LOCK TABLE morpholog.deployment_roles IN ACCESS EXCLUSIVE MODE")
         .execute(&mut *tx)
@@ -178,6 +186,35 @@ pub async fn move_deployment_roles(
                 m.role
             )));
         }
+    }
+
+    let parents = sqlx::query_scalar!(
+        r#"SELECT format('`%s` is a member of `%s`', m.rolname, g.rolname) AS "finding!"
+           FROM pg_auth_members am
+           JOIN pg_roles g ON g.oid = am.roleid
+           JOIN pg_roles m ON m.oid = am.member
+           WHERE m.rolname = ANY($1)
+           ORDER BY 1"#,
+        &old,
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(classify_checked_query)?;
+    if !parents.is_empty() {
+        return Err(PgError::InvalidState(format!(
+            "the old roles are members of other roles, which may reach this database \
+             whatever the move revokes, and which the new roles would not inherit; revoke \
+             these memberships first, or keep the old roles: {}",
+            parents.join("; ")
+        )));
+    }
+    let public = granted_to_public(&mut tx).await?;
+    if !public.is_empty() {
+        return Err(PgError::InvalidState(format!(
+            "PUBLIC holds privileges on Morpholog's schemas or tables, which granting the \
+             floor revokes; revoke these by hand first: {}",
+            public.join("; ")
+        )));
     }
 
     for role in to.both() {
@@ -337,6 +374,29 @@ async fn beyond_the_floor(
         from.reader(),
         to.writer(),
         to.reader(),
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(classify_checked_query)
+}
+
+/// What PUBLIC holds on the schemas and tables the floor revokes it from.
+async fn granted_to_public(conn: &mut sqlx::PgConnection) -> Result<Vec<String>, PgError> {
+    sqlx::query_scalar!(
+        r#"WITH governed AS (
+               SELECT oid FROM pg_namespace WHERE nspname IN ('morpholog', 'morpholog_read')
+           )
+           SELECT format('PUBLIC holds %s on %s', a.privilege_type,
+                         pg_describe_object('pg_namespace'::regclass, n.oid, 0)) AS "finding!"
+           FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a
+           WHERE n.oid IN (SELECT oid FROM governed) AND a.grantee = 0
+           UNION ALL
+           SELECT format('PUBLIC holds %s on %s', a.privilege_type,
+                         pg_describe_object('pg_class'::regclass, c.oid, 0))
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
+           WHERE c.relnamespace IN (SELECT oid FROM governed)
+             AND c.relkind IN ('r', 'p', 'v', 'm', 'f') AND a.grantee = 0
+           ORDER BY 1"#
     )
     .fetch_all(&mut *conn)
     .await

@@ -37,7 +37,7 @@ impl World {
     fn roles(&self) -> Vec<String> {
         ["old_writer", "old_reader", "new_writer", "new_reader"]
             .into_iter()
-            .chain(["l1", "l2", "l3", "l4", "l5", "stranger", "group"])
+            .chain(["l1", "l2", "l3", "l4", "l5", "stranger", "group", "extra"])
             .map(|r| self.name(r))
             .collect()
     }
@@ -235,7 +235,7 @@ async fn run(pool: &PgPool, sql: &str) {
 /// `None` when the test role cannot create roles and databases.
 async fn in_world<F, Fut>(tag: &'static str, scenario: F)
 where
-    F: FnOnce(World) -> Fut,
+    F: FnOnce(World) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     let world = World { tag };
@@ -250,8 +250,12 @@ where
         eprintln!("skipping: needs a superuser test role");
         return;
     }
-    world.build().await;
-    let outcome = tokio::spawn(scenario(world.clone())).await;
+    let built = world.clone();
+    let outcome = tokio::spawn(async move {
+        built.build().await;
+        scenario(built).await;
+    })
+    .await;
     world.clean().await;
     if let Err(failure) = outcome {
         std::panic::resume_unwind(failure.into_panic());
@@ -261,7 +265,7 @@ where
 #[tokio::test]
 async fn named_logins_move_and_the_other_database_keeps_the_old_pair() {
     in_world("happy", |w| async move {
-        let (status, stdout, stderr) = w.move_roles(&["l1", "l3", "l4"]);
+        let (status, stdout, stderr) = w.move_roles(&["l1", "l3", "l4", "l1"]);
         assert!(status.success(), "{stderr}");
         let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(report["to"]["writer"], w.name("new_writer"), "{report}");
@@ -274,6 +278,11 @@ async fn named_logins_move_and_the_other_database_keeps_the_old_pair() {
             report["old_pair_reaches"],
             serde_json::json!([w.db("b")]),
             "{report}"
+        );
+        assert_eq!(
+            report["logins"].as_array().unwrap().len(),
+            3,
+            "a login named twice is moved once: {report}"
         );
         let l3 = report["logins"]
             .as_array()
@@ -421,6 +430,7 @@ async fn privileges_beyond_the_floor_refuse_the_move_instead_of_being_revoked() 
     in_world("beyond", |w| async move {
         let a = w.pool("a").await;
         let (ow, or) = (w.name("old_writer"), w.name("old_reader"));
+        let extra = w.name("extra");
         for (grant, revoke, named) in [
             (
                 format!("GRANT UPDATE ON morpholog.audit TO {ow}"),
@@ -442,6 +452,14 @@ async fn privileges_beyond_the_floor_refuse_the_move_instead_of_being_revoked() 
                 ),
                 "default privileges",
             ),
+            (
+                format!(
+                    "CREATE ROLE {extra} NOLOGIN; \
+                     GRANT INSERT ON morpholog.audit TO {extra}; GRANT {extra} TO {ow}"
+                ),
+                format!("DROP OWNED BY {extra}; DROP ROLE {extra}"),
+                "is a member of",
+            ),
         ] {
             run(&a, &grant).await;
             let (status, _, stderr) = w.move_roles(&["l1"]);
@@ -451,6 +469,24 @@ async fn privileges_beyond_the_floor_refuse_the_move_instead_of_being_revoked() 
             assert_eq!(w.recorded().await, (ow.clone(), or.clone()));
             run(&a, &revoke).await;
         }
+
+        // Granting the floor revokes PUBLIC's privileges, so a grant to
+        // PUBLIC refuses the move and stays.
+        run(&a, "GRANT SELECT ON morpholog.audit TO PUBLIC").await;
+        let (status, _, stderr) = w.move_roles(&["l1"]);
+        assert!(!status.success(), "moved past a grant to PUBLIC");
+        assert!(
+            stderr.contains("PUBLIC holds SELECT on table morpholog.audit"),
+            "{stderr}"
+        );
+        assert!(!w.new_pair_exists().await);
+        let kept: bool =
+            sqlx::query_scalar("SELECT has_table_privilege('public', 'morpholog.audit', 'SELECT')")
+                .fetch_one(&a)
+                .await
+                .unwrap();
+        assert!(kept, "the grant to PUBLIC was revoked");
+        run(&a, "REVOKE SELECT ON morpholog.audit FROM PUBLIC").await;
         a.close().await;
         let (status, _, stderr) = w.move_roles(&["l1"]);
         assert!(status.success(), "{stderr}");
