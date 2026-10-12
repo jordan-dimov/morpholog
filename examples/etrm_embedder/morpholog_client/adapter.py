@@ -215,8 +215,6 @@ class Morpholog:
         # until then, ``True`` once it agreed, or the error a mismatch
         # raised, raised again on every later call.
         self._checked: bool | MorphologError | None = None
-        # The report the check read, until the first ``hash()`` takes it.
-        self._checked_report: envelopes.HashReport | None = None
         self._check_lock = threading.Lock()
 
     # ------------------------------------------------------------
@@ -236,18 +234,19 @@ class Morpholog:
         self._ensure_compatible()
         return self._run_raw(args, stdin, timeout=timeout, stdout=stdout)
 
-    def _ensure_compatible(self) -> None:
+    def _ensure_compatible(self) -> envelopes.HashReport | None:
         """Refuse a binary of another version, or one serving other rules,
         before anything else runs. Asked of `hash`, whose report carries
         both, once per client, immediately before its first operation: a
         mismatch stays refused. It detects deployment skew at first use;
         it does not protect against replacing the binary or the programme
-        file under a client already checked."""
+        file under a client already checked. Returns the report when this
+        call ran the check."""
         if self._expected_version is None and self._expected_model_hash is None:
-            return
+            return None
         with self._check_lock:
             if self._checked is True:
-                return
+                return None
             if isinstance(self._checked, MorphologError):
                 raise self._checked
             args = ["hash", self.file]
@@ -284,7 +283,7 @@ class Morpholog:
                 )
                 raise self._checked
             self._checked = True
-            self._checked_report = report
+            return report
 
     def _run_raw(
         self,
@@ -465,14 +464,12 @@ class Morpholog:
         return envelopes.ProvisionReport.from_json(json.loads(proc.stdout))
 
     def hash(self) -> envelopes.HashReport:
-        """The stamps the binary reports for the file. The first call after
-        the pinned check returns the report that check read, without a
-        second spawn; every later call asks the binary again."""
-        self._ensure_compatible()
-        with self._check_lock:
-            kept, self._checked_report = self._checked_report, None
-        if kept is not None:
-            return kept
+        """The stamps the binary reports for the file. When this call runs
+        the pinned check, it returns the report the check read; otherwise
+        it asks the binary."""
+        checked = self._ensure_compatible()
+        if checked is not None:
+            return checked
         return envelopes.HashReport.from_json(self._json("hash", self.file))
 
     def check(self, strict: bool = False) -> envelopes.CheckReport:

@@ -29,7 +29,7 @@ class DecodeTagged(unittest.TestCase):
             ({"type": "duration", "value": "PT6H"}, "PT6H"),
             (
                 {"type": "quantity", "value": {"amount": "25000", "unit": "USD"}},
-                Decimal("25000"),
+                values.Quantity(Decimal("25000"), "USD"),
             ),
             (
                 {"type": "collection", "value": [{"type": "subject", "value": "nested"}]},

@@ -1,7 +1,7 @@
 """Value codecs for the Morpholog CLI contract, both directions.
 
 Decode: tagged wire values (``{"type": ..., "value": ...}``) into bare
-Python values. Encode: bare Python values into the ``--args-named``
+Python values, a quantity keeping its unit. Encode: bare Python values into the ``--args-named``
 codec's JSON shapes. Exactness is the contract: decimals travel as
 strings end to end and become ``decimal.Decimal``, never a float;
 timestamps are aware ``datetime`` objects, and a naive datetime is
@@ -18,6 +18,7 @@ model encodes it element by element, each item passing through
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import TypeVar
@@ -36,6 +37,14 @@ _DURATION_PATTERN = re.compile(r"^-?PT(?=\d)(\d+H)?(\d+M)?(\d+(\.\d+)?S)?$")
 
 class CodecError(ValueError):
     """A value that cannot cross the wire contract in this direction."""
+
+
+@dataclass(frozen=True)
+class Quantity:
+    """A tagged quantity: an exact amount and the unit it carried."""
+
+    amount: Decimal
+    unit: str
 
 
 def _expect_str(what: str, value: object) -> str:
@@ -167,9 +176,7 @@ def decode_tagged(tagged: object) -> object:
                 or not isinstance(value["unit"], str)
             ):
                 raise CodecError(f"malformed quantity payload: {value!r}")
-            # The bare amount; the unit is declared, not carried, on
-            # the named surfaces this client generates models for.
-            return parse_decimal(value["amount"])
+            return Quantity(parse_decimal(value["amount"]), value["unit"])
         case "collection":
             if not isinstance(value, list):
                 raise CodecError(f"a collection must arrive as an array: {value!r}")
@@ -222,6 +229,13 @@ def named_timestamp(where: str, value: object) -> datetime:
         return parse_timestamp(value)
     except CodecError as exc:
         raise CodecError(f"{where}: {exc}") from exc
+
+
+def quantity_amount(where: str, value: object, unit: str) -> Decimal:
+    """A decoded quantity's amount, held to the unit its declaration names."""
+    if not isinstance(value, Quantity) or value.unit != unit:
+        raise CodecError(f"{where}: expected a quantity in {unit}, got {value!r}")
+    return value.amount
 
 
 _K = TypeVar("_K")

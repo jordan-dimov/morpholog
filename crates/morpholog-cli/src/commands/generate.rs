@@ -492,12 +492,20 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
             .iter()
             .enumerate()
             .map(|(i, a)| {
-                let (annotation, _, _) = kind_map(&a.kind);
-                format!(
-                    "            {name}=values.decoded(\"{intent}.{name}\", args[{i}], {annotation}),\n",
-                    name = a.name,
-                    intent = intent.name,
-                )
+                let read = match &a.kind {
+                    PredicateArgKind::Quantity(unit) => format!(
+                        "quantity_amount(\"{intent}.{name}\", args[{i}], \"{unit}\")",
+                        name = a.name,
+                        intent = intent.name
+                    ),
+                    kind => format!(
+                        "decoded(\"{intent}.{name}\", args[{i}], {annotation})",
+                        name = a.name,
+                        intent = intent.name,
+                        annotation = kind_map(kind).0
+                    ),
+                };
+                format!("            {name}=values.{read},\n", name = a.name)
             })
             .collect::<String>();
         let _ = write!(

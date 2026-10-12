@@ -280,7 +280,7 @@ for name, call in calls.items():
 /// The generated models hold every value to its declared kind: a named
 /// read refuses a wrong kind, a missing field or an unknown one, and a
 /// payload refuses a decoded value of another type, a `datetime` where a
-/// `date` is declared included. Each refusal is a `CodecError`. The
+/// `date` is declared included, and a quantity in another unit or none. Each refusal is a `CodecError`. The
 /// programme carries every kind the generator supports.
 #[test]
 fn the_generated_models_refuse_a_value_of_another_kind() {
@@ -319,11 +319,12 @@ refused(lambda: models.FillClaim.from_named({k: v for k, v in good.items() if k 
 refused(lambda: models.FillClaim.from_named({**good, "extra": "x"}), "unknown key")
 
 at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
-args = ["o1", Decimal("1.5"), date(2026, 1, 2), at, True, Decimal("10")]
+args = ["o1", Decimal("1.5"), date(2026, 1, 2), at, True, values.Quantity(Decimal("10"), "USD")]
 payload = models.INTENT_PAYLOADS["FillBooked"].from_args(args)
 assert payload == models.FillBookedPayload("o1", Decimal("1.5"), date(2026, 1, 2), at, True,
                                            Decimal("10"))
-for i, bad in [(0, 7), (1, "1.5"), (2, at), (3, date(2026, 1, 2)), (4, 1), (5, 1.5)]:
+for i, bad in [(0, 7), (1, "1.5"), (2, at), (3, date(2026, 1, 2)), (4, 1), (5, 1.5),
+               (5, Decimal("10")), (5, values.Quantity(Decimal("10"), "EUR"))]:
     refused(lambda: models.FillBookedPayload.from_args(args[:i] + [bad] + args[i + 1:]),
             f"argument {i}={bad!r}")
 refused(lambda: models.FillBookedPayload.from_args(args[:5]), "arity")
@@ -337,7 +338,7 @@ print("done")
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("done"), "{stdout}\n{stderr}");
     assert!(!stdout.contains("WRONG"), "{stdout}");
-    assert_eq!(stdout.matches("refused").count(), 16, "{stdout}");
+    assert_eq!(stdout.matches("refused").count(), 18, "{stdout}");
 }
 
 fn refusal_fixture(source: &str) -> (tempfile::TempDir, PathBuf) {

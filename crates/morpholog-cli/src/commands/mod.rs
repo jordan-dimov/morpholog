@@ -316,7 +316,8 @@ fn members_of(role: &str, members: &[morpholog_postgres::RoleMember]) -> String 
         })
         .collect::<Vec<_>>()
         .join(", ");
-    format!("{listed} hold `{role}`")
+    let verb = if members.len() == 1 { "holds" } else { "hold" };
+    format!("{listed} {verb} `{role}`")
 }
 
 /// Pretty-print a value as JSON to stdout. The canonical output shape

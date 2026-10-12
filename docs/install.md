@@ -120,7 +120,7 @@ DATABASE_URL=postgres:///morpholog_scratch python3 examples/etrm_embedder/etrm_l
 
 ## Upgrading an existing database
 
-A verifier reads one evidence-pack format, its own. A pack in an older format is refused as `unsupported_pack`; export it again from the upgraded database. Keep the old packs, and a binary of the release that wrote them: anyone who holds a pack without the database cannot export it again, and only that release verifies it. That does not change the semantics version an older receipt was decided under: its integrity can verify while the current release reports `not_re_evaluated` for its answer (see [semantics versions](runtime-semantics.md#semantics-versions)).
+A verifier reads one evidence-pack format, its own. A pack in an older format is refused as `unsupported_pack`; export it again from the upgraded database. Keep the old packs, and a binary of the release that wrote them: anyone who holds a pack without the database cannot export it again, and only that release verifies it. This holds even when little changed. A prefix pack from v0.0.14 (format 13) and a v0.0.15 export of the same record differ only in their first line, and v0.0.15 still refuses the older one. The other way round, v0.0.14 reports a format 17 pack as `malformed_pack`, with a detail that says to upgrade. The generated client's pack models, such as `PrefixPackManifest`, read the current format only. That does not change the semantics version an older receipt was decided under: its integrity can verify while the current release reports `not_re_evaluated` for its answer (see [semantics versions](runtime-semantics.md#semantics-versions)).
 
 `morpholog init` provisions a schema; it never migrates one. That is
 deliberate - it means running `init` against a live database cannot alter
@@ -135,6 +135,8 @@ morpholog audit verify --database-url "$DATABASE_URL"        # 5. the record sti
 morpholog provision indexes a.morph b.morph                  # 6. every programme, one call
 # 7. start every process on the new binary
 ```
+
+To rehearse, migrate a copy first (`createdb -T live rehearsal`). A copy holds the same grants as its source, so `migrate` on it warns that this deployment's roles also hold privileges in the source database. For a copy that is expected, and no reason to move roles. Drop the copy before you migrate the live database, or that migrate warns about the copy too.
 
 Step 6 provisions. `provision indexes --check` asks the same question and changes nothing, so it belongs at deployment or service start, before the first write is accepted: a programme running unprovisioned is refused there instead of found by its latency.
 
