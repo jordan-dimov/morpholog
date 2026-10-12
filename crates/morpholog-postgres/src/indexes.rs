@@ -72,6 +72,35 @@ impl fmt::Display for IndexAction {
     }
 }
 
+/// What in a programme needs an index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NeedKind {
+    /// The invariant's compiled SQL seeks on it.
+    Invariant,
+    /// The transformation's reads, or the check that an admit is new,
+    /// seek on it.
+    Transformation,
+}
+
+impl fmt::Display for NeedKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            NeedKind::Invariant => "invariant",
+            NeedKind::Transformation => "transformation",
+        })
+    }
+}
+
+/// One part of a named programme that needs an index. Sorted by programme,
+/// then kind, then name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct IndexNeed {
+    pub program: String,
+    pub kind: NeedKind,
+    pub name: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct IndexPlanEntry {
     pub action: IndexAction,
@@ -89,6 +118,11 @@ pub struct IndexPlanEntry {
     /// The programmes that require the index once every named programme's
     /// requirements are replaced, by identity; none on a stale entry.
     pub required_by: Vec<String>,
+    /// What in the programmes named in this call needs the index. A
+    /// programme outside the call is in `required_by` only: the registry
+    /// records that it needs an index, not why. Empty does not mean the
+    /// index is unneeded.
+    pub needed_by: Vec<IndexNeed>,
 }
 
 /// What reconciling one statistics object does. An object under
@@ -503,7 +537,13 @@ fn classify_statistics(
 struct Named {
     identity: String,
     hash: String,
-    specs: Vec<IndexSpec>,
+    needs: BTreeMap<IndexSpec, BTreeSet<(NeedKind, String)>>,
+}
+
+impl Named {
+    fn specs(&self) -> impl Iterator<Item = &IndexSpec> {
+        self.needs.keys()
+    }
 }
 
 async fn reconcile(
@@ -518,7 +558,7 @@ async fn reconcile(
         .map(|program| Named {
             identity: program.prepared().program().name.to_string(),
             hash: canonical_hash(program.prepared().program()),
-            specs: program.required_indexes(),
+            needs: program.index_needs(),
         })
         .collect();
     named.sort_by(|a, b| a.identity.cmp(&b.identity));
@@ -638,7 +678,7 @@ async fn prospective_requirements(
         }
     };
     for program in named {
-        for spec in &program.specs {
+        for spec in program.specs() {
             required
                 .entry(spec.digest())
                 .or_default()
@@ -691,6 +731,28 @@ async fn managed_statistics_positions(
         .collect())
 }
 
+/// What in the named programmes needs `spec`, from the same map that put
+/// it in the plan.
+fn needed_by(named: &[Named], spec: &IndexSpec) -> Vec<IndexNeed> {
+    let mut needs: Vec<IndexNeed> = named
+        .iter()
+        .flat_map(|p| {
+            p.needs
+                .get(spec)
+                .into_iter()
+                .flatten()
+                .map(|(kind, name)| IndexNeed {
+                    program: p.identity.clone(),
+                    kind: *kind,
+                    name: name.clone(),
+                })
+        })
+        .collect();
+    needs.sort();
+    needs.dedup();
+    needs
+}
+
 async fn reconcile_locked(
     conn: &mut sqlx::PgConnection,
     named: &[Named],
@@ -699,7 +761,7 @@ async fn reconcile_locked(
 ) -> Result<ProvisionReport, PgError> {
     let specs: Vec<IndexSpec> = named
         .iter()
-        .flat_map(|p| p.specs.iter().cloned())
+        .flat_map(|p| p.specs().cloned())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -768,6 +830,7 @@ async fn reconcile_locked(
             partial_predicate_sql: spec.partial_predicate_sql.clone(),
             detail,
             required_by: required_by(&spec.digest()),
+            needed_by: needed_by(named, spec),
         });
     }
 
@@ -892,7 +955,7 @@ async fn reconcile_locked(
             .execute(&mut *tx)
             .await
             .map_err(classify_checked_query)?;
-            for spec in &program.specs {
+            for spec in program.specs() {
                 sqlx::query!(
                     "INSERT INTO morpholog.index_requirement
                         (program_identity, spec_digest, program_hash, position)
@@ -944,6 +1007,7 @@ async fn reconcile_locked(
                 "required by no programme; `--prune` drops it".to_string()
             },
             required_by: Vec::new(),
+            needed_by: Vec::new(),
         });
     }
     entries.sort_by(|a, b| a.index_name.cmp(&b.index_name));
@@ -1011,6 +1075,7 @@ mod tests {
                 partial_predicate_sql: String::new(),
                 detail: String::new(),
                 required_by: Vec::new(),
+                needed_by: Vec::new(),
             }],
             statistics: vec![StatisticsPlanEntry {
                 action: statistics,

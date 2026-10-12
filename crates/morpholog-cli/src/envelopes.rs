@@ -324,9 +324,19 @@ pub struct ProvisionedIndex<'a> {
     #[serde(skip_serializing_if = "str::is_empty")]
     pub detail: &'a str,
     pub name: &'a str,
+    /// What in the programmes named in the call needs the index. Empty
+    /// when only a programme outside the call needs it, or nothing does.
+    pub needed_by: Vec<IndexNeed<'a>>,
     pub position: usize,
     pub predicate: &'a str,
     pub required_by: &'a [String],
+}
+
+#[derive(Serialize)]
+pub struct IndexNeed<'a> {
+    pub kind: morpholog_postgres::NeedKind,
+    pub name: &'a str,
+    pub program: &'a str,
 }
 
 #[derive(Serialize)]
@@ -363,6 +373,15 @@ impl<'a> From<&'a morpholog_postgres::ProvisionReport> for ProvisionReport<'a> {
                     action: e.action,
                     detail: &e.detail,
                     name: &e.index_name,
+                    needed_by: e
+                        .needed_by
+                        .iter()
+                        .map(|n| IndexNeed {
+                            kind: n.kind,
+                            name: &n.name,
+                            program: &n.program,
+                        })
+                        .collect(),
                     position: e.position,
                     predicate: &e.predicate,
                     required_by: &e.required_by,

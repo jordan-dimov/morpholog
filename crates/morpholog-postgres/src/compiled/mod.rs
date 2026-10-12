@@ -160,22 +160,24 @@ pub(crate) struct CompiledInvariantSet {
 }
 
 impl CompiledInvariantSet {
+    /// Every index the set's SQL can seek on, with the invariant whose
+    /// SQL seeks on it, once per pair.
+    pub(crate) fn index_needs(&self) -> impl Iterator<Item = (&IndexSpec, &InvariantName)> {
+        self.invariants.iter().flat_map(|inv| {
+            inv.required_indexes
+                .iter()
+                .chain(&inv.case_indexes)
+                .map(move |spec| (spec, &inv.name))
+        })
+    }
+
     /// Every index the set's SQL can seek on, once each, in
     /// specification order.
+    #[cfg(test)]
     pub(crate) fn required_indexes(&self) -> Vec<IndexSpec> {
-        let mut specs: Vec<IndexSpec> = self
-            .invariants
-            .iter()
-            .flat_map(|inv| {
-                inv.required_indexes
-                    .iter()
-                    .chain(&inv.case_indexes)
-                    .cloned()
-            })
-            .collect();
-        specs.sort();
-        specs.dedup();
-        specs
+        let specs: std::collections::BTreeSet<IndexSpec> =
+            self.index_needs().map(|(spec, _)| spec.clone()).collect();
+        specs.into_iter().collect()
     }
 }
 

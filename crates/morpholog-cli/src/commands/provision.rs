@@ -78,14 +78,25 @@ fn print_plan(report: &ProvisionReport) {
         }
     };
     for entry in &report.entries {
+        let needed_by = if entry.needed_by.is_empty() {
+            String::new()
+        } else {
+            let needs: Vec<String> = entry
+                .needed_by
+                .iter()
+                .map(|n| format!("{}/{} {}", n.program, n.kind, n.name))
+                .collect();
+            format!("  - needed by {}", needs.join(", "))
+        };
         println!(
-            "{:<20} {}  {}[{}] {}{}",
+            "{:<20} {}  {}[{}] {}{}{}",
             entry.action.to_string(),
             entry.index_name,
             entry.predicate,
             entry.position,
             entry.representation,
-            detail(&entry.detail)
+            detail(&entry.detail),
+            needed_by
         );
     }
     for entry in &report.required_elsewhere {

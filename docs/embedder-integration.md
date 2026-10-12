@@ -506,9 +506,13 @@ Statistics objects are reconciled for every programme at once, named or not: one
   "dry_run": false,
   "indexes": [
     { "action": "keep", "name": "morpholog_ci_journalentry_0_vk1_0123456789ab",
+      "needed_by": [
+        { "kind": "transformation", "name": "bill_entry", "program": "billing" },
+        { "kind": "invariant", "name": "balanced", "program": "ledger" }
+      ],
       "position": 0, "predicate": "JournalEntry", "required_by": ["billing", "ledger"] },
     { "action": "stale", "detail": "required by no programme; dropped",
-      "name": "morpholog_ci_journalline_1_vk1_456789abcdef",
+      "name": "morpholog_ci_journalline_1_vk1_456789abcdef", "needed_by": [],
       "position": 1, "predicate": "JournalLine", "required_by": [] }
   ],
   "programs": [
@@ -529,6 +533,7 @@ Statistics objects are reconciled for every programme at once, named or not: one
 - An index's `action` is one of `keep`, `create`, `repair_invalid`, `satisfied_externally`, `stale`, `conflict`; a statistics object's is `keep`, `create`, `stale` or `conflict`. A dry run reports the same actions the applying run takes.
 - A run that applied under `prune` dropped every `stale` index and statistics object it lists.
 - `required_by` names the programmes that require the index or the statistics object's position once every named programme's requirements are replaced: the named ones and any other the database has recorded.
+- `needed_by` says why: each invariant whose compiled check seeks on the index, and each transformation whose reads, or check that an admit is new, seek on it, sorted by programme, kind and name. It covers the programmes named in this call only. The database records that another programme requires an index, not why, so such a programme is in `required_by` alone. An empty `needed_by` does not mean the index is unneeded. The printed plan ends each index line with the same list, as `program/kind name`.
 - `positions_unknown_for` names programmes outside the call with a recorded requirement whose position is not known. While it is not empty no statistics object is stale.
 - `detail` is a sentence for an operator, present when there is something to say. Decide on the typed fields.
 - The order never depends on the order the files were named in: programmes by name, indexes by name, statistics by position.

@@ -5,6 +5,18 @@
     {
       "action": "keep",
       "name": "morpholog_ci_journalentry_0_vk1_0123456789ab",
+      "needed_by": [
+        {
+          "kind": "invariant",
+          "name": "balanced",
+          "program": "ledger"
+        },
+        {
+          "kind": "transformation",
+          "name": "post_entry",
+          "program": "ledger"
+        }
+      ],
       "position": 0,
       "predicate": "JournalEntry",
       "required_by": [
@@ -15,6 +27,13 @@
       "action": "satisfied_externally",
       "detail": "lines_by_entry is equivalent and stays unmanaged",
       "name": "morpholog_ci_journalline_1_vk1_456789abcdef",
+      "needed_by": [
+        {
+          "kind": "transformation",
+          "name": "post_entry",
+          "program": "ledger"
+        }
+      ],
       "position": 1,
       "predicate": "JournalLine",
       "required_by": [

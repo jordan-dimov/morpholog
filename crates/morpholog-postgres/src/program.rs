@@ -6,7 +6,9 @@
 use morpholog_core::{PreparedProgram, ReadPlan, Transformation, Transition};
 
 use crate::compiled::{CompileRefusal, CompiledInvariantSet, IndexSpec, Run, compile_each};
+use crate::indexes::NeedKind;
 use crate::propose::{LoadScope, Reads, compute_load_scope};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The PostgreSQL binding of a programme: the prepared programme and the
 /// execution plan that runs it. The plan changes what a proposal costs,
@@ -161,23 +163,36 @@ impl PgProgram {
         )
     }
 
-    /// The indexes this programme's executions seek on: every position a
-    /// transformation's reads key and one per keyed admit, on either
-    /// route, plus the compiled checks' own when the programme compiles.
+    /// The specifications of [`Self::index_needs`], in order.
+    #[cfg(test)]
+    pub(crate) fn required_indexes(&self) -> Vec<IndexSpec> {
+        self.index_needs().into_keys().collect()
+    }
+
+    /// The indexes this programme's executions seek on, each with what
+    /// needs it: every position a transformation's reads key and one per
+    /// keyed admit, on either route, and the compiled checks' own when the
+    /// programme compiles.
     /// What `provision indexes` reconciles; an interpreted programme has
     /// the same physical contract as a compiled one for its loads.
-    pub(crate) fn required_indexes(&self) -> Vec<IndexSpec> {
+    pub(crate) fn index_needs(&self) -> BTreeMap<IndexSpec, BTreeSet<(NeedKind, String)>> {
         let program = self.prepared.program();
-        let mut specs: Vec<IndexSpec> = program
-            .transformations
-            .iter()
-            .flat_map(|t| ReadPlan::of(t, &program.definitions).seek_positions())
-            .map(|(predicate, position)| IndexSpec::new(predicate, position))
-            .collect();
-        specs.extend(self.execution.compiled.required_indexes());
-        specs.sort();
-        specs.dedup();
-        specs
+        let mut needs: BTreeMap<IndexSpec, BTreeSet<(NeedKind, String)>> = BTreeMap::new();
+        for t in &program.transformations {
+            for (predicate, position) in ReadPlan::of(t, &program.definitions).seek_positions() {
+                needs
+                    .entry(IndexSpec::new(predicate, position))
+                    .or_default()
+                    .insert((NeedKind::Transformation, t.name.to_string()));
+            }
+        }
+        for (spec, invariant) in self.execution.compiled.index_needs() {
+            needs
+                .entry(spec.clone())
+                .or_default()
+                .insert((NeedKind::Invariant, invariant.to_string()));
+        }
+        needs
     }
 
     pub fn plan(&self) -> InvariantPlan<'_> {

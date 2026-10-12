@@ -163,6 +163,19 @@ impl core::marker::Unpin for morpholog_cli::envelopes::HashReport
 impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::HashReport
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::HashReport
 impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::HashReport
+pub struct morpholog_cli::envelopes::IndexNeed<'a>
+pub morpholog_cli::envelopes::IndexNeed::kind: morpholog_postgres::indexes::NeedKind
+pub morpholog_cli::envelopes::IndexNeed::name: &'a str
+pub morpholog_cli::envelopes::IndexNeed::program: &'a str
+impl<'a> serde_core::ser::Serialize for morpholog_cli::envelopes::IndexNeed<'a>
+pub fn morpholog_cli::envelopes::IndexNeed<'a>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'a> core::marker::Freeze for morpholog_cli::envelopes::IndexNeed<'a>
+impl<'a> core::marker::Send for morpholog_cli::envelopes::IndexNeed<'a>
+impl<'a> core::marker::Sync for morpholog_cli::envelopes::IndexNeed<'a>
+impl<'a> core::marker::Unpin for morpholog_cli::envelopes::IndexNeed<'a>
+impl<'a> core::marker::UnsafeUnpin for morpholog_cli::envelopes::IndexNeed<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::IndexNeed<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::IndexNeed<'a>
 pub struct morpholog_cli::envelopes::InitReport
 pub morpholog_cli::envelopes::InitReport::least_privilege: core::option::Option<morpholog_cli::envelopes::LeastPrivilegeReport>
 pub morpholog_cli::envelopes::InitReport::schema: &'static str
@@ -240,6 +253,7 @@ pub struct morpholog_cli::envelopes::ProvisionedIndex<'a>
 pub morpholog_cli::envelopes::ProvisionedIndex::action: morpholog_postgres::indexes::IndexAction
 pub morpholog_cli::envelopes::ProvisionedIndex::detail: &'a str
 pub morpholog_cli::envelopes::ProvisionedIndex::name: &'a str
+pub morpholog_cli::envelopes::ProvisionedIndex::needed_by: alloc::vec::Vec<morpholog_cli::envelopes::IndexNeed<'a>>
 pub morpholog_cli::envelopes::ProvisionedIndex::position: usize
 pub morpholog_cli::envelopes::ProvisionedIndex::predicate: &'a str
 pub morpholog_cli::envelopes::ProvisionedIndex::required_by: &'a [alloc::string::String]

@@ -2069,15 +2069,38 @@ _STATISTICS_ACTIONS = frozenset({"keep", "create", "conflict", "stale"})
 
 
 @dataclass(frozen=True)
+class IndexNeed:
+    """One part of a programme named in the call that needs an index: an
+    invariant, or a transformation."""
+
+    program: str
+    kind: str
+    name: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> IndexNeed:
+        data = _strict("index need", payload, {"program", "kind", "name"})
+        return cls(
+            program=data.text("program"),
+            kind=data.member("kind", {"invariant", "transformation"}),
+            name=data.text("name"),
+        )
+
+
+@dataclass(frozen=True)
 class ProvisionedIndex:
     """One index the call reconciled against the catalogue. ``detail`` is
-    for an operator to read, not to decide on."""
+    for an operator to read, not to decide on. ``needed_by`` covers the
+    programmes named in the call only; one outside it is in
+    ``required_by`` alone, so an empty ``needed_by`` does not mean the
+    index is unneeded."""
 
     action: str
     name: str
     predicate: str
     position: int
     required_by: list[str]
+    needed_by: list[IndexNeed]
     detail: str = ""
 
     @classmethod
@@ -2085,7 +2108,7 @@ class ProvisionedIndex:
         data = _strict(
             "provisioned index",
             payload,
-            {"action", "name", "predicate", "position", "required_by"},
+            {"action", "name", "predicate", "position", "required_by", "needed_by"},
             {"detail"},
         )
         return cls(
@@ -2094,6 +2117,7 @@ class ProvisionedIndex:
             predicate=data.text("predicate"),
             position=data.integer("position"),
             required_by=data.texts("required_by"),
+            needed_by=data.array("needed_by", IndexNeed.from_json),
             detail=data.optional_text("detail") or "",
         )
 

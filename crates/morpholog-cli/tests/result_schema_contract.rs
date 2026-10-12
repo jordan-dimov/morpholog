@@ -710,7 +710,24 @@ fn provisioned_index(
         },
         detail: detail.to_string(),
         required_by: required_by.iter().map(ToString::to_string).collect(),
+        needed_by: Vec::new(),
     }
+}
+
+/// `entry`, with what in the named programmes needs it.
+fn needing(
+    mut entry: morpholog_postgres::IndexPlanEntry,
+    needs: &[(&str, morpholog_postgres::NeedKind, &str)],
+) -> morpholog_postgres::IndexPlanEntry {
+    entry.needed_by = needs
+        .iter()
+        .map(|(program, kind, name)| morpholog_postgres::IndexNeed {
+            program: (*program).to_string(),
+            kind: *kind,
+            name: (*name).to_string(),
+        })
+        .collect();
+    entry
 }
 
 fn provisioned_statistics(
@@ -737,7 +754,7 @@ fn provisioned_statistics(
 #[test]
 fn provision_reports_serialize_as_pinned() {
     use morpholog_cli::envelopes::ProvisionReport;
-    use morpholog_postgres::{IndexAction, StatisticsAction};
+    use morpholog_postgres::{IndexAction, NeedKind, StatisticsAction};
 
     let program = |identity: &str, digit: char| morpholog_postgres::ProvisionedProgram {
         identity: identity.to_string(),
@@ -745,25 +762,37 @@ fn provision_reports_serialize_as_pinned() {
     };
     let entry = "morpholog_ci_journalentry_0_vk1_0123456789ab";
     let line = "morpholog_ci_journalline_1_vk1_456789abcdef";
+    // An invariant and a transformation's read need the same index.
+    let entry_needs = [
+        ("ledger", NeedKind::Invariant, "balanced"),
+        ("ledger", NeedKind::Transformation, "post_entry"),
+    ];
+    let line_needs = [("ledger", NeedKind::Transformation, "post_entry")];
 
     let applied = morpholog_postgres::ProvisionReport {
         programs: vec![program("ledger", '0')],
         entries: vec![
-            provisioned_index(
-                IndexAction::Create,
-                entry,
-                "JournalEntry",
-                0,
-                &["ledger"],
-                "",
+            needing(
+                provisioned_index(
+                    IndexAction::Create,
+                    entry,
+                    "JournalEntry",
+                    0,
+                    &["ledger"],
+                    "",
+                ),
+                &entry_needs,
             ),
-            provisioned_index(
-                IndexAction::SatisfiedExternally,
-                line,
-                "JournalLine",
-                1,
-                &["ledger"],
-                "lines_by_entry is equivalent and stays unmanaged",
+            needing(
+                provisioned_index(
+                    IndexAction::SatisfiedExternally,
+                    line,
+                    "JournalLine",
+                    1,
+                    &["ledger"],
+                    "lines_by_entry is equivalent and stays unmanaged",
+                ),
+                &line_needs,
             ),
         ],
         statistics: vec![
@@ -794,15 +823,21 @@ fn provision_reports_serialize_as_pinned() {
 
     let conflict = morpholog_postgres::ProvisionReport {
         entries: vec![
-            provisioned_index(IndexAction::Keep, entry, "JournalEntry", 0, &["ledger"], ""),
-            provisioned_index(
-                IndexAction::Conflict,
-                line,
-                "JournalLine",
-                1,
-                &["ledger"],
-                "the index under this name is defined as (arguments -> 7) where \
-                 (predicate_name = 'JournalLine'::text), not the specification",
+            needing(
+                provisioned_index(IndexAction::Keep, entry, "JournalEntry", 0, &["ledger"], ""),
+                &entry_needs,
+            ),
+            needing(
+                provisioned_index(
+                    IndexAction::Conflict,
+                    line,
+                    "JournalLine",
+                    1,
+                    &["ledger"],
+                    "the index under this name is defined as (arguments -> 7) where \
+                     (predicate_name = 'JournalLine'::text), not the specification",
+                ),
+                &line_needs,
             ),
         ],
         statistics: vec![
@@ -826,21 +861,32 @@ fn provision_reports_serialize_as_pinned() {
     let pruned = morpholog_postgres::ProvisionReport {
         programs: vec![program("billing", '1'), program("ledger", '0')],
         entries: vec![
-            provisioned_index(
-                IndexAction::RepairInvalid,
-                "morpholog_ci_invoice_0_vk1_89abcdef0123",
-                "Invoice",
-                0,
-                &["billing"],
-                "an interrupted concurrent build left it invalid",
+            needing(
+                provisioned_index(
+                    IndexAction::RepairInvalid,
+                    "morpholog_ci_invoice_0_vk1_89abcdef0123",
+                    "Invoice",
+                    0,
+                    &["billing"],
+                    "an interrupted concurrent build left it invalid",
+                ),
+                &[("billing", NeedKind::Transformation, "issue_invoice")],
             ),
-            provisioned_index(
-                IndexAction::Keep,
-                entry,
-                "JournalEntry",
-                0,
-                &["billing", "ledger", "reporting"],
-                "",
+            // `reporting` is outside the call: it requires the index, and
+            // nothing here says why.
+            needing(
+                provisioned_index(
+                    IndexAction::Keep,
+                    entry,
+                    "JournalEntry",
+                    0,
+                    &["billing", "ledger", "reporting"],
+                    "",
+                ),
+                &[
+                    ("billing", NeedKind::Transformation, "bill_entry"),
+                    ("ledger", NeedKind::Invariant, "balanced"),
+                ],
             ),
             provisioned_index(
                 IndexAction::Stale,
@@ -890,14 +936,20 @@ fn provision_reports_serialize_as_pinned() {
     // What `--check` passes: nothing to create, repair, prune or resolve.
     let current = morpholog_postgres::ProvisionReport {
         entries: vec![
-            provisioned_index(IndexAction::Keep, entry, "JournalEntry", 0, &["ledger"], ""),
-            provisioned_index(
-                IndexAction::SatisfiedExternally,
-                line,
-                "JournalLine",
-                1,
-                &["ledger"],
-                "lines_by_entry is equivalent and stays unmanaged",
+            needing(
+                provisioned_index(IndexAction::Keep, entry, "JournalEntry", 0, &["ledger"], ""),
+                &entry_needs,
+            ),
+            needing(
+                provisioned_index(
+                    IndexAction::SatisfiedExternally,
+                    line,
+                    "JournalLine",
+                    1,
+                    &["ledger"],
+                    "lines_by_entry is equivalent and stays unmanaged",
+                ),
+                &line_needs,
             ),
         ],
         statistics: vec![

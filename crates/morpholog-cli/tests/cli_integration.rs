@@ -4724,6 +4724,86 @@ async fn provision_indexes_reports_the_same_bytes_whatever_order_the_programmes_
     reset_db().await;
 }
 
+/// Each index names what in the named programmes needs it. A programme
+/// outside the call stays in `required_by`, with nothing said about why.
+#[tokio::test(flavor = "current_thread")]
+async fn provision_indexes_names_the_rules_and_transformations_behind_each_index() {
+    reset_db().await;
+    let desk = common::write_fixture(
+        "desk",
+        "program desk\n\n\
+         predicate Limit(book: Subject, cap: Decimal)\n\
+         predicate Position(book: Subject, qty: Decimal)\n\
+         predicate Flag(book: Subject, kind: Subject)\n\n\
+         invariant position_within_limit:\n    \
+         Position(book, qty) and Limit(book, cap) implies qty <= cap\n\n\
+         invariant flag_is_known:\n    \
+         Flag(book, kind) implies (kind = #hold or kind = #review)\n\n\
+         transformation book_position(book, qty):\n    \
+         require has_limit: Limit(book, _)\n    admit Position(book, qty)\n",
+    );
+    let watch = common::write_fixture(
+        "watch",
+        "program watch\n\n\
+         predicate Limit(book: Subject, cap: Decimal)\n\
+         predicate Seen(book: Subject)\n\n\
+         transformation note(book):\n    require Limit(book, _)\n    admit Seen(book)\n",
+    );
+    let (desk, watch) = (desk.to_str().unwrap(), watch.to_str().unwrap());
+    let (status, _, stderr) = run_cli(&["provision", "indexes", desk, watch]);
+    assert!(status.success(), "{stderr}");
+
+    let (status, stdout, stderr) = run_cli(&["provision", "indexes", desk, "--json"]);
+    assert!(status.success(), "{stderr}");
+    let report = provision_report(&stdout);
+    let needs = |predicate: &str, position: u64| -> Vec<(String, String, String)> {
+        let index = report["indexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["predicate"] == predicate && i["position"] == position)
+            .unwrap_or_else(|| panic!("{predicate}[{position}]: {stdout}"));
+        index["needed_by"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| {
+                let field = |k: &str| n[k].as_str().unwrap().to_string();
+                (field("program"), field("kind"), field("name"))
+            })
+            .collect()
+    };
+    let need = |kind: &str, name: &str| ("desk".to_string(), kind.to_string(), name.to_string());
+    // A rule and a transformation's read need the same index; `watch`
+    // needs it too, but is not in this call.
+    assert_eq!(
+        needs("Limit", 0),
+        [
+            need("invariant", "position_within_limit"),
+            need("transformation", "book_position"),
+        ],
+        "{stdout}"
+    );
+    // A rule with `or` in its consequent compiles, and its indexes say so.
+    assert_eq!(needs("Flag", 0), [need("invariant", "flag_is_known")]);
+    for index in report["indexes"].as_array().unwrap() {
+        let required_by = index["required_by"].as_array().unwrap();
+        let needed_by = index["needed_by"].as_array().unwrap();
+        for n in needed_by {
+            assert!(required_by.contains(&n["program"]), "{index}");
+        }
+        let keys: Vec<String> = needed_by.iter().map(ToString::to_string).collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(keys.len(), sorted.len(), "each need once: {index}");
+        if index["predicate"] == "Limit" && index["position"] == 0 {
+            assert_eq!(*required_by, ["desk", "watch"], "{index}");
+        }
+    }
+    reset_db().await;
+}
+
 /// `--check` is a deploy gate: it changes nothing, prints the plan, and
 /// passes only once there is nothing left to do.
 #[tokio::test(flavor = "current_thread")]

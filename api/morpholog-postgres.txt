@@ -348,6 +348,34 @@ impl<'a> core::marker::Unpin for morpholog_postgres::InvariantPlan<'a>
 impl<'a> core::marker::UnsafeUnpin for morpholog_postgres::InvariantPlan<'a>
 impl<'a> core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::InvariantPlan<'a>
 impl<'a> core::panic::unwind_safe::UnwindSafe for morpholog_postgres::InvariantPlan<'a>
+pub enum morpholog_postgres::NeedKind
+pub morpholog_postgres::NeedKind::Invariant
+pub morpholog_postgres::NeedKind::Transformation
+impl core::clone::Clone for morpholog_postgres::NeedKind
+pub fn morpholog_postgres::NeedKind::clone(&self) -> morpholog_postgres::NeedKind
+impl core::clone::TrivialClone for morpholog_postgres::NeedKind
+impl core::cmp::Eq for morpholog_postgres::NeedKind
+impl core::cmp::Ord for morpholog_postgres::NeedKind
+pub fn morpholog_postgres::NeedKind::cmp(&self, &morpholog_postgres::NeedKind) -> core::cmp::Ordering
+impl core::cmp::PartialEq for morpholog_postgres::NeedKind
+pub fn morpholog_postgres::NeedKind::eq(&self, &morpholog_postgres::NeedKind) -> bool
+impl core::cmp::PartialOrd for morpholog_postgres::NeedKind
+pub fn morpholog_postgres::NeedKind::partial_cmp(&self, &morpholog_postgres::NeedKind) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for morpholog_postgres::NeedKind
+pub fn morpholog_postgres::NeedKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for morpholog_postgres::NeedKind
+pub fn morpholog_postgres::NeedKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_postgres::NeedKind
+impl core::marker::StructuralPartialEq for morpholog_postgres::NeedKind
+impl serde_core::ser::Serialize for morpholog_postgres::NeedKind
+pub fn morpholog_postgres::NeedKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::NeedKind
+impl core::marker::Send for morpholog_postgres::NeedKind
+impl core::marker::Sync for morpholog_postgres::NeedKind
+impl core::marker::Unpin for morpholog_postgres::NeedKind
+impl core::marker::UnsafeUnpin for morpholog_postgres::NeedKind
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::NeedKind
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::NeedKind
 pub enum morpholog_postgres::OutboxStatus
 pub morpholog_postgres::OutboxStatus::CompensationFailed
 pub morpholog_postgres::OutboxStatus::CompensationInProgress
@@ -1526,11 +1554,36 @@ impl core::marker::Unpin for morpholog_postgres::EvidencePack
 impl core::marker::UnsafeUnpin for morpholog_postgres::EvidencePack
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::EvidencePack
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::EvidencePack
+pub struct morpholog_postgres::IndexNeed
+pub morpholog_postgres::IndexNeed::kind: morpholog_postgres::NeedKind
+pub morpholog_postgres::IndexNeed::name: alloc::string::String
+pub morpholog_postgres::IndexNeed::program: alloc::string::String
+impl core::clone::Clone for morpholog_postgres::IndexNeed
+pub fn morpholog_postgres::IndexNeed::clone(&self) -> morpholog_postgres::IndexNeed
+impl core::cmp::Eq for morpholog_postgres::IndexNeed
+pub fn morpholog_postgres::IndexNeed::assert_fields_are_eq(&self)
+impl core::cmp::Ord for morpholog_postgres::IndexNeed
+pub fn morpholog_postgres::IndexNeed::cmp(&self, &morpholog_postgres::IndexNeed) -> core::cmp::Ordering
+impl core::cmp::PartialEq for morpholog_postgres::IndexNeed
+pub fn morpholog_postgres::IndexNeed::eq(&self, &morpholog_postgres::IndexNeed) -> bool
+impl core::cmp::PartialOrd for morpholog_postgres::IndexNeed
+pub fn morpholog_postgres::IndexNeed::partial_cmp(&self, &morpholog_postgres::IndexNeed) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for morpholog_postgres::IndexNeed
+pub fn morpholog_postgres::IndexNeed::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::IndexNeed
+impl core::marker::Freeze for morpholog_postgres::IndexNeed
+impl core::marker::Send for morpholog_postgres::IndexNeed
+impl core::marker::Sync for morpholog_postgres::IndexNeed
+impl core::marker::Unpin for morpholog_postgres::IndexNeed
+impl core::marker::UnsafeUnpin for morpholog_postgres::IndexNeed
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::IndexNeed
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::IndexNeed
 pub struct morpholog_postgres::IndexPlanEntry
 pub morpholog_postgres::IndexPlanEntry::action: morpholog_postgres::IndexAction
 pub morpholog_postgres::IndexPlanEntry::detail: alloc::string::String
 pub morpholog_postgres::IndexPlanEntry::expression_sql: alloc::string::String
 pub morpholog_postgres::IndexPlanEntry::index_name: alloc::string::String
+pub morpholog_postgres::IndexPlanEntry::needed_by: alloc::vec::Vec<morpholog_postgres::IndexNeed>
 pub morpholog_postgres::IndexPlanEntry::partial_predicate_sql: alloc::string::String
 pub morpholog_postgres::IndexPlanEntry::position: usize
 pub morpholog_postgres::IndexPlanEntry::predicate: alloc::string::String
