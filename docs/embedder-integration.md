@@ -355,12 +355,14 @@ An admitted policy claim whose shape the runtime cannot read stops every durable
 
 The record keeps every admitted claim, and an audit row cannot change without breaking verification. So keep personal data out of it.
 
-Give each person an opaque subject, such as a UUID or an id like `p_7f3a91`, and admit claims about that subject only: `Entrant(p_7f3a91, contest_12)`, never a name or an email address. Keep the table that maps the subject to the person in your application's own database, where rows can be deleted. To erase a person, delete their row there. Nothing admitted changes, so the audit log still verifies, and the record no longer holds anything that says who `p_7f3a91` was. One embedder already runs this way: its participants are `p_<hex>` ids, and erasure deletes one row in its own table.
+Give each person an opaque subject, such as a UUID or an id like `p_7f3a91`, and admit claims about that subject only: `Entrant(p_7f3a91, contest_12)`, never a name or an email address. Keep the table that maps the subject to the person in your application's own database, where rows can be deleted. Deleting a person's row removes the application's direct link between the subject and the person. Nothing admitted changes, so the audit log still verifies. One embedder already runs this way: its participants are `p_<hex>` ids, and it deletes one row in its own table.
+
+This is pseudonymisation by design. It does not by itself make the record anonymous, or answer a request to erase someone's data: the application still has to consider other identifying values, copies and exports it holds, and any other reasonable way the subject could be identified again.
 
 What this does not cover:
 
 - **Identifying values in other claims.** A postcode, an account number or a free-text note admitted as a claim stays in the record, and in every evidence pack exported from it. Admit only what the rules need, and keep the rest beside the mapping.
-- **What a proposal carried.** Audit rows and the rejection log keep a proposal's arguments, and a refusal's witness and compared values come from them. A name passed as an argument is recorded even when the proposal is refused.
+- **What a proposal carried.** Audit rows keep a committed proposal's arguments, and a refusal's witness and compared values come from them. A name passed as an argument may be kept in the rejection log even when the proposal is refused.
 - **Correlation.** One opaque id still links everything admitted about one person, and a pattern of activity can identify someone without a name. Use a separate subject for each context where linking them is not needed.
 
 Erasing a value from inside the history is not offered.

@@ -719,7 +719,7 @@ async fn an_ambiguous_success_is_delivered_again_as_the_same_intent() {
     let attempts = deliver_across_a_lost_lease(true).await;
     assert!(
         attempts.iter().all(|a| a.accepted),
-        "the downstream accepted both, and deduplicates on the key: {attempts:?}"
+        "the downstream accepted both, which the stable key lets it deduplicate: {attempts:?}"
     );
 }
 
