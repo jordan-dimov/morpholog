@@ -9,7 +9,7 @@ from decimal import Decimal
 
 from _support import GOLDEN_DIR, TEMPLATES_DIR, golden
 
-from python_client import envelopes
+from python_client import envelopes, values
 
 
 
@@ -27,11 +27,31 @@ class RunOutcomes(unittest.TestCase):
                 date(2026, 6, 1),
                 datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
                 "PT6H",
-                Decimal("25000"),
+                values.Quantity(Decimal("25000"), "USD"),
                 ["nested"],
             ],
         )
         self.assertEqual(outcome.emitted_intents[0].name, "AccountOpened")
+
+    def test_to_json_prints_every_decoded_value_kind_exactly(self):
+        outcome = envelopes.parse_run_outcome(golden("committed.json"))
+        printed = json.loads(envelopes.to_json(outcome))
+        self.assertEqual(
+            printed["asserted_claims"][0]["args"],
+            [
+                "acct_1",
+                "100.50",
+                True,
+                "2026-06-01",
+                "2026-06-01T12:00:00Z",
+                "PT6H",
+                {"amount": "25000", "unit": "USD"},
+                ["nested"],
+            ],
+        )
+        refused = envelopes.parse_run_outcome(golden("rejected_gate_with_compared.json"))
+        printed = json.loads(envelopes.to_json(refused))
+        self.assertEqual(printed["compared"], {"op": "<=", "left": "152000", "right": "97911.8"})
 
     def test_a_refusal_carries_the_values_the_rule_was_reading(self):
         # The point of a structured witness: read the offending value,

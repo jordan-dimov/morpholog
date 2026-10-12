@@ -154,7 +154,7 @@ async fn init_refuses_held_roles_and_migrate_warns_about_shared_ones() {
     );
     assert!(
         stderr.contains(&format!(
-            "Direct members: `{MEMBER}` (login) hold `{}`; none hold `{}`",
+            "Direct members: `{MEMBER}` (login) holds `{}`; none hold `{}`",
             ROLES[0], ROLES[1]
         )),
         "{stderr}"

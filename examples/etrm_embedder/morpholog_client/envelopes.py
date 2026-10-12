@@ -7,16 +7,19 @@ grows an envelope field this client does not know, the parse fails
 loudly instead of silently dropping data.
 
 Tagged values inside envelopes are decoded to bare Python values
-(``decimal.Decimal``, ``datetime.date``, aware ``datetime``); named
+(``decimal.Decimal``, ``datetime.date``, aware ``datetime``,
+``values.Quantity``); ``to_json`` prints any of them back. Named
 claims keep their wire-true bare values, and the generated read models
 in ``models.py`` parse those by declared kind.
 """
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import asdict, dataclass, field, is_dataclass
+from datetime import date, datetime
+from decimal import Decimal
 from collections.abc import Set as AbstractSet
 from typing import Callable, Generic, TypeVar
 
@@ -3535,3 +3538,22 @@ class ReceiptVerificationReport:
             program=_by_status(data.raw("program"), "a programme finding", program),
             evaluation=_by_status(data.raw("evaluation"), "an evaluation finding", evaluation),
         )
+
+
+def to_json(envelope: object) -> str:
+    """A decoded envelope as JSON text, for printing or storing what the
+    binary said. Values come out plain, a decimal as exact text: this is
+    not the wire shape, and ``from_json`` does not read it back."""
+    return json.dumps(envelope, default=_plain)
+
+
+def _plain(value: object) -> object:
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    if isinstance(value, Decimal):
+        return values.encode_decimal(value)
+    if isinstance(value, datetime):
+        return values.encode_timestamp(value)
+    if isinstance(value, date):
+        return value.isoformat()
+    raise TypeError(f"{type(value).__name__} is not an envelope value: {value!r}")

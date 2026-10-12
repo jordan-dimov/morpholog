@@ -403,21 +403,22 @@ class AdapterDiscrimination(unittest.TestCase):
                     f"{cls.__name__}({name}=...) is passed by keyword",
                 )
 
-    def test_the_check_keeps_its_report_and_the_first_hash_returns_it(self):
+    def test_a_hash_that_runs_the_check_returns_its_report_and_no_other_does(self):
         agreeing = {"hash": self.HASH, "morpholog_version": "0.0.0", "program": "p"}
         # A verify that opens with hash(): the check's own report, one spawn.
         client, record = self._pinned(agreeing)
         report = client.hash()
         self.assertEqual(report.hash, self.HASH)
         self.assertEqual(self._ran(record), ["hash model.morph"])
-        # Later calls ask the binary again, as before.
+        # Later calls ask the binary again.
         client.hash()
         self.assertEqual(self._ran(record), ["hash model.morph"] * 2)
-        # The kept report survives other calls until hash() takes it.
+        # A hash() after another call asks the binary now, never the check's
+        # report from first use, which may be long out of date.
         client, record = self._pinned(agreeing)
         client.claims()
         client.hash()
-        self.assertEqual(self._ran(record).count("hash model.morph"), 1)
+        self.assertEqual(self._ran(record).count("hash model.morph"), 2)
         # An unpinned client has no check to keep a report from.
         client, record = self._pinned(agreeing, expected_version=None, expected_model_hash=None)
         client.hash()
