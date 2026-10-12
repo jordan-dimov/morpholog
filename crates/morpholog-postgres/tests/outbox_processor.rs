@@ -554,3 +554,181 @@ fn a_compensation_spec_refuses_a_transformation_its_programme_lacks() {
         refused.err()
     );
 }
+
+// A worker loses its lease after the downstream saw the delivery, so it
+// cannot record what happened. The fault modelled is a crash or a lost
+// connection in that window, not a hostile party. Delivery is at least
+// once: a second worker reclaims the row and delivers again, and both
+// attempts must carry one stable identity the downstream can deduplicate
+// on. Nothing promises the downstream sees the effect only once.
+
+/// What the downstream sees of one delivery attempt.
+#[derive(Debug, Clone, PartialEq)]
+struct Attempt {
+    intent_id: Uuid,
+    idempotency_key: String,
+    intent_type: String,
+    arguments: Vec<morpholog_core::EvalValue>,
+    transition_id: Uuid,
+    accepted: bool,
+}
+
+/// A downstream that records every attempt. On the first one it accepts
+/// the delivery or refuses it, as told, and then the worker's lease is
+/// lost before it can record anything. Later attempts are accepted.
+struct RecordingDownstream {
+    pool: PgPool,
+    first_accepted: bool,
+    attempts: std::sync::Mutex<Vec<Attempt>>,
+}
+impl Deliverer for RecordingDownstream {
+    async fn deliver(&self, row: &OutboxRow) -> DeliveryOutcome {
+        let first = self.attempts.lock().unwrap().is_empty();
+        let accepted = !first || self.first_accepted;
+        self.attempts.lock().unwrap().push(Attempt {
+            intent_id: row.intent_id,
+            idempotency_key: row.idempotency_key.clone(),
+            intent_type: row.intent_type.clone(),
+            arguments: row.arguments.clone(),
+            transition_id: row.transition_id,
+            accepted,
+        });
+        if !first {
+            return DeliveryOutcome::Delivered;
+        }
+        sqlx::query(
+            "UPDATE morpholog.outbox SET lock_expires_at = now() - interval '1 second'
+             WHERE intent_id=$1",
+        )
+        .bind(row.intent_id)
+        .execute(&self.pool)
+        .await
+        .unwrap();
+        if accepted {
+            DeliveryOutcome::Delivered
+        } else {
+            DeliveryOutcome::Transient {
+                next_attempt_at: Timestamp::now(),
+            }
+        }
+    }
+}
+
+async fn governed_rows(pool: &PgPool) -> (i64, i64, i64) {
+    sqlx::query_as(
+        "SELECT (SELECT count(*) FROM morpholog.audit),
+                (SELECT count(*) FROM morpholog.claims),
+                (SELECT count(*) FROM morpholog.outbox)",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// One intent, a first worker that loses its lease after the downstream
+/// answered, and a second worker that reclaims and delivers. Returns the
+/// attempts the downstream saw.
+async fn deliver_across_a_lost_lease(first_accepted: bool) -> Vec<Attempt> {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let _ = commit_post_simple_entry(&pool, "entry_redelivered").await;
+    let before = governed_rows(&pool).await;
+    assert_eq!(before.2, 1, "one intent to deliver");
+    let downstream = RecordingDownstream {
+        pool: pool.clone(),
+        first_accepted,
+        attempts: std::sync::Mutex::new(Vec::new()),
+    };
+
+    let lost = process_one_outbox_row(
+        &pool,
+        "worker_a",
+        INTENT_TYPE,
+        LEASE,
+        &downstream,
+        None,
+        Timestamp::now(),
+    )
+    .await
+    .unwrap();
+    let ProcessOutcome::LeaseLost { intent_id } = lost else {
+        panic!("the first worker should lose its lease, got {lost:?}");
+    };
+    let (status, delivered_at): (String, Option<jiff_sqlx::Timestamp>) =
+        sqlx::query_as("SELECT status, delivered_at FROM morpholog.outbox WHERE intent_id=$1")
+            .bind(intent_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        status, "in_progress",
+        "nothing was recorded for the attempt"
+    );
+    assert!(delivered_at.is_none());
+    assert_eq!(
+        governed_rows(&pool).await,
+        before,
+        "an attempt changes no governed row"
+    );
+
+    let delivered = process_one_outbox_row(
+        &pool,
+        "worker_b",
+        INTENT_TYPE,
+        LEASE,
+        &downstream,
+        None,
+        Timestamp::now(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(delivered, ProcessOutcome::Delivered { intent_id: id } if id == intent_id),
+        "the second worker should reclaim and deliver the same intent, got {delivered:?}"
+    );
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM morpholog.outbox WHERE intent_id=$1")
+            .bind(intent_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "delivered");
+    assert_eq!(
+        governed_rows(&pool).await,
+        before,
+        "redelivery adds no audit row, claim or intent"
+    );
+
+    let attempts = downstream.attempts.into_inner().unwrap();
+    assert_eq!(attempts.len(), 2, "{attempts:?}");
+    let identity = |a: &Attempt| Attempt {
+        accepted: true,
+        ..a.clone()
+    };
+    assert_eq!(
+        identity(&attempts[0]),
+        identity(&attempts[1]),
+        "both attempts must carry one identity and payload"
+    );
+    assert_eq!(attempts[0].intent_id, intent_id);
+    attempts
+}
+
+#[tokio::test]
+async fn an_ambiguous_success_is_delivered_again_as_the_same_intent() {
+    let attempts = deliver_across_a_lost_lease(true).await;
+    assert!(
+        attempts.iter().all(|a| a.accepted),
+        "the downstream accepted both, and deduplicates on the key: {attempts:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_attempt_is_delivered_later_as_the_same_intent() {
+    let attempts = deliver_across_a_lost_lease(false).await;
+    assert_eq!(
+        attempts.iter().map(|a| a.accepted).collect::<Vec<_>>(),
+        [false, true],
+        "the redelivery is the first accepted one"
+    );
+}

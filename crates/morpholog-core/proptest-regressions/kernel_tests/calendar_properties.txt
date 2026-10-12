@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ccbee1f575b3b5310577f4f575a51a70e74cbb23c4dc5fd86681519bd47be5e5 # shrinks to d = 2008-03-29, months = 37, forward = false
+cc 6b703db8f975707f5bb7e794c250bf777e8ff9c18ab8b2dcd3f89c2f00f4cb34 # shrinks to anchor = 1990-03-29, months = 19, days = 0, n = -8
+cc 7fba6a19f39700e7e2851c9f6c4d9cda017fafd7bc79577389ba6e612d90ca89 # shrinks to d = -009999-01-28, months = 273229, days = 0, forward = false
+cc 4d46d4bbcccd128d2bec184e376ecdc1ada7106aeb1bead0c4cbe9345837c284 # shrinks to anchor = 2024-09-28, months = 5, days = 7, at = 2026-01-28
+cc 55928a61d24b8ddeeae11158d7d548ae50216a384c9060cb600c5df79309adab # shrinks to anchor = 1990-01-28, months = 0, days = 1, n = -1

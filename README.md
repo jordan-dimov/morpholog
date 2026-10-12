@@ -225,7 +225,7 @@ Active development, in Rust on PostgreSQL 18+, with no unsafe code. The kernel, 
 
 **Isn't one generic table of records slow?** The table is storage, not the query engine. A rule that compiles to SQL is checked inside the same transaction, only over the records a change touches; other rules are checked in memory over the records the change reads. Either way the in-memory version is the specification, and a test holds the SQL version to it. Heavy querying and reporting use the typed SQL views Morpholog generates, or a downstream copy.
 
-**What about GDPR's right to erasure, if nothing is deleted?** Keep personal data in an ordinary store you can erase, keyed by an opaque id, and keep personal details out of the governed records. The design encourages this but cannot make it automatic. Erasing inside the history cryptographically is a known future direction.
+**What about GDPR's right to erasure, if nothing is deleted?** Keep personal data in an ordinary store you can erase, keyed by an opaque id, and keep personal details out of the governed records ([how, and what it does not cover](docs/embedder-integration.md#personal-data-outside-the-record)). The design encourages this but cannot make it automatic. Erasing inside the history cryptographically is a known future direction.
 
 **How does the shape of a record change once history exists?** The same way records change: declare the new shape, carry the data forward with a governed transformation, and history stays as it was recorded. Tooling that automates this is future work; `morpholog migrate` already upgrades Morpholog's own tables between releases.
 
