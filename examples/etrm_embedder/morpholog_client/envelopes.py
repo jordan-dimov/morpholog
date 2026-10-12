@@ -14,6 +14,7 @@ in ``models.py`` parse those by declared kind.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from collections.abc import Set as AbstractSet
@@ -26,12 +27,136 @@ class EnvelopeError(ValueError):
     """An envelope that does not match the pinned contract."""
 
 
+_T = TypeVar("_T")
+
+
+class _Fields:
+    """An envelope object whose key set ``_strict`` has checked, read one
+    field at a time. Each reader holds the value to the type the schema
+    publishes and raises ``EnvelopeError`` otherwise: nothing is coerced,
+    a boolean is not an integer, and an absent optional key reads as its
+    default only where the schema lets it be absent."""
+
+    def __init__(self, name: str, data: dict[str, object]) -> None:
+        self.name = name
+        self.data = data
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.data
+
+    def fail(self, key: str, expected: str) -> EnvelopeError:
+        return EnvelopeError(
+            f"{self.name}: `{key}` must be {expected}, got {self.data.get(key)!r}"
+        )
+
+    def raw(self, key: str) -> object:
+        return self.data.get(key)
+
+    def text(self, key: str) -> str:
+        value = self.data.get(key)
+        if not isinstance(value, str):
+            raise self.fail(key, "a string")
+        return value
+
+    def optional_text(self, key: str) -> str | None:
+        """A key the envelope may leave out; null is not a spelling of absent."""
+        if key not in self.data:
+            return None
+        return self.text(key)
+
+    def nullable_text(self, key: str) -> str | None:
+        if self.data.get(key) is None:
+            return None
+        return self.text(key)
+
+    def integer(self, key: str, minimum: int | None = None) -> int:
+        value = self.data.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise self.fail(key, "an integer")
+        if minimum is not None and value < minimum:
+            raise self.fail(key, f"at least {minimum}")
+        return value
+
+    def optional_integer(self, key: str, minimum: int | None = None) -> int | None:
+        if key not in self.data:
+            return None
+        return self.integer(key, minimum)
+
+    def flag(self, key: str) -> bool:
+        value = self.data.get(key)
+        if not isinstance(value, bool):
+            raise self.fail(key, "a boolean")
+        return value
+
+    def constant(self, key: str, expected: str) -> None:
+        if self.data.get(key) != expected:
+            raise self.fail(key, repr(expected))
+
+    def member(self, key: str, known: AbstractSet[str]) -> str:
+        value = self.data.get(key)
+        if not isinstance(value, str) or value not in known:
+            raise self.fail(key, f"one of {sorted(known)}")
+        return value
+
+    def array(
+        self, key: str, parse: Callable[[object], _T], *, non_empty: bool = False
+    ) -> list[_T]:
+        """A required array, each item read by ``parse``."""
+        value = self.data.get(key)
+        if not isinstance(value, list) or (non_empty and not value):
+            raise self.fail(key, "a non-empty array" if non_empty else "an array")
+        return [parse(item) for item in value]
+
+    def optional_array(
+        self, key: str, parse: Callable[[object], _T], *, non_empty: bool = False
+    ) -> list[_T]:
+        """An array the envelope may leave out, read as empty when it does."""
+        if key not in self.data:
+            return []
+        return self.array(key, parse, non_empty=non_empty)
+
+    def texts(self, key: str) -> list[str]:
+        return self.array(key, lambda item: _text(f"{self.name}.{key}", item))
+
+    def tagged(self, key: str) -> object:
+        return _tagged(f"{self.name}.{key}", self.data.get(key))
+
+    def timestamp(self, key: str) -> datetime:
+        return _timestamp(f"{self.name}.{key}", self.data.get(key))
+
+    def optional_timestamp(self, key: str) -> datetime | None:
+        if key not in self.data:
+            return None
+        return self.timestamp(key)
+
+    def nullable_timestamp(self, key: str) -> datetime | None:
+        if self.data.get(key) is None:
+            return None
+        return self.timestamp(key)
+
+    def actor(self, key: str) -> str:
+        """A tagged subject: the only kind an actor is."""
+        value = self.data.get(key)
+        if not isinstance(value, dict) or value.get("type") != "subject":
+            raise self.fail(key, "a tagged subject")
+        return _text(f"{self.name}.{key}", self.tagged(key))
+
+    def nested(self, key: str, parse: Callable[[object], _T]) -> _T:
+        return parse(self.data.get(key))
+
+    def optional_nested(self, key: str, parse: Callable[[object], _T]) -> _T | None:
+        """An object the envelope may leave out."""
+        if key not in self.data:
+            return None
+        return parse(self.data[key])
+
+
 def _strict(
     name: str,
     payload: object,
     required: AbstractSet[str],
     optional: AbstractSet[str] = frozenset(),
-) -> dict[str, object]:
+) -> _Fields:
     if not isinstance(payload, dict):
         raise EnvelopeError(f"{name}: expected an object, got {payload!r}")
     keys = set(payload)
@@ -44,10 +169,65 @@ def _strict(
             f"{name}: unknown key(s) {sorted(unknown)} - the binary's contract "
             f"has drifted past this generated client; regenerate it"
         )
-    return payload
+    return _Fields(name, payload)
 
 
-_T = TypeVar("_T")
+def _text(where: str, value: object) -> str:
+    if not isinstance(value, str):
+        raise EnvelopeError(f"{where}: expected a string, got {value!r}")
+    return value
+
+
+def _tagged(where: str, value: object) -> object:
+    """A tagged value, decoded; a malformed one is an envelope error."""
+    try:
+        return values.decode_tagged(value)
+    except values.CodecError as exc:
+        raise EnvelopeError(f"{where}: {exc}") from exc
+
+
+def _timestamp(where: str, value: object) -> datetime:
+    try:
+        return values.parse_timestamp(value)
+    except values.CodecError as exc:
+        raise EnvelopeError(f"{where}: {exc}") from exc
+
+
+def _bare(where: str, value: object) -> object:
+    """A named-codec value: a string, a boolean, or an array of them."""
+    if isinstance(value, str | bool):
+        return value
+    if isinstance(value, list):
+        return [_bare(where, item) for item in value]
+    raise EnvelopeError(f"{where}: {value!r} is not a named value")
+
+
+def _bare_args(where: str, value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise EnvelopeError(f"{where}: expected an object, got {value!r}")
+    return {_text(where, k): _bare(f"{where}.{k}", v) for k, v in value.items()}
+
+
+def _tagged_item(value: object) -> object:
+    return _tagged("a tagged value", value)
+
+
+_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def _hash(data: _Fields, key: str) -> str:
+    """A programme or model hash: `sha256:` and 64 lowercase hex digits."""
+    value = data.text(key)
+    if not _HASH.match(value):
+        raise data.fail(key, "sha256: and 64 lowercase hex digits")
+    return value
+
+
+def parse_list(payload: object, parse: Callable[[object], _T]) -> list[_T]:
+    """A JSON array the binary printed, each item read by ``parse``."""
+    if not isinstance(payload, list):
+        raise EnvelopeError(f"expected an array, got {payload!r}")
+    return [parse(item) for item in payload]
 
 
 def _by_status(payload: object, label: str, mapping: dict[str, Callable[[object], _T]]) -> _T:
@@ -62,10 +242,6 @@ def _by_status(payload: object, label: str, mapping: dict[str, Callable[[object]
     return parse(payload)
 
 
-def _optional_timestamp(text: object) -> datetime | None:
-    return None if text is None else values.parse_timestamp(str(text))
-
-
 @dataclass(frozen=True)
 class ClaimInstance:
     predicate: str
@@ -74,10 +250,7 @@ class ClaimInstance:
     @classmethod
     def from_json(cls, payload: object) -> ClaimInstance:
         data = _strict("claim", payload, {"predicate", "args"})
-        return cls(
-            predicate=data["predicate"],
-            args=[values.decode_tagged(a) for a in data["args"]],
-        )
+        return cls(predicate=data.text("predicate"), args=data.array("args", _tagged_item))
 
 
 @dataclass(frozen=True)
@@ -88,10 +261,7 @@ class IntentInstance:
     @classmethod
     def from_json(cls, payload: object) -> IntentInstance:
         data = _strict("intent", payload, {"name", "args"})
-        return cls(
-            name=data["name"],
-            args=[values.decode_tagged(a) for a in data["args"]],
-        )
+        return cls(name=data.text("name"), args=data.array("args", _tagged_item))
 
 
 @dataclass(frozen=True)
@@ -104,7 +274,7 @@ class NamedClaim:
     @classmethod
     def from_json(cls, payload: object) -> NamedClaim:
         data = _strict("named claim", payload, {"predicate", "args"})
-        return cls(predicate=data["predicate"], args=dict(data["args"]))
+        return cls(predicate=data.text("predicate"), args=_bare_args("named claim", data.raw("args")))
 
 
 @dataclass(frozen=True)
@@ -122,9 +292,9 @@ class ClaimRead:
     def from_json(cls, payload: object) -> ClaimRead:
         data = _strict("claim read", payload, {"predicate", "args", "asserted_in"})
         return cls(
-            predicate=data["predicate"],
-            args=[values.decode_tagged(a) for a in data["args"]],
-            asserted_in=data["asserted_in"],
+            predicate=data.text("predicate"),
+            args=data.array("args", _tagged_item),
+            asserted_in=data.text("asserted_in"),
         )
 
 
@@ -141,9 +311,9 @@ class NamedClaimRead:
     def from_json(cls, payload: object) -> NamedClaimRead:
         data = _strict("named claim read", payload, {"predicate", "args", "asserted_in"})
         return cls(
-            predicate=data["predicate"],
-            args=dict(data["args"]),
-            asserted_in=data["asserted_in"],
+            predicate=data.text("predicate"),
+            args=_bare_args("named claim read", data.raw("args")),
+            asserted_in=data.text("asserted_in"),
         )
 
 
@@ -169,12 +339,13 @@ class Committed:
                 "emitted_intents",
             },
         )
+        data.constant("status", "committed")
         return cls(
-            transition_id=data["transition_id"],
-            actor=str(values.decode_tagged(data["actor"])),
-            asserted_claims=[ClaimInstance.from_json(c) for c in data["asserted_claims"]],
-            retracted_claims=[ClaimInstance.from_json(c) for c in data["retracted_claims"]],
-            emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
+            transition_id=data.text("transition_id"),
+            actor=data.actor("actor"),
+            asserted_claims=data.array("asserted_claims", ClaimInstance.from_json),
+            retracted_claims=data.array("retracted_claims", ClaimInstance.from_json),
+            emitted_intents=data.array("emitted_intents", IntentInstance.from_json),
         )
 
 
@@ -188,7 +359,7 @@ class WitnessBinding:
     @classmethod
     def from_json(cls, payload: object) -> WitnessBinding:
         data = _strict("witness binding", payload, {"var", "value"})
-        return cls(var=data["var"], value=values.decode_tagged(data["value"]))
+        return cls(var=data.text("var"), value=data.tagged("value"))
 
 
 @dataclass(frozen=True)
@@ -202,11 +373,7 @@ class Compared:
     @classmethod
     def from_json(cls, payload: object) -> Compared:
         data = _strict("compared", payload, {"op", "left", "right"})
-        return cls(
-            op=data["op"],
-            left=values.decode_tagged(data["left"]),
-            right=values.decode_tagged(data["right"]),
-        )
+        return cls(op=data.text("op"), left=data.tagged("left"), right=data.tagged("right"))
 
 
 @dataclass(frozen=True)
@@ -232,14 +399,13 @@ class Rejected:
             {"status", "reason"},
             {"explanation", "rule", "witness", "compared"},
         )
-        explanation = data.get("explanation")
-        compared = data.get("compared")
+        data.constant("status", "rejected")
         return cls(
-            reason=data["reason"],
-            rule=data.get("rule"),
-            explanation=None if explanation is None else Explanation.from_json(explanation),
-            witness=[WitnessBinding.from_json(w) for w in data.get("witness", [])],
-            compared=None if compared is None else Compared.from_json(compared),
+            reason=data.text("reason"),
+            rule=data.optional_text("rule"),
+            explanation=data.optional_nested("explanation", Explanation.from_json),
+            witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
+            compared=data.optional_nested("compared", Compared.from_json),
         )
 
 
@@ -254,23 +420,20 @@ class Errored:
     @classmethod
     def from_json(cls, payload: object) -> Errored:
         data = _strict("errored result", payload, {"status", "code", "error"})
-        if data["code"] != "kernel_error":
-            raise EnvelopeError(f"errored result: unexpected code {data['code']!r}")
-        return cls(code=str(data["code"]), error=str(data["error"]))
+        data.constant("status", "errored")
+        data.constant("code", "kernel_error")
+        return cls(code="kernel_error", error=data.text("error"))
 
 
 def parse_run_outcome(payload: object) -> Committed | Rejected:
     """The ``propose`` outcome envelope: a lawful business outcome
     either way. (The wire keeps the historical ``run_outcome`` name in
     the pinned schema; only the command verb changed.)"""
-    return _by_status(
-        payload,
-        "a propose outcome",
-        {
-            "committed": Committed.from_json,
-            "rejected": Rejected.from_json,
-        },
-    )
+    parsers: dict[str, Callable[[object], Committed | Rejected]] = {
+        "committed": Committed.from_json,
+        "rejected": Rejected.from_json,
+    }
+    return _by_status(payload, "a propose outcome", parsers)
 
 
 @dataclass(frozen=True)
@@ -297,9 +460,9 @@ class AtomicAct:
                 "emitted_intents",
             },
         )
-        body = {k: v for k, v in data.items() if k != "row"}
+        body = {k: v for k, v in data.data.items() if k != "row"}
         body["status"] = "committed"
-        return cls(row=int(str(data["row"])), outcome=Committed.from_json(body))
+        return cls(row=data.integer("row", minimum=1), outcome=Committed.from_json(body))
 
 
 @dataclass(frozen=True)
@@ -311,10 +474,9 @@ class AtomicCommitted:
     @classmethod
     def from_json(cls, payload: object) -> AtomicCommitted:
         data = _strict("atomic committed", payload, {"status", "acts"}, optional={"row"})
-        raw = data["acts"]
-        if not isinstance(raw, list) or not raw:
-            raise EnvelopeError(f"`acts` must be a non-empty list, got {raw!r}")
-        return cls(acts=[AtomicAct.from_json(a) for a in raw])
+        data.constant("status", "committed")
+        data.optional_integer("row", minimum=1)
+        return cls(acts=data.array("acts", AtomicAct.from_json, non_empty=True))
 
 
 @dataclass(frozen=True)
@@ -337,26 +499,24 @@ class AtomicRejected:
             {"status", "act", "reason"},
             optional={"rule", "witness", "row"},
         )
-        rule = data.get("rule")
+        data.constant("status", "rejected")
+        data.optional_integer("row", minimum=1)
         return cls(
-            act=int(str(data["act"])),
-            reason=str(data["reason"]),
-            rule=None if rule is None else str(rule),
-            witness=[WitnessBinding.from_json(w) for w in data.get("witness", [])],
+            act=data.integer("act", minimum=1),
+            reason=data.text("reason"),
+            rule=data.optional_text("rule"),
+            witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
         )
 
 
 def parse_atomic_outcome(payload: object) -> AtomicCommitted | AtomicRejected:
     """A ``transact`` outcome: committed or rejected. A coded error is
     not an outcome and is raised by the adapter."""
-    return _by_status(
-        payload,
-        "a transact outcome",
-        {
-            "committed": AtomicCommitted.from_json,
-            "rejected": AtomicRejected.from_json,
-        },
-    )
+    parsers: dict[str, Callable[[object], AtomicCommitted | AtomicRejected]] = {
+        "committed": AtomicCommitted.from_json,
+        "rejected": AtomicRejected.from_json,
+    }
+    return _by_status(payload, "a transact outcome", parsers)
 
 
 @dataclass(frozen=True)
@@ -367,7 +527,7 @@ class RenderedClaim:
     @classmethod
     def from_json(cls, payload: object) -> RenderedClaim:
         data = _strict("rendered claim", payload, {"predicate", "rendered"})
-        return cls(predicate=data["predicate"], rendered=data["rendered"])
+        return cls(predicate=data.text("predicate"), rendered=data.text("rendered"))
 
 
 @dataclass(frozen=True)
@@ -377,7 +537,8 @@ class RequireHeld:
     @classmethod
     def from_json(cls, payload: object) -> RequireHeld:
         data = _strict("require held", payload, {"status", "match_count"})
-        return cls(match_count=data["match_count"])
+        data.constant("status", "held")
+        return cls(match_count=data.integer("match_count", minimum=0))
 
 
 @dataclass(frozen=True)
@@ -394,12 +555,13 @@ class RequireRejected:
             {"status", "reason"},
             {"failing_sub_expression", "directly_missing_claims"},
         )
+        data.constant("status", "rejected")
         return cls(
-            reason=data["reason"],
-            failing_sub_expression=data.get("failing_sub_expression"),
-            directly_missing_claims=[
-                RenderedClaim.from_json(c) for c in data.get("directly_missing_claims", [])
-            ],
+            reason=data.text("reason"),
+            failing_sub_expression=data.optional_text("failing_sub_expression"),
+            directly_missing_claims=data.optional_array(
+                "directly_missing_claims", RenderedClaim.from_json
+            ),
         )
 
 
@@ -410,7 +572,8 @@ class BindBound:
     @classmethod
     def from_json(cls, payload: object) -> BindBound:
         data = _strict("bind bound", payload, {"status", "bindings"})
-        return cls(bindings=[WitnessBinding.from_json(b) for b in data["bindings"]])
+        data.constant("status", "bound")
+        return cls(bindings=data.array("bindings", WitnessBinding.from_json))
 
 
 @dataclass(frozen=True)
@@ -426,11 +589,12 @@ class BindNoMatch:
             {"status"},
             {"failing_sub_expression", "directly_missing_claims"},
         )
+        data.constant("status", "no_match")
         return cls(
-            failing_sub_expression=data.get("failing_sub_expression"),
-            directly_missing_claims=[
-                RenderedClaim.from_json(c) for c in data.get("directly_missing_claims", [])
-            ],
+            failing_sub_expression=data.optional_text("failing_sub_expression"),
+            directly_missing_claims=data.optional_array(
+                "directly_missing_claims", RenderedClaim.from_json
+            ),
         )
 
 
@@ -441,27 +605,25 @@ class BindMultipleMatches:
     @classmethod
     def from_json(cls, payload: object) -> BindMultipleMatches:
         data = _strict("bind multiple matches", payload, {"status", "count"})
-        return cls(count=data["count"])
+        data.constant("status", "multiple_matches")
+        return cls(count=data.integer("count", minimum=0))
 
 
 def _parse_require_outcome(payload: object) -> RequireHeld | RequireRejected:
-    return _by_status(
-        payload,
-        "a require outcome",
-        {"held": RequireHeld.from_json, "rejected": RequireRejected.from_json},
-    )
+    parsers: dict[str, Callable[[object], RequireHeld | RequireRejected]] = {
+        "held": RequireHeld.from_json,
+        "rejected": RequireRejected.from_json,
+    }
+    return _by_status(payload, "a require outcome", parsers)
 
 
 def _parse_bind_outcome(payload: object) -> BindBound | BindNoMatch | BindMultipleMatches:
-    return _by_status(
-        payload,
-        "a bind outcome",
-        {
-            "bound": BindBound.from_json,
-            "no_match": BindNoMatch.from_json,
-            "multiple_matches": BindMultipleMatches.from_json,
-        },
-    )
+    parsers: dict[str, Callable[[object], BindBound | BindNoMatch | BindMultipleMatches]] = {
+        "bound": BindBound.from_json,
+        "no_match": BindNoMatch.from_json,
+        "multiple_matches": BindMultipleMatches.from_json,
+    }
+    return _by_status(payload, "a bind outcome", parsers)
 
 
 @dataclass(frozen=True)
@@ -475,10 +637,11 @@ class RequireStep:
     @classmethod
     def from_json(cls, payload: object) -> RequireStep:
         data = _strict("require step", payload, {"kind", "expression", "outcome"}, {"name"})
+        data.constant("kind", "require")
         return cls(
-            expression=data["expression"],
-            outcome=_parse_require_outcome(data["outcome"]),
-            name=data.get("name"),
+            expression=data.text("expression"),
+            outcome=data.nested("outcome", _parse_require_outcome),
+            name=data.optional_text("name"),
         )
 
 
@@ -491,10 +654,11 @@ class BindStep:
     @classmethod
     def from_json(cls, payload: object) -> BindStep:
         data = _strict("bind step", payload, {"kind", "expression", "outcome"}, {"name"})
+        data.constant("kind", "bind_one")
         return cls(
-            expression=data["expression"],
-            outcome=_parse_bind_outcome(data["outcome"]),
-            name=data.get("name"),
+            expression=data.text("expression"),
+            outcome=data.nested("outcome", _parse_bind_outcome),
+            name=data.optional_text("name"),
         )
 
 
@@ -506,7 +670,8 @@ class LetStep:
     @classmethod
     def from_json(cls, payload: object) -> LetStep:
         data = _strict("let step", payload, {"kind", "name", "value"})
-        return cls(name=data["name"], value=values.decode_tagged(data["value"]))
+        data.constant("kind", "let")
+        return cls(name=data.text("name"), value=data.tagged("value"))
 
 
 @dataclass(frozen=True)
@@ -517,7 +682,8 @@ class LetNewSubjectStep:
     @classmethod
     def from_json(cls, payload: object) -> LetNewSubjectStep:
         data = _strict("let new subject step", payload, {"kind", "name", "subject"})
-        return cls(name=data["name"], subject=values.decode_tagged(data["subject"]))
+        data.constant("kind", "let_new_subject")
+        return cls(name=data.text("name"), subject=data.tagged("subject"))
 
 
 @dataclass(frozen=True)
@@ -530,7 +696,8 @@ class AssertStep:
     @classmethod
     def from_json(cls, payload: object) -> AssertStep:
         data = _strict("assert step", payload, {"kind", "claim"})
-        return cls(claim=ClaimInstance.from_json(data["claim"]))
+        data.constant("kind", "assert")
+        return cls(claim=data.nested("claim", ClaimInstance.from_json))
 
 
 @dataclass(frozen=True)
@@ -541,9 +708,10 @@ class RetractStep:
     @classmethod
     def from_json(cls, payload: object) -> RetractStep:
         data = _strict("retract step", payload, {"kind", "predicate", "retracted"})
+        data.constant("kind", "retract")
         return cls(
-            predicate=data["predicate"],
-            retracted=[ClaimInstance.from_json(c) for c in data["retracted"]],
+            predicate=data.text("predicate"),
+            retracted=data.array("retracted", ClaimInstance.from_json),
         )
 
 
@@ -554,7 +722,8 @@ class EmitStep:
     @classmethod
     def from_json(cls, payload: object) -> EmitStep:
         data = _strict("emit step", payload, {"kind", "intent"})
-        return cls(intent=IntentInstance.from_json(data["intent"]))
+        data.constant("kind", "emit")
+        return cls(intent=data.nested("intent", IntentInstance.from_json))
 
 
 @dataclass(frozen=True)
@@ -565,10 +734,7 @@ class ForIteration:
     @classmethod
     def from_json(cls, payload: object) -> ForIteration:
         data = _strict("for iteration", payload, {"item", "trace"})
-        return cls(
-            item=values.decode_tagged(data["item"]),
-            trace=[parse_trace_step(e) for e in data["trace"]],
-        )
+        return cls(item=data.tagged("item"), trace=data.array("trace", parse_trace_step))
 
 
 @dataclass(frozen=True)
@@ -579,9 +745,10 @@ class ForStep:
     @classmethod
     def from_json(cls, payload: object) -> ForStep:
         data = _strict("for step", payload, {"kind", "binding", "iterations"})
+        data.constant("kind", "for")
         return cls(
-            binding=data["binding"],
-            iterations=[ForIteration.from_json(i) for i in data["iterations"]],
+            binding=data.text("binding"),
+            iterations=data.array("iterations", ForIteration.from_json),
         )
 
 
@@ -594,7 +761,10 @@ class InvariantCheckStep:
     @classmethod
     def from_json(cls, payload: object) -> InvariantCheckStep:
         data = _strict("invariant check step", payload, {"kind", "name", "expression", "held"})
-        return cls(name=data["name"], expression=data["expression"], held=data["held"])
+        data.constant("kind", "invariant_check")
+        return cls(
+            name=data.text("name"), expression=data.text("expression"), held=data.flag("held")
+        )
 
 
 TraceStep = (
@@ -613,7 +783,7 @@ TraceStep = (
 def parse_trace_step(payload: object) -> TraceStep:
     """One `--trace` step, by declared kind."""
     kind = payload.get("kind") if isinstance(payload, dict) else None
-    by_kind = {
+    by_kind: dict[str, Callable[[object], TraceStep]] = {
         "require": RequireStep.from_json,
         "bind_one": BindStep.from_json,
         "let": LetStep.from_json,
@@ -638,14 +808,14 @@ class TracedEnvelope:
     @classmethod
     def from_json(cls, payload: object) -> TracedEnvelope:
         data = _strict("traced envelope", payload, {"result", "trace"})
-        result = data["result"]
+        result = data.raw("result")
         status = result.get("status") if isinstance(result, dict) else None
         parsed: Committed | Rejected | Errored
         if status == "errored":
             parsed = Errored.from_json(result)
         else:
             parsed = parse_run_outcome(result)
-        return cls(result=parsed, trace=[parse_trace_step(e) for e in data["trace"]])
+        return cls(result=parsed, trace=data.array("trace", parse_trace_step))
 
 
 @dataclass(frozen=True)
@@ -658,9 +828,9 @@ class TransitionRef:
     def from_json(cls, payload: object) -> TransitionRef:
         data = _strict("transition ref", payload, {"transformation", "args", "actor"})
         return cls(
-            transformation=data["transformation"],
-            args=list(data["args"]),
-            actor=data["actor"],
+            transformation=data.text("transformation"),
+            args=list(data.texts("args")),
+            actor=data.text("actor"),
         )
 
 
@@ -678,12 +848,9 @@ class MissingClaim:
             {"predicate", "rendered", "candidate_supplier_transformations"},
         )
         return cls(
-            predicate=data["predicate"],
-            rendered=data["rendered"],
-            candidate_supplier_transformations=_str_list(
-                "candidate_supplier_transformations",
-                data["candidate_supplier_transformations"],
-            ),
+            predicate=data.text("predicate"),
+            rendered=data.text("rendered"),
+            candidate_supplier_transformations=data.texts("candidate_supplier_transformations"),
         )
 
 
@@ -708,16 +875,14 @@ class GateRejection:
             {"kind", "gate", "statement_kind", "directly_missing_claims"},
             {"rule", "witness", "compared"},
         )
-        compared = data.get("compared")
+        data.constant("kind", "gate")
         return cls(
-            gate=data["gate"],
-            statement_kind=data["statement_kind"],
-            directly_missing_claims=[
-                MissingClaim.from_json(m) for m in data["directly_missing_claims"]
-            ],
-            rule=data.get("rule"),
-            witness=[WitnessBinding.from_json(w) for w in data.get("witness", [])],
-            compared=None if compared is None else Compared.from_json(compared),
+            gate=data.text("gate"),
+            statement_kind=data.member("statement_kind", {"require", "bind_one"}),
+            directly_missing_claims=data.array("directly_missing_claims", MissingClaim.from_json),
+            rule=data.optional_text("rule"),
+            witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
+            compared=data.optional_nested("compared", Compared.from_json),
         )
 
 
@@ -735,12 +900,12 @@ class InvariantRejection:
         data = _strict(
             "invariant rejection", payload, {"kind", "name", "rule"}, {"witness", "compared"}
         )
-        compared = data.get("compared")
+        data.constant("kind", "invariant")
         return cls(
-            name=data["name"],
-            rule=data["rule"],
-            witness=[WitnessBinding.from_json(w) for w in data.get("witness", [])],
-            compared=None if compared is None else Compared.from_json(compared),
+            name=data.text("name"),
+            rule=data.text("rule"),
+            witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
+            compared=data.optional_nested("compared", Compared.from_json),
         )
 
 
@@ -751,7 +916,8 @@ class ErrorRejection:
     @classmethod
     def from_json(cls, payload: object) -> ErrorRejection:
         data = _strict("error rejection", payload, {"kind", "message"})
-        return cls(message=data["message"])
+        data.constant("kind", "error")
+        return cls(message=data.text("message"))
 
 
 def _parse_rejection(payload: object) -> GateRejection | InvariantRejection | ErrorRejection:
@@ -779,13 +945,15 @@ class Explanation:
     @classmethod
     def from_json(cls, payload: object) -> Explanation:
         data = _strict("explanation", payload, {"transition", "verdict"})
-        verdict = data["verdict"]
+        verdict = data.raw("verdict")
+        rejection: GateRejection | InvariantRejection | ErrorRejection | None
         if verdict == "admissible":
             rejection = None
         else:
-            wrapped = _strict("verdict", verdict, {"rejected"})
-            rejection = _parse_rejection(wrapped["rejected"])
-        return cls(transition=TransitionRef.from_json(data["transition"]), rejection=rejection)
+            rejection = _strict("verdict", verdict, {"rejected"}).nested(
+                "rejected", _parse_rejection
+            )
+        return cls(transition=data.nested("transition", TransitionRef.from_json), rejection=rejection)
 
 
 @dataclass(frozen=True)
@@ -807,13 +975,12 @@ class SessionReady:
             payload,
             {"model_hash", "morpholog_version", "program", "protocol", "status"},
         )
-        if data["status"] != "ready":
-            raise EnvelopeError(f"session ready: unexpected status {data['status']!r}")
+        data.constant("status", "ready")
         return cls(
-            model_hash=str(data["model_hash"]),
-            morpholog_version=str(data["morpholog_version"]),
-            program=str(data["program"]),
-            protocol=int(str(data["protocol"])),
+            model_hash=_hash(data, "model_hash"),
+            morpholog_version=data.text("morpholog_version"),
+            program=data.text("program"),
+            protocol=data.integer("protocol", minimum=1),
         )
 
 
@@ -842,6 +1009,11 @@ PROPOSE_ERROR_CODES = frozenset(
 #: nothing else.
 NOTHING_RECORDED_CODES = PROPOSE_ERROR_CODES - {"commit_outcome_unknown"}
 
+#: The codes a session error receipt can carry - the schema's
+#: ``error_code``: a proposal's, and one for a request the session does
+#: not know.
+SESSION_ERROR_CODES = PROPOSE_ERROR_CODES | {"unknown_operation"}
+
 
 @dataclass(frozen=True)
 class RequestError:
@@ -856,9 +1028,8 @@ class RequestError:
     @classmethod
     def from_json(cls, payload: object) -> RequestError:
         data = _strict("request error", payload, {"code", "error", "status"})
-        if data["status"] != "error":
-            raise EnvelopeError(f"request error: unexpected status {data['status']!r}")
-        return cls(code=str(data["code"]), error=str(data["error"]))
+        data.constant("status", "error")
+        return cls(code=data.member("code", PROPOSE_ERROR_CODES), error=data.text("error"))
 
 
 @dataclass(frozen=True)
@@ -874,12 +1045,11 @@ class SessionErrorReceipt:
     @classmethod
     def from_json(cls, payload: object) -> SessionErrorReceipt:
         data = _strict("session error receipt", payload, {"code", "error", "row", "status"})
-        if data["status"] != "error":
-            raise EnvelopeError(f"session error receipt: unexpected status {data['status']!r}")
+        data.constant("status", "error")
         return cls(
-            code=str(data["code"]),
-            error=str(data["error"]),
-            row=int(str(data["row"])),
+            code=data.member("code", SESSION_ERROR_CODES),
+            error=data.text("error"),
+            row=data.integer("row", minimum=1),
         )
 
 
@@ -901,11 +1071,14 @@ class BatchReceipt:
     def from_json(cls, payload: object) -> BatchReceipt:
         if not isinstance(payload, dict) or "row" not in payload:
             raise EnvelopeError(f"not a batch receipt: {payload!r}")
-        row = payload["row"]
+        row = _Fields("batch receipt", payload).integer("row", minimum=1)
         body = {k: v for k, v in payload.items() if k != "row"}
         if body.get("status") == "error":
             data = _strict("batch error receipt", body, {"status", "code", "error"})
-            return cls(row=row, outcome=BatchError(code=str(data["code"]), error=str(data["error"])))
+            error = BatchError(
+                code=data.member("code", PROPOSE_ERROR_CODES), error=data.text("error")
+            )
+            return cls(row=row, outcome=error)
         return cls(row=row, outcome=parse_run_outcome(body))
 
 
@@ -921,7 +1094,7 @@ class RejectionRow:
     rejection_id: str
     transformation_name: str
     arguments: list[object]
-    actor: object
+    actor: str
     kind: str
     rule: str
     reason: str
@@ -953,28 +1126,30 @@ class RejectionRow:
             },
             {"invariant_version", "witness", "compared"},
         )
-        witness = data.get("witness")
-        compared = data.get("compared")
-        # Only an invariant refusal has a version. A gate refusal carrying
-        # one is a serializer regression, not a row - so it raises here
-        # rather than becoming a model nobody can trust.
-        if data["kind"] != "invariant" and data.get("invariant_version") is not None:
+        kind = data.member("kind", {"invariant", "require", "bind"})
+        # Only an invariant refusal has a version, and it always has one. A
+        # gate refusal carrying one is a serializer regression, not a row -
+        # so it raises here rather than becoming a model nobody can trust.
+        if (kind == "invariant") != ("invariant_version" in data):
             raise EnvelopeError(
-                f"rejection row: kind {data['kind']!r} cannot carry an invariant "
-                f"version, got {payload!r}"
+                f"rejection row: kind {kind!r} and invariant_version disagree in {payload!r}"
             )
         return cls(
-            rejection_id=data["rejection_id"],
-            transformation_name=data["transformation_name"],
-            arguments=[values.decode_tagged(a) for a in data["arguments"]],
-            actor=values.decode_tagged(data["actor"]),
-            kind=data["kind"],
-            rule=data["rule"],
-            reason=data["reason"],
-            rejected_at=values.parse_timestamp(data["rejected_at"]),
-            invariant_version=data.get("invariant_version"),
-            witness=None if witness is None else [WitnessBinding.from_json(w) for w in witness],
-            compared=None if compared is None else Compared.from_json(compared),
+            rejection_id=data.text("rejection_id"),
+            transformation_name=data.text("transformation_name"),
+            arguments=data.array("arguments", _tagged_item),
+            actor=data.actor("actor"),
+            kind=kind,
+            rule=data.text("rule"),
+            reason=data.text("reason"),
+            rejected_at=data.timestamp("rejected_at"),
+            invariant_version=data.optional_integer("invariant_version"),
+            witness=(
+                data.array("witness", WitnessBinding.from_json, non_empty=True)
+                if "witness" in data
+                else None
+            ),
+            compared=data.optional_nested("compared", Compared.from_json),
         )
 
 
@@ -1022,28 +1197,27 @@ class OutboxRow:
             },
         )
         return cls(
-            intent_id=data["intent_id"],
-            transition_id=data["transition_id"],
-            intent_type=data["intent_type"],
-            arguments=[values.decode_tagged(a) for a in data["arguments"]],
-            idempotency_key=data["idempotency_key"],
-            status=data["status"],
-            attempt_count=data["attempt_count"],
-            enqueued_at=values.parse_timestamp(data["enqueued_at"]),
-            last_attempt_at=_optional_timestamp(data["last_attempt_at"]),
-            delivered_at=_optional_timestamp(data["delivered_at"]),
-            failed_at=_optional_timestamp(data["failed_at"]),
-            failure_reason=data["failure_reason"],
-            next_attempt_at=_optional_timestamp(data["next_attempt_at"]),
-            compensation_transition_id=data["compensation_transition_id"],
-            locked_by=data["locked_by"],
-            lock_expires_at=_optional_timestamp(data["lock_expires_at"]),
+            intent_id=data.text("intent_id"),
+            transition_id=data.text("transition_id"),
+            intent_type=data.text("intent_type"),
+            arguments=data.array("arguments", _tagged_item),
+            idempotency_key=data.text("idempotency_key"),
+            status=data.text("status"),
+            attempt_count=data.integer("attempt_count"),
+            enqueued_at=data.timestamp("enqueued_at"),
+            last_attempt_at=data.nullable_timestamp("last_attempt_at"),
+            delivered_at=data.nullable_timestamp("delivered_at"),
+            failed_at=data.nullable_timestamp("failed_at"),
+            failure_reason=data.nullable_text("failure_reason"),
+            next_attempt_at=data.nullable_timestamp("next_attempt_at"),
+            compensation_transition_id=data.nullable_text("compensation_transition_id"),
+            locked_by=data.nullable_text("locked_by"),
+            lock_expires_at=data.nullable_timestamp("lock_expires_at"),
         )
 
 
 def parse_outbox_claim(payload: object) -> OutboxRow | None:
-    data = _strict("outbox claim", payload, {"row"})
-    row = data["row"]
+    row = _strict("outbox claim", payload, {"row"}).raw("row")
     return None if row is None else OutboxRow.from_json(row)
 
 
@@ -1058,7 +1232,7 @@ class OutboxUpdate:
     @classmethod
     def from_json(cls, payload: object) -> OutboxUpdate:
         data = _strict("outbox update", payload, {"status"})
-        return cls(status=data["status"])
+        return cls(status=data.member("status", {"applied", "lease_lost"}))
 
 
 @dataclass(frozen=True)
@@ -1074,7 +1248,7 @@ class AuditedInvariantCheck:
     @classmethod
     def from_json(cls, payload: object) -> AuditedInvariantCheck:
         data = _strict("audited invariant check", payload, {"name", "version"})
-        return cls(name=data["name"], version=data["version"])
+        return cls(name=data.text("name"), version=data.integer("version", minimum=1))
 
 
 _AUDIT_ROW_KEYS = {
@@ -1099,19 +1273,16 @@ _AUDIT_ROW_OPTIONAL_KEYS = {
 }
 
 
-def _parameters_of(data: dict[str, object]) -> list[str] | None:
+def _parameters_of(data: _Fields) -> list[str] | None:
     """The stamped parameter names, held to the shapes a row can have:
     names are strings (leaf-covered evidence, never coerced), only an
     attested row carries them, and there is one per argument."""
     if "parameters" not in data:
         return None
-    raw = data["parameters"]
-    if raw is None:
-        raise EnvelopeError("an audit row carries parameters: null; absent is the only spelling")
-    names = _str_list("parameters", raw)
-    if data.get("attestation") is None:
+    names = data.texts("parameters")
+    if "attestation" not in data:
         raise EnvelopeError("an audit row carries parameter names but no attestation")
-    arguments = data.get("arguments")
+    arguments = data.raw("arguments")
     if not isinstance(arguments, list) or len(names) != len(arguments):
         raise EnvelopeError(
             f"an audit row carries {len(names)} parameter names for "
@@ -1120,66 +1291,41 @@ def _parameters_of(data: dict[str, object]) -> list[str] | None:
     return names
 
 
-def _model_hash_of(data: dict[str, object]) -> str | None:
-    """The programme hash a row names, held to its one shape: `sha256:`
-    and 64 lowercase hex digits, only on a row that also carries an
+def _model_hash_of(data: _Fields) -> str | None:
+    """The programme hash a row names, only on a row that also carries an
     attestation and parameter names."""
-    raw = data.get("model_hash", _ABSENT)
-    if raw is _ABSENT:
+    if "model_hash" not in data:
         return None
-    if (
-        not isinstance(raw, str)
-        or not raw.startswith("sha256:")
-        or len(raw) != 71
-        or any(c not in "0123456789abcdef" for c in raw[7:])
-    ):
-        raise EnvelopeError(f"an audit row carries a malformed model hash {raw!r}")
-    if data.get("attestation") is None or data.get("parameters") is None:
+    hash_ = _hash(data, "model_hash")
+    if "attestation" not in data or "parameters" not in data:
         raise EnvelopeError(
             "an audit row carries a model hash without an attestation and parameter names"
         )
-    return raw
+    return hash_
 
 
-def _semantics_version_of(data: dict[str, object]) -> int | None:
+def _semantics_version_of(data: _Fields) -> int | None:
     """The semantics version a row names, held to its shape: an integer in
     the u32 range from 1, only on a row that also names its programme."""
-    raw = data.get("semantics_version", _ABSENT)
-    if raw is _ABSENT:
+    if "semantics_version" not in data:
         return None
-    if isinstance(raw, bool) or not isinstance(raw, int) or not 1 <= raw <= 0xFFFFFFFF:
-        raise EnvelopeError(f"an audit row carries a malformed semantics version {raw!r}")
-    if data.get("model_hash") is None:
+    version = data.integer("semantics_version", minimum=1)
+    if version > 0xFFFFFFFF:
+        raise data.fail("semantics_version", "within the u32 range")
+    if "model_hash" not in data:
         raise EnvelopeError("an audit row carries a semantics version without a model hash")
-    return raw
+    return version
 
 
-def _drawn_subjects_of(data: dict[str, object]) -> list[str] | None:
+def _drawn_subjects_of(data: _Fields) -> list[str] | None:
     """The subjects a row records its act drawing, in order: strings,
     possibly none, only on a row that also names its semantics."""
     if "drawn_subjects" not in data:
         return None
-    raw = data["drawn_subjects"]
-    if raw is None:
-        raise EnvelopeError(
-            "an audit row carries drawn_subjects: null; absent is the only spelling"
-        )
-    drawn = _str_list("drawn_subjects", raw)
-    if data.get("semantics_version") is None:
+    drawn = data.texts("drawn_subjects")
+    if "semantics_version" not in data:
         raise EnvelopeError("an audit row records drawn subjects without a semantics version")
     return drawn
-
-
-_ABSENT = object()
-
-
-def _passes(label: str, data: dict[str, object]) -> bool:
-    """A report's own verdict on whether its verification passed: a JSON
-    boolean, never coerced."""
-    raw = data["passes"]
-    if not isinstance(raw, bool):
-        raise EnvelopeError(f"{label}: passes must be a boolean, got {raw!r}")
-    return raw
 
 
 @dataclass(frozen=True)
@@ -1202,26 +1348,12 @@ class Attestation:
         data = _strict(
             "attestation", payload, {"mode", "authenticated_by"}, {"authenticated_by_oid"}
         )
-        if data["mode"] != "gateway":
-            raise EnvelopeError(
-                f"attestation: unknown mode {data['mode']!r} - the binary's "
-                "contract has drifted past this generated client; regenerate it"
-            )
-        oid = data.get("authenticated_by_oid")
+        data.constant("mode", "gateway")
         return cls(
-            mode=data["mode"],
-            authenticated_by=data["authenticated_by"],
-            authenticated_by_oid=None if oid is None else int(str(oid)),
+            mode="gateway",
+            authenticated_by=data.text("authenticated_by"),
+            authenticated_by_oid=data.optional_integer("authenticated_by_oid", minimum=0),
         )
-
-
-def _attestation_of(data: dict[str, object]) -> Attestation | None:
-    if "attestation" not in data:
-        return None
-    raw = data["attestation"]
-    if raw is None:
-        raise EnvelopeError("an audit row carries attestation: null; absent is the only spelling")
-    return Attestation.from_json(raw)
 
 
 @dataclass(frozen=True)
@@ -1262,19 +1394,17 @@ class AuditRow:
     def from_json(cls, payload: object) -> AuditRow:
         data = _strict("audit row", payload, _AUDIT_ROW_KEYS, optional=_AUDIT_ROW_OPTIONAL_KEYS)
         return cls(
-            transition_id=data["transition_id"],
-            transformation_name=data["transformation_name"],
-            arguments=[values.decode_tagged(a) for a in data["arguments"]],
-            actor=str(values.decode_tagged(data["actor"])),
-            invariant_epoch=data["invariant_epoch"],
-            invariants_checked=[
-                AuditedInvariantCheck.from_json(c) for c in data["invariants_checked"]
-            ],
-            asserted_claims=[ClaimInstance.from_json(c) for c in data["asserted_claims"]],
-            retracted_claims=[ClaimInstance.from_json(c) for c in data["retracted_claims"]],
-            emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
-            committed_at=values.parse_timestamp(data["committed_at"]),
-            attestation=_attestation_of(data),
+            transition_id=data.text("transition_id"),
+            transformation_name=data.text("transformation_name"),
+            arguments=data.array("arguments", _tagged_item),
+            actor=data.actor("actor"),
+            invariant_epoch=data.integer("invariant_epoch"),
+            invariants_checked=data.array("invariants_checked", AuditedInvariantCheck.from_json),
+            asserted_claims=data.array("asserted_claims", ClaimInstance.from_json),
+            retracted_claims=data.array("retracted_claims", ClaimInstance.from_json),
+            emitted_intents=data.array("emitted_intents", IntentInstance.from_json),
+            committed_at=data.timestamp("committed_at"),
+            attestation=data.optional_nested("attestation", Attestation.from_json),
             parameters=_parameters_of(data),
             model_hash=_model_hash_of(data),
             semantics_version=_semantics_version_of(data),
@@ -1319,19 +1449,17 @@ class AuditRowNamed:
     def from_json(cls, payload: object) -> AuditRowNamed:
         data = _strict("named audit row", payload, _AUDIT_ROW_KEYS, optional=_AUDIT_ROW_OPTIONAL_KEYS)
         return cls(
-            transition_id=data["transition_id"],
-            transformation_name=data["transformation_name"],
-            arguments=[values.decode_tagged(a) for a in data["arguments"]],
-            actor=str(values.decode_tagged(data["actor"])),
-            invariant_epoch=data["invariant_epoch"],
-            invariants_checked=[
-                AuditedInvariantCheck.from_json(c) for c in data["invariants_checked"]
-            ],
-            asserted_claims=[NamedClaim.from_json(c) for c in data["asserted_claims"]],
-            retracted_claims=[NamedClaim.from_json(c) for c in data["retracted_claims"]],
-            emitted_intents=[IntentInstance.from_json(i) for i in data["emitted_intents"]],
-            committed_at=values.parse_timestamp(data["committed_at"]),
-            attestation=_attestation_of(data),
+            transition_id=data.text("transition_id"),
+            transformation_name=data.text("transformation_name"),
+            arguments=data.array("arguments", _tagged_item),
+            actor=data.actor("actor"),
+            invariant_epoch=data.integer("invariant_epoch"),
+            invariants_checked=data.array("invariants_checked", AuditedInvariantCheck.from_json),
+            asserted_claims=data.array("asserted_claims", NamedClaim.from_json),
+            retracted_claims=data.array("retracted_claims", NamedClaim.from_json),
+            emitted_intents=data.array("emitted_intents", IntentInstance.from_json),
+            committed_at=data.timestamp("committed_at"),
+            attestation=data.optional_nested("attestation", Attestation.from_json),
             parameters=_parameters_of(data),
             model_hash=_model_hash_of(data),
             semantics_version=_semantics_version_of(data),
@@ -1376,18 +1504,18 @@ class InvariantCoverage:
             },
         )
         return cls(
-            invariant=data["invariant"],
-            verdict=data["verdict"],
-            transitions_fired=data["transitions_fired"],
+            invariant=data.text("invariant"),
+            verdict=data.member("verdict", {"constrained", "fired", "never_fired", "always_on"}),
+            transitions_fired=data.integer("transitions_fired", minimum=0),
             # `from` is a Python keyword; the wire name maps to
             # `from_clause` on this side only.
-            from_clause=data.get("from"),
-            first_fired=data.get("first_fired"),
-            last_fired=data.get("last_fired"),
-            proposals_refused=data.get("proposals_refused", 0),
-            first_refused=data.get("first_refused"),
-            last_refused=data.get("last_refused"),
-            not_in_programme=data.get("not_in_programme", False),
+            from_clause=data.optional_text("from"),
+            first_fired=data.optional_text("first_fired"),
+            last_fired=data.optional_text("last_fired"),
+            proposals_refused=data.optional_integer("proposals_refused", minimum=1) or 0,
+            first_refused=data.optional_text("first_refused"),
+            last_refused=data.optional_text("last_refused"),
+            not_in_programme="not_in_programme" in data and data.flag("not_in_programme"),
         )
 
 
@@ -1406,9 +1534,9 @@ class RefusalCause:
     def from_json(cls, payload: object) -> RefusalCause:
         data = _strict("refusal cause", payload, {"kind", "rule", "proposals_refused"})
         return cls(
-            kind=data["kind"],
-            rule=data["rule"],
-            proposals_refused=data["proposals_refused"],
+            kind=data.member("kind", {"require", "bind", "invariant"}),
+            rule=data.text("rule"),
+            proposals_refused=data.integer("proposals_refused", minimum=1),
         )
 
 
@@ -1434,13 +1562,13 @@ class TransformationUsage:
             {"first", "last", "proposals_refused", "refusals", "not_in_programme"},
         )
         return cls(
-            transformation=data["transformation"],
-            transitions=data["transitions"],
-            first=data.get("first"),
-            last=data.get("last"),
-            proposals_refused=data.get("proposals_refused", 0),
-            refusals=[RefusalCause.from_json(c) for c in data.get("refusals", [])],
-            not_in_programme=data.get("not_in_programme", False),
+            transformation=data.text("transformation"),
+            transitions=data.integer("transitions", minimum=0),
+            first=data.optional_text("first"),
+            last=data.optional_text("last"),
+            proposals_refused=data.optional_integer("proposals_refused", minimum=1) or 0,
+            refusals=data.optional_array("refusals", RefusalCause.from_json, non_empty=True),
+            not_in_programme="not_in_programme" in data and data.flag("not_in_programme"),
         )
 
 
@@ -1470,13 +1598,11 @@ class CoverageReport:
             },
         )
         return cls(
-            program=data["program"],
-            transitions_replayed=data["transitions_replayed"],
-            rejections_replayed=data["rejections_replayed"],
-            invariants=[InvariantCoverage.from_json(i) for i in data["invariants"]],
-            transformations=[
-                TransformationUsage.from_json(t) for t in data["transformations"]
-            ],
+            program=data.text("program"),
+            transitions_replayed=data.integer("transitions_replayed", minimum=0),
+            rejections_replayed=data.integer("rejections_replayed", minimum=0),
+            invariants=data.array("invariants", InvariantCoverage.from_json),
+            transformations=data.array("transformations", TransformationUsage.from_json),
         )
 
 
@@ -1498,12 +1624,12 @@ class Diagnostic:
             {"start", "end", "line", "column"},
         )
         return cls(
-            severity=data["severity"],
-            message=data["message"],
-            start=data.get("start"),
-            end=data.get("end"),
-            line=data.get("line"),
-            column=data.get("column"),
+            severity=data.member("severity", {"error", "hint"}),
+            message=data.text("message"),
+            start=data.optional_integer("start"),
+            end=data.optional_integer("end"),
+            line=data.optional_integer("line"),
+            column=data.optional_integer("column"),
         )
 
 
@@ -1521,15 +1647,6 @@ _REFUSAL_KINDS = frozenset(
 )
 
 
-def _member(label: str, value: object, known: AbstractSet[str]) -> str:
-    if not isinstance(value, str) or value not in known:
-        raise EnvelopeError(
-            f"{label}: unknown value {value!r} - the binary's contract has "
-            f"drifted past this generated client; regenerate it"
-        )
-    return value
-
-
 @dataclass(frozen=True)
 class CheckRefusal:
     """Why an invariant is interpreted: ``kind`` from a closed list, and
@@ -1541,10 +1658,7 @@ class CheckRefusal:
     @classmethod
     def from_json(cls, payload: object) -> CheckRefusal:
         data = _strict("check refusal", payload, {"kind", "message"})
-        return cls(
-            kind=_member("check refusal kind", data["kind"], _REFUSAL_KINDS),
-            message=data["message"],
-        )
+        return cls(kind=data.member("kind", _REFUSAL_KINDS), message=data.text("message"))
 
 
 _CASE_KINDS = frozenset({"bound", "whole"})
@@ -1566,16 +1680,13 @@ class CheckedCases:
     @classmethod
     def from_json(cls, payload: object) -> CheckedCases:
         data = _strict("checked cases", payload, {"kind"}, {"because"})
-        kind = _member("checked cases kind", data["kind"], _CASE_KINDS)
+        kind = data.member("kind", _CASE_KINDS)
         if (kind == "whole") != ("because" in data):
             raise EnvelopeError(
                 f"checked cases: a reason belongs to a whole verdict and only to one, "
                 f"got {payload!r}"
             )
-        because = data.get("because")
-        if kind == "whole" and not isinstance(because, str):
-            raise EnvelopeError(f"checked cases: because must be a string, got {payload!r}")
-        return cls(kind=kind, because=because)
+        return cls(kind=kind, because=data.optional_text("because"))
 
 
 @dataclass(frozen=True)
@@ -1592,17 +1703,17 @@ class CheckedInvariant:
     @classmethod
     def from_json(cls, payload: object) -> CheckedInvariant:
         data = _strict("checked invariant", payload, {"cases", "name", "route"}, {"refusal"})
-        route = _member("checked invariant route", data["route"], _CHECK_ROUTES)
+        route = data.member("route", _CHECK_ROUTES)
         if (route == "interpreted") != ("refusal" in data):
             raise EnvelopeError(
                 f"checked invariant: a refusal belongs to an interpreted invariant "
                 f"and only to one, got {payload!r}"
             )
         return cls(
-            name=data["name"],
+            name=data.text("name"),
             route=route,
-            cases=CheckedCases.from_json(data["cases"]),
-            refusal=CheckRefusal.from_json(data["refusal"]) if "refusal" in data else None,
+            cases=data.nested("cases", CheckedCases.from_json),
+            refusal=data.optional_nested("refusal", CheckRefusal.from_json),
         )
 
 
@@ -1636,15 +1747,14 @@ class CheckReport:
     @classmethod
     def from_json(cls, payload: object) -> CheckReport:
         data = _strict("check report", payload, {"file", "diagnostics"}, {"invariants"})
-        invariants = None
-        if "invariants" in data:
-            if not isinstance(data["invariants"], list):
-                raise EnvelopeError(f"check report: invariants is not a list in {payload!r}")
-            invariants = [CheckedInvariant.from_json(i) for i in data["invariants"]]
         return cls(
-            file=data["file"],
-            diagnostics=[Diagnostic.from_json(d) for d in data["diagnostics"]],
-            invariants=invariants,
+            file=data.text("file"),
+            diagnostics=data.array("diagnostics", Diagnostic.from_json),
+            invariants=(
+                data.array("invariants", CheckedInvariant.from_json)
+                if "invariants" in data
+                else None
+            ),
         )
 
 
@@ -1661,9 +1771,9 @@ class HashReport:
     def from_json(cls, payload: object) -> HashReport:
         data = _strict("hash report", payload, {"program", "hash", "morpholog_version"})
         return cls(
-            program=data["program"],
-            hash=data["hash"],
-            morpholog_version=data["morpholog_version"],
+            program=data.text("program"),
+            hash=_hash(data, "hash"),
+            morpholog_version=data.text("morpholog_version"),
         )
 
 
@@ -1707,9 +1817,9 @@ class LeastPrivilege:
             "least privilege", payload, {"next_steps", "reader_role", "writer_role"}
         )
         return cls(
-            next_steps=tuple(data["next_steps"]),
-            reader_role=data["reader_role"],
-            writer_role=data["writer_role"],
+            next_steps=tuple(data.texts("next_steps")),
+            reader_role=data.text("reader_role"),
+            writer_role=data.text("writer_role"),
         )
 
 
@@ -1721,7 +1831,7 @@ class MigrationRef:
     @classmethod
     def from_json(cls, payload: object) -> MigrationRef:
         data = _strict("migration ref", payload, {"version", "name"})
-        return cls(version=data["version"], name=data["name"])
+        return cls(version=data.integer("version"), name=data.text("name"))
 
 
 @dataclass(frozen=True)
@@ -1754,12 +1864,12 @@ class MigrationReport:
             {"unknown"},
         )
         return cls(
-            recorded_version_before=data["recorded_version_before"],
-            recorded_version_after=data["recorded_version_after"],
-            binary_version=data["binary_version"],
-            applied=[MigrationRef.from_json(m) for m in data["applied"]],
-            pending=[MigrationRef.from_json(m) for m in data["pending"]],
-            unknown=[MigrationRef.from_json(m) for m in data.get("unknown", [])],
+            recorded_version_before=data.integer("recorded_version_before"),
+            recorded_version_after=data.integer("recorded_version_after"),
+            binary_version=data.integer("binary_version"),
+            applied=data.array("applied", MigrationRef.from_json),
+            pending=data.array("pending", MigrationRef.from_json),
+            unknown=data.optional_array("unknown", MigrationRef.from_json),
         )
 
 
@@ -1771,22 +1881,13 @@ class ProvisionedProgram:
     @classmethod
     def from_json(cls, payload: object) -> ProvisionedProgram:
         data = _strict("provisioned program", payload, {"program", "hash"})
-        return cls(program=data["program"], hash=data["hash"])
+        return cls(program=data.text("program"), hash=data.text("hash"))
 
 
 _INDEX_ACTIONS = frozenset(
     {"keep", "create", "repair_invalid", "satisfied_externally", "stale", "conflict"}
 )
 _STATISTICS_ACTIONS = frozenset({"keep", "create", "conflict", "stale"})
-
-
-def _action(label: str, value: object, known: AbstractSet[str]) -> str:
-    if not isinstance(value, str) or value not in known:
-        raise EnvelopeError(
-            f"{label}: unknown action {value!r} - the binary's contract has "
-            f"drifted past this generated client; regenerate it"
-        )
-    return value
 
 
 @dataclass(frozen=True)
@@ -1810,12 +1911,12 @@ class ProvisionedIndex:
             {"detail"},
         )
         return cls(
-            action=_action("provisioned index", data["action"], _INDEX_ACTIONS),
-            name=data["name"],
-            predicate=data["predicate"],
-            position=data["position"],
-            required_by=_str_list("required_by", data["required_by"]),
-            detail=data.get("detail", ""),
+            action=data.member("action", _INDEX_ACTIONS),
+            name=data.text("name"),
+            predicate=data.text("predicate"),
+            position=data.integer("position"),
+            required_by=data.texts("required_by"),
+            detail=data.optional_text("detail") or "",
         )
 
 
@@ -1839,11 +1940,11 @@ class ProvisionedStatistics:
             {"detail"},
         )
         return cls(
-            action=_action("provisioned statistics", data["action"], _STATISTICS_ACTIONS),
-            name=data["name"],
-            position=data["position"],
-            required_by=_str_list("required_by", data["required_by"]),
-            detail=data.get("detail", ""),
+            action=data.member("action", _STATISTICS_ACTIONS),
+            name=data.text("name"),
+            position=data.integer("position"),
+            required_by=data.texts("required_by"),
+            detail=data.optional_text("detail") or "",
         )
 
 
@@ -1859,7 +1960,10 @@ class RequiredElsewhere:
     @classmethod
     def from_json(cls, payload: object) -> RequiredElsewhere:
         data = _strict("required elsewhere", payload, {"name", "required_by"})
-        return cls(name=data["name"], required_by=_str_list("required_by", data["required_by"]))
+        required_by = data.array(
+            "required_by", lambda item: _text("required elsewhere", item), non_empty=True
+        )
+        return cls(name=data.text("name"), required_by=required_by)
 
 
 @dataclass(frozen=True)
@@ -1883,7 +1987,9 @@ class ProvisionReport:
     def has_conflict(self) -> bool:
         """Something under Morpholog's own name has another definition. The
         run applied nothing and an operator has to look."""
-        return any(e.action == "conflict" for e in (*self.indexes, *self.statistics))
+        return any(i.action == "conflict" for i in self.indexes) or any(
+            s.action == "conflict" for s in self.statistics
+        )
 
     @property
     def is_current(self) -> bool:
@@ -1900,7 +2006,9 @@ class ProvisionReport:
         when it applied under prune."""
         if not (self.applied and self.prune):
             return []
-        return [e.name for e in (*self.indexes, *self.statistics) if e.action == "stale"]
+        return [i.name for i in self.indexes if i.action == "stale"] + [
+            s.name for s in self.statistics if s.action == "stale"
+        ]
 
     @classmethod
     def from_json(cls, payload: object) -> ProvisionReport:
@@ -1911,18 +2019,14 @@ class ProvisionReport:
              "required_elsewhere", "positions_unknown_for"},
         )
         return cls(
-            applied=data["applied"],
-            dry_run=data["dry_run"],
-            prune=data["prune"],
-            programs=[ProvisionedProgram.from_json(p) for p in data["programs"]],
-            indexes=[ProvisionedIndex.from_json(i) for i in data["indexes"]],
-            statistics=[ProvisionedStatistics.from_json(s) for s in data["statistics"]],
-            required_elsewhere=[
-                RequiredElsewhere.from_json(r) for r in data["required_elsewhere"]
-            ],
-            positions_unknown_for=_str_list(
-                "positions_unknown_for", data["positions_unknown_for"]
-            ),
+            applied=data.flag("applied"),
+            dry_run=data.flag("dry_run"),
+            prune=data.flag("prune"),
+            programs=data.array("programs", ProvisionedProgram.from_json, non_empty=True),
+            indexes=data.array("indexes", ProvisionedIndex.from_json),
+            statistics=data.array("statistics", ProvisionedStatistics.from_json),
+            required_elsewhere=data.array("required_elsewhere", RequiredElsewhere.from_json),
+            positions_unknown_for=data.texts("positions_unknown_for"),
         )
 
 
@@ -1937,11 +2041,11 @@ class InitReport:
         data = _strict(
             "init report", payload, {"status", "schema"}, optional={"least_privilege"}
         )
-        floor = data.get("least_privilege")
+        data.constant("schema", "morpholog")
         return cls(
-            status=data["status"],
-            schema=data["schema"],
-            least_privilege=None if floor is None else LeastPrivilege.from_json(floor),
+            status=data.member("status", {"initialised", "already-initialised"}),
+            schema="morpholog",
+            least_privilege=data.optional_nested("least_privilege", LeastPrivilege.from_json),
         )
 
 
@@ -1976,21 +2080,19 @@ class RefreshDerivedReport:
             },
             {"source_snapshot_committed_at", "source_snapshot_transition_id"},
         )
-        tid = data.get("source_snapshot_transition_id")
-        at = data.get("source_snapshot_committed_at")
-        if (tid is None) != (at is None):
+        if ("source_snapshot_transition_id" in data) != ("source_snapshot_committed_at" in data):
             raise EnvelopeError(
                 "refresh derived report: the snapshot pair must be present "
                 f"or absent together, got {payload!r}"
             )
         return cls(
-            derived_claim_count=data["derived_claim_count"],
-            derived_predicate_count=data["derived_predicate_count"],
-            model_hash=data["model_hash"],
-            refresh_id=data["refresh_id"],
-            source_claim_count=data["source_claim_count"],
-            source_snapshot_committed_at=_optional_timestamp(at),
-            source_snapshot_transition_id=tid,
+            derived_claim_count=data.integer("derived_claim_count", minimum=0),
+            derived_predicate_count=data.integer("derived_predicate_count", minimum=0),
+            model_hash=_hash(data, "model_hash"),
+            refresh_id=data.text("refresh_id"),
+            source_claim_count=data.integer("source_claim_count", minimum=0),
+            source_snapshot_committed_at=data.optional_timestamp("source_snapshot_committed_at"),
+            source_snapshot_transition_id=data.optional_text("source_snapshot_transition_id"),
         )
 
 
@@ -2009,7 +2111,8 @@ class ReplayConsistent:
     @classmethod
     def from_json(cls, payload: object) -> ReplayConsistent:
         data = _strict("consistent replay", payload, {"status", "transitions", "claims"})
-        return cls(transitions=data["transitions"], claims=data["claims"])
+        data.constant("status", "consistent")
+        return cls(transitions=data.integer("transitions"), claims=data.integer("claims"))
 
 
 @dataclass(frozen=True)
@@ -2025,21 +2128,19 @@ class ReplayDivergent:
         data = _strict(
             "divergent replay", payload, {"status", "only_in_claims_table", "only_in_replay"}
         )
+        data.constant("status", "divergent")
         return cls(
-            only_in_claims_table=[ClaimInstance.from_json(c) for c in data["only_in_claims_table"]],
-            only_in_replay=[ClaimInstance.from_json(c) for c in data["only_in_replay"]],
+            only_in_claims_table=data.array("only_in_claims_table", ClaimInstance.from_json),
+            only_in_replay=data.array("only_in_replay", ClaimInstance.from_json),
         )
 
 
 def parse_verify_outcome(payload: object) -> ReplayConsistent | ReplayDivergent:
-    return _by_status(
-        payload,
-        "a replay verdict",
-        {
-            "consistent": ReplayConsistent.from_json,
-            "divergent": ReplayDivergent.from_json,
-        },
-    )
+    parsers: dict[str, Callable[[object], ReplayConsistent | ReplayDivergent]] = {
+        "consistent": ReplayConsistent.from_json,
+        "divergent": ReplayDivergent.from_json,
+    }
+    return _by_status(payload, "a replay verdict", parsers)
 
 
 @dataclass(frozen=True)
@@ -2050,7 +2151,8 @@ class TreeIntact:
     @classmethod
     def from_json(cls, payload: object) -> TreeIntact:
         data = _strict("intact tree", payload, {"status", "checkpoints", "tree_size"})
-        return cls(checkpoints=data["checkpoints"], tree_size=data["tree_size"])
+        data.constant("status", "intact")
+        return cls(checkpoints=data.integer("checkpoints"), tree_size=data.integer("tree_size"))
 
 
 @dataclass(frozen=True)
@@ -2064,10 +2166,11 @@ class TreeTampered:
         data = _strict(
             "tampered tree", payload, {"status", "tree_size", "recorded_root", "recomputed_root"}
         )
+        data.constant("status", "tampered")
         return cls(
-            tree_size=data["tree_size"],
-            recorded_root=data["recorded_root"],
-            recomputed_root=data["recomputed_root"],
+            tree_size=data.integer("tree_size"),
+            recorded_root=data.text("recorded_root"),
+            recomputed_root=data.text("recomputed_root"),
         )
 
 
@@ -2078,7 +2181,8 @@ class TreeChainBroken:
     @classmethod
     def from_json(cls, payload: object) -> TreeChainBroken:
         data = _strict("chain-broken tree", payload, {"status", "detail"})
-        return cls(detail=data["detail"])
+        data.constant("status", "chain_broken")
+        return cls(detail=data.text("detail"))
 
 
 @dataclass(frozen=True)
@@ -2094,10 +2198,11 @@ class TreeAnchorMismatch:
             payload,
             {"status", "tree_size", "anchor_checkpoint_hash", "stored_checkpoint_hash"},
         )
+        data.constant("status", "anchor_mismatch")
         return cls(
-            tree_size=data["tree_size"],
-            anchor_checkpoint_hash=data["anchor_checkpoint_hash"],
-            stored_checkpoint_hash=data["stored_checkpoint_hash"],
+            tree_size=data.integer("tree_size"),
+            anchor_checkpoint_hash=data.text("anchor_checkpoint_hash"),
+            stored_checkpoint_hash=data.nullable_text("stored_checkpoint_hash"),
         )
 
 
@@ -2111,7 +2216,8 @@ class TreeMalformedPack:
     @classmethod
     def from_json(cls, payload: object) -> TreeMalformedPack:
         data = _strict("malformed pack", payload, {"status", "detail"})
-        return cls(detail=data["detail"])
+        data.constant("status", "malformed_pack")
+        return cls(detail=data.text("detail"))
 
 
 @dataclass(frozen=True)
@@ -2132,11 +2238,12 @@ class TreeUnsupportedPack:
             payload,
             {"status", "pack_format_version", "reads", "written_by", "detail"},
         )
+        data.constant("status", "unsupported_pack")
         return cls(
-            pack_format_version=data["pack_format_version"],
-            reads=data["reads"],
-            written_by=data["written_by"],
-            detail=data["detail"],
+            pack_format_version=data.integer("pack_format_version"),
+            reads=data.integer("reads"),
+            written_by=data.nullable_text("written_by"),
+            detail=data.text("detail"),
         )
 
 
@@ -2157,11 +2264,12 @@ class TreeSignatureInvalid:
             payload,
             {"status", "tree_size", "key_id", "purpose", "public_key"},
         )
+        data.constant("status", "signature_invalid")
         return cls(
-            tree_size=data["tree_size"],
-            key_id=data["key_id"],
-            purpose=data["purpose"],
-            public_key=data["public_key"],
+            tree_size=data.integer("tree_size"),
+            key_id=data.text("key_id"),
+            purpose=data.text("purpose"),
+            public_key=data.text("public_key"),
         )
 
 
@@ -2183,11 +2291,12 @@ class TreeUnauthorizedKey:
             payload,
             {"status", "tree_size", "key_id", "purpose", "public_key"},
         )
+        data.constant("status", "unauthorized_key")
         return cls(
-            tree_size=data["tree_size"],
-            key_id=data["key_id"],
-            purpose=data["purpose"],
-            public_key=data["public_key"],
+            tree_size=data.integer("tree_size"),
+            key_id=data.text("key_id"),
+            purpose=data.text("purpose"),
+            public_key=data.text("public_key"),
         )
 
 
@@ -2201,7 +2310,8 @@ class TreeSignatureRequired:
     @classmethod
     def from_json(cls, payload: object) -> TreeSignatureRequired:
         data = _strict("signature-required tree", payload, {"status", "tree_size"})
-        return cls(tree_size=data["tree_size"])
+        data.constant("status", "signature_required")
+        return cls(tree_size=data.integer("tree_size"))
 
 
 @dataclass(frozen=True)
@@ -2217,7 +2327,8 @@ class TreeSigningKeyRequired:
     @classmethod
     def from_json(cls, payload: object) -> TreeSigningKeyRequired:
         data = _strict("signing-key-required tree", payload, {"status", "tree_size", "public_key"})
-        return cls(tree_size=data["tree_size"], public_key=data["public_key"])
+        data.constant("status", "signing_key_required")
+        return cls(tree_size=data.integer("tree_size"), public_key=data.text("public_key"))
 
 
 TreeVerification = (
@@ -2237,22 +2348,19 @@ TreeVerification = (
 def parse_tree_verification(payload: object) -> TreeVerification:
     """The tamper-evidence verdict, the output of `evidence verify` and
     the `tree` half of `verify`."""
-    return _by_status(
-        payload,
-        "a tree verdict",
-        {
-            "intact": TreeIntact.from_json,
-            "tampered": TreeTampered.from_json,
-            "chain_broken": TreeChainBroken.from_json,
-            "anchor_mismatch": TreeAnchorMismatch.from_json,
-            "malformed_pack": TreeMalformedPack.from_json,
-            "unsupported_pack": TreeUnsupportedPack.from_json,
-            "signature_invalid": TreeSignatureInvalid.from_json,
-            "unauthorized_key": TreeUnauthorizedKey.from_json,
-            "signature_required": TreeSignatureRequired.from_json,
-            "signing_key_required": TreeSigningKeyRequired.from_json,
-        },
-    )
+    parsers: dict[str, Callable[[object], TreeVerification]] = {
+        "intact": TreeIntact.from_json,
+        "tampered": TreeTampered.from_json,
+        "chain_broken": TreeChainBroken.from_json,
+        "anchor_mismatch": TreeAnchorMismatch.from_json,
+        "malformed_pack": TreeMalformedPack.from_json,
+        "unsupported_pack": TreeUnsupportedPack.from_json,
+        "signature_invalid": TreeSignatureInvalid.from_json,
+        "unauthorized_key": TreeUnauthorizedKey.from_json,
+        "signature_required": TreeSignatureRequired.from_json,
+        "signing_key_required": TreeSigningKeyRequired.from_json,
+    }
+    return _by_status(payload, "a tree verdict", parsers)
 
 
 @dataclass(frozen=True)
@@ -2264,7 +2372,8 @@ class ViewsIntact:
     @classmethod
     def from_json(cls, payload: object) -> ViewsIntact:
         data = _strict("intact views", payload, {"status", "views_checked"})
-        return cls(views_checked=data["views_checked"])
+        data.constant("status", "intact")
+        return cls(views_checked=data.integer("views_checked", minimum=0))
 
 
 @dataclass(frozen=True)
@@ -2279,9 +2388,10 @@ class ViewsTampered:
     @classmethod
     def from_json(cls, payload: object) -> ViewsTampered:
         data = _strict("tampered views", payload, {"status", "mismatched", "missing"})
+        data.constant("status", "tampered")
         return cls(
-            mismatched=_str_list("mismatched", data["mismatched"]),
-            missing=_str_list("missing", data["missing"]),
+            mismatched=data.texts("mismatched"),
+            missing=data.texts("missing"),
         )
 
 
@@ -2292,7 +2402,8 @@ class ViewsNotSealed:
 
     @classmethod
     def from_json(cls, payload: object) -> ViewsNotSealed:
-        _strict("unsealed views", payload, {"status"})
+        data = _strict("unsealed views", payload, {"status"})
+        data.constant("status", "not_sealed")
         return cls()
 
 
@@ -2301,15 +2412,12 @@ ViewsVerification = ViewsIntact | ViewsTampered | ViewsNotSealed
 
 def parse_views_verification(payload: object) -> ViewsVerification:
     """Parse a `views` verdict by its `status` tag."""
-    return _by_status(
-        payload,
-        "a views verdict",
-        {
-            "intact": ViewsIntact.from_json,
-            "tampered": ViewsTampered.from_json,
-            "not_sealed": ViewsNotSealed.from_json,
-        },
-    )
+    parsers: dict[str, Callable[[object], ViewsVerification]] = {
+        "intact": ViewsIntact.from_json,
+        "tampered": ViewsTampered.from_json,
+        "not_sealed": ViewsNotSealed.from_json,
+    }
+    return _by_status(payload, "a views verdict", parsers)
 
 
 @dataclass(frozen=True)
@@ -2336,13 +2444,14 @@ class WitnessVerdict:
             {"scheme", "submitted_to", "status"},
             optional={"attested_at", "detail"},
         )
-        detail = data.get("detail")
         return cls(
-            scheme=data["scheme"],
-            submitted_to=data["submitted_to"],
-            status=data["status"],
-            attested_at=_optional_timestamp(data.get("attested_at")),
-            detail=None if detail is None else str(detail),
+            scheme=data.member("scheme", {"rfc3161"}),
+            submitted_to=data.text("submitted_to"),
+            status=data.member(
+                "status", {"verified", "untrusted", "unverified", "unsupported", "invalid"}
+            ),
+            attested_at=data.optional_timestamp("attested_at"),
+            detail=data.optional_text("detail"),
         )
 
 
@@ -2356,12 +2465,9 @@ class CheckpointWitnesses:
     @classmethod
     def from_json(cls, payload: object) -> CheckpointWitnesses:
         data = _strict("checkpoint witnesses", payload, {"tree_size", "witnesses"})
-        raw = data["witnesses"]
-        if not isinstance(raw, list):
-            raise EnvelopeError(f"`witnesses` must be a list, got {raw!r}")
         return cls(
-            tree_size=data["tree_size"],
-            witnesses=[WitnessVerdict.from_json(w) for w in raw],
+            tree_size=data.integer("tree_size"),
+            witnesses=data.array("witnesses", WitnessVerdict.from_json),
         )
 
 
@@ -2380,12 +2486,9 @@ class WitnessesReport:
         data = _strict(
             "witnesses report", payload, {"checkpoints"}, optional={"earliest_attested_at"}
         )
-        raw = data["checkpoints"]
-        if not isinstance(raw, list):
-            raise EnvelopeError(f"`checkpoints` must be a list, got {raw!r}")
         return cls(
-            checkpoints=[CheckpointWitnesses.from_json(c) for c in raw],
-            earliest_attested_at=_optional_timestamp(data.get("earliest_attested_at")),
+            checkpoints=data.array("checkpoints", CheckpointWitnesses.from_json),
+            earliest_attested_at=data.optional_timestamp("earliest_attested_at"),
         )
 
 
@@ -2410,11 +2513,11 @@ class RoleRebinding:
              "first_observed_transition"},
         )
         return cls(
-            role=str(data["role"]),
-            previous_oid=int(str(data["previous_oid"])),
-            last_observed_transition=str(data["last_observed_transition"]),
-            new_oid=int(str(data["new_oid"])),
-            first_observed_transition=str(data["first_observed_transition"]),
+            role=data.text("role"),
+            previous_oid=data.integer("previous_oid", minimum=0),
+            last_observed_transition=data.text("last_observed_transition"),
+            new_oid=data.integer("new_oid", minimum=0),
+            first_observed_transition=data.text("first_observed_transition"),
         )
 
 
@@ -2437,14 +2540,12 @@ class RoleRebindingsEvaluated:
             payload,
             {"status", "scope", "rows_with_oid", "rows_without_oid", "changes"},
         )
-        changes = data["changes"]
-        if not isinstance(changes, list):
-            raise EnvelopeError(f"role rebindings: changes is not a list: {changes!r}")
+        data.constant("status", "evaluated")
         return cls(
-            scope=str(data["scope"]),
-            rows_with_oid=int(str(data["rows_with_oid"])),
-            rows_without_oid=int(str(data["rows_without_oid"])),
-            changes=[RoleRebinding.from_json(c) for c in changes],
+            scope=data.member("scope", {"complete_prefix", "window", "selective"}),
+            rows_with_oid=data.integer("rows_with_oid", minimum=0),
+            rows_without_oid=data.integer("rows_without_oid", minimum=0),
+            changes=data.array("changes", RoleRebinding.from_json),
         )
 
 
@@ -2455,7 +2556,8 @@ class RoleRebindingsNotEvaluated:
 
     @classmethod
     def from_json(cls, payload: object) -> RoleRebindingsNotEvaluated:
-        _strict("role rebindings", payload, {"status"})
+        data = _strict("role rebindings", payload, {"status"})
+        data.constant("status", "not_evaluated")
         return cls()
 
 
@@ -2464,14 +2566,11 @@ RoleRebindings = RoleRebindingsEvaluated | RoleRebindingsNotEvaluated
 
 def parse_role_rebindings(payload: object) -> RoleRebindings:
     """Parse the role-rebinding finding by its `status` tag."""
-    return _by_status(
-        payload,
-        "a role-rebinding finding",
-        {
-            "evaluated": RoleRebindingsEvaluated.from_json,
-            "not_evaluated": RoleRebindingsNotEvaluated.from_json,
-        },
-    )
+    parsers: dict[str, Callable[[object], RoleRebindings]] = {
+        "evaluated": RoleRebindingsEvaluated.from_json,
+        "not_evaluated": RoleRebindingsNotEvaluated.from_json,
+    }
+    return _by_status(payload, "a role-rebinding finding", parsers)
 
 
 @dataclass(frozen=True)
@@ -2502,15 +2601,13 @@ class VerifyReport:
             {"passes", "replay", "tree", "role_rebindings"},
             optional={"views", "witnesses"},
         )
-        views = data.get("views")
-        witnesses = data.get("witnesses")
         return cls(
-            passes=_passes("verify report", data),
-            replay=parse_verify_outcome(data["replay"]),
-            tree=parse_tree_verification(data["tree"]),
-            role_rebindings=parse_role_rebindings(data["role_rebindings"]),
-            views=None if views is None else parse_views_verification(views),
-            witnesses=None if witnesses is None else WitnessesReport.from_json(witnesses),
+            passes=data.flag("passes"),
+            replay=data.nested("replay", parse_verify_outcome),
+            tree=data.nested("tree", parse_tree_verification),
+            role_rebindings=data.nested("role_rebindings", parse_role_rebindings),
+            views=data.optional_nested("views", parse_views_verification),
+            witnesses=data.optional_nested("witnesses", WitnessesReport.from_json),
         )
 
 
@@ -2531,10 +2628,10 @@ class TreeHeadSignature:
             "tree-head signature", payload, {"key_id", "purpose", "public_key", "signature"}
         )
         return cls(
-            key_id=data["key_id"],
-            purpose=data["purpose"],
-            public_key=data["public_key"],
-            signature=data["signature"],
+            key_id=data.text("key_id"),
+            purpose=data.text("purpose"),
+            public_key=data.text("public_key"),
+            signature=data.text("signature"),
         )
 
 
@@ -2552,21 +2649,11 @@ class Witness:
     @classmethod
     def from_json(cls, payload: object) -> Witness:
         data = _strict("witness", payload, {"scheme", "proof", "submitted_to"})
-        return cls(scheme=data["scheme"], proof=data["proof"], submitted_to=data["submitted_to"])
-
-
-def _parse_witnesses(data: dict[str, object]) -> list[Witness]:
-    raw = data.get("witnesses", [])
-    if not isinstance(raw, list):
-        raise EnvelopeError(f"`witnesses` must be a list, got {raw!r}")
-    return [Witness.from_json(w) for w in raw]
-
-
-def _parse_signatures(data: dict[str, object]) -> list[TreeHeadSignature]:
-    raw = data.get("signatures", [])
-    if not isinstance(raw, list):
-        raise EnvelopeError(f"`signatures` must be a list, got {raw!r}")
-    return [TreeHeadSignature.from_json(s) for s in raw]
+        return cls(
+            scheme=data.member("scheme", {"rfc3161"}),
+            proof=data.text("proof"),
+            submitted_to=data.text("submitted_to"),
+        )
 
 
 @dataclass(frozen=True)
@@ -2591,17 +2678,21 @@ class Checkpoint:
             {"tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
             {"signatures", "witnesses"},
         )
-        return cls(
-            tree_size=data["tree_size"],
-            root_hash=data["root_hash"],
-            prev_checkpoint_hash=data["prev_checkpoint_hash"],
-            checkpoint_hash=data["checkpoint_hash"],
-            signatures=_parse_signatures(data),
-            witnesses=_parse_witnesses(data),
-        )
+        return _checkpoint(data)
 
 
-def _checkpoint_from_flattened(name: str, payload: object) -> Checkpoint:
+def _checkpoint(data: _Fields) -> Checkpoint:
+    return Checkpoint(
+        tree_size=data.integer("tree_size"),
+        root_hash=data.text("root_hash"),
+        prev_checkpoint_hash=data.nullable_text("prev_checkpoint_hash"),
+        checkpoint_hash=data.text("checkpoint_hash"),
+        signatures=data.optional_array("signatures", TreeHeadSignature.from_json),
+        witnesses=data.optional_array("witnesses", Witness.from_json),
+    )
+
+
+def _checkpoint_from_flattened(name: str, status: str, payload: object) -> Checkpoint:
     # The `checkpoint` command flattens the checkpoint fields beside a
     # `status` tag, so the bare-checkpoint parser (which forbids
     # `status`) cannot read it directly.
@@ -2611,14 +2702,8 @@ def _checkpoint_from_flattened(name: str, payload: object) -> Checkpoint:
         {"status", "tree_size", "root_hash", "prev_checkpoint_hash", "checkpoint_hash"},
         {"signatures", "witnesses"},
     )
-    return Checkpoint(
-        tree_size=data["tree_size"],
-        root_hash=data["root_hash"],
-        prev_checkpoint_hash=data["prev_checkpoint_hash"],
-        checkpoint_hash=data["checkpoint_hash"],
-        signatures=_parse_signatures(data),
-        witnesses=_parse_witnesses(data),
-    )
+    data.constant("status", status)
+    return _checkpoint(data)
 
 
 @dataclass(frozen=True)
@@ -2627,7 +2712,7 @@ class CheckpointCreated:
 
     @classmethod
     def from_json(cls, payload: object) -> CheckpointCreated:
-        return cls(checkpoint=_checkpoint_from_flattened("created checkpoint", payload))
+        return cls(checkpoint=_checkpoint_from_flattened("created checkpoint", "created", payload))
 
 
 @dataclass(frozen=True)
@@ -2639,18 +2724,15 @@ class CheckpointNoNewRows:
 
     @classmethod
     def from_json(cls, payload: object) -> CheckpointNoNewRows:
-        return cls(checkpoint=_checkpoint_from_flattened("no-new-rows checkpoint", payload))
+        return cls(checkpoint=_checkpoint_from_flattened("no-new-rows checkpoint", "no_new_rows", payload))
 
 
 def parse_checkpoint_outcome(payload: object) -> CheckpointCreated | CheckpointNoNewRows:
-    return _by_status(
-        payload,
-        "a checkpoint outcome",
-        {
-            "created": CheckpointCreated.from_json,
-            "no_new_rows": CheckpointNoNewRows.from_json,
-        },
-    )
+    parsers: dict[str, Callable[[object], CheckpointCreated | CheckpointNoNewRows]] = {
+        "created": CheckpointCreated.from_json,
+        "no_new_rows": CheckpointNoNewRows.from_json,
+    }
+    return _by_status(payload, "a checkpoint outcome", parsers)
 
 
 @dataclass(frozen=True)
@@ -2683,13 +2765,13 @@ class PrefixPackManifest:
             },
         )
         return cls(
-            pack_format_version=data["pack_format_version"],
-            pack_kind=data["pack_kind"],
-            morpholog_version=data["morpholog_version"],
-            tree_size=data["tree_size"],
-            root_hash=data["root_hash"],
-            checkpoint_hash=data["checkpoint_hash"],
-            checkpoint_count=data["checkpoint_count"],
+            pack_format_version=data.integer("pack_format_version"),
+            pack_kind=data.text("pack_kind"),
+            morpholog_version=data.text("morpholog_version"),
+            tree_size=data.integer("tree_size"),
+            root_hash=data.text("root_hash"),
+            checkpoint_hash=data.text("checkpoint_hash"),
+            checkpoint_count=data.integer("checkpoint_count", minimum=0),
         )
 
 
@@ -2723,25 +2805,16 @@ class WindowPackManifest:
             },
         )
         return cls(
-            pack_format_version=data["pack_format_version"],
-            pack_kind=data["pack_kind"],
-            morpholog_version=data["morpholog_version"],
-            from_tree_size=data["from_tree_size"],
-            to_tree_size=data["to_tree_size"],
-            from_checkpoint_hash=data["from_checkpoint_hash"],
-            to_checkpoint_hash=data["to_checkpoint_hash"],
-            from_root_hash=data["from_root_hash"],
-            to_root_hash=data["to_root_hash"],
+            pack_format_version=data.integer("pack_format_version"),
+            pack_kind=data.text("pack_kind"),
+            morpholog_version=data.text("morpholog_version"),
+            from_tree_size=data.integer("from_tree_size"),
+            to_tree_size=data.integer("to_tree_size"),
+            from_checkpoint_hash=data.text("from_checkpoint_hash"),
+            to_checkpoint_hash=data.text("to_checkpoint_hash"),
+            from_root_hash=data.text("from_root_hash"),
+            to_root_hash=data.text("to_root_hash"),
         )
-
-
-def _str_list(label: str, value: object) -> list[str]:
-    """A list of strings, or an `EnvelopeError`. The schema pins proof and
-    consistency-proof hashes as string arrays; a bare string would otherwise
-    pass `list(...)` as a list of characters."""
-    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
-        raise EnvelopeError(f"`{label}` must be a list of strings, got {value!r}")
-    return list(value)
 
 
 @dataclass(frozen=True)
@@ -2755,7 +2828,7 @@ class RowInclusionProof:
     @classmethod
     def from_json(cls, payload: object) -> RowInclusionProof:
         data = _strict("row inclusion proof", payload, {"leaf_index", "proof"})
-        return cls(leaf_index=data["leaf_index"], proof=_str_list("proof", data["proof"]))
+        return cls(leaf_index=data.integer("leaf_index"), proof=data.texts("proof"))
 
 
 @dataclass(frozen=True)
@@ -2786,12 +2859,12 @@ class WindowEvidencePack:
             },
         )
         return cls(
-            manifest=WindowPackManifest.from_json(data["manifest"]),
-            from_checkpoint=Checkpoint.from_json(data["from_checkpoint"]),
-            to_checkpoint=Checkpoint.from_json(data["to_checkpoint"]),
-            consistency_proof=_str_list("consistency_proof", data["consistency_proof"]),
-            rows=[AuditRow.from_json(r) for r in data["rows"]],
-            inclusion_proofs=[RowInclusionProof.from_json(p) for p in data["inclusion_proofs"]],
+            manifest=data.nested("manifest", WindowPackManifest.from_json),
+            from_checkpoint=data.nested("from_checkpoint", Checkpoint.from_json),
+            to_checkpoint=data.nested("to_checkpoint", Checkpoint.from_json),
+            consistency_proof=data.texts("consistency_proof"),
+            rows=data.array("rows", AuditRow.from_json),
+            inclusion_proofs=data.array("inclusion_proofs", RowInclusionProof.from_json),
         )
 
 
@@ -2806,10 +2879,11 @@ class WindowIntact:
         data = _strict(
             "intact window", payload, {"status", "from_tree_size", "to_tree_size", "rows"}
         )
+        data.constant("status", "intact")
         return cls(
-            from_tree_size=data["from_tree_size"],
-            to_tree_size=data["to_tree_size"],
-            rows=data["rows"],
+            from_tree_size=data.integer("from_tree_size"),
+            to_tree_size=data.integer("to_tree_size"),
+            rows=data.integer("rows"),
         )
 
 
@@ -2826,7 +2900,8 @@ class WindowInconsistentExtension:
         data = _strict(
             "inconsistent-extension window", payload, {"status", "from_tree_size", "to_tree_size"}
         )
-        return cls(from_tree_size=data["from_tree_size"], to_tree_size=data["to_tree_size"])
+        data.constant("status", "inconsistent_extension")
+        return cls(from_tree_size=data.integer("from_tree_size"), to_tree_size=data.integer("to_tree_size"))
 
 
 @dataclass(frozen=True)
@@ -2839,7 +2914,8 @@ class WindowRowNotIncluded:
     @classmethod
     def from_json(cls, payload: object) -> WindowRowNotIncluded:
         data = _strict("row-not-included window", payload, {"status", "leaf_index"})
-        return cls(leaf_index=data["leaf_index"])
+        data.constant("status", "row_not_included")
+        return cls(leaf_index=data.integer("leaf_index"))
 
 
 @dataclass(frozen=True)
@@ -2857,10 +2933,11 @@ class WindowAnchorMismatch:
             payload,
             {"status", "tree_size", "anchor_checkpoint_hash", "pack_checkpoint_hash"},
         )
+        data.constant("status", "anchor_mismatch")
         return cls(
-            tree_size=data["tree_size"],
-            anchor_checkpoint_hash=data["anchor_checkpoint_hash"],
-            pack_checkpoint_hash=data["pack_checkpoint_hash"],
+            tree_size=data.integer("tree_size"),
+            anchor_checkpoint_hash=data.text("anchor_checkpoint_hash"),
+            pack_checkpoint_hash=data.text("pack_checkpoint_hash"),
         )
 
 
@@ -2881,11 +2958,12 @@ class WindowSignatureInvalid:
             payload,
             {"status", "tree_size", "key_id", "purpose", "public_key"},
         )
+        data.constant("status", "signature_invalid")
         return cls(
-            tree_size=data["tree_size"],
-            key_id=data["key_id"],
-            purpose=data["purpose"],
-            public_key=data["public_key"],
+            tree_size=data.integer("tree_size"),
+            key_id=data.text("key_id"),
+            purpose=data.text("purpose"),
+            public_key=data.text("public_key"),
         )
 
 
@@ -2899,7 +2977,8 @@ class WindowSignatureRequired:
     @classmethod
     def from_json(cls, payload: object) -> WindowSignatureRequired:
         data = _strict("signature-required window", payload, {"status", "tree_size"})
-        return cls(tree_size=data["tree_size"])
+        data.constant("status", "signature_required")
+        return cls(tree_size=data.integer("tree_size"))
 
 
 @dataclass(frozen=True)
@@ -2912,7 +2991,8 @@ class WindowMalformed:
     @classmethod
     def from_json(cls, payload: object) -> WindowMalformed:
         data = _strict("malformed window", payload, {"status", "detail"})
-        return cls(detail=data["detail"])
+        data.constant("status", "malformed")
+        return cls(detail=data.text("detail"))
 
 
 WindowVerification = (
@@ -2929,19 +3009,16 @@ WindowVerification = (
 def parse_window_verification(payload: object) -> WindowVerification:
     """The windowed-pack verdict, the output of ``evidence verify`` on a v2
     window pack."""
-    return _by_status(
-        payload,
-        "a window verdict",
-        {
-            "intact": WindowIntact.from_json,
-            "inconsistent_extension": WindowInconsistentExtension.from_json,
-            "row_not_included": WindowRowNotIncluded.from_json,
-            "anchor_mismatch": WindowAnchorMismatch.from_json,
-            "signature_invalid": WindowSignatureInvalid.from_json,
-            "signature_required": WindowSignatureRequired.from_json,
-            "malformed": WindowMalformed.from_json,
-        },
-    )
+    parsers: dict[str, Callable[[object], WindowVerification]] = {
+        "intact": WindowIntact.from_json,
+        "inconsistent_extension": WindowInconsistentExtension.from_json,
+        "row_not_included": WindowRowNotIncluded.from_json,
+        "anchor_mismatch": WindowAnchorMismatch.from_json,
+        "signature_invalid": WindowSignatureInvalid.from_json,
+        "signature_required": WindowSignatureRequired.from_json,
+        "malformed": WindowMalformed.from_json,
+    }
+    return _by_status(payload, "a window verdict", parsers)
 
 
 @dataclass(frozen=True)
@@ -2963,12 +3040,12 @@ class SelectivePackManifest:
             {"pack_format_version", "pack_kind", "morpholog_version", "tree_size", "root_hash", "checkpoint_hash"},
         )
         return cls(
-            pack_format_version=data["pack_format_version"],
-            pack_kind=data["pack_kind"],
-            morpholog_version=data["morpholog_version"],
-            tree_size=data["tree_size"],
-            root_hash=data["root_hash"],
-            checkpoint_hash=data["checkpoint_hash"],
+            pack_format_version=data.integer("pack_format_version"),
+            pack_kind=data.text("pack_kind"),
+            morpholog_version=data.text("morpholog_version"),
+            tree_size=data.integer("tree_size"),
+            root_hash=data.text("root_hash"),
+            checkpoint_hash=data.text("checkpoint_hash"),
         )
 
 
@@ -2992,10 +3069,10 @@ class SelectiveEvidencePack:
             {"manifest", "checkpoint", "rows", "inclusion_proofs"},
         )
         return cls(
-            manifest=SelectivePackManifest.from_json(data["manifest"]),
-            checkpoint=Checkpoint.from_json(data["checkpoint"]),
-            rows=[AuditRow.from_json(r) for r in data["rows"]],
-            inclusion_proofs=[RowInclusionProof.from_json(p) for p in data["inclusion_proofs"]],
+            manifest=data.nested("manifest", SelectivePackManifest.from_json),
+            checkpoint=data.nested("checkpoint", Checkpoint.from_json),
+            rows=data.array("rows", AuditRow.from_json),
+            inclusion_proofs=data.array("inclusion_proofs", RowInclusionProof.from_json),
         )
 
 
@@ -3011,7 +3088,8 @@ class SelectiveIntact:
     @classmethod
     def from_json(cls, payload: object) -> SelectiveIntact:
         data = _strict("intact selective", payload, {"status", "tree_size", "rows_disclosed"})
-        return cls(tree_size=data["tree_size"], rows_disclosed=data["rows_disclosed"])
+        data.constant("status", "intact")
+        return cls(tree_size=data.integer("tree_size"), rows_disclosed=data.integer("rows_disclosed", minimum=1))
 
 
 @dataclass(frozen=True)
@@ -3024,7 +3102,8 @@ class SelectiveRowNotIncluded:
     @classmethod
     def from_json(cls, payload: object) -> SelectiveRowNotIncluded:
         data = _strict("row-not-included selective", payload, {"status", "leaf_index"})
-        return cls(leaf_index=data["leaf_index"])
+        data.constant("status", "row_not_included")
+        return cls(leaf_index=data.integer("leaf_index"))
 
 
 @dataclass(frozen=True)
@@ -3042,10 +3121,11 @@ class SelectiveAnchorMismatch:
             payload,
             {"status", "tree_size", "anchor_checkpoint_hash", "pack_checkpoint_hash"},
         )
+        data.constant("status", "anchor_mismatch")
         return cls(
-            tree_size=data["tree_size"],
-            anchor_checkpoint_hash=data["anchor_checkpoint_hash"],
-            pack_checkpoint_hash=data["pack_checkpoint_hash"],
+            tree_size=data.integer("tree_size"),
+            anchor_checkpoint_hash=data.text("anchor_checkpoint_hash"),
+            pack_checkpoint_hash=data.text("pack_checkpoint_hash"),
         )
 
 
@@ -3066,11 +3146,12 @@ class SelectiveSignatureInvalid:
             payload,
             {"status", "tree_size", "key_id", "purpose", "public_key"},
         )
+        data.constant("status", "signature_invalid")
         return cls(
-            tree_size=data["tree_size"],
-            key_id=data["key_id"],
-            purpose=data["purpose"],
-            public_key=data["public_key"],
+            tree_size=data.integer("tree_size"),
+            key_id=data.text("key_id"),
+            purpose=data.text("purpose"),
+            public_key=data.text("public_key"),
         )
 
 
@@ -3084,7 +3165,8 @@ class SelectiveSignatureRequired:
     @classmethod
     def from_json(cls, payload: object) -> SelectiveSignatureRequired:
         data = _strict("signature-required selective", payload, {"status", "tree_size"})
-        return cls(tree_size=data["tree_size"])
+        data.constant("status", "signature_required")
+        return cls(tree_size=data.integer("tree_size"))
 
 
 @dataclass(frozen=True)
@@ -3097,7 +3179,8 @@ class SelectiveMalformed:
     @classmethod
     def from_json(cls, payload: object) -> SelectiveMalformed:
         data = _strict("malformed selective", payload, {"status", "detail"})
-        return cls(detail=data["detail"])
+        data.constant("status", "malformed")
+        return cls(detail=data.text("detail"))
 
 
 SelectiveVerification = (
@@ -3113,18 +3196,15 @@ SelectiveVerification = (
 def parse_selective_verification(payload: object) -> SelectiveVerification:
     """The selective-pack verdict, the output of ``evidence verify`` on a v3
     selective pack."""
-    return _by_status(
-        payload,
-        "a selective verdict",
-        {
-            "intact": SelectiveIntact.from_json,
-            "row_not_included": SelectiveRowNotIncluded.from_json,
-            "anchor_mismatch": SelectiveAnchorMismatch.from_json,
-            "signature_invalid": SelectiveSignatureInvalid.from_json,
-            "signature_required": SelectiveSignatureRequired.from_json,
-            "malformed": SelectiveMalformed.from_json,
-        },
-    )
+    parsers: dict[str, Callable[[object], SelectiveVerification]] = {
+        "intact": SelectiveIntact.from_json,
+        "row_not_included": SelectiveRowNotIncluded.from_json,
+        "anchor_mismatch": SelectiveAnchorMismatch.from_json,
+        "signature_invalid": SelectiveSignatureInvalid.from_json,
+        "signature_required": SelectiveSignatureRequired.from_json,
+        "malformed": SelectiveMalformed.from_json,
+    }
+    return _by_status(payload, "a selective verdict", parsers)
 
 
 _PackVerdict = TypeVar("_PackVerdict")
@@ -3158,12 +3238,11 @@ class PackVerificationReport(Generic[_PackVerdict]):
             {"passes", "verdict", "role_rebindings"},
             optional={"witnesses"},
         )
-        witnesses = data.get("witnesses")
         return cls(
-            passes=_passes("pack verification report", data),
-            verdict=parse_verdict(data["verdict"]),
-            role_rebindings=parse_role_rebindings(data["role_rebindings"]),
-            witnesses=None if witnesses is None else WitnessesReport.from_json(witnesses),
+            passes=data.flag("passes"),
+            verdict=data.nested("verdict", parse_verdict),
+            role_rebindings=data.nested("role_rebindings", parse_role_rebindings),
+            witnesses=data.optional_nested("witnesses", WitnessesReport.from_json),
         )
 
 
@@ -3182,9 +3261,9 @@ class ReceiptCheckpoint:
             "receipt checkpoint", payload, {"tree_size", "root_hash", "checkpoint_hash"}
         )
         return cls(
-            tree_size=int(str(data["tree_size"])),
-            root_hash=str(data["root_hash"]),
-            checkpoint_hash=str(data["checkpoint_hash"]),
+            tree_size=data.integer("tree_size", minimum=0),
+            root_hash=data.text("root_hash"),
+            checkpoint_hash=data.text("checkpoint_hash"),
         )
 
 
@@ -3198,9 +3277,8 @@ class ReceiptQuery:
     @classmethod
     def from_json(cls, payload: object) -> ReceiptQuery:
         data = _strict("receipt query", payload, {"kind", "predicate"})
-        if data["kind"] != "derived":
-            raise EnvelopeError(f"not a receipt query: {payload!r}")
-        return cls(kind="derived", predicate=str(data["predicate"]))
+        data.constant("kind", "derived")
+        return cls(kind="derived", predicate=data.text("predicate"))
 
 
 @dataclass(frozen=True)
@@ -3231,25 +3309,23 @@ class EvaluationReceipt:
                 "answer",
             },
         )
-        answer = data["answer"]
-        if not isinstance(answer, list):
-            raise EnvelopeError(f"evaluation receipt: answer is not a list: {answer!r}")
         return cls(
-            receipt_format_version=int(str(data["receipt_format_version"])),
-            program_hash=str(data["program_hash"]),
-            semantics_version=int(str(data["semantics_version"])),
-            checkpoint=ReceiptCheckpoint.from_json(data["checkpoint"]),
-            query=ReceiptQuery.from_json(data["query"]),
-            answer=[ClaimInstance.from_json(c) for c in answer],
+            receipt_format_version=data.integer("receipt_format_version", minimum=1),
+            program_hash=data.text("program_hash"),
+            semantics_version=data.integer("semantics_version", minimum=1),
+            checkpoint=data.nested("checkpoint", ReceiptCheckpoint.from_json),
+            query=data.nested("query", ReceiptQuery.from_json),
+            answer=data.array("answer", ClaimInstance.from_json),
         )
 
 
-def _status_only(label: str) -> Callable[[object], str]:
+def _status_only(label: str, status: str) -> Callable[[object], str]:
     """A variant that carries nothing but its status, read as that
     status."""
 
     def parse(payload: object) -> str:
-        return str(_strict(label, payload, {"status"})["status"])
+        _strict(label, payload, {"status"}).constant("status", status)
+        return status
 
     return parse
 
@@ -3263,7 +3339,8 @@ class ReceiptMalformed:
     @classmethod
     def from_json(cls, payload: object) -> ReceiptMalformed:
         data = _strict("malformed receipt", payload, {"status", "detail"})
-        return cls(detail=str(data["detail"]))
+        data.constant("status", "malformed")
+        return cls(detail=data.text("detail"))
 
 
 @dataclass(frozen=True)
@@ -3276,9 +3353,10 @@ class CheckpointDiffers:
     @classmethod
     def from_json(cls, payload: object) -> CheckpointDiffers:
         data = _strict("differing checkpoint", payload, {"status", "receipt", "pack"})
+        data.constant("status", "differs")
         return cls(
-            receipt=ReceiptCheckpoint.from_json(data["receipt"]),
-            pack=ReceiptCheckpoint.from_json(data["pack"]),
+            receipt=data.nested("receipt", ReceiptCheckpoint.from_json),
+            pack=data.nested("pack", ReceiptCheckpoint.from_json),
         )
 
 
@@ -3293,7 +3371,8 @@ class ProgramDiffers:
     @classmethod
     def from_json(cls, payload: object) -> ProgramDiffers:
         data = _strict("differing programme", payload, {"status", "receipt", "supplied"})
-        return cls(receipt=str(data["receipt"]), supplied=str(data["supplied"]))
+        data.constant("status", "differs")
+        return cls(receipt=data.text("receipt"), supplied=data.text("supplied"))
 
 
 @dataclass(frozen=True)
@@ -3307,7 +3386,11 @@ class AnswerDiffers:
     @classmethod
     def from_json(cls, payload: object) -> AnswerDiffers:
         data = _strict("differing answer", payload, {"status", "missing", "unexpected"})
-        return cls(missing=int(str(data["missing"])), unexpected=int(str(data["unexpected"])))
+        data.constant("status", "differs")
+        return cls(
+            missing=data.integer("missing", minimum=0),
+            unexpected=data.integer("unexpected", minimum=0),
+        )
 
 
 @dataclass(frozen=True)
@@ -3319,7 +3402,8 @@ class QueryUnknown:
     @classmethod
     def from_json(cls, payload: object) -> QueryUnknown:
         data = _strict("unknown query", payload, {"status", "predicate"})
-        return cls(predicate=str(data["predicate"]))
+        data.constant("status", "query_unknown")
+        return cls(predicate=data.text("predicate"))
 
 
 @dataclass(frozen=True)
@@ -3331,7 +3415,8 @@ class EvaluationErrored:
     @classmethod
     def from_json(cls, payload: object) -> EvaluationErrored:
         data = _strict("errored evaluation", payload, {"status", "detail"})
-        return cls(detail=str(data["detail"]))
+        data.constant("status", "errored")
+        return cls(detail=data.text("detail"))
 
 
 @dataclass(frozen=True)
@@ -3349,13 +3434,16 @@ class NotReEvaluated:
             payload,
             {"status", "receipt_semantics", "binary_semantics"},
         )
+        data.constant("status", "not_re_evaluated")
         return cls(
-            receipt_semantics=int(str(data["receipt_semantics"])),
-            binary_semantics=int(str(data["binary_semantics"])),
+            receipt_semantics=data.integer("receipt_semantics", minimum=0),
+            binary_semantics=data.integer("binary_semantics", minimum=0),
         )
 
 
-_PACK_VERDICT_PARSERS: dict[str, Callable[[object], object]] = {
+_PACK_VERDICT_PARSERS: dict[
+    str, Callable[[object], TreeVerification | WindowVerification | SelectiveVerification]
+] = {
     "prefix": lambda v: parse_tree_verification(v),
     "window": lambda v: parse_window_verification(v),
     "selective": lambda v: parse_selective_verification(v),
@@ -3400,60 +3488,48 @@ class ReceiptVerificationReport:
                 "evaluation",
             },
         )
-        verdict_kind = data["verdict_kind"]
-        parse_verdict = (
-            _PACK_VERDICT_PARSERS.get(verdict_kind) if isinstance(verdict_kind, str) else None
-        )
-        if parse_verdict is None:
-            raise EnvelopeError(f"not a verdict kind: {verdict_kind!r}")
+        verdict_kind = data.member("verdict_kind", set(_PACK_VERDICT_PARSERS))
+        parse_verdict = _PACK_VERDICT_PARSERS[verdict_kind]
+        receipt_forms: dict[str, Callable[[object], str | ReceiptMalformed]] = {
+            "well_formed": _status_only("well-formed receipt", "well_formed"),
+            "malformed": ReceiptMalformed.from_json,
+        }
+        completeness: dict[str, Callable[[object], str]] = {
+            status: _status_only("completeness", status)
+            for status in ("complete", "not_complete", "not_checked")
+        }
+        checkpoint: dict[str, Callable[[object], str | CheckpointDiffers]] = {
+            "matches": _status_only("matching checkpoint", "matches"),
+            "differs": CheckpointDiffers.from_json,
+            "not_checked": _status_only("unchecked checkpoint", "not_checked"),
+        }
+        program: dict[str, Callable[[object], str | ProgramDiffers]] = {
+            "matches": _status_only("matching programme", "matches"),
+            "differs": ProgramDiffers.from_json,
+            "not_checked": _status_only("unchecked programme", "not_checked"),
+        }
+        evaluation: dict[
+            str,
+            Callable[
+                [object], str | AnswerDiffers | QueryUnknown | EvaluationErrored | NotReEvaluated
+            ],
+        ] = {
+            "reproduced": _status_only("reproduced answer", "reproduced"),
+            "differs": AnswerDiffers.from_json,
+            "query_unknown": QueryUnknown.from_json,
+            "errored": EvaluationErrored.from_json,
+            "not_re_evaluated": NotReEvaluated.from_json,
+            "not_evaluated": _status_only("unevaluated answer", "not_evaluated"),
+        }
         return cls(
-            passes=_passes("receipt verification report", data),
-            receipt=_by_status(
-                data["receipt"],
-                "a receipt form",
-                {
-                    "well_formed": _status_only("well-formed receipt"),
-                    "malformed": ReceiptMalformed.from_json,
-                },
-            ),
+            passes=data.flag("passes"),
+            receipt=_by_status(data.raw("receipt"), "a receipt form", receipt_forms),
             verdict_kind=verdict_kind,
-            evidence=PackVerificationReport.from_json(data["evidence"], parse_verdict),
+            evidence=PackVerificationReport.from_json(data.raw("evidence"), parse_verdict),
             completeness=_by_status(
-                data["completeness"],
-                "a completeness finding",
-                {
-                    status: _status_only("completeness")
-                    for status in ("complete", "not_complete", "not_checked")
-                },
+                data.raw("completeness"), "a completeness finding", completeness
             ),
-            checkpoint=_by_status(
-                data["checkpoint"],
-                "a checkpoint finding",
-                {
-                    "matches": _status_only("matching checkpoint"),
-                    "differs": CheckpointDiffers.from_json,
-                    "not_checked": _status_only("unchecked checkpoint"),
-                },
-            ),
-            program=_by_status(
-                data["program"],
-                "a programme finding",
-                {
-                    "matches": _status_only("matching programme"),
-                    "differs": ProgramDiffers.from_json,
-                    "not_checked": _status_only("unchecked programme"),
-                },
-            ),
-            evaluation=_by_status(
-                data["evaluation"],
-                "an evaluation finding",
-                {
-                    "reproduced": _status_only("reproduced answer"),
-                    "differs": AnswerDiffers.from_json,
-                    "query_unknown": QueryUnknown.from_json,
-                    "errored": EvaluationErrored.from_json,
-                    "not_re_evaluated": NotReEvaluated.from_json,
-                    "not_evaluated": _status_only("unevaluated answer"),
-                },
-            ),
+            checkpoint=_by_status(data.raw("checkpoint"), "a checkpoint finding", checkpoint),
+            program=_by_status(data.raw("program"), "a programme finding", program),
+            evaluation=_by_status(data.raw("evaluation"), "an evaluation finding", evaluation),
         )

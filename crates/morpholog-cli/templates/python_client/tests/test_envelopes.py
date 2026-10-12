@@ -107,6 +107,9 @@ class RunOutcomes(unittest.TestCase):
         self.assertEqual(
             envelopes.NOTHING_RECORDED_CODES, published - {"commit_outcome_unknown"}
         )
+        self.assertEqual(
+            envelopes.SESSION_ERROR_CODES, set(schema["$defs"]["error_code"]["enum"])
+        )
 
     def test_the_developer_intro_recipe_lists_the_same_codes(self):
         # The hand-written recipe in the developer introduction carries its
