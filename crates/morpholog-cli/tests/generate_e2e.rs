@@ -277,6 +277,57 @@ for name, call in calls.items():
     }
 }
 
+/// The generated client reads `inspect guarantees` off the real binary,
+/// and holds what the CLI prints: every invariant, in order, with its
+/// optional clauses absent rather than empty.
+#[test]
+fn the_client_reads_the_guarantees_the_binary_prints() {
+    let out = tempfile::tempdir().unwrap();
+    assert!(generate(&trade_lifecycle(), out.path()).status.success());
+    let probe = r#"
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from morpholog_client import Morpholog
+rows = []
+for g in Morpholog(sys.argv[2], "postgres:///unused", binary=sys.argv[3]).guarantees():
+    row = {"invariant": g.invariant, "rule": g.rule}
+    if g.forbids is not None:
+        row["forbids"] = g.forbids
+    if g.from_clause is not None:
+        row["from"] = g.from_clause
+    rows.append(row)
+print(json.dumps(rows))
+"#;
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            probe,
+            out.path().to_str().unwrap(),
+            trade_lifecycle().to_str().unwrap(),
+            bin(),
+        ])
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .expect("python3 runs the emitted package");
+    let read: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|_| {
+        panic!("{}", String::from_utf8_lossy(&output.stderr));
+    });
+    let printed = Command::new(bin())
+        .args(["inspect", "guarantees"])
+        .arg(trade_lifecycle())
+        .arg("--json")
+        .output()
+        .unwrap();
+    let printed: serde_json::Value = serde_json::from_slice(&printed.stdout).unwrap();
+    assert_eq!(read, printed);
+    let rows = printed.as_array().unwrap();
+    assert!(
+        rows.iter().any(|g| g.get("from").is_some())
+            && rows.iter().any(|g| g.get("from").is_none()),
+        "the programme should carry both a generated and an authored rule: {printed}"
+    );
+}
+
 /// The generated models hold every value to its declared kind: a named
 /// read refuses a wrong kind, a missing field or an unknown one, and a
 /// payload refuses a decoded value of another type, a `datetime` where a

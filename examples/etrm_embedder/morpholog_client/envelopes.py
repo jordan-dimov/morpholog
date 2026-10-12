@@ -1783,6 +1783,30 @@ class HashReport:
 
 
 @dataclass(frozen=True)
+class Guarantee:
+    """One invariant and the state it rules out. ``forbids`` is set for a
+    ``not(...)`` rule, ``from_clause`` for a rule generated from a
+    declaration clause; each is ``None`` otherwise."""
+
+    invariant: str
+    rule: str
+    forbids: str | None = None
+    from_clause: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> Guarantee:
+        data = _strict("guarantee", payload, {"invariant", "rule"}, {"forbids", "from"})
+        return cls(
+            invariant=data.text("invariant"),
+            rule=data.text("rule"),
+            forbids=data.optional_text("forbids"),
+            # `from` is a Python keyword; the wire name maps to
+            # `from_clause` on this side only.
+            from_clause=data.optional_text("from"),
+        )
+
+
+@dataclass(frozen=True)
 class InvariantScore:
     """One invariant replayed over the whole history: whether it held of
     the state before the first transition, and the admitted transitions

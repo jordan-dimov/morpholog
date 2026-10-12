@@ -201,6 +201,10 @@ The report reads the whole database's history by name. On a database several pro
 
 `refusals` is new in this release. A client generated before it refuses a report that carries the field, by design, so regenerate the client; it still reads a report in which nothing was refused.
 
+### `morpholog inspect guarantees --json`
+
+What the programme makes impossible, one entry per invariant, generated ones included, in the programme's order: `invariant`, `rule` (the body as this binary renders it), `forbids` for a `not(...)` rule, and `from` for a rule generated from a declaration clause. A clause that does not apply is absent, never empty. It is a bare array, `guarantee_array` in `schema --result`, and the generated client's `guarantees()` returns it typed, with `from` as `from_clause`. It covers invariants only, so a gate on one transformation is not in it. The rule text is the formatter's, so a page generated from it and committed byte-exact can change when the binary does, with the programme unchanged.
+
 ### `morpholog explain --json`
 
 Stdout is the `Explanation` JSON: the verdict (admissible or rejected), the gate that failed, the directly-missing claims, or the violated invariant. Without `--json` the same structure renders as claim-shaped prose.
@@ -421,7 +425,7 @@ What this document promises:
 
 What is deliberately left open, pending the worked example that forces the shape:
 
-- **`inspect guarantees` and `inspect controls`.** Their output is for a person reading rules; it varies and earns a contract entry when an embedder leans on it. Every other `inspect` shape, the outbox rows and the lease wrappers included, is pinned.
+- **`inspect controls`.** Its output is for a person reading rules; it varies and earns a contract entry when an embedder leans on it. Every other `inspect` shape, the outbox rows and the lease wrappers included, is pinned.
 
 ## The outcome-envelope contract (`schema --result`)
 

@@ -483,6 +483,17 @@ class Morpholog:
             args.extend(["--database-url", self.database_url])
         return envelopes.CheckReport.from_json(self._json(*args))
 
+    def guarantees(self) -> list[envelopes.Guarantee]:
+        """Every invariant of this client's programme file, generated ones
+        included, in the programme's order, each with the state it rules
+        out. Invariants only: a gate on one transformation is not here.
+        The rule text comes from this binary's formatter, so another
+        version may render it differently."""
+        return envelopes.parse_list(
+            self._json("inspect", "guarantees", self.file, "--json"),
+            envelopes.Guarantee.from_json,
+        )
+
     def evaluate(
         self, pack: str | None = None, *, train_until: str | None = None
     ) -> envelopes.ScoreReport:
