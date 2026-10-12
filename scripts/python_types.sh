@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# The generated client's typed seam, checked with a pinned mypy over the
-# committed example package: the one-shot and session clients themselves,
-# and a probe of what an embedder writes against them (a generated
-# request model is accepted, anything else refused). Modules they import
-# are analysed for their types but their own errors are not reported yet.
+# The generated client, checked whole with a pinned mypy: the committed
+# example package and the worked embedder with its type-contract probe
+# (a generated request model is accepted, anything else refused), and a
+# package generated from a programme with every value kind the generator
+# supports. Every module is named, so none is checked only by import.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$root/examples/etrm_embedder"
 
 MYPY_VERSION=1.19.1
 if python3 -m mypy --version 2>/dev/null | grep -q "^mypy $MYPY_VERSION "; then
@@ -17,6 +16,14 @@ else
     echo "mypy $MYPY_VERSION is needed: pip install mypy==$MYPY_VERSION, or install uv" >&2
     exit 1
 fi
-"${mypy[@]}" --python-version 3.12 --follow-imports=silent --warn-unused-ignores \
-    --cache-dir "$root/target/mypy-cache" \
-    morpholog_client/adapter.py morpholog_client/session.py type_contract.py
+check=("${mypy[@]}" --python-version 3.12 --warn-unused-ignores --cache-dir "$root/target/mypy-cache")
+
+every_kind="$root/target/python-types/every_kind"
+rm -rf "$every_kind"
+cargo run -q -p morpholog-cli -- generate python-client \
+    "$root/crates/morpholog-cli/tests/fixtures/every_generated_kind.morph" \
+    --out "$every_kind" >/dev/null
+
+(cd "$root/examples/etrm_embedder" && "${check[@]}" \
+    morpholog_client/*.py etrm_lifecycle.py type_contract.py)
+(cd "$every_kind" && "${check[@]}" morpholog_client/*.py)

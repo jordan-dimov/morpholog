@@ -332,21 +332,19 @@ fn camel(name: &str) -> String {
         .collect()
 }
 
-/// The Python annotation, the parse expression for a named read, and the
+/// The Python annotation, the `values` reader for a named read, and the
 /// docstring qualifier for one supported kind. The match is exhaustive so
 /// a new kind fails to compile here rather than emit a wrong model.
-fn kind_map(kind: &PredicateArgKind) -> (&'static str, String, Option<String>) {
+fn kind_map(kind: &PredicateArgKind) -> (&'static str, &'static str, Option<String>) {
     match kind {
-        PredicateArgKind::Subject => ("str", "raw".to_string(), None),
-        PredicateArgKind::Decimal => ("Decimal", "values.parse_decimal(raw)".to_string(), None),
-        PredicateArgKind::Date => ("date", "values.parse_date(raw)".to_string(), None),
-        PredicateArgKind::Timestamp => {
-            ("datetime", "values.parse_timestamp(raw)".to_string(), None)
-        }
-        PredicateArgKind::Bool => ("bool", "raw".to_string(), None),
+        PredicateArgKind::Subject => ("str", "named_text", None),
+        PredicateArgKind::Decimal => ("Decimal", "named_decimal", None),
+        PredicateArgKind::Date => ("date", "named_date", None),
+        PredicateArgKind::Timestamp => ("datetime", "named_timestamp", None),
+        PredicateArgKind::Bool => ("bool", "named_bool", None),
         PredicateArgKind::Quantity(unit) => (
             "Decimal",
-            "values.parse_decimal(raw)".to_string(),
+            "named_decimal",
             Some(format!(
                 "amount in {unit} (the declaration carries the unit)"
             )),
@@ -438,25 +436,29 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
                 let _ = writeln!(out, "    # {qualifier}");
             }
         }
-        let mut parses = Vec::new();
-        for arg in &predicate.args {
-            let (_, parse, _) = kind_map(&arg.kind);
-            parses.push(format!(
-                "        raw = args[\"{name}\"]\n        {name} = {parse}",
-                name = arg.name,
-                parse = parse,
-            ));
-        }
-        let field_list = predicate
+        let fields = predicate
             .args
             .iter()
-            .map(|a| format!("{name}={name}", name = a.name))
+            .map(|a| format!("\"{}\"", a.name))
             .collect::<Vec<_>>()
-            .join(", ");
+            .join(", ")
+            + if predicate.args.len() == 1 { "," } else { "" };
+        let reads = predicate
+            .args
+            .iter()
+            .map(|a| {
+                let (_, reader, _) = kind_map(&a.kind);
+                format!(
+                    "            {name}=values.{reader}(\"{predicate}.{name}\", args[\"{name}\"]),\n",
+                    name = a.name,
+                    predicate = predicate.name,
+                )
+            })
+            .collect::<String>();
         let _ = write!(
             out,
-            "\n    @classmethod\n    def from_named(cls, args: dict[str, object]) -> {class}:\n{}\n        return cls({field_list})\n",
-            parses.join("\n")
+            "\n    @classmethod\n    def from_named(cls, args: dict[str, object]) -> {class}:\n        values.named_fields(\"{}\", args, ({fields}))\n        return cls(\n{reads}        )\n",
+            predicate.name
         );
     }
 
@@ -473,7 +475,7 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
             .join(", ");
         let _ = write!(
             out,
-            "\n\n@dataclass(frozen=True)\nclass {class}:\n    \"\"\"Payload of an emitted `{}` intent.\"\"\"\n\n    INTENT: ClassVar[str] = \"{}\"\n    _ARG_ORDER: ClassVar[tuple] = ({order}{trailing})\n\n",
+            "\n\n@dataclass(frozen=True)\nclass {class}:\n    \"\"\"Payload of an emitted `{}` intent.\"\"\"\n\n    INTENT: ClassVar[str] = \"{}\"\n    _ARG_ORDER: ClassVar[tuple[str, ...]] = ({order}{trailing})\n\n",
             intent.name,
             intent.name,
             trailing = if intent.args.is_empty() { "" } else { "," },
@@ -485,9 +487,22 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
                 let _ = writeln!(out, "    # {qualifier}");
             }
         }
+        let checks = intent
+            .args
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let (annotation, _, _) = kind_map(&a.kind);
+                format!(
+                    "            {name}=values.decoded(\"{intent}.{name}\", args[{i}], {annotation}),\n",
+                    name = a.name,
+                    intent = intent.name,
+                )
+            })
+            .collect::<String>();
         let _ = write!(
             out,
-            "\n    @classmethod\n    def from_args(cls, args: list[object]) -> {class}:\n        \"\"\"Build from the decoded positional values of an outbox\n        row's `arguments` (the adapter decodes; this names).\"\"\"\n        if len(args) != {arity}:\n            raise ValueError(\n                f\"{intent}: payload arity {{len(args)}} != contract arity {arity} \"\n                f\"(schema/payload skew)\"\n            )\n        return cls(*args)\n",
+            "\n    @classmethod\n    def from_args(cls, args: list[object]) -> {class}:\n        \"\"\"Build from the decoded positional values of an outbox\n        row's `arguments` (the adapter decodes; this names).\"\"\"\n        if len(args) != {arity}:\n            raise values.CodecError(\n                f\"{intent}: payload arity {{len(args)}} != contract arity {arity} \"\n                f\"(schema/payload skew)\"\n            )\n        return cls(\n{checks}        )\n",
             arity = intent.args.len(),
             intent = intent.name,
         );
@@ -501,7 +516,10 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
         .map(|i| format!("    \"{}\": {}Payload,", i.name, camel(i.name.as_str())))
         .collect::<Vec<_>>()
         .join("\n");
-    let _ = write!(out, "\n\nINTENT_PAYLOADS = {{\n{payload_entries}\n}}\n");
+    let _ = write!(
+        out,
+        "\n\nclass IntentPayloadModel(Protocol):\n    \"\"\"What every payload model offers: its intent's name, and a build from\n    an outbox row's decoded arguments.\"\"\"\n\n    INTENT: ClassVar[str]\n\n    @classmethod\n    def from_args(cls, args: list[object]) -> IntentPayloadModel: ...\n\n\nINTENT_PAYLOADS: dict[str, type[IntentPayloadModel]] = {{\n{payload_entries}\n}}\n"
+    );
     // The header last, so each value-kind import appears only when a
     // field has that annotation; an unused import is a lint finding in
     // every embedder's CI. The annotations are the ones `kind_map` emits.
@@ -527,7 +545,7 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
     header.push_str("from __future__ import annotations\n\nfrom dataclasses import dataclass\n");
     header.push_str(time_import);
     header.push_str(decimal_import);
-    header.push_str("from typing import ClassVar\n\nfrom . import values\n");
+    header.push_str("from typing import ClassVar, Protocol\n\nfrom . import values\n");
     let out = header + &out;
     Ok(out)
 }

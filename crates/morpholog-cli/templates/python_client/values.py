@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from typing import TypeVar
 
 # The schema pattern for decimal text, mirrored from the binary's
 # argument codec: optional sign, no leading zeros, optional fraction.
@@ -176,3 +177,59 @@ def decode_tagged(tagged: object) -> object:
         case _:
             raise CodecError(f"unknown value tag {tag!r}")
 
+
+# The generated read and payload models read their fields through these,
+# so a wrong kind names the field it arrived in.
+
+
+def named_fields(owner: str, args: dict[str, object], fields: tuple[str, ...]) -> None:
+    """A named claim carries exactly its declared fields."""
+    if set(args) != set(fields):
+        raise CodecError(
+            f"{owner}: fields {sorted(args)} are not the declared {sorted(fields)}; "
+            f"the programme has changed since this client was generated"
+        )
+
+
+def named_text(where: str, value: object) -> str:
+    if not isinstance(value, str):
+        raise CodecError(f"{where}: expected a string, got {value!r}")
+    return value
+
+
+def named_bool(where: str, value: object) -> bool:
+    if not isinstance(value, bool):
+        raise CodecError(f"{where}: expected a boolean, got {value!r}")
+    return value
+
+
+def named_decimal(where: str, value: object) -> Decimal:
+    try:
+        return parse_decimal(value)
+    except CodecError as exc:
+        raise CodecError(f"{where}: {exc}") from exc
+
+
+def named_date(where: str, value: object) -> date:
+    try:
+        return parse_date(value)
+    except CodecError as exc:
+        raise CodecError(f"{where}: {exc}") from exc
+
+
+def named_timestamp(where: str, value: object) -> datetime:
+    try:
+        return parse_timestamp(value)
+    except CodecError as exc:
+        raise CodecError(f"{where}: {exc}") from exc
+
+
+_K = TypeVar("_K")
+
+
+def decoded(where: str, value: object, kind: type[_K]) -> _K:
+    """A value ``decode_tagged`` produced, held to its declared kind. A
+    ``datetime`` is a ``date`` to Python, but not to the contract."""
+    if not isinstance(value, kind) or (kind is date and isinstance(value, datetime)):
+        raise CodecError(f"{where}: expected {kind.__name__}, got {value!r}")
+    return value

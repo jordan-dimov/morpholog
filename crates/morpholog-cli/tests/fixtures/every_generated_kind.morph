@@ -1,0 +1,12 @@
+-- Every value kind the generated Python client supports, on a claim, an
+-- intent and a request: the programme the client's type gate and its
+-- model tests generate from.
+program every_generated_kind
+
+predicate Fill(order_id: Subject, qty: Decimal, on: Date, at: Timestamp, firm: Bool, cost: Decimal[USD])
+
+intent FillBooked(order_id: Subject, qty: Decimal, on: Date, at: Timestamp, firm: Bool, cost: Decimal[USD])
+
+transformation book(order_id, qty, on, at, firm, cost):
+    admit Fill(order_id, qty, on, at, firm, cost)
+    emit FillBooked(order_id, qty, on, at, firm, cost)
