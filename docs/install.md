@@ -120,7 +120,7 @@ DATABASE_URL=postgres:///morpholog_scratch python3 examples/etrm_embedder/etrm_l
 
 ## Upgrading an existing database
 
-A verifier reads one evidence-pack format, its own. A pack in an older format is refused as `unsupported_pack`; export it again from the upgraded database. That does not change the semantics version an older receipt was decided under: its integrity can verify while the current release reports `not_re_evaluated` for its answer (see [semantics versions](runtime-semantics.md#semantics-versions)).
+A verifier reads one evidence-pack format, its own. A pack in an older format is refused as `unsupported_pack`; export it again from the upgraded database. Keep the old packs, and a binary of the release that wrote them: anyone who holds a pack without the database cannot export it again, and only that release verifies it. That does not change the semantics version an older receipt was decided under: its integrity can verify while the current release reports `not_re_evaluated` for its answer (see [semantics versions](runtime-semantics.md#semantics-versions)).
 
 `morpholog init` provisions a schema; it never migrates one. That is
 deliberate - it means running `init` against a live database cannot alter
@@ -187,9 +187,9 @@ per version, side by side, and point each project at the one its generated
 client was built for:
 
 ```bash
-mkdir -p ~/.local/lib/morpholog/v0.0.14
-tar -xzf "morpholog-v0.0.14-$TARGET.tar.gz" --strip-components=1 -C ~/.local/lib/morpholog/v0.0.14
-export MORPHOLOG_BIN=~/.local/lib/morpholog/v0.0.14/morpholog   # per project
+mkdir -p ~/.local/lib/morpholog/v0.0.15
+tar -xzf "morpholog-v0.0.15-$TARGET.tar.gz" --strip-components=1 -C ~/.local/lib/morpholog/v0.0.15
+export MORPHOLOG_BIN=~/.local/lib/morpholog/v0.0.15/morpholog   # per project
 ```
 
 The generated Python client reads `MORPHOLOG_BIN` before `PATH`, and its
