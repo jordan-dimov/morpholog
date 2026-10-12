@@ -351,6 +351,22 @@ An admitted policy claim whose shape the runtime cannot read stops every durable
 
 **For direct SQL readers** (a projector that prefers the table): the `(committed_at, transition_id)` total order is stable - it is load-bearing in `verify`, coverage replay, and the as-of reconstructions, so it cannot drift; the claim JSONB inside `asserted_claims`/`retracted_claims` is the pinned `claim_instance` shape; the column set may grow additively. Name columns, in reads and writes alike: their order depends on the database's history, since a migration adds a column at the end where a fresh `init` may place it elsewhere, so `SELECT *` positions and positional `INSERT`s differ between databases. An upgraded database also keeps the audit log's required-field checks unvalidated, so its old rows stay lawful. Apart from those two, a test holds a database provisioned by the baseline release, v0.0.14, migrated to the current version, to the same schema as a fresh one, grants and policies included. And `committed_at` is the transaction START instant, not the commit instant - so a direct tail wanting lossless resume must implement the same compute-horizon-first recipe and preconditions described under `--after` above (min `xact_start` over `pg_stat_activity`, snapshot, then page strictly below the horizon), itself - including, on a managed host, the writer-set assertion: filter to the asserted roles' `usesysid` and verify the census in the same statement, as above.
 
+## Personal data outside the record
+
+The record keeps every admitted claim, and an audit row cannot change without breaking verification. So keep personal data out of it.
+
+Give each person an opaque subject, such as a UUID or an id like `p_7f3a91`, and admit claims about that subject only: `Entrant(p_7f3a91, contest_12)`, never a name or an email address. Keep the table that maps the subject to the person in your application's own database, where rows can be deleted. Deleting a person's row removes the application's direct link between the subject and the person. Nothing admitted changes, so the audit log still verifies. One embedder already runs this way: its participants are `p_<hex>` ids, and it deletes one row in its own table.
+
+This is pseudonymisation by design. It does not by itself make the record anonymous, or answer a request to erase someone's data: the application still has to consider other identifying values, copies and exports it holds, and any other reasonable way the subject could be identified again.
+
+What this does not cover:
+
+- **Identifying values in other claims.** A postcode, an account number or a free-text note admitted as a claim stays in the record, and in every evidence pack exported from it. Admit only what the rules need, and keep the rest beside the mapping.
+- **What a proposal carried.** Audit rows keep a committed proposal's arguments, and a refusal's witness and compared values come from them. A name passed as an argument may be kept in the rejection log even when the proposal is refused.
+- **Correlation.** One opaque id still links everything admitted about one person, and a pattern of activity can identify someone without a name. Use a separate subject for each context where linking them is not needed.
+
+Erasing a value from inside the history is not offered.
+
 ## Stability and what is not pinned
 
 What this document promises:
