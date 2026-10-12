@@ -3461,13 +3461,15 @@ mod smoke {
             return;
         };
         // A database this binary cannot serve is refused with the remedy
-        // named; afterwards the test puts the record back.
+        // named. The record goes back before any assertion.
         let pool = connect(&url).await.expect("connect");
-        sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
-            .bind(morpholog_postgres::BASELINE_VERSION)
-            .execute(&pool)
-            .await
-            .expect("remove the baseline's record");
+        let removed: Vec<(i32, String)> = sqlx::query_as(
+            "DELETE FROM morpholog.schema_migrations WHERE version >= $1 RETURNING version, name",
+        )
+        .bind(morpholog_postgres::BASELINE_VERSION)
+        .fetch_all(&pool)
+        .await
+        .expect("wind the record back below the baseline");
         let behind = run_write(ScenarioArgs {
             n: 1,
             accounts: 2,
@@ -3478,6 +3480,18 @@ mod smoke {
             repeat: 1,
         })
         .await;
+        for (version, name) in removed {
+            sqlx::query("INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, $2)")
+                .bind(version)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .expect("put the record back");
+        }
+        morpholog_postgres::require_current_schema(&pool)
+            .await
+            .expect("the test database is current again");
+        drop(pool);
         let message = format!(
             "{:?}",
             behind.expect_err("a database below the baseline is refused")
@@ -3486,17 +3500,6 @@ mod smoke {
             message.contains("migration head") && message.contains("v0.0.14 binary"),
             "the refusal names the remedy: {message}"
         );
-        sqlx::query(
-            "INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, 'deployment_roles')",
-        )
-        .bind(morpholog_postgres::BASELINE_VERSION)
-        .execute(&pool)
-        .await
-        .expect("put the baseline's record back");
-        morpholog_postgres::require_current_schema(&pool)
-            .await
-            .expect("the test database is current again");
-        drop(pool);
 
         run_write(ScenarioArgs {
             n: 1,

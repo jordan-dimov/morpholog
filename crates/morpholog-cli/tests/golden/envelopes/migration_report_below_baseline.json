@@ -1,0 +1,12 @@
+{
+  "applied": [],
+  "below_baseline": {
+    "baseline": 23,
+    "recorded": 19,
+    "upgrade_with": "0.0.14"
+  },
+  "binary_version": 25,
+  "pending": [],
+  "recorded_version_after": 19,
+  "recorded_version_before": 19
+}

@@ -90,7 +90,7 @@ pub use indexes::{
 };
 pub use merkle::{Digest, DigestError};
 pub use migrations::{
-    BASELINE_VERSION, MigrationRef, MigrationReport, apply_migrations, head_version,
+    BASELINE_VERSION, BelowBaseline, MigrationRef, MigrationReport, apply_migrations, head_version,
     migration_status, require_current_schema,
 };
 pub use outbox::{

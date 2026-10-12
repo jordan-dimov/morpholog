@@ -1840,6 +1840,28 @@ class MigrationRef:
 
 
 @dataclass(frozen=True)
+class BelowBaseline:
+    """A database an older release made. A binary of release `upgrade_with`
+    must migrate it before this one can."""
+
+    baseline: int
+    upgrade_with: str
+    # The newest migration the database records; None when it records none.
+    recorded: int | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> BelowBaseline:
+        data = _strict(
+            "below baseline", payload, {"baseline", "upgrade_with"}, {"recorded"}
+        )
+        return cls(
+            baseline=data.integer("baseline"),
+            upgrade_with=data.text("upgrade_with"),
+            recorded=data.optional_integer("recorded"),
+        )
+
+
+@dataclass(frozen=True)
 class MigrationReport:
     """What `migrate` found, and what it did about it."""
 
@@ -1851,13 +1873,17 @@ class MigrationReport:
     # Recorded by the database and unknown to this binary: the database is
     # AHEAD, which is what a rollback to an older binary looks like.
     unknown: list[MigrationRef] = field(default_factory=list)
+    # Set only when the database is older than the baseline. Nothing is
+    # pending then, since this binary can apply nothing to it.
+    below_baseline: BelowBaseline | None = None
 
     @property
     def is_current(self) -> bool:
-        """Nothing outstanding and nothing unrecognised. What a deploy gate
-        asks - and it is false for a database AHEAD of this binary too,
-        which is when a green light would be most dangerous."""
-        return not self.pending and not self.unknown
+        """Nothing outstanding, nothing unrecognised, and not below the
+        baseline. What a deploy gate asks - and it is false for a database
+        AHEAD of this binary too, which is when a green light would be most
+        dangerous."""
+        return not self.pending and not self.unknown and self.below_baseline is None
 
     @classmethod
     def from_json(cls, payload: object) -> MigrationReport:
@@ -1866,7 +1892,7 @@ class MigrationReport:
             payload,
             {"recorded_version_before", "recorded_version_after", "binary_version",
              "applied", "pending"},
-            {"unknown"},
+            {"unknown", "below_baseline"},
         )
         return cls(
             recorded_version_before=data.integer("recorded_version_before"),
@@ -1875,6 +1901,7 @@ class MigrationReport:
             applied=data.array("applied", MigrationRef.from_json),
             pending=data.array("pending", MigrationRef.from_json),
             unknown=data.optional_array("unknown", MigrationRef.from_json),
+            below_baseline=data.optional_nested("below_baseline", BelowBaseline.from_json),
         )
 
 
