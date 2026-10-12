@@ -472,10 +472,15 @@ class Morpholog:
             return checked
         return envelopes.HashReport.from_json(self._json("hash", self.file))
 
-    def check(self, strict: bool = False) -> envelopes.CheckReport:
+    def check(self, strict: bool = False, *, with_database: bool = False) -> envelopes.CheckReport:
+        """Check the programme. With ``with_database``, also check that it
+        fits the claims this client's database holds now: a deploy step,
+        not a guard on every call."""
         args = ["check", "--json", self.file]
         if strict:
             args.append("--strict")
+        if with_database:
+            args.extend(["--database-url", self.database_url])
         return envelopes.CheckReport.from_json(self._json(*args))
 
     # ------------------------------------------------------------

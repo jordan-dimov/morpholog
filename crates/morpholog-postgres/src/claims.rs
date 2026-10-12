@@ -1,6 +1,8 @@
 use crate::error::{PgError, classify_checked_query};
 use crate::propose::{Reads, compute_load_scope};
-use morpholog_core::{ClaimInstance, PredicateName, PreparedProgram, State, TransformationName};
+use morpholog_core::{
+    ClaimInstance, PredicateArgKind, PredicateName, PreparedProgram, State, TransformationName,
+};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -47,6 +49,77 @@ pub async fn read_claims(pool: &PgPool) -> Result<Vec<ClaimRead>, PgError> {
             .map(|r| (r.predicate_name, r.arguments, r.asserted_in))
             .collect(),
     )
+}
+
+/// Current claims of one predicate that share a shape: the kind at each
+/// position, a quantity with its unit, and how many claims have it.
+#[derive(Debug)]
+pub struct StoredShape {
+    pub predicate: PredicateName,
+    pub kinds: Vec<PredicateArgKind>,
+    pub claims: i64,
+}
+
+/// Every distinct shape among the current claims. The grouping runs in
+/// SQL: one scan of the claims table, one row back per shape.
+pub async fn stored_claim_shapes(pool: &PgPool) -> Result<Vec<StoredShape>, PgError> {
+    // Non-null overrides: `predicate_name` is a NOT NULL column, the shape
+    // is coalesced, and `count(*)` is never null.
+    let rows = sqlx::query!(
+        r#"SELECT predicate_name AS "predicate!", shape AS "shape!", count(*) AS "claims!"
+           FROM (
+               SELECT c.predicate_name,
+                      coalesce(
+                          (SELECT jsonb_agg(
+                                      jsonb_build_array(a.e ->> 'type', a.e -> 'value' ->> 'unit')
+                                      ORDER BY a.i)
+                           FROM jsonb_array_elements(c.arguments) WITH ORDINALITY AS a(e, i)),
+                          '[]'::jsonb) AS shape
+               FROM morpholog.claims c
+           ) s
+           GROUP BY predicate_name, shape
+           ORDER BY predicate_name, shape"#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(classify_checked_query)?;
+    rows.into_iter()
+        .map(|r| {
+            let positions: Vec<(Option<String>, Option<String>)> = serde_json::from_value(r.shape)?;
+            let kinds = positions
+                .into_iter()
+                .map(|(tag, unit)| stored_kind(&r.predicate, tag.as_deref(), unit))
+                .collect::<Result<_, _>>()?;
+            Ok(StoredShape {
+                predicate: PredicateName::from(r.predicate),
+                kinds,
+                claims: r.claims,
+            })
+        })
+        .collect()
+}
+
+/// The declarable kind a stored value's tag stands for.
+fn stored_kind(
+    predicate: &str,
+    tag: Option<&str>,
+    unit: Option<String>,
+) -> Result<PredicateArgKind, PgError> {
+    Ok(match (tag, unit) {
+        (Some("subject"), _) => PredicateArgKind::Subject,
+        (Some("decimal"), _) => PredicateArgKind::Decimal,
+        (Some("date"), _) => PredicateArgKind::Date,
+        (Some("timestamp"), _) => PredicateArgKind::Timestamp,
+        (Some("duration"), _) => PredicateArgKind::Duration,
+        (Some("bool"), _) => PredicateArgKind::Bool,
+        (Some("collection"), _) => PredicateArgKind::Collection,
+        (Some("quantity"), Some(unit)) => PredicateArgKind::Quantity(unit.into()),
+        (tag, _) => {
+            return Err(PgError::InvalidState(format!(
+                "a stored `{predicate}` claim holds a value tagged {tag:?}, which is no stored kind"
+            )));
+        }
+    })
 }
 
 /// Decode `(predicate_name, arguments)` rows into `ClaimInstance`s.
@@ -245,4 +318,47 @@ pub async fn load_scoped_state(
     .collect();
     let claims = list_claims_for_predicates(pool, &scope).await?;
     Ok(Some(State::from_claims(claims)))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::stored_kind;
+    use morpholog_core::{EvalValue, PredicateArgKind};
+
+    /// Every value the codec can store reads back as the kind that
+    /// declares it, through the same JSON the shape query reads.
+    #[test]
+    fn every_stored_value_reads_back_as_its_declared_kind() {
+        let values = [
+            EvalValue::Subject("s".into()),
+            EvalValue::Decimal(rust_decimal::Decimal::ONE),
+            EvalValue::Date(jiff::civil::date(2026, 10, 12)),
+            EvalValue::Timestamp(jiff::Timestamp::UNIX_EPOCH),
+            EvalValue::Duration(jiff::SignedDuration::from_hours(6)),
+            EvalValue::Bool(true),
+            EvalValue::Collection(vec![]),
+            EvalValue::Quantity {
+                amount: rust_decimal::Decimal::ONE,
+                unit: "USD".into(),
+            },
+        ];
+        for value in values {
+            let expected = match &value {
+                EvalValue::Subject(_) => PredicateArgKind::Subject,
+                EvalValue::Decimal(_) => PredicateArgKind::Decimal,
+                EvalValue::Date(_) => PredicateArgKind::Date,
+                EvalValue::Timestamp(_) => PredicateArgKind::Timestamp,
+                EvalValue::Duration(_) => PredicateArgKind::Duration,
+                EvalValue::Bool(_) => PredicateArgKind::Bool,
+                EvalValue::Collection(_) => PredicateArgKind::Collection,
+                EvalValue::Quantity { unit, .. } => PredicateArgKind::Quantity(unit.clone()),
+                EvalValue::CalendarSpan(_) => unreachable!("never stored"),
+            };
+            let json = serde_json::to_value(&value).unwrap();
+            let tag = json["type"].as_str();
+            let unit = json["value"]["unit"].as_str().map(str::to_string);
+            assert_eq!(stored_kind("P", tag, unit).unwrap(), expected, "{json}");
+        }
+    }
 }

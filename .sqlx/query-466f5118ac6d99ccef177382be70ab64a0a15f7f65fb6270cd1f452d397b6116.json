@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT predicate_name AS \"predicate!\", shape AS \"shape!\", count(*) AS \"claims!\"\n           FROM (\n               SELECT c.predicate_name,\n                      coalesce(\n                          (SELECT jsonb_agg(\n                                      jsonb_build_array(a.e ->> 'type', a.e -> 'value' ->> 'unit')\n                                      ORDER BY a.i)\n                           FROM jsonb_array_elements(c.arguments) WITH ORDINALITY AS a(e, i)),\n                          '[]'::jsonb) AS shape\n               FROM morpholog.claims c\n           ) s\n           GROUP BY predicate_name, shape\n           ORDER BY predicate_name, shape",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "predicate!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.claims",
+            "name": "predicate_name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "shape!",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "claims!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "466f5118ac6d99ccef177382be70ab64a0a15f7f65fb6270cd1f452d397b6116"
+}

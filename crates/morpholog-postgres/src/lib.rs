@@ -76,8 +76,9 @@ pub use checkpoints::{
     with_anchor_signatures,
 };
 pub use claims::{
-    ClaimFilter, ClaimRead, list_claims, list_claims_for_predicates, list_claims_where,
-    load_scoped_state, read_claims, read_claims_for_predicates, read_claims_where,
+    ClaimFilter, ClaimRead, StoredShape, list_claims, list_claims_for_predicates,
+    list_claims_where, load_scoped_state, read_claims, read_claims_for_predicates,
+    read_claims_where, stored_claim_shapes,
 };
 #[doc(hidden)]
 pub use compiled::fetch_diagnostic;

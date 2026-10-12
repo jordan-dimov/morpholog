@@ -7,9 +7,10 @@ use morpholog_cli::envelopes::{
     CheckDiagnostic, CheckRefusal, CheckReport, CheckedCases, CheckedInvariant,
 };
 use morpholog_core::Bounding;
-use morpholog_core::{PreparedProgram, Program};
-use morpholog_postgres::{CompileReason, InvariantPlan, PgProgram};
-use morpholog_surface::{Diagnostic, Span, parse_program_with_sources};
+use morpholog_core::{PredicateArgKind, PredicateDecl, PredicateName, PreparedProgram, Program};
+use morpholog_postgres::{CompileReason, InvariantPlan, PgProgram, StoredShape};
+use morpholog_surface::{DeclKind, Diagnostic, SourceMap, Span, parse_program_with_sources};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Run the `check` subcommand: collect every finding once, then render
@@ -20,14 +21,15 @@ use std::path::Path;
 ///   places it (its declaration, or the exact statement), a plain
 ///   `error: <message>` line when it has no source anchor. Exit 1.
 /// - Both clean: declaration policy, then lints, then `--against`
-///   collisions. A lint is a hint and the check still passes; under
-///   `--strict` it is an error and the check fails.
+///   collisions, then the claims stored under `--database-url`. A lint
+///   is a hint and the check still passes; under `--strict` it is an
+///   error and the check fails.
 /// - Fully clean: print nothing and exit 0, or a short summary under
 ///   `--verbose`. Findings always go to stderr, so stdout stays silent
 ///   for scripts. `--json` prints every finding to stdout as one object,
 ///   with byte offsets and line/column; exit codes are the same.
-pub(crate) fn run(args: CheckArgs) -> anyhow::Result<()> {
-    let collected = collect(&args)?;
+pub(crate) async fn run(args: CheckArgs) -> anyhow::Result<()> {
+    let collected = collect(&args).await?;
     let routes = match &collected.prepared {
         Some(prepared) if args.json || args.verbose => {
             Some(invariant_routes(&PgProgram::new(prepared.clone()))?)
@@ -150,7 +152,7 @@ struct Collected {
 }
 
 /// Every finding for the file, in the order the layers run.
-fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
+async fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
     let source = std::fs::read_to_string(&args.file)
         .with_context(|| format!("read source file {}", args.file.display()))?;
     let mut out = Collected {
@@ -200,6 +202,7 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
             args.strict,
         ));
     }
+    let mut others = Vec::new();
     for path in &args.against {
         if let Err(e) = refuse_self_comparison(&args.file, path) {
             out.failed = true;
@@ -220,11 +223,164 @@ fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
                         args.strict,
                     ));
                 }
+                for finding in declaration_conflicts(prepared.program(), &other, path, &map) {
+                    out.failed = true;
+                    out.findings.push(finding);
+                }
+                others.push(other);
             }
+        }
+    }
+    if let Some(url) = &args.database_url {
+        let pool = crate::commands::connect(url).await?;
+        let shapes = morpholog_postgres::stored_claim_shapes(&pool).await?;
+        for finding in misfits(prepared.program(), &shapes, &map) {
+            out.failed = true;
+            out.findings.push(finding);
+        }
+        for (predicate, claims) in undeclared(prepared.program(), &others, &shapes) {
+            out.failed |= args.strict;
+            out.findings.push(Finding::lint(
+                format!(
+                    "stored predicate `{predicate}` has {} but is not declared by any \
+                     supplied programme",
+                    plural(claims, "current claim", "current claims")
+                ),
+                None,
+                args.strict,
+            ));
         }
     }
     out.prepared = Some(prepared);
     Ok(out)
+}
+
+/// The predicates `this` and `other` both declare with different fields.
+/// Claims live by name and position in one table, so the two would each
+/// miss the claims the other admits. Field names are free to differ.
+fn declaration_conflicts(
+    this: &Program,
+    other: &Program,
+    path: &Path,
+    map: &SourceMap,
+) -> Vec<Finding> {
+    this.predicates
+        .iter()
+        .filter_map(|decl| {
+            let theirs = other.predicates.iter().find(|d| d.name == decl.name)?;
+            let kinds =
+                |d: &PredicateDecl| d.args.iter().map(|a| a.kind.clone()).collect::<Vec<_>>();
+            if kinds(decl) == kinds(theirs) {
+                return None;
+            }
+            Some(Finding::error(
+                format!(
+                    "against {}: predicate `{}` is declared ({}) here and ({}) there; \
+                     each programme would miss the claims the other admits",
+                    path.display(),
+                    decl.name,
+                    fields(decl),
+                    fields(theirs),
+                ),
+                map.decl_span(DeclKind::Predicate, decl.name.as_str()),
+            ))
+        })
+        .collect()
+}
+
+/// One error per way the stored claims of a declared predicate fail to
+/// fit its declaration: a different number of fields, or a field holding
+/// another kind (a quantity in another unit included). `Any` fits every
+/// kind, and a collection's elements are not looked at.
+fn misfits(program: &Program, shapes: &[StoredShape], map: &SourceMap) -> Vec<Finding> {
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
+    enum Misfit {
+        Arity(usize),
+        Kind(usize, PredicateArgKind),
+    }
+    // Keyed by the declaration's position, so findings follow the source.
+    let mut counted: BTreeMap<(usize, Misfit), i64> = BTreeMap::new();
+    for shape in shapes {
+        let Some(d) = program
+            .predicates
+            .iter()
+            .position(|d| d.name == shape.predicate)
+        else {
+            continue;
+        };
+        let decl = &program.predicates[d];
+        if decl.args.len() != shape.kinds.len() {
+            *counted
+                .entry((d, Misfit::Arity(shape.kinds.len())))
+                .or_default() += shape.claims;
+            continue;
+        }
+        for (i, (arg, stored)) in decl.args.iter().zip(&shape.kinds).enumerate() {
+            if arg.kind != PredicateArgKind::Any && arg.kind != *stored {
+                *counted
+                    .entry((d, Misfit::Kind(i, stored.clone())))
+                    .or_default() += shape.claims;
+            }
+        }
+    }
+    counted
+        .into_iter()
+        .map(|((d, misfit), claims)| {
+            let decl = &program.predicates[d];
+            let name = &decl.name;
+            let message = match misfit {
+                Misfit::Arity(stored) => format!(
+                    "predicate `{name}` declares {} ({}), but {} {stored}; no pattern in \
+                     this programme can match them",
+                    plural(decl.args.len(), "field", "fields"),
+                    fields(decl),
+                    plural(claims, "stored claim has", "stored claims have"),
+                ),
+                Misfit::Kind(i, stored) => format!(
+                    "field `{}` of predicate `{name}` is declared {}, but {} {stored} there",
+                    decl.args[i].name,
+                    decl.args[i].kind,
+                    plural(claims, "stored claim holds", "stored claims hold"),
+                ),
+            };
+            Finding::error(message, map.decl_span(DeclKind::Predicate, name.as_str()))
+        })
+        .collect()
+}
+
+/// Stored predicates no supplied programme declares, with their counts.
+fn undeclared<'a>(
+    program: &Program,
+    others: &[Program],
+    shapes: &'a [StoredShape],
+) -> BTreeMap<&'a PredicateName, i64> {
+    let declared = |name: &PredicateName| {
+        std::iter::once(program)
+            .chain(others)
+            .any(|p| p.predicates.iter().any(|d| &d.name == name))
+    };
+    let mut counted = BTreeMap::new();
+    for shape in shapes.iter().filter(|s| !declared(&s.predicate)) {
+        *counted.entry(&shape.predicate).or_default() += shape.claims;
+    }
+    counted
+}
+
+fn fields(decl: &PredicateDecl) -> String {
+    decl.args
+        .iter()
+        .map(|a| format!("{}: {}", a.name, a.kind))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn plural(n: impl std::fmt::Display, one: &str, many: &str) -> String {
+    let n = n.to_string();
+    if n == "1" {
+        format!("1 {one}")
+    } else {
+        format!("{n} {many}")
+    }
 }
 
 /// Refuse `--against` the file being checked: every write would collide

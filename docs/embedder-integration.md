@@ -257,7 +257,13 @@ The field is present even when the run fails on a promoted lint or an `--against
 
 ### `morpholog check --against`
 
-Two programmes deployed against one database share rows for any same-named predicate, and each escapes the other's gates: a guarded `register` in one file and an ungated registration in another are two write authorities over one persisted predicate. `check a.morph --against b.morph` (repeatable, one flag per deployed programme) reports every predicate `a.morph` admits or retracts that the other also admits or retracts, as a hint anchored on `a.morph`'s writing transformation, naming the other file, its writing transformations, and whether each carries a top-level admission gate (a gate inside a `for` is an iteration condition, not protection). Reads are never findings. Each `--against` file must itself parse and validate (its own lints are not judged here; that is its own `check`); a failure there is an error naming that path, unanchored in `--json` because the report has one `file`. The CI shape is `--strict` against every other programme in the deployment, which turns the hint into a failing exit. The check is static and needs no database; the database, not the files, is the shared thing, and a census of which programme hashes have actually written a predicate waits on a deployment whose historic programme files are no longer all to hand.
+Two programmes deployed against one database share rows for any same-named predicate, and each escapes the other's gates: a guarded `register` in one file and an ungated registration in another are two write authorities over one persisted predicate. `check a.morph --against b.morph` (repeatable, one flag per deployed programme) reports every predicate `a.morph` admits or retracts that the other also admits or retracts, as a hint anchored on `a.morph`'s writing transformation, naming the other file, its writing transformations, and whether each carries a top-level admission gate (a gate inside a `for` is an iteration condition, not protection). Reads are never findings. A predicate both files declare with different fields is an error, anchored on `a.morph`'s declaration: claims are stored by name and position, so each programme would miss the claims the other admits. Field names may differ; the number of fields, and the kind and unit at each position, may not, and `Any` matches only `Any`. Each `--against` file must itself parse and validate (its own lints are not judged here; that is its own `check`); a failure there is an error naming that path, unanchored in `--json` because the report has one `file`. The CI shape is `--strict` against every other programme in the deployment, which turns the hint into a failing exit. These checks are static and need no database, so they catch a conflict before any claim exists. The database, not the files, is the shared thing, and a census of which programme hashes have actually written a predicate waits on a deployment whose historic programme files are no longer all to hand.
+
+### `morpholog check --database-url`
+
+`check a.morph --database-url "$DATABASE_URL"` also checks the programme against the claims the database holds now. For each predicate the file declares, a stored claim with another number of fields, or with a field of another kind (a `Decimal[USD]` where `Decimal` is declared, or another unit), is an error anchored on the declaration, with the number of claims. No rule of the file could match such a claim. A field declared `Any` takes any kind, and a collection's elements are not looked at. A stored predicate that neither the file nor an `--against` file declares is a hint, and an error under `--strict`, so a strict run names every programme the database serves.
+
+It is a deployment preflight, not a guard on running processes. It judges the claims current when it runs: a claim retracted earlier is not judged, a writer can change the claims afterwards, and a process already running is not stopped. The URL is never read from `DATABASE_URL`, so a plain `check` stays offline. The cost is one scan of the claims table, grouped in the database, with one row back per distinct shape. Findings are ordinary `check --json` diagnostics, and the generated client's `check(with_database=True)` passes the client's own URL.
 
 ### `morpholog init`
 
@@ -291,7 +297,7 @@ Selection stops at predicate granularity. Picking one subject's claims out of th
 
 ### A predicate's shape, once there is history
 
-Do not add fields to a predicate that already has admitted claims. A claim keeps the arguments it was admitted with, and changing the declaration rewrites none of them; a `--named` read then reports the arity mismatch above rather than reading old rows under the new shape. Rules say nothing: no pattern of the new shape matches a claim with another number of fields, so a gate looking for one finds none where the ledger holds one. When an `Entry(order, qty, price)` later needs a bid and an ask, declare a sibling `Quote(order, bid, ask)` keyed by the same order and join the two in the rule that needs both. Existing entries stay valid; an entry without a quote is refused only where a rule says one is required. The [syntax sheet](surface-syntax.md) shows the shape as a parsed programme. Optional fields with a default for old rows, and a migration of claims to a new shape, are not supported, and each would need its own language and runtime support before the guide could describe it.
+Do not add fields to a predicate that already has admitted claims. A claim keeps the arguments it was admitted with, and changing the declaration rewrites none of them; a `--named` read then reports the arity mismatch above rather than reading old rows under the new shape. Rules say nothing: no pattern of the new shape matches a claim with another number of fields, so a gate looking for one finds none where the ledger holds one. [`check --database-url`](#morpholog-check---database-url) refuses such a programme before it is deployed. When an `Entry(order, qty, price)` later needs a bid and an ask, declare a sibling `Quote(order, bid, ask)` keyed by the same order and join the two in the rule that needs both. Existing entries stay valid; an entry without a quote is refused only where a rule says one is required. The [syntax sheet](surface-syntax.md) shows the shape as a parsed programme. Optional fields with a default for old rows, and a migration of claims to a new shape, are not supported, and each would need its own language and runtime support before the guide could describe it.
 
 ### `morpholog inspect audit` - the projector's tail
 
@@ -459,7 +465,7 @@ A new programme does not need a new ledger. Each audit row records the hash of t
 
 Before deploying, ask `evaluate`. `morpholog evaluate new.morph` replays the committed log under the new programme's invariants, which are not deployed, and names for each one the past commits it would have refused, where admission would have refused them. With `--pack` it runs offline against an exported pack, which suits CI. It scores invariants only, so a tightened `require` needs its own test. It says what the new invariants would have refused in the history you have, not that the new programme is safe to deploy: a reshaped predicate, for one, is outside what it judges.
 
-What a reshape breaks: see [a predicate's shape, once there is history](#a-predicates-shape-once-there-is-history). The stored claims stay and `audit verify` still passes, but rules of the new shape do not see them.
+What a reshape breaks: see [a predicate's shape, once there is history](#a-predicates-shape-once-there-is-history). The stored claims stay and `audit verify` still passes, but rules of the new shape do not see them. `check --database-url` refuses that programme by name.
 
 Then run the deploy sequence below with the new programme. A new rule can need new indexes, and a generated client pinned to the old model hash refuses the new programme until it is regenerated.
 
@@ -472,11 +478,15 @@ A deployment that forgets a step still answers correctly, only slowly, so nothin
 ```bash
 morpholog init --skip-if-exists                       # day zero only; a no-op afterwards
 morpholog migrate                                     # the schema this binary expects
+morpholog check --strict --database-url "$DATABASE_URL" ledger.morph --against billing.morph
+morpholog check --strict --database-url "$DATABASE_URL" billing.morph --against ledger.morph
 morpholog provision indexes ledger.morph billing.morph --json
 morpholog generate views ledger.morph | psql "$DATABASE_URL"   # if you read state as SQL
 ```
 
 `init` cannot do the third step. It provisions Morpholog's own tables and knows no programme; which indexes are worth building depends on the rules you deploy. A database reset with `init --reset` has no indexes until `provision indexes` runs again.
+
+The two `check` runs are the exception. A programme that does not fit the stored claims answers wrongly, not slowly, so each must fit the claims stored now and agree with the others on every predicate they share.
 
 Because a forgotten step fails nothing, gate on it where a step can be skipped: `migrate --check` exits non-zero while the schema is not current, and `provision indexes --check` (with the same programme files) exits non-zero while anything is left to create or repair, anything is stale, or a conflict needs an operator. Both change nothing and print the same report as the step they check. `migrate --check` reports on any database a Morpholog release made, one below the baseline included. A non-zero exit with no report means the state could not be reported: the connection failed, say, the `morpholog` schema is absent, or the migration record is inconsistent.
 

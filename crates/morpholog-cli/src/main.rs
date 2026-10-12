@@ -1399,11 +1399,21 @@ pub(crate) struct CheckArgs {
     /// predicate this file admits or retracts that the other also
     /// admits or retracts is reported as a hint on this file's
     /// writing transformation: two programmes writing one predicate
-    /// each escape the other's gates. Repeatable; each file must
-    /// itself parse and validate (its own lints are its own `check`'s
-    /// business).
+    /// each escape the other's gates. A predicate both files declare
+    /// with different fields is an error: each would miss the claims
+    /// the other admits. Repeatable; each file must itself parse and
+    /// validate (its own lints are its own `check`'s business).
     #[arg(long, value_name = "FILE")]
     pub(crate) against: Vec<PathBuf>,
+
+    /// Also check the programme against the claims this database holds
+    /// now. A stored claim whose fields do not fit its predicate's
+    /// declaration is an error, since no rule could match it. A stored
+    /// predicate that neither this file nor an `--against` file
+    /// declares is a hint. Never read from `DATABASE_URL`, so a plain
+    /// `check` stays offline.
+    #[arg(long, value_name = "URL")]
+    pub(crate) database_url: Option<String>,
 
     /// Emit every finding - parse errors, validation errors, lints -
     /// as one JSON object on stdout, each with byte offsets and
@@ -1651,7 +1661,7 @@ async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Inspect { what } => commands::inspect::run(what).await,
-        Command::Check(args) => commands::check::run(args),
+        Command::Check(args) => commands::check::run(args).await,
         Command::Propose(args) => commands::propose::run(args).await,
         Command::Transact(args) => commands::transact::run(args).await,
         Command::Session(args) => commands::session::run(args).await,

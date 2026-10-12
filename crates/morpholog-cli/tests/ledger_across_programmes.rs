@@ -3,7 +3,8 @@
 //! programme now is. A new rule judges only the cases a change touches,
 //! and `evaluate` says beforehand which past commits it would have
 //! refused. A predicate whose fields change in place leaves its old claims
-//! where no pattern of the new shape matches them.
+//! where no pattern of the new shape matches them, and `check
+//! --database-url` refuses that programme before it is deployed.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -59,6 +60,24 @@ transformation set_limit(book, cap, currency):
 transformation book_position(book, qty):
     require has_limit: Limit(book, _, _)
     admit Position(book, qty)
+";
+
+const RETIRE: &str = "\
+program ledger
+
+predicate Limit(book: Subject, cap: Decimal)
+
+transformation drop_limit(book, cap):
+    retract Limit(book, cap)
+";
+
+const PRICED: &str = "\
+program priced
+
+predicate Price(item: Subject, amount: Decimal[USD])
+
+transformation set_price(item, amount):
+    admit Price(item, amount)
 ";
 
 fn run(args: &[&str]) -> (bool, Value, String) {
@@ -180,4 +199,86 @@ async fn a_ledger_outlives_a_programme_change_and_a_reshape_hides_old_claims() {
         "Limit",
     ]);
     assert!(!ok && stderr.contains("arity 2"), "{stderr}");
+
+    // Checked against the ledger first, the reshape is refused by name.
+    let (ok, report, stderr) = run(&["check", reshaped.to_str().unwrap(), "--json"]);
+    assert!(!ok, "the reshaped Limit must be refused: {report} {stderr}");
+    let misfit = &report["diagnostics"][0];
+    assert_eq!(misfit["severity"], "error", "{report}");
+    assert_eq!(misfit["line"], 3, "on the declaration of Limit: {report}");
+    assert!(
+        misfit["message"].as_str().unwrap().contains(
+            "predicate `Limit` declares 3 fields (book: Subject, cap: Decimal, \
+             currency: Subject), but 2 stored claims have 2"
+        ),
+        "{report}"
+    );
+    // The programme that only added a predicate fits.
+    let (ok, _, stderr) = run(&["check", "--strict", new_rule.to_str().unwrap()]);
+    assert!(ok && stderr.is_empty(), "{stderr}");
+    // The original fits too. It does not declare `Note`, which is a hint,
+    // an error under --strict, and silent when a supplied file declares it.
+    let (ok, _, stderr) = run(&["check", before.to_str().unwrap()]);
+    assert!(
+        ok && stderr.contains(
+            "hint: stored predicate `Note` has 1 current claim but is not declared by \
+             any supplied programme"
+        ),
+        "{stderr}"
+    );
+    let (ok, _, stderr) = run(&["check", "--strict", before.to_str().unwrap()]);
+    assert!(
+        !ok && stderr.contains("error: stored predicate `Note`"),
+        "{stderr}"
+    );
+    let (ok, _, stderr) = run(&[
+        "check",
+        before.to_str().unwrap(),
+        "--against",
+        new_rule.to_str().unwrap(),
+    ]);
+    assert!(
+        ok && !stderr.contains("`Note`"),
+        "the --against file declares Note: {stderr}"
+    );
+
+    // Only current claims are judged: once the old limits are retracted,
+    // the reshape fits, though the log still holds them.
+    let retire = common::write_fixture("retire", RETIRE);
+    committed(&retire, "drop_limit", r#"{"book": "A", "cap": "10"}"#);
+    committed(&retire, "drop_limit", r#"{"book": "B", "cap": "10"}"#);
+    let (ok, _, stderr) = run(&["check", reshaped.to_str().unwrap()]);
+    assert!(ok && !stderr.contains("`Limit`"), "{stderr}");
+}
+
+/// A field that keeps its arity but changes kind or unit is refused too;
+/// a field declared `Any` takes whatever is stored.
+#[tokio::test(flavor = "current_thread")]
+async fn check_refuses_a_field_whose_stored_kind_or_unit_differs() {
+    reset_db().await;
+    let priced = common::write_fixture("priced", PRICED);
+    committed(&priced, "set_price", r#"{"item": "X", "amount": "5"}"#);
+    committed(&priced, "set_price", r#"{"item": "Y", "amount": "7"}"#);
+
+    let check = |amount: &str| {
+        let file = common::write_fixture(
+            "variant",
+            &format!("program priced\npredicate Price(item: Subject, amount: {amount})\n"),
+        );
+        run(&["check", file.to_str().unwrap()])
+    };
+    for declared in ["Decimal", "Decimal[EUR]"] {
+        let (ok, _, stderr) = check(declared);
+        assert!(
+            !ok && stderr.contains(&format!(
+                "field `amount` of predicate `Price` is declared {declared}, but 2 stored \
+                 claims hold Decimal[USD] there"
+            )),
+            "{stderr}"
+        );
+    }
+    for declared in ["Decimal[USD]", "Any"] {
+        let (ok, _, stderr) = check(declared);
+        assert!(ok && stderr.is_empty(), "{declared}: {stderr}");
+    }
 }
