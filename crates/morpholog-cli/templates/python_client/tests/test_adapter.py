@@ -831,6 +831,16 @@ class AdapterDiscrimination(unittest.TestCase):
             with self.assertRaises(ValueError):
                 call()
 
+    def test_check_reads_the_database_only_when_asked(self):
+        self._mode("record_argv_stdout")
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "check_report.json").read_text()
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with recording_argv() as argv_after:
+            argv = argv_after(lambda: self.client.check(with_database=True))
+            self.assertEqual(argv[argv.index("--database-url") + 1], self.client.database_url)
+            argv = argv_after(lambda: self.client.check(strict=True))
+            self.assertNotIn("--database-url", argv)
+
     def test_writer_roles_repeat_on_the_audit_and_checkpoint_argv(self):
         # The managed-Postgres assertion: one --writer-role pair per
         # role, on every watermark consumer, and absent when not asked.

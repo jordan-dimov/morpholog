@@ -2334,6 +2334,19 @@ impl core::marker::Unpin for morpholog_postgres::StatisticsPlanEntry
 impl core::marker::UnsafeUnpin for morpholog_postgres::StatisticsPlanEntry
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::StatisticsPlanEntry
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::StatisticsPlanEntry
+pub struct morpholog_postgres::StoredShape
+pub morpholog_postgres::StoredShape::claims: i64
+pub morpholog_postgres::StoredShape::kinds: alloc::vec::Vec<morpholog_core::ir::PredicateArgKind>
+pub morpholog_postgres::StoredShape::predicate: morpholog_core::ir::PredicateName
+impl core::fmt::Debug for morpholog_postgres::StoredShape
+pub fn morpholog_postgres::StoredShape::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for morpholog_postgres::StoredShape
+impl core::marker::Send for morpholog_postgres::StoredShape
+impl core::marker::Sync for morpholog_postgres::StoredShape
+impl core::marker::Unpin for morpholog_postgres::StoredShape
+impl core::marker::UnsafeUnpin for morpholog_postgres::StoredShape
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::StoredShape
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::StoredShape
 pub struct morpholog_postgres::TimedProposalOutcome
 pub morpholog_postgres::TimedProposalOutcome::outcome: morpholog_postgres::PgProposalOutcome
 pub morpholog_postgres::TimedProposalOutcome::phases: morpholog_postgres::ProposalPhases
@@ -2656,6 +2669,7 @@ pub fn morpholog_postgres::sign_tree_head(&ed25519_dalek::signing::SigningKey, &
 pub fn morpholog_postgres::signing_key_from_pem(&str) -> core::result::Result<ed25519_dalek::signing::SigningKey, morpholog_postgres::SigningError>
 pub fn morpholog_postgres::signing_key_to_pem(&ed25519_dalek::signing::SigningKey) -> core::result::Result<alloc::string::String, morpholog_postgres::SigningError>
 pub async fn morpholog_postgres::single_connection_pool(&str) -> core::result::Result<sqlx_postgres::PgPool, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::stored_claim_shapes(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::StoredShape>, morpholog_postgres::PgError>
 pub fn morpholog_postgres::streamed_pack_head(&[u8]) -> core::option::Option<morpholog_postgres::PackHead>
 pub fn morpholog_postgres::tree_head_signing_bytes(&str, &str, &morpholog_postgres::TreeHead<'_>) -> alloc::vec::Vec<u8>
 pub fn morpholog_postgres::tree_head_witness_bytes(&morpholog_postgres::TreeHead<'_>) -> alloc::vec::Vec<u8>

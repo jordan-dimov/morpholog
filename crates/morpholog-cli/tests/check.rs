@@ -769,6 +769,81 @@ fn against_a_broken_file_carets_that_file_in_plain_mode() {
     );
 }
 
+/// Two programmes on one ledger that declare a predicate differently each
+/// miss the other's claims. Caught with no database, before any exist.
+#[test]
+fn against_refuses_a_predicate_declared_with_other_fields() {
+    let narrow = temp_morph(
+        "program narrow\npredicate Limit(book: Subject, cap: Decimal)\n\
+         transformation set(book, cap):\n    admit Limit(book, cap)\n",
+    );
+    let wide = temp_morph(
+        "program wide\npredicate Limit(book: Subject, cap: Decimal, currency: Subject)\n\
+         transformation set(book, cap, currency):\n    admit Limit(book, cap, currency)\n",
+    );
+    let out = check_against(narrow.path(), &[wide.path()], &["--json"]);
+    assert!(!out.status.success(), "an error without --strict");
+    let payload: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let conflict = payload["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["message"].as_str().unwrap().contains("declared"))
+        .unwrap_or_else(|| panic!("{payload}"));
+    assert_eq!(conflict["severity"], "error");
+    assert_eq!(conflict["line"], 2, "on the local declaration: {payload}");
+    assert!(
+        conflict["message"].as_str().unwrap().contains(
+            "predicate `Limit` is declared (book: Subject, cap: Decimal) here and \
+             (book: Subject, cap: Decimal, currency: Subject) there"
+        ),
+        "{payload}"
+    );
+
+    // `Any` is a different contract from `Decimal`.
+    let open = temp_morph(
+        "program open\npredicate Limit(book: Subject, cap: Any)\n\
+         transformation peek(book):\n    require Limit(book, _)\n    admit Limit(book, 1)\n",
+    );
+    let out = check_against(narrow.path(), &[open.path()], &[]);
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        !out.status.success() && stderr.contains("(book: Subject, cap: Any) there"),
+        "{stderr}"
+    );
+
+    // Field names do not reach storage, so renaming one is no conflict.
+    let renamed = temp_morph(
+        "program renamed\npredicate Limit(desk: Subject, ceiling: Decimal)\n\
+         predicate Seen(desk: Subject)\n\
+         transformation note(desk):\n    require Limit(desk, _)\n    admit Seen(desk)\n",
+    );
+    let out = check_against(narrow.path(), &[renamed.path()], &["--strict"]);
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// `check` reads the database only when told to by flag: a shell's
+/// `DATABASE_URL` is not enough, even one that leads nowhere.
+#[test]
+fn check_never_connects_through_the_environment() {
+    let secure = temp_morph(SECURE_MORPH);
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(secure.path())
+        .env("DATABASE_URL", "postgres:///no_such_database?port=1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn against_a_reader_is_silent_and_against_itself_is_refused() {
     let secure = temp_morph(SECURE_MORPH);

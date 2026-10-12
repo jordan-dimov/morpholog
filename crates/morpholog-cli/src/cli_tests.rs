@@ -910,8 +910,8 @@ mod exit_path {
     /// A refusing command hands its caller an error, and the caller is
     /// still running to receive it. A `std::process::exit` would take the
     /// test runner down with it.
-    #[test]
-    fn a_refused_command_returns_rather_than_ending_the_process() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_refused_command_returns_rather_than_ending_the_process() {
         // A unique path per run, since tests run in parallel.
         let file = tempfile::Builder::new()
             .suffix(".morph")
@@ -930,7 +930,9 @@ mod exit_path {
         let Command::Check(check) = args.command else {
             panic!("expected check");
         };
-        let err = commands::check::run(check).expect_err("an undeclared predicate is refused");
+        let err = commands::check::run(check)
+            .await
+            .expect_err("an undeclared predicate is refused");
         assert!(
             err.is::<commands::AlreadyReported>(),
             "the diagnostics were printed, so main must add nothing: {err:?}"
