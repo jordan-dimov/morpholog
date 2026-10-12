@@ -3541,9 +3541,9 @@ class ReceiptVerificationReport:
 
 
 def to_json(envelope: object) -> str:
-    """A decoded envelope as JSON text, for printing or storing what the
-    binary said. Values come out plain, a decimal as exact text: this is
-    not the wire shape, and ``from_json`` does not read it back."""
+    """A decoded envelope as JSON text for a person to read, a decimal as
+    exact text. This is not the wire shape: no decoder or verifier reads
+    it back."""
     return json.dumps(envelope, default=_plain)
 
 

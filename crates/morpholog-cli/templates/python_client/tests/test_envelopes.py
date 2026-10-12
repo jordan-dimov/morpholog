@@ -52,6 +52,28 @@ class RunOutcomes(unittest.TestCase):
         refused = envelopes.parse_run_outcome(golden("rejected_gate_with_compared.json"))
         printed = json.loads(envelopes.to_json(refused))
         self.assertEqual(printed["compared"], {"op": "<=", "left": "152000", "right": "97911.8"})
+        nested = envelopes.WitnessBinding.from_json(
+            {
+                "var": "legs",
+                "value": {
+                    "type": "collection",
+                    "value": [
+                        {"type": "quantity", "value": {"amount": "0.10", "unit": "MW"}},
+                        {
+                            "type": "collection",
+                            "value": [
+                                {"type": "date", "value": "2026-06-01"},
+                                {"type": "decimal", "value": "-3.5"},
+                            ],
+                        },
+                    ],
+                },
+            }
+        )
+        self.assertEqual(
+            json.loads(envelopes.to_json(nested)),
+            {"var": "legs", "value": [{"amount": "0.10", "unit": "MW"}, ["2026-06-01", "-3.5"]]},
+        )
 
     def test_a_refusal_carries_the_values_the_rule_was_reading(self):
         # The point of a structured witness: read the offending value,
