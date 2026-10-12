@@ -399,7 +399,7 @@ class Morpholog:
         `SELECT` on the record, so a readiness probe can run as either.
 
         `check` reports and changes nothing. The binary exits non-zero when
-        the database is behind, but this client reads stdout rather than the
+        the database is not current, but this client reads stdout rather than the
         exit code, so you get the report either way - which is the more
         useful outcome, because a raise would throw away what is pending.
         Gate on the report:

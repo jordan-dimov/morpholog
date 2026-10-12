@@ -7,8 +7,8 @@
 
 use anyhow::Context;
 use morpholog_postgres::{
-    PgPool, apply_migrations, deployment_roles, migration_status, other_sessions,
-    single_connection_pool, with_default_user,
+    MigrationReport, PgError, PgPool, apply_migrations, deployment_roles, migration_status,
+    other_sessions, single_connection_pool, with_default_user,
 };
 
 use crate::MigrateArgs;
@@ -21,9 +21,13 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
         .await
         .context("failed to connect to PostgreSQL")?;
 
-    let before = migration_status(&pool)
-        .await
-        .context("reading the database's migration state failed")?;
+    let before = match migration_status(&pool).await {
+        // Only `--check` reports this state; `migrate` has nothing to apply.
+        Err(PgError::SchemaBelowBaseline { recorded, .. }) if args.check => {
+            MigrationReport::below_baseline(recorded)
+        }
+        status => status.context("reading the database's migration state failed")?,
+    };
     if !before.pending.is_empty() {
         warn_about_other_sessions(&pool).await?;
     }

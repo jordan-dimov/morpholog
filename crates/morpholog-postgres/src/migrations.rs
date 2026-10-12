@@ -17,6 +17,9 @@ use sqlx::PgPool;
 /// The migration every database must record: v0.0.14's head.
 pub const BASELINE_VERSION: i32 = 23;
 
+/// The release whose `migrate` brings an older database to the baseline.
+pub(crate) const BASELINE_RELEASE: &str = "0.0.14";
+
 /// Every migration this build carries beyond the baseline, in order, as
 /// `(version, name, sql)`; the SQL is `include_str!` of a file under
 /// `crates/morpholog-postgres/sql/migrations/`.
@@ -67,12 +70,46 @@ pub struct MigrationReport {
     /// migration changed something it depends on.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown: Vec<MigrationRef>,
+    /// Present only when the database is older than the baseline. Nothing
+    /// is pending then, since this binary can apply nothing to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub below_baseline: Option<BelowBaseline>,
+}
+
+/// A database an older release made, which a binary of release
+/// `upgrade_with` must migrate before this one can.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BelowBaseline {
+    pub baseline: i32,
+    /// The newest migration the database records; absent when it records
+    /// none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded: Option<i32>,
+    pub upgrade_with: String,
 }
 
 impl MigrationReport {
-    /// Nothing outstanding and nothing unrecognised. What a deploy gate asks.
+    /// What `migrate --check` reports for [`PgError::SchemaBelowBaseline`].
+    pub fn below_baseline(recorded: Option<i32>) -> Self {
+        Self {
+            recorded_version_before: recorded.unwrap_or(0),
+            recorded_version_after: recorded.unwrap_or(0),
+            binary_version: head_version(),
+            applied: Vec::new(),
+            pending: Vec::new(),
+            unknown: Vec::new(),
+            below_baseline: Some(BelowBaseline {
+                baseline: BASELINE_VERSION,
+                recorded,
+                upgrade_with: BASELINE_RELEASE.to_string(),
+            }),
+        }
+    }
+
+    /// Nothing outstanding, nothing unrecognised, and not below the
+    /// baseline. What a deploy gate asks.
     pub fn is_current(&self) -> bool {
-        self.pending.is_empty() && self.unknown.is_empty()
+        self.pending.is_empty() && self.unknown.is_empty() && self.below_baseline.is_none()
     }
 }
 
@@ -161,8 +198,19 @@ pub async fn migration_status(pool: &PgPool) -> Result<MigrationReport, PgError>
     ensure_schema_present(pool).await?;
     let rows = recorded_versions(pool).await?.unwrap_or_default();
     if !rows.iter().any(|r| r.version == BASELINE_VERSION) {
+        let recorded = rows.iter().map(|r| r.version).max();
+        // No release records a later migration without the baseline, so
+        // no release's `migrate` is the remedy.
+        if let Some(newest) = recorded.filter(|v| *v > BASELINE_VERSION) {
+            return Err(PgError::InvalidState(format!(
+                "this database records migration {newest} but not migration \
+                 {BASELINE_VERSION}, which every release since v{BASELINE_RELEASE} records; \
+                 its migration record was changed outside `morpholog migrate`, and no \
+                 release can be trusted to migrate it"
+            )));
+        }
         return Err(PgError::SchemaBelowBaseline {
-            recorded: rows.iter().map(|r| r.version).max(),
+            recorded,
             baseline: BASELINE_VERSION,
         });
     }
@@ -193,6 +241,7 @@ pub async fn migration_status(pool: &PgPool) -> Result<MigrationReport, PgError>
         applied: Vec::new(),
         pending,
         unknown,
+        below_baseline: None,
     })
 }
 
@@ -245,6 +294,7 @@ pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError>
         applied,
         pending: after.pending,
         unknown: after.unknown,
+        below_baseline: None,
     })
 }
 

@@ -1208,7 +1208,17 @@
         "binary_version": { "type": "integer" },
         "applied": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } },
         "pending": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } },
-        "unknown": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } }
+        "unknown": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } },
+        "below_baseline": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["baseline", "upgrade_with"],
+          "properties": {
+            "baseline": { "type": "integer" },
+            "recorded": { "type": "integer" },
+            "upgrade_with": { "type": "string" }
+          }
+        }
       }
     },
     "roles_move_report": {

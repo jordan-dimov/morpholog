@@ -1242,6 +1242,30 @@ impl core::marker::Unpin for morpholog_postgres::AuditedInvariantCheck
 impl core::marker::UnsafeUnpin for morpholog_postgres::AuditedInvariantCheck
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::AuditedInvariantCheck
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::AuditedInvariantCheck
+pub struct morpholog_postgres::BelowBaseline
+pub morpholog_postgres::BelowBaseline::baseline: i32
+pub morpholog_postgres::BelowBaseline::recorded: core::option::Option<i32>
+pub morpholog_postgres::BelowBaseline::upgrade_with: alloc::string::String
+impl core::clone::Clone for morpholog_postgres::BelowBaseline
+pub fn morpholog_postgres::BelowBaseline::clone(&self) -> morpholog_postgres::BelowBaseline
+impl core::cmp::Eq for morpholog_postgres::BelowBaseline
+pub fn morpholog_postgres::BelowBaseline::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::BelowBaseline
+pub fn morpholog_postgres::BelowBaseline::eq(&self, &morpholog_postgres::BelowBaseline) -> bool
+impl core::fmt::Debug for morpholog_postgres::BelowBaseline
+pub fn morpholog_postgres::BelowBaseline::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::BelowBaseline
+impl serde_core::ser::Serialize for morpholog_postgres::BelowBaseline
+pub fn morpholog_postgres::BelowBaseline::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for morpholog_postgres::BelowBaseline
+pub fn morpholog_postgres::BelowBaseline::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for morpholog_postgres::BelowBaseline
+impl core::marker::Send for morpholog_postgres::BelowBaseline
+impl core::marker::Sync for morpholog_postgres::BelowBaseline
+impl core::marker::Unpin for morpholog_postgres::BelowBaseline
+impl core::marker::UnsafeUnpin for morpholog_postgres::BelowBaseline
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::BelowBaseline
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::BelowBaseline
 pub struct morpholog_postgres::Checkpoint
 pub morpholog_postgres::Checkpoint::checkpoint_hash: morpholog_postgres::Digest
 pub morpholog_postgres::Checkpoint::prev_checkpoint_hash: core::option::Option<morpholog_postgres::Digest>
@@ -1548,12 +1572,14 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::MigrationRe
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::MigrationRef
 pub struct morpholog_postgres::MigrationReport
 pub morpholog_postgres::MigrationReport::applied: alloc::vec::Vec<morpholog_postgres::MigrationRef>
+pub morpholog_postgres::MigrationReport::below_baseline: core::option::Option<morpholog_postgres::BelowBaseline>
 pub morpholog_postgres::MigrationReport::binary_version: i32
 pub morpholog_postgres::MigrationReport::pending: alloc::vec::Vec<morpholog_postgres::MigrationRef>
 pub morpholog_postgres::MigrationReport::recorded_version_after: i32
 pub morpholog_postgres::MigrationReport::recorded_version_before: i32
 pub morpholog_postgres::MigrationReport::unknown: alloc::vec::Vec<morpholog_postgres::MigrationRef>
 impl morpholog_postgres::MigrationReport
+pub fn morpholog_postgres::MigrationReport::below_baseline(core::option::Option<i32>) -> Self
 pub fn morpholog_postgres::MigrationReport::is_current(&self) -> bool
 impl core::clone::Clone for morpholog_postgres::MigrationReport
 pub fn morpholog_postgres::MigrationReport::clone(&self) -> morpholog_postgres::MigrationReport

@@ -322,6 +322,29 @@ class Migrations(unittest.TestCase):
         self.assertEqual(report.pending, [])
         self.assertFalse(report.is_current)
         self.assertEqual([m.version for m in report.unknown], [26])
+        self.assertIsNone(report.below_baseline)
+
+    def test_a_database_below_the_baseline_names_the_release_to_upgrade_with(self):
+        # Nothing pending, since this binary can apply nothing to it, and
+        # not current.
+        report = envelopes.MigrationReport.from_json(
+            golden("migration_report_below_baseline.json")
+        )
+        self.assertEqual(report.pending, [])
+        self.assertFalse(report.is_current)
+        assert report.below_baseline is not None
+        self.assertEqual(report.below_baseline.baseline, 23)
+        self.assertEqual(report.below_baseline.recorded, 19)
+        self.assertEqual(report.below_baseline.upgrade_with, "0.0.14")
+
+    def test_a_database_recording_no_migration_is_below_the_baseline(self):
+        report = envelopes.MigrationReport.from_json(
+            golden("migration_report_below_baseline_no_record.json")
+        )
+        self.assertFalse(report.is_current)
+        assert report.below_baseline is not None
+        self.assertIsNone(report.below_baseline.recorded)
+        self.assertEqual(report.recorded_version_before, 0)
 
 
 class VersionSkew(unittest.TestCase):

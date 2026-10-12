@@ -81,9 +81,10 @@ pub enum PgError {
     /// that brings it forward.
     #[error(
         "this database does not record migration {baseline}, the baseline this binary \
-         starts from ({}); upgrade it with a v0.0.14 binary (`morpholog migrate`) first, \
+         starts from ({}); upgrade it with a v{} binary (`morpholog migrate`) first, \
          then run this one",
-        match recorded { Some(v) => format!("its newest recorded migration is {v}"), None => "it records no migration".to_string() }
+        match recorded { Some(v) => format!("its newest recorded migration is {v}"), None => "it records no migration".to_string() },
+        crate::migrations::BASELINE_RELEASE
     )]
     SchemaBelowBaseline {
         recorded: Option<i32>,

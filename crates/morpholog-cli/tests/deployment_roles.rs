@@ -334,7 +334,9 @@ async fn a_reset_of_a_database_older_than_the_role_record_refuses_first() {
     run(
         &pool,
         "DROP TABLE morpholog.deployment_roles; \
-         DELETE FROM morpholog.schema_migrations WHERE version = 23; \
+         CREATE TABLE public.kept_migrations AS \
+             SELECT * FROM morpholog.schema_migrations WHERE version >= 23; \
+         DELETE FROM morpholog.schema_migrations WHERE version >= 23; \
          CREATE TABLE morpholog.reset_sentinel ()",
     )
     .await;
@@ -363,7 +365,7 @@ async fn a_reset_of_a_database_older_than_the_role_record_refuses_first() {
     // apply, so it is not the advice.
     run(
         &pool,
-        "INSERT INTO morpholog.schema_migrations (version, name) VALUES (23, 'deployment_roles')",
+        "INSERT INTO morpholog.schema_migrations SELECT * FROM public.kept_migrations",
     )
     .await;
     let (status, _, stderr) = cli(&[

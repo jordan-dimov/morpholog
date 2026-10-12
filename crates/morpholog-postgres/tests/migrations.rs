@@ -274,8 +274,10 @@ fn the_baseline_is_the_v0_0_14_heads_version() {
 }
 
 /// A database that does not record the baseline was made by an older
-/// release: refused by name, with the remedy, by every reading, and
-/// before ahead is judged. A record missing altogether says so too.
+/// release: refused by name, with the remedy, by every reading. A record
+/// missing altogether says so too. A record holding later migrations
+/// without the baseline was changed by hand: refused before ahead is
+/// judged, and no release is offered as the remedy.
 #[tokio::test]
 async fn a_database_below_the_baseline_is_refused_by_name() {
     let pool = test_pool().await;
@@ -283,9 +285,12 @@ async fn a_database_below_the_baseline_is_refused_by_name() {
     morpholog_postgres::require_current_schema(&pool)
         .await
         .expect("the test database starts current");
+    let record: Vec<(i32, String)> =
+        sqlx::query_as("SELECT version, name FROM morpholog.schema_migrations")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
 
-    // The baseline's record gone, a newer version present: the baseline
-    // wins over ahead, since nothing can be said about such a database.
     sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
         .bind(BASELINE_VERSION)
         .execute(&pool)
@@ -296,7 +301,23 @@ async fn a_database_below_the_baseline_is_refused_by_name() {
         .execute(&pool)
         .await
         .unwrap();
-    let with_newer = morpholog_postgres::require_current_schema(&pool).await;
+    let hand_changed = [
+        morpholog_postgres::require_current_schema(&pool)
+            .await
+            .map(|()| String::new()),
+        morpholog_postgres::migration_status(&pool)
+            .await
+            .map(|r| format!("{r:?}")),
+        morpholog_postgres::apply_migrations(&pool)
+            .await
+            .map(|r| format!("{r:?}")),
+    ];
+    sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version >= $1")
+        .bind(BASELINE_VERSION)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let with_older = morpholog_postgres::require_current_schema(&pool).await;
     let status = morpholog_postgres::migration_status(&pool).await;
     let applied = morpholog_postgres::apply_migrations(&pool).await;
     sqlx::raw_sql("DELETE FROM morpholog.schema_migrations")
@@ -304,29 +325,41 @@ async fn a_database_below_the_baseline_is_refused_by_name() {
         .await
         .unwrap();
     let with_no_record = morpholog_postgres::require_current_schema(&pool).await;
-    sqlx::raw_sql("DROP TABLE morpholog.schema_migrations")
+    sqlx::raw_sql("ALTER TABLE morpholog.schema_migrations RENAME TO schema_migrations_away")
         .execute(&pool)
         .await
         .unwrap();
     let with_no_table = morpholog_postgres::require_current_schema(&pool).await;
-    // Put the record back before asserting, so a failure cannot leave the
-    // shared database below the baseline.
-    sqlx::raw_sql(
-        "CREATE TABLE morpholog.schema_migrations (
-             version integer PRIMARY KEY, name text NOT NULL,
-             applied_at timestamptz NOT NULL DEFAULT now());
-         INSERT INTO morpholog.schema_migrations (version, name)
-         VALUES (23, 'deployment_roles'), (24, 'gate_witness'), (25, 'rejection_compared')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    // Put the whole record back before asserting, so a failure cannot leave
+    // the shared database below the baseline.
+    sqlx::raw_sql("ALTER TABLE morpholog.schema_migrations_away RENAME TO schema_migrations")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for (version, name) in record {
+        sqlx::query("INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, $2)")
+            .bind(version)
+            .bind(name)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
     morpholog_postgres::require_current_schema(&pool)
         .await
         .expect("current again");
 
+    for outcome in hand_changed {
+        let err = outcome.unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            matches!(err, morpholog_postgres::PgError::InvalidState(_))
+                && rendered.contains(&format!("but not migration {BASELINE_VERSION}"))
+                && !rendered.contains("upgrade"),
+            "{err:?}"
+        );
+    }
     for (case, outcome) in [
-        ("require", with_newer.map(|()| "ok".to_string())),
+        ("require", with_older.map(|()| "ok".to_string())),
         ("status", status.map(|r| format!("{r:?}"))),
         ("apply", applied.map(|r| format!("{r:?}"))),
     ] {
@@ -335,7 +368,7 @@ async fn a_database_below_the_baseline_is_refused_by_name() {
             matches!(
                 &err,
                 morpholog_postgres::PgError::SchemaBelowBaseline { recorded: Some(v), baseline }
-                    if *v == morpholog_postgres::head_version() + 1 && *baseline == BASELINE_VERSION
+                    if *v == BASELINE_VERSION - 1 && *baseline == BASELINE_VERSION
             ),
             "{case}: {err:?}"
         );

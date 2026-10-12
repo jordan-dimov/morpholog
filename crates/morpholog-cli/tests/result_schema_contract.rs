@@ -992,6 +992,7 @@ fn migration_reports_serialize_as_pinned() {
         binary_version: 25,
         applied: Vec::new(),
         unknown: Vec::new(),
+        below_baseline: None,
         pending: vec![
             morpholog_postgres::MigrationRef {
                 version: 24,
@@ -1012,6 +1013,7 @@ fn migration_reports_serialize_as_pinned() {
         applied: behind.pending.clone(),
         pending: Vec::new(),
         unknown: Vec::new(),
+        below_baseline: None,
     };
     assert_golden("migration_report_applied.json", &to_value(&applied));
 
@@ -1027,9 +1029,31 @@ fn migration_reports_serialize_as_pinned() {
             version: 26,
             name: "something_this_build_never_saw".to_string(),
         }],
+        below_baseline: None,
     };
     assert!(!ahead.is_current(), "an ahead database is not current");
     assert_golden("migration_report_ahead.json", &to_value(&ahead));
+
+    // A database an older release made: nothing pending, since this binary
+    // can apply nothing to it, yet not current.
+    let below = morpholog_postgres::MigrationReport {
+        binary_version: 25,
+        ..morpholog_postgres::MigrationReport::below_baseline(Some(19))
+    };
+    assert!(
+        !below.is_current(),
+        "a database below the baseline is not current"
+    );
+    assert_golden("migration_report_below_baseline.json", &to_value(&below));
+    let no_record = morpholog_postgres::MigrationReport {
+        binary_version: 25,
+        ..morpholog_postgres::MigrationReport::below_baseline(None)
+    };
+    assert!(!no_record.is_current());
+    assert_golden(
+        "migration_report_below_baseline_no_record.json",
+        &to_value(&no_record),
+    );
 }
 
 /// `roles move`: the pairs, the logins moved, the members left behind, and
@@ -2791,6 +2815,11 @@ fn every_golden_validates_against_its_defs_entry() {
         ("migration_report_applied.json", "migration_report"),
         ("roles_move_report.json", "roles_move_report"),
         ("migration_report_ahead.json", "migration_report"),
+        ("migration_report_below_baseline.json", "migration_report"),
+        (
+            "migration_report_below_baseline_no_record.json",
+            "migration_report",
+        ),
         ("provision_report_applied.json", "provision_report"),
         ("provision_report_dry_run.json", "provision_report"),
         ("provision_report_conflict.json", "provision_report"),

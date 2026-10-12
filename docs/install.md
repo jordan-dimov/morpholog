@@ -129,7 +129,7 @@ it. Upgrading is its own verb, and it sits in a sequence:
 ```bash
 # 1. stop every process on the database: sessions, workers, the service
 pg_dump "$DATABASE_URL" > before-upgrade.sql                 # 2. back up
-morpholog migrate --check --database-url "$DATABASE_URL"     # 3. ask: exit 1 if behind or ahead
+morpholog migrate --check --database-url "$DATABASE_URL"     # 3. ask: exit 1 unless current
 morpholog migrate --database-url "$DATABASE_URL"             # 4. bring the schema forward
 morpholog audit verify --database-url "$DATABASE_URL"        # 5. the record still agrees with itself
 morpholog provision indexes a.morph b.morph                  # 6. every programme, one call
@@ -155,7 +155,9 @@ schema records that it is.
 
 The baseline is the schema v0.0.14 provisioned. A database from an older
 release does not record it, and every command refuses it by name: bring it
-to v0.0.14 with that release's binary first, then run this one.
+to v0.0.14 with that release's binary first, then run this one. `migrate
+--check` reports it instead, with `below_baseline` naming the release to
+upgrade with.
 
 Rollback is restoring the backup. It is never running an older binary
 against a migrated database: every command that opens the database refuses

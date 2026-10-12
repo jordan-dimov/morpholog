@@ -4830,9 +4830,9 @@ async fn provision_indexes_json_keeps_stdout_for_the_report() {
 
 /// The commands that reach the governed schema refuse a database this
 /// binary cannot serve before their first query, by name in both
-/// directions; `migrate --check` still reports, and `init` still
-/// provisions. Wound back and forward on the shared database, restored
-/// before any assertion.
+/// directions, plain `migrate` included; `migrate --check` still reports,
+/// and `init` still provisions. Wound back and forward on the shared
+/// database, restored before any assertion.
 #[tokio::test(flavor = "current_thread")]
 async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
     reset_db().await;
@@ -4841,12 +4841,14 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
     let head = morpholog_postgres::head_version();
     let args_named = r#"{"entry_id":"e1","posting_date":"2026-04-15","period":"q1_2026","debit_account":"a","credit_account":"b","amount":"100"}"#;
 
-    // Below the baseline: its record missing.
-    sqlx::query("DELETE FROM morpholog.schema_migrations WHERE version = $1")
-        .bind(morpholog_postgres::BASELINE_VERSION)
-        .execute(&pool)
-        .await
-        .unwrap();
+    // Below the baseline: the record as an older release left it.
+    let removed: Vec<(i32, String)> = sqlx::query_as(
+        "DELETE FROM morpholog.schema_migrations WHERE version >= $1 RETURNING version, name",
+    )
+    .bind(morpholog_postgres::BASELINE_VERSION)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
     let read = run_cli(&["inspect", "claims"]);
     let write = run_cli(&[
         "propose",
@@ -4858,6 +4860,7 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
         args_named,
     ]);
     let check = run_cli(&["migrate", "--check"]);
+    let apply = run_cli(&["migrate"]);
     let session = Command::new(common::bin())
         .args(["session", &ledger])
         .env("DATABASE_URL", database_url())
@@ -4865,25 +4868,34 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
         .output()
         .unwrap();
     let init = run_cli(&["init", "--skip-if-exists"]);
+    let all: Vec<(i32, String)> =
+        sqlx::query_as("DELETE FROM morpholog.schema_migrations RETURNING version, name")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let check_no_record = run_cli(&["migrate", "--check"]);
     // The record back, so the shared database is current again.
-    sqlx::query(
-        "INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, 'deployment_roles')",
-    )
-    .bind(morpholog_postgres::BASELINE_VERSION)
-    .execute(&pool)
-    .await
-    .unwrap();
+    for (version, name) in all.into_iter().chain(removed) {
+        sqlx::query("INSERT INTO morpholog.schema_migrations (version, name) VALUES ($1, $2)")
+            .bind(version)
+            .bind(name)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
     morpholog_postgres::require_current_schema(&pool)
         .await
         .unwrap();
 
-    for (what, (status, stdout, stderr)) in [("read", &read), ("write", &write)] {
+    for (what, (status, stdout, stderr)) in
+        [("read", &read), ("write", &write), ("migrate", &apply)]
+    {
         assert_eq!(status.code(), Some(1), "{what}: {stderr}");
         assert!(
             stderr.contains("does not record migration") && stderr.contains("v0.0.14 binary"),
             "{what} names the baseline and the remedy: {stderr}"
         );
-        if what == "read" {
+        if what != "write" {
             assert!(stdout.is_empty(), "{what}: {stdout}");
         }
     }
@@ -4898,16 +4910,27 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
         String::from_utf8_lossy(&session.stdout)
     );
     assert!(String::from_utf8_lossy(&session.stderr).contains("v0.0.14 binary"));
-    assert!(
-        !check.0.success(),
-        "check refuses a database below the baseline"
-    );
-    assert!(
-        check.2.contains("v0.0.14 binary") && check.1.is_empty(),
-        "nothing to report about such a database: {} / {}",
-        check.1,
-        check.2
-    );
+    // `--check` reports the state, and fails like a database behind.
+    for ((status, stdout, stderr), recorded) in [
+        (
+            &check,
+            Value::from(morpholog_postgres::BASELINE_VERSION - 1),
+        ),
+        (&check_no_record, Value::Null),
+    ] {
+        assert_eq!(status.code(), Some(1), "{stderr}");
+        let report: Value =
+            serde_json::from_str(stdout).unwrap_or_else(|e| panic!("{e}: {stdout} / {stderr}"));
+        let below = &report["below_baseline"];
+        assert_eq!(
+            below["baseline"],
+            morpholog_postgres::BASELINE_VERSION,
+            "{stdout}"
+        );
+        assert_eq!(below["recorded"], recorded, "{stdout}");
+        assert_eq!(below["upgrade_with"], "0.0.14", "{stdout}");
+        assert_eq!(report["pending"], serde_json::json!([]), "{stdout}");
+    }
     assert!(
         init.0.success(),
         "init never migrates and still provisions: {}",
@@ -4950,6 +4973,38 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
     // Current again: the same read runs.
     let (status, _, stderr) = run_cli(&["inspect", "claims"]);
     assert!(status.success(), "{stderr}");
+}
+
+/// `migrate --check` reports every schema state it recognises. A database
+/// with no `morpholog` schema is not one: it fails with no report.
+#[tokio::test(flavor = "current_thread")]
+async fn migrate_check_reports_nothing_about_an_unprovisioned_database() {
+    let base = morpholog_postgres::with_default_user(&database_url());
+    let name = format!("morpholog_cli_unprovisioned_{}", std::process::id());
+    let admin = PgPool::connect(&common::with_database(&base, "postgres"))
+        .await
+        .unwrap();
+    let drop = format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)");
+    for sql in [drop.clone(), format!("CREATE DATABASE {name}")] {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+            .execute(&admin)
+            .await
+            .unwrap();
+    }
+    let output = Command::new(common::bin())
+        .args(["migrate", "--check", "--database-url"])
+        .arg(common::with_database(&base, &name))
+        .output()
+        .unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(drop))
+        .execute(&admin)
+        .await
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(output.stdout.is_empty(), "{stderr}");
+    assert!(stderr.contains("no `morpholog` schema"), "{stderr}");
 }
 
 /// The hash `morpholog hash` reports for a programme file.

@@ -86,6 +86,11 @@ CASES = {
     "migration_report_behind.json": ("migration_report", E.MigrationReport.from_json),
     "migration_report_applied.json": ("migration_report", E.MigrationReport.from_json),
     "migration_report_ahead.json": ("migration_report", E.MigrationReport.from_json),
+    "migration_report_below_baseline.json": ("migration_report", E.MigrationReport.from_json),
+    "migration_report_below_baseline_no_record.json": (
+        "migration_report",
+        E.MigrationReport.from_json,
+    ),
     "provision_report_applied.json": ("provision_report", E.ProvisionReport.from_json),
     "provision_report_dry_run.json": ("provision_report", E.ProvisionReport.from_json),
     "provision_report_conflict.json": ("provision_report", E.ProvisionReport.from_json),
