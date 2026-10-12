@@ -1782,6 +1782,152 @@ class HashReport:
         )
 
 
+@dataclass(frozen=True)
+class InvariantScore:
+    """One invariant replayed over the whole history: whether it held of
+    the state before the first transition, and the admitted transitions
+    it would have refused."""
+
+    invariant: str
+    version: int
+    initially_holds: bool
+    would_refuse: int
+    refused_transitions: list[str]
+
+    @classmethod
+    def from_json(cls, payload: object) -> InvariantScore:
+        data = _strict(
+            "invariant score",
+            payload,
+            {"invariant", "version", "initially_holds", "would_refuse", "refused_transitions"},
+        )
+        return cls(
+            invariant=data.text("invariant"),
+            version=data.integer("version", minimum=1),
+            initially_holds=data.flag("initially_holds"),
+            would_refuse=data.integer("would_refuse", minimum=0),
+            refused_transitions=data.texts("refused_transitions"),
+        )
+
+
+@dataclass(frozen=True)
+class SliceInvariantScore:
+    """One invariant within one slice of a split replay."""
+
+    invariant: str
+    version: int
+    would_refuse: int
+    refused_transitions: list[str]
+
+    @classmethod
+    def from_json(cls, payload: object) -> SliceInvariantScore:
+        data = _strict(
+            "slice invariant score",
+            payload,
+            {"invariant", "version", "would_refuse", "refused_transitions"},
+        )
+        return cls(
+            invariant=data.text("invariant"),
+            version=data.integer("version", minimum=1),
+            would_refuse=data.integer("would_refuse", minimum=0),
+            refused_transitions=data.texts("refused_transitions"),
+        )
+
+
+@dataclass(frozen=True)
+class SliceScore:
+    transitions_replayed: int
+    invariants: list[SliceInvariantScore]
+
+    @classmethod
+    def from_json(cls, payload: object) -> SliceScore:
+        data = _strict("slice score", payload, {"transitions_replayed", "invariants"})
+        return cls(
+            transitions_replayed=data.integer("transitions_replayed", minimum=0),
+            invariants=data.array("invariants", SliceInvariantScore.from_json),
+        )
+
+
+@dataclass(frozen=True)
+class SplitBoundary:
+    """The ``train_until`` asked for, and the last transition at or before
+    it, which ends the training slice."""
+
+    requested: str
+    resolved_transition_id: str
+    resolved_committed_at: datetime
+
+    @classmethod
+    def from_json(cls, payload: object) -> SplitBoundary:
+        data = _strict(
+            "split boundary",
+            payload,
+            {"requested", "resolved_transition_id", "resolved_committed_at"},
+        )
+        return cls(
+            requested=data.text("requested"),
+            resolved_transition_id=data.text("resolved_transition_id"),
+            resolved_committed_at=data.timestamp("resolved_committed_at"),
+        )
+
+
+@dataclass(frozen=True)
+class ScoreSplit:
+    boundary: SplitBoundary
+    train: SliceScore
+    test: SliceScore
+
+    @classmethod
+    def from_json(cls, payload: object) -> ScoreSplit:
+        data = _strict("score split", payload, {"boundary", "train", "test"})
+        return cls(
+            boundary=data.nested("boundary", SplitBoundary.from_json),
+            train=data.nested("train", SliceScore.from_json),
+            test=data.nested("test", SliceScore.from_json),
+        )
+
+
+@dataclass(frozen=True)
+class ScoreReport:
+    """What the programme's invariants would have refused in a history the
+    ledger already admitted. Evidence for a deployment decision, not the
+    decision: gates are not scored. ``split`` is ``None`` unless the
+    replay was split with ``train_until``."""
+
+    score_format_version: int
+    semantics: str
+    program: str
+    program_hash: str
+    transitions_replayed: int
+    invariants: list[InvariantScore]
+    split: ScoreSplit | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> ScoreReport:
+        data = _strict(
+            "score report",
+            payload,
+            {
+                "score_format_version",
+                "semantics",
+                "program",
+                "program_hash",
+                "transitions_replayed",
+                "invariants",
+            },
+            {"split"},
+        )
+        return cls(
+            score_format_version=data.integer("score_format_version", minimum=1),
+            semantics=data.text("semantics"),
+            program=data.text("program"),
+            program_hash=_hash(data, "program_hash"),
+            transitions_replayed=data.integer("transitions_replayed", minimum=0),
+            invariants=data.array("invariants", InvariantScore.from_json),
+            split=data.optional_nested("split", ScoreSplit.from_json),
+        )
+
+
 def version_skew(payload: object, expected: str) -> str | None:
     """The version the binary states in its envelope against the one this
     client was generated for, or ``None`` when they agree or the envelope

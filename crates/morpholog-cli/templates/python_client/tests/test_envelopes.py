@@ -643,6 +643,34 @@ class Reports(unittest.TestCase):
         self.assertIs(named.args["flagged"], False)
 
 
+class Score(unittest.TestCase):
+    def test_a_score_report_reads_whole_and_has_no_split_unless_asked(self):
+        report = envelopes.ScoreReport.from_json(golden("score_report.json"))
+        self.assertEqual(report.score_format_version, 5)
+        self.assertEqual(report.transitions_replayed, 1)
+        self.assertIsNone(report.split, "absent, not an empty split")
+        scored = report.invariants[0]
+        self.assertEqual(scored.invariant, "no_flagged")
+        self.assertIs(scored.initially_holds, True)
+        self.assertEqual(scored.would_refuse, 1)
+        self.assertEqual(scored.refused_transitions, ["01900000-0000-7000-8000-000000000001"])
+
+    def test_a_split_report_carries_its_boundary_and_both_slices(self):
+        report = envelopes.ScoreReport.from_json(golden("score_report_split.json"))
+        split = report.split
+        assert split is not None
+        self.assertEqual(split.boundary.requested, "2026-06-01T12:00:00Z")
+        self.assertEqual(split.boundary.resolved_committed_at.year, 2026)
+        self.assertEqual(split.train.invariants[0].would_refuse, 1)
+        self.assertEqual(split.test.invariants[0].refused_transitions, [])
+
+    def test_a_score_report_refuses_a_field_it_does_not_know(self):
+        payload = golden("score_report.json")
+        payload["safe_to_deploy"] = True
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "safe_to_deploy"):
+            envelopes.ScoreReport.from_json(payload)
+
+
 class AuditTail(unittest.TestCase):
     def test_the_audit_row_round_trips_the_golden(self):
         row = envelopes.AuditRow.from_json(golden("audit_row.json"))

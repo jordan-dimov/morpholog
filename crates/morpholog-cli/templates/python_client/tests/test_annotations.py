@@ -53,8 +53,6 @@ NOT_A_SINGLE_ENVELOPE = {
     "outbox_claim.json": "wrapped as {'row': ...}",
     "outbox_claim_null.json": "wrapped as {'row': null}",
     "batch_score.json": "a score report keyed by case, not one envelope",
-    "score_report.json": "a score report, read through its own accessor",
-    "score_report_split.json": "a split score report",
     "pack_verification_report.json": (
         "a pack verdict of any kind beside its witnesses; parsed with the kind's own verdict parser"
     ),

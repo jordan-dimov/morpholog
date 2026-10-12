@@ -483,6 +483,25 @@ class Morpholog:
             args.extend(["--database-url", self.database_url])
         return envelopes.CheckReport.from_json(self._json(*args))
 
+    def evaluate(
+        self, pack: str | None = None, *, train_until: str | None = None
+    ) -> envelopes.ScoreReport:
+        """Replay a history the ledger admitted under this client's
+        programme file's invariants, and report the transitions each would
+        have refused: from ``pack``, an evidence pack read offline, or else
+        from this client's database. ``train_until`` (a transition id or an
+        RFC 3339 timestamp) splits the replay in two. Gates are not scored.
+        A programme that cannot be scored, one using ``pre(...)`` for one,
+        raises ``MorphologError``: not evaluated, which is not the same as
+        refused."""
+        args = ["evaluate", self.file]
+        if pack is None:
+            args.extend(["--database-url", self.database_url])
+        else:
+            args.extend(["--pack", str(pack)])
+        args.extend(self._opt("--train-until", train_until))
+        return envelopes.ScoreReport.from_json(self._json(*args))
+
     # ------------------------------------------------------------
     # The commit path.
     # ------------------------------------------------------------
