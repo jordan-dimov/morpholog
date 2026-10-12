@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from _support import GOLDEN_DIR, recording_argv
+from _support import GOLDEN_DIR, golden, recording_argv
 
 from python_client import envelopes
 from python_client.adapter import (
@@ -623,6 +623,17 @@ class AdapterDiscrimination(unittest.TestCase):
         receipts = self.client.propose_batch([row])
         self.assertEqual(receipts[0].outcome.code, "commit_outcome_unknown")
 
+    def test_a_batch_rejection_carries_the_comparison_it_blamed(self):
+        self._mode("stdout_then_exit")
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        row = {"transformation": "t", "actor": "a", "args_named": {}}
+        os.environ["STUB_STDOUT"] = "".join(
+            json.dumps({**golden("batch_rejected_receipt_with_compared.json"), "row": n}) + "\n"
+            for n in (1, 2)
+        )
+        receipts = self.client.propose_batch([row, row])
+        self.assertEqual(receipts[1].outcome.compared.op, "<=")
+
     def test_a_batch_receipt_with_a_wrong_value_keeps_the_receipts_before_it(self):
         # A receipt with the right keys and a wrong value is as untrusted
         # as a missing one: the receipts before it stand, and its row and
@@ -885,6 +896,8 @@ class AdapterDiscrimination(unittest.TestCase):
         rejected = self.client.transact(acts)
         self.assertIsInstance(rejected, envelopes.AtomicRejected)
         self.assertEqual(rejected.act, 2)
+        # A refusal that names its comparison is still a decided refusal.
+        self.assertEqual(rejected.compared.op, "<=")
 
         # The error object is raised with its code; only a serialization
         # failure is retriable, and the predicate says so.

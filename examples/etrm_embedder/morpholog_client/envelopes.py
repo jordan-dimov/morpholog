@@ -483,13 +483,14 @@ class AtomicCommitted:
 class AtomicRejected:
     """The first refused act, by 1-based position, and nothing written:
     the acts before it were staged and rolled back, and get no receipt.
-    ``rule`` and ``witness`` are as on ``Rejected``; the witness may
+    ``rule``, ``witness`` and ``compared`` are as on ``Rejected``; they may
     name values the rolled-back prefix staged."""
 
     act: int
     reason: str
     rule: str | None = None
     witness: list[WitnessBinding] = field(default_factory=list)
+    compared: Compared | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AtomicRejected:
@@ -497,7 +498,7 @@ class AtomicRejected:
             "atomic rejected",
             payload,
             {"status", "act", "reason"},
-            optional={"rule", "witness", "row"},
+            optional={"rule", "witness", "compared", "row"},
         )
         data.constant("status", "rejected")
         data.optional_integer("row", minimum=1)
@@ -506,6 +507,7 @@ class AtomicRejected:
             reason=data.text("reason"),
             rule=data.optional_text("rule"),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
+            compared=data.optional_nested("compared", Compared.from_json),
         )
 
 

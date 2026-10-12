@@ -1,5 +1,16 @@
 {
   "act": 2,
+  "compared": {
+    "left": {
+      "type": "decimal",
+      "value": "152000"
+    },
+    "op": "<=",
+    "right": {
+      "type": "decimal",
+      "value": "97911.8"
+    }
+  },
   "reason": "invariant `balance_unique_by_account` violated",
   "rule": "balance_unique_by_account",
   "status": "rejected",

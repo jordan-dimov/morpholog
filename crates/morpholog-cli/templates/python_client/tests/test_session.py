@@ -12,6 +12,7 @@ import tempfile
 import time
 import threading
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 from _support import GOLDEN_DIR
@@ -123,7 +124,8 @@ for request in sys.stdin:
     elif mode == "commit_outcome_unknown_receipt":
         say(json.dumps({"code": "commit_outcome_unknown", "error": "the commit outcome is unknown - read the record before re-submitting: connection reset by peer", "row": n, "status": "error"}))
     elif mode == "transact_rejected":
-        say(json.dumps({"act": 1, "reason": "require `Account(account)` failed", "row": n, "status": "rejected"}))
+        compared = {"op": "<=", "left": {"type": "decimal", "value": "2"}, "right": {"type": "decimal", "value": "1"}}
+        say(json.dumps({"act": 1, "compared": compared, "reason": "require `Account(account)` failed", "row": n, "status": "rejected"}))
     elif mode == "empty_batch_receipt":
         say(json.dumps({"code": "invalid_request", "error": "an atomic batch needs at least one act", "row": n, "status": "error"}))
     elif mode == "unpublished_code_receipt":
@@ -354,6 +356,7 @@ class TranscriptConversation(SessionHarness):
             rejected = s.transact(acts)
             self.assertIsInstance(rejected, envelopes.AtomicRejected)
             self.assertEqual(rejected.act, 1)
+            self.assertEqual(rejected.compared.left, Decimal("2"))
             self.assertIsNone(s._poisoned)
         request = json.loads(self.recorded()[0])
         self.assertEqual(request["op"], "transact")

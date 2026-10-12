@@ -967,6 +967,7 @@ class TamperEvidence(unittest.TestCase):
         self.assertEqual(rejected.act, 2)
         self.assertEqual(rejected.rule, "balance_unique_by_account")
         self.assertTrue(rejected.witness)
+        self.assertEqual(rejected.compared.op, "<=")
         in_session = envelopes.parse_atomic_outcome(golden("transact_rejected_session.json"))
         self.assertEqual((in_session.act, in_session.rule, in_session.witness), (1, None, []))
         # An act with a key the contract does not name is drift, even

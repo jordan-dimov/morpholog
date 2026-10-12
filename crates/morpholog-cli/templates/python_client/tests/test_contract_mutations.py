@@ -58,6 +58,7 @@ CASES = {
     "traced_errored.json": ("traced_envelope", E.TracedEnvelope.from_json),
     "batch_committed_receipt.json": ("batch_receipt", E.BatchReceipt.from_json),
     "batch_rejected_receipt.json": ("batch_receipt", E.BatchReceipt.from_json),
+    "batch_rejected_receipt_with_compared.json": ("batch_receipt", E.BatchReceipt.from_json),
     "batch_error_receipt.json": ("batch_receipt", E.BatchReceipt.from_json),
     "batch_error_receipt_not_committed.json": ("batch_receipt", E.BatchReceipt.from_json),
     "transact_committed.json": ("atomic_outcome", E.parse_atomic_outcome),
@@ -317,9 +318,10 @@ def nodes(value, path=()):
 
 
 def replacements(value):
-    """A value of every other JSON kind, and one wrong value of its own
-    kind: a string no constant or pattern matches, a negative integer,
-    the empty array or object, the other boolean."""
+    """A value of every other JSON kind, and wrong values of its own kind:
+    a string no constant or pattern matches, a negative integer, the empty
+    array, the other boolean, and an object with a key added or one
+    taken away."""
     out = [r for r in (None, True, 7, 1.5, "x", [], {}) if _kind(r) != _kind(value)]
     if isinstance(value, bool):
         out.append(not value)
@@ -329,8 +331,9 @@ def replacements(value):
         out.append("\u0000")
     elif isinstance(value, list) and value:
         out.append([])
-    elif isinstance(value, dict) and value:
-        out.append({})
+    elif isinstance(value, dict):
+        out.append({**value, "unexpected": 1})
+        out.extend({k: v for k, v in value.items() if k != key} for key in value)
     return out
 
 
