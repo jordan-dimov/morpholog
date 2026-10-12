@@ -748,6 +748,23 @@ fn provisioned_statistics(
     }
 }
 
+/// `inspect guarantees --json`: the core's own serialization, in the
+/// programme's order. One authored rule, one `not(...)` rule with what it
+/// forbids, and one generated from a discipline clause.
+#[test]
+fn guarantees_serialize_as_pinned() {
+    let source = "program desk\n\n\
+        predicate Limit(book: Subject, cap: Decimal) unique by (book)\n\
+        predicate Position(book: Subject, qty: Decimal)\n\
+        predicate Frozen(book: Subject)\n\n\
+        invariant position_within_limit:\n    \
+        Position(book, qty) and Limit(book, cap) implies qty <= cap\n\n\
+        invariant nothing_frozen:\n    not (exists b: Frozen(b))\n";
+    let program = morpholog_surface::parse_program(source).unwrap();
+    let prepared = morpholog_core::PreparedProgram::new(program).unwrap();
+    assert_golden_bytes("guarantees.json", &morpholog_core::guarantees(&prepared));
+}
+
 /// The `provision indexes --json` report: a first run, its dry run, a
 /// conflict, and a pruning run over two programmes beside a third the call
 /// does not name. Deploy steps read it instead of the printed plan.
@@ -2904,6 +2921,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("init_report_least_privilege.json", "init_report"),
         ("named_claim.json", "named_claim"),
         ("claim_instances.json", "claim_instance_array"),
+        ("guarantees.json", "guarantee_array"),
         ("named_claims.json", "named_claim_array"),
         ("claim_reads.json", "claim_read_array"),
         ("named_claim_reads.json", "named_claim_read_array"),

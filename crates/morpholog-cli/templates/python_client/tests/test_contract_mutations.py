@@ -118,6 +118,9 @@ CASES = {
     "init_report_least_privilege.json": ("init_report", E.InitReport.from_json),
     "named_claim.json": ("named_claim", E.NamedClaim.from_json),
     "claim_instances.json": ("claim_instance_array", _list_of(E.ClaimInstance.from_json)),
+    "guarantees.json": ("guarantee_array", _list_of(E.Guarantee.from_json)),
+    "score_report.json": ("score_report", E.ScoreReport.from_json),
+    "score_report_split.json": ("score_report", E.ScoreReport.from_json),
     "named_claims.json": ("named_claim_array", _list_of(E.NamedClaim.from_json)),
     "claim_reads.json": ("claim_read_array", _list_of(E.ClaimRead.from_json)),
     "named_claim_reads.json": ("named_claim_read_array", _list_of(E.NamedClaimRead.from_json)),
@@ -224,9 +227,7 @@ CASES.update(
 # Goldens of reports the client has no parser for, each with its reason.
 NOT_PARSED = {
     "roles_move_report.json": "`roles move` has no client method",
-    "score_report.json": "scoring has no client method; read by the CLI's own consumers",
-    "score_report_split.json": "scoring has no client method",
-    "batch_score.json": "scoring has no client method",
+    "batch_score.json": "scoring many packs at once has no client method",
 }
 
 # Measured counts, rounded down: below them the battery has stopped

@@ -137,6 +137,23 @@
       "type": "array",
       "items": { "$ref": "#/$defs/claim_instance" }
     },
+    "guarantee": {
+      "description": "One invariant of the programme and the state it rules out, as `inspect guarantees --json` prints it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["invariant", "rule"],
+      "properties": {
+        "invariant": { "type": "string" },
+        "rule": { "description": "The invariant body, as this binary's formatter renders it.", "type": "string" },
+        "forbids": { "description": "For a `not(...)` invariant, the state it forbids outright. Absent otherwise.", "type": "string" },
+        "from": { "description": "For a generated invariant, the declaration clause behind it. Absent for an authored one.", "type": "string" }
+      }
+    },
+    "guarantee_array": {
+      "description": "Every invariant, in the programme's order, generated ones included.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/guarantee" }
+    },
     "named_claim_array": {
       "type": "array",
       "items": { "$ref": "#/$defs/named_claim" }

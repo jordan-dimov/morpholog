@@ -1,0 +1,16 @@
+[
+  {
+    "invariant": "limit_unique_by_book",
+    "rule": "(Limit(book, cap_a) and Limit(book, cap_b)) implies (cap_a = cap_b)",
+    "from": "predicate Limit, unique by (book)"
+  },
+  {
+    "invariant": "position_within_limit",
+    "rule": "(Position(book, qty) and Limit(book, cap)) implies (qty <= cap)"
+  },
+  {
+    "invariant": "nothing_frozen",
+    "rule": "not (exists b: Frozen(b))",
+    "forbids": "exists b: Frozen(b)"
+  }
+]

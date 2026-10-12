@@ -835,6 +835,14 @@ class AdapterDiscrimination(unittest.TestCase):
             with self.assertRaises(ValueError):
                 call()
 
+    def test_guarantees_ask_the_binary_about_the_client_s_own_file(self):
+        self._mode("record_argv_stdout")
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "guarantees.json").read_text()
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with recording_argv() as argv_after:
+            argv = argv_after(self.client.guarantees)
+            self.assertEqual(argv, ["inspect", "guarantees", self.client.file, "--json"])
+
     def test_evaluate_reads_a_pack_offline_or_else_the_database(self):
         self._mode("record_argv_stdout")
         os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "score_report.json").read_text()

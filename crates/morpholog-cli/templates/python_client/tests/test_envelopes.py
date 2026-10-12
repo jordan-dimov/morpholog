@@ -650,6 +650,26 @@ class Reports(unittest.TestCase):
         self.assertIs(named.args["flagged"], False)
 
 
+class Guarantees(unittest.TestCase):
+    def test_each_guarantee_reads_with_only_the_clauses_it_has(self):
+        parsed = envelopes.parse_list(golden("guarantees.json"), envelopes.Guarantee.from_json)
+        self.assertEqual(
+            [(g.invariant, g.forbids, g.from_clause) for g in parsed],
+            [
+                ("limit_unique_by_book", None, "predicate Limit, unique by (book)"),
+                ("position_within_limit", None, None),
+                ("nothing_frozen", "exists b: Frozen(b)", None),
+            ],
+        )
+        self.assertEqual(parsed[2].rule, "not (exists b: Frozen(b))")
+
+    def test_a_guarantee_refuses_a_field_it_does_not_know(self):
+        payload = golden("guarantees.json")[0]
+        payload["version"] = 1
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "version"):
+            envelopes.Guarantee.from_json(payload)
+
+
 class Score(unittest.TestCase):
     def test_a_score_report_reads_whole_and_has_no_split_unless_asked(self):
         report = envelopes.ScoreReport.from_json(golden("score_report.json"))

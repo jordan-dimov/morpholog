@@ -47,6 +47,7 @@ BARE = {list, dict, set, tuple, frozenset}
 # not the shape to expect here.
 NOT_A_SINGLE_ENVELOPE = {
     "claim_instances.json": "a JSON array of claims; the adapter maps over it",
+    "guarantees.json": "a JSON array of guarantees; the adapter maps over it",
     "named_claims.json": "a JSON array of named claims",
     "claim_reads.json": "a JSON array of claim reads",
     "named_claim_reads.json": "a JSON array of named claim reads",
