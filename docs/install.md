@@ -251,22 +251,42 @@ deployment alone. If they don't, the next `migrate` warns.
 A deployment provisioned before v0.0.14 was recorded with the shared pair
 `morpholog_writer` and `morpholog_reader` when it granted them the floor by
 name, and `migrate` warns while that pair reaches another database. If it
-warns, move one of the deployments to new roles. In that deployment's
-database, as the role that owns its tables, withdraw the shared roles and
-the record:
-
-```sql
-REVOKE ALL ON ALL TABLES IN SCHEMA morpholog, morpholog_read FROM morpholog_writer, morpholog_reader;
-REVOKE ALL ON SCHEMA morpholog, morpholog_read FROM morpholog_writer, morpholog_reader;
-DELETE FROM morpholog.deployment_roles;
-```
-
-Then provision its own roles, and move its logins to them
-(`GRANT acme_writer TO <login>`, then `REVOKE morpholog_writer FROM <login>`):
+warns, give one of the deployments roles of its own. Stop its writers, then,
+as the role that owns its tables:
 
 ```bash
-morpholog init --skip-if-exists --least-privilege --role-prefix acme_ --database-url postgres:///acme
+morpholog roles move --role-prefix acme_ --login acme_app --database-url postgres:///acme
 ```
+
+In one transaction this creates `acme_writer` and `acme_reader`, grants them
+the floor, makes each `--login` a member of the new role of every kind it
+held (with the same inherit and `SET ROLE` settings), revokes the floor from
+the old pair in this database, and records the new pair. It prints a report:
+the logins moved, the old pair's other direct members, which no longer hold
+anything here through it, and the other databases the old pair still
+reaches. What those members hold directly or through other roles is not
+read.
+
+It changes nothing when it cannot move faithfully: a named login that is
+not a direct member of the old pair, cannot log in, or holds it with the
+admin option; a new role name that already exists; an old role that is
+itself a member of another role, which may reach this database however the
+move revokes; a privilege PUBLIC holds on Morpholog's schemas or tables,
+which granting the floor would revoke; or anything the old pair holds here
+beyond Morpholog's floor - a privilege granted by hand, an object it owns, a
+policy or default privilege naming it, a privilege on the database. It lists
+what it found; remove it, or keep the old roles. The old
+roles, and every membership in them, stay: they belong to the whole
+cluster, and another deployment may still use them. Remove a login's old
+membership only once no deployment needs it.
+
+If the connection drops while the move commits, the report never arrives
+and either outcome is possible. Reconnect as the owner and read
+`morpholog.deployment_roles`: the new pair recorded means the move
+committed; the old pair means it did not, and nothing changed.
+
+The generated client has no method for this: it is run by the role that
+owns the tables, which an application's login is not.
 
 From here: the [developer introduction](developer-intro.md) builds a
 governed model from scratch; [`embedder-integration.md`](embedder-integration.md)

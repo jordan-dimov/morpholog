@@ -1371,6 +1371,8 @@ impl core::cmp::Eq for morpholog_postgres::DeploymentRoles
 pub fn morpholog_postgres::DeploymentRoles::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_postgres::DeploymentRoles
 pub fn morpholog_postgres::DeploymentRoles::eq(&self, &morpholog_postgres::DeploymentRoles) -> bool
+impl core::convert::From<&morpholog_postgres::DeploymentRoles> for morpholog_postgres::RolePair
+pub fn morpholog_postgres::RolePair::from(&morpholog_postgres::DeploymentRoles) -> Self
 impl core::default::Default for morpholog_postgres::DeploymentRoles
 pub fn morpholog_postgres::DeploymentRoles::default() -> Self
 impl core::fmt::Debug for morpholog_postgres::DeploymentRoles
@@ -1573,6 +1575,28 @@ impl core::marker::Unpin for morpholog_postgres::MigrationReport
 impl core::marker::UnsafeUnpin for morpholog_postgres::MigrationReport
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::MigrationReport
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::MigrationReport
+pub struct morpholog_postgres::MovedLogin
+pub morpholog_postgres::MovedLogin::login: alloc::string::String
+pub morpholog_postgres::MovedLogin::reader: bool
+pub morpholog_postgres::MovedLogin::writer: bool
+impl core::clone::Clone for morpholog_postgres::MovedLogin
+pub fn morpholog_postgres::MovedLogin::clone(&self) -> morpholog_postgres::MovedLogin
+impl core::cmp::Eq for morpholog_postgres::MovedLogin
+pub fn morpholog_postgres::MovedLogin::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::MovedLogin
+pub fn morpholog_postgres::MovedLogin::eq(&self, &morpholog_postgres::MovedLogin) -> bool
+impl core::fmt::Debug for morpholog_postgres::MovedLogin
+pub fn morpholog_postgres::MovedLogin::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::MovedLogin
+impl serde_core::ser::Serialize for morpholog_postgres::MovedLogin
+pub fn morpholog_postgres::MovedLogin::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::MovedLogin
+impl core::marker::Send for morpholog_postgres::MovedLogin
+impl core::marker::Sync for morpholog_postgres::MovedLogin
+impl core::marker::Unpin for morpholog_postgres::MovedLogin
+impl core::marker::UnsafeUnpin for morpholog_postgres::MovedLogin
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::MovedLogin
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::MovedLogin
 pub struct morpholog_postgres::OutboxRow
 pub morpholog_postgres::OutboxRow::arguments: alloc::vec::Vec<morpholog_core::state::EvalValue>
 pub morpholog_postgres::OutboxRow::attempt_count: i32
@@ -2079,6 +2103,29 @@ impl core::marker::Unpin for morpholog_postgres::RoleMembers
 impl core::marker::UnsafeUnpin for morpholog_postgres::RoleMembers
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RoleMembers
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RoleMembers
+pub struct morpholog_postgres::RolePair
+pub morpholog_postgres::RolePair::reader: alloc::string::String
+pub morpholog_postgres::RolePair::writer: alloc::string::String
+impl core::clone::Clone for morpholog_postgres::RolePair
+pub fn morpholog_postgres::RolePair::clone(&self) -> morpholog_postgres::RolePair
+impl core::cmp::Eq for morpholog_postgres::RolePair
+pub fn morpholog_postgres::RolePair::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::RolePair
+pub fn morpholog_postgres::RolePair::eq(&self, &morpholog_postgres::RolePair) -> bool
+impl core::convert::From<&morpholog_postgres::DeploymentRoles> for morpholog_postgres::RolePair
+pub fn morpholog_postgres::RolePair::from(&morpholog_postgres::DeploymentRoles) -> Self
+impl core::fmt::Debug for morpholog_postgres::RolePair
+pub fn morpholog_postgres::RolePair::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::RolePair
+impl serde_core::ser::Serialize for morpholog_postgres::RolePair
+pub fn morpholog_postgres::RolePair::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::RolePair
+impl core::marker::Send for morpholog_postgres::RolePair
+impl core::marker::Sync for morpholog_postgres::RolePair
+impl core::marker::Unpin for morpholog_postgres::RolePair
+impl core::marker::UnsafeUnpin for morpholog_postgres::RolePair
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RolePair
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RolePair
 pub struct morpholog_postgres::RoleRebinding
 pub morpholog_postgres::RoleRebinding::first_observed_transition: uuid::Uuid
 pub morpholog_postgres::RoleRebinding::last_observed_transition: uuid::Uuid
@@ -2103,6 +2150,30 @@ impl core::marker::Unpin for morpholog_postgres::RoleRebinding
 impl core::marker::UnsafeUnpin for morpholog_postgres::RoleRebinding
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RoleRebinding
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RoleRebinding
+pub struct morpholog_postgres::RolesMoveReport
+pub morpholog_postgres::RolesMoveReport::from: morpholog_postgres::RolePair
+pub morpholog_postgres::RolesMoveReport::logins: alloc::vec::Vec<morpholog_postgres::MovedLogin>
+pub morpholog_postgres::RolesMoveReport::old_pair_reaches: alloc::vec::Vec<alloc::string::String>
+pub morpholog_postgres::RolesMoveReport::to: morpholog_postgres::RolePair
+pub morpholog_postgres::RolesMoveReport::unmoved_members: alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for morpholog_postgres::RolesMoveReport
+pub fn morpholog_postgres::RolesMoveReport::clone(&self) -> morpholog_postgres::RolesMoveReport
+impl core::cmp::Eq for morpholog_postgres::RolesMoveReport
+pub fn morpholog_postgres::RolesMoveReport::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::RolesMoveReport
+pub fn morpholog_postgres::RolesMoveReport::eq(&self, &morpholog_postgres::RolesMoveReport) -> bool
+impl core::fmt::Debug for morpholog_postgres::RolesMoveReport
+pub fn morpholog_postgres::RolesMoveReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::RolesMoveReport
+impl serde_core::ser::Serialize for morpholog_postgres::RolesMoveReport
+pub fn morpholog_postgres::RolesMoveReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::RolesMoveReport
+impl core::marker::Send for morpholog_postgres::RolesMoveReport
+impl core::marker::Sync for morpholog_postgres::RolesMoveReport
+impl core::marker::Unpin for morpholog_postgres::RolesMoveReport
+impl core::marker::UnsafeUnpin for morpholog_postgres::RolesMoveReport
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RolesMoveReport
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RolesMoveReport
 pub struct morpholog_postgres::RowInclusionProof
 pub morpholog_postgres::RowInclusionProof::leaf_index: i64
 pub morpholog_postgres::RowInclusionProof::proof: alloc::vec::Vec<morpholog_postgres::Digest>
@@ -2515,6 +2586,7 @@ pub async fn morpholog_postgres::mark_outbox_delivered(&sqlx_postgres::PgPool, u
 pub async fn morpholog_postgres::mark_outbox_failed(&sqlx_postgres::PgPool, uuid::Uuid, &str, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::mark_outbox_transient_attempt(&sqlx_postgres::PgPool, uuid::Uuid, &str, jiff::timestamp::Timestamp) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::migration_status(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::move_deployment_roles(&sqlx_postgres::PgPool, &morpholog_postgres::DeploymentRoles, &[alloc::string::String]) -> core::result::Result<morpholog_postgres::RolesMoveReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::other_sessions(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::SessionCount>, morpholog_postgres::PgError>
 pub fn morpholog_postgres::pack_role_rebindings(&[morpholog_postgres::AuditRow], &morpholog_postgres::PackVerdict) -> morpholog_postgres::RoleRebindings
 pub fn morpholog_postgres::parse_public_key(&str) -> core::result::Result<ed25519_dalek::verifying::VerifyingKey, morpholog_postgres::SigningError>

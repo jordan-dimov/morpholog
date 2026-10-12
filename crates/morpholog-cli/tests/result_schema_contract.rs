@@ -1032,6 +1032,31 @@ fn migration_reports_serialize_as_pinned() {
     assert_golden("migration_report_ahead.json", &to_value(&ahead));
 }
 
+/// `roles move`: the pairs, the logins moved, the members left behind, and
+/// where the old pair still reaches.
+#[test]
+fn roles_move_report_serializes_as_pinned() {
+    use morpholog_postgres::{MovedLogin, RolePair, RolesMoveReport};
+    let report = RolesMoveReport {
+        from: RolePair {
+            reader: "morpholog_reader".to_string(),
+            writer: "morpholog_writer".to_string(),
+        },
+        logins: vec![MovedLogin {
+            login: "acme_app".to_string(),
+            reader: false,
+            writer: true,
+        }],
+        old_pair_reaches: vec!["other_deployment".to_string()],
+        to: RolePair {
+            reader: "acme_reader".to_string(),
+            writer: "acme_writer".to_string(),
+        },
+        unmoved_members: vec!["other_app".to_string()],
+    };
+    assert_golden("roles_move_report.json", &to_value(&report));
+}
+
 #[test]
 fn outbox_row_serializes_as_pinned() {
     let row = OutboxRow {
@@ -2753,6 +2778,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("outbox_row.json", "outbox_row"),
         ("migration_report_behind.json", "migration_report"),
         ("migration_report_applied.json", "migration_report"),
+        ("roles_move_report.json", "roles_move_report"),
         ("migration_report_ahead.json", "migration_report"),
         ("provision_report_applied.json", "provision_report"),
         ("provision_report_dry_run.json", "provision_report"),

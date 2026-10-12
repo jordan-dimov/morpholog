@@ -64,6 +64,15 @@ NOT_A_SINGLE_ENVELOPE = {
     ),
 }
 
+# Goldens of reports the client deliberately has no method for, each
+# with its reason.
+NO_CLIENT_METHOD = {
+    "roles_move_report.json": (
+        "`roles move` is run by the role that owns the tables; an application login cannot "
+        "create roles"
+    ),
+}
+
 # The element-type check is only as strong as the payloads it sees:
 # an empty list conforms to every `list[X]`. This floor is a measured
 # property of the corpus, not an aspiration - it drops if goldens stop
@@ -218,10 +227,11 @@ class TestAnnotationsHoldForGoldens(unittest.TestCase):
 
         self.assertEqual(
             sorted(goldens - matched),
-            sorted(NOT_A_SINGLE_ENVELOPE),
+            sorted(NOT_A_SINGLE_ENVELOPE | NO_CLIENT_METHOD),
             "a golden stopped participating in the annotation check (or a newly "
             "unmatched one appeared): every file is either parsed by some "
-            "envelope class or listed in NOT_A_SINGLE_ENVELOPE with its reason",
+            "envelope class or listed in NOT_A_SINGLE_ENVELOPE or NO_CLIENT_METHOD "
+            "with its reason",
         )
         self.assertGreaterEqual(
             self.non_empty,

@@ -1210,6 +1210,39 @@
         "unknown": { "type": "array", "items": { "$ref": "#/$defs/migration_ref" } }
       }
     },
+    "roles_move_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "logins", "old_pair_reaches", "to", "unmoved_members"],
+      "properties": {
+        "from": { "$ref": "#/$defs/role_pair" },
+        "logins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["login", "reader", "writer"],
+            "properties": {
+              "login": { "type": "string" },
+              "reader": { "type": "boolean" },
+              "writer": { "type": "boolean" }
+            }
+          }
+        },
+        "old_pair_reaches": { "type": "array", "items": { "type": "string" } },
+        "to": { "$ref": "#/$defs/role_pair" },
+        "unmoved_members": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "role_pair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reader", "writer"],
+      "properties": {
+        "reader": { "type": "string" },
+        "writer": { "type": "string" }
+      }
+    },
     "init_report": {
       "type": "object",
       "additionalProperties": false,

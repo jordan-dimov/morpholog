@@ -38,7 +38,7 @@ mod commands;
         The commands, by what you are doing:\n  \
         authoring a programme    check, hash, schema, generate\n  \
         governing state          propose, explain, inspect, session\n  \
-        running a deployment     init, refresh, outbox\n  \
+        running a deployment     init, roles, refresh, outbox\n  \
         proving the record       audit\n  \
         discovering rules        evaluate\n\n\
         Only invariants and transformations are first-class in Morpholog: propose\n\
@@ -200,6 +200,18 @@ enum Command {
     Audit {
         #[command(subcommand)]
         what: AuditCmd,
+    },
+
+    /// Manage the roles a deployment's least-privilege floor is granted to.
+    ///
+    /// `move` gives a deployment a pair of roles of its own, for one that
+    /// shares its pair with another database. It moves this database's
+    /// privileges and the logins you name, in one transaction; the old
+    /// roles and their memberships stay, since another deployment may use
+    /// them.
+    Roles {
+        #[command(subcommand)]
+        what: RolesCmd,
     },
 
     /// Prepare a database for a programme, beyond the schema.
@@ -567,6 +579,33 @@ pub(crate) struct EvaluateArgs {
 /// it takes no connection string, only files - and `keygen` touches
 /// neither.
 #[derive(clap::Subcommand, Debug)]
+pub(crate) enum RolesCmd {
+    /// Move this database from its recorded pair of roles to
+    /// `<PREFIX>writer` and `<PREFIX>reader`, created here. Each `--login`
+    /// becomes a member of the new role of every kind it held, with the
+    /// same inherit and `SET ROLE` settings; other members of the old pair
+    /// lose what this deployment granted through it. Refuses, changing
+    /// nothing, when the old pair holds anything here beyond Morpholog's
+    /// floor. Run as the role that owns the tables, with writers stopped.
+    Move(RolesMoveArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct RolesMoveArgs {
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+
+    /// Name the new roles `<PREFIX>writer` and `<PREFIX>reader`.
+    #[arg(long, value_name = "PREFIX")]
+    pub(crate) role_prefix: String,
+
+    /// A login that should keep its access here: a direct member of the
+    /// old pair. Repeatable.
+    #[arg(long, value_name = "LOGIN")]
+    pub(crate) login: Vec<String>,
+}
+
+#[derive(Subcommand, Debug)]
 pub(crate) enum ProvisionCmd {
     /// Reconcile the indexes the programmes' loads and compiled invariants
     /// seek on, and the statistics that let the planner see each seek is
@@ -1648,6 +1687,9 @@ async fn run() -> anyhow::Result<()> {
         } => commands::refresh::run(&args).await,
         Command::Hash(args) => commands::hash::run(args),
         Command::Init(args) => commands::init::run(args).await,
+        Command::Roles {
+            what: RolesCmd::Move(args),
+        } => commands::roles::run_move(args).await,
         Command::Migrate(args) => commands::migrate::run(args).await,
     }
 }

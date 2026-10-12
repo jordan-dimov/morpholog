@@ -44,6 +44,7 @@ mod provision;
 mod receipt;
 mod rejections;
 mod role_rebindings;
+mod roles_move;
 #[cfg(test)]
 mod scope_differential;
 mod score;
@@ -129,6 +130,7 @@ pub use receipt::{
 };
 pub use rejections::{RejectionRow, list_rejection_rows};
 pub use role_rebindings::{RebindingScope, RoleRebinding, RoleRebindings};
+pub use roles_move::{MovedLogin, RolePair, RolesMoveReport, move_deployment_roles};
 pub use score::{
     SplitBoundary, score_candidate, score_candidate_against_pack, score_candidate_against_packs,
     score_candidate_against_packs_lazily,

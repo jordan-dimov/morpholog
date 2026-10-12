@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM morpholog.deployment_roles",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "9c68d968ddb8c2d124b9c3bed92452e2654716f75898ef6a021ab6f1ae12d81d"
+}
