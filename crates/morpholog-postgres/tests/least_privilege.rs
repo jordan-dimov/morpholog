@@ -533,26 +533,10 @@ async fn migrate_re_applies_the_floor_on_every_run() {
     scratch.clean().await;
 }
 
-/// The SQL of the install guide's procedure for moving a deployment to its
-/// own roles, as written there.
-fn documented_move() -> String {
-    let guide = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/install.md"),
-    )
-    .unwrap();
-    let section = guide
-        .split_once("### Moving a deployment to its own roles")
-        .expect("the guide has the procedure")
-        .1;
-    let block = section.split_once("```sql\n").expect("its SQL").1;
-    block.split_once("```").unwrap().0.to_string()
-}
-
-/// The guide's procedure ends a sharing: run on one of two deployments
-/// that share roles, it leaves each with roles of its own and neither
-/// reaching the other.
+/// Moving one of two deployments that share roles leaves each with roles
+/// of its own and neither reaching the other.
 #[tokio::test]
-async fn the_documented_move_ends_a_shared_floor() {
+async fn moving_roles_ends_a_shared_floor() {
     let Some(base) = base_url() else { return };
     let (a, b) = ("morpholog_ci_lp_move_a", "morpholog_ci_lp_move_b");
     let scratch = Scratch::new(
@@ -588,14 +572,10 @@ async fn the_documented_move_ends_a_shared_floor() {
         "the sharing `migrate` warns about"
     );
 
-    let procedure = documented_move()
-        .replace("morpholog_writer", shared.writer())
-        .replace("morpholog_reader", shared.reader());
-    run(&pool_b, &procedure).await;
     let own = roles("morpholog_ci_lp_moved_");
-    provision_least_privilege(&pool_b, &own)
+    morpholog_postgres::move_deployment_roles(&pool_b, &own, &[])
         .await
-        .expect("the guide's init after the guide's SQL");
+        .expect("the move");
 
     assert!(
         databases_also_reached(&pool_a, &shared)

@@ -1,0 +1,23 @@
+{
+  "from": {
+    "reader": "morpholog_reader",
+    "writer": "morpholog_writer"
+  },
+  "logins": [
+    {
+      "login": "acme_app",
+      "reader": false,
+      "writer": true
+    }
+  ],
+  "old_pair_reaches": [
+    "other_deployment"
+  ],
+  "to": {
+    "reader": "acme_reader",
+    "writer": "acme_writer"
+  },
+  "unmoved_members": [
+    "other_app"
+  ]
+}

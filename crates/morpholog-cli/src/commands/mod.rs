@@ -32,6 +32,7 @@ pub(crate) mod propose;
 pub(crate) mod provision;
 pub(crate) mod receipt;
 pub(crate) mod refresh;
+pub(crate) mod roles;
 pub(crate) mod schema;
 pub(crate) mod session;
 pub(crate) mod transact;
@@ -281,8 +282,9 @@ pub(crate) async fn warn_if_roles_shared(
         eprintln!(
             "warning: this deployment's roles `{}` and `{}` also hold privileges in {}; \
              a login granted either can act there too. Direct members: {}; {}. Review each \
-             member's effective access, and give each deployment its own roles: see \
-             docs/install.md, \"Several deployments on one cluster\"",
+             member's effective access, and give each deployment its own roles with \
+             `morpholog roles move --role-prefix <prefix> --login <login>`: see \
+             docs/install.md, \"Moving a deployment to its own roles\"",
             roles.writer(),
             roles.reader(),
             others

@@ -266,7 +266,7 @@ impl DeploymentRoles {
         &self.reader
     }
 
-    fn both(&self) -> [&str; 2] {
+    pub(crate) fn both(&self) -> [&str; 2] {
         [&self.writer, &self.reader]
     }
 }
@@ -288,7 +288,9 @@ pub async fn deployment_roles(pool: &PgPool) -> Result<Option<DeploymentRoles>, 
     recorded_roles(&mut conn).await
 }
 
-async fn recorded_roles(conn: &mut sqlx::PgConnection) -> Result<Option<DeploymentRoles>, PgError> {
+pub(crate) async fn recorded_roles(
+    conn: &mut sqlx::PgConnection,
+) -> Result<Option<DeploymentRoles>, PgError> {
     let present = sqlx::query_scalar!(
         "SELECT to_regclass('morpholog.deployment_roles') IS NOT NULL AS \"present!\""
     )
@@ -402,7 +404,7 @@ pub async fn databases_also_reached(
     other_databases(&mut conn, roles).await
 }
 
-async fn other_databases(
+pub(crate) async fn other_databases(
     conn: &mut sqlx::PgConnection,
     roles: &DeploymentRoles,
 ) -> Result<Vec<String>, PgError> {
@@ -437,7 +439,10 @@ async fn other_databases(
 /// record. A deployment's roles are created by its own provisioning, so two
 /// databases provisioning the same names at once collide on the name and
 /// one fails; adopting an existing role would let both pass.
-async fn existing_role(conn: &mut sqlx::PgConnection, role: &str) -> Result<PgError, PgError> {
+pub(crate) async fn existing_role(
+    conn: &mut sqlx::PgConnection,
+    role: &str,
+) -> Result<PgError, PgError> {
     let single = DeploymentRoles {
         writer: role.to_string(),
         reader: role.to_string(),
@@ -454,7 +459,10 @@ async fn existing_role(conn: &mut sqlx::PgConnection, role: &str) -> Result<PgEr
     )))
 }
 
-async fn role_exists(conn: &mut sqlx::PgConnection, role: &str) -> Result<bool, PgError> {
+pub(crate) async fn role_exists(
+    conn: &mut sqlx::PgConnection,
+    role: &str,
+) -> Result<bool, PgError> {
     Ok(
         sqlx::query!("SELECT 1 AS one FROM pg_roles WHERE rolname = $1", role)
             .fetch_optional(&mut *conn)
@@ -467,7 +475,7 @@ async fn role_exists(conn: &mut sqlx::PgConnection, role: &str) -> Result<bool, 
 /// Refuse when a role this database records no longer exists: recreating
 /// it would hand the deployment's authority to whoever makes that name
 /// next.
-async fn require_recorded_roles(
+pub(crate) async fn require_recorded_roles(
     conn: &mut sqlx::PgConnection,
     roles: &DeploymentRoles,
 ) -> Result<(), PgError> {
@@ -669,7 +677,7 @@ pub async fn require_can_provision_least_privilege(
     }
 }
 
-async fn grant_floor(
+pub(crate) async fn grant_floor(
     conn: &mut sqlx::PgConnection,
     roles: &DeploymentRoles,
 ) -> Result<(), PgError> {
@@ -688,7 +696,7 @@ async fn grant_floor(
 /// needs CREATEROLE, and REVOKE/GRANT need ownership of the governed
 /// tables (normally the role that ran `morpholog init`). A superuser has
 /// both.
-fn provision_error(e: sqlx::Error) -> PgError {
+pub(crate) fn provision_error(e: sqlx::Error) -> PgError {
     if let sqlx::Error::Database(db) = &e
         && db.code().as_deref() == Some("42501")
     {
