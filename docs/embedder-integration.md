@@ -291,7 +291,7 @@ Selection stops at predicate granularity. Picking one subject's claims out of th
 
 ### A predicate's shape, once there is history
 
-Do not add fields to a predicate that already has admitted claims. A claim keeps the arguments it was admitted with, and changing the declaration rewrites none of them; a `--named` read then reports the arity mismatch above rather than reading old rows under the new shape. When an `Entry(order, qty, price)` later needs a bid and an ask, declare a sibling `Quote(order, bid, ask)` keyed by the same order and join the two in the rule that needs both. Existing entries stay valid; an entry without a quote is refused only where a rule says one is required. The [syntax sheet](surface-syntax.md) shows the shape as a parsed programme. Optional fields with a default for old rows, and a migration of claims to a new shape, are not supported, and each would need its own language and runtime support before the guide could describe it.
+Do not add fields to a predicate that already has admitted claims. A claim keeps the arguments it was admitted with, and changing the declaration rewrites none of them; a `--named` read then reports the arity mismatch above rather than reading old rows under the new shape. Rules say nothing: no pattern of the new shape matches a claim with another number of fields, so a gate looking for one finds none where the ledger holds one. When an `Entry(order, qty, price)` later needs a bid and an ask, declare a sibling `Quote(order, bid, ask)` keyed by the same order and join the two in the rule that needs both. Existing entries stay valid; an entry without a quote is refused only where a rule says one is required. The [syntax sheet](surface-syntax.md) shows the shape as a parsed programme. Optional fields with a default for old rows, and a migration of claims to a new shape, are not supported, and each would need its own language and runtime support before the guide could describe it.
 
 ### `morpholog inspect audit` - the projector's tail
 
@@ -446,6 +446,24 @@ morpholog generate python-client billing.morph --out . --check   # zero, or drif
 ```
 
 The properties that make it a contract rather than a convenience: **stdlib-only** (no dependency treadmill; richer types are the embedder's to build on top), **deterministic** (the same binary and programme produce byte-identical output, so the drift check is regenerate-and-diff), **type-true** (a parsed model holds the types its annotations declare, and the package type-checks under the mypy version CI pins), and **whole-run refusal** (a programme whose contract the client cannot carry - a Duration field, a parameter with no single concrete kind, a Python-keyword field name - fails generation with every finding listed and nothing written; no partial packages, no silent mangling). The worked embedder (`examples/etrm_embedder/`) runs on its committed output. `check` hints a field or parameter name the generator would refuse, a Python keyword or a reserved member, before anything is hashed or provisioned.
+
+## When the programme changes and the ledger stays
+
+A new programme does not need a new ledger. Each audit row records the hash of the programme that admitted it (`model_hash`), so one log can hold rows admitted under several. When the change reshapes no predicate, this still holds:
+
+- `audit verify` passes. It replays the audit log against the claims table and checks the Merkle tree, and it reads no programme.
+- `inspect claims`, with or without `--as-of`, reads stored claims, not rules. With `--named`, the programme you pass decodes the fields.
+- A row admitted under the old programme keeps the old hash.
+- A receipt names the programme that computed its answer, and verifies against that programme. Keep the old source beside the new one.
+- Claims admitted under the old rules are not checked again because the rules changed. A new or tightened rule judges each later change over the cases that change touches. Where history already breaks the rule in one case, a change to another case is admitted, and a change that touches the breaking case is refused. A rule checked whole (`cases: whole`) is judged whole, so there one old violation refuses every change that re-checks it.
+
+Before deploying, ask `evaluate`. `morpholog evaluate new.morph` replays the committed log under the new programme's invariants, which are not deployed, and names for each one the past commits it would have refused, where admission would have refused them. With `--pack` it runs offline against an exported pack, which suits CI. It scores invariants only, so a tightened `require` needs its own test.
+
+What a reshape breaks: see [a predicate's shape, once there is history](#a-predicates-shape-once-there-is-history). The stored claims stay and `audit verify` still passes, but rules of the new shape do not see them.
+
+Then run the deploy sequence below with the new programme. A new rule can need new indexes, and a generated client pinned to the old model hash refuses the new programme until it is regenerated.
+
+`crates/morpholog-cli/tests/ledger_across_programmes.rs` runs each of these on one ledger.
 
 ## The deploy sequence
 
