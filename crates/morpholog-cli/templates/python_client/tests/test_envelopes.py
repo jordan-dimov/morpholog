@@ -456,6 +456,13 @@ class Provisioning(unittest.TestCase):
             [("morpholog_ci_period_2_vk1_cdef01234567", ["reporting"])],
         )
         self.assertEqual(report.indexes[1].required_by, ["billing", "ledger", "reporting"])
+        # `reporting` is outside the call: required, with nothing to say why.
+        self.assertEqual(
+            [(n.program, n.kind, n.name) for n in report.indexes[1].needed_by],
+            [("billing", "transformation", "bill_entry"), ("ledger", "invariant", "balanced")],
+        )
+        self.assertEqual(report.indexes[2].action, "stale")
+        self.assertEqual(report.indexes[2].needed_by, [])
 
     def test_a_stale_index_is_dropped_only_by_a_run_that_applied_under_prune(self):
         for change in ({"applied": False, "dry_run": True}, {"prune": False}):

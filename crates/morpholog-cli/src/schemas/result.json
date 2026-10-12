@@ -1323,7 +1323,7 @@
     "provisioned_index": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["action", "name", "position", "predicate", "required_by"],
+      "required": ["action", "name", "needed_by", "position", "predicate", "required_by"],
       "properties": {
         "action": {
           "enum": [
@@ -1332,6 +1332,20 @@
         },
         "detail": { "description": "For an operator to read; not for parsing.", "type": "string" },
         "name": { "type": "string" },
+        "needed_by": {
+          "description": "What in the programmes named in this call needs the index, sorted by program, kind, name. A programme outside the call is in required_by only, since the registry records that it needs an index, not why. Empty does not mean the index is unneeded.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "name", "program"],
+            "properties": {
+              "kind": { "enum": ["invariant", "transformation"] },
+              "name": { "type": "string" },
+              "program": { "type": "string" }
+            }
+          }
+        },
         "position": { "type": "integer" },
         "predicate": { "type": "string" },
         "required_by": { "type": "array", "items": { "type": "string" } }

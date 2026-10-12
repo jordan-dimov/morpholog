@@ -6,6 +6,13 @@
       "action": "repair_invalid",
       "detail": "an interrupted concurrent build left it invalid",
       "name": "morpholog_ci_invoice_0_vk1_89abcdef0123",
+      "needed_by": [
+        {
+          "kind": "transformation",
+          "name": "issue_invoice",
+          "program": "billing"
+        }
+      ],
       "position": 0,
       "predicate": "Invoice",
       "required_by": [
@@ -15,6 +22,18 @@
     {
       "action": "keep",
       "name": "morpholog_ci_journalentry_0_vk1_0123456789ab",
+      "needed_by": [
+        {
+          "kind": "transformation",
+          "name": "bill_entry",
+          "program": "billing"
+        },
+        {
+          "kind": "invariant",
+          "name": "balanced",
+          "program": "ledger"
+        }
+      ],
       "position": 0,
       "predicate": "JournalEntry",
       "required_by": [
@@ -27,6 +46,7 @@
       "action": "stale",
       "detail": "required by no programme; dropped",
       "name": "morpholog_ci_journalline_1_vk1_456789abcdef",
+      "needed_by": [],
       "position": 1,
       "predicate": "JournalLine",
       "required_by": []
