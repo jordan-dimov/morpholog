@@ -114,6 +114,10 @@ if mode == "audit_ndjson":
     print(row % (1, 1))
     print(row % (2, 2))
     sys.exit(0)
+if mode == "evaluate_refuses_pre":
+    print("error: `evaluate` v1 scores state invariants only; these use pre(...) "
+          "(transition-relational, deferred): no_reopen", file=sys.stderr)
+    sys.exit(1)
 if mode == "stderr_echoes_conninfo":
     i = sys.argv.index("--database-url")
     print(f"error: could not connect to {sys.argv[i + 1]}", file=sys.stderr)
@@ -830,6 +834,26 @@ class AdapterDiscrimination(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 call()
+
+    def test_evaluate_reads_a_pack_offline_or_else_the_database(self):
+        self._mode("record_argv_stdout")
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "score_report.json").read_text()
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with recording_argv() as argv_after:
+            argv = argv_after(lambda: self.client.evaluate("history.ndjson"))
+            self.assertEqual(argv[:2], ["evaluate", self.client.file])
+            self.assertEqual(argv[argv.index("--pack") + 1], "history.ndjson")
+            self.assertNotIn("--database-url", argv)
+            self.assertNotIn("--train-until", argv)
+            argv = argv_after(lambda: self.client.evaluate(train_until="2026-06-01T12:00:00Z"))
+            self.assertEqual(argv[argv.index("--database-url") + 1], self.client.database_url)
+            self.assertEqual(argv[argv.index("--train-until") + 1], "2026-06-01T12:00:00Z")
+            self.assertNotIn("--pack", argv)
+
+    def test_a_programme_evaluate_cannot_score_raises_rather_than_reports(self):
+        self._mode("evaluate_refuses_pre")
+        with self.assertRaisesRegex(MorphologError, r"pre\(\.\.\.\)"):
+            self.client.evaluate("history.ndjson")
 
     def test_check_reads_the_database_only_when_asked(self):
         self._mode("record_argv_stdout")

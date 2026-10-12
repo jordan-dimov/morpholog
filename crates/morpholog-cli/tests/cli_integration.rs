@@ -1423,6 +1423,50 @@ async fn evaluate_against_a_pack_needs_no_database() {
     assert_eq!(report["semantics"], "case_bound_admission_v5");
     assert_eq!(report["invariants"][0]["would_refuse"], 2, "got: {stdout}");
 
+    // The Python client's `evaluate` reads the same report off the same
+    // binary, typed.
+    let probe = r#"
+import sys
+sys.path.insert(0, sys.argv[1])
+from python_client.adapter import Morpholog
+report = Morpholog(sys.argv[2], "postgres:///unused", binary=sys.argv[3]).evaluate(sys.argv[4])
+scored = report.invariants[0]
+print(report.program_hash, report.transitions_replayed, scored.invariant, scored.would_refuse,
+      scored.refused_transitions, report.split)
+"#;
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            probe,
+            common::repo_root()
+                .join("crates/morpholog-cli/templates")
+                .to_str()
+                .unwrap(),
+            candfile.path().to_str().unwrap(),
+            common::bin(),
+            packfile.path().to_str().unwrap(),
+        ])
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .expect("python3 runs the client");
+    let refused: Vec<String> = report["invariants"][0]["refused_transitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| format!("'{}'", id.as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        format!(
+            "{} {} no_entries 2 [{}] None",
+            report["program_hash"].as_str().unwrap(),
+            report["transitions_replayed"],
+            refused.join(", ")
+        ),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
     // A tampered pack is refused, not scored.
     let mut tampered = pack_lines(&pack_stdout);
     let row = first_row(&tampered);
