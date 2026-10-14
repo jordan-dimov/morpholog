@@ -405,7 +405,13 @@ pub(crate) fn discipline_provenance(
                 Discipline::SupersededVia { lineage } => {
                     format!("predicate {declared}, superseded via {lineage}")
                 }
-                Discipline::EffectiveBy { .. } | Discipline::AppendOnly => return None,
+                Discipline::EffectiveBy { keys, on, .. } => {
+                    format!(
+                        "predicate {declared}, effective by ({}) on ({on})",
+                        keys.join(", ")
+                    )
+                }
+                Discipline::AppendOnly => return None,
             };
             Some((unique_invariant_name(&u.target.name, &u.fields), clause))
         })

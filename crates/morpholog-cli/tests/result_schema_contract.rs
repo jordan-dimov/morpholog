@@ -750,13 +750,15 @@ fn provisioned_statistics(
 
 /// `inspect guarantees --json`: the core's own serialization, in the
 /// programme's order. One authored rule, one `not(...)` rule with what it
-/// forbids, and one generated from a discipline clause.
+/// forbids, and rules generated from `unique by` and `effective by`.
 #[test]
 fn guarantees_serialize_as_pinned() {
     let source = "program desk\n\n\
         predicate Limit(book: Subject, cap: Decimal) unique by (book)\n\
         predicate Position(book: Subject, qty: Decimal)\n\
-        predicate Frozen(book: Subject)\n\n\
+        predicate Frozen(book: Subject)\n\
+        predicate Rate(desk: Subject, rate: Decimal, from_date: Date)\n    \
+        effective by (desk) on (from_date)\n\n\
         invariant position_within_limit:\n    \
         Position(book, qty) and Limit(book, cap) implies qty <= cap\n\n\
         invariant nothing_frozen:\n    not (exists b: Frozen(b))\n";
