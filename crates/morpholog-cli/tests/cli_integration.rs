@@ -537,6 +537,52 @@ async fn verify_detects_an_out_of_band_edit() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn checkpoint_covering_a_withheld_transition_prints_the_coded_refusal() {
+    reset_db().await;
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    // An older transaction still open stands in for a writer in flight:
+    // the horizon trails it, so a transition committed after it is
+    // withheld from the stable prefix.
+    let mut older = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1").execute(&mut *older).await.unwrap();
+    let withheld = post_balanced_entry("c1", 100);
+
+    let id = withheld.to_string();
+    let (status, stdout, _stderr) = run_cli(&["audit", "checkpoint", "--covering", &id]);
+    assert!(
+        !status.success(),
+        "a withheld transition is refused: {stdout}"
+    );
+    let refusal: Value = serde_json::from_str(&stdout).expect("a coded refusal on stdout");
+    assert_eq!(refusal["status"], "error");
+    assert_eq!(refusal["code"], "transition_not_covered");
+    assert_eq!(refusal["transition_id"], id);
+    assert_eq!(refusal["tree_size"], 0);
+    let (recorded,): (i64,) = sqlx::query_as("SELECT count(*) FROM morpholog.audit_checkpoints")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(recorded, 0, "a refusal records nothing");
+
+    older.commit().await.unwrap();
+    let (status, stdout, stderr) = run_cli(&["audit", "checkpoint", "--covering", &id]);
+    assert!(
+        status.success(),
+        "covered once the older writer finished: {stderr}"
+    );
+    let cp: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(cp["status"], "created");
+    assert_eq!(cp["tree_size"], 1);
+
+    // An id the log does not hold is an ordinary error: nothing on stdout.
+    let unknown = "01990000-0000-7000-8000-00000000beef";
+    let (status, stdout, stderr) = run_cli(&["audit", "checkpoint", "--covering", unknown]);
+    assert!(!status.success());
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("not found"), "{stderr}");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn checkpoint_then_verify_against_the_anchor() {
     reset_db().await;
     post_balanced_entry("c1", 100);

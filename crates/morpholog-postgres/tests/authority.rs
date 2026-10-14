@@ -89,7 +89,7 @@ async fn signing_with_an_unauthorized_key_is_refused() {
         key: generate_signing_key(),
     };
     common::drain_open_transactions(&pool).await;
-    let err = create_checkpoint(&pool, Some(&interloper), None)
+    let err = create_checkpoint(&pool, Some(&interloper), None, None)
         .await
         .expect_err("signing with an unauthorised key must be refused, not produced");
     // Nothing withheld, so the refusal is about the key, not the horizon.
@@ -125,7 +125,7 @@ async fn an_unauthorised_key_with_a_withheld_authorisation_names_the_horizon() {
         key,
     };
 
-    let err = create_checkpoint(&pool, Some(&signer), None)
+    let err = create_checkpoint(&pool, Some(&signer), None, None)
         .await
         .expect_err("the authorisation is above the horizon, so signing must refuse");
     match &err {
@@ -151,7 +151,10 @@ async fn an_unauthorised_key_with_a_withheld_authorisation_names_the_horizon() {
     // ends, the same signer succeeds.
     interferer.rollback().await.unwrap();
     common::drain_open_transactions(&pool).await;
-    match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
+    match create_checkpoint(&pool, Some(&signer), None, None)
+        .await
+        .unwrap()
+    {
         CheckpointOutcome::Created(c) => {
             assert_eq!(c.tree_size, 1);
             assert_eq!(c.signatures.len(), 1);
@@ -195,7 +198,7 @@ async fn attaching_a_signature_resolves_authority_as_of_the_head_actually_signed
 
     // A checkpoint under the asserted horizon (which ignores the
     // interferer) advances the head past the revocation.
-    let head = match create_checkpoint(&pool, None, Some(&["mtest303_idle".to_string()]))
+    let head = match create_checkpoint(&pool, None, Some(&["mtest303_idle".to_string()]), None)
         .await
         .unwrap()
     {
@@ -216,7 +219,7 @@ async fn attaching_a_signature_resolves_authority_as_of_the_head_actually_signed
         key_id: "k1".into(),
         key,
     };
-    let err = create_checkpoint(&pool, Some(&signer), None)
+    let err = create_checkpoint(&pool, Some(&signer), None, None)
         .await
         .expect_err("signing must be judged against the head that receives the signature");
     assert!(
@@ -256,7 +259,7 @@ async fn an_authorisation_beyond_the_head_is_diagnosed_as_withheld_not_missing()
         .await
         .unwrap();
     common::commit_entry(&pool, "e1").await;
-    let head = match create_checkpoint(&pool, None, Some(&["mtest305_idle".to_string()]))
+    let head = match create_checkpoint(&pool, None, Some(&["mtest305_idle".to_string()]), None)
         .await
         .unwrap()
     {
@@ -283,7 +286,7 @@ async fn an_authorisation_beyond_the_head_is_diagnosed_as_withheld_not_missing()
         key_id: "k1".into(),
         key,
     };
-    let err = create_checkpoint(&pool, Some(&signer), None)
+    let err = create_checkpoint(&pool, Some(&signer), None, None)
         .await
         .expect_err("the head predates the authorisation, so signing must refuse");
     match &err {
@@ -305,7 +308,10 @@ async fn an_authorisation_beyond_the_head_is_diagnosed_as_withheld_not_missing()
     // that authorises it.
     interferer.rollback().await.unwrap();
     common::drain_open_transactions(&pool).await;
-    match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
+    match create_checkpoint(&pool, Some(&signer), None, None)
+        .await
+        .unwrap()
+    {
         CheckpointOutcome::Created(c) => {
             assert_eq!(c.tree_size, 2);
             assert_eq!(c.signatures.len(), 1);

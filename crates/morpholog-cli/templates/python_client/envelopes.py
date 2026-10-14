@@ -2962,6 +2962,34 @@ def parse_checkpoint_outcome(payload: object) -> CheckpointCreated | CheckpointN
 
 
 @dataclass(frozen=True)
+class CheckpointRefusal:
+    """The refusal of ``audit checkpoint`` with ``covering``: the
+    transition is committed but not yet in the stable prefix, because a
+    writer that started earlier is still in flight. Nothing was recorded."""
+
+    code: str
+    error: str
+    transition_id: str
+    tree_size: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> CheckpointRefusal:
+        data = _strict(
+            "checkpoint refusal",
+            payload,
+            {"code", "error", "status", "transition_id", "tree_size"},
+        )
+        data.constant("status", "error")
+        data.constant("code", "transition_not_covered")
+        return cls(
+            code="transition_not_covered",
+            error=data.text("error"),
+            transition_id=data.text("transition_id"),
+            tree_size=data.integer("tree_size", minimum=0),
+        )
+
+
+@dataclass(frozen=True)
 class PrefixPackManifest:
     """Line 1 of a complete-prefix evidence pack. The next
     ``checkpoint_count`` lines are checkpoints, then exactly ``tree_size``

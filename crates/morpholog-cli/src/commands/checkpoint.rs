@@ -2,8 +2,9 @@
 //! audit log and print it as an external anchor.
 
 use anyhow::Context;
+use morpholog_cli::envelopes;
 use morpholog_postgres::{
-    CheckpointOutcome, CheckpointSigner, create_checkpoint, signing_key_from_pem,
+    CheckpointOutcome, CheckpointSigner, PgError, create_checkpoint, signing_key_from_pem,
 };
 
 use crate::CheckpointArgs;
@@ -18,7 +19,10 @@ use crate::commands::{AlreadyReported, connect, print_json};
 /// table. A signature says who made the anchor; a `--witness` dates it.
 /// Witnessing runs after the commit, outside any transaction: every named
 /// authority is tried, the checkpoint is kept and printed regardless, and
-/// any failed submission exits 1 naming the retry.
+/// any failed submission exits 1 naming the retry. With `--covering`, a
+/// transition the stable prefix has not reached is the one refusal a
+/// deliverer retries, so it is a coded object on stdout; every other
+/// failure stays an error.
 pub(crate) async fn run(args: CheckpointArgs) -> anyhow::Result<()> {
     let signer = match (&args.signing_key, &args.key_id) {
         (Some(path), Some(key_id)) => {
@@ -37,9 +41,21 @@ pub(crate) async fn run(args: CheckpointArgs) -> anyhow::Result<()> {
     };
 
     let pool = connect(&args.db.database_url).await?;
-    let mut outcome = create_checkpoint(&pool, signer.as_ref(), args.writers.as_writers())
-        .await
-        .context("create_checkpoint failed")?;
+    let mut outcome = match create_checkpoint(
+        &pool,
+        signer.as_ref(),
+        args.writers.as_writers(),
+        args.covering,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(PgError::TransitionNotCovered { id, tree_size }) => {
+            print_json(&envelopes::CheckpointRefusal::not_covered(id, tree_size))?;
+            return Err(AlreadyReported.into());
+        }
+        Err(e) => return Err(anyhow::Error::new(e).context("create_checkpoint failed")),
+    };
 
     let mut failed = Vec::new();
     match &mut outcome {

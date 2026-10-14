@@ -86,9 +86,10 @@ class MorphologError(RuntimeError):
     business rejection, which is a decided outcome on stdout."""
 
     #: Whether re-submitting the same request is known to be safe. False
-    #: for every error but a ``serialization_failure`` receipt: an
-    #: unknown outcome may already have committed, and any other failure
-    #: needs its cause fixed first. The one retry predicate.
+    #: for every error but a ``serialization_failure`` receipt and a
+    #: checkpoint's ``transition_not_covered`` refusal: an unknown outcome
+    #: may already have committed, and any other failure needs its cause
+    #: fixed first. The one retry predicate.
     retriable: bool = False
 
 
@@ -111,6 +112,22 @@ class MorphologRequestError(MorphologError):
     @property
     def retriable(self) -> bool:  # type: ignore[override]
         return self.code == "serialization_failure"
+
+
+class MorphologNotCovered(MorphologError):
+    """``audit_checkpoint(covering=...)`` refused: the transition is
+    committed but not yet in the stable prefix a checkpoint could cover,
+    because a writer that started earlier is still in flight. Nothing was
+    recorded, so the call is safe to repeat once that writer has finished.
+    An id the log does not hold is a plain ``MorphologError``."""
+
+    retriable = True
+
+    def __init__(self, refusal: envelopes.CheckpointRefusal) -> None:
+        super().__init__(refusal.error)
+        self.code = refusal.code
+        self.transition_id = refusal.transition_id
+        self.tree_size = refusal.tree_size
 
 
 class MorphologTimeout(MorphologError):
@@ -1035,6 +1052,7 @@ class Morpholog:
         *,
         writer_roles: list[str] | None = None,
         witnesses: list[str] | None = None,
+        covering: str | None = None,
     ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
         """Record a checkpoint over the current stable prefix, or return
         the unchanged head - either way a usable external anchor. Pass
@@ -1044,7 +1062,12 @@ class Morpholog:
         resume horizon. ``witnesses`` (each ``"rfc3161:<url>"``) has those
         timestamp authorities countersign the new head after the commit;
         the checkpoint is recorded either way, and a failed submission is
-        an operational error naming ``audit_witness`` to retry."""
+        an operational error naming ``audit_witness`` to retry. With
+        ``covering`` (a transition id) the result's head contains that
+        transition, or the call raises: ``MorphologNotCovered`` while a
+        writer that started earlier keeps it out of the stable prefix
+        (nothing recorded; retry later), ``MorphologError`` for an id the
+        log does not hold."""
         if (signing_key is None) != (key_id is None):
             raise ValueError("signing_key and key_id must be given together")
         args = ["audit", "checkpoint", "--database-url", self.database_url]
@@ -1052,7 +1075,11 @@ class Morpholog:
             args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
         args += self._repeat("--writer-role", writer_roles)
         args += self._repeat("--witness", witnesses)
-        return envelopes.parse_checkpoint_outcome(self._json(*args))
+        args += self._opt("--covering", covering)
+        payload = self._json(*args)
+        if isinstance(payload, dict) and payload.get("status") == "error":
+            raise MorphologNotCovered(envelopes.CheckpointRefusal.from_json(payload))
+        return envelopes.parse_checkpoint_outcome(payload)
 
     def audit_witness(self, tree_size: int, witnesses: list[str]) -> envelopes.Checkpoint:
         """Have timestamp authorities (each ``"rfc3161:<url>"``) witness

@@ -2018,6 +2018,13 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "checkpoint_no_new_rows.json",
         &to_value(&CheckpointOutcome::NoNewRows(sample_checkpoint())),
     );
+    assert_golden(
+        "checkpoint_refusal_not_covered.json",
+        &to_value(&morpholog_cli::envelopes::CheckpointRefusal::not_covered(
+            uuid::Uuid::parse_str("01990000-0000-7000-8000-000000000001").unwrap(),
+            2,
+        )),
+    );
     let mut witnessed = sample_checkpoint();
     witnessed.witnesses = vec![morpholog_postgres::Witness {
         scheme: morpholog_postgres::WitnessScheme::Rfc3161,
@@ -2941,6 +2948,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("checkpoint_created.json", "checkpoint_outcome"),
         ("checkpoint_created_signed.json", "checkpoint_outcome"),
         ("checkpoint_no_new_rows.json", "checkpoint_outcome"),
+        ("checkpoint_refusal_not_covered.json", "checkpoint_refusal"),
         ("checkpoint_created_witnessed.json", "checkpoint_outcome"),
         ("checkpoint_witnessed.json", "checkpoint"),
         ("verify_report_witnessed.json", "verify_report"),

@@ -1,0 +1,7 @@
+{
+  "code": "transition_not_covered",
+  "error": "transition 01990000-0000-7000-8000-000000000001 is committed but not yet in the stable prefix (tree_size 2): a writer that started earlier is still in flight; nothing was recorded, retry once it has finished",
+  "status": "error",
+  "transition_id": "01990000-0000-7000-8000-000000000001",
+  "tree_size": 2
+}

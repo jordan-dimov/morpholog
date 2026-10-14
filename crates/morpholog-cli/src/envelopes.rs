@@ -7,6 +7,7 @@
 use morpholog_core::Compared;
 use morpholog_core::WitnessBinding;
 use serde::Serialize;
+use uuid::Uuid;
 
 /// `check --json`: the uniform findings report, and the route this
 /// binary plans for each invariant. `invariants` is absent only when
@@ -167,6 +168,35 @@ impl RequestError {
             code,
             error,
             status: "error",
+        }
+    }
+}
+
+/// The refusal of `audit checkpoint --covering`: the transition is
+/// committed but outside the stable prefix this run could checkpoint, so
+/// nothing was recorded. The one checkpoint failure with a code, because a
+/// deliverer retries this one and investigates every other.
+#[derive(Serialize)]
+pub struct CheckpointRefusal {
+    pub code: &'static str,
+    pub error: String,
+    pub status: &'static str,
+    pub transition_id: Uuid,
+    pub tree_size: i64,
+}
+
+impl CheckpointRefusal {
+    pub fn not_covered(transition_id: Uuid, tree_size: i64) -> Self {
+        Self {
+            code: "transition_not_covered",
+            error: format!(
+                "transition {transition_id} is committed but not yet in the stable \
+                 prefix (tree_size {tree_size}): a writer that started earlier is \
+                 still in flight; nothing was recorded, retry once it has finished"
+            ),
+            status: "error",
+            transition_id,
+            tree_size,
         }
     }
 }

@@ -1123,6 +1123,15 @@ class TamperEvidence(unittest.TestCase):
         self.assertIsInstance(no_new, envelopes.CheckpointNoNewRows)
         self.assertEqual(created.checkpoint.signatures, [])
 
+    def test_a_covering_refusal_names_the_transition_and_the_prefix(self):
+        refusal = envelopes.CheckpointRefusal.from_json(
+            golden("checkpoint_refusal_not_covered.json")
+        )
+        self.assertEqual(refusal.code, "transition_not_covered")
+        self.assertEqual(refusal.transition_id, "01990000-0000-7000-8000-000000000001")
+        self.assertEqual(refusal.tree_size, 2)
+        self.assertIn("retry", refusal.error)
+
     def test_a_signed_checkpoint_carries_its_signature(self):
         signed = envelopes.parse_checkpoint_outcome(golden("checkpoint_created_signed.json"))
         self.assertIsInstance(signed, envelopes.CheckpointCreated)

@@ -95,10 +95,12 @@ pub enum PgError {
     /// ids.
     #[error("transition_id {0} not found in morpholog.audit")]
     TransitionNotFound(Uuid),
-    /// A transition selected for disclosure is not in the prefix the
-    /// covering checkpoint commits to. It may exist after the checkpoint,
-    /// so [`PgError::TransitionNotFound`] would be wrong. Remedy:
-    /// checkpoint later, or select from an earlier checkpoint's contents.
+    /// A transition selected for disclosure, or one a checkpoint must
+    /// cover, is not in the prefix the checkpoint commits to. It may exist
+    /// after the checkpoint, so [`PgError::TransitionNotFound`] would be
+    /// wrong. Remedy: checkpoint later, once the writers that started
+    /// earlier have finished, or select from an earlier checkpoint's
+    /// contents.
     #[error(
         "transition {id} is not in the prefix the covering checkpoint \
          (tree_size {tree_size}) commits to"
