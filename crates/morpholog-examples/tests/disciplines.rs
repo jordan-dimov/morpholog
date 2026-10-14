@@ -664,6 +664,36 @@ transformation restate(owner, successor, prior):
 }
 
 #[test]
+fn an_effective_by_rule_names_its_clause_in_guarantees_and_coverage() {
+    let program = parsed(
+        r#"
+program effective_provenance
+
+predicate Rate(desk: Subject, rate: Decimal, from_date: Date)
+    effective by (desk) on (from_date)
+
+transformation set_rate(desk, rate, from_date):
+    admit Rate(desk, rate, from_date)
+"#,
+    );
+    let clause = "predicate Rate, effective by (desk) on (from_date)";
+    let prepared = morpholog_core::PreparedProgram::new(program.clone()).unwrap();
+    let guarantee = morpholog_core::guarantees(&prepared)
+        .into_iter()
+        .find(|g| g.invariant == "rate_unique_by_desk_from_date")
+        .expect("the generated rule keeps its name");
+    assert_eq!(guarantee.from.as_deref(), Some(clause));
+    let report = morpholog_core::CoverageTracker::new(morpholog_test_support::validated(&program))
+        .into_report();
+    let covered = report
+        .invariants
+        .iter()
+        .find(|i| i.invariant == "rate_unique_by_desk_from_date")
+        .expect("the generated rule is tracked");
+    assert_eq!(covered.from.as_deref(), Some(clause));
+}
+
+#[test]
 fn an_unlowered_lineage_is_caught_and_an_unfit_one_is_not_expected() {
     // Hand-built IR that skips lowering fails validation for the missing
     // no-fork invariant, but only when the lineage predicate has the

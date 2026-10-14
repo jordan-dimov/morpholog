@@ -5,6 +5,11 @@
     "from": "predicate Limit, unique by (book)"
   },
   {
+    "invariant": "rate_unique_by_desk_from_date",
+    "rule": "(Rate(desk, rate_a, from_date) and Rate(desk, rate_b, from_date)) implies (rate_a = rate_b)",
+    "from": "predicate Rate, effective by (desk) on (from_date)"
+  },
+  {
     "invariant": "position_within_limit",
     "rule": "(Position(book, qty) and Limit(book, cap)) implies (qty <= cap)"
   },

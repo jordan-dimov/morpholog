@@ -657,11 +657,16 @@ class Guarantees(unittest.TestCase):
             [(g.invariant, g.forbids, g.from_clause) for g in parsed],
             [
                 ("limit_unique_by_book", None, "predicate Limit, unique by (book)"),
+                (
+                    "rate_unique_by_desk_from_date",
+                    None,
+                    "predicate Rate, effective by (desk) on (from_date)",
+                ),
                 ("position_within_limit", None, None),
                 ("nothing_frozen", "exists b: Frozen(b)", None),
             ],
         )
-        self.assertEqual(parsed[2].rule, "not (exists b: Frozen(b))")
+        self.assertEqual(parsed[3].rule, "not (exists b: Frozen(b))")
 
     def test_a_guarantee_refuses_a_field_it_does_not_know(self):
         payload = golden("guarantees.json")[0]
