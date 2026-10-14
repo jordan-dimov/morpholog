@@ -114,31 +114,38 @@ async fn a_head_that_already_covers_the_transition_is_returned_unchanged() {
 async fn a_head_that_does_not_cover_the_transition_is_refused_with_nothing_new_to_checkpoint() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let key = generate_signing_key();
-    authorize_signing_key(
-        &pool,
-        "covering-key",
-        "audit_checkpoint_v1",
-        &render_public_key(&key.verifying_key()),
-    )
-    .await;
-    let signer = CheckpointSigner {
-        key_id: "covering-key".into(),
-        key,
-    };
+    // Two authorised keys: the first signs the head, the second is what
+    // the refused run would add. A re-sign by the first key is
+    // deduplicated, so it could not show the signing path was reached.
+    let mut signers = Vec::new();
+    for key_id in ["first-key", "second-key"] {
+        let key = generate_signing_key();
+        authorize_signing_key(
+            &pool,
+            key_id,
+            "audit_checkpoint_v1",
+            &render_public_key(&key.verifying_key()),
+        )
+        .await;
+        signers.push(CheckpointSigner {
+            key_id: key_id.into(),
+            key,
+        });
+    }
+    let (first, second) = (&signers[0], &signers[1]);
     let head = created(
-        create_checkpoint(&pool, Some(&signer), None, None)
+        create_checkpoint(&pool, Some(first), None, None)
             .await
             .unwrap(),
     );
 
     // Nothing new can be checkpointed while A is in flight, so a plain run
-    // would return the head. With a signer it would also re-sign it. The
-    // covering run must do neither.
+    // would return the head, and one with the second key would also sign
+    // it. The covering run must do neither.
     let mut older = pool.begin().await.unwrap();
     common::insert_in_flight_audit_row(&mut older, Uuid::now_v7()).await;
     let wanted = commit_row(&pool).await;
-    for signer in [Some(&signer), None] {
+    for signer in [Some(second), None] {
         let err = create_checkpoint(&pool, signer, None, Some(wanted))
             .await
             .unwrap_err();
@@ -149,12 +156,17 @@ async fn a_head_that_does_not_cover_the_transition_is_refused_with_nothing_new_t
     }
     assert_eq!(checkpoints_recorded(&pool).await, 1);
     let unchanged = load_checkpoint(&pool, head).await.unwrap().unwrap();
-    assert_eq!(unchanged.signatures.len(), 1, "no signature was added");
+    let key_ids: Vec<&str> = unchanged
+        .signatures
+        .iter()
+        .map(|s| s.key_id.as_str())
+        .collect();
+    assert_eq!(key_ids, ["first-key"], "the refused run added no signature");
     assert!(unchanged.witnesses.is_empty());
 
     older.commit().await.unwrap();
     let tree_size = created(
-        create_checkpoint(&pool, Some(&signer), None, Some(wanted))
+        create_checkpoint(&pool, Some(second), None, Some(wanted))
             .await
             .unwrap(),
     );

@@ -2964,8 +2964,8 @@ def parse_checkpoint_outcome(payload: object) -> CheckpointCreated | CheckpointN
 @dataclass(frozen=True)
 class CheckpointRefusal:
     """The refusal of ``audit checkpoint`` with ``covering``: the
-    transition is committed but not yet in the stable prefix, because a
-    writer that started earlier is still in flight. Nothing was recorded."""
+    transition is committed but outside the stable prefix that run could
+    checkpoint. Nothing was recorded."""
 
     code: str
     error: str

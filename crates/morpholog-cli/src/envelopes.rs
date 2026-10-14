@@ -190,9 +190,9 @@ impl CheckpointRefusal {
         Self {
             code: "transition_not_covered",
             error: format!(
-                "transition {transition_id} is committed but not yet in the stable \
-                 prefix (tree_size {tree_size}): a writer that started earlier is \
-                 still in flight; nothing was recorded, retry once it has finished"
+                "transition {transition_id} is committed but outside this \
+                 checkpoint's stable prefix (tree_size {tree_size}); nothing was \
+                 recorded, retry after the prefix advances"
             ),
             status: "error",
             transition_id,

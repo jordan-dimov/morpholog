@@ -116,10 +116,9 @@ class MorphologRequestError(MorphologError):
 
 class MorphologNotCovered(MorphologError):
     """``audit_checkpoint(covering=...)`` refused: the transition is
-    committed but not yet in the stable prefix a checkpoint could cover,
-    because a writer that started earlier is still in flight. Nothing was
-    recorded, so the call is safe to repeat once that writer has finished.
-    An id the log does not hold is a plain ``MorphologError``."""
+    committed but outside the stable prefix that run could checkpoint.
+    Nothing was recorded, so the call is safe to repeat after the prefix
+    advances. An id the log does not hold is a plain ``MorphologError``."""
 
     retriable = True
 
@@ -1064,10 +1063,10 @@ class Morpholog:
         the checkpoint is recorded either way, and a failed submission is
         an operational error naming ``audit_witness`` to retry. With
         ``covering`` (a transition id) the result's head contains that
-        transition, or the call raises: ``MorphologNotCovered`` while a
-        writer that started earlier keeps it out of the stable prefix
-        (nothing recorded; retry later), ``MorphologError`` for an id the
-        log does not hold."""
+        transition, or the call raises: ``MorphologNotCovered`` while it
+        is outside the stable prefix (nothing recorded; retry after the
+        prefix advances), ``MorphologError`` for an id the log does not
+        hold."""
         if (signing_key is None) != (key_id is None):
             raise ValueError("signing_key and key_id must be given together")
         args = ["audit", "checkpoint", "--database-url", self.database_url]
