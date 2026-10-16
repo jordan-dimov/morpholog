@@ -95,11 +95,13 @@ drives the same story through the client the binary generates. It
 enumerates the residues, proposes the table, runs `lean` on the lemma
 file and records the check under the checker's name, deduces, proposes
 the modulo-8 counterexample and reads the refusal, then issues and
-verifies the receipts. It needs `lean` on the path and a disposable
-database; one login plays every party.
+verifies the receipts. Generate the client first and put it on the
+path; the script needs `lean` too, and a disposable database. One login
+plays every party.
 
 ```bash
-DATABASE_URL=postgres:///morpholog_dev python3 examples/22_residue_classes/explore.py
+morpholog generate python-client examples/22_residue_classes/residue_classes.morph --out /tmp/rc
+DATABASE_URL=postgres:///morpholog_dev PYTHONPATH=/tmp/rc python3 examples/22_residue_classes/explore.py
 ```
 
 ## Searching for representations

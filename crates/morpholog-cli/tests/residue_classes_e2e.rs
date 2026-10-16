@@ -389,6 +389,18 @@ async fn a_dry_run_names_the_row_that_refuses_squares_modulo_eight() {
 #[tokio::test(flavor = "current_thread")]
 async fn the_explorer_script_runs_the_story_or_says_what_it_needs() {
     reset_db().await;
+    let client = tempfile::tempdir().unwrap();
+    let (status, _, stderr) = run(
+        &[
+            "generate",
+            "python-client",
+            program().to_str().unwrap(),
+            "--out",
+            client.path().to_str().unwrap(),
+        ],
+        false,
+    );
+    assert!(status.success(), "{stderr}");
     let bin_dir = Path::new(common::bin()).parent().unwrap();
     let path = format!(
         "{}:{}",
@@ -398,7 +410,7 @@ async fn the_explorer_script_runs_the_story_or_says_what_it_needs() {
     let output = Command::new("python3")
         .arg(example_dir().join("explore.py"))
         .env("DATABASE_URL", database_url())
-        .env("MORPHOLOG_BIN", common::bin())
+        .env("PYTHONPATH", client.path())
         .env("PATH", &path)
         .output()
         .expect("python3 runs the explorer");
