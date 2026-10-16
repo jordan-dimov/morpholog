@@ -11,6 +11,7 @@ by what you want to write in a `.morph` file.
 |---|---|
 | Let an AI or an optimiser propose, without trusting it | [Operational information](20_operational_information/), [Margin call run](14_margin_call_run/) |
 | Find out, from the outside world's own record, whether an action got past the system | [Closed-loop execution](21_closed_loop_execution/) |
+| Let an explorer change how a problem is represented, and keep what the record verified apart from what a checker told it | [Residue classes](22_residue_classes/) |
 | Govern a trade from capture to settlement | [Trade lifecycle](10_trade_lifecycle/) |
 | Accept a batch only if it is complete, not just correct line by line | [Margin call run](14_margin_call_run/) |
 | Check authority at the moment someone acts, and withdraw it later | [Trade lifecycle](10_trade_lifecycle/), [Approval controls](04_approval_controls/) |
@@ -67,6 +68,7 @@ one act is a margin-call run.
 | keep a period inside one anniversary-anchored year | [19_charging_years](19_charging_years/) | `period_index(anchor, span, at)` |
 | compute a period's start date back from its number | [19_charging_years](19_charging_years/) | `period_start_of(anchor, span, index)` |
 | recompute an expected value exactly, and refuse any other figure | [20_operational_information](20_operational_information/) | an expression, probability times loss, as the target of `sum` |
+| verify a statement over a finite domain, and refuse it over an incomplete one | [22_residue_classes](22_residue_classes/) | `sum` counting the domain, and `%` in the rule |
 | call Morpholog from an application | [etrm_embedder](etrm_embedder/) | the generated Python client |
 
 ## If the thing you want is not here

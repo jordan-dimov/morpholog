@@ -1,0 +1,208 @@
+-- Residue classes: a change of representation, with the record keeping
+-- the difference between what it verified and what it was told.
+--
+-- Two textbook exercises. First: the square of any integer leaves a
+-- remainder of 0 or 1 when divided by 4. Second: in a Pythagorean
+-- triple, a² + b² = c², the two legs a and b cannot both be odd.
+--
+-- Both are statements about all integers, and there are infinitely
+-- many of those. The trick that makes them easy is to stop looking at
+-- integers and look at remainders instead. Divide any integer by 4 and
+-- the remainder is 0, 1, 2 or 3: four RESIDUES. Squaring and adding
+-- respect that reduction, so a question about every integer becomes a
+-- question about four residues, and four residues can be checked one by
+-- one. Square each: 0, 1, 0, 1. So a square is 0 or 1 mod 4, and two
+-- odd squares add to 1 + 1 = 2, which no square is. Both exercises fall
+-- out of one table of four rows.
+--
+-- That is the shape of a great deal of hard reasoning: change the
+-- representation, and a hard problem becomes a finite one. This
+-- programme governs such a change. The point is not the arithmetic; it
+-- is keeping three different kinds of standing apart, so that the
+-- record never says more than it can back:
+--
+--   * what the record VERIFIED. The finite statements over the residues
+--     are rules here, checked exhaustively over a domain the record
+--     has confirmed is complete. The explorer proposes the table; the
+--     record recomputes every entry and refuses any statement the
+--     table does not bear out. Nothing is taken on trust.
+--   * what the record was TOLD. Carrying a finite statement to every
+--     integer needs a lemma about all integers: reduction respects
+--     squaring and adding, and parity. No rule here can check that. An
+--     outside checker (a proof assistant) does, and reports under its
+--     own name, which version it ran, and the exact file it checked.
+--     The record keeps who said so about what. It never says "proved".
+--   * what was DEDUCED. A conclusion about all integers stands on one
+--     verified finite statement and one checked lemma. The record
+--     refuses a deduction whose grounds are missing, and a read shows
+--     which conclusions still stand on grounds nobody has withdrawn.
+--
+-- Three words that recur below. The runtime stores CLAIMS, statements
+-- it has agreed to admit because they obey the rules, never "facts". An
+-- INVARIANT is a rule the runtime will not let any change break. A
+-- `require` is a gate on one act: a yes-or-no question asked before it
+-- may go ahead.
+
+program residue_classes
+
+-- The finite domain: the residues of one modulus. The explorer proposes
+-- them as one act, and the rules below decide whether they are the
+-- whole domain. Append only: a domain is never edited once declared,
+-- so nothing verified over it can lose its ground.
+predicate Residue(modulus: Decimal, r: Decimal)
+    append only
+predicate DomainSealed(modulus: Decimal)
+    append only
+
+-- The explorer's representation of squaring: one row per residue. The
+-- row's square is the explorer's figure, and the record recomputes it.
+predicate SquareOf(modulus: Decimal, r: Decimal, square: Decimal)
+    unique by (modulus, r)
+    append only
+
+-- A finite statement the record has verified over a modulus. The
+-- statement is named by a constant the rules below know; the record
+-- admits this claim only when its own rule for that statement holds
+-- over a complete domain with every square tabulated.
+predicate Verified(statement: Subject, modulus: Decimal)
+    append only
+
+-- Who may say a lemma was checked. The operator is the trust root and
+-- appoints checkers; a checker's name is bound to one database login,
+-- so a proposal naming it from any other login is refused before the
+-- body runs. The two policy claims are the runtime's own shape for
+-- that binding.
+predicate Operator(operator: Subject)
+predicate Checker(checker: Subject)
+predicate ActorAssertionRestricted(actor: Subject)
+predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
+
+-- A checker's report: this statement checks, under this version of the
+-- checker, in this exact file (named by its digest). Testimony with a
+-- name on it, kept whole. A later finding that the check was wrong is
+-- a new claim beside it; the report itself is never erased.
+predicate Checked(statement: Subject, checker: Subject, version: Subject, artefact: Subject)
+    append only
+predicate Withdrawn(statement: Subject, checker: Subject, reason: Subject)
+    append only
+
+-- A conclusion about all integers, with the two grounds it stands on:
+-- a finite statement verified here, and a lemma checked outside.
+predicate Deduced(conclusion: Subject, statement: Subject, modulus: Decimal, lemma: Subject)
+    unique by (conclusion)
+    append only
+
+-- The domain. A residue is an integer in [0, modulus), and a sealed
+-- domain of a positive modulus holds the modulus's worth of them. Since
+-- claims are a set and each one is an integer in range, that count
+-- means every residue is present: the domain is complete, not merely
+-- plausible.
+invariant residue_is_an_integer_in_range:
+    Residue(m, r) implies 0 <= r and r < m and r % 1 = 0
+
+invariant sealed_domain_is_complete:
+    DomainSealed(m) implies 0 < m and sum(1 | Residue(m, _)) = m
+
+-- The table. Every square is the record's own recompute.
+invariant square_is_the_recompute:
+    SquareOf(m, r, s) implies s = (r * r) % m
+
+-- What "verified" costs. A statement is checked only over a sealed
+-- domain with every residue's square in the table. Without these two
+-- rules, a statement could pass over a table with the awkward rows
+-- left out.
+invariant verified_domain_is_sealed:
+    Verified(_, m) implies DomainSealed(m)
+
+invariant verified_squares_are_total:
+    Verified(_, m) and Residue(m, r) implies SquareOf(m, r, _)
+
+-- The first exercise, over residues: every square in the table is 0 or
+-- 1. Propose the same statement for modulus 8 and the row for 2 (its
+-- square is 4) refuses it, and the refusal names that row.
+invariant squares_are_zero_or_one:
+    Verified(#squares_are_zero_or_one, m) and SquareOf(m, _, s)
+    implies s = 0 or s = 1
+
+-- The second exercise, over residues: no square in the table equals the
+-- sum of two odd squares. Every pair of odd residues is tried against
+-- every square.
+invariant no_square_is_a_sum_of_two_odd_squares:
+    (Verified(#no_square_is_a_sum_of_two_odd_squares, m)
+     and Residue(m, a) and Residue(m, b) and a % 2 = 1 and b % 2 = 1
+     and SquareOf(m, _, s))
+    implies s != (a * a + b * b) % m
+
+-- Only a statement this programme has a rule for can be verified. A
+-- name the rules do not know would otherwise be admitted unchecked.
+invariant only_a_stated_statement_is_verified:
+    Verified(statement, modulus)
+    implies (statement = #squares_are_zero_or_one
+             or statement = #no_square_is_a_sum_of_two_odd_squares)
+
+-- A deduction stands on its grounds. The record checks that both exist;
+-- the step from them to the conclusion is the deducer's own, attributed
+-- to the act that proposed it and never re-examined by a rule.
+invariant deduction_rests_on_a_verified_statement:
+    Deduced(_, statement, m, _) implies Verified(statement, m)
+
+invariant deduction_rests_on_a_checked_lemma:
+    Deduced(_, _, _, lemma) implies Checked(lemma, _, _, _)
+
+-- The acts.
+
+-- The deployment's first act names the operator and binds the name to
+-- its login in the same breath, so nobody else can ever speak it.
+transformation appoint_operator(operator, login_role):
+    require not Operator(_)
+    admit Operator(operator)
+    admit ActorAssertionRestricted(operator)
+    admit ActorAssertionAuthority(operator, login_role)
+
+transformation appoint_checker(checker, login_role):
+    require Operator(actor)
+    require not Checker(checker)
+    admit Checker(checker)
+    admit ActorAssertionRestricted(checker)
+    admit ActorAssertionAuthority(checker, login_role)
+
+-- The explorer's acts. Anyone may propose a domain, a row, a statement
+-- or a deduction; the rules decide.
+transformation declare_domain(modulus, residues):
+    require not DomainSealed(modulus)
+    for r in residues:
+        admit Residue(modulus, r)
+    admit DomainSealed(modulus)
+
+-- A row is for a residue the domain declares; the rule above decides
+-- whether its square is right.
+transformation tabulate_square(modulus, r, square):
+    require Residue(modulus, r)
+    admit SquareOf(modulus, r, square)
+
+transformation verify(statement, modulus):
+    admit Verified(statement, modulus)
+
+transformation deduce(conclusion, statement, modulus, lemma):
+    admit Deduced(conclusion, statement, modulus, lemma)
+
+-- The checker's acts, under its own bound name.
+transformation record_check(statement, version, artefact):
+    require Checker(actor)
+    admit Checked(statement, actor, version, artefact)
+
+transformation withdraw_check(statement, reason):
+    require Checked(statement, actor, _, _)
+    admit Withdrawn(statement, actor, reason)
+
+-- The read: which conclusions stand, and on what. Computed from the
+-- claims whenever asked, never stored, so it cannot drift from them. A
+-- conclusion drops out the moment its lemma's check is withdrawn, while
+-- every claim that put it there stays on the record.
+predicate Grounded(conclusion: Subject, statement: Subject, lemma: Subject, checker: Subject, modulus: Decimal)
+
+derived Grounded(conclusion, statement, lemma, checker):
+    over (Deduced(conclusion, statement, _, lemma)
+          and Checked(lemma, checker, _, _)
+          and not Withdrawn(lemma, checker, _))
+    value modulus = value Deduced(conclusion: conclusion, modulus: _, ..)

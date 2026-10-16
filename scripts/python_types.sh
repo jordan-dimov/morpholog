@@ -27,3 +27,10 @@ cargo run -q -p morpholog-cli -- generate python-client \
 (cd "$root/examples/etrm_embedder" && "${check[@]}" \
     morpholog_client/*.py etrm_lifecycle.py type_contract.py)
 (cd "$every_kind" && "${check[@]}" morpholog_client/*.py)
+
+residue="$root/target/python-types/residue_classes"
+rm -rf "$residue"
+cargo run -q -p morpholog-cli -- generate python-client \
+    "$root/examples/22_residue_classes/residue_classes.morph" \
+    --out "$residue" >/dev/null
+(cd "$root/examples/22_residue_classes" && MYPYPATH="$residue" "${check[@]}" explore.py)

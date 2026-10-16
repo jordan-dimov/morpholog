@@ -98,6 +98,7 @@ example_module!(margin_call_run);
 example_module!(metered_billing);
 example_module!(operational_information);
 example_module!(release_governance);
+example_module!(residue_classes);
 example_module!(scoped_charges);
 example_module!(settlement_netting);
 example_module!(trade_lifecycle);

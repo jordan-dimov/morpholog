@@ -21,4 +21,5 @@ else
 fi
 "${ruff[@]}" check --isolated --target-version py312 \
     crates/morpholog-cli/templates/python_client \
-    examples/etrm_embedder/morpholog_client
+    examples/etrm_embedder/morpholog_client \
+    examples/22_residue_classes/explore.py
