@@ -994,8 +994,10 @@ class AdapterDiscrimination(unittest.TestCase):
         self.assertIsInstance(self.client.audit_witness(3, witnesses), envelopes.Checkpoint)
 
     def test_a_witness_failure_is_only_ever_raised_over_a_valid_checkpoint(self):
-        # Exit 1 beside anything but a checkpoint envelope follows the
-        # operational contract: it is never read as a partial success.
+        # Exit 1 beside anything but a checkpoint envelope raises what it
+        # always did: a JSON object of another shape `EnvelopeError`, text
+        # that is not JSON the decoder's own error, silence the operational
+        # error. None of them is read as a partial success.
         witnesses = ["rfc3161:http://a.example/tsr"]
         self._witness_failure('{"tree_size": "three"}')
         for call in (
@@ -1005,6 +1007,9 @@ class AdapterDiscrimination(unittest.TestCase):
             with self.assertRaises(envelopes.EnvelopeError) as caught:
                 call()
             self.assertNotIsInstance(caught.exception, MorphologWitnessFailed)
+            os.environ["STUB_STDOUT"] = "not json"
+            with self.assertRaises(json.JSONDecodeError):
+                call()
             os.environ["STUB_STDOUT"] = ""
             with self.assertRaises(MorphologError) as caught:
                 call()
