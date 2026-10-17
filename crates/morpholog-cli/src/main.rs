@@ -118,7 +118,7 @@ enum Command {
     /// attaches the structured explanation to refusals.
     Propose(ProposeArgs),
 
-    /// Serve propose and the page reads over stdio, resident.
+    /// Serve propose, explain and the page reads over stdio, resident.
     ///
     /// Parses and validates the programme once, holds one warm
     /// database connection, and answers NDJSON requests on stdin with
@@ -126,12 +126,13 @@ enum Command {
     /// compact line per request, in order. The escape from the
     /// per-call subprocess and connection tax when an embedder drives
     /// many operations: a propose request answers with the batch
-    /// receipt shape, the claims and derived reads with their pinned
-    /// arrays, and a per-request failure with an error receipt
-    /// carrying a stable `code`. The first line out is `status:
-    /// "ready"` with the programme's canonical hash - the programme
-    /// is pinned for the session's lifetime. EOF on stdin ends the
-    /// session cleanly; operational failure aborts it with a
+    /// receipt shape, an explain request with the one-shot
+    /// explanation (nothing recorded), the claims and derived reads
+    /// with their pinned arrays, and a per-request failure with an
+    /// error receipt carrying a stable `code`. The first line out is
+    /// `status: "ready"` with the programme's canonical hash - the
+    /// programme is pinned for the session's lifetime. EOF on stdin
+    /// ends the session cleanly; operational failure aborts it with a
     /// non-zero exit. Protocol reference in
     /// docs/embedder-integration.md.
     Session(SessionArgs),
