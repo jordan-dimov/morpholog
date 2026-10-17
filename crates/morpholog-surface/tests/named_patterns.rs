@@ -722,19 +722,18 @@ define Reading(level):
 invariant bad:
     Reading(level: l, ..) implies 0 <= l
 ";
-    match parse_program(src) {
-        Err(_) => {}
-        Ok(program) => {
-            let errs = program
-                .validate()
-                .expect_err("a predicate and a definition of one name never validate");
-            assert!(
-                errs.iter()
-                    .any(|e| e.to_string().contains("collides with predicate")),
-                "got {errs:?}"
-            );
-        }
-    }
+    // The parser accepts the declarations; validation owns the shared namespace.
+    let program = parse_program(src).expect("the collision reaches validation");
+    let errs = program
+        .validate()
+        .expect_err("a predicate and a definition of one name never validate");
+    assert!(
+        errs.iter().any(|e| matches!(
+            e,
+            morpholog_core::ValidationError::DefinitionNameCollision { .. }
+        )),
+        "got {errs:?}"
+    );
 }
 
 #[test]
