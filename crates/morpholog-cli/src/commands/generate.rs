@@ -390,7 +390,12 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
                     (
                         annotation.to_string(),
                         qualifier,
-                        format!("            \"{param}\": values.encode_named(self.{param}),"),
+                        call(
+                            12,
+                            &format!("\"{param}\": values.encode_named"),
+                            &[format!("self.{param}")],
+                            ",",
+                        ),
                     )
                 }
                 ParamKind::Collection(element) => {
@@ -440,25 +445,37 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
             .args
             .iter()
             .map(|a| format!("\"{}\"", a.name))
-            .collect::<Vec<_>>()
-            .join(", ")
-            + if predicate.args.len() == 1 { "," } else { "" };
+            .collect::<Vec<_>>();
+        let named_fields = call(
+            8,
+            "values.named_fields",
+            &[
+                format!("\"{}\"", predicate.name),
+                "args".to_string(),
+                tuple_literal(&fields, PYTHON_WIDTH - 13),
+            ],
+            "",
+        );
         let reads = predicate
             .args
             .iter()
             .map(|a| {
                 let (_, reader, _) = kind_map(&a.kind);
-                format!(
-                    "            {name}=values.{reader}(\"{predicate}.{name}\", args[\"{name}\"]),\n",
-                    name = a.name,
-                    predicate = predicate.name,
-                )
+                let read = call(
+                    12,
+                    &format!("{}=values.{reader}", a.name),
+                    &[
+                        format!("\"{}.{}\"", predicate.name, a.name),
+                        format!("args[\"{}\"]", a.name),
+                    ],
+                    ",",
+                );
+                format!("{read}\n")
             })
             .collect::<String>();
         let _ = write!(
             out,
-            "\n    @classmethod\n    def from_named(cls, args: dict[str, object]) -> {class}:\n        values.named_fields(\"{}\", args, ({fields}))\n        return cls(\n{reads}        )\n",
-            predicate.name
+            "\n    @classmethod\n    def from_named(cls, args: dict[str, object]) -> {class}:\n{named_fields}\n        return cls(\n{reads}        )\n",
         );
     }
 
@@ -471,14 +488,16 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
             .args
             .iter()
             .map(|a| format!("\"{}\"", a.name))
-            .collect::<Vec<_>>()
-            .join(", ");
+            .collect::<Vec<_>>();
+        let order = indented(
+            4,
+            ARG_ORDER_HEAD,
+            &tuple_literal(&order, PYTHON_WIDTH - 4 - ARG_ORDER_HEAD.len()),
+        );
         let _ = write!(
             out,
-            "\n\n@dataclass(frozen=True)\nclass {class}:\n    \"\"\"Payload of an emitted `{}` intent.\"\"\"\n\n    INTENT: ClassVar[str] = \"{}\"\n    _ARG_ORDER: ClassVar[tuple[str, ...]] = ({order}{trailing})\n\n",
-            intent.name,
-            intent.name,
-            trailing = if intent.args.is_empty() { "" } else { "," },
+            "\n\n@dataclass(frozen=True)\nclass {class}:\n    \"\"\"Payload of an emitted `{}` intent.\"\"\"\n\n    INTENT: ClassVar[str] = \"{}\"\n{order}\n\n",
+            intent.name, intent.name,
         );
         for arg in &intent.args {
             let (annotation, _, qualifier) = kind_map(&arg.kind);
@@ -492,25 +511,23 @@ fn render_models(program: &Program, validated: &ValidatedProgram<'_>) -> anyhow:
             .iter()
             .enumerate()
             .map(|(i, a)| {
-                let read = match &a.kind {
-                    PredicateArgKind::Quantity(unit) => format!(
-                        "quantity_amount(\"{intent}.{name}\", args[{i}], \"{unit}\")",
-                        name = a.name,
-                        intent = intent.name
-                    ),
-                    kind => format!(
-                        "decoded(\"{intent}.{name}\", args[{i}], {annotation})",
-                        name = a.name,
-                        intent = intent.name,
-                        annotation = kind_map(kind).0
-                    ),
+                let field = format!("\"{}.{}\"", intent.name, a.name);
+                let (reader, last) = match &a.kind {
+                    PredicateArgKind::Quantity(unit) => ("quantity_amount", format!("\"{unit}\"")),
+                    kind => ("decoded", kind_map(kind).0.to_string()),
                 };
-                format!("            {name}=values.{read},\n", name = a.name)
+                let read = call(
+                    12,
+                    &format!("{}=values.{reader}", a.name),
+                    &[field, format!("args[{i}]"), last],
+                    ",",
+                );
+                format!("{read}\n")
             })
             .collect::<String>();
         let _ = write!(
             out,
-            "\n    @classmethod\n    def from_args(cls, args: list[object]) -> {class}:\n        \"\"\"Build from the decoded positional values of an outbox\n        row's `arguments` (the adapter decodes; this names).\"\"\"\n        if len(args) != {arity}:\n            raise values.CodecError(\n                f\"{intent}: payload arity {{len(args)}} != contract arity {arity} \"\n                f\"(schema/payload skew)\"\n            )\n        return cls(\n{checks}        )\n",
+            "\n    @classmethod\n    def from_args(cls, args: list[object]) -> {class}:\n        \"\"\"Build from the decoded positional values of an outbox\n        row's `arguments` (the adapter decodes; this names).\"\"\"\n        if len(args) != {arity}:\n            raise values.CodecError(\n                f\"{intent}: \"\n                f\"payload arity {{len(args)}} != contract arity {arity} \"\n                f\"(schema/payload skew)\"\n            )\n        return cls(\n{checks}        )\n",
             arity = intent.args.len(),
             intent = intent.name,
         );
@@ -649,5 +666,59 @@ fn render_init(program: &Program) -> String {
              \"values\",\n]\n",
         program_name = program.name,
     );
+    out
+}
+
+/// The width the emitted Python keeps to, so an embedder's own formatter
+/// has nothing to change in the models.
+const PYTHON_WIDTH: usize = 88;
+
+/// `head(args)tail` at `indent`, on one line when it fits, else with each
+/// argument on its own line. An argument may itself span lines.
+fn call(indent: usize, head: &str, args: &[String], tail: &str) -> String {
+    let pad = " ".repeat(indent);
+    let one = format!("{pad}{head}({}){tail}", args.join(", "));
+    if one.len() <= PYTHON_WIDTH && !one.contains('\n') {
+        return one;
+    }
+    let inner = " ".repeat(indent + 4);
+    let mut out = format!("{pad}{head}(\n");
+    for arg in args {
+        for line in arg.lines() {
+            out.push_str(&inner);
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.pop();
+        out.push_str(",\n");
+    }
+    out.push_str(&format!("{pad}){tail}"));
+    out
+}
+
+const ARG_ORDER_HEAD: &str = "_ARG_ORDER: ClassVar[tuple[str, ...]] = ";
+
+/// A tuple literal at indent zero: one line when it fits in `budget`, else
+/// one item per line. A single item keeps the comma that makes it a tuple.
+fn tuple_literal(items: &[String], budget: usize) -> String {
+    let comma = if items.len() == 1 { "," } else { "" };
+    let one = format!("({}{comma})", items.join(", "));
+    if one.len() <= budget {
+        return one;
+    }
+    let lines: String = items.iter().map(|item| format!("    {item},\n")).collect();
+    format!("(\n{lines})")
+}
+
+/// `head` followed by a possibly multi-line `value`, every line at `indent`.
+fn indented(indent: usize, head: &str, value: &str) -> String {
+    let pad = " ".repeat(indent);
+    let mut lines = value.lines();
+    let mut out = format!("{pad}{head}{}", lines.next().unwrap_or_default());
+    for line in lines {
+        out.push('\n');
+        out.push_str(&pad);
+        out.push_str(line);
+    }
     out
 }

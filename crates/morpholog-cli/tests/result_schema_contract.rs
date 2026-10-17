@@ -590,6 +590,10 @@ fn explanations_serialize_as_pinned() {
         &mut morpholog_postgres::runtime_subjects(),
     );
     assert_golden("explanation_admissible.json", &to_value(&admissible));
+    // Through the session, the same explanation carries the request row.
+    let mut in_session = to_value(&admissible);
+    in_session["row"] = serde_json::json!(4);
+    assert_golden("explanation_session.json", &in_session);
     assert_golden("explanation_gate.json", &to_value(&gate));
     // Both shapes: an unnamed gate omits `rule` (above), a named one
     // carries it.
@@ -2883,6 +2887,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("session_ready.json", "session_ready"),
         ("session_error_receipt.json", "session_error_receipt"),
         ("explanation_admissible.json", "explanation"),
+        ("explanation_session.json", "explanation"),
         ("explanation_gate.json", "explanation"),
         ("explanation_gate_named.json", "explanation"),
         ("explanation_invariant.json", "explanation"),
@@ -3106,6 +3111,7 @@ fn every_session_transcript_answer_validates_against_its_defs_entry() {
         } else {
             match request["op"].as_str().unwrap() {
                 "propose" => "batch_receipt",
+                "explain" => "explanation",
                 "transact" => "atomic_outcome",
                 "claims" if named => "named_claim_read_array",
                 "claims" => "claim_read_array",

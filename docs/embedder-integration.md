@@ -213,7 +213,9 @@ Read-only. Exit code is always zero on a parsed-and-validated programme, whether
 
 `explain` is the second verb after `propose`, not a debugging aid. It evaluates the same rules against the current state and commits nothing; a rejection names the failing rule, the bindings it was judged under (`witness`) and the two values it compared (`compared`), from the same walk the refusal makes, so a dry run and a refusal name the same case. The invariant verdict's `witness` is new in this release: a client generated before it refuses an explanation that carries one as unknown, by design, so regenerate the client; a regenerated client reads an older binary's explanations as before. An agent, a risk engine or an operator's tool asks it "would you permit this, and if not, why" before acting; a property test submits hypothetical acts against one live database without resetting it between cases, because nothing it asks changes the state. Two things it is not. It does not authorise the login, below. And it is a rehearsal, not a reservation: it reads a snapshot, and a later `propose` is its own transaction against whatever the state is then, so an admissible answer is not a promise that the commit will succeed.
 
-The `--actor` you give takes part in the rules as `actor`, but `explain` does not check that the login running it may assert that actor (see "Restricting who may assert an actor"). `propose`, `transact` and the session do. So an admissible verdict from `explain` does not mean this login's proposal would be accepted.
+The `--actor` you give takes part in the rules as `actor`, but `explain` does not check that the login running it may assert that actor (see "Restricting who may assert an actor"). `propose`, `transact` and the session's `propose` do. So an admissible verdict from `explain` does not mean this login's proposal would be accepted.
+
+Stated once, for a loop that acts on the answer: an admissible `explain` is permission to attempt the governed act, not an authorisation. It does not check the actor-assertion policy, it holds no snapshot or lock past its one read, and it does not guarantee that a later `propose` of the same act commits, because that proposal is its own transaction against whatever the state is by then. The same holds through the session (`{"op": "explain"}`, below), which runs the same read and the same kernel.
 
 ### `morpholog check --json`
 
@@ -859,6 +861,20 @@ parameters. Unknown fields are refused, not ignored - a misspelt
   "args"|"args_named": ..., "explain_on_reject"?: true}` - answered
   with the batch receipt shape verbatim (`row` = the 1-based request
   line number).
+- `{"op": "explain", "transformation": ..., "actor": ...,
+  "args"|"args_named": ...}` - the one-shot `explain`, answered with
+  its `explanation` plus `row`. One read of the state, the kernel in
+  memory, nothing recorded: no claim, audit row, rejection row or
+  intent, whatever the verdict. A kernel error is a verdict inside the
+  explanation (`kind: error`), as on the one-shot command, and the
+  session goes on; an unknown transformation or bad arguments are the
+  coded receipts a proposal gets. An admissible answer is a rehearsal,
+  not a reservation: it does not check the actor-assertion policy,
+  hold a snapshot, or promise that a later `propose` commits (the
+  `explain` section above). The generated client's `explain()` returns
+  the same `Explanation` the one-shot client does, and a lost response
+  is a plain `MorphologError`, never outcome-unknown, because nothing
+  could have committed.
 - `{"op": "claims", "predicates"?: [...], "named"?: true,
   "as_of"?: ..., "where"?: {...}}` - answered with the pinned claim
   array (tagged or named), compact on one line.

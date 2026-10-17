@@ -38,6 +38,11 @@ transformation open_account(account, opened_on):
 
 transformation post_balance(account, figure):
     admit Balance(account, figure)
+
+transformation restate(account, figure):
+    bind Balance(account, prior)
+    retract Balance(account, prior)
+    admit Balance(account, figure)
 ";
 
 /// The requests of the pinned conversation, in order: the exact bytes the
@@ -46,6 +51,11 @@ const REQUESTS: &[&str] = &[
     r#"{"actor":"teller","args_named":{"account":"acct_1","opened_on":"2026-01-15"},"op":"propose","transformation":"open_account"}"#,
     r#"{"actor":"teller","args_named":{"account":"acct_1","figure":"100"},"op":"propose","transformation":"post_balance"}"#,
     r#"{"actor":"teller","args_named":{"account":"ghost","figure":"5"},"explain_on_reject":true,"op":"propose","transformation":"post_balance"}"#,
+    // A rehearsal between proposals: admissible, refused with its
+    // witness, and a malformed one, none of them recorded.
+    r#"{"actor":"teller","args_named":{"account":"acct_1","figure":"7"},"op":"explain","transformation":"post_balance"}"#,
+    r#"{"actor":"teller","args_named":{"account":"ghost","figure":"5"},"op":"explain","transformation":"post_balance"}"#,
+    r#"{"actor":"teller","args_named":{"account":"acct_1"},"op":"explain","transformation":"post_balance"}"#,
     r#"{"named":true,"op":"claims","predicates":["Account"]}"#,
     r#"{"named":true,"op":"claims","predicates":["Balance"],"where":{"figure":"100"}}"#,
     r#"{"name":"BookTotal","named":true,"op":"derived"}"#,
@@ -739,35 +749,36 @@ fn pinged_session(
     (child, stdin, recv)
 }
 
-/// Ping, then wait for the session to end without answering. An answer
-/// or a hang is the error.
-fn ping_expecting_abort(
+/// Send `request`, then wait for the session to end without answering.
+/// An answer or a hang is the error.
+fn expecting_abort(
     mut child: std::process::Child,
     mut stdin: std::process::ChildStdin,
     recv: &std::sync::mpsc::Receiver<String>,
+    request: &str,
 ) -> Result<(), String> {
-    writeln!(stdin, r#"{{"op":"ping"}}"#).unwrap();
+    writeln!(stdin, "{request}").unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
     loop {
         if let Ok(line) = recv.try_recv() {
             child.kill().unwrap();
             return Err(format!(
-                "the session answered a ping it could not make: {line}"
+                "the session answered a request it could not make: {line}"
             ));
         }
         if let Some(status) = child.try_wait().unwrap() {
             if status.success() {
-                return Err("the session exited 0 on a failed ping".to_string());
+                return Err("the session exited 0 on a failed request".to_string());
             }
             let leftover: Vec<String> = recv.try_iter().collect();
             return match leftover.is_empty() {
                 true => Ok(()),
-                false => Err(format!("no answer to the ping; got {leftover:?}")),
+                false => Err(format!("no answer to the request; got {leftover:?}")),
             };
         }
         if std::time::Instant::now() > deadline {
             child.kill().unwrap();
-            return Err("the session hung on a failed ping".to_string());
+            return Err("the session hung on a failed request".to_string());
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
@@ -791,7 +802,7 @@ async fn a_ping_aborts_the_session_when_the_database_is_unreachable() {
         db.name
     ))
     .await;
-    let outcome = ping_expecting_abort(child, stdin, &recv);
+    let outcome = expecting_abort(child, stdin, &recv, r#"{"op":"ping"}"#);
     db.drop_it().await;
     outcome.unwrap_or_else(|e| panic!("{e}"));
 }
@@ -811,7 +822,163 @@ async fn a_ping_aborts_the_session_when_the_database_moved_past_its_binary() {
     .await
     .unwrap();
     pool.close().await;
-    let outcome = ping_expecting_abort(child, stdin, &recv);
+    let outcome = expecting_abort(child, stdin, &recv, r#"{"op":"ping"}"#);
+    db.drop_it().await;
+    outcome.unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// Rows in each record that a proposal can write.
+async fn record_counts(pool: &morpholog_postgres::PgPool) -> Vec<(&'static str, i64)> {
+    let mut counts = Vec::new();
+    for (table, count) in [
+        ("claims", "SELECT count(*) FROM morpholog.claims"),
+        ("audit", "SELECT count(*) FROM morpholog.audit"),
+        ("rejections", "SELECT count(*) FROM morpholog.rejections"),
+        ("outbox", "SELECT count(*) FROM morpholog.outbox"),
+    ] {
+        let n: i64 = sqlx::query_scalar(count).fetch_one(pool).await.unwrap();
+        counts.push((table, n));
+    }
+    counts
+}
+
+/// The one-shot `explain --json` for the same act, as a value.
+fn one_shot_explain(file: &std::path::Path, act: &serde_json::Value) -> serde_json::Value {
+    let output = Command::new(common::bin())
+        .arg("explain")
+        .arg(file)
+        .arg(act["transformation"].as_str().unwrap())
+        .args(["--actor", act["actor"].as_str().unwrap()])
+        .args(["--args-named", &act["args_named"].to_string()])
+        .arg("--json")
+        .args(["--database-url", &database_url()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "one-shot explain: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+/// An explain is the one-shot command through the session: one read of
+/// the state, the kernel in memory, nothing recorded whatever the verdict.
+/// Its answer is the one-shot explanation plus the row; a kernel error is
+/// a verdict inside it, as on the one-shot command, and the session keeps
+/// answering.
+#[tokio::test]
+async fn an_explain_records_nothing_and_answers_as_the_one_shot_command() {
+    reset_db().await;
+    let fixture = common::write_fixture("session_fixture", FIXTURE);
+    let mut child = spawn_session(&fixture.path);
+    let mut stdin = child.stdin.take().unwrap();
+    let recv = lines_of(&mut child);
+    recv.recv_timeout(std::time::Duration::from_secs(30))
+        .expect("ready line");
+    for (act, args) in [
+        (
+            "open_account",
+            serde_json::json!({"account": "acct_1", "opened_on": "2026-01-15"}),
+        ),
+        (
+            "post_balance",
+            serde_json::json!({"account": "acct_1", "figure": "100"}),
+        ),
+        (
+            "post_balance",
+            serde_json::json!({"account": "acct_1", "figure": "50"}),
+        ),
+    ] {
+        let receipt = answer(
+            &mut stdin,
+            &recv,
+            &serde_json::json!({"op": "propose", "transformation": act, "actor": "teller", "args_named": args}),
+        );
+        assert_eq!(receipt["status"], "committed", "{receipt}");
+    }
+    let pool = morpholog_postgres::PgPool::connect(&database_url())
+        .await
+        .unwrap();
+    let before = record_counts(&pool).await;
+
+    // Admissible, refused by an invariant, and a kernel error: the bind
+    // in `restate` meets two balances.
+    let acts = [
+        (
+            serde_json::json!({"transformation": "post_balance", "actor": "teller", "args_named": {"account": "acct_1", "figure": "7"}}),
+            serde_json::json!("admissible"),
+        ),
+        (
+            serde_json::json!({"transformation": "post_balance", "actor": "teller", "args_named": {"account": "ghost", "figure": "5"}}),
+            serde_json::json!({"rejected": {
+                "kind": "invariant",
+                "name": "balances_name_an_account",
+                "rule": "Balance(a, _) implies Account(a, _)",
+                "witness": [{"var": "a", "value": {"type": "subject", "value": "ghost"}}]
+            }}),
+        ),
+        (
+            serde_json::json!({"transformation": "restate", "actor": "teller", "args_named": {"account": "acct_1", "figure": "9"}}),
+            serde_json::json!({"rejected": {
+                "kind": "error",
+                "message": "type mismatch: bind_one matched 2 candidates; expected exactly one: Balance(account, prior)"
+            }}),
+        ),
+    ];
+    for (row, (act, verdict)) in acts.iter().enumerate() {
+        let mut request = act.clone();
+        request["op"] = serde_json::json!("explain");
+        let mut explained = answer(&mut stdin, &recv, &request);
+        assert_eq!(
+            record_counts(&pool).await,
+            before,
+            "an explain recorded something: {explained}"
+        );
+        assert_eq!(explained["verdict"], *verdict, "{explained}");
+        assert_eq!(explained["row"], serde_json::json!(row + 4), "{explained}");
+        explained.as_object_mut().unwrap().remove("row");
+        assert_eq!(
+            explained,
+            one_shot_explain(&fixture.path, act),
+            "the session's explanation is the one-shot command's"
+        );
+    }
+
+    // The session is in step: the next proposal commits with the next row.
+    let after = answer(
+        &mut stdin,
+        &recv,
+        &serde_json::json!({"op": "propose", "transformation": "open_account", "actor": "teller", "args_named": {"account": "acct_2", "opened_on": "2026-02-01"}}),
+    );
+    assert_eq!(after["status"], "committed", "{after}");
+    assert_eq!(after["row"], serde_json::json!(7));
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+/// An explain reads the database, so a session whose database stops
+/// accepting connections aborts on it: no explanation, no receipt.
+#[tokio::test]
+async fn an_explain_aborts_the_session_when_the_database_is_unreachable() {
+    let db = OwnDatabase::new("explain_closed").await;
+    let (child, stdin, recv) = pinged_session(&db.url);
+    db.run(&format!(
+        "ALTER DATABASE {} ALLOW_CONNECTIONS false",
+        db.name
+    ))
+    .await;
+    db.run(&format!(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{}'",
+        db.name
+    ))
+    .await;
+    let outcome = expecting_abort(
+        child,
+        stdin,
+        &recv,
+        r#"{"actor":"teller","args_named":{"account":"acct_1","figure":"7"},"op":"explain","transformation":"post_balance"}"#,
+    );
     db.drop_it().await;
     outcome.unwrap_or_else(|e| panic!("{e}"));
 }

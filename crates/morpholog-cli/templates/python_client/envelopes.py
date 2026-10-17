@@ -949,7 +949,9 @@ class Explanation:
 
     @classmethod
     def from_json(cls, payload: object) -> Explanation:
-        data = _strict("explanation", payload, {"transition", "verdict"})
+        data = _strict("explanation", payload, {"transition", "verdict"}, optional={"row"})
+        # Through the session, the request row rides beside the verdict.
+        data.optional_integer("row", minimum=1)
         verdict = data.raw("verdict")
         rejection: GateRejection | InvariantRejection | ErrorRejection | None
         if verdict == "admissible":

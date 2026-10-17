@@ -73,6 +73,7 @@ CASES = {
         E.SessionErrorReceipt.from_json,
     ),
     "explanation_admissible.json": ("explanation", E.Explanation.from_json),
+    "explanation_session.json": ("explanation", E.Explanation.from_json),
     "explanation_gate.json": ("explanation", E.Explanation.from_json),
     "explanation_gate_named.json": ("explanation", E.Explanation.from_json),
     "explanation_invariant.json": ("explanation", E.Explanation.from_json),

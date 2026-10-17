@@ -62,6 +62,17 @@ done
 end=$(date +%s%N)
 run_ms=$(awk "BEGIN { printf \"%.2f\", ($end - $start) / 1000000 / $N }")
 
+# The non-committing question, one-shot: the same spawn, parse and
+# connect, then one read and the kernel in memory.
+start=$(date +%s%N)
+for i in $(seq 1 "$N"); do
+    "$BIN" explain "$FILE" post_simple_entry \
+        --args-named "{\"entry_id\":\"x$i\",\"posting_date\":\"d1\",\"period\":\"p1\",\"debit_account\":\"cash\",\"credit_account\":\"rev\",\"amount\":\"42\"}" \
+        --actor bench --json >/dev/null
+done
+end=$(date +%s%N)
+explain_ms=$(awk "BEGIN { printf \"%.2f\", ($end - $start) / 1000000 / $N }")
+
 # The resident escape: the same N proposals through ONE
 # `morpholog session` process - spawn, parse, validate, and connect
 # paid once, then a lockstep request/response per transition. The
@@ -93,11 +104,20 @@ for i in $(seq 1 "$N"); do
     t1=$(now_us)
     request_ms+=("$(awk "BEGIN { printf \"%.3f\", ($t1 - $t0) / 1000 }")")
 done
+declare -a explain_request_ms=()
+for i in $(seq 1 "$N"); do
+    req="{\"actor\":\"bench\",\"args_named\":{\"entry_id\":\"y$i\",\"posting_date\":\"d1\",\"period\":\"p1\",\"debit_account\":\"cash\",\"credit_account\":\"rev\",\"amount\":\"42\"},\"op\":\"explain\",\"transformation\":\"post_simple_entry\"}"
+    t0=$(now_us)
+    printf '%s\n' "$req" >&"${SESSION[1]}"
+    IFS= read -r -u "${SESSION[0]}" _response
+    t1=$(now_us)
+    explain_request_ms+=("$(awk "BEGIN { printf \"%.3f\", ($t1 - $t0) / 1000 }")")
+done
 exec {SESSION[1]}>&-  # EOF: the clean shutdown.
 wait "$SESSION_PID" 2>/dev/null || true
 
 first_ms="${request_ms[0]}"
-stats=$(printf '%s\n' "${request_ms[@]:1}" | sort -n | awk '
+percentiles() { sort -n | awk '
     { v[NR] = $1 }
     END {
         if (NR == 0) { print "0 0 0"; exit }
@@ -105,14 +125,16 @@ stats=$(printf '%s\n' "${request_ms[@]:1}" | sort -n | awk '
         median = v[int((NR + 1) / 2)]
         p95 = v[int(NR * 0.95) < 1 ? 1 : int(NR * 0.95)]
         printf "%.2f %.2f %.2f", median, p95, sum / NR
-    }')
-read -r session_median session_p95 session_mean <<<"$stats"
+    }'; }
+read -r session_median session_p95 session_mean <<<"$(printf '%s\n' "${request_ms[@]:1}" | percentiles)"
+read -r explain_median explain_p95 explain_mean <<<"$(printf '%s\n' "${explain_request_ms[@]}" | percentiles)"
 
 echo
 echo "embedder latency (N=${N}, local PostgreSQL, --release):"
 printf '  morpholog check (spawn + parse + validate)           : %7.2f ms/call\n' "$check_ms"
 printf '  morpholog propose (+ connect + propose + commit + JSON) : %7.2f ms/call\n' "$run_ms"
 awk "BEGIN { printf \"  per-call DB + propose tax (propose - check)              : %7.2f ms/call\\n\", $run_ms - $check_ms }"
+printf '  morpholog explain (+ connect + read + kernel + JSON)    : %7.2f ms/call\n' "$explain_ms"
 echo
 echo "morpholog session (one resident process, same ${N} proposals):"
 printf '  startup to ready (spawn + parse + validate + pool)   : %7.2f ms once\n' "$ready_ms"
@@ -121,6 +143,10 @@ if awk "BEGIN { exit !($session_mean > 0) }"; then
     printf '  steady state median                                   : %7.2f ms/request\n' "$session_median"
     printf '  steady state p95                                      : %7.2f ms/request\n' "$session_p95"
     awk "BEGIN { printf \"  speed-up vs one-shot propose (mean vs mean)           : %7.1fx\\n\", $run_ms / $session_mean }"
+    printf '  explain steady state median                           : %7.2f ms/request\n' "$explain_median"
+    printf '  explain steady state p95                              : %7.2f ms/request\n' "$explain_p95"
+    awk "BEGIN { printf \"  explain throughput (requests per second, mean)        : %7.0f\\n\", 1000 / $explain_mean }"
+    awk "BEGIN { printf \"  speed-up vs one-shot explain (mean vs mean)           : %7.1fx\\n\", $explain_ms / $explain_mean }"
 else
     echo "  (N < 2: no steady-state sample - raise N for medians and the ratio)"
 fi

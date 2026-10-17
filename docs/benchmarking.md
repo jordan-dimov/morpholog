@@ -85,3 +85,29 @@ The script prints the speed-up rounded to one decimal and does not print the ses
 Invocation: `DATABASE_URL=<disposable database> ./scripts/embedder_latency.sh 300`, three runs a few seconds apart, each started once the one-minute load average was under 1.5 (readings above). Release binary at commit `cbb7f36`, sha256 `bf437a7e5c705d6f826a033f3d2d4437192a4e906d10f98cf2c2558ec3489cc2`; PostgreSQL 18.6 on the same host, an Intel Core Ultra 7 155H laptop on mains power, no thermal events in the kernel log. The workload is the ledger example's `post_simple_entry`, one worker, proposals in sequence.
 
 Not measured: several workers proposing at once, and the time inside a web request. Whether a burst in the last seconds before a close completes in time, and how often concurrent workers meet serialization failures, depend on the deploying programme's own rules and state; measure them against that programme when they matter.
+
+### Resident explain against one-shot explain (2026-10-17)
+
+Forced by the representation-search experiment: a loop that asks the record many times whether its evidence permits a conclusion, with nothing recorded, and commits through the session when it does. The question was what `{"op": "explain"}` on the session buys over a one-shot `morpholog explain` per question, and the parts the one-shot pays are reported apart: the process cost (`check`: spawn, parse, validate), the evaluation over a warm connection (the session's steady state), and the throughput one sequential worker gets.
+
+The claim: **on one machine, a resident explain takes well under half the time of a one-shot `morpholog explain`**, the same ratio in three runs, and a one-shot explain is cheaper than a one-shot propose by about the commit. Protocol-level, in Bash, one worker in sequence; the generated client inside a loop was not timed.
+
+| | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| `check` (spawn, parse, validate), ms per call | 3.83 | 4.05 | 3.94 |
+| one-shot `propose`, ms per call | 20.38 | 21.59 | 21.54 |
+| one-shot `explain`, ms per call | 15.87 | 14.77 | 15.57 |
+| session startup to ready, ms once | 8.28 | 7.33 | 7.77 |
+| session first request, ms | 8.56 | 9.00 | 8.46 |
+| session `propose` steady-state median, ms | 10.94 | 10.28 | 10.35 |
+| session `explain` steady-state median, ms | 5.65 | 5.19 | 6.01 |
+| session `explain` steady-state p95, ms | 6.63 | 6.51 | 7.22 |
+| session `explain` throughput, requests per second (mean) | 179 | 192 | 173 |
+| speed-up over one-shot `explain`, mean against mean | 2.8x | 2.8x | 2.7x |
+| one-minute load at start | 6.54 | 4.89 | 4.00 |
+
+Read it as three parts. Process startup and programme preparation: about 4 ms per one-shot call, paid once per session (startup to ready, under 9 ms). Evaluation over a warm connection: 5 to 6 ms per explain, which is one read of the rules' predicates, the kernel in memory and the JSON line. Throughput: one worker asking in sequence gets about 180 explains a second through the session against about 65 one-shot.
+
+Invocation: `DATABASE_URL=<disposable database> ./scripts/embedder_latency.sh 300`, three runs a few seconds apart. The one-minute load was above the 1.5 the earlier table waited for, because the release build had just finished; the `check` and `propose` rows reproduce that table within a few percent, so the runs were kept. Release binary sha256 `5ec428a75b54ad87dac0e29b6dd772fbf28d9ffc60d51d0be9a2d904f750f702`, built from the working tree of the pull request that added the explain operation (commit `a08f9f8` plus that change); PostgreSQL 18.6 on the same host, an Intel Core Ultra 7 155H laptop on mains power, `powersave` governor, no thermal events in the kernel log. The workload is the ledger example's `post_simple_entry`; each session explain ran after the session's own 300 proposals, so against a ledger of 300 entries.
+
+Not measured: a larger ledger. An explain runs the interpreter over a whole read of the predicates the rules name, so its cost grows with those predicates' size where a compiled `propose` stays flat; measure it against the deploying programme's own state when the loop's state is large.

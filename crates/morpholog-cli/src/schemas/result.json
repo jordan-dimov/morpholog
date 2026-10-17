@@ -509,6 +509,7 @@
       "additionalProperties": false,
       "required": ["transition", "verdict"],
       "properties": {
+        "row": { "type": "integer", "minimum": 1 },
         "transition": {
           "type": "object",
           "additionalProperties": false,

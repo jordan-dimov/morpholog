@@ -123,6 +123,8 @@ for request in sys.stdin:
         say(json.dumps({"code": "kernel_error", "error": "x", "row": 99, "status": "error"}))
     elif mode == "commit_outcome_unknown_receipt":
         say(json.dumps({"code": "commit_outcome_unknown", "error": "the commit outcome is unknown - read the record before re-submitting: connection reset by peer", "row": n, "status": "error"}))
+    elif mode == "explain_error":
+        say(json.dumps({"row": n, "transition": {"actor": "teller", "args": ["a", "9"], "transformation": "restate"}, "verdict": {"rejected": {"kind": "error", "message": "type mismatch: bind_one matched 2 candidates; expected exactly one: Balance(account, prior)"}}}))
     elif mode == "transact_rejected":
         compared = {"op": "<=", "left": {"type": "decimal", "value": "2"}, "right": {"type": "decimal", "value": "1"}}
         say(json.dumps({"act": 1, "compared": compared, "reason": "require `Account(account)` failed", "row": n, "status": "rejected"}))
@@ -263,6 +265,21 @@ class TranscriptConversation(SessionHarness):
             self.assertIsInstance(three, envelopes.Rejected)
             self.assertEqual(three.rule, "balances_name_an_account")
             self.assertIsNotNone(three.explanation)
+            # A rehearsal between proposals: admissible, refused with its
+            # witness, and a malformed one, none of them recorded.
+            rehearsed = s.explain(
+                "post_balance", "teller", {"account": "acct_1", "figure": "7"}
+            )
+            self.assertTrue(rehearsed.admissible)
+            refused_rehearsal = s.explain(
+                "post_balance", "teller", {"account": "ghost", "figure": "5"}
+            )
+            self.assertIsInstance(refused_rehearsal.rejection, envelopes.InvariantRejection)
+            self.assertEqual(refused_rehearsal.rejection.name, "balances_name_an_account")
+            self.assertEqual(refused_rehearsal.rejection.witness[0].value, "ghost")
+            with self.assertRaises(MorphologRequestError) as missing_figure:
+                s.explain("post_balance", "teller", {"account": "acct_1"})
+            self.assertEqual(missing_figure.exception.code, "invalid_arguments")
             accounts = s.claims_named("Account")
             self.assertEqual(accounts[0].args["account"], "acct_1")
             balances = s.claims_named("Balance", where={"figure": "100"})
@@ -395,6 +412,26 @@ class TranscriptConversation(SessionHarness):
             self.assertIsNone(s._poisoned)
         self.assertEqual(json.loads(self.recorded()[0])["acts"], [])
 
+    def test_a_kernel_error_on_an_explain_is_a_verdict_not_a_broken_exchange(self):
+        # The one-shot command's distinction, kept: a kernel error is the
+        # explanation's own verdict, so the loop reads it and goes on.
+        with self.session("explain_error") as s:
+            explained = s.explain("restate", "teller", {"account": "a", "figure": "9"})
+            self.assertIsInstance(explained.rejection, envelopes.ErrorRejection)
+            self.assertIn("matched 2 candidates", explained.rejection.message)
+            self.assertIsNone(s._poisoned)
+        self.assertEqual(json.loads(self.recorded()[0])["op"], "explain")
+
+    def test_an_explain_for_the_wrong_row_is_plain_error_and_poisons(self):
+        # Nothing an explain asks can commit, so a broken exchange is an
+        # ordinary error - never outcome-unknown - and the session, no
+        # longer in step, refuses what follows.
+        with self.session("wrong_row") as s:
+            with self.assertRaises(MorphologError) as err:
+                s.explain("post_balance", "teller", {"account": "a", "figure": "7"})
+            self.assertNotIsInstance(err.exception, MorphologOutcomeUnknown)
+            self.assertIsNotNone(s._poisoned)
+
     def test_a_not_committed_receipt_is_a_coded_refusal(self):
         with self.session("not_committed_receipt") as s:
             with self.assertRaises(MorphologRequestError) as refused:
@@ -430,6 +467,13 @@ class Lifecycle(SessionHarness):
         s = self.session(mode="die_after_ready")
         with self.assertRaises(MorphologOutcomeUnknown):
             s.propose("t", "a", {})
+
+    def test_a_timeout_on_an_explain_is_plain_operational(self):
+        s = self.session(mode="hang_after_ready", timeout=0.3)
+        with self.assertRaises(MorphologError) as err:
+            s.explain("post_balance", "teller", {"account": "a", "figure": "7"})
+        self.assertNotIsInstance(err.exception, MorphologOutcomeUnknown)
+        self.assertIsNotNone(s._poisoned)
 
     def test_process_death_on_a_read_is_plain_operational(self):
         s = self.session(mode="die_after_ready")
