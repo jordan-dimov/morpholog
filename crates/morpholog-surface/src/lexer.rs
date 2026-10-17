@@ -41,6 +41,11 @@ macro_rules! tokens {
                 }
             }
 
+            /// Whether this token is a keyword. Every top-level declaration starts with one.
+            pub(crate) fn is_keyword(&self) -> bool {
+                self.keyword_spelling().is_some()
+            }
+
             /// The token a reserved word lexes to, if the word is one.
             fn keyword(word: &str) -> Option<Token> {
                 match word {

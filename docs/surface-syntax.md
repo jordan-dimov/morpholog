@@ -312,9 +312,11 @@ predicate PriceSupersedes(successor: Subject, prior: Subject)
 
 -- Versions dated from a day. "The one in force on a date" becomes a
 -- definition the declaration writes for you, `terms_in_force_on`, taking
--- the keys, the date, then the other fields in declared order. Without
--- `partial`, a rule must vouch that a version exists wherever one is
--- read; with it, the gaps are intended.
+-- the keys, the date as `as_of`, then the other fields in declared order.
+-- Call it positionally, or name the parameters you use and leave the
+-- rest to `..`, as a claim pattern does with fields. Without `partial`,
+-- a rule must vouch that a version exists wherever one is read; with it,
+-- the gaps are intended.
 predicate Terms(trade: Subject, version: Subject, qty: Decimal, effective_from: Date)
     effective by (trade) on (effective_from)
 predicate Discount(trade: Subject, pct: Decimal, effective_from: Date)
@@ -353,7 +355,7 @@ invariant settlements_have_terms total over Terms:
     Settled(t, on, _) implies (exists v: Terms(t, v, _, from) and from on_or_before on)
 
 invariant settled_within_terms:
-    Settled(t, on, q) and terms_in_force_on(t, on, _, qty) implies q <= qty
+    Settled(t, on, q) and terms_in_force_on(trade: t, as_of: on, qty: qty, ..) implies q <= qty
 ```
 
 ## Definitions and reads

@@ -1,4 +1,4 @@
-//! The declared-field table a named claim pattern resolves against.
+//! The declared-name table a named pattern resolves against.
 //!
 //! A named pattern (`Pred(field: x, ..)`) needs the declaration's field order, but the
 //! declaration may come later in the file. So a quick scan of the raw tokens collects field lists
@@ -7,17 +7,18 @@
 //! parser over every worked example.
 //!
 //! Predicates and intents are kept apart, since one name can be both with different fields.
-//! `define` names are recorded only so a named pattern on one gets an accurate error.
+//! Definitions resolve against their parameters: an authored one's as written, and the selector
+//! an `effective by` clause generates by the signature the lowering will give it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::lexer::Token;
 
-/// One declaration's usable field list, or the refusal to have one.
+/// One declaration's usable name list, or the refusal to have one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum DeclFields {
     Usable(Vec<String>),
-    /// Declared more than once, so which fields apply would depend on source order.
+    /// Declared more than once, so which names apply would depend on source order.
     Ambiguous,
 }
 
@@ -25,7 +26,8 @@ pub(super) enum DeclFields {
 pub(super) struct FieldTable {
     pub(super) predicates: HashMap<String, DeclFields>,
     pub(super) intents: HashMap<String, DeclFields>,
-    pub(super) authored_definitions: HashSet<String>,
+    /// Parameter lists, authored and generated alike.
+    pub(super) definitions: HashMap<String, DeclFields>,
 }
 
 impl FieldTable {
@@ -33,6 +35,12 @@ impl FieldTable {
     pub(super) fn empty() -> Self {
         Self::default()
     }
+}
+
+fn record(map: &mut HashMap<String, DeclFields>, name: String, fields: Vec<String>) {
+    map.entry(name)
+        .and_modify(|f| *f = DeclFields::Ambiguous)
+        .or_insert(DeclFields::Usable(fields));
 }
 
 /// Scan the raw token stream for `predicate`, `intent` and `define` declarations. A declaration
@@ -44,25 +52,32 @@ pub(super) fn scan<S>(tokens: &[(Token, S)]) -> FieldTable {
         match &tokens[i].0 {
             Token::KwPredicate | Token::KwIntent => {
                 let is_predicate = matches!(tokens[i].0, Token::KwPredicate);
-                if let Some((name, fields, next)) = scan_decl(tokens, i + 1) {
-                    let map = if is_predicate {
-                        &mut table.predicates
+                if let Some((name, fields, next)) = scan_decl(tokens, i + 1, true) {
+                    if is_predicate {
+                        if let Some(selector) = scan_effective_by(tokens, next, &name, &fields) {
+                            let parameters = selector
+                                .parameters
+                                .iter()
+                                .map(|v| v.as_str().to_string())
+                                .collect();
+                            record(&mut table.definitions, selector.name, parameters);
+                        }
+                        record(&mut table.predicates, name, fields);
                     } else {
-                        &mut table.intents
-                    };
-                    map.entry(name)
-                        .and_modify(|f| *f = DeclFields::Ambiguous)
-                        .or_insert(DeclFields::Usable(fields));
+                        record(&mut table.intents, name, fields);
+                    }
                     i = next;
                 } else {
                     i += 1;
                 }
             }
             Token::KwDefine => {
-                if let Some(Token::Ident(name)) = tokens.get(i + 1).map(|t| &t.0) {
-                    table.authored_definitions.insert(name.clone());
+                if let Some((name, parameters, next)) = scan_decl(tokens, i + 1, false) {
+                    record(&mut table.definitions, name, parameters);
+                    i = next;
+                } else {
+                    i += 1;
                 }
-                i += 1;
             }
             _ => i += 1,
         }
@@ -71,9 +86,13 @@ pub(super) fn scan<S>(tokens: &[(Token, S)]) -> FieldTable {
 }
 
 /// Follow one declaration head `Ident ( ... )`. At paren depth 1, each `Ident :` is a field name
-/// and its kind is skipped up to the next `,`. Returns `(name, fields, index past the closing
-/// paren)`, or `None` when the shape does not hold.
-fn scan_decl<S>(tokens: &[(Token, S)], start: usize) -> Option<(String, Vec<String>, usize)> {
+/// and its kind is skipped up to the next `,`; with `typed` off, each `Ident` is a parameter.
+/// Returns `(name, names, index past the closing paren)`, or `None` when the shape does not hold.
+fn scan_decl<S>(
+    tokens: &[(Token, S)],
+    start: usize,
+    typed: bool,
+) -> Option<(String, Vec<String>, usize)> {
     let Token::Ident(name) = &tokens.get(start)?.0 else {
         return None;
     };
@@ -95,7 +114,8 @@ fn scan_decl<S>(tokens: &[(Token, S)], start: usize) -> Option<(String, Vec<Stri
             Token::RParen => depth -= 1,
             Token::Comma if depth == 1 => at_field_slot = true,
             Token::Ident(field) if depth == 1 && at_field_slot => {
-                if matches!(tokens.get(i + 1).map(|t| &t.0), Some(Token::Colon)) {
+                let named = matches!(tokens.get(i + 1).map(|t| &t.0), Some(Token::Colon));
+                if named == typed {
                     fields.push(field.clone());
                 }
                 at_field_slot = false;
@@ -106,25 +126,79 @@ fn scan_decl<S>(tokens: &[(Token, S)], start: usize) -> Option<(String, Vec<Stri
         i += 1;
     }
     if saw_content && fields.is_empty() {
-        // Something in the parens, but no `name:` fields: leave it to the real parser.
+        // Something in the parens, but nothing of the expected shape: leave it to the real parser.
         return None;
     }
     Some((name.clone(), fields, i))
 }
 
-/// Which declarations a named pattern resolves against, chosen by where it appears. The two
-/// predicate variants differ only in whether the error may suggest a positional definition call.
+/// The selector an `effective by (keys) on (field)` clause after a predicate head will generate,
+/// with the signature the lowering gives it. The clauses run from the head to the next keyword;
+/// the first clause of that shape counts, as it does in the lowering.
+fn scan_effective_by<S>(
+    tokens: &[(Token, S)],
+    start: usize,
+    predicate: &str,
+    fields: &[String],
+) -> Option<morpholog_core::InForceSignature> {
+    let end = (start..tokens.len())
+        .find(|&i| tokens[i].0.is_keyword())
+        .unwrap_or(tokens.len());
+    let word =
+        |i: usize, w: &str| matches!(&tokens.get(i)?.0, Token::Ident(s) if s == w).then_some(());
+    let mut i = start;
+    while i < end {
+        if word(i, "effective").is_some() && word(i + 1, "by").is_some() {
+            let (keys, after_keys) = scan_ident_list(tokens, i + 2)?;
+            word(after_keys, "on")?;
+            let (on, _) = scan_ident_list(tokens, after_keys + 1)?;
+            let [on] = on.as_slice() else {
+                return None;
+            };
+            return morpholog_core::in_force_signature(&predicate.into(), fields, &keys, on);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// `( Ident, Ident, ... )` at `start`: the names and the index past the closing paren.
+fn scan_ident_list<S>(tokens: &[(Token, S)], start: usize) -> Option<(Vec<String>, usize)> {
+    if !matches!(tokens.get(start)?.0, Token::LParen) {
+        return None;
+    }
+    let mut names = Vec::new();
+    let mut i = start + 1;
+    loop {
+        match &tokens.get(i)?.0 {
+            Token::Ident(name) => names.push(name.clone()),
+            _ => return None,
+        }
+        i += 1;
+        match &tokens.get(i)?.0 {
+            Token::Comma => i += 1,
+            Token::RParen => return Some((names, i + 1)),
+            _ => return None,
+        }
+        // A trailing comma closes the list, as in the grammar.
+        if matches!(tokens.get(i)?.0, Token::RParen) {
+            return Some((names, i + 1));
+        }
+    }
+}
+
+/// Which declarations a named pattern resolves against, chosen by where it appears.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Vocabulary {
-    /// Propositions and `bind`, where a positional definition call is also allowed.
+    /// Propositions and `bind`: predicates, and definitions by their parameters.
     ClaimShaped,
-    /// `admit`/`retract`: predicates only.
+    /// `admit`/`retract`/`value`: predicates only.
     PredicateOnly,
     Intent,
 }
 
-/// Resolve a named pattern to positional arguments in declared field order, with wildcards for
-/// unmentioned fields. Errors come back as spanned messages.
+/// Resolve a named pattern to positional arguments in declared order, with wildcards for
+/// unmentioned names. Errors come back as spanned messages.
 pub(super) fn resolve_named(
     head: &str,
     entries: &[(chumsky::span::SimpleSpan, String, morpholog_core::Term)],
@@ -138,22 +212,25 @@ pub(super) fn resolve_named(
         Vocabulary::ClaimShaped | Vocabulary::PredicateOnly => &table.predicates,
         Vocabulary::Intent => &table.intents,
     };
-    let fields = match map.get(head) {
+    // A predicate and a definition of one name is a validation error; until then the predicate
+    // reads as it always did.
+    let (found, what) = match map.get(head) {
+        Some(found) => (Some(found), "field"),
+        None if vocabulary == Vocabulary::ClaimShaped => (table.definitions.get(head), "parameter"),
+        None => (None, "field"),
+    };
+    let fields = match found {
         Some(DeclFields::Usable(fields)) => fields,
         Some(DeclFields::Ambiguous) => {
             return Err(vec![(
                 call_span,
-                format!("`{head}` is declared more than once, so its field names cannot resolve"),
+                format!("`{head}` is declared more than once, so its {what} names cannot resolve"),
             )]);
         }
         None => {
             let is_definition =
-                vocabulary != Vocabulary::Intent && table.authored_definitions.contains(head);
+                vocabulary != Vocabulary::Intent && table.definitions.contains_key(head);
             let message = match (vocabulary, is_definition) {
-                (Vocabulary::ClaimShaped, true) => format!(
-                    "`{head}` is a definition; definitions have parameters, not declared \
-                     fields - use the positional form"
-                ),
                 // A definition call is not allowed here at all, so do not suggest one.
                 (Vocabulary::PredicateOnly, true) => {
                     format!("`{head}` is a definition, not a predicate")
@@ -161,7 +238,10 @@ pub(super) fn resolve_named(
                 (Vocabulary::Intent, _) => {
                     format!("named fields need a declared intent; `{head}` is not one")
                 }
-                (_, false) => {
+                (Vocabulary::ClaimShaped, _) => format!(
+                    "named fields need a declared predicate or definition; `{head}` is neither"
+                ),
+                (Vocabulary::PredicateOnly, false) => {
                     format!("named fields need a declared predicate; `{head}` is not one")
                 }
             };
@@ -174,7 +254,7 @@ pub(super) fn resolve_named(
             refusals.push((
                 *span,
                 format!(
-                    "`{head}` declares no field `{name}`; declared: {}",
+                    "`{head}` declares no {what} `{name}`; declared: {}",
                     fields.join(", ")
                 ),
             ));
@@ -190,7 +270,7 @@ pub(super) fn resolve_named(
             refusals.push((
                 call_span,
                 format!(
-                    "a named pattern without `..` names every field of `{head}`; missing: {} \
+                    "a named pattern without `..` names every {what} of `{head}`; missing: {} \
                      (name them, or end the pattern with `..`)",
                     missing.join(", ")
                 ),
@@ -211,7 +291,6 @@ pub(super) fn resolve_named(
         })
         .collect())
 }
-
 /// One written `field: term` entry, as the pattern parser collects it.
 type NamedEntry = (chumsky::span::SimpleSpan, String, morpholog_core::Term);
 
@@ -333,16 +412,27 @@ mod tests {
                     "intent tables diverge in {}",
                     path.display()
                 );
-                let expected_definitions: std::collections::HashSet<String> = program
+                // Generated selectors included: the scan predicts the lowering's signature,
+                // and this is where the prediction is held to it.
+                let expected_definitions: std::collections::HashMap<String, DeclFields> = program
                     .definitions
                     .iter()
-                    .filter(|d| d.origin != morpholog_core::DefinitionOrigin::Discipline)
-                    .map(|d| d.name.to_string())
+                    .map(|d| {
+                        (
+                            d.name.to_string(),
+                            DeclFields::Usable(
+                                d.parameters
+                                    .iter()
+                                    .map(|v| v.as_str().to_string())
+                                    .collect(),
+                            ),
+                        )
+                    })
                     .collect();
                 assert_eq!(
-                    table.authored_definitions,
+                    table.definitions,
                     expected_definitions,
-                    "definition sets diverge in {}",
+                    "definition tables diverge in {}",
                     path.display()
                 );
                 checked += 1;

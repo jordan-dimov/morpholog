@@ -230,7 +230,7 @@ invariant trade_terms_quantity_is_positive:
 -- slice that was over the old quantity but within the new one becomes
 -- admissible. The comparison is inclusive.
 invariant settled_within_effective_terms:
-    (TradeSettled(trade, _, _, _, d) and trade_terms_in_force_on(trade, d, _, qty, _))
+    (TradeSettled(trade, _, _, _, d) and trade_terms_in_force_on(trade: trade, as_of: d, quantity: qty, ..))
     implies sum(s | TradeSettled(trade, s, _, _, sd) and sd on_or_before d) <= qty
 
 -- Every settled date has terms effective by it. Without this, a slice

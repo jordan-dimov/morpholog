@@ -165,6 +165,63 @@ pub fn in_force_define_name(predicate: &PredicateName) -> String {
     format!("{}_in_force_on", snake_case(predicate.as_str()))
 }
 
+/// The call shape of the selector `effective by` generates: its name and
+/// its parameters, the keys, an as-of date, then every payload field in
+/// declared order. The as-of parameter is renamed with trailing
+/// underscores until it collides with no field.
+///
+/// The surface parser asks for it before the selector exists, so a named
+/// call can resolve its parameter names; the lowering builds the selector
+/// from the same answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InForceSignature {
+    pub name: String,
+    pub parameters: Vec<Var>,
+}
+
+/// The signature of the selector for a predicate with `fields`, keyed by
+/// `keys` and dated by `on`. `None` when a key or the date is not a field,
+/// or a key is the date; validation owns that diagnostic.
+pub fn in_force_signature(
+    predicate: &PredicateName,
+    fields: &[String],
+    keys: &[String],
+    on: &str,
+) -> Option<InForceSignature> {
+    let known = |f: &String| fields.contains(f);
+    if !keys.iter().all(known) || !fields.iter().any(|f| f == on) || keys.contains(&on.to_string())
+    {
+        return None;
+    }
+    let as_of = fresh_var(fields, "as_of", &[]);
+    let mut parameters: Vec<Var> = fields
+        .iter()
+        .filter(|f| keys.contains(f))
+        .map(|f| Var::from(f.as_str()))
+        .collect();
+    parameters.push(as_of);
+    parameters.extend(
+        fields
+            .iter()
+            .filter(|f| !keys.contains(f) && *f != on)
+            .map(|f| Var::from(f.as_str())),
+    );
+    Some(InForceSignature {
+        name: in_force_define_name(predicate),
+        parameters,
+    })
+}
+
+/// `base` with underscores appended until it is neither a field nor one
+/// of `also`, so a generated variable never shadows an author's name.
+fn fresh_var(fields: &[String], base: &str, also: &[&Var]) -> Var {
+    let mut name = base.to_string();
+    while fields.contains(&name) || also.iter().any(|v| v.as_str() == name) {
+        name.push('_');
+    }
+    Var::from(name)
+}
+
 /// The in-force-on-a-date selector for `decl`, keyed by `keys` and dated
 /// by `on`: the dated claim, an on-or-before bound, and no strictly
 /// later version. A definition, because the author calls it.
@@ -176,13 +233,8 @@ pub fn in_force_define_name(predicate: &PredicateName) -> String {
 /// `None` when the clause cannot be lowered soundly (an unknown field, or
 /// a key that is also the date); validation owns the diagnostic.
 fn in_force_define(decl: &PredicateDecl, keys: &[String], on: &str) -> Option<Definition> {
-    let known = |f: &String| decl.args.iter().any(|a| a.name == *f);
-    if !keys.iter().all(known)
-        || !decl.args.iter().any(|a| a.name == on)
-        || keys.contains(&on.to_string())
-    {
-        return None;
-    }
+    let fields: Vec<String> = decl.args.iter().map(|a| a.name.clone()).collect();
+    let InForceSignature { name, parameters } = in_force_signature(&decl.name, &fields, keys, on)?;
     let domain = match decl.args.iter().find(|a| a.name == on)?.kind {
         PredicateArgKind::Date => OrderedDomain::Date,
         PredicateArgKind::Timestamp => OrderedDomain::Timestamp,
@@ -190,45 +242,29 @@ fn in_force_define(decl: &PredicateDecl, keys: &[String], on: &str) -> Option<De
         _ => return None,
     };
 
-    // Must not clash with a field name, or a field called `as_of` would
-    // yield a DuplicateParameter in a definition the author never wrote.
-    // Append underscores until unique.
-    let taken: Vec<&str> = decl.args.iter().map(|a| a.name.as_str()).collect();
-    let fresh = |base: &str, also: &[&Var]| {
-        let mut name = base.to_string();
-        while taken.contains(&name.as_str()) || also.iter().any(|v| v.as_str() == name) {
-            name.push('_');
-        }
-        Var::from(name)
-    };
-    let as_of = fresh("as_of", &[]);
-    let effective = fresh("effective_from", &[&as_of]);
-    let later = fresh("later_effective_from", &[&as_of, &effective]);
+    // The as-of parameter follows the keys, counted as fields so a repeated key cannot shift it.
+    let key_count = fields.iter().filter(|f| keys.contains(f)).count();
+    let as_of = parameters[key_count].clone();
+    let effective = fresh_var(&fields, "effective_from", &[&as_of]);
+    let later = fresh_var(&fields, "later_effective_from", &[&as_of, &effective]);
 
     // Positional: the date field and keys can sit anywhere.
-    let mut parameters: Vec<Var> = Vec::new();
     let mut outer: Vec<Term> = Vec::new();
     let mut inner: Vec<Term> = Vec::new();
-    let mut payload: Vec<Var> = Vec::new();
     for arg in &decl.args {
         if keys.contains(&arg.name) {
             let k = Var::from(arg.name.as_str());
-            parameters.push(k.clone());
             outer.push(Term::Var(k.clone()));
             inner.push(Term::Var(k));
         } else if arg.name == on {
             outer.push(Term::Var(effective.clone()));
             inner.push(Term::Var(later.clone()));
         } else {
-            let v = Var::from(arg.name.as_str());
-            payload.push(v.clone());
-            outer.push(Term::Var(v));
+            outer.push(Term::Var(Var::from(arg.name.as_str())));
             // Only the later version's date matters, not its payload.
             inner.push(Term::Wildcard);
         }
     }
-    parameters.push(as_of.clone());
-    parameters.extend(payload);
 
     let var = |v: &Var| Box::new(ValueExpr::Term(Term::Var(v.clone())));
     let no_later = Prop::Not(Box::new(Prop::Exists {
@@ -255,7 +291,7 @@ fn in_force_define(decl: &PredicateDecl, keys: &[String], on: &str) -> Option<De
 
     Some(Definition {
         origin: crate::ir::DefinitionOrigin::Discipline,
-        name: in_force_define_name(&decl.name).into(),
+        name: name.into(),
         parameters,
         body: Prop::And(vec![
             Prop::Claim {

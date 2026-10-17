@@ -64,7 +64,10 @@ pub use coverage::{
     TransformationUsage, render_coverage,
 };
 pub use definitions::resolve_defined_calls;
-pub use disciplines::{in_force_define_name, lower_discipline_definitions, lower_disciplines};
+pub use disciplines::{
+    InForceSignature, in_force_define_name, in_force_signature, lower_discipline_definitions,
+    lower_disciplines,
+};
 pub use eval::{EvalError, RenderedClaim, literal_value, ordered_compare_error};
 pub use explain::{
     ErrorRejection, Explanation, GateKind, GateRejection, InvariantRejection, MissingClaim,
