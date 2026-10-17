@@ -96,6 +96,28 @@ fn a_collection_parameter_renders_a_typed_list_field() {
 
 // The same binary and programme give byte-identical trees, so an embedder
 // can check for drift by regenerating and diffing.
+/// The models keep to the width a formatter would, so an embedder that
+/// formats the package has nothing to change and the regenerate-and-diff
+/// check stays clean. The fixtures carry the long names that once broke it.
+#[test]
+fn the_emitted_models_keep_to_the_formatter_width() {
+    for source in [
+        trade_lifecycle(),
+        repo_root().join("crates/morpholog-cli/tests/fixtures/every_generated_kind.morph"),
+    ] {
+        let out = tempfile::tempdir().unwrap();
+        assert!(generate(&source, out.path()).status.success());
+        let models =
+            std::fs::read_to_string(out.path().join("morpholog_client/models.py")).unwrap();
+        let over: Vec<String> = models
+            .lines()
+            .filter(|line| line.len() > 88)
+            .map(|line| format!("{} chars: {line}", line.len()))
+            .collect();
+        assert!(over.is_empty(), "{}: {over:#?}", source.display());
+    }
+}
+
 #[test]
 fn generation_is_byte_deterministic() {
     let first = tempfile::tempdir().unwrap();
