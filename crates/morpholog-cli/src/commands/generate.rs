@@ -594,7 +594,12 @@ fn render_init(program: &Program) -> String {
          MORPHOLOG_VERSION = \"{version}\"\n\
          PYTHON_FLOOR = ({floor_major}, {floor_minor})\n\n\
          from . import envelopes, models, values  # noqa: E402\n\
-         from .adapter import Morpholog, MorphologBatchIncomplete, MorphologError, Request  # noqa: E402\n\
+         from .adapter import (  # noqa: E402\n    \
+             Morpholog,\n    \
+             MorphologBatchIncomplete,\n    \
+             MorphologError,\n    \
+             MorphologNotCovered,\n    \
+             Request,\n)\n\
          from .session import (  # noqa: E402\n    \
              MorphologOutcomeUnknown,\n    \
              MorphologRequestError,\n    \
@@ -649,6 +654,7 @@ fn render_init(program: &Program) -> String {
              \"Morpholog\",\n    \
              \"MorphologBatchIncomplete\",\n    \
              \"MorphologError\",\n    \
+             \"MorphologNotCovered\",\n    \
              \"MorphologOutcomeUnknown\",\n    \
              \"MorphologRequestError\",\n    \
              \"Request\",\n    \

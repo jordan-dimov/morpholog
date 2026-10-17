@@ -323,7 +323,7 @@ async fn checkpoint_at(
     use morpholog_postgres::CheckpointOutcome::{Created, NoNewRows};
     for attempt in 0..3 {
         drain_open_transactions(pool).await;
-        match morpholog_postgres::create_checkpoint(pool, signer, None)
+        match morpholog_postgres::create_checkpoint(pool, signer, None, None)
             .await
             .unwrap()
         {

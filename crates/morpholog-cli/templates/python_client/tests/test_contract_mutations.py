@@ -140,6 +140,7 @@ CASES = {
     "checkpoint_created.json": ("checkpoint_outcome", E.parse_checkpoint_outcome),
     "checkpoint_created_signed.json": ("checkpoint_outcome", E.parse_checkpoint_outcome),
     "checkpoint_no_new_rows.json": ("checkpoint_outcome", E.parse_checkpoint_outcome),
+    "checkpoint_refusal_not_covered.json": ("checkpoint_refusal", E.CheckpointRefusal.from_json),
     "checkpoint_created_witnessed.json": ("checkpoint_outcome", E.parse_checkpoint_outcome),
     "checkpoint_witnessed.json": ("checkpoint", E.Checkpoint.from_json),
     "pack_verification_report.json": (

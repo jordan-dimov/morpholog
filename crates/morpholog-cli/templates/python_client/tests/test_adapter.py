@@ -19,6 +19,7 @@ from python_client.adapter import (
     Morpholog,
     MorphologBatchIncomplete,
     MorphologError,
+    MorphologNotCovered,
     MorphologOutcomeUnknown,
     MorphologRequestError,
     MorphologTimeout,
@@ -904,6 +905,10 @@ class AdapterDiscrimination(unittest.TestCase):
             argv = argv_after(lambda: self.client.audit_checkpoint())
             self.assertNotIn("--writer-role", argv)
             self.assertNotIn("--witness", argv)
+            self.assertNotIn("--covering", argv)
+
+            argv = argv_after(lambda: self.client.audit_checkpoint(covering="t-1"))
+            self.assertEqual(argv[argv.index("--covering") + 1], "t-1")
 
             argv = argv_after(
                 lambda: self.client.audit_checkpoint(
@@ -923,6 +928,20 @@ class AdapterDiscrimination(unittest.TestCase):
             self.assertEqual(argv[argv.index("--witness") + 1], "rfc3161:http://a.example/tsr")
             with self.assertRaises(ValueError):
                 self.client.audit_witness(3, [])
+
+    def test_a_checkpoint_covering_a_withheld_transition_raises_a_transient_refusal(self):
+        self._mode("stdout_then_exit")
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        self.addCleanup(os.environ.pop, "STUB_EXIT", None)
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "checkpoint_refusal_not_covered.json").read_text()
+        os.environ["STUB_EXIT"] = "1"
+        with self.assertRaises(MorphologNotCovered) as caught:
+            self.client.audit_checkpoint(covering="01990000-0000-7000-8000-000000000001")
+        self.assertEqual(caught.exception.code, "transition_not_covered")
+        self.assertEqual(caught.exception.transition_id, "01990000-0000-7000-8000-000000000001")
+        self.assertEqual(caught.exception.tree_size, 2)
+        self.assertTrue(caught.exception.retriable)
+        self.assertNotIsInstance(caught.exception, MorphologRequestError)
 
     def test_transact_returns_the_decision_and_raises_a_coded_error_with_retriable(self):
         self._mode("transact_stdout")

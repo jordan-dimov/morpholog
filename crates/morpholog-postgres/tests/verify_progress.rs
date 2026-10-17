@@ -29,7 +29,7 @@ async fn both_passes_report_progress_to_their_totals() {
             .unwrap(),
         );
     }
-    create_checkpoint(&pool, None, None).await.unwrap();
+    create_checkpoint(&pool, None, None, None).await.unwrap();
 
     let mut seen: Vec<VerifyProgress> = Vec::new();
     verify_replay(&pool, &mut |p| seen.push(p)).await.unwrap();
@@ -61,7 +61,7 @@ async fn the_tree_pass_ends_at_the_checkpoint_when_later_rows_exist() {
     for doc in ["doc_1", "doc_2", "doc_3"] {
         submit(&pool, &program, doc).await;
     }
-    create_checkpoint(&pool, None, None).await.unwrap();
+    create_checkpoint(&pool, None, None, None).await.unwrap();
     submit(&pool, &program, "doc_4").await;
 
     let mut seen: Vec<VerifyProgress> = Vec::new();

@@ -1,0 +1,7 @@
+{
+  "code": "transition_not_covered",
+  "error": "transition 01990000-0000-7000-8000-000000000001 is committed but outside this checkpoint's stable prefix (tree_size 2); nothing was recorded, retry after the prefix advances",
+  "status": "error",
+  "transition_id": "01990000-0000-7000-8000-000000000001",
+  "tree_size": 2
+}

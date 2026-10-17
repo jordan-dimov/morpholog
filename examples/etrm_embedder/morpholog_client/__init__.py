@@ -20,7 +20,13 @@ MORPHOLOG_VERSION = "0.0.15"
 PYTHON_FLOOR = (3, 12)
 
 from . import envelopes, models, values  # noqa: E402
-from .adapter import Morpholog, MorphologBatchIncomplete, MorphologError, Request  # noqa: E402
+from .adapter import (  # noqa: E402
+    Morpholog,
+    MorphologBatchIncomplete,
+    MorphologError,
+    MorphologNotCovered,
+    Request,
+)
 from .session import (  # noqa: E402
     MorphologOutcomeUnknown,
     MorphologRequestError,
@@ -81,6 +87,7 @@ __all__ = [
     "Morpholog",
     "MorphologBatchIncomplete",
     "MorphologError",
+    "MorphologNotCovered",
     "MorphologOutcomeUnknown",
     "MorphologRequestError",
     "Request",

@@ -368,6 +368,32 @@ async fn collect_leaves(
     Ok((leaves, last))
 }
 
+/// Refuse unless `id` is inside the prefix below `horizon`. `>=` mirrors
+/// the pager's strict `<`: a row at the horizon is withheld.
+async fn refuse_unless_covered(
+    conn: &mut sqlx::PgConnection,
+    id: Uuid,
+    horizon: Timestamp,
+    tree_size: i64,
+) -> Result<(), PgError> {
+    // `committed_at` is NOT NULL and the horizon is bound, so the
+    // comparison is never NULL.
+    let withheld = sqlx::query_scalar!(
+        r#"SELECT committed_at >= $2 AS "withheld!"
+           FROM morpholog.audit WHERE transition_id = $1"#,
+        id,
+        horizon.to_sqlx(),
+    )
+    .fetch_optional(conn)
+    .await
+    .map_err(classify_checked_query)?;
+    match withheld {
+        None => Err(PgError::TransitionNotFound(id)),
+        Some(true) => Err(PgError::TransitionNotCovered { id, tree_size }),
+        Some(false) => Ok(()),
+    }
+}
+
 /// A checkpoint row as stored, digests as text.
 struct StoredCheckpoint {
     tree_size: i64,
@@ -434,10 +460,19 @@ fn make_signature(signer: &CheckpointSigner, head: &signing::TreeHead<'_>) -> Tr
 /// head, so concurrent runs cannot fork it. If the prefix has not grown,
 /// no new tree is recorded, but a signer's signature is still added to
 /// the existing head (deduplicated on re-sign).
+///
+/// With `covering`, the run refuses unless that transition is inside the
+/// stable prefix it read: [`PgError::TransitionNotCovered`] for a committed
+/// row the horizon withholds, [`PgError::TransitionNotFound`] for an id the
+/// snapshot does not hold. A refusal records nothing. Every head this run
+/// can return is a prefix at least as long as the one it read, over the
+/// same order, so a transition inside the prefix read is inside the head
+/// returned, including a head a concurrent run advanced.
 pub async fn create_checkpoint(
     pool: &PgPool,
     signer: Option<&CheckpointSigner>,
     writers: Option<&[String]>,
+    covering: Option<Uuid>,
 ) -> Result<CheckpointOutcome, PgError> {
     // Watermark before the snapshot: only below the horizon can no
     // in-flight writer still insert inside the prefix.
@@ -446,6 +481,9 @@ pub async fn create_checkpoint(
     let mut read_tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
     let (leaves, last) = collect_leaves(&mut read_tx, horizon).await?;
     let tree_size = leaves.len() as i64;
+    if let Some(id) = covering {
+        refuse_unless_covered(&mut read_tx, id, horizon, tree_size).await?;
+    }
     // When signing, judge authority over the same prefix in the same
     // snapshot, so the check and the leaves agree; on failure the withheld
     // row count comes from this snapshot too. The verdict is held, not

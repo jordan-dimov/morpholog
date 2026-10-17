@@ -134,6 +134,23 @@ impl core::marker::Unpin for morpholog_cli::envelopes::CheckedInvariant
 impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::CheckedInvariant
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::CheckedInvariant
 impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::CheckedInvariant
+pub struct morpholog_cli::envelopes::CheckpointRefusal
+pub morpholog_cli::envelopes::CheckpointRefusal::code: &'static str
+pub morpholog_cli::envelopes::CheckpointRefusal::error: alloc::string::String
+pub morpholog_cli::envelopes::CheckpointRefusal::status: &'static str
+pub morpholog_cli::envelopes::CheckpointRefusal::transition_id: uuid::Uuid
+pub morpholog_cli::envelopes::CheckpointRefusal::tree_size: i64
+impl morpholog_cli::envelopes::CheckpointRefusal
+pub fn morpholog_cli::envelopes::CheckpointRefusal::not_covered(uuid::Uuid, i64) -> Self
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::CheckpointRefusal
+pub fn morpholog_cli::envelopes::CheckpointRefusal::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::CheckpointRefusal
+impl core::marker::Send for morpholog_cli::envelopes::CheckpointRefusal
+impl core::marker::Sync for morpholog_cli::envelopes::CheckpointRefusal
+impl core::marker::Unpin for morpholog_cli::envelopes::CheckpointRefusal
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::CheckpointRefusal
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::CheckpointRefusal
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::CheckpointRefusal
 pub struct morpholog_cli::envelopes::ErrorReceipt
 pub morpholog_cli::envelopes::ErrorReceipt::code: morpholog_cli::envelopes::ErrorCode
 pub morpholog_cli::envelopes::ErrorReceipt::error: alloc::string::String

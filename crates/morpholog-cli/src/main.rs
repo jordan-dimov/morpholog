@@ -498,6 +498,15 @@ pub(crate) struct CheckpointArgs {
     /// checkpointed.
     #[arg(long, value_name = "SCHEME:URL")]
     pub(crate) witness: Vec<commands::witness::WitnessTarget>,
+
+    /// Succeed only with a head that contains this transition. A
+    /// committed transition outside the stable prefix this run can
+    /// checkpoint is refused with a coded `checkpoint_refusal` object on
+    /// stdout (`transition_not_covered`), nothing recorded and exit one:
+    /// retry after the prefix advances. An id the audit log does not hold
+    /// is an ordinary error.
+    #[arg(long, value_name = "TRANSITION_ID")]
+    pub(crate) covering: Option<uuid::Uuid>,
 }
 
 /// Arguments for `audit witness`: which recorded checkpoint, and which

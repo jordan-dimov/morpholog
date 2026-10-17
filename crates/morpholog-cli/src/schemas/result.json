@@ -1472,6 +1472,18 @@
         }
       ]
     },
+    "checkpoint_refusal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "code", "error", "transition_id", "tree_size"],
+      "properties": {
+        "status": { "const": "error" },
+        "code": { "const": "transition_not_covered" },
+        "error": { "type": "string" },
+        "transition_id": { "type": "string" },
+        "tree_size": { "type": "integer", "minimum": 0 }
+      }
+    },
     "verify_outcome": {
       "oneOf": [
         {
