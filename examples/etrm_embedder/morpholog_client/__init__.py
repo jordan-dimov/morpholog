@@ -25,6 +25,7 @@ from .adapter import (  # noqa: E402
     MorphologBatchIncomplete,
     MorphologError,
     MorphologNotCovered,
+    MorphologWitnessFailed,
     Request,
 )
 from .session import (  # noqa: E402
@@ -88,6 +89,7 @@ __all__ = [
     "MorphologBatchIncomplete",
     "MorphologError",
     "MorphologNotCovered",
+    "MorphologWitnessFailed",
     "MorphologOutcomeUnknown",
     "MorphologRequestError",
     "Request",

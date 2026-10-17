@@ -599,6 +599,7 @@ fn render_init(program: &Program) -> String {
              MorphologBatchIncomplete,\n    \
              MorphologError,\n    \
              MorphologNotCovered,\n    \
+             MorphologWitnessFailed,\n    \
              Request,\n)\n\
          from .session import (  # noqa: E402\n    \
              MorphologOutcomeUnknown,\n    \
@@ -655,6 +656,7 @@ fn render_init(program: &Program) -> String {
              \"MorphologBatchIncomplete\",\n    \
              \"MorphologError\",\n    \
              \"MorphologNotCovered\",\n    \
+             \"MorphologWitnessFailed\",\n    \
              \"MorphologOutcomeUnknown\",\n    \
              \"MorphologRequestError\",\n    \
              \"Request\",\n    \

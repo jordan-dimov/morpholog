@@ -23,6 +23,7 @@ from python_client.adapter import (
     MorphologOutcomeUnknown,
     MorphologRequestError,
     MorphologTimeout,
+    MorphologWitnessFailed,
 )
 
 STUB = """#!/usr/bin/env python3
@@ -47,6 +48,7 @@ if mode == "killed":
 if mode == "stdout_then_exit":
     sys.stdout.write(os.environ["STUB_STDOUT"])
     sys.stdout.flush()
+    sys.stderr.write(os.environ.get("STUB_STDERR", ""))
     sys.exit(int(os.environ.get("STUB_EXIT", "0")))
 if mode == "batch_receipt_then_killed":
     print('{"row": 1, "status": "rejected", "reason": "closed period"}', flush=True)
@@ -942,6 +944,73 @@ class AdapterDiscrimination(unittest.TestCase):
         self.assertEqual(caught.exception.tree_size, 2)
         self.assertTrue(caught.exception.retriable)
         self.assertNotIsInstance(caught.exception, MorphologRequestError)
+
+    def _witness_failure(self, stdout: object) -> None:
+        self._mode("stdout_then_exit")
+        for var in ("STUB_STDOUT", "STUB_EXIT", "STUB_STDERR"):
+            self.addCleanup(os.environ.pop, var, None)
+        os.environ["STUB_STDOUT"] = stdout if isinstance(stdout, str) else json.dumps(stdout)
+        os.environ["STUB_EXIT"] = "1"
+        os.environ["STUB_STDERR"] = (
+            "error: http://b.example/tsr: connection refused\n"
+            "The checkpoint is recorded and printed above; retry with "
+            "`audit witness --tree-size 3 --witness rfc3161:http://b.example/tsr`.\n"
+        )
+
+    def test_a_failed_witness_submission_raises_with_the_checkpoint_as_stored(self):
+        # The binary prints the checkpoint with the witnesses that did land
+        # and exits 1 naming the rest. Stdout stays the result, but the
+        # exit says the witnessing is incomplete, and the caller gets both.
+        witnesses = ["rfc3161:http://a.example/tsr", "rfc3161:http://b.example/tsr"]
+        stored = golden("checkpoint_witnessed.json")
+        self._witness_failure(stored)
+        with self.assertRaises(MorphologWitnessFailed) as caught:
+            self.client.audit_witness(3, witnesses)
+        self.assertEqual(caught.exception.checkpoint, envelopes.Checkpoint.from_json(stored))
+        self.assertTrue(caught.exception.retriable)
+        self.assertIn("audit witness --tree-size 3", str(caught.exception))
+        self.assertNotIsInstance(caught.exception, MorphologRequestError)
+
+        created = golden("checkpoint_created.json")
+        os.environ["STUB_STDOUT"] = json.dumps(created)
+        with self.assertRaises(MorphologWitnessFailed) as caught:
+            self.client.audit_checkpoint(witnesses=witnesses)
+        self.assertEqual(
+            caught.exception.checkpoint,
+            envelopes.parse_checkpoint_outcome(created).checkpoint,
+        )
+
+        # Nothing was asked to witness, so the exit code says nothing
+        # about witnessing: the outcome printed is the result, as before.
+        outcome = self.client.audit_checkpoint()
+        self.assertIsInstance(outcome, envelopes.CheckpointCreated)
+
+        # Every authority answered: the plain results, as before.
+        os.environ["STUB_EXIT"] = "0"
+        self.assertIsInstance(
+            self.client.audit_checkpoint(witnesses=witnesses), envelopes.CheckpointCreated
+        )
+        os.environ["STUB_STDOUT"] = json.dumps(stored)
+        self.assertIsInstance(self.client.audit_witness(3, witnesses), envelopes.Checkpoint)
+
+    def test_a_witness_failure_is_only_ever_raised_over_a_valid_checkpoint(self):
+        # Exit 1 beside anything but a checkpoint envelope follows the
+        # operational contract: it is never read as a partial success.
+        witnesses = ["rfc3161:http://a.example/tsr"]
+        self._witness_failure('{"tree_size": "three"}')
+        for call in (
+            lambda: self.client.audit_witness(3, witnesses),
+            lambda: self.client.audit_checkpoint(witnesses=witnesses),
+        ):
+            with self.assertRaises(envelopes.EnvelopeError) as caught:
+                call()
+            self.assertNotIsInstance(caught.exception, MorphologWitnessFailed)
+            os.environ["STUB_STDOUT"] = ""
+            with self.assertRaises(MorphologError) as caught:
+                call()
+            self.assertNotIsInstance(caught.exception, MorphologWitnessFailed)
+            self.assertIn("connection refused", str(caught.exception))
+            os.environ["STUB_STDOUT"] = '{"tree_size": "three"}'
 
     def test_transact_returns_the_decision_and_raises_a_coded_error_with_retriable(self):
         self._mode("transact_stdout")
