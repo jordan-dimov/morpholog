@@ -129,6 +129,28 @@ class MorphologNotCovered(MorphologError):
         self.tree_size = refusal.tree_size
 
 
+class MorphologWitnessFailed(MorphologError):
+    """``audit_checkpoint(witnesses=...)`` or ``audit_witness`` recorded
+    the checkpoint and stored every witness that arrived, and at least
+    one authority did not answer with one. ``checkpoint`` is the head as
+    now stored, so the caller sees which witnesses did land; the message
+    is the binary's own account of each failed authority and the command
+    that retries exactly those. Repeating the witness call for the same
+    tree size adds to the recorded head and never records a checkpoint,
+    and a proof already stored is not stored twice, so the retry is safe;
+    whether the authority answers next time is its own affair. A head
+    short of the witnesses it needs is not a witnessed close."""
+
+    retriable = True
+
+    def __init__(self, checkpoint: envelopes.Checkpoint, stderr: str) -> None:
+        super().__init__(
+            f"the checkpoint at tree size {checkpoint.tree_size} is recorded, "
+            f"but a witness submission failed:\n{stderr}"
+        )
+        self.checkpoint = checkpoint
+
+
 class MorphologTimeout(MorphologError):
     """The binary did not finish within the client's timeout and was
     killed. Operational for a read; for a proposal the caller must not
@@ -345,10 +367,13 @@ class Morpholog:
 
     def _invoke(self, *args: str, stdin: str | None = None) -> str:
         proc = self._run(list(args), stdin=stdin, timeout=self.timeout)
+        return self._decided(proc, list(args))
+
+    def _decided(self, proc: subprocess.CompletedProcess[str], args: list[str]) -> str:
+        """Stdout is the decided result, whatever the exit code; empty
+        stdout is an operational failure."""
         if not proc.stdout.strip():
-            raise MorphologError(
-                f"`{_redact_argv(list(args))}`:\n{self._redact_stderr(proc.stderr)}"
-            )
+            raise MorphologError(f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}")
         return proc.stdout
 
     def _json(self, *args: str) -> object:
@@ -1060,8 +1085,9 @@ class Morpholog:
         ``audit`` - the checkpoint's stable prefix rests on the same
         resume horizon. ``witnesses`` (each ``"rfc3161:<url>"``) has those
         timestamp authorities countersign the new head after the commit;
-        the checkpoint is recorded either way, and a failed submission is
-        an operational error naming ``audit_witness`` to retry. With
+        the checkpoint is recorded either way, and a failed submission
+        raises ``MorphologWitnessFailed`` carrying the head as stored, to
+        retry with ``audit_witness``. With
         ``covering`` (a transition id) the result's head contains that
         transition, or the call raises: ``MorphologNotCovered`` while it
         is outside the stable prefix (nothing recorded; retry after the
@@ -1075,10 +1101,14 @@ class Morpholog:
         args += self._repeat("--writer-role", writer_roles)
         args += self._repeat("--witness", witnesses)
         args += self._opt("--covering", covering)
-        payload = self._json(*args)
+        proc = self._run(args, timeout=self.timeout)
+        payload = json.loads(self._decided(proc, args))
         if isinstance(payload, dict) and payload.get("status") == "error":
             raise MorphologNotCovered(envelopes.CheckpointRefusal.from_json(payload))
-        return envelopes.parse_checkpoint_outcome(payload)
+        outcome = envelopes.parse_checkpoint_outcome(payload)
+        if witnesses and proc.returncode != 0:
+            raise MorphologWitnessFailed(outcome.checkpoint, self._redact_stderr(proc.stderr))
+        return outcome
 
     def audit_witness(self, tree_size: int, witnesses: list[str]) -> envelopes.Checkpoint:
         """Have timestamp authorities (each ``"rfc3161:<url>"``) witness
@@ -1086,14 +1116,18 @@ class Morpholog:
         response on it as it arrives. Returns the checkpoint as now
         stored. Every authority is attempted; a response that is not over
         this head is refused and stores nothing, and if any authority
-        failed the call is an operational error naming the retry, with
-        the others' witnesses already stored."""
+        failed the call raises ``MorphologWitnessFailed`` carrying the
+        checkpoint with the others' witnesses already stored."""
         if not witnesses:
             raise ValueError("name at least one witness")
         args = ["audit", "witness", "--database-url", self.database_url]
         args.extend(["--tree-size", str(tree_size)])
         args += self._repeat("--witness", witnesses)
-        return envelopes.Checkpoint.from_json(self._json(*args))
+        proc = self._run(args, timeout=self.timeout)
+        checkpoint = envelopes.Checkpoint.from_json(json.loads(self._decided(proc, args)))
+        if proc.returncode != 0:
+            raise MorphologWitnessFailed(checkpoint, self._redact_stderr(proc.stderr))
+        return checkpoint
 
     def audit_export(
         self, path: str, tree_size: int | None = None, timeout: float | None = None
