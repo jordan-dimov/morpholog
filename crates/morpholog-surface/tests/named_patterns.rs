@@ -214,9 +214,9 @@ fn rest_is_refused_on_admit_and_emit() {
 }
 
 #[test]
-fn a_named_pattern_on_a_definition_is_refused_by_kind() {
-    // The definition comes after its use; the refusal must still name it as one.
-    let src = "\
+fn a_named_call_on_a_definition_resolves_against_its_parameters() {
+    // The definition comes after its use, as a predicate may.
+    let named = "\
 program defs
 predicate Reading(r: Subject, level: Decimal)
 invariant bad:
@@ -224,14 +224,28 @@ invariant bad:
 define in_band(level):
     Reading(_, level) and 0 <= level
 ";
-    refuses(src, "is a definition; definitions have parameters");
+    let positional = named.replace("in_band(level: l)", "in_band(l)");
+    assert_eq!(
+        parse_program(named).unwrap(),
+        parse_program(&positional).unwrap(),
+        "a named call and its positional twin must produce identical IR"
+    );
+    refuses(
+        &named.replace("in_band(level: l)", "in_band(band: l)"),
+        "`in_band` declares no parameter `band`; declared: level",
+    );
+    // `..` over the one parameter is the positional `in_band(_)`: lawful, the body binds it.
+    assert_eq!(
+        parse_program(&named.replace("in_band(level: l) implies 0 <= l", "in_band(..)")).unwrap(),
+        parse_program(&positional.replace("in_band(l) implies 0 <= l", "in_band(_)")).unwrap(),
+    );
 }
 
 #[test]
 fn a_named_pattern_on_an_undeclared_head_is_refused() {
     refuses(
         &format!("{DECLS}invariant bad:\n    Ghost(field: x, ..) implies 0 <= x\n"),
-        "named fields need a declared predicate; `Ghost` is not one",
+        "named fields need a declared predicate or definition; `Ghost` is neither",
     );
 }
 
@@ -601,5 +615,168 @@ fn a_refused_rest_on_admit_yields_one_diagnostic_not_two() {
             .any(|d| d.message.contains("wildcard `_` is not allowed")),
         "one authored mistake, one diagnostic: {:?}",
         errs.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+// ============================================================
+// Definition calls: parameters play the part of fields
+// ============================================================
+
+const DATED: &str = "\
+program dated
+predicate Terms(trade: Subject, version: Subject, qty: Decimal, delivery: Subject, effective_from: Date)
+    unique by (version)
+    effective by (trade) on (effective_from)
+predicate Settled(trade: Subject, on: Date, qty: Decimal)
+";
+
+/// Parse, format, reparse, format again: the IR, the text and the hash must all settle at once.
+fn settles_at_once(src: &str, needle: &str) {
+    let first = parse_program(src).unwrap();
+    let formatted = format_program(&first);
+    assert!(
+        formatted.contains(needle),
+        "expected the formatter to spell `{needle}`; got:\n{formatted}"
+    );
+    let second = parse_program(&formatted).unwrap();
+    assert_eq!(first, second, "formatting changed the IR");
+    assert_eq!(
+        formatted,
+        format_program(&second),
+        "a second formatting pass changed the text"
+    );
+    assert_eq!(canonical_hash(&first), canonical_hash(&second));
+}
+
+#[test]
+fn a_named_call_on_a_generated_selector_resolves_against_its_signature() {
+    // The selector does not exist in the source: keys, then `as_of`, then the payload fields.
+    let named = format!(
+        "{DATED}invariant within:\n    Settled(t, d, q) and \
+         terms_in_force_on(trade: t, as_of: d, qty: cap, ..) implies q <= cap\n"
+    );
+    let positional = format!(
+        "{DATED}invariant within:\n    Settled(t, d, q) and \
+         terms_in_force_on(t, d, _, cap, _) implies q <= cap\n"
+    );
+    let a = parse_program(&named).unwrap();
+    let b = parse_program(&positional).unwrap();
+    assert_eq!(a, b, "the named call must lower to its positional twin");
+    assert_eq!(canonical_hash(&a), canonical_hash(&b));
+    assert!(a.validate().is_ok(), "{:?}", a.validate());
+    refuses(
+        &named.replace("qty: cap", "quantity: cap"),
+        "`terms_in_force_on` declares no parameter `quantity`; declared: trade, as_of, version, qty, delivery",
+    );
+}
+
+#[test]
+fn the_generated_as_of_parameter_is_named_as_the_lowering_renames_it() {
+    // A field called `as_of` pushes the generated parameter to `as_of_`; the call uses that name.
+    let src = "\
+program dated
+predicate Rate(charge: Subject, as_of: Date, amount: Decimal)
+    effective by (charge) on (as_of)
+invariant positive:
+    rate_in_force_on(charge: c, as_of_: @2026-06-01, amount: a) implies 0 <= a
+";
+    let named = parse_program(src).unwrap();
+    let positional = parse_program(&src.replace(
+        "rate_in_force_on(charge: c, as_of_: @2026-06-01, amount: a)",
+        "rate_in_force_on(c, @2026-06-01, a)",
+    ))
+    .unwrap();
+    assert_eq!(named, positional);
+    assert!(named.validate().is_ok(), "{:?}", named.validate());
+    refuses(
+        &src.replace("as_of_: @2026-06-01", "as_of: @2026-06-01"),
+        "`rate_in_force_on` declares no parameter `as_of`; declared: charge, as_of_, amount",
+    );
+}
+
+#[test]
+fn rest_cannot_supply_an_input_the_selector_needs() {
+    // `..` wildcards `as_of`, which the body only reads, so the call is as unbound as the
+    // positional `_` would be.
+    let src = format!(
+        "{DATED}invariant bad:\n    Settled(t, d, q) and \
+         terms_in_force_on(trade: t, qty: cap, ..) implies q <= cap\n"
+    );
+    let program = parse_program(&src).unwrap();
+    let errs = program
+        .validate()
+        .expect_err("an unbound as_of must not validate");
+    assert!(
+        errs.iter().any(|e| e.to_string().contains("as_of")),
+        "expected the refusal to name `as_of`; got {errs:?}"
+    );
+}
+
+#[test]
+fn a_definition_sharing_a_predicates_name_is_refused_whatever_the_spelling() {
+    let src = "\
+program clash
+predicate Reading(r: Subject, level: Decimal)
+define Reading(level):
+    0 <= level
+invariant bad:
+    Reading(level: l, ..) implies 0 <= l
+";
+    // The parser accepts the declarations; validation owns the shared namespace.
+    let program = parse_program(src).expect("the collision reaches validation");
+    let errs = program
+        .validate()
+        .expect_err("a predicate and a definition of one name never validate");
+    assert!(
+        errs.iter().any(|e| matches!(
+            e,
+            morpholog_core::ValidationError::DefinitionNameCollision { .. }
+        )),
+        "got {errs:?}"
+    );
+}
+
+#[test]
+fn the_formatter_names_a_definition_call_with_a_wildcard_wall() {
+    let authored = "\
+program defs
+predicate Reading(r: Subject, site: Subject, level: Decimal, taken_on: Date)
+define reading_at(site, level, taken_on, r):
+    Reading(r, site, level, taken_on)
+invariant positive:
+    reading_at(s, l, _, _) implies 0 <= l
+";
+    settles_at_once(authored, "reading_at(site: s, level: l, ..)");
+    let generated = format!(
+        "{DATED}invariant delivered:\n    Settled(t, d, _) and \
+         terms_in_force_on(t, d, _, _, dl) implies Settled(t, d, _)\n"
+    );
+    settles_at_once(
+        &generated,
+        "terms_in_force_on(trade: t, as_of: d, delivery: dl, ..)",
+    );
+    // One wildcard stays positional, as for a claim pattern.
+    let single = format!(
+        "{DATED}invariant within:\n    Settled(t, d, q) and \
+         terms_in_force_on(t, d, _, cap, dl) implies q <= cap\n"
+    );
+    settles_at_once(&single, "terms_in_force_on(t, d, _, cap, dl)");
+}
+
+#[test]
+fn trade_lifecycle_hashes_as_its_positional_twin() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/10_trade_lifecycle/trade_lifecycle.morph");
+    let named = fs::read_to_string(&path).unwrap();
+    let now = "trade_terms_in_force_on(trade: trade, as_of: d, quantity: qty, ..)";
+    assert!(named.contains(now), "the file no longer spells `{now}`");
+    let positional = named.replace(now, "trade_terms_in_force_on(trade, d, _, qty, _)");
+    let a = parse_program(&named).unwrap();
+    let b = parse_program(&positional).unwrap();
+    assert_eq!(a, b);
+    // The hash the file had before the call was respelled.
+    assert_eq!(
+        canonical_hash(&a),
+        "sha256:8f40dc6b6e53fc332379ad889d24154e9c1d5431b9db4559df2e51789b427daa"
     );
 }

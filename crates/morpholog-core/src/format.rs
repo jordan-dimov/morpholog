@@ -93,54 +93,81 @@ pub(crate) fn canonical_preimage(p: &Program) -> String {
     render_program(
         p,
         FormatContext {
-            predicates: Some(&naming),
+            naming: Some(&naming),
             named_canonical: false,
         },
     )
 }
 
-/// The declaration table the named forms resolve field names from,
-/// when the caller holds a whole programme.
-type Naming<'a> = Option<&'a std::collections::HashMap<&'a str, &'a PredicateDecl>>;
+/// The declaration tables the named forms resolve names from, when the
+/// caller holds a whole programme: a predicate's fields, a definition's
+/// parameters (a generated selector's included).
+struct Naming<'a> {
+    predicates: std::collections::HashMap<&'a str, &'a PredicateDecl>,
+    definitions: std::collections::HashMap<&'a str, &'a [Var]>,
+}
 
-/// What every formatting call carries. `predicates` supplies field
-/// names; it is `None` for diagnostic display text (rejection reasons,
-/// witnesses). `named_canonical` turns on the human-facing form, where
-/// wildcard runs print named; off, the rendering is the stable
+/// What every formatting call carries. `naming` supplies field and
+/// parameter names; it is `None` for diagnostic display text (rejection
+/// reasons, witnesses). `named_canonical` turns on the human-facing form,
+/// where wildcard runs print named; off, the rendering is the stable
 /// positional one the hash uses. In either mode, a `value` lookup whose
 /// hole is not its first wildcard prints named when it can, because the
 /// positional text would reparse differently.
 #[derive(Clone, Copy)]
 pub(crate) struct FormatContext<'a> {
-    predicates: Naming<'a>,
+    naming: Option<&'a Naming<'a>>,
     named_canonical: bool,
 }
 
 impl FormatContext<'_> {
     /// Decl-free positional rendering: diagnostics and inline helpers.
     pub(crate) const DIAGNOSTIC: FormatContext<'static> = FormatContext {
-        predicates: None,
+        naming: None,
         named_canonical: false,
     };
+
+    fn predicate(&self, name: &str) -> Option<&PredicateDecl> {
+        self.naming.and_then(|n| n.predicates.get(name).copied())
+    }
 }
 
-/// The field-name table for the named form. Duplicate predicate names
-/// and repeated field names are left out: such programmes do not
-/// validate, and named text for them would resolve wrongly.
-fn claim_naming(p: &Program) -> std::collections::HashMap<&str, &PredicateDecl> {
-    let mut counts = std::collections::HashMap::new();
-    for d in &p.predicates {
-        *counts.entry(d.name.as_str()).or_insert(0usize) += 1;
+/// The name tables for the named form. Duplicate names and repeated
+/// fields or parameters are left out: such programmes do not validate,
+/// and named text for them would resolve wrongly.
+fn claim_naming(p: &Program) -> Naming<'_> {
+    fn unique<'a, T: Copy>(
+        items: impl Iterator<Item = (&'a str, T, Vec<&'a str>)> + Clone,
+    ) -> std::collections::HashMap<&'a str, T> {
+        let mut counts = std::collections::HashMap::new();
+        for (name, _, _) in items.clone() {
+            *counts.entry(name).or_insert(0usize) += 1;
+        }
+        items
+            .filter(|(name, _, _)| counts[name] == 1)
+            .filter(|(_, _, names)| {
+                let mut seen = std::collections::HashSet::new();
+                names.iter().all(|n| seen.insert(*n))
+            })
+            .map(|(name, item, _)| (name, item))
+            .collect()
     }
-    p.predicates
-        .iter()
-        .filter(|d| counts[d.name.as_str()] == 1)
-        .filter(|d| {
-            let mut seen = std::collections::HashSet::new();
-            d.args.iter().all(|a| seen.insert(a.name.as_str()))
-        })
-        .map(|d| (d.name.as_str(), d))
-        .collect()
+    Naming {
+        predicates: unique(p.predicates.iter().map(|d| {
+            (
+                d.name.as_str(),
+                d,
+                d.args.iter().map(|a| a.name.as_str()).collect(),
+            )
+        })),
+        definitions: unique(p.definitions.iter().map(|d| {
+            (
+                d.name.as_str(),
+                d.parameters.as_slice(),
+                d.parameters.iter().map(Var::as_str).collect(),
+            )
+        })),
+    }
 }
 
 /// The longest run of consecutive wildcards. Two or more in a row
@@ -167,7 +194,7 @@ pub fn format_program(p: &Program) -> String {
     render_program(
         p,
         FormatContext {
-            predicates: Some(&naming),
+            naming: Some(&naming),
             named_canonical: true,
         },
     )
@@ -418,12 +445,7 @@ fn fmt_prop(p: &Prop, ctx: FormatContext) -> String {
     fn prop_primary(p: &Prop, ctx: FormatContext) -> String {
         match p {
             Prop::Claim { predicate, args } => fmt_predicate_call(predicate.as_str(), args, ctx),
-            // A definition call has parameters, not fields, so it never
-            // takes the named form. Branch on the variant: a definition
-            // may share its name with a predicate.
-            Prop::Defined { name, args } => {
-                fmt_predicate_call(name.as_str(), args, FormatContext::DIAGNOSTIC)
-            }
+            Prop::Defined { name, args } => fmt_defined_call(name.as_str(), args, ctx),
             // `pre(...)` is function-call-shape; no outer parens needed.
             Prop::Pre(inner) => format!("pre({})", fmt_prop(inner, ctx)),
             _ => format!("({})", fmt_prop(p, ctx)),
@@ -432,11 +454,8 @@ fn fmt_prop(p: &Prop, ctx: FormatContext) -> String {
 
     match p {
         Prop::Claim { predicate, args } => fmt_predicate_call(predicate.as_str(), args, ctx),
-        // Renders like a claim; the parser resolves it by name. Never in
-        // named form - see `prop_primary`.
-        Prop::Defined { name, args } => {
-            fmt_predicate_call(name.as_str(), args, FormatContext::DIAGNOSTIC)
-        }
+        // Renders like a claim; the parser resolves it by name.
+        Prop::Defined { name, args } => fmt_defined_call(name.as_str(), args, ctx),
 
         // Comparators relate two value expressions.
         Prop::Eq(l, r) => format!("{} = {}", value_primary(l, ctx), value_primary(r, ctx)),
@@ -525,7 +544,7 @@ pub fn format_prop_source(p: &Program, prop: &Prop) -> String {
     fmt_prop(
         prop,
         FormatContext {
-            predicates: Some(&naming),
+            naming: Some(&naming),
             named_canonical: false,
         },
     )
@@ -537,7 +556,7 @@ pub fn format_value_source(p: &Program, e: &ValueExpr) -> String {
     fmt_value(
         e,
         FormatContext {
-            predicates: Some(&naming),
+            naming: Some(&naming),
             named_canonical: false,
         },
     )
@@ -550,7 +569,7 @@ pub fn format_stmt_source(p: &Program, s: &Stmt, depth: usize) -> String {
         s,
         depth,
         FormatContext {
-            predicates: Some(&naming),
+            naming: Some(&naming),
             named_canonical: false,
         },
     )
@@ -647,8 +666,7 @@ fn named_value_lookup(
     extract: usize,
     ctx: FormatContext,
 ) -> String {
-    if let Some(map) = ctx.predicates
-        && let Some(decl) = map.get(predicate)
+    if let Some(decl) = ctx.predicate(predicate)
         && decl.args.len() == args.len()
         && matches!(args.get(extract), Some(Term::Wildcard))
     {
@@ -672,27 +690,52 @@ fn named_value_lookup(
 }
 
 fn fmt_predicate_call(predicate: &str, args: &[Term], ctx: FormatContext) -> String {
-    // Two or more wildcards in a row are hard to read, so name the
-    // mentioned fields and write the rest as `..`. An all-wildcard
-    // pattern becomes `Pred(..)`.
     if ctx.named_canonical
-        && let Some(map) = ctx.predicates
-        && let Some(decl) = map.get(predicate)
+        && let Some(decl) = ctx.predicate(predicate)
         && decl.args.len() == args.len()
-        && max_wildcard_run(args) >= 2
     {
-        let mut parts: Vec<String> = decl
-            .args
-            .iter()
-            .zip(args)
-            .filter(|(_, term)| !matches!(term, Term::Wildcard))
-            .map(|(field, term)| format!("{}: {}", field.name, format_term(term)))
-            .collect();
-        parts.push("..".to_string());
-        return format!("{predicate}({})", parts.join(", "));
+        let fields = decl.args.iter().map(|a| a.name.as_str());
+        return named_or_positional(predicate, fields, args);
     }
+    positional_call(predicate, args)
+}
+
+/// A definition call, named by its parameters under the same rule as a
+/// claim pattern by its fields. Branch on the variant, not the name: a
+/// definition may share its name with a predicate in invalid IR.
+fn fmt_defined_call(name: &str, args: &[Term], ctx: FormatContext) -> String {
+    if ctx.named_canonical
+        && let Some(parameters) = ctx.naming.and_then(|n| n.definitions.get(name))
+        && parameters.len() == args.len()
+    {
+        return named_or_positional(name, parameters.iter().map(Var::as_str), args);
+    }
+    positional_call(name, args)
+}
+
+/// Two or more wildcards in a row are hard to read, so name the
+/// mentioned slots and write the rest as `..`; an all-wildcard pattern
+/// becomes `Name(..)`. Anything shorter stays positional.
+fn named_or_positional<'a>(
+    head: &str,
+    names: impl Iterator<Item = &'a str>,
+    args: &[Term],
+) -> String {
+    if max_wildcard_run(args) < 2 {
+        return positional_call(head, args);
+    }
+    let mut parts: Vec<String> = names
+        .zip(args)
+        .filter(|(_, term)| !matches!(term, Term::Wildcard))
+        .map(|(name, term)| format!("{name}: {}", format_term(term)))
+        .collect();
+    parts.push("..".to_string());
+    format!("{head}({})", parts.join(", "))
+}
+
+fn positional_call(head: &str, args: &[Term]) -> String {
     let formatted: Vec<String> = args.iter().map(format_term).collect();
-    format!("{predicate}({})", formatted.join(", "))
+    format!("{head}({})", formatted.join(", "))
 }
 
 fn format_claim(c: &Claim) -> String {
