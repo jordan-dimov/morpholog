@@ -26,16 +26,20 @@
 --     has confirmed is complete. The explorer proposes the table; the
 --     record recomputes every entry and refuses any statement the
 --     table does not bear out. Nothing is taken on trust.
---   * what the record was TOLD. Carrying a finite statement to every
---     integer needs a lemma about all integers: reduction respects
---     squaring and adding, and parity. No rule here can check that. An
---     outside checker (a proof assistant) does, and reports under its
---     own name, which version it ran, and the exact file it checked.
---     The record keeps who said so about what. It never says "proved".
---   * what was DEDUCED. A conclusion about all integers stands on one
---     verified finite statement and one checked lemma. The record
---     refuses a deduction whose grounds are missing, and a read shows
---     which conclusions still stand on grounds nobody has withdrawn.
+--   * what the record was TOLD. The theorem about every integer is
+--     beyond any rule here: there are infinitely many integers. An
+--     outside checker (a proof assistant) proves it whole, and reports
+--     under its own name, which version it ran, and the exact file it
+--     checked. The record keeps who said so about what. It never says
+--     "proved", and it never re-runs the checker.
+--   * what STANDS. A conclusion about all integers is admitted only
+--     when a checker has checked it and the record has verified, for
+--     itself, the finite core this programme pairs it with. The pairing
+--     is written in the rules: the programme names the two conclusions
+--     it recognises and the finite statement each rests on. A conclusion
+--     it does not name cannot be admitted, whatever a checker says of
+--     it. A read shows which conclusions still stand on a check nobody
+--     has withdrawn.
 --
 -- Three words that recur below. The runtime stores CLAIMS, statements
 -- it has agreed to admit because they obey the rules, never "facts". An
@@ -67,7 +71,7 @@ predicate SquareOf(modulus: Decimal, r: Decimal, square: Decimal)
 predicate Verified(statement: Subject, modulus: Decimal)
     append only
 
--- Who may say a lemma was checked. The operator is the trust root and
+-- Who may say a theorem was checked. The operator is the trust root and
 -- appoints checkers; a checker's name is bound to one database login,
 -- so a proposal naming it from any other login is refused before the
 -- body runs. The two policy claims are the runtime's own shape for
@@ -78,17 +82,19 @@ predicate ActorAssertionRestricted(actor: Subject)
 predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
 
 -- A checker's report: this statement checks, under this version of the
--- checker, in this exact file (named by its digest). Testimony with a
--- name on it, kept whole. A later finding that the check was wrong is
--- a new claim beside it; the report itself is never erased.
+-- checker, in this exact file (named by its digest). The statement is
+-- the theorem's own name in that file. Testimony with a name on it,
+-- kept whole. A later finding that the check was wrong is a new claim
+-- beside it; the report itself is never erased.
 predicate Checked(statement: Subject, checker: Subject, version: Subject, artefact: Subject)
     append only
 predicate Withdrawn(statement: Subject, checker: Subject, reason: Subject)
     append only
 
--- A conclusion about all integers, with the two grounds it stands on:
--- a finite statement verified here, and a lemma checked outside.
-predicate Deduced(conclusion: Subject, statement: Subject, modulus: Decimal, lemma: Subject)
+-- A conclusion about all integers, paired with the finite statement
+-- that is its core. The conclusion itself is what the checker checked;
+-- the core is what this record verified.
+predicate Conclusion(conclusion: Subject, statement: Subject)
     unique by (conclusion)
     append only
 
@@ -140,14 +146,24 @@ invariant only_a_stated_statement_is_verified:
     implies (statement = #squares_are_zero_or_one
              or statement = #no_square_is_a_sum_of_two_odd_squares)
 
--- A deduction stands on its grounds. The record checks that both exist;
--- the step from them to the conclusion is the deducer's own, attributed
--- to the act that proposed it and never re-examined by a rule.
-invariant deduction_rests_on_a_verified_statement:
-    Deduced(_, statement, m, _) implies Verified(statement, m)
+-- What a conclusion needs. First, the pairing: this programme knows two
+-- theorems, each resting on one finite statement over the residues
+-- modulo 4, and admits no other conclusion. A checker's report about
+-- some other statement is kept as a report and grounds nothing here.
+-- Then the two grounds: the core verified by this record, and the
+-- conclusion checked by a checker.
+invariant conclusion_rests_on_its_own_finite_core:
+    Conclusion(conclusion, statement)
+    implies ((conclusion = #every_square_is_zero_or_one_mod_four
+              and statement = #squares_are_zero_or_one)
+             or (conclusion = #no_pythagorean_triple_has_two_odd_legs
+                 and statement = #no_square_is_a_sum_of_two_odd_squares))
 
-invariant deduction_rests_on_a_checked_lemma:
-    Deduced(_, _, _, lemma) implies Checked(lemma, _, _, _)
+invariant conclusion_rests_on_a_verified_core:
+    Conclusion(_, statement) implies Verified(statement, 4)
+
+invariant conclusion_rests_on_a_check:
+    Conclusion(conclusion, _) implies Checked(conclusion, _, _, _)
 
 -- The acts.
 
@@ -167,7 +183,7 @@ transformation appoint_checker(checker, login_role):
     admit ActorAssertionAuthority(checker, login_role)
 
 -- The explorer's acts. Anyone may propose a domain, a row, a statement
--- or a deduction; the rules decide.
+-- or a conclusion; the rules decide.
 transformation declare_domain(modulus, residues):
     require not DomainSealed(modulus)
     for r in residues:
@@ -183,8 +199,8 @@ transformation tabulate_square(modulus, r, square):
 transformation verify(statement, modulus):
     admit Verified(statement, modulus)
 
-transformation deduce(conclusion, statement, modulus, lemma):
-    admit Deduced(conclusion, statement, modulus, lemma)
+transformation conclude(conclusion, statement):
+    admit Conclusion(conclusion, statement)
 
 -- The checker's acts, under its own bound name.
 transformation record_check(statement, version, artefact):
@@ -195,14 +211,15 @@ transformation withdraw_check(statement, reason):
     require Checked(statement, actor, _, _)
     admit Withdrawn(statement, actor, reason)
 
--- The read: which conclusions stand, and on what. Computed from the
--- claims whenever asked, never stored, so it cannot drift from them. A
--- conclusion drops out the moment its lemma's check is withdrawn, while
--- every claim that put it there stays on the record.
-predicate Grounded(conclusion: Subject, statement: Subject, lemma: Subject, checker: Subject, modulus: Decimal)
+-- The read: which conclusions stand, on whose word, and how many of that
+-- checker's reports back each. Computed from the claims whenever asked,
+-- never stored, so it cannot drift from them. A conclusion drops out
+-- the moment its checker withdraws, while every claim that put it there
+-- stays on the record.
+predicate Standing(conclusion: Subject, statement: Subject, checker: Subject, checks: Decimal)
 
-derived Grounded(conclusion, statement, lemma, checker):
-    over (Deduced(conclusion, statement, _, lemma)
-          and Checked(lemma, checker, _, _)
-          and not Withdrawn(lemma, checker, _))
-    value modulus = value Deduced(conclusion: conclusion, modulus: _, ..)
+derived Standing(conclusion, statement, checker):
+    over (Conclusion(conclusion, statement)
+          and Checked(conclusion, checker, _, _)
+          and not Withdrawn(conclusion, checker, _))
+    value checks = sum(1 | Checked(conclusion, checker, _, _))

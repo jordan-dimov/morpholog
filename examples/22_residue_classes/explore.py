@@ -2,12 +2,12 @@
 of a problem and asks the record to govern the result.
 
 It enumerates the residues modulo 4 and proposes them with their squares,
-asks the record to verify two finite statements, runs Lean on the lemma
-that carries them to every integer and records that check under the
-checker's name, deduces, and proposes a false statement (squares modulo
-8) to read the refusal. Then the historical part: a checkpoint and a
-receipt over what stands, a withdrawn check, a second checkpoint, and
-the first receipt verified against both histories.
+asks the record to verify two finite statements, runs Lean on the file
+that proves the two theorems whole and records each check under the
+checker's name, admits the two conclusions, and proposes a false statement
+(squares modulo 8) to read the refusal. Then the historical part: a
+checkpoint and a receipt over what stands, one check withdrawn, a second
+checkpoint, and the first receipt verified against both histories.
 
 One login plays every party here; the tests keep them apart. The script
 speaks to the binary through the client the binary generates for this
@@ -37,14 +37,18 @@ from morpholog_client import Morpholog, Request, envelopes, models, open_client
 
 HERE = Path(__file__).resolve().parent
 PROGRAMME = HERE / "residue_classes.morph"
-LEMMA_FILE = HERE / "reduction.lean"
+THEOREMS_FILE = HERE / "reduction.lean"
 
 EXPLORER = "explorer"
 OPERATOR = "operator"
 CHECKER = "lean4"
-LEMMA = "reduction_respects_arithmetic"
 SQUARES = "squares_are_zero_or_one"
 ODD_LEGS = "no_square_is_a_sum_of_two_odd_squares"
+SQUARES_THEOREM = "every_square_is_zero_or_one_mod_four"
+ODD_LEGS_THEOREM = "no_pythagorean_triple_has_two_odd_legs"
+# Each theorem, by its name in the Lean file, and the finite core the
+# programme pairs it with.
+THEOREMS = {SQUARES_THEOREM: SQUARES, ODD_LEGS_THEOREM: ODD_LEGS}
 
 
 class Refused(Exception):
@@ -55,7 +59,7 @@ class Refused(Exception):
 
 
 @dataclass(frozen=True)
-class LemmaCheck:
+class Check:
     """What the checker records: its version and the file it checked."""
 
     version: str
@@ -70,18 +74,18 @@ def login_role() -> str:
     return getpass.getuser()
 
 
-def check_lemma() -> LemmaCheck | None:
-    """Run Lean on the lemma file; None when Lean is not installed."""
+def check_theorems() -> Check | None:
+    """Run Lean on the theorem file; None when Lean is not installed."""
     lean = shutil.which("lean")
     if lean is None:
         return None
-    subprocess.run([lean, str(LEMMA_FILE)], check=True, capture_output=True)
+    subprocess.run([lean, str(THEOREMS_FILE)], check=True, capture_output=True)
     banner = subprocess.run(
         [lean, "--version"], check=True, capture_output=True, text=True
     )
     version = banner.stdout.split("version", 1)[1].split(",", 1)[0].strip()
-    digest = hashlib.sha256(LEMMA_FILE.read_bytes()).hexdigest()
-    return LemmaCheck(version=f"lean4:v{version}", artefact=f"sha256:{digest}")
+    digest = hashlib.sha256(THEOREMS_FILE.read_bytes()).hexdigest()
+    return Check(version=f"lean4:v{version}", artefact=f"sha256:{digest}")
 
 
 def propose(
@@ -111,20 +115,13 @@ def tabulate(morph: Morpholog, modulus: int) -> None:
         commit(morph, EXPLORER, row)
 
 
-def deduce(morph: Morpholog, conclusion: str, statement: str) -> None:
-    request = models.DeduceRequest(
-        conclusion=conclusion, statement=statement, modulus=Decimal(4), lemma=LEMMA
-    )
-    commit(morph, EXPLORER, request)
-
-
-def grounded(morph: Morpholog) -> int:
-    return len(morph.derived("Grounded"))
+def standing(morph: Morpholog) -> int:
+    return len(morph.derived("Standing"))
 
 
 @dataclass(frozen=True)
 class Receipt:
-    """A checkpoint, the pack covering it, and a receipt over `Grounded`."""
+    """A checkpoint, the pack covering it, and a receipt over `Standing`."""
 
     tree_size: int
     pack: Path
@@ -137,7 +134,7 @@ class Receipt:
         pack = workdir / f"{name}.ndjson"
         receipt = workdir / f"{name}.receipt.json"
         morph.audit_export(str(pack))
-        issued = morph.audit_receipt("Grounded", str(pack), str(receipt))
+        issued = morph.audit_receipt("Standing", str(pack), str(receipt))
         return Receipt(checkpoint.tree_size, pack, receipt, len(issued.answer))
 
 
@@ -149,7 +146,7 @@ def verify(morph: Morpholog, receipt: Receipt, against: Receipt) -> str:
     return f"passes = {report.passes}, checkpoint = {report.checkpoint}"
 
 
-def explore(morph: Morpholog, lemma: LemmaCheck, workdir: Path) -> None:
+def explore(morph: Morpholog, check: Check, workdir: Path) -> None:
     print(
         "1. the parties: the operator appoints itself and the checker, bound to logins"
     )
@@ -175,19 +172,22 @@ def explore(morph: Morpholog, lemma: LemmaCheck, workdir: Path) -> None:
         )
         print(f"   Verified({statement}, 4)")
 
-    print(
-        "4. checked outside: Lean on the lemma that carries the table to every integer"
-    )
-    check = models.RecordCheckRequest(
-        statement=LEMMA, version=lemma.version, artefact=lemma.artefact
-    )
-    commit(morph, CHECKER, check)
-    print(f"   Checked({LEMMA}, {CHECKER}, {lemma.version}, {lemma.artefact[:19]}...)")
+    print("4. checked outside: Lean proves both theorems over every integer")
+    for theorem in THEOREMS:
+        report = models.RecordCheckRequest(
+            statement=theorem, version=check.version, artefact=check.artefact
+        )
+        commit(morph, CHECKER, report)
+        print(
+            f"   Checked({theorem}, {CHECKER}, {check.version}, {check.artefact[:19]}...)"
+        )
 
-    print("5. deduced: two conclusions about all integers, each on its two grounds")
-    deduce(morph, "every_square_is_zero_or_one_mod_four", SQUARES)
-    deduce(morph, "no_pythagorean_triple_has_two_odd_legs", ODD_LEGS)
-    print(f"   Grounded: {grounded(morph)}")
+    print("5. standing: each conclusion on its check and its verified core")
+    for theorem, core in THEOREMS.items():
+        commit(
+            morph, EXPLORER, models.ConcludeRequest(conclusion=theorem, statement=core)
+        )
+    print(f"   Standing: {standing(morph)}")
 
     print("6. a false statement: squares modulo 8 are not all 0 or 1")
     tabulate(morph, 8)
@@ -203,25 +203,25 @@ def explore(morph: Morpholog, lemma: LemmaCheck, workdir: Path) -> None:
     print("7. a receipt over what stands, verified offline against its own history")
     first = Receipt.issue(morph, workdir, "first")
     print(
-        f"   checkpoint {first.tree_size}: {first.stated} grounded, "
+        f"   checkpoint {first.tree_size}: {first.stated} standing, "
         f"{verify(morph, first, first)}"
     )
 
-    print("8. the checker withdraws its check: the read empties and nothing is erased")
-    commit(
-        morph,
-        CHECKER,
-        models.WithdrawCheckRequest(statement=LEMMA, reason="proof_regressed"),
+    print(
+        "8. the checker withdraws one check: that conclusion drops, nothing is erased"
     )
+    withdrawal = models.WithdrawCheckRequest(
+        statement=ODD_LEGS_THEOREM, reason="proof_regressed"
+    )
+    commit(morph, CHECKER, withdrawal)
     second = Receipt.issue(morph, workdir, "second")
     checks = len(morph.claims("Checked"))
     print(
-        f"   checkpoint {second.tree_size}: {second.stated} grounded, "
+        f"   checkpoint {second.tree_size}: {second.stated} standing, "
         f"Checked rows still on the record: {checks}"
     )
     print(
-        f"   the first receipt against the later history: "
-        f"{verify(morph, first, second)}"
+        f"   the first receipt against the later history: {verify(morph, first, second)}"
     )
 
 
@@ -232,8 +232,8 @@ def main() -> int:
             "DATABASE_URL must name a disposable, initialised database", file=sys.stderr
         )
         return 2
-    lemma = check_lemma()
-    if lemma is None:
+    check = check_theorems()
+    if check is None:
         print(
             "lean is not on the path, so nothing can check reduction.lean; install Lean 4",
             file=sys.stderr,
@@ -242,7 +242,7 @@ def main() -> int:
     morph = open_client(str(PROGRAMME), database_url)
     workdir = Path(tempfile.mkdtemp(prefix="residue_classes_"))
     try:
-        explore(morph, lemma, workdir)
+        explore(morph, check, workdir)
     except Refused as refused:
         print(f"refused: {refused}", file=sys.stderr)
         return 1

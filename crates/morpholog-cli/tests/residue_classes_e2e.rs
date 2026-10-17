@@ -22,9 +22,10 @@ use serde_json::{Value, json};
 const EXPLORER: &str = "explorer";
 const OPERATOR: &str = "operator";
 const CHECKER: &str = "lean4";
-const LEMMA: &str = "reduction_respects_arithmetic";
 const SQUARES: &str = "squares_are_zero_or_one";
 const ODD_LEGS: &str = "no_square_is_a_sum_of_two_odd_squares";
+const SQUARES_THEOREM: &str = "every_square_is_zero_or_one_mod_four";
+const ODD_LEGS_THEOREM: &str = "no_pythagorean_triple_has_two_odd_legs";
 
 fn run(args: &[&str], db: bool) -> (ExitStatus, String, String) {
     let mut command = Command::new(common::bin());
@@ -101,7 +102,7 @@ async fn session_user() -> String {
         .unwrap()
 }
 
-/// The lemma file's digest, as the checker would record it.
+/// The theorem file's digest, as the checker would record it.
 fn lemma_digest() -> String {
     let output = Command::new("python3")
         .args([
@@ -110,7 +111,7 @@ fn lemma_digest() -> String {
             example_dir().join("reduction.lean").to_str().unwrap(),
         ])
         .output()
-        .expect("python3 hashes the lemma file");
+        .expect("python3 hashes the theorem file");
     assert!(output.status.success());
     format!(
         "sha256:{}",
@@ -144,7 +145,7 @@ fn receipt(dir: &Path, name: &str, pack: &Path) -> (PathBuf, Value) {
             "--pack",
             pack.to_str().unwrap(),
             "--derived",
-            "Grounded",
+            "Standing",
         ],
         false,
     );
@@ -214,34 +215,23 @@ async fn verified_world() {
 #[tokio::test(flavor = "current_thread")]
 async fn a_receipt_states_what_stood_at_its_checkpoint_and_a_withdrawal_does_not_rewrite_it() {
     verified_world().await;
+    let digest = lemma_digest();
+    for theorem in [SQUARES_THEOREM, ODD_LEGS_THEOREM] {
+        committed(
+            CHECKER,
+            "record_check",
+            &[subject(theorem), subject("lean4:v4.35.0"), subject(&digest)],
+        );
+    }
     committed(
-        CHECKER,
-        "record_check",
-        &[
-            subject(LEMMA),
-            subject("lean4:v4.35.0"),
-            subject(&lemma_digest()),
-        ],
+        EXPLORER,
+        "conclude",
+        &[subject(SQUARES_THEOREM), subject(SQUARES)],
     );
     committed(
         EXPLORER,
-        "deduce",
-        &[
-            subject("every_square_is_zero_or_one_mod_four"),
-            subject(SQUARES),
-            decimal(4),
-            subject(LEMMA),
-        ],
-    );
-    committed(
-        EXPLORER,
-        "deduce",
-        &[
-            subject("no_pythagorean_triple_has_two_odd_legs"),
-            subject(ODD_LEGS),
-            decimal(4),
-            subject(LEMMA),
-        ],
+        "conclude",
+        &[subject(ODD_LEGS_THEOREM), subject(ODD_LEGS)],
     );
 
     let dir = tempfile::tempdir().unwrap();
@@ -251,10 +241,7 @@ async fn a_receipt_states_what_stood_at_its_checkpoint_and_a_withdrawal_does_not
     assert_eq!(stated["checkpoint"]["tree_size"], first);
     assert_eq!(
         conclusions(&stated["answer"]),
-        [
-            "every_square_is_zero_or_one_mod_four",
-            "no_pythagorean_triple_has_two_odd_legs"
-        ]
+        [SQUARES_THEOREM, ODD_LEGS_THEOREM]
     );
     let (passed, report) = verify(&receipt_one, &pack_one);
     assert!(passed, "{report}");
@@ -263,17 +250,18 @@ async fn a_receipt_states_what_stood_at_its_checkpoint_and_a_withdrawal_does_not
     assert_eq!(report["program"]["status"], "matches");
     assert_eq!(report["evaluation"]["status"], "reproduced");
 
-    // The checker withdraws. The read empties; every claim stays.
+    // The checker withdraws one check. That conclusion leaves the read;
+    // the other stands; every claim stays.
     committed(
         CHECKER,
         "withdraw_check",
-        &[subject(LEMMA), subject("proof_regressed")],
+        &[subject(ODD_LEGS_THEOREM), subject("proof_regressed")],
     );
     let second = checkpoint();
     assert_eq!(second, first + 1);
     let pack_two = export(dir.path(), "pack2.ndjson");
     let (receipt_two, later) = receipt(dir.path(), "receipt2.json", &pack_two);
-    assert!(later["answer"].as_array().unwrap().is_empty(), "{later}");
+    assert_eq!(conclusions(&later["answer"]), [SQUARES_THEOREM]);
     let (passed, report) = verify(&receipt_two, &pack_two);
     assert!(passed, "{report}");
     let (status, claims, stderr) = run(
@@ -283,7 +271,7 @@ async fn a_receipt_states_what_stood_at_its_checkpoint_and_a_withdrawal_does_not
             "--predicate",
             "Checked",
             "--predicate",
-            "Deduced",
+            "Conclusion",
         ],
         true,
     );
@@ -294,7 +282,7 @@ async fn a_receipt_states_what_stood_at_its_checkpoint_and_a_withdrawal_does_not
             .as_array()
             .unwrap()
             .len(),
-        3
+        4
     );
 
     // The first receipt is still a true statement about the first
@@ -320,7 +308,7 @@ async fn a_login_the_checkers_name_is_not_bound_to_cannot_record_a_check() {
     let (status, outcome) = propose(
         "other_checker",
         "record_check",
-        &[subject(LEMMA), subject("v"), subject("sha256:x")],
+        &[subject(SQUARES_THEOREM), subject("v"), subject("sha256:x")],
     );
     assert!(!status.success());
     assert_eq!(
@@ -331,7 +319,7 @@ async fn a_login_the_checkers_name_is_not_bound_to_cannot_record_a_check() {
     let (status, outcome) = propose(
         EXPLORER,
         "record_check",
-        &[subject(LEMMA), subject("v"), subject("sha256:x")],
+        &[subject(SQUARES_THEOREM), subject("v"), subject("sha256:x")],
     );
     assert!(!status.success());
     assert_eq!(outcome["status"], "rejected", "{outcome}");
@@ -423,14 +411,14 @@ async fn the_explorer_script_runs_the_story_or_says_what_it_needs() {
         .is_ok_and(|o| o.status.success());
     if lean_available {
         assert!(output.status.success(), "{stdout}\n{stderr}");
-        assert!(stdout.contains("Grounded: 2"), "{stdout}");
+        assert!(stdout.contains("Standing: 2"), "{stdout}");
         assert!(
             stdout.contains("refused by squares_are_zero_or_one (m = 8, s = 4)"),
             "{stdout}"
         );
-        assert!(stdout.contains("2 grounded, passes = True"), "{stdout}");
+        assert!(stdout.contains("2 standing, passes = True"), "{stdout}");
         assert!(
-            stdout.contains("0 grounded, Checked rows still on the record: 1"),
+            stdout.contains("1 standing, Checked rows still on the record: 2"),
             "{stdout}"
         );
         assert!(

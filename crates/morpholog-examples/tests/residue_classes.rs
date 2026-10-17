@@ -4,14 +4,16 @@
 //! An explorer proposes a change of representation: the residues modulo
 //! 4 and a table of their squares. The record recomputes every entry,
 //! verifies two finite statements exhaustively over a domain it has
-//! confirmed complete, keeps a checker's report about a lemma apart from
-//! its own verification, and lets a conclusion stand only on both. These
-//! tests walk that path end to end and pin each refusal: a wrong square,
-//! an incomplete or non-integer domain, a statement the table does not
-//! bear out (squares modulo 8), a statement the rules do not know, a
-//! deduction with a missing ground, and a check recorded by a login that
-//! is not the checker. The login binding itself is a database policy,
-//! tested in the CLI suite.
+//! confirmed complete, keeps a checker's report apart from its own
+//! verification, and lets a conclusion stand only on a check and the
+//! finite core the programme pairs it with. These tests walk that path
+//! and pin each refusal: a wrong square, an incomplete or non-integer
+//! domain, a statement the table does not bear out (squares modulo 8), a
+//! statement the rules do not know, a conclusion the programme does not
+//! name even though a checker vouches for it, a conclusion paired with
+//! the wrong core, a conclusion with a ground missing, and a check
+//! recorded by a login that is not the checker. The login binding itself
+//! is a database policy, tested in the CLI suite.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -26,9 +28,12 @@ use morpholog_test_support::enumerate_derived;
 const EXPLORER: &str = "explorer";
 const OPERATOR: &str = "operator";
 const CHECKER: &str = "lean4";
-const LEMMA: &str = "reduction_respects_arithmetic";
+const VERSION: &str = "lean4:v4.35.0";
+const ARTEFACT: &str = "sha256:reduction";
 const SQUARES: &str = "squares_are_zero_or_one";
 const ODD_LEGS: &str = "no_square_is_a_sum_of_two_odd_squares";
+const SQUARES_THEOREM: &str = "every_square_is_zero_or_one_mod_four";
+const ODD_LEGS_THEOREM: &str = "no_pythagorean_triple_has_two_odd_legs";
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
@@ -109,42 +114,34 @@ fn verified_mod4() -> State {
     )
 }
 
-fn checked(state: State) -> State {
+fn checked(state: State, statement: &str) -> State {
     accept_as(
         state,
         &rc::record_check(),
-        vec![subj(LEMMA), subj("lean4:v4.35.0"), subj("sha256:reduction")],
+        vec![subj(statement), subj(VERSION), subj(ARTEFACT)],
         CHECKER,
     )
 }
 
-fn deduce_both(state: State) -> State {
+/// Both theorems checked and both conclusions admitted.
+fn concluded() -> State {
+    let s = checked(checked(verified_mod4(), SQUARES_THEOREM), ODD_LEGS_THEOREM);
     let s = accept_as(
-        state,
-        &rc::deduce(),
-        vec![
-            subj("every_square_is_zero_or_one_mod_four"),
-            subj(SQUARES),
-            dec(4),
-            subj(LEMMA),
-        ],
+        s,
+        &rc::conclude(),
+        vec![subj(SQUARES_THEOREM), subj(SQUARES)],
         EXPLORER,
     );
     accept_as(
         s,
-        &rc::deduce(),
-        vec![
-            subj("no_pythagorean_triple_has_two_odd_legs"),
-            subj(ODD_LEGS),
-            dec(4),
-            subj(LEMMA),
-        ],
+        &rc::conclude(),
+        vec![subj(ODD_LEGS_THEOREM), subj(ODD_LEGS)],
         EXPLORER,
     )
 }
 
-fn grounded(state: &State) -> Vec<Vec<EvalValue>> {
-    let mut rows: Vec<Vec<EvalValue>> = enumerate_derived(&rc::program(), &rc::grounded(), state)
+fn standing(state: &State) -> Vec<Vec<EvalValue>> {
+    let mut rows: Vec<Vec<EvalValue>> = enumerate_derived(&rc::program(), &rc::standing(), state)
         .expect("the read enumerates")
         .into_iter()
         .map(|c| c.args)
@@ -154,47 +151,55 @@ fn grounded(state: &State) -> Vec<Vec<EvalValue>> {
 }
 
 #[test]
-fn both_exercises_are_verified_checked_and_deduced() {
-    let state = deduce_both(checked(verified_mod4()));
+fn both_theorems_are_verified_at_their_core_checked_whole_and_stand() {
+    let state = concluded();
     assert!(has_claim(&state, "Verified", &[subj(SQUARES), dec(4)]));
     assert!(has_claim(&state, "Verified", &[subj(ODD_LEGS), dec(4)]));
-    let rows = grounded(&state);
-    assert_eq!(rows.len(), 2, "{rows:?}");
-    assert!(
-        rows.iter()
-            .all(|r| r[2] == subj(LEMMA) && r[3] == subj(CHECKER) && r[4] == dec(4))
+    assert_eq!(
+        standing(&state),
+        [
+            vec![subj(SQUARES_THEOREM), subj(SQUARES), subj(CHECKER), dec(1)],
+            vec![
+                subj(ODD_LEGS_THEOREM),
+                subj(ODD_LEGS),
+                subj(CHECKER),
+                dec(1)
+            ],
+        ]
     );
 }
 
 #[test]
-fn a_withdrawn_check_drops_the_conclusions_from_the_read_and_erases_nothing() {
-    let state = deduce_both(checked(verified_mod4()));
+fn a_withdrawn_check_drops_that_conclusion_from_the_read_and_erases_nothing() {
     let state = accept_as(
-        state,
+        concluded(),
         &rc::withdraw_check(),
-        vec![subj(LEMMA), subj("proof_regressed")],
+        vec![subj(ODD_LEGS_THEOREM), subj("proof_regressed")],
         CHECKER,
     );
-    assert!(grounded(&state).is_empty());
+    assert_eq!(
+        standing(&state),
+        [vec![
+            subj(SQUARES_THEOREM),
+            subj(SQUARES),
+            subj(CHECKER),
+            dec(1)
+        ]]
+    );
     assert!(has_claim(
         &state,
         "Checked",
         &[
-            subj(LEMMA),
+            subj(ODD_LEGS_THEOREM),
             subj(CHECKER),
-            subj("lean4:v4.35.0"),
-            subj("sha256:reduction")
+            subj(VERSION),
+            subj(ARTEFACT)
         ]
     ));
     assert!(has_claim(
         &state,
-        "Deduced",
-        &[
-            subj("every_square_is_zero_or_one_mod_four"),
-            subj(SQUARES),
-            dec(4),
-            subj(LEMMA)
-        ]
+        "Conclusion",
+        &[subj(ODD_LEGS_THEOREM), subj(ODD_LEGS)]
     ));
 }
 
@@ -318,28 +323,83 @@ fn a_statement_the_rules_do_not_know_cannot_be_verified() {
     );
 }
 
+/// A checker's word is kept, and grounds nothing the programme does not
+/// name: a conclusion outside its two theorems is refused by the pairing
+/// rule even with a check on record and a verified statement to point at.
 #[test]
-fn a_deduction_with_a_missing_ground_is_refused() {
-    let state = verified_mod4();
-    let unchecked = ex().propose_as(
-        &rc::deduce(),
-        vec![subj("c"), subj(SQUARES), dec(4), subj(LEMMA)],
+fn a_conclusion_the_programme_does_not_name_is_refused_whatever_a_checker_says() {
+    let state = checked(verified_mod4(), "every_integer_is_prime");
+    let outcome = ex().propose_as(
+        &rc::conclude(),
+        vec![subj("every_integer_is_prime"), subj(SQUARES)],
         EXPLORER,
         &state,
     );
     assert!(
-        rejected_by(&unchecked, "deduction_rests_on_a_checked_lemma"),
-        "got: {unchecked:?}"
+        rejected_by(&outcome, "conclusion_rests_on_its_own_finite_core"),
+        "got: {outcome:?}"
     );
-    let unverified = ex().propose_as(
-        &rc::deduce(),
-        vec![subj("c"), subj(SQUARES), dec(8), subj(LEMMA)],
+    assert!(has_claim(
+        &state,
+        "Checked",
+        &[
+            subj("every_integer_is_prime"),
+            subj(CHECKER),
+            subj(VERSION),
+            subj(ARTEFACT)
+        ]
+    ));
+}
+
+#[test]
+fn a_conclusion_paired_with_the_wrong_core_is_refused() {
+    let state = checked(verified_mod4(), ODD_LEGS_THEOREM);
+    let outcome = ex().propose_as(
+        &rc::conclude(),
+        vec![subj(ODD_LEGS_THEOREM), subj(SQUARES)],
         EXPLORER,
-        &checked(state),
+        &state,
     );
     assert!(
-        rejected_by(&unverified, "deduction_rests_on_a_verified_statement"),
-        "got: {unverified:?}"
+        rejected_by(&outcome, "conclusion_rests_on_its_own_finite_core"),
+        "got: {outcome:?}"
+    );
+}
+
+#[test]
+fn a_conclusion_with_a_ground_missing_is_refused() {
+    let unchecked = ex().propose_as(
+        &rc::conclude(),
+        vec![subj(SQUARES_THEOREM), subj(SQUARES)],
+        EXPLORER,
+        &verified_mod4(),
+    );
+    assert!(
+        rejected_by(&unchecked, "conclusion_rests_on_a_check"),
+        "got: {unchecked:?}"
+    );
+    let mut unverified = tabulated(4);
+    unverified = accept_as(
+        unverified,
+        &rc::appoint_operator(),
+        vec![subj(OPERATOR), subj("operator_login")],
+        OPERATOR,
+    );
+    unverified = accept_as(
+        unverified,
+        &rc::appoint_checker(),
+        vec![subj(CHECKER), subj("checker_login")],
+        OPERATOR,
+    );
+    let outcome = ex().propose_as(
+        &rc::conclude(),
+        vec![subj(SQUARES_THEOREM), subj(SQUARES)],
+        EXPLORER,
+        &checked(unverified, SQUARES_THEOREM),
+    );
+    assert!(
+        rejected_by(&outcome, "conclusion_rests_on_a_verified_core"),
+        "got: {outcome:?}"
     );
 }
 
@@ -348,7 +408,7 @@ fn only_an_appointed_checker_records_a_check_and_only_the_operator_appoints() {
     let state = verified_mod4();
     let forged = ex().propose_as(
         &rc::record_check(),
-        vec![subj(LEMMA), subj("v"), subj("sha256:x")],
+        vec![subj(SQUARES_THEOREM), subj("v"), subj("sha256:x")],
         EXPLORER,
         &state,
     );
