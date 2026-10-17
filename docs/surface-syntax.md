@@ -100,7 +100,10 @@ and who it really is must be settled at the integration boundary.
 
 The forms: `implies`, `and`, `or`, `not`, `xor`, `forall x in source:
 body`, `exists x: body`, `pre(...)` for the state before the change,
-`x in xs` for membership, and the comparators. A rule may open with
+`x in xs` for membership, and the comparators. `exists` names one
+variable: in `exists r: Report(r, t, o) and ...` the pattern binds `t`
+and `o` as well, because a claim pattern binds every free variable it
+meets, so `exists r, t, o:` is not a form. A rule may open with
 `let` lines naming a figure, as `invoices_follow_signing` does under
 dates below.
 
@@ -220,7 +223,8 @@ invariant exposure_is_bounded_either_way:
 
 Arithmetic is `+ - * / %` over decimals, same-unit quantities and the
 date and time forms below. `sum(target | body)` adds a target over every
-binding of the body and is the typed zero when nothing matches;
+binding of the body and is the typed zero when nothing matches, so
+`sum(1 | body)` counts the bindings;
 `max(target | body)` and `min(target | body)` pick an end and have no
 answer for nothing. `value P(args)` reads one field of one claim, `_`
 marking the field wanted, with an optional `default expr` for when there
