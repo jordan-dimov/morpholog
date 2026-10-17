@@ -122,6 +122,25 @@ def _decode_receipt(
     return receipt.outcome
 
 
+def _decode_explanation(payload: object, expected_row: int) -> envelopes.Explanation:
+    """The explain decoder: the one-shot explanation, matched to the row
+    THIS caller sent. A kernel error is a verdict inside it, never a
+    broken exchange."""
+    if not isinstance(payload, dict) or payload.get("row") != expected_row:
+        raise _ResponseContract(
+            "an explain response did not match the request row",
+            f"session answered row {payload.get('row') if isinstance(payload, dict) else None} "
+            f"to request {expected_row}",
+        )
+    try:
+        return envelopes.Explanation.from_json(payload)
+    except envelopes.EnvelopeError as exc:
+        raise _ResponseContract(
+            "an explain response did not match the explanation contract",
+            f"unparseable explanation: {exc}",
+        ) from None
+
+
 def _decode_rows(parse: Callable[[object], _T]) -> Callable[[object, int], list[_T]]:
     """The read decoder: the pinned array shape, then every row
     against its envelope contract."""
@@ -537,6 +556,28 @@ class Session:
         the one-shot client; the session stays in step."""
         body: dict[str, object] = {"op": "transact", "acts": [dict(a) for a in acts]}
         return self._exchange(body, commitful=True, decode=_decode_atomic)
+
+    def explain(
+        self, transformation: str, actor: str, args_named: dict[str, object]
+    ) -> envelopes.Explanation:
+        """The one-shot ``explain`` through the session: would this act be
+        admitted against the state as it is now, and if not, which rule
+        refuses it, under which bindings. Nothing is recorded - no claim,
+        audit row, rejection row or intent - so it can be asked as often
+        as a loop likes. A kernel error is a verdict in the explanation
+        (``ErrorRejection``), not an exception; an unknown transformation
+        or bad arguments raise ``MorphologRequestError``; a lost response
+        is a plain ``MorphologError``, never outcome-unknown, since
+        nothing could have committed. An admissible answer is a rehearsal,
+        not a reservation: it does not check the actor-assertion policy,
+        hold a snapshot, or promise that a later ``propose`` commits."""
+        body: dict[str, object] = {
+            "op": "explain",
+            "transformation": transformation,
+            "actor": actor,
+            "args_named": dict(args_named),
+        }
+        return self._exchange(body, commitful=False, decode=_decode_explanation)
 
     def submit(
         self, request: Request, actor: str, explain_on_reject: bool = False

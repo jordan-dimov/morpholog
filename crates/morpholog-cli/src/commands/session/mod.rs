@@ -38,7 +38,9 @@ use crate::commands::inspect::{
     audit_row_named_json, claims_rows, decode_claim_reads_named, decode_claims_named, derived_rows,
     resolve_as_of,
 };
-use crate::commands::propose::{BatchRow, RowError, classify_pg_error, propose_row_outcome};
+use crate::commands::propose::{
+    BatchRow, RowError, classify_pg_error, decode_row, propose_row_outcome,
+};
 use crate::commands::transact::{Act, decode_acts};
 use crate::commands::{parse_or_report, prepare_or_report};
 use morpholog_cli::envelopes::{ErrorCode, ErrorReceipt, SessionReady};
@@ -182,6 +184,7 @@ async fn handle_line(
     };
     match op.as_str() {
         "propose" => handle_propose(args, program, pool, value, row).await,
+        "explain" => handle_explain(args, program.prepared(), pool, value, row).await,
         "transact" => handle_transact(args, program, pool, value, row).await,
         "claims" => handle_claims(args, program.prepared(), pool, value).await,
         "derived" => handle_derived(args, program.prepared(), pool, value).await,
@@ -191,8 +194,8 @@ async fn handle_line(
         other => Err(SessionFailure::request(
             ErrorCode::UnknownOperation,
             anyhow!(
-                "unknown operation `{other}`; this session answers propose, transact, claims, \
-                 derived, audit, rejections, ping"
+                "unknown operation `{other}`; this session answers propose, explain, transact, \
+                 claims, derived, audit, rejections, ping"
             ),
         )),
     }
@@ -240,6 +243,60 @@ async fn handle_propose(
             })?;
     if let Some(receipt) = envelope.as_object_mut() {
         receipt.insert("row".to_string(), serde_json::json!(row));
+    }
+    Ok(envelope)
+}
+
+/// The explain body: the batch row's own fields, nothing more.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExplainBody {
+    transformation: String,
+    actor: String,
+    #[serde(default)]
+    args: Option<serde_json::Value>,
+    #[serde(default)]
+    args_named: Option<serde_json::Value>,
+}
+
+/// The one-shot `explain`, answered with its explanation plus this
+/// request's row: the same decoder as a proposal, the same one-statement
+/// read of the state, the kernel in memory, nothing recorded. A kernel
+/// error is a verdict inside the explanation, as on the one-shot command;
+/// only a failure to read the state aborts.
+async fn handle_explain(
+    args: &SessionArgs,
+    prepared: &PreparedProgram,
+    pool: &PgPool,
+    body: serde_json::Value,
+    row: u64,
+) -> Result<serde_json::Value, SessionFailure> {
+    let body: ExplainBody = serde_json::from_value(body)
+        .map_err(|e| SessionFailure::request(ErrorCode::InvalidRequest, e.into()))?;
+    let batch_row = BatchRow {
+        transformation: body.transformation,
+        actor: body.actor,
+        args: body.args,
+        args_named: body.args_named,
+    };
+    let transition = decode_row(&args.file, prepared, batch_row).map_err(row_failure)?;
+    let state =
+        morpholog_postgres::load_scoped_state(pool, prepared, &transition.transformation_name)
+            .await
+            .context("loading the state to explain against")
+            .map_err(SessionFailure::Operational)?
+            .context("the transformation was looked up in this programme")
+            .map_err(SessionFailure::Operational)?;
+    let explanation = prepared.explain(
+        &transition,
+        &state,
+        &mut morpholog_postgres::runtime_subjects(),
+    );
+    let mut envelope = serde_json::to_value(&explanation)
+        .context("serialising the explanation")
+        .map_err(SessionFailure::Operational)?;
+    if let Some(object) = envelope.as_object_mut() {
+        object.insert("row".to_string(), serde_json::json!(row));
     }
     Ok(envelope)
 }
