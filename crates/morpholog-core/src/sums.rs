@@ -311,7 +311,8 @@ mod tests {
             predicate: "P".into(),
             args: vec![Term::Var(Var::from("x"))],
         };
-        let cases: [(&str, Prop, fn(&ValidationError) -> bool); 2] = [
+        type Case = (&'static str, Prop, fn(&ValidationError) -> bool);
+        let cases: [Case; 2] = [
             (
                 "round with one argument",
                 body(call(Builtin::Round, vec![x()]), p_x()),
