@@ -22,8 +22,9 @@
 //!
 //! The IR has no source spans; findings carry a context instead.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use crate::analysis::{ParamKind, project};
 use crate::fold;
 use crate::format::{arith_token, compare_token};
 use crate::ir::{
@@ -90,11 +91,72 @@ fn comparator_suggestion(op: CompareOp, actual: &PredicateArgKind) -> Option<&'s
     OrderedDomain::for_concrete_kind(actual).map(|domain| compare_token(op, domain))
 }
 
+/// Where a name's observations accumulate for the input contract. A
+/// scope cloned at a branch, a gate or a quantifier keeps the same
+/// cell, so the set is flat across `or` branches and `require`;
+/// `let x = y` gives both names one cell until either is rebound; a
+/// loop binding gets a cell of its own, so it never types an outer
+/// name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct CellId(usize);
+
+/// The observation cells of one checker run.
+#[derive(Debug, Default)]
+pub(crate) struct Cells {
+    observed: Vec<BTreeSet<PredicateArgKind>>,
+    /// What the loop bindings iterating a collection cell were used as.
+    elements: HashMap<CellId, BTreeSet<PredicateArgKind>>,
+}
+
+impl Cells {
+    fn fresh(&mut self) -> CellId {
+        self.observed.push(BTreeSet::new());
+        CellId(self.observed.len() - 1)
+    }
+
+    fn record(&mut self, cell: CellId, kind: PredicateArgKind) {
+        self.observed[cell.0].insert(kind);
+    }
+
+    fn observed(&self, cell: CellId) -> &BTreeSet<PredicateArgKind> {
+        &self.observed[cell.0]
+    }
+
+    /// The loop binding `binder` iterated `collection`: its kinds are
+    /// the collection's element kinds.
+    fn iterated(&mut self, collection: CellId, binder: CellId) {
+        let kinds = self.observed(binder).clone();
+        if !kinds.is_empty() {
+            self.elements.entry(collection).or_default().extend(kinds);
+        }
+    }
+
+    /// A parameter's contract from its cell.
+    fn contract(&self, cell: CellId) -> ParamKind {
+        let observed = self.observed(cell);
+        if observed.len() == 1
+            && observed.contains(&PredicateArgKind::Collection)
+            && let Some(elements) = self.elements.get(&cell)
+        {
+            return ParamKind::Collection(Box::new(project(elements)));
+        }
+        project(observed)
+    }
+}
+
+/// One name in a scope: the kind inferred so far, and the cell its
+/// observations go to.
+#[derive(Debug, Clone)]
+struct Slot {
+    inferred: InferredKind,
+    cell: CellId,
+}
+
 /// Variable name -> inferred kind, for one invariant, derived claim,
 /// or transformation body.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct KindEnv {
-    bindings: HashMap<Var, InferredKind>,
+    bindings: HashMap<Var, Slot>,
 }
 
 impl KindEnv {
@@ -102,21 +164,72 @@ impl KindEnv {
     pub(crate) fn lookup(&self, name: &Var) -> InferredKind {
         self.bindings
             .get(name)
-            .cloned()
+            .map(|slot| slot.inferred.clone())
             .unwrap_or(InferredKind::UnknownOrAny)
     }
 
+    fn cell(&self, name: &Var) -> Option<CellId> {
+        self.bindings.get(name).map(|slot| slot.cell)
+    }
+
+    fn slot_mut(&mut self, name: &Var, cells: &mut Cells) -> &mut Slot {
+        self.bindings.entry(name.clone()).or_insert_with(|| Slot {
+            inferred: InferredKind::UnknownOrAny,
+            cell: cells.fresh(),
+        })
+    }
+
     /// Observe a variable at a kind: refine if compatible, else return
-    /// the conflict as `(previous, new)`.
+    /// the conflict as `(previous, new)`. A concrete kind is also
+    /// recorded in the variable's cell.
     pub(crate) fn observe(
         &mut self,
         name: &Var,
         observed: InferredKind,
+        cells: &mut Cells,
     ) -> Result<(), (PredicateArgKind, PredicateArgKind)> {
-        let existing = self.lookup(name);
-        let refined = existing.refine(observed)?;
-        self.bindings.insert(name.clone(), refined);
-        Ok(())
+        let cell = self.slot_mut(name, cells).cell;
+        if let InferredKind::Known(kind) = &observed {
+            cells.record(cell, kind.clone());
+        }
+        self.refine(name, observed, cells)
+    }
+
+    /// Refine without recording, where the position says nothing about
+    /// the kind the name must carry: an equality, or a `let`'s own name.
+    pub(crate) fn refine(
+        &mut self,
+        name: &Var,
+        observed: InferredKind,
+        cells: &mut Cells,
+    ) -> Result<(), (PredicateArgKind, PredicateArgKind)> {
+        let slot = self.slot_mut(name, cells);
+        let existing = std::mem::replace(&mut slot.inferred, InferredKind::UnknownOrAny);
+        match existing.refine(observed) {
+            Ok(refined) => {
+                slot.inferred = refined;
+                Ok(())
+            }
+            Err(conflict) => {
+                slot.inferred = InferredKind::Known(conflict.0.clone());
+                Err(conflict)
+            }
+        }
+    }
+
+    /// `let name = of`: both names share one cell from here on.
+    fn alias(&mut self, name: &Var, of: &Var, cells: &mut Cells) {
+        let cell = self.slot_mut(of, cells).cell;
+        let inferred = self.lookup(name);
+        self.bindings.insert(name.clone(), Slot { inferred, cell });
+    }
+
+    /// A new binding of `name`: a cell of its own. The inferred kind
+    /// stays, so a rebinding still refines against the earlier one.
+    fn rebind(&mut self, name: &Var, cells: &mut Cells) {
+        let inferred = self.lookup(name);
+        let cell = cells.fresh();
+        self.bindings.insert(name.clone(), Slot { inferred, cell });
     }
 }
 
@@ -194,22 +307,37 @@ struct CheckCtx<'a> {
     generated_invariants: std::collections::BTreeSet<String>,
     context: ValidationContext,
     errors: Vec<ValidationError>,
+    cells: Cells,
+    /// Each transformation's input contract, read off its parameters'
+    /// cells after the walk.
+    param_kinds: BTreeMap<String, Vec<(Var, ParamKind)>>,
 }
 
-/// Inferred call signature of a definition: each parameter's kind, and
-/// whether the body binds it. A parameter the body binds may arrive
-/// unbound. One the body only uses (a date in a comparator, say) must
-/// arrive bound at every call, as the runtime requires.
+/// Inferred call signature of a definition: each parameter's kind,
+/// every kind the body used it as, and whether the body binds it. A
+/// parameter the body binds may arrive unbound. One the body only uses
+/// (a date in a comparator, say) must arrive bound at every call, as
+/// the runtime requires.
 struct DefinitionSig {
     param_kinds: Vec<InferredKind>,
+    param_observed: Vec<BTreeSet<PredicateArgKind>>,
     generator: Vec<bool>,
 }
 
+/// What one checker run found.
+pub(crate) struct Checked {
+    pub(crate) errors: Vec<ValidationError>,
+    /// Per transformation, each parameter's [`ParamKind`] in
+    /// declaration order. Meaningful only when `errors` is empty.
+    pub(crate) param_kinds: BTreeMap<String, Vec<(Var, ParamKind)>>,
+}
+
 /// Run the static checks over the whole programme. Returns every
-/// problem found; empty means it passes. Definitions are walked first,
-/// then invariants, transformations, and derived claims, so the order
-/// of diagnostics is predictable.
-pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
+/// problem found (empty means it passes) and the transformations' input
+/// contracts, which the same walk observes. Definitions are walked
+/// first, then invariants, transformations, and derived claims, so the
+/// order of diagnostics is predictable.
+pub(crate) fn check_program(program: &Program) -> Checked {
     let mut cx = CheckCtx {
         derived_heads: program
             .derived_claims
@@ -244,6 +372,8 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             name: String::new(),
         },
         errors: Vec::new(),
+        cells: Cells::default(),
+        param_kinds: BTreeMap::new(),
     };
 
     // Definitions first, callees before callers, so every call site
@@ -285,7 +415,9 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         let mut scope = Scope::new();
         for param in &def.parameters {
             scope.bound.bind(param);
-            let _ = scope.kinds.observe(param, InferredKind::UnknownOrAny);
+            let _ = scope
+                .kinds
+                .observe(param, InferredKind::UnknownOrAny, &mut cx.cells);
         }
         cx.walk_prop(&def.body, &mut scope);
         for param in &def.parameters {
@@ -301,10 +433,22 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
             .iter()
             .map(|p| scope.kinds.lookup(p))
             .collect();
+        let param_observed = def
+            .parameters
+            .iter()
+            .map(|p| {
+                scope
+                    .kinds
+                    .cell(p)
+                    .map(|c| cx.cells.observed(c).clone())
+                    .unwrap_or_default()
+            })
+            .collect();
         cx.definition_sigs.insert(
             def.name.to_string(),
             DefinitionSig {
                 param_kinds,
+                param_observed,
                 generator,
             },
         );
@@ -348,8 +492,18 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         // first use.
         for param in &transformation.parameters {
             scope.bound.bind(param);
-            let _ = scope.kinds.observe(param, InferredKind::UnknownOrAny);
+            let _ = scope
+                .kinds
+                .observe(param, InferredKind::UnknownOrAny, &mut cx.cells);
         }
+        // The contract reads these cells after the walk: a parameter
+        // rebound by a `let` keeps its input contract on the cell it
+        // entered with.
+        let param_cells: Vec<Option<CellId>> = transformation
+            .parameters
+            .iter()
+            .map(|p| scope.kinds.cell(p))
+            .collect();
         // A duplicate name within one transformation would make a
         // refusal ambiguous. Two transformations may share a gate name.
         let mut seen: HashSet<&RuleName> = HashSet::new();
@@ -397,6 +551,21 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
                     });
             }
         }
+
+        let contract = transformation
+            .parameters
+            .iter()
+            .zip(param_cells)
+            .map(|(param, cell)| {
+                let kind = match cell {
+                    Some(cell) => cx.cells.contract(cell),
+                    None => ParamKind::Unconstrained,
+                };
+                (param.clone(), kind)
+            })
+            .collect();
+        cx.param_kinds
+            .insert(transformation.name.to_string(), contract);
     }
 
     for derived in &program.derived_claims {
@@ -431,7 +600,7 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
                 value_scope.bound.bind(key);
             }
             let kind = scope.kinds.lookup(key);
-            let _ = value_scope.kinds.observe(key, kind);
+            let _ = value_scope.kinds.observe(key, kind, &mut cx.cells);
         }
         let before_values = cx.errors.len();
         let value_kinds: Vec<InferredKind> = derived
@@ -509,7 +678,10 @@ pub(crate) fn check_program(program: &Program) -> Vec<ValidationError> {
         }
     }
 
-    cx.errors
+    Checked {
+        errors: cx.errors,
+        param_kinds: cx.param_kinds,
+    }
 }
 
 impl CheckCtx<'_> {
@@ -589,13 +761,23 @@ impl CheckCtx<'_> {
                 self.walk_closed(scope, |cx, scoped| cx.walk_prop(body, scoped));
             }
             Prop::Forall {
-                binding: _,
+                binding,
                 source,
                 body,
             } => {
                 self.walk_closed(scope, |cx, scoped| {
+                    // The binding is the loop's own name: its uses type
+                    // the source collection's elements, not an outer
+                    // name it shadows.
+                    scoped.kinds.rebind(binding, &mut cx.cells);
                     cx.walk_prop(source, scoped);
                     cx.walk_prop(body, scoped);
+                    if let Prop::In(_, Term::Var(collection)) = source.as_ref()
+                        && let (Some(over), Some(each)) =
+                            (scoped.kinds.cell(collection), scoped.kinds.cell(binding))
+                    {
+                        cx.cells.iterated(over, each);
+                    }
                 });
             }
             Prop::Compare {
@@ -628,7 +810,9 @@ impl CheckCtx<'_> {
                 // collection must be bound and a Collection.
                 if let Term::Var(name) = element {
                     scope.bound.bind(name);
-                    let _ = scope.kinds.observe(name, InferredKind::UnknownOrAny);
+                    let _ = scope
+                        .kinds
+                        .observe(name, InferredKind::UnknownOrAny, &mut self.cells);
                 }
                 match collection {
                     Term::Var(name) => {
@@ -666,11 +850,13 @@ impl CheckCtx<'_> {
     fn walk_closed(&mut self, scope: &mut Scope, walk: impl FnOnce(&mut Self, &mut Scope)) {
         let mut scoped = scope.clone();
         walk(self, &mut scoped);
+        // Refine only: the walk's observations already sit in the cells
+        // the clone shares, and a shadowing binder's must stay its own.
         let entry_bound: Vec<Var> = scope.bound.names().cloned().collect();
         for name in entry_bound {
             let refined = scoped.kinds.lookup(&name);
             if matches!(refined, InferredKind::Known(_)) {
-                self.observe_or_report(scope, &name, refined);
+                self.refine_or_report(scope, &name, refined);
             }
         }
     }
@@ -695,10 +881,18 @@ impl CheckCtx<'_> {
             Stmt::Let { name, value } => {
                 let value_kind = self.infer_value(value, scope);
                 scope.bound.bind(name);
-                self.observe_or_report(scope, name, value_kind);
+                // A new binding: the aliased name's cell when the value
+                // is just that name, otherwise a cell of its own. The
+                // name itself is not a kind-bearing position.
+                match value {
+                    ValueExpr::Term(Term::Var(of)) => scope.kinds.alias(name, of, &mut self.cells),
+                    _ => scope.kinds.rebind(name, &mut self.cells),
+                }
+                self.refine_or_report(scope, name, value_kind);
             }
             Stmt::LetNewSubject { name } => {
                 scope.bound.bind(name);
+                scope.kinds.rebind(name, &mut self.cells);
                 self.observe_or_report(scope, name, InferredKind::Known(PredicateArgKind::Subject));
             }
             Stmt::Assert(claim) => {
@@ -718,12 +912,19 @@ impl CheckCtx<'_> {
                 body,
             } => {
                 self.check_operand_kind(collection, PredicateArgKind::Collection, "for", scope);
-                // A clone, so loop bindings do not leak out.
+                // A clone, so loop bindings do not leak out. The binding
+                // is the loop's own name, as in `forall`.
                 let mut scoped = scope.clone();
                 scoped.bound.bind(binding);
-                let _ = scoped.kinds.observe(binding, InferredKind::UnknownOrAny);
+                scoped.kinds.rebind(binding, &mut self.cells);
                 for inner in body {
                     self.walk_stmt(inner, &mut scoped);
+                }
+                if let ValueExpr::Term(Term::Var(over)) = collection
+                    && let (Some(over), Some(each)) =
+                        (scope.kinds.cell(over), scoped.kinds.cell(binding))
+                {
+                    self.cells.iterated(over, each);
                 }
             }
             Stmt::Emit(intent) => {
@@ -751,6 +952,7 @@ impl CheckCtx<'_> {
         // A variable inside `abs(...)` refines too, so
         // `abs(d) <cmp> duration(...)` pins `d` to Duration.
         self.refine_through_abs(operand, &expected, scope);
+        self.record_expected(operand, &expected, scope);
         let inferred = self.infer_value(operand, scope);
         if let InferredKind::Known(actual) = inferred
             && !kinds_compatible(&expected, &actual)
@@ -799,6 +1001,7 @@ impl CheckCtx<'_> {
             } else {
                 // `abs(gap) no_longer_than allowed` pins `gap` to Duration.
                 self.refine_through_abs(operand, &expected, scope);
+                self.record_expected(operand, &expected, scope);
             }
         }
     }
@@ -872,6 +1075,51 @@ impl CheckCtx<'_> {
         }
     }
 
+    /// Record, for the contract only, that the variables an expected kind
+    /// reaches through kind-transparent shapes are used as that kind: the
+    /// operands of `abs`, `min` and `max`, the branches of `if`, a lookup's
+    /// default. `min(p, q) <= 10` needs two decimals from the caller
+    /// whatever the checker can prove about them, so the contract says
+    /// so. The inferred kinds are untouched, so validation does not
+    /// change.
+    fn record_expected(&mut self, operand: &ValueExpr, expected: &PredicateArgKind, scope: &Scope) {
+        match operand {
+            ValueExpr::Term(Term::Var(name)) => {
+                if let Some(cell) = scope.kinds.cell(name) {
+                    self.cells.record(cell, expected.clone());
+                }
+            }
+            ValueExpr::Call {
+                builtin: Builtin::Abs | Builtin::Min | Builtin::Max,
+                args,
+            } => {
+                for arg in args {
+                    self.record_expected(arg, expected, scope);
+                }
+            }
+            ValueExpr::Cond {
+                then, otherwise, ..
+            } => {
+                self.record_expected(then, expected, scope);
+                self.record_expected(otherwise, expected, scope);
+            }
+            ValueExpr::ValueOf {
+                default: Some(default),
+                ..
+            } => self.record_expected(default, expected, scope),
+            // A literal, `actor` or a wildcard binds nothing; arithmetic,
+            // a sum, an extremum and the remaining builtins decide their
+            // own operand kinds, which the walk observes where it checks
+            // them.
+            ValueExpr::Term(_)
+            | ValueExpr::Arith { .. }
+            | ValueExpr::Sum { .. }
+            | ValueExpr::Extremum { .. }
+            | ValueExpr::ValueOf { default: None, .. }
+            | ValueExpr::Call { .. } => {}
+        }
+    }
+
     /// One operand of a decimal-domain comparison, plus whether it was
     /// refused. An unknown variable's flavour is decided later from the
     /// other operand. A known kind that is neither a decimal nor a
@@ -930,6 +1178,7 @@ impl CheckCtx<'_> {
                 } else {
                     // `abs(x) <= 10` pins `x` to Decimal.
                     this.refine_through_abs(operand, &kind, scope);
+                    this.record_expected(operand, &kind, scope);
                 }
             };
         match (l, r) {
@@ -973,25 +1222,33 @@ impl CheckCtx<'_> {
         operator: &'static str,
         scope: &mut Scope,
     ) {
-        self.unify_value_kinds(left, right, scope, |l, r, context| {
-            ValidationError::EqualityKindMismatch {
+        self.unify_value_kinds(
+            left,
+            right,
+            scope,
+            Recording::RefineOnly,
+            |l, r, context| ValidationError::EqualityKindMismatch {
                 operator,
                 left: l,
                 right: r,
                 context,
-            }
-        });
+            },
+        );
     }
 
     /// Unify two value kinds, for equality and for a conditional's
     /// branches: check compatibility, keep the more specific kind, and
     /// refine bare variables. Each caller supplies its own `mismatch`
-    /// error. Returns the combined kind.
+    /// error and says whether the refinement is also an observation: a
+    /// conditional's branches share one kind, so a branch variable is
+    /// used as the other branch's kind; an equality relates values of
+    /// any kind, so it only refines. Returns the combined kind.
     fn unify_value_kinds(
         &mut self,
         left: EqualityOperand<'_>,
         right: EqualityOperand<'_>,
         scope: &mut Scope,
+        recording: Recording,
         mismatch: impl FnOnce(PredicateArgKind, PredicateArgKind, ValidationContext) -> ValidationError,
     ) -> InferredKind {
         let combined = match (left.0, right.0) {
@@ -1009,7 +1266,10 @@ impl CheckCtx<'_> {
         };
         if let Some(refined) = &combined {
             for name in [left.1, right.1].into_iter().flatten() {
-                self.observe_or_report(scope, name, refined.clone());
+                match recording {
+                    Recording::Observe => self.observe_or_report(scope, name, refined.clone()),
+                    Recording::RefineOnly => self.refine_or_report(scope, name, refined.clone()),
+                }
             }
         }
         combined.unwrap_or(InferredKind::UnknownOrAny)
@@ -1068,13 +1328,17 @@ impl CheckCtx<'_> {
                     self.infer_value(otherwise, scope),
                     value_var_name(otherwise),
                 );
-                self.unify_value_kinds(then_op, otherwise_op, scope, |t, o, context| {
-                    ValidationError::CondBranchKindMismatch {
+                self.unify_value_kinds(
+                    then_op,
+                    otherwise_op,
+                    scope,
+                    Recording::Observe,
+                    |t, o, context| ValidationError::CondBranchKindMismatch {
                         then_kind: t,
                         otherwise_kind: o,
                         context,
-                    }
-                })
+                    },
+                )
             }
             ValueExpr::Arith { op, left, right } => {
                 let operator = arith_token(*op);
@@ -1490,6 +1754,7 @@ impl CheckCtx<'_> {
             return;
         };
         let param_kinds = sig.param_kinds.clone();
+        let param_observed = sig.param_observed.clone();
         let generator = sig.generator.clone();
         let n = args.len().min(param_kinds.len());
         for (position, arg) in args.iter().take(n).enumerate() {
@@ -1502,6 +1767,12 @@ impl CheckCtx<'_> {
                         self.use_var(scope, var_name);
                     }
                     self.observe_or_report(scope, var_name, expected);
+                    // The argument is used as everything the body used
+                    // the parameter as, branches included.
+                    let cell = scope.kinds.slot_mut(var_name, &mut self.cells).cell;
+                    for kind in &param_observed[position] {
+                        self.cells.record(cell, kind.clone());
+                    }
                 }
                 Term::Wildcard => {
                     if !generator[position] {
@@ -1646,7 +1917,9 @@ impl CheckCtx<'_> {
                 RefMode::Use => self.use_var(scope, var_name),
             }
             if let Err((previous, new)) =
-                scope.kinds.observe(var_name, InferredKind::Known(expected))
+                scope
+                    .kinds
+                    .observe(var_name, InferredKind::Known(expected), &mut self.cells)
             {
                 self.report(|context| ValidationError::VariableKindConflict {
                     variable: var_name.as_str().to_string(),
@@ -1674,7 +1947,7 @@ impl CheckCtx<'_> {
     /// Observe `name` at `kind` in the scope's kind environment; on
     /// a refinement conflict, push a `VariableKindConflict`.
     fn observe_or_report(&mut self, scope: &mut Scope, name: &Var, kind: InferredKind) {
-        if let Err((previous, new)) = scope.kinds.observe(name, kind) {
+        if let Err((previous, new)) = scope.kinds.observe(name, kind, &mut self.cells) {
             self.report(|context| ValidationError::VariableKindConflict {
                 variable: name.to_string(),
                 previous,
@@ -1683,6 +1956,26 @@ impl CheckCtx<'_> {
             });
         }
     }
+
+    /// As [`Self::observe_or_report`], without recording for the contract.
+    fn refine_or_report(&mut self, scope: &mut Scope, name: &Var, kind: InferredKind) {
+        if let Err((previous, new)) = scope.kinds.refine(name, kind, &mut self.cells) {
+            self.report(|context| ValidationError::VariableKindConflict {
+                variable: name.to_string(),
+                previous,
+                new,
+                context,
+            });
+        }
+    }
+}
+
+/// Whether a refinement of a bare variable is also an observation for
+/// the input contract.
+#[derive(Clone, Copy)]
+enum Recording {
+    Observe,
+    RefineOnly,
 }
 
 /// One side of an equality check: the inferred kind, plus the
