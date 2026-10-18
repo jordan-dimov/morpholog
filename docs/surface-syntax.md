@@ -222,7 +222,8 @@ invariant exposure_is_bounded_either_way:
 ```
 
 Arithmetic is `+ - * / %` over decimals, same-unit quantities and the
-date and time forms below. `sum(target | body)` adds a target over every
+date and time forms below; `-x` is `0 - x`, so `max(-100, score)` floors
+a decimal. `sum(target | body)` adds a target over every
 binding of the body and is the typed zero when nothing matches, so
 `sum(1 | body)` counts the bindings;
 `max(target | body)` and `min(target | body)` pick an end and have no
