@@ -104,6 +104,8 @@ Shape:
 
 Per-kind property fragments are documented in `morpholog-core::schema`'s rustdoc; the same fragments are reused as `anyOf` alternatives for `Ambiguous` parameters.
 
+**Where the contract comes from.** Parameters declare no kinds. Validation observes every position a parameter reaches in the body (a claim slot, a comparator, an arithmetic operand, an emitted intent, a loop over it, a definition call) and the set of kinds it was used as is the parameter's contract: one concrete kind, or `Polymorphic`, `Unconstrained`, `Ambiguous` or `Collection` where the body does not settle on one. The schema, the named codec and the generated client are three projections of that one contract, read off the validated programme, never re-inferred. The tagged `--args` codec is decoded as written; it does not check the values against the contract.
+
 A note on `Subject`: the schema describes `Subject` as `{"type": "string"}` with no `format`; why is under the named codec above.
 
 Exits zero on success; non-zero on parse, validation, or unknown-transformation. The schema output stream is empty on any error path.
