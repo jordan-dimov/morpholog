@@ -19,6 +19,7 @@ use morpholog_core::{
     ArgDecl, ArithOp, Claim, CompareOp, Definition, DerivedClaim, DerivedValue, Discipline,
     IntentDecl, Invariant, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program,
     Prop, Stmt, SumSeed, Term, Transformation, ValidationError, Value, ValueExpr, Var,
+    lower_sum_seeds,
 };
 use proptest::prelude::*;
 
@@ -350,6 +351,23 @@ proptest! {
     #[test]
     fn validate_is_deterministic(p in arb_program()) {
         prop_assert_eq!(p.validate(), p.validate());
+    }
+
+    /// The seed pass never stamps a typed zero the checker disagrees
+    /// with: wherever validation finds a seed unfaithful after lowering,
+    /// the stamped seed is the decimal default the pass falls back to,
+    /// never a wrong duration or unit.
+    #[test]
+    fn lowered_seeds_are_never_a_wrong_typed_zero(p in arb_program()) {
+        let mut lowered = p.clone();
+        lower_sum_seeds(&mut lowered);
+        if let Err(errors) = lowered.validate() {
+            for error in errors {
+                if let ValidationError::SumSeedNotFaithful { found, .. } = error {
+                    prop_assert_eq!(found, SumSeed::Decimal);
+                }
+            }
+        }
     }
 }
 

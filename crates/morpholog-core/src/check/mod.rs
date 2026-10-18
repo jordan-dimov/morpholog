@@ -311,6 +311,7 @@ struct CheckCtx<'a> {
     /// Each transformation's input contract, read off its parameters'
     /// cells after the walk.
     param_kinds: BTreeMap<String, Vec<(Var, ParamKind)>>,
+    sum_seeds: HashMap<*const ValueExpr, SumSeed>,
 }
 
 /// Inferred call signature of a definition: each parameter's kind,
@@ -330,6 +331,11 @@ pub(crate) struct Checked {
     /// Per transformation, each parameter's [`ParamKind`] in
     /// declaration order. Meaningful only when `errors` is empty.
     pub(crate) param_kinds: BTreeMap<String, Vec<(Var, ParamKind)>>,
+    /// The empty-case seed each `Sum` node's target kind gives, keyed by
+    /// the node's address in the programme that was checked. Valid only
+    /// while that programme is neither moved nor rebuilt; the seed
+    /// lowering stamps from it within one call.
+    pub(crate) sum_seeds: HashMap<*const ValueExpr, SumSeed>,
 }
 
 /// Run the static checks over the whole programme. Returns every
@@ -374,6 +380,7 @@ pub(crate) fn check_program(program: &Program) -> Checked {
         errors: Vec::new(),
         cells: Cells::default(),
         param_kinds: BTreeMap::new(),
+        sum_seeds: HashMap::new(),
     };
 
     // Definitions first, callees before callers, so every call site
@@ -681,6 +688,7 @@ pub(crate) fn check_program(program: &Program) -> Checked {
     Checked {
         errors: cx.errors,
         param_kinds: cx.param_kinds,
+        sum_seeds: cx.sum_seeds,
     }
 }
 
@@ -1434,42 +1442,46 @@ impl CheckCtx<'_> {
                 let mut scoped = scope.clone();
                 self.walk_prop(body, &mut scoped);
                 let resolved = self.infer_value(value, &mut scoped);
-                // Sums of decimals, durations, and quantities are fine;
-                // any other known kind is an error.
-                if let InferredKind::Known(
-                    k @ (PredicateArgKind::Duration | PredicateArgKind::Quantity(_)),
-                ) = resolved
-                {
-                    // The seed pass sees less than this scope (an
-                    // outer-bound variable, a builtin call), and an empty
-                    // sum returns the seed. A mismatch would be a runtime
-                    // type error on the first empty book, so refuse it.
-                    let seed_kind = match seed {
-                        SumSeed::Decimal => PredicateArgKind::Decimal,
-                        SumSeed::Duration => PredicateArgKind::Duration,
-                        SumSeed::Quantity(u) => PredicateArgKind::Quantity(u.clone()),
-                    };
-                    if seed_kind != k {
-                        self.report(|context| ValidationError::EmptySumUntyped {
-                            target: k.clone(),
-                            seed: seed_kind,
+                // The empty sum is the typed zero of the target's kind, a
+                // decimal where nothing decides it. Any other known kind
+                // cannot be summed. The expected seed comes from this
+                // inference alone, never from the node's own seed, which
+                // the hash leaves out.
+                let (expected, result) = match resolved {
+                    InferredKind::Known(PredicateArgKind::Duration) => {
+                        (SumSeed::Duration, PredicateArgKind::Duration)
+                    }
+                    InferredKind::Known(PredicateArgKind::Quantity(u)) => {
+                        (SumSeed::Quantity(u.clone()), PredicateArgKind::Quantity(u))
+                    }
+                    InferredKind::Known(PredicateArgKind::Decimal | PredicateArgKind::Any)
+                    | InferredKind::UnknownOrAny => (SumSeed::Decimal, PredicateArgKind::Decimal),
+                    InferredKind::Known(actual) => {
+                        self.report(|context| ValidationError::OperandKindMismatch {
+                            operator: "sum",
+                            expected: PredicateArgKind::Decimal,
+                            actual,
+                            suggestion: None,
                             context,
                         });
+                        return InferredKind::Known(PredicateArgKind::Decimal);
                     }
-                    return InferredKind::Known(k);
+                };
+                self.sum_seeds
+                    .insert(std::ptr::from_ref(expr), expected.clone());
+                if *seed != expected {
+                    // Once per node: a node under arithmetic can be
+                    // inferred twice.
+                    let error = ValidationError::SumSeedNotFaithful {
+                        found: seed.clone(),
+                        expected,
+                        context: self.context.clone(),
+                    };
+                    if !self.errors.contains(&error) {
+                        self.errors.push(error);
+                    }
                 }
-                if let InferredKind::Known(actual) = resolved
-                    && !kinds_compatible(&PredicateArgKind::Decimal, &actual)
-                {
-                    self.report(|context| ValidationError::OperandKindMismatch {
-                        operator: "sum",
-                        expected: PredicateArgKind::Decimal,
-                        actual,
-                        suggestion: None,
-                        context,
-                    });
-                }
-                InferredKind::Known(PredicateArgKind::Decimal)
+                InferredKind::Known(result)
             }
             ValueExpr::ValueOf {
                 predicate,

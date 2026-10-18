@@ -9,7 +9,7 @@
 //! author fixing a programme sees the whole list at once.
 
 use crate::eval::EvalError;
-use crate::ir::{DefinitionName, PredicateArgKind, Program, Prop, Stmt, ValueExpr};
+use crate::ir::{DefinitionName, PredicateArgKind, Program, Prop, Stmt, SumSeed, ValueExpr};
 use crate::state::{ClaimInstance, State};
 use std::collections::HashMap;
 
@@ -303,20 +303,6 @@ pub enum ValidationError {
     InvalidValueExtraction {
         predicate: String,
         extract: usize,
-        context: ValidationContext,
-    },
-    /// A sum's target reads as a duration or quantity, but its empty case
-    /// would be a bare-decimal zero, which fails at runtime the first time
-    /// the sum is empty. The fix is to bind the summed value inside the
-    /// sum's body, or pair the target with an operand of the right kind.
-    #[error(
-        "the empty case of this sum cannot be typed in {context}: the target reads as \
-         {target}, but the empty sum would evaluate to {seed}; bind the summed value \
-         in the sum's own body, or give the target an operand of the expected kind"
-    )]
-    EmptySumUntyped {
-        target: PredicateArgKind,
-        seed: PredicateArgKind,
         context: ValidationContext,
     },
     /// An operator (comparator, arithmetic, `sum`, `for`, `in`,
@@ -638,14 +624,18 @@ pub enum ValidationError {
         "the generated {kind} `{name}` is not what the declared disciplines lower to; change the declaration, not the generated {kind}, so the programme's hash names the rules it enforces"
     )]
     GeneratedNotFaithful { kind: String, name: String },
-    /// A sum's empty-case seed is not what lowering derives from the
-    /// declarations. Seeds stay out of the programme hash for that reason,
-    /// so one set by hand would change what an empty sum returns without
-    /// changing the hash.
+    /// A sum's empty-case seed is not the typed zero of its target's
+    /// kind. Seeds stay out of the programme hash, so one set by hand
+    /// would change what an empty sum returns without changing the hash;
+    /// the checker derives the expected seed from the target alone.
     #[error(
-        "a sum in {context} carries an empty-case value its declarations do not give it; lower the programme with `lower_sum_seeds` instead of setting seeds by hand, so the programme's hash names what an empty sum returns"
+        "a sum in {context} would return {found} when empty, but its target's kind gives {expected}; lower the programme with `lower_sum_seeds` instead of setting seeds by hand, so the programme's hash names what an empty sum returns"
     )]
-    SumSeedNotFaithful { context: ValidationContext },
+    SumSeedNotFaithful {
+        found: SumSeed,
+        expected: SumSeed,
+        context: ValidationContext,
+    },
     /// An invariant carries a version other than 1, which no source can
     /// write. The programme hash carries no version, so another would
     /// share version 1's identity while rejections name it.
@@ -753,7 +743,7 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
 /// version, so validation fixes them: a seed must be what lowering
 /// derives, as generated invariants must be, and a version must be 1.
 fn collect_unhashed_errors(p: &Program) -> Vec<ValidationError> {
-    let mut errors: Vec<ValidationError> = p
+    let errors: Vec<ValidationError> = p
         .invariants
         .iter()
         .filter(|inv| inv.version != 1)
@@ -764,43 +754,6 @@ fn collect_unhashed_errors(p: &Program) -> Vec<ValidationError> {
             },
         })
         .collect();
-    let mut lowered = p.clone();
-    crate::lower_sum_seeds(&mut lowered);
-    let mut contexts = Vec::new();
-    for (was, now) in p.definitions.iter().zip(&lowered.definitions) {
-        if was != now {
-            contexts.push(ValidationContext::Definition {
-                name: was.name.to_string(),
-            });
-        }
-    }
-    for (was, now) in p.invariants.iter().zip(&lowered.invariants) {
-        if was != now {
-            contexts.push(ValidationContext::Invariant {
-                name: was.name.to_string(),
-            });
-        }
-    }
-    for (was, now) in p.transformations.iter().zip(&lowered.transformations) {
-        if let Some(statement) = was.body.iter().zip(&now.body).position(|(a, b)| a != b) {
-            contexts.push(ValidationContext::Transformation {
-                name: was.name.to_string(),
-                statement: Some(statement),
-            });
-        }
-    }
-    for (was, now) in p.derived_claims.iter().zip(&lowered.derived_claims) {
-        if was != now {
-            contexts.push(ValidationContext::DerivedClaim {
-                predicate: was.predicate.to_string(),
-            });
-        }
-    }
-    errors.extend(
-        contexts
-            .into_iter()
-            .map(|context| ValidationError::SumSeedNotFaithful { context }),
-    );
     errors
 }
 

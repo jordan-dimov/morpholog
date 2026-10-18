@@ -153,8 +153,8 @@ fn unlowered_duration_sums_are_refused_and_lowering_restores_validity() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, ValidationError::EmptySumUntyped { .. })),
-        "expected EmptySumUntyped, got {errors:?}"
+            .any(|e| matches!(e, ValidationError::SumSeedNotFaithful { .. })),
+        "expected SumSeedNotFaithful, got {errors:?}"
     );
 
     // The same programme through the seed pass is exactly lawful.

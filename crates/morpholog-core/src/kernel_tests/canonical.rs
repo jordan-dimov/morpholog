@@ -376,6 +376,7 @@ fn a_sum_seed_the_declarations_do_not_give_is_refused() {
                 e,
                 crate::ValidationError::SumSeedNotFaithful {
                     context: crate::ValidationContext::Invariant { name },
+                    ..
                 } if name == "capped"
             )),
             "{case}: expected SumSeedNotFaithful naming `capped`, got {errors:?}"

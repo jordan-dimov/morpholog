@@ -246,8 +246,8 @@ fn an_outer_bound_quantity_target_is_refused_not_mistyped() {
     assert!(
         errors
             .iter()
-            .any(|e| matches!(e, ValidationError::EmptySumUntyped { .. })),
-        "expected EmptySumUntyped, got {errors:?}"
+            .any(|e| matches!(e, ValidationError::SumSeedNotFaithful { .. })),
+        "expected SumSeedNotFaithful, got {errors:?}"
     );
 }
 
