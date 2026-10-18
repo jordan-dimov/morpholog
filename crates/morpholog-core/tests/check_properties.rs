@@ -353,19 +353,18 @@ proptest! {
         prop_assert_eq!(p.validate(), p.validate());
     }
 
-    /// The seed pass never stamps a typed zero the checker disagrees
-    /// with: wherever validation finds a seed unfaithful after lowering,
-    /// the stamped seed is the decimal default the pass falls back to,
-    /// never a wrong duration or unit.
+    /// Lowering stamps what the checker expects, on any IR: after it,
+    /// validation never finds an unfaithful seed, whatever else it finds.
     #[test]
-    fn lowered_seeds_are_never_a_wrong_typed_zero(p in arb_program()) {
+    fn lowered_seeds_are_always_faithful(p in arb_program()) {
         let mut lowered = p.clone();
         lower_sum_seeds(&mut lowered);
         if let Err(errors) = lowered.validate() {
             for error in errors {
-                if let ValidationError::SumSeedNotFaithful { found, .. } = error {
-                    prop_assert_eq!(found, SumSeed::Decimal);
-                }
+                prop_assert!(
+                    !matches!(error, ValidationError::SumSeedNotFaithful { .. }),
+                    "lowering left an unfaithful seed: {error}"
+                );
             }
         }
     }

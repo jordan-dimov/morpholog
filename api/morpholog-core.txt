@@ -1083,6 +1083,8 @@ impl core::default::Default for morpholog_core::SumSeed
 pub fn morpholog_core::SumSeed::default() -> morpholog_core::SumSeed
 impl core::fmt::Debug for morpholog_core::SumSeed
 pub fn morpholog_core::SumSeed::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for morpholog_core::SumSeed
+pub fn morpholog_core::SumSeed::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for morpholog_core::SumSeed
 impl core::marker::Freeze for morpholog_core::SumSeed
 impl core::marker::Send for morpholog_core::SumSeed
@@ -1302,10 +1304,6 @@ pub morpholog_core::ValidationError::EffectiveDateNotATime
 pub morpholog_core::ValidationError::EffectiveDateNotATime::actual: morpholog_core::PredicateArgKind
 pub morpholog_core::ValidationError::EffectiveDateNotATime::field: alloc::string::String
 pub morpholog_core::ValidationError::EffectiveDateNotATime::predicate: alloc::string::String
-pub morpholog_core::ValidationError::EmptySumUntyped
-pub morpholog_core::ValidationError::EmptySumUntyped::context: morpholog_core::ValidationContext
-pub morpholog_core::ValidationError::EmptySumUntyped::seed: morpholog_core::PredicateArgKind
-pub morpholog_core::ValidationError::EmptySumUntyped::target: morpholog_core::PredicateArgKind
 pub morpholog_core::ValidationError::EqualityKindMismatch
 pub morpholog_core::ValidationError::EqualityKindMismatch::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::EqualityKindMismatch::left: morpholog_core::PredicateArgKind
@@ -1359,6 +1357,8 @@ pub morpholog_core::ValidationError::RoundQuantumNotPositive::context: morpholog
 pub morpholog_core::ValidationError::RoundQuantumNotPositive::quantum: alloc::string::String
 pub morpholog_core::ValidationError::SumSeedNotFaithful
 pub morpholog_core::ValidationError::SumSeedNotFaithful::context: morpholog_core::ValidationContext
+pub morpholog_core::ValidationError::SumSeedNotFaithful::expected: morpholog_core::SumSeed
+pub morpholog_core::ValidationError::SumSeedNotFaithful::found: morpholog_core::SumSeed
 pub morpholog_core::ValidationError::UnboundVariable
 pub morpholog_core::ValidationError::UnboundVariable::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::UnboundVariable::variable: alloc::string::String

@@ -672,6 +672,23 @@ impl std::fmt::Display for ValidationContext {
 /// compare names rather than walk bodies; every body walk lives in
 /// [`crate::check::check_program`].
 pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> {
+    structural_errors(p)?;
+    let mut errors = collect_duplicate_decl_errors(p);
+    errors.extend(collect_discipline_errors(p));
+    errors.extend(collect_unhashed_errors(p));
+    errors.extend(crate::check::check_program(p).errors);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// The guards every recursive walk relies on, in the order they protect
+/// each other: nesting within each body, no definition cycle, nesting
+/// within each body once calls are expanded. `Err` carries the refusal;
+/// the checker and the seed lowering walk a programme only after `Ok`.
+pub(crate) fn structural_errors(p: &Program) -> Result<(), Vec<ValidationError>> {
     // Every body's own nesting is measured before anything walks it,
     // because the cycle search and the checks reported beside a cycle
     // walk bodies without a cap. A call counts at depth 1 here; its
@@ -725,17 +742,10 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
         }
     }
     depth_errors.extend(collect_depth_errors(p, &definition_depths));
-    if !depth_errors.is_empty() {
-        return Err(depth_errors);
-    }
-    let mut errors = collect_duplicate_decl_errors(p);
-    errors.extend(collect_discipline_errors(p));
-    errors.extend(collect_unhashed_errors(p));
-    errors.extend(crate::check::check_program(p).errors);
-    if errors.is_empty() {
+    if depth_errors.is_empty() {
         Ok(())
     } else {
-        Err(errors)
+        Err(depth_errors)
     }
 }
 

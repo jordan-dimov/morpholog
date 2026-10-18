@@ -224,7 +224,7 @@ fn duration_term(s: &str) -> Term {
 /// beyond the seed pass, so it is refused at authoring time rather than
 /// given a decimal zero that fails on the first empty book.
 #[test]
-fn an_outer_bound_quantity_target_is_refused_not_mistyped() {
+fn an_outer_bound_quantity_target_types_the_empty_sum() {
     let mut p = program("outer_target")
         .predicates(vec![
             predicate("Item").subject("i").build(),
@@ -242,12 +242,65 @@ fn an_outer_bound_quantity_target_is_refused_not_mistyped() {
         )])
         .build();
     lower_sum_seeds(&mut p);
-    let errors = p.validate().expect_err("the empty case cannot be typed");
+    p.validate()
+        .expect("the checker types the outer-bound target, so the empty sum has a zero");
+    // No items: the sum is the typed zero `0 t`, which the quantity
+    // comparison accepts, where a bare decimal zero would raise.
+    let state = State::from_claims(vec![claim_instance(
+        "Cap",
+        &[crate::EvalValue::Quantity {
+            amount: rust_decimal::Decimal::from(5),
+            unit: "t".into(),
+        }],
+    )]);
+    assert_eq!(
+        eval_invariant(&p.invariants[0], &state, None, &[]),
+        Ok(true),
+        "the empty sum over an outer-bound quantity target is `0 t`"
+    );
+}
+
+/// A builtin over a duration as the target: `abs(d)` keeps the duration,
+/// so the empty sum is a zero duration. The un-lowered programme carries
+/// the decimal default and is refused with both seeds named.
+#[test]
+fn a_builtin_target_types_the_empty_sum_and_an_unlowered_one_is_refused() {
+    use crate::ir_builder::{abs, duration};
+    let p = program("abs_target")
+        .predicates(vec![predicate("Gap").subject("v").duration("d").build()])
+        .invariants(vec![invariant(
+            "bounded",
+            duration_le(
+                sum(
+                    abs(term(var("d"))),
+                    claim("Gap", vec![wildcard(), var("d")]),
+                ),
+                term(duration("PT1H")),
+            ),
+        )])
+        .build();
+    let errors = p
+        .validate()
+        .expect_err("un-lowered, the seed is a decimal zero");
     assert!(
-        errors
-            .iter()
-            .any(|e| matches!(e, ValidationError::SumSeedNotFaithful { .. })),
-        "expected SumSeedNotFaithful, got {errors:?}"
+        errors.iter().any(|e| matches!(
+            e,
+            ValidationError::SumSeedNotFaithful {
+                found: crate::SumSeed::Decimal,
+                expected: crate::SumSeed::Duration,
+                ..
+            }
+        )),
+        "got {errors:?}"
+    );
+    let mut p = p;
+    lower_sum_seeds(&mut p);
+    p.validate()
+        .expect("lowered, the empty sum is a zero duration");
+    assert_eq!(
+        eval_invariant(&p.invariants[0], &State::from_claims(vec![]), None, &[]),
+        Ok(true),
+        "an empty book: PT0S is within PT1H"
     );
 }
 

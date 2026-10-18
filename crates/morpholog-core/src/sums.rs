@@ -1,116 +1,106 @@
-//! Lowering pass resolving each `sum(...)`'s empty-case seed.
+//! Lowering pass stamping each `sum(...)`'s empty-case seed.
 //!
-//! A sum's kind comes from its values, but an empty sum has none. A
+//! A sum's kind comes from its values, but an empty sum has none, and a
 //! bare-decimal zero fails every quantity or duration comparison, so an
-//! aggregate rule would break on an empty book. The summed variable's
-//! declared kind is known statically, so this pass stamps the typed zero
-//! on the node for the evaluator to return.
+//! aggregate rule would break on an empty book. The checker infers each
+//! target's kind as it walks; this pass asks it once and writes the typed
+//! zero on the node for the evaluator to return. It infers nothing of
+//! its own.
 //!
-//! Runs in `parse_program` after `resolve_defined_calls`, since a
-//! variable bound inside a definition call takes its kind from the
-//! definition's body. Idempotent. The programme hash leaves seeds out, so
-//! validation refuses any seed this pass would not give
-//! (`SumSeedNotFaithful`), and hand-built IR must lower too.
+//! Runs in `parse_program` after `resolve_defined_calls` and
+//! `lower_disciplines`, before validation. The checker recurses over
+//! every body, so the programme first passes validation's own structural
+//! guards (nesting, definition cycles); one that fails them keeps its
+//! decimal defaults, and validation then refuses it by name. Idempotent.
+//! The programme hash leaves seeds out, so validation refuses any seed
+//! the checker would not give (`SumSeedNotFaithful`), and hand-built IR
+//! must lower too.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::HashMap;
 
-use crate::definitions::DefinitionTable;
-use crate::ir::{
-    DefinitionName, PredicateArgKind, Program, Prop, Stmt, SumSeed, Term, Value, ValueExpr, Var,
-};
-use crate::validate::MAX_EXPR_DEPTH;
+use crate::ir::{Program, Prop, Stmt, SumSeed, ValueExpr};
 
-/// Resolve every `Sum` node's empty-case seed from the summed
-/// variable's declared kind.
+/// Stamp every `Sum` node's empty-case seed with the typed zero of the
+/// kind the checker infers for its target.
 pub fn lower_sum_seeds(program: &mut Program) {
-    let kinds: BTreeMap<String, Vec<PredicateArgKind>> = program
-        .predicates
-        .iter()
-        .map(|p| {
-            (
-                p.name.to_string(),
-                p.args.iter().map(|a| a.kind.clone()).collect(),
-            )
-        })
-        .collect();
-    // Cloned so definition bodies can be consulted for variable kinds
-    // while the originals are themselves being lowered.
-    let definitions = program.definitions.clone();
-    let ctx = SeedContext {
-        kinds: &kinds,
-        definitions: DefinitionTable::new(&definitions),
-    };
+    if crate::validate::structural_errors(program).is_err() {
+        return;
+    }
+    let seeds = crate::check::check_program(program).sum_seeds;
+    // The seeds are keyed by node address. Nothing below moves or
+    // rebuilds a node, only writes a seed field in place, so each address
+    // still names the node the checker saw.
     for def in &mut program.definitions {
-        lower_in_prop(&mut def.body, &ctx);
+        stamp_prop(&mut def.body, &seeds);
     }
     for inv in &mut program.invariants {
-        lower_in_prop(&mut inv.body, &ctx);
+        stamp_prop(&mut inv.body, &seeds);
     }
     for t in &mut program.transformations {
         for stmt in &mut t.body {
-            lower_in_stmt(stmt, &ctx);
+            stamp_stmt(stmt, &seeds);
         }
     }
     for dc in &mut program.derived_claims {
-        lower_in_prop(&mut dc.domain, &ctx);
+        stamp_prop(&mut dc.domain, &seeds);
         for v in &mut dc.values {
-            lower_in_value(&mut v.expr, &ctx);
+            stamp_value(&mut v.expr, &seeds);
         }
     }
 }
 
-struct SeedContext<'a> {
-    kinds: &'a BTreeMap<String, Vec<PredicateArgKind>>,
-    definitions: DefinitionTable<'a>,
-}
+type Seeds = HashMap<*const ValueExpr, SumSeed>;
 
-fn lower_in_prop(prop: &mut Prop, ctx: &SeedContext<'_>) {
+fn stamp_prop(prop: &mut Prop, seeds: &Seeds) {
     match prop {
         Prop::Claim { .. } | Prop::Defined { .. } | Prop::In(_, _) => {}
         Prop::And(props) | Prop::Or(props) => {
             for p in props {
-                lower_in_prop(p, ctx);
+                stamp_prop(p, seeds);
             }
         }
         Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            lower_in_prop(left, ctx);
-            lower_in_prop(right, ctx);
+            stamp_prop(left, seeds);
+            stamp_prop(right, seeds);
         }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => lower_in_prop(p, ctx),
+        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => stamp_prop(p, seeds),
         Prop::Forall { source, body, .. } => {
-            lower_in_prop(source, ctx);
-            lower_in_prop(body, ctx);
+            stamp_prop(source, seeds);
+            stamp_prop(body, seeds);
         }
         Prop::Eq(l, r) | Prop::Neq(l, r) => {
-            lower_in_value(l, ctx);
-            lower_in_value(r, ctx);
+            stamp_value(l, seeds);
+            stamp_value(r, seeds);
         }
         Prop::Compare { left, right, .. } => {
-            lower_in_value(left, ctx);
-            lower_in_value(right, ctx);
+            stamp_value(left, seeds);
+            stamp_value(right, seeds);
         }
     }
 }
 
-fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
-    match value {
+fn stamp_value(expr: &mut ValueExpr, seeds: &Seeds) {
+    let node: *const ValueExpr = &raw const *expr;
+    match expr {
         ValueExpr::Term(_) => {}
         ValueExpr::ValueOf { default, .. } => {
             if let Some(d) = default {
-                lower_in_value(d, ctx);
+                stamp_value(d, seeds);
             }
         }
         ValueExpr::Arith { left, right, .. } => {
-            lower_in_value(left, ctx);
-            lower_in_value(right, ctx);
+            stamp_value(left, seeds);
+            stamp_value(right, seeds);
         }
         // An empty extremum has no value to type, but a sum can sit in
         // its body.
-        ValueExpr::Extremum { body, .. } => lower_in_prop(body, ctx),
+        ValueExpr::Extremum { body, .. } => stamp_prop(body, seeds),
         ValueExpr::Sum { value, body, seed } => {
-            lower_in_prop(body, ctx);
-            lower_in_value(value, ctx);
-            *seed = value_seed(value, body, ctx).unwrap_or_default();
+            stamp_prop(body, seeds);
+            stamp_value(value, seeds);
+            if let Some(found) = seeds.get(&node) {
+                *seed = found.clone();
+            }
         }
         // Nothing of its own to type, but a sum can sit in the
         // condition or either branch.
@@ -119,155 +109,31 @@ fn lower_in_value(value: &mut ValueExpr, ctx: &SeedContext<'_>) {
             then,
             otherwise,
         } => {
-            lower_in_prop(when, ctx);
-            lower_in_value(then, ctx);
-            lower_in_value(otherwise, ctx);
+            stamp_prop(when, seeds);
+            stamp_value(then, seeds);
+            stamp_value(otherwise, seeds);
         }
         ValueExpr::Call { args, .. } => {
             for a in args {
-                lower_in_value(a, ctx);
+                stamp_value(a, seeds);
             }
         }
     }
 }
 
-fn lower_in_stmt(stmt: &mut Stmt, ctx: &SeedContext<'_>) {
+fn stamp_stmt(stmt: &mut Stmt, seeds: &Seeds) {
     match stmt {
-        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => lower_in_prop(p, ctx),
-        Stmt::Let { value, .. } => lower_in_value(value, ctx),
+        Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => stamp_prop(p, seeds),
+        Stmt::Let { value, .. } => stamp_value(value, seeds),
         Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) | Stmt::LetNewSubject { .. } => {}
         Stmt::For {
             collection, body, ..
         } => {
-            lower_in_value(collection, ctx);
+            stamp_value(collection, seeds);
             for inner in body {
-                lower_in_stmt(inner, ctx);
+                stamp_stmt(inner, seeds);
             }
         }
-    }
-}
-
-/// The seed for an expression target:
-/// - a variable: the kind of the claim position that binds it;
-/// - a literal: its own kind (`sum(1 t | ...)` counts in tonnes);
-/// - a `value` lookup: the declared kind of the extracted position;
-/// - a conditional: its branches, when they agree;
-/// - a nested sum: its own resolved seed;
-/// - arithmetic: the rule matrix over the operands' seeds. With one side
-///   unknown, a unique rule still decides (`qty * factor` is a quantity
-///   of `qty`'s unit).
-///
-/// Anything else (an outer-bound variable, a builtin call) keeps the
-/// decimal default. If the checker then sees a duration or quantity
-/// there, it refuses the programme (`EmptySumUntyped`), so the default
-/// is never a wrong zero in a committed programme.
-fn value_seed(value: &ValueExpr, body: &Prop, ctx: &SeedContext<'_>) -> Option<SumSeed> {
-    let kind = match value {
-        ValueExpr::Term(Term::Var(v)) => return var_seed(v, body, ctx, &mut BTreeSet::new()),
-        ValueExpr::Term(Term::Literal(Value::Quantity { unit, .. })) => {
-            return Some(SumSeed::Quantity(unit.clone()));
-        }
-        ValueExpr::Term(Term::Literal(Value::Duration(_))) => return Some(SumSeed::Duration),
-        ValueExpr::Term(Term::Literal(Value::Decimal(_))) => return Some(SumSeed::Decimal),
-        ValueExpr::Arith { op, left, right } => {
-            let l = value_seed(left, body, ctx).map(seed_kind);
-            let r = value_seed(right, body, ctx).map(seed_kind);
-            match (l, r) {
-                (Some(l), Some(r)) => crate::ir::arith_result_kind(*op, &l, &r)?,
-                (Some(k), None) => crate::ir::arith_unique_counterpart(*op, &k, true)?.1,
-                (None, Some(k)) => crate::ir::arith_unique_counterpart(*op, &k, false)?.1,
-                (None, None) => return None,
-            }
-        }
-        // The declared kind at the extracted position, as the checker's
-        // `value_of_result_kind` reads it.
-        ValueExpr::ValueOf {
-            predicate, extract, ..
-        } => {
-            let kinds = ctx.kinds.get(predicate.as_str())?;
-            kinds.get(*extract)?.clone()
-        }
-        // A conditional is typed only when both branches agree; the
-        // sum's body supplies the bindings either branch would consume.
-        ValueExpr::Cond {
-            then, otherwise, ..
-        } => {
-            let t = value_seed(then, body, ctx)?;
-            let o = value_seed(otherwise, body, ctx)?;
-            if t != o {
-                return None;
-            }
-            return Some(t);
-        }
-        // The recursion above already resolved the nested sum's seed.
-        ValueExpr::Sum { seed, .. } => return Some(seed.clone()),
-        _ => return None,
-    };
-    match kind {
-        PredicateArgKind::Decimal => Some(SumSeed::Decimal),
-        PredicateArgKind::Duration => Some(SumSeed::Duration),
-        PredicateArgKind::Quantity(u) => Some(SumSeed::Quantity(u)),
-        _ => None,
-    }
-}
-
-fn seed_kind(seed: SumSeed) -> PredicateArgKind {
-    match seed {
-        SumSeed::Decimal => PredicateArgKind::Decimal,
-        SumSeed::Duration => PredicateArgKind::Duration,
-        SumSeed::Quantity(u) => PredicateArgKind::Quantity(u),
-    }
-}
-
-/// The seed for a variable summed over `body`: the declared kind of the
-/// first claim position that binds it, following definition calls
-/// through their parameters. `None` (a pre-bound variable, a subject
-/// join) keeps the decimal default.
-fn var_seed(
-    var: &Var,
-    body: &Prop,
-    ctx: &SeedContext<'_>,
-    seen: &mut BTreeSet<DefinitionName>,
-) -> Option<SumSeed> {
-    match body {
-        Prop::Claim { predicate, args } => {
-            let kinds = ctx.kinds.get(predicate.as_str())?;
-            args.iter()
-                .zip(kinds)
-                .find_map(|(arg, kind)| match (arg, kind) {
-                    (Term::Var(v), PredicateArgKind::Quantity(unit)) if v == var => {
-                        Some(SumSeed::Quantity(unit.clone()))
-                    }
-                    (Term::Var(v), PredicateArgKind::Duration) if v == var => {
-                        Some(SumSeed::Duration)
-                    }
-                    (Term::Var(v), PredicateArgKind::Decimal) if v == var => Some(SumSeed::Decimal),
-                    _ => None,
-                })
-        }
-        // `seen` stops cycles; this budget stops long acyclic chains,
-        // which would otherwise overflow the stack. The pass runs before
-        // validation's depth guard. It uses validation's own limit, so
-        // any chain cut here is one validation rejects anyway with
-        // `NestingTooDeep`.
-        Prop::Defined { .. } if seen.len() >= MAX_EXPR_DEPTH => None,
-        Prop::Defined { name, args } => ctx.definitions.enter(name, seen, |def, seen| {
-            args.iter()
-                .zip(&def.parameters)
-                .filter(|(arg, _)| matches!(arg, Term::Var(v) if v == var))
-                .find_map(|(_, param)| var_seed(param, &def.body, ctx, seen))
-        }),
-        Prop::And(props) | Prop::Or(props) => {
-            props.iter().find_map(|p| var_seed(var, p, ctx, seen))
-        }
-        Prop::Implies { left, right } | Prop::Xor(left, right) => {
-            var_seed(var, left, ctx, seen).or_else(|| var_seed(var, right, ctx, seen))
-        }
-        Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => var_seed(var, p, ctx, seen),
-        Prop::Forall { source, body, .. } => {
-            var_seed(var, source, ctx, seen).or_else(|| var_seed(var, body, ctx, seen))
-        }
-        Prop::In(_, _) | Prop::Eq(_, _) | Prop::Neq(_, _) | Prop::Compare { .. } => None,
     }
 }
 
@@ -277,6 +143,7 @@ mod tests {
     use super::*;
     use crate::ir::Definition;
     use crate::ir_builder::{defined, invariant, predicate, program, sum};
+    use crate::validate::MAX_EXPR_DEPTH;
     use crate::{CompareOp, OrderedDomain, Term, Value, Var};
 
     /// A programme whose one invariant sums through `layers` chained
@@ -417,5 +284,157 @@ mod tests {
         p.definitions[last].body = defined("d0", vec![Term::Var(Var::from("x"))]);
         lower_sum_seeds(&mut p);
         assert_eq!(seed_of(&p), SumSeed::Decimal);
+    }
+
+    /// Lowering runs before validation, so it must come back from a
+    /// programme the checker can only refuse: a builtin with the wrong
+    /// arity in the target, and a claim that names a definition. The
+    /// seed keeps its default and validation names the fault.
+    #[test]
+    fn malformed_targets_and_unresolved_calls_leave_the_default_and_validate_by_name() {
+        use crate::ir_builder::{call, implies, le, term};
+        use crate::{Builtin, ValidationError};
+        let body = |target: ValueExpr, over: Prop| {
+            implies(
+                Prop::Claim {
+                    predicate: "P".into(),
+                    args: vec![Term::Var(Var::from("x"))],
+                },
+                le(
+                    sum(target, over),
+                    term(Term::Literal(Value::Decimal("100".to_string()))),
+                ),
+            )
+        };
+        let x = || ValueExpr::Term(Term::Var(Var::from("x")));
+        let p_x = || Prop::Claim {
+            predicate: "P".into(),
+            args: vec![Term::Var(Var::from("x"))],
+        };
+        let cases: [(&str, Prop, fn(&ValidationError) -> bool); 2] = [
+            (
+                "round with one argument",
+                body(call(Builtin::Round, vec![x()]), p_x()),
+                |e: &ValidationError| matches!(e, ValidationError::BuiltinArity { .. }),
+            ),
+            (
+                "a claim naming a definition",
+                body(
+                    x(),
+                    Prop::Claim {
+                        predicate: "d0".into(),
+                        args: vec![Term::Var(Var::from("x"))],
+                    },
+                ),
+                |e: &ValidationError| matches!(e, ValidationError::UnresolvedDefinitionCall { .. }),
+            ),
+        ];
+        for (case, inv_body, expected) in cases {
+            let mut p = program("hostile")
+                .predicates(vec![predicate("P").quantity("qty", "t").build()])
+                .definitions(vec![Definition {
+                    origin: crate::ir::DefinitionOrigin::Authored,
+                    name: "d0".into(),
+                    parameters: vec![Var::from("x")],
+                    body: p_x(),
+                }])
+                .invariants(vec![invariant("capped", inv_body)])
+                .build();
+            lower_sum_seeds(&mut p);
+            let errors = p.validate().expect_err(case);
+            assert!(errors.iter().any(expected), "{case}: got {errors:?}");
+        }
+    }
+
+    /// A body nested beyond the depth validation allows is not walked:
+    /// lowering returns with the default seed and validation refuses the
+    /// nesting, as it would have before anything recursed.
+    #[test]
+    fn a_body_too_deep_is_not_walked() {
+        use crate::ir_builder::{abs, implies, le, term};
+        let mut target = ValueExpr::Term(Term::Var(Var::from("x")));
+        for _ in 0..(MAX_EXPR_DEPTH + 8) {
+            target = abs(target);
+        }
+        let mut p = program("deep")
+            .predicates(vec![predicate("P").quantity("qty", "t").build()])
+            .invariants(vec![invariant(
+                "capped",
+                implies(
+                    Prop::Claim {
+                        predicate: "P".into(),
+                        args: vec![Term::Var(Var::from("x"))],
+                    },
+                    le(
+                        sum(
+                            target,
+                            Prop::Claim {
+                                predicate: "P".into(),
+                                args: vec![Term::Var(Var::from("x"))],
+                            },
+                        ),
+                        term(Term::Literal(Value::Decimal("100".to_string()))),
+                    ),
+                ),
+            )])
+            .build();
+        lower_sum_seeds(&mut p);
+        let errors = p.validate().expect_err("validation refuses the nesting");
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, crate::ValidationError::NestingTooDeep { .. })),
+            "got {errors:?}"
+        );
+    }
+
+    /// A seed is never read back from the node: a quantity seed forged on
+    /// a target the checker cannot type is refused, with both seeds named.
+    #[test]
+    fn a_forged_seed_on_an_untyped_target_is_refused() {
+        use crate::ir_builder::{le, params, require, term, transformation, wildcard};
+        let mut p = program("forged")
+            .predicates(vec![predicate("P").subject("s").build()])
+            .transformations(vec![transformation(
+                "t",
+                params(&["p"]),
+                vec![require(le(
+                    sum(
+                        Term::Var(Var::from("p")),
+                        Prop::Claim {
+                            predicate: "P".into(),
+                            args: vec![wildcard()],
+                        },
+                    ),
+                    term(Term::Literal(Value::Decimal("100".to_string()))),
+                ))],
+            )])
+            .build();
+        let Stmt::Require {
+            prop: Prop::Compare { left, .. },
+            ..
+        } = &mut p.transformations[0].body[0]
+        else {
+            panic!("require of a comparison expected");
+        };
+        let ValueExpr::Sum { seed, .. } = left.as_mut() else {
+            panic!("sum expected");
+        };
+        *seed = SumSeed::Quantity("t".into());
+        let errors = p.validate().expect_err("the forged seed is refused");
+        assert!(
+            errors.iter().any(|e| matches!(
+                e,
+                crate::ValidationError::SumSeedNotFaithful {
+                    found: SumSeed::Quantity(_),
+                    expected: SumSeed::Decimal,
+                    ..
+                }
+            )),
+            "got {errors:?}"
+        );
+        // Lowering restores the checker's seed and the programme validates.
+        lower_sum_seeds(&mut p);
+        p.validate().expect("lowered, the programme validates");
     }
 }
