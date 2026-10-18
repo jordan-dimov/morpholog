@@ -1573,12 +1573,11 @@ impl CheckCtx<'_> {
                 self.check_operand_kind(&args[1], PredicateArgKind::Decimal, "round", scope);
                 // A literal quantum must be positive; the runtime checks
                 // a variable one.
-                if let ValueExpr::Term(Term::Literal(Value::Decimal(s))) = &args[1]
-                    && s.parse::<rust_decimal::Decimal>()
-                        .is_ok_and(|d| d <= rust_decimal::Decimal::ZERO)
+                if let ValueExpr::Term(Term::Literal(Value::Decimal(d))) = &args[1]
+                    && d.value() <= rust_decimal::Decimal::ZERO
                 {
                     self.report(|context| ValidationError::RoundQuantumNotPositive {
-                        quantum: s.clone(),
+                        quantum: d.to_string(),
                         context,
                     });
                 }
@@ -1615,12 +1614,11 @@ impl CheckCtx<'_> {
                 self.refuse_literal_zero_span(&args[1], "period_start_of");
                 // A literal fractional index is refused here; the runtime
                 // checks a computed one.
-                if let ValueExpr::Term(Term::Literal(Value::Decimal(s))) = &args[2]
-                    && s.parse::<rust_decimal::Decimal>()
-                        .is_ok_and(|d| !d.is_integer())
+                if let ValueExpr::Term(Term::Literal(Value::Decimal(d))) = &args[2]
+                    && !d.value().is_integer()
                 {
                     self.report(|context| ValidationError::PeriodIndexNotWhole {
-                        index: s.clone(),
+                        index: d.to_string(),
                         context,
                     });
                 }
@@ -1672,14 +1670,13 @@ impl CheckCtx<'_> {
     /// here by name; the runtime checks one passed in through a
     /// parameter.
     fn refuse_literal_zero_span(&mut self, span_arg: &ValueExpr, builtin: &'static str) {
-        if let ValueExpr::Term(Term::Literal(Value::CalendarSpan(text))) = span_arg
-            && let Ok(parsed) = crate::calendar::parse_calendar_span(text)
-            && parsed.months == 0
-            && parsed.days == 0
+        if let ValueExpr::Term(Term::Literal(Value::CalendarSpan(span))) = span_arg
+            && span.months == 0
+            && span.days == 0
         {
             self.report(|context| ValidationError::PeriodSpanNotPositive {
                 builtin,
-                span: parsed.to_string(),
+                span: span.to_string(),
                 context,
             });
         }

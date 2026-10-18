@@ -70,7 +70,7 @@ use morpholog_core::{
     ClaimInstance, CompareOp, Compared, Definition, DefinitionName, EvalError, EvalValue, Impact,
     ImpactPlan, Invariant, InvariantName, OrderedDomain, PredicateArgKind, PredicateDecl,
     PredicateName, Prop, RejectionReason, SumSeed, Term, ValidatedProgram, Value, ValueExpr, Var,
-    WitnessBinding, literal_value, ordered_compare_error,
+    WitnessBinding, ordered_compare_error,
 };
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -1006,7 +1006,7 @@ impl Chosen {
 
     fn value(&self, bound: &Bound) -> Result<EvalValue, PgError> {
         match bound {
-            Bound::Lit(value) => literal_value(value).map_err(PgError::Kernel),
+            Bound::Lit(value) => Ok(EvalValue::from(value)),
             Bound::Col(col) => {
                 let (_, _, args) = self.rows.get(&col.alias).ok_or_else(|| {
                     PgError::InvalidState(format!("diagnosis read unchosen alias {}", col.alias))
@@ -2225,19 +2225,13 @@ fn literal_filter(col: &ColRef, value: &Value, ctx: &mut Ctx<'_>) -> Result<Stri
             kind: "calendar span",
         });
     }
-    let ev = literal_eval(value)?;
+    let ev = EvalValue::from(value);
     ctx.required.insert((col.predicate.clone(), col.position));
     const_eq_sql(col, &ev)
 }
 
 /// A literal's runtime value, as the evaluator would parse it. A literal
 /// a validated programme carries always parses.
-fn literal_eval(value: &Value) -> Result<EvalValue, CompileReason> {
-    literal_value(value).map_err(|e| CompileReason::UnvalidatedShape {
-        detail: format!("literal does not evaluate: {e}"),
-    })
-}
-
 /// The canonical tagged JSON of a runtime value: the same serde every
 /// stored claim passed through.
 fn tagged_json(ev: &EvalValue) -> Result<String, CompileReason> {
@@ -3011,7 +3005,7 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                         )
                     }
                     ValueExpr::Term(Term::Literal(Value::Decimal(d))) => (
-                        format!("{}::numeric", quote_literal(d)),
+                        format!("{}::numeric", quote_literal(&d.to_string())),
                         "false".to_string(),
                         None,
                     ),
@@ -3081,7 +3075,7 @@ fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
             kind: "calendar span",
         });
     }
-    let ev = literal_eval(value)?;
+    let ev = EvalValue::from(value);
     let tagged = format!("{}::jsonb", quote_literal(&tagged_json(&ev)?));
     let ordered = match &ev {
         EvalValue::Decimal(d) => Ordered::Numeric {

@@ -249,7 +249,8 @@ fn term_of<'a>(node: Node<'a>) -> Option<&'a Term> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::ir::{SumSeed, Value};
+    use crate::ir::SumSeed;
+    use crate::ir_builder::dec;
 
     fn claim(pred: &str) -> Prop {
         Prop::Claim {
@@ -283,7 +284,7 @@ mod tests {
             Box::new(ValueExpr::Arith {
                 op: crate::ArithOp::Add,
                 left: Box::new(ValueExpr::Sum {
-                    value: Box::new(Term::Literal(Value::Decimal("1".into())).into()),
+                    value: Box::new(dec("1").into()),
                     body: Box::new(Prop::Pre(Box::new(claim("P")))),
                     seed: SumSeed::Decimal,
                 }),

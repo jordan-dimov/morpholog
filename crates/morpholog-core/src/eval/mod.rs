@@ -13,7 +13,6 @@
 use jiff::civil::Date;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 
 use crate::definitions::DefinitionTable;
 use crate::ir::{
@@ -476,20 +475,6 @@ pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
     }
 }
 
-/// Parse a `Value::Date(String)` literal into a `jiff::civil::Date`.
-/// One parser, so every path reads `YYYY-MM-DD` the same way.
-pub(crate) fn parse_date_literal(s: &str) -> Result<Date, EvalError> {
-    s.parse::<Date>()
-        .map_err(|e| EvalError::TypeMismatch(format!("invalid civil date `{s}`: {e}")))
-}
-
-/// Parse a `Value::Timestamp(String)` literal into a [`jiff::Timestamp`]
-/// (RFC 3339).
-pub(crate) fn parse_timestamp_literal(s: &str) -> Result<jiff::Timestamp, EvalError> {
-    s.parse::<jiff::Timestamp>()
-        .map_err(|e| EvalError::TypeMismatch(format!("invalid timestamp `{s}`: {e}")))
-}
-
 /// An exact span as a decimal count of nanoseconds, so two durations
 /// divide exactly. Always fits: |i64 seconds| * 1e9 + nanos < 2^96.
 fn duration_nanos_decimal(d: jiff::SignedDuration) -> Decimal {
@@ -512,39 +497,6 @@ fn runtime_kind_label(v: &EvalValue) -> String {
         EvalValue::Quantity { unit, .. } => format!("Decimal[{unit}]"),
         EvalValue::Collection(_) => "collection".to_string(),
     }
-}
-
-/// Parse a `Value::Quantity` literal's amount into the runtime
-/// quantity value, keeping the unit label.
-pub(crate) fn parse_quantity_literal(
-    amount: &str,
-    unit: &crate::ir::Unit,
-) -> Result<EvalValue, EvalError> {
-    let d = Decimal::from_str(amount).map_err(|_| {
-        EvalError::TypeMismatch(format!("invalid quantity amount `{amount} {unit}`"))
-    })?;
-    Ok(EvalValue::Quantity {
-        amount: d,
-        unit: unit.clone(),
-    })
-}
-
-/// Parse a `Value::Duration(String)` literal into a
-/// [`jiff::SignedDuration`] (ISO 8601, e.g. `PT6H`). Exact seconds
-/// only: calendar units are rejected by the type itself.
-pub(crate) fn parse_duration_literal(s: &str) -> Result<jiff::SignedDuration, EvalError> {
-    s.parse::<jiff::SignedDuration>()
-        .map_err(|e| EvalError::TypeMismatch(format!("invalid duration `{s}`: {e}")))
-}
-
-/// Parse a `Value::CalendarSpan(String)` literal with the kernel's own
-/// grammar ([`crate::calendar::parse_calendar_span`]), the same one the
-/// surface diagnostics use.
-pub(crate) fn parse_calendar_span_literal(
-    s: &str,
-) -> Result<crate::calendar::CalendarSpan, EvalError> {
-    crate::calendar::parse_calendar_span(s)
-        .map_err(|e| EvalError::TypeMismatch(format!("invalid calendar span `{s}`: {e}")))
 }
 
 /// Shift a civil date by whole months, then whole days. Months move the
@@ -713,21 +665,10 @@ fn select_candidates<'a>(
         let ground = match term {
             Term::Wildcard => None,
             Term::Var(name) => base.get(name).cloned(),
-            Term::Literal(Value::Subject(s)) => Some(EvalValue::Subject(s.clone())),
-            Term::Literal(Value::Decimal(s)) => Decimal::from_str(s).ok().map(EvalValue::Decimal),
-            Term::Literal(Value::Date(s)) => parse_date_literal(s).ok().map(EvalValue::Date),
-            Term::Literal(Value::Timestamp(s)) => {
-                parse_timestamp_literal(s).ok().map(EvalValue::Timestamp)
-            }
-            Term::Literal(Value::Duration(s)) => {
-                parse_duration_literal(s).ok().map(EvalValue::Duration)
-            }
             // No admitted claim can carry a calendar span, so as a
             // ground argument it matches nothing.
             Term::Literal(Value::CalendarSpan(_)) => None,
-            Term::Literal(Value::Quantity { amount, unit }) => {
-                parse_quantity_literal(amount, unit).ok()
-            }
+            Term::Literal(lit) => Some(EvalValue::from(lit)),
             Term::Actor => match actor {
                 Some(a) => Some(EvalValue::Subject(a.clone())),
                 None => return Err(EvalError::UnboundActor),
@@ -854,44 +795,15 @@ fn match_args<'a>(
                     new.push((name, v));
                 }
             }
-            Term::Literal(Value::Decimal(s)) => {
-                let parsed = Decimal::from_str(s).ok()?;
-                match v {
-                    EvalValue::Decimal(d) if *d == parsed => {}
-                    _ => return None,
-                }
-            }
             Term::Literal(Value::Subject(s)) => match v {
                 EvalValue::Subject(id) if id == s => {}
                 _ => return None,
             },
-            Term::Literal(Value::Date(s)) => {
-                let parsed = parse_date_literal(s).ok()?;
-                match v {
-                    EvalValue::Date(d) if *d == parsed => {}
-                    _ => return None,
-                }
-            }
-            Term::Literal(Value::Timestamp(s)) => {
-                let parsed = parse_timestamp_literal(s).ok()?;
-                match v {
-                    EvalValue::Timestamp(t) if *t == parsed => {}
-                    _ => return None,
-                }
-            }
-            Term::Literal(Value::Duration(s)) => {
-                let parsed = parse_duration_literal(s).ok()?;
-                match v {
-                    EvalValue::Duration(d) if *d == parsed => {}
-                    _ => return None,
-                }
-            }
             // A stored value is never a calendar span, so the pattern
             // cannot match one.
             Term::Literal(Value::CalendarSpan(_)) => return None,
-            Term::Literal(Value::Quantity { amount, unit }) => {
-                let parsed = parse_quantity_literal(amount, unit).ok()?;
-                if *v != parsed {
+            Term::Literal(lit) => {
+                if *v != EvalValue::from(lit) {
                     return None;
                 }
             }
@@ -1603,11 +1515,6 @@ fn round_decimal(v: Decimal, q: Decimal) -> Result<Decimal, EvalError> {
     Ok(result.normalize())
 }
 
-/// The runtime value of a literal, parsed as the evaluator parses it.
-pub fn literal_value(value: &Value) -> Result<EvalValue, EvalError> {
-    resolve_term(&Term::Literal(value.clone()), &Bindings::new(), None)
-}
-
 pub(crate) fn resolve_term(
     t: &Term,
     bindings: &Bindings,
@@ -1621,21 +1528,7 @@ pub(crate) fn resolve_term(
         Term::Wildcard => Err(EvalError::TypeMismatch(
             "wildcard cannot be resolved as a value".into(),
         )),
-        Term::Literal(Value::Decimal(s)) => {
-            let d = Decimal::from_str(s)
-                .map_err(|_| EvalError::TypeMismatch(format!("invalid decimal: {s}")))?;
-            Ok(EvalValue::Decimal(d))
-        }
-        Term::Literal(Value::Subject(s)) => Ok(EvalValue::Subject(s.clone())),
-        Term::Literal(Value::Date(s)) => Ok(EvalValue::Date(parse_date_literal(s)?)),
-        Term::Literal(Value::Timestamp(s)) => Ok(EvalValue::Timestamp(parse_timestamp_literal(s)?)),
-        Term::Literal(Value::Duration(s)) => Ok(EvalValue::Duration(parse_duration_literal(s)?)),
-        Term::Literal(Value::CalendarSpan(s)) => {
-            Ok(EvalValue::CalendarSpan(parse_calendar_span_literal(s)?))
-        }
-        Term::Literal(Value::Quantity { amount, unit }) => {
-            Ok(parse_quantity_literal(amount, unit)?)
-        }
+        Term::Literal(lit) => Ok(EvalValue::from(lit)),
         Term::Actor => actor
             .map(|a| EvalValue::Subject(a.clone()))
             .ok_or(EvalError::UnboundActor),

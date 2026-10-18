@@ -51,7 +51,7 @@ fn var(name: &str) -> Term {
 }
 
 fn dec(s: &str) -> Term {
-    Term::Literal(Value::Decimal(s.to_string()))
+    Term::Literal(Value::decimal(s).unwrap())
 }
 
 fn dec_value(s: &str) -> ValueExpr {
@@ -694,7 +694,7 @@ fn parses_date_literal_as_term() {
     let got = parse_value_expr("@2026-05-22").unwrap();
     assert_eq!(
         got,
-        ValueExpr::Term(Term::Literal(Value::Date("2026-05-22".to_string())))
+        ValueExpr::Term(Term::Literal(Value::date("2026-05-22").unwrap()))
     );
 }
 
@@ -715,10 +715,7 @@ fn date_literal_in_claim_args() {
     };
     assert_eq!(predicate.as_str(), "EffectiveFrom");
     assert_eq!(args[0], Term::Var("verification".into()));
-    assert_eq!(
-        args[1],
-        Term::Literal(Value::Date("2026-05-22".to_string()))
-    );
+    assert_eq!(args[1], Term::Literal(Value::date("2026-05-22").unwrap()));
 }
 
 #[test]
@@ -905,7 +902,7 @@ fn sum_target_can_be_a_decimal_literal_for_counting() {
     };
     assert_eq!(
         *value,
-        ValueExpr::Term(Term::Literal(Value::Decimal("1".to_string())))
+        ValueExpr::Term(Term::Literal(Value::decimal("1").unwrap()))
     );
 }
 

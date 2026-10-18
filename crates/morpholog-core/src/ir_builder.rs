@@ -70,46 +70,47 @@ pub fn subj(s: &str) -> Term {
     Term::Literal(Value::Subject(Subject::from(s)))
 }
 
-/// Decimal literal. Stored as the exact source string; the evaluator
-/// parses it to `rust_decimal::Decimal` on use.
+/// A literal from fixed text. The text is part of the programme the
+/// author wrote, so a malformed one is a programming error here, not a
+/// value to carry: it panics at construction, never at evaluation.
+#[allow(clippy::expect_used)]
+fn literal(parsed: Result<Value, String>) -> Term {
+    Term::Literal(parsed.expect("a literal in hand-built IR is well-formed"))
+}
+
+/// Decimal literal, e.g. `dec("1250.75")`. Scale is kept as written.
 pub fn dec(s: &str) -> Term {
-    Term::Literal(Value::Decimal(s.to_string()))
+    literal(Value::decimal(s))
 }
 
-/// ISO-8601 civil-date literal. Stored as the exact source string; the
-/// evaluator parses it to `jiff::civil::Date` on use.
+/// ISO-8601 civil-date literal, e.g. `date("2026-04-01")`.
 pub fn date(s: &str) -> Term {
-    Term::Literal(Value::Date(s.to_string()))
+    literal(Value::date(s))
 }
 
-/// RFC 3339 UTC-instant literal. Stored as the exact source string;
-/// the evaluator parses it to `jiff::Timestamp` on use.
+/// RFC 3339 UTC-instant literal, e.g. `timestamp("2026-10-24T14:00:00Z")`.
 pub fn timestamp(s: &str) -> Term {
-    Term::Literal(Value::Timestamp(s.to_string()))
+    literal(Value::timestamp(s))
 }
 
-/// ISO-8601 duration literal in exact time units (e.g. `PT6H`). Stored
-/// as the exact source string; the evaluator parses it to
-/// `jiff::SignedDuration` on use.
+/// ISO-8601 duration literal in exact time units, e.g. `duration("PT6H")`.
 pub fn duration(s: &str) -> Term {
-    Term::Literal(Value::Duration(s.to_string()))
+    literal(Value::duration(s))
 }
 
-/// Calendar-span literal in date units (e.g. `P3M`, `P45D`), the
-/// surface's `span(P3M)`. Stored as the exact source string; parsed with
-/// [`crate::calendar::parse_calendar_span`] on use.
+/// Calendar-span literal in date units, e.g. `span("P3M")`, the
+/// surface's `span(P3M)`.
 pub fn span(s: &str) -> Term {
-    Term::Literal(Value::CalendarSpan(s.to_string()))
+    literal(Value::span(s))
 }
 
-/// Unit-tagged quantity literal (`qty("25000", "USD")` builds the IR
-/// for the surface's `25000 USD`). Amount stored as the exact source
-/// string; the unit is an opaque symbol.
+/// Unit-tagged quantity literal: `qty("25000", "USD")` builds the IR
+/// for the surface's `25000 USD`.
 pub fn qty(amount: &str, unit: &str) -> Term {
-    Term::Literal(Value::Quantity {
-        amount: amount.to_string(),
-        unit: crate::ir::Unit::from(unit.to_string()),
-    })
+    literal(Value::quantity(
+        amount,
+        crate::ir::Unit::from(unit.to_string()),
+    ))
 }
 
 /// Same as [`subj`]; the name tells the reader the subject is a role.

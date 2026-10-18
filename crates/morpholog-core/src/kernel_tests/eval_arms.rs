@@ -102,17 +102,27 @@ fn duration_arithmetic_is_exact_including_subsecond_parts() {
     ));
 }
 
+/// A malformed literal cannot be built: the text is read once, at
+/// construction, and refused there by name. Nothing downstream parses.
 #[test]
-fn a_malformed_timestamp_literal_is_an_error_not_a_default() {
-    // Hand-built IR can carry an unparseable instant; evaluation must
-    // refuse it by name, never quietly substitute some default epoch.
-    errs(
-        crate::ir_builder::timestamp_le(
-            term(timestamp("not-a-timestamp")),
-            term(timestamp("2026-07-01T12:00:00Z")),
+fn a_malformed_literal_is_refused_at_construction() {
+    for (text, parse) in [
+        (
+            "not-a-timestamp",
+            crate::ir::Value::timestamp as fn(&str) -> Result<crate::ir::Value, String>,
         ),
-        &["invalid timestamp", "not-a-timestamp"],
-    );
+        ("2026-02-30", crate::ir::Value::date),
+        ("1e5", crate::ir::Value::decimal),
+        (
+            "1.000000000000000000000000000001",
+            crate::ir::Value::decimal,
+        ),
+        ("P3M", crate::ir::Value::duration),
+        ("PT6H", crate::ir::Value::span),
+    ] {
+        let err = parse(text).expect_err(text);
+        assert!(err.contains(text), "{err}");
+    }
 }
 
 /// Admit one claim carrying every time kind, then match it - and fail

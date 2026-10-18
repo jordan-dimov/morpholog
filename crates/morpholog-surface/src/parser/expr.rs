@@ -14,60 +14,6 @@ use morpholog_core::{
 
 use super::field_table::{FieldTable, Vocabulary, resolve_named, resolve_named_value};
 
-/// The `duration(PT6H)` constructor: an ISO 8601 duration in exact time units. The payload lexes
-/// as an identifier because it starts with `P`. A malformed one is a parse error with a span.
-/// `duration` is only special before `(`, so it stays usable as a variable name.
-pub(super) fn duration_ctor<'a, I>()
--> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
-where
-    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
-{
-    select! { Token::Ident(s) if s == "duration" => () }
-        .ignore_then(
-            select! { Token::Ident(s) => s }.delimited_by(just(Token::LParen), just(Token::RParen)),
-        )
-        .validate(|s: String, e, emitter| {
-            if s.parse::<jiff::SignedDuration>().is_err() {
-                let span: SimpleSpan = e.span();
-                emitter.emit(Rich::custom(
-                    span,
-                    format!(
-                        "invalid duration literal `{s}` (expected ISO 8601 \
-                         time units, e.g. PT6H or PT1H30M)"
-                    ),
-                ));
-            }
-            s
-        })
-}
-
-/// The `span(P3M)` constructor: a calendar span in date units (Y/M/W/D), shaped like
-/// `duration(...)`. Validated with the kernel's own `morpholog_core::calendar` grammar so the
-/// two cannot disagree. Only valid as a value: a span shifts a date and is never a claim or intent
-/// argument, so `term_parser` leaves it out.
-pub(super) fn span_ctor<'a, I>() -> impl Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone
-where
-    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
-{
-    let payload = choice((
-        select! { Token::Ident(s) => s },
-        // Accept `span(3)` here so the diagnostic can name the fix.
-        select! { Token::DecimalLit(s) => s },
-    ));
-    select! { Token::Ident(s) if s == "span" => () }
-        .ignore_then(payload.delimited_by(just(Token::LParen), just(Token::RParen)))
-        .validate(|s: String, e, emitter| {
-            if let Err(reason) = morpholog_core::calendar::parse_calendar_span(&s) {
-                let span: SimpleSpan = e.span();
-                emitter.emit(Rich::custom(
-                    span,
-                    format!("invalid span literal `{s}` ({reason})"),
-                ));
-            }
-            s
-        })
-}
-
 /// Build a `Prop::Compare`. The inverse is `format::compare_token`.
 fn compare(op: CompareOp, domain: OrderedDomain, lhs: ValueExpr, rhs: ValueExpr) -> Prop {
     Prop::Compare {
@@ -141,6 +87,107 @@ fn finish<T>(
     Ok(parsed)
 }
 
+/// The `duration(PT6H)` constructor: an ISO 8601 duration in exact time units. The payload lexes
+/// as an identifier because it starts with `P`. A malformed one is a parse error with a span.
+/// `duration` is only special before `(`, so it stays usable as a variable name.
+pub(super) fn duration_ctor<'a, I>()
+-> impl Parser<'a, I, Value, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    select! { Token::Ident(s) if s == "duration" => () }
+        .ignore_then(
+            select! { Token::Ident(s) => s }.delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .validate(|s: String, e, emitter| {
+            Value::duration(&s).unwrap_or_else(|_| {
+                let span: SimpleSpan = e.span();
+                emitter.emit(Rich::custom(
+                    span,
+                    format!(
+                        "invalid duration literal `{s}` (expected ISO 8601 \
+                         time units, e.g. PT6H or PT1H30M)"
+                    ),
+                ));
+                Value::Duration(jiff::SignedDuration::ZERO)
+            })
+        })
+}
+
+/// The `span(P3M)` constructor: a calendar span in date units. Same shape as `duration(...)`;
+/// the payload is validated with the kernel's own grammar so the diagnostic matches evaluation.
+pub(super) fn span_ctor<'a, I>() -> impl Parser<'a, I, Value, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    let payload = choice((
+        select! { Token::Ident(s) => s },
+        // Accept `span(3)` here so the diagnostic can name the fix.
+        select! { Token::DecimalLit(s) => s },
+    ));
+    select! { Token::Ident(s) if s == "span" => () }
+        .ignore_then(payload.delimited_by(just(Token::LParen), just(Token::RParen)))
+        .validate(|s: String, e, emitter| {
+            morpholog_core::calendar::parse_calendar_span(&s)
+                .map(Value::CalendarSpan)
+                .unwrap_or_else(|reason| {
+                    let span: SimpleSpan = e.span();
+                    emitter.emit(Rich::custom(
+                        span,
+                        format!("invalid span literal `{s}` ({reason})"),
+                    ));
+                    Value::CalendarSpan(morpholog_core::calendar::CalendarSpan {
+                        months: 0,
+                        days: 0,
+                    })
+                })
+        })
+}
+
+/// A lexed literal, parsed into its value once, here. The lexer fixes the shape of a decimal,
+/// date or timestamp; this is where the text becomes a value or a diagnostic at its span. On a
+/// diagnostic the parse carries on with `placeholder`, which never escapes: the emitted error
+/// fails the whole parse, and carrying on is what lets every other finding be reported too.
+fn literal<'a, I, P>(
+    token: P,
+    parse: impl Fn(&str) -> Result<Value, String> + Clone + 'a,
+    placeholder: Value,
+) -> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+    P: Parser<'a, I, String, extra::Err<Rich<'a, Token>>> + Clone,
+{
+    token.validate(move |s: String, e, emitter| {
+        Term::Literal(parse(&s).unwrap_or_else(|reason| {
+            let span: SimpleSpan = e.span();
+            emitter.emit(Rich::custom(span, reason));
+            placeholder.clone()
+        }))
+    })
+}
+
+fn date_term<'a, I>() -> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    literal(
+        select! { Token::DateLit(s) => s },
+        Value::date,
+        Value::Date(jiff::civil::Date::ZERO),
+    )
+}
+
+fn timestamp_term<'a, I>() -> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    literal(
+        select! { Token::TimestampLit(s) => s },
+        Value::timestamp,
+        Value::Timestamp(jiff::Timestamp::UNIX_EPOCH),
+    )
+}
+
 /// A number with an optional unit: `25000 USD` is a quantity, `25000` a decimal. A contextual
 /// comparator after a bare number reads as a unit, but that expression was ill-typed anyway.
 fn decimal_or_quantity_term<'a, I>() -> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
@@ -151,12 +198,16 @@ where
     let decimal_lit = select! { Token::DecimalLit(s) => s };
     decimal_lit
         .then(ident.or_not())
-        .map(|(s, unit)| match unit {
-            Some(u) => Term::Literal(Value::Quantity {
-                amount: s,
-                unit: Unit::from(u),
-            }),
-            None => Term::Literal(Value::Decimal(s)),
+        .validate(|(s, unit): (String, Option<String>), e, emitter| {
+            let parsed = match unit {
+                Some(u) => Value::quantity(&s, Unit::from(u)),
+                None => Value::decimal(&s),
+            };
+            Term::Literal(parsed.unwrap_or_else(|reason| {
+                let span: SimpleSpan = e.span();
+                emitter.emit(Rich::custom(span, reason));
+                Value::Decimal(morpholog_core::LiteralDecimal::ZERO)
+            }))
         })
 }
 
@@ -167,16 +218,14 @@ where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
     let ident = select! { Token::Ident(s) => s };
-    let date_lit = select! { Token::DateLit(s) => s };
     let subject_lit = select! { Token::SubjectLit(s) => s };
-    let timestamp_lit = select! { Token::TimestampLit(s) => s };
     choice((
         just(Token::Wildcard).to(Term::Wildcard),
         decimal_or_quantity_term(),
-        timestamp_lit.map(|s| Term::Literal(Value::Timestamp(s))),
-        date_lit.map(|s| Term::Literal(Value::Date(s))),
+        timestamp_term(),
+        date_term(),
         // Before bare idents, so `duration(...)` is the constructor.
-        duration_ctor().map(|s| Term::Literal(Value::Duration(s))),
+        duration_ctor().map(Term::Literal),
         subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
         ident.map(|name| {
             if name == "actor" {
@@ -671,22 +720,17 @@ where
 {
     recursive(move |value| {
         let ident = select! { Token::Ident(s) => s };
-        let date_lit = select! { Token::DateLit(s) => s };
         let subject_lit = select! { Token::SubjectLit(s) => s };
 
         let parenthesised = value
             .clone()
             .delimited_by(just(Token::LParen), just(Token::RParen));
 
-        let timestamp_lit = select! { Token::TimestampLit(s) => s };
         let decimal_as_value = decimal_or_quantity_term().map(ValueExpr::Term);
-        let date_as_value = date_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Date(s))));
-        let timestamp_as_value =
-            timestamp_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Timestamp(s))));
-        let duration_as_value =
-            duration_ctor().map(|s| ValueExpr::Term(Term::Literal(Value::Duration(s))));
-        let span_as_value =
-            span_ctor().map(|s| ValueExpr::Term(Term::Literal(Value::CalendarSpan(s))));
+        let date_as_value = date_term().map(ValueExpr::Term);
+        let timestamp_as_value = timestamp_term().map(ValueExpr::Term);
+        let duration_as_value = duration_ctor().map(|v| ValueExpr::Term(Term::Literal(v)));
+        let span_as_value = span_ctor().map(|v| ValueExpr::Term(Term::Literal(v)));
         let subject_as_value =
             subject_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Subject(s.into()))));
         let wildcard_as_value = just(Token::Wildcard).to(ValueExpr::Term(Term::Wildcard));
