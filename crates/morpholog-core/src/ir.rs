@@ -713,7 +713,8 @@ impl std::fmt::Display for LiteralDecimal {
 /// value parsed from source does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
-    /// Arbitrary-precision decimal, identity by coefficient and scale.
+    /// An exact decimal within the precision the type holds (a text past
+    /// it is refused at parse), identity by coefficient and scale.
     Decimal(LiteralDecimal),
     /// A named subject constant (a purpose, status, or authority), so it
     /// need not be passed as a parameter.

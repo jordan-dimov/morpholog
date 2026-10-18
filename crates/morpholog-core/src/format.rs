@@ -90,9 +90,10 @@ pub fn canonical_hash(p: &Program) -> String {
     out
 }
 
-/// The bytes `canonical_hash` digests: canonical encoding 1, which
-/// `sha256:` names. Frozen for every programme it can already express; a
-/// new construct may only add rendering for itself.
+/// The bytes `canonical_hash` digests: the canonical encoding
+/// ([`CANONICAL_ENCODING`]) that `sha256:` names. Pinned for every
+/// programme it can already express; a new construct may only add
+/// rendering for itself.
 pub(crate) fn canonical_preimage(p: &Program) -> String {
     // Positional, so a nicer spelling in the formatter never moves the
     // hash. The declaration table is still needed for a `value` lookup

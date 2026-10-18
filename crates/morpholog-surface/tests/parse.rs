@@ -1468,8 +1468,8 @@ transformation t(d):
 }
 
 #[test]
-fn an_impossible_calendar_timestamp_is_a_lex_diagnostic() {
-    // Well-shaped but month 13: a lex error.
+fn an_impossible_calendar_timestamp_is_a_parse_diagnostic() {
+    // Well-shaped, so it lexes; month 13 is refused where the text becomes a value.
     let source = "program bad_instant
 predicate E(at: Timestamp)
 transformation t(v):

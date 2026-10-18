@@ -1,9 +1,9 @@
-//! Canonical encoding 1, the bytes `sha256:` names, frozen over one carrier
-//! programme built directly as IR. Built after parsing, so a parser change
-//! cannot move it and an example edit cannot excuse it: if this fails, the
-//! encoder changed what an existing programme hashes to. That is never
-//! regenerated under the same prefix; a new construct may only add
-//! rendering for itself.
+//! The canonical encoding, the bytes `sha256:` names, pinned over one
+//! carrier programme built directly as IR. Built after parsing, so a parser
+//! change cannot move it and an example edit cannot excuse it: if this
+//! fails, the encoder changed what an existing programme hashes to. That is
+//! never re-pinned quietly: a new construct may only add rendering for
+//! itself, and anything else moves `CANONICAL_ENCODING` on purpose.
 
 use crate::format::{canonical_hash, canonical_preimage};
 use crate::ir::{
@@ -39,7 +39,7 @@ fn v(name: &str) -> ValueExpr {
 
 /// Every declaration kind, discipline, proposition, value, builtin,
 /// operator, ordered domain, sum seed, statement and literal the IR had
-/// when encoding 1 was frozen. A later construct adds its own carrier.
+/// when the encoding was pinned. A later construct adds its own carrier.
 fn encoding_carrier() -> Program {
     let predicates = vec![
         predicate("Account")

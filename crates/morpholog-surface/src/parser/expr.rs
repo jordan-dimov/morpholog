@@ -172,7 +172,11 @@ where
 {
     literal(
         select! { Token::DateLit(s) => s },
-        Value::date,
+        |s| {
+            Value::date(s).map_err(|_| {
+                format!("invalid date literal `@{s}` (expected a real civil date, YYYY-MM-DD)")
+            })
+        },
         Value::Date(jiff::civil::Date::ZERO),
     )
 }
@@ -183,7 +187,11 @@ where
 {
     literal(
         select! { Token::TimestampLit(s) => s },
-        Value::timestamp,
+        |s| {
+            Value::timestamp(s).map_err(|_| {
+                format!("invalid timestamp literal `@{s}` (expected a real RFC 3339 instant)")
+            })
+        },
         Value::Timestamp(jiff::Timestamp::UNIX_EPOCH),
     )
 }
@@ -203,9 +211,12 @@ where
                 Some(u) => Value::quantity(&s, Unit::from(u)),
                 None => Value::decimal(&s),
             };
-            Term::Literal(parsed.unwrap_or_else(|reason| {
+            Term::Literal(parsed.unwrap_or_else(|_| {
                 let span: SimpleSpan = e.span();
-                emitter.emit(Rich::custom(span, reason));
+                emitter.emit(Rich::custom(
+                    span,
+                    format!("invalid decimal literal `{s}` (a decimal is held exactly or refused)"),
+                ));
                 Value::Decimal(morpholog_core::LiteralDecimal::ZERO)
             }))
         })

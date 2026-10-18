@@ -128,3 +128,56 @@ fn a_literal_the_value_cannot_hold_is_a_parse_diagnostic() {
         assert!(msg.contains(text), "diagnostic should name `{text}`: {msg}");
     }
 }
+
+/// On a malformed literal the frontend emits its diagnostic and carries
+/// on with a placeholder value, so every other finding is reported too.
+/// The placeholder never escapes: every entry point returns `Err`, the
+/// custom message survives the parser's recovery, and the span is the
+/// offending literal's own.
+#[test]
+fn a_malformed_literal_never_escapes_as_a_placeholder() {
+    use morpholog_surface::{parse_expression, parse_value_expr};
+    let cases = [
+        ("duration(NOT_ISO)", "invalid duration literal"),
+        ("span(PT6H)", "invalid span literal"),
+        ("span(3)", "invalid span literal"),
+        ("@2026-02-30", "invalid date literal"),
+        ("@2026-13-40T12:00:00Z", "invalid timestamp literal"),
+        (
+            "1.000000000000000000000000000001",
+            "invalid decimal literal",
+        ),
+    ];
+    for (literal, message) in cases {
+        // In a programme.
+        let source = format!(
+            "program p\npredicate P(x: Decimal)\n\ninvariant i:\n  {literal} = {literal}\n"
+        );
+        let errs = parse_program(&source).expect_err(literal);
+        let found = errs
+            .iter()
+            .find(|d| d.message.contains(message))
+            .unwrap_or_else(|| panic!("`{literal}` in a programme: {errs:?}"));
+        assert_eq!(
+            &source[found.primary.clone()],
+            literal,
+            "`{literal}` in a programme: the span is the literal's own"
+        );
+
+        // As a standalone proposition and a standalone value.
+        let prop = format!("{literal} = {literal}");
+        let errs = parse_expression(&prop).expect_err(literal);
+        let found = errs
+            .iter()
+            .find(|d| d.message.contains(message))
+            .unwrap_or_else(|| panic!("`{literal}` as a proposition: {errs:?}"));
+        assert_eq!(&prop[found.primary.clone()], literal);
+
+        let errs = parse_value_expr(literal).expect_err(literal);
+        let found = errs
+            .iter()
+            .find(|d| d.message.contains(message))
+            .unwrap_or_else(|| panic!("`{literal}` as a value: {errs:?}"));
+        assert_eq!(&literal[found.primary.clone()], literal);
+    }
+}
