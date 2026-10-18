@@ -219,7 +219,7 @@ async fn list_derived_at_recovers_historical_trial_balance() {
     // At tid1: only entry_001 with amount 100. Cash 100, revenue -100.
     let at_tid1 = list_derived_at(
         &pool,
-        morpholog_test_support::validated(&double_entry_ledger::program()),
+        &morpholog_test_support::validated(&double_entry_ledger::program()),
         trial_balance.predicate.as_str(),
         tid1,
     )
@@ -232,7 +232,7 @@ async fn list_derived_at_recovers_historical_trial_balance() {
     // At tid2: entry_001 (100) + entry_002 (200). Cash 300, revenue -300.
     let at_tid2 = list_derived_at(
         &pool,
-        morpholog_test_support::validated(&double_entry_ledger::program()),
+        &morpholog_test_support::validated(&double_entry_ledger::program()),
         trial_balance.predicate.as_str(),
         tid2,
     )
@@ -253,7 +253,7 @@ async fn list_derived_at_at_latest_equals_list_derived() {
     let trial_balance = double_entry_ledger::trial_balance_row();
     let at_tid3 = list_derived_at(
         &pool,
-        morpholog_test_support::validated(&double_entry_ledger::program()),
+        &morpholog_test_support::validated(&double_entry_ledger::program()),
         trial_balance.predicate.as_str(),
         tid3,
     )
@@ -262,7 +262,7 @@ async fn list_derived_at_at_latest_equals_list_derived() {
     .expect("the programme derives it");
     let current = list_derived(
         &pool,
-        morpholog_test_support::validated(&double_entry_ledger::program()),
+        &morpholog_test_support::validated(&double_entry_ledger::program()),
         trial_balance.predicate.as_str(),
     )
     .await
@@ -286,7 +286,7 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
     let trial_balance = double_entry_ledger::trial_balance_row();
     let baseline = list_derived_at(
         &pool,
-        morpholog_test_support::validated(&double_entry_ledger::program()),
+        &morpholog_test_support::validated(&double_entry_ledger::program()),
         trial_balance.predicate.as_str(),
         tid3,
     )
@@ -314,7 +314,7 @@ async fn list_derived_at_ignores_unrelated_predicates_under_noise() {
 
     let after_noise = list_derived_at(
         &pool,
-        morpholog_test_support::validated(&double_entry_ledger::program()),
+        &morpholog_test_support::validated(&double_entry_ledger::program()),
         trial_balance.predicate.as_str(),
         new_tid,
     )
@@ -352,7 +352,7 @@ async fn list_derived_at_returns_correct_output_under_mixed_predicate_history() 
     let trial_balance = double_entry_ledger::trial_balance_row();
     let rows = list_derived_at(
         &pool,
-        morpholog_test_support::validated(&double_entry_ledger::program()),
+        &morpholog_test_support::validated(&double_entry_ledger::program()),
         trial_balance.predicate.as_str(),
         tid3,
     )
@@ -474,7 +474,7 @@ async fn list_derived_at_checks_the_id_before_the_name() {
 
     let err = list_derived_at(
         &pool,
-        morpholog_test_support::validated(&ledger),
+        &morpholog_test_support::validated(&ledger),
         "NothingDerivesThis",
         Uuid::now_v7(),
     )
@@ -484,7 +484,7 @@ async fn list_derived_at_checks_the_id_before_the_name() {
 
     let rows = list_derived_at(
         &pool,
-        morpholog_test_support::validated(&ledger),
+        &morpholog_test_support::validated(&ledger),
         "NothingDerivesThis",
         tid1,
     )

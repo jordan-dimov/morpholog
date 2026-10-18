@@ -1625,7 +1625,7 @@ pub struct morpholog_core::CandidateScorer<'p>
 impl<'p> morpholog_core::CandidateScorer<'p>
 pub fn morpholog_core::CandidateScorer<'p>::into_report(self) -> morpholog_core::CandidateScore
 pub fn morpholog_core::CandidateScorer<'p>::mark_split(&mut self, morpholog_core::SplitBoundaryReport)
-pub fn morpholog_core::CandidateScorer<'p>::new(morpholog_core::ValidatedProgram<'p>) -> core::result::Result<Self, morpholog_core::ScoreError>
+pub fn morpholog_core::CandidateScorer<'p>::new(&morpholog_core::ValidatedProgram<'p>) -> core::result::Result<Self, morpholog_core::ScoreError>
 pub fn morpholog_core::CandidateScorer<'p>::observe_transition(&mut self, &morpholog_core::State, &morpholog_core::EffectiveDelta, &str) -> core::result::Result<(), morpholog_core::EvalError>
 impl<'p> core::marker::Freeze for morpholog_core::CandidateScorer<'p>
 impl<'p> core::marker::Send for morpholog_core::CandidateScorer<'p>
@@ -1791,7 +1791,7 @@ pub struct morpholog_core::CoverageTracker<'p>
 impl<'p> morpholog_core::CoverageTracker<'p>
 pub fn morpholog_core::CoverageTracker<'p>::into_report(self) -> morpholog_core::CoverageReport
 pub fn morpholog_core::CoverageTracker<'p>::needs_pre_state(&self) -> bool
-pub fn morpholog_core::CoverageTracker<'p>::new(morpholog_core::ValidatedProgram<'p>) -> Self
+pub fn morpholog_core::CoverageTracker<'p>::new(&morpholog_core::ValidatedProgram<'p>) -> Self
 pub fn morpholog_core::CoverageTracker<'p>::observe(&mut self, &morpholog_core::State, &morpholog_core::State, &alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>, &str, &str) -> core::result::Result<(), morpholog_core::EvalError>
 pub fn morpholog_core::CoverageTracker<'p>::observe_rejection(&mut self, morpholog_core::RefusalKind, &str, &str, &str)
 impl<'p> core::marker::Freeze for morpholog_core::CoverageTracker<'p>
@@ -3047,17 +3047,15 @@ impl core::marker::Unpin for morpholog_core::Unit
 impl core::marker::UnsafeUnpin for morpholog_core::Unit
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Unit
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Unit
-pub struct morpholog_core::ValidatedProgram<'a>(_)
+pub struct morpholog_core::ValidatedProgram<'a>
 impl<'a> morpholog_core::ValidatedProgram<'a>
 pub fn morpholog_core::ValidatedProgram<'a>::as_program(&self) -> &'a morpholog_core::Program
-pub fn morpholog_core::ValidatedProgram<'a>::enumerate_derived(self, &str, &morpholog_core::State) -> core::result::Result<core::option::Option<alloc::vec::Vec<morpholog_core::ClaimInstance>>, morpholog_core::EvalError>
-pub fn morpholog_core::ValidatedProgram<'a>::eval_invariant(self, &str, &morpholog_core::State, core::option::Option<&morpholog_core::State>) -> core::result::Result<core::option::Option<bool>, morpholog_core::EvalError>
+pub fn morpholog_core::ValidatedProgram<'a>::enumerate_derived(&self, &str, &morpholog_core::State) -> core::result::Result<core::option::Option<alloc::vec::Vec<morpholog_core::ClaimInstance>>, morpholog_core::EvalError>
+pub fn morpholog_core::ValidatedProgram<'a>::eval_invariant(&self, &str, &morpholog_core::State, core::option::Option<&morpholog_core::State>) -> core::result::Result<core::option::Option<bool>, morpholog_core::EvalError>
 impl<'a> core::clone::Clone for morpholog_core::ValidatedProgram<'a>
 pub fn morpholog_core::ValidatedProgram<'a>::clone(&self) -> morpholog_core::ValidatedProgram<'a>
-impl<'a> core::clone::TrivialClone for morpholog_core::ValidatedProgram<'a>
 impl<'a> core::fmt::Debug for morpholog_core::ValidatedProgram<'a>
 pub fn morpholog_core::ValidatedProgram<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl<'a> core::marker::Copy for morpholog_core::ValidatedProgram<'a>
 impl<'a> core::marker::Freeze for morpholog_core::ValidatedProgram<'a>
 impl<'a> core::marker::Send for morpholog_core::ValidatedProgram<'a>
 impl<'a> core::marker::Sync for morpholog_core::ValidatedProgram<'a>

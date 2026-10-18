@@ -43,7 +43,7 @@ async fn coverage_reports_fired_never_fired_and_usage_over_real_history() {
 
     // An empty log first: everything implication-shaped is never-fired,
     // nothing has been used, zero transitions.
-    let report = coverage_replay(&pool, morpholog_test_support::validated(&program))
+    let report = coverage_replay(&pool, &morpholog_test_support::validated(&program))
         .await
         .unwrap();
     assert_eq!(report.transitions_replayed, 0);
@@ -61,7 +61,7 @@ async fn coverage_reports_fired_never_fired_and_usage_over_real_history() {
     let tid1 = post_entry(&pool, "entry_001", 100).await;
     let tid2 = post_entry(&pool, "entry_002", 200).await;
 
-    let report = coverage_replay(&pool, morpholog_test_support::validated(&program))
+    let report = coverage_replay(&pool, &morpholog_test_support::validated(&program))
         .await
         .unwrap();
     assert_eq!(report.transitions_replayed, 2);
@@ -137,7 +137,7 @@ async fn firing_is_counted_per_relevant_transition() {
         .unwrap(),
     );
 
-    let report = coverage_replay(&pool, morpholog_test_support::validated(&program))
+    let report = coverage_replay(&pool, &morpholog_test_support::validated(&program))
         .await
         .unwrap();
     assert_eq!(report.transitions_replayed, 2);
@@ -184,7 +184,7 @@ transformation retire(credit_id):
     program.validate().expect("validates");
 
     // Sanity: with no history at all, the prohibition is always-on.
-    let report = coverage_replay(&pool, morpholog_test_support::validated(&program))
+    let report = coverage_replay(&pool, &morpholog_test_support::validated(&program))
         .await
         .unwrap();
     let inv = report
@@ -215,7 +215,7 @@ transformation retire(credit_id):
     .unwrap();
     assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
 
-    let report = coverage_replay(&pool, morpholog_test_support::validated(&program))
+    let report = coverage_replay(&pool, &morpholog_test_support::validated(&program))
         .await
         .unwrap();
     assert_eq!(report.transitions_replayed, 1);

@@ -8,62 +8,76 @@
 //! predicates and intents are errors. Every error is collected, so an
 //! author fixing a programme sees the whole list at once.
 
+use crate::analysis::ParamKind;
 use crate::eval::EvalError;
-use crate::ir::{DefinitionName, PredicateArgKind, Program, Prop, Stmt, SumSeed, ValueExpr};
+use crate::ir::{DefinitionName, PredicateArgKind, Program, Prop, Stmt, SumSeed, ValueExpr, Var};
 use crate::state::{ClaimInstance, State};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-/// Proof-of-validity handle: a reference to a [`Program`] that passed
-/// [`Program::validate`]. The only way to obtain one is
-/// [`Program::validated`], which fails if validation reports errors.
+/// The input contracts validation established: per transformation,
+/// each parameter's [`ParamKind`] in declaration order.
+pub(crate) type Contracts = BTreeMap<String, Vec<(Var, ParamKind)>>;
+
+/// Proof-of-validity handle: a [`Program`] that passed
+/// [`Program::validate`], with the facts validation established about
+/// it. The only way to obtain one is [`Program::validated`], which fails
+/// if validation reports errors.
 ///
 /// The analysis accessors ([`crate::transformation_param_kinds`],
-/// [`crate::transformation_arg_schema`]) only make sense over a valid
-/// programme. Taking this type instead of `&Program` puts that
-/// precondition in the signature, so they need not re-validate.
-///
-/// `Copy` because it wraps a single reference.
-#[derive(Debug, Clone, Copy)]
-pub struct ValidatedProgram<'a>(&'a Program);
+/// [`crate::transformation_arg_schema`]) read the transformations' input
+/// contracts off it, so they neither re-validate nor walk the programme
+/// again.
+#[derive(Debug, Clone)]
+pub struct ValidatedProgram<'a> {
+    program: &'a Program,
+    contracts: Contracts,
+}
 
 impl<'a> ValidatedProgram<'a> {
     /// Borrow the underlying programme.
     pub fn as_program(&self) -> &'a Program {
-        self.0
+        self.program
     }
 
-    /// Wraps a programme that has just passed validation. Crate-private
-    /// so [`Program::validated`] stays the only way in.
-    pub(crate) fn from_validated(program: &'a Program) -> Self {
-        Self(program)
+    /// Wraps a programme that has just passed validation, with the
+    /// contracts that validation observed. Crate-private so
+    /// [`Program::validated`] stays the only way in.
+    pub(crate) fn from_validated(program: &'a Program, contracts: Contracts) -> Self {
+        Self { program, contracts }
+    }
+
+    /// The named transformation's input contract, as validation
+    /// observed it. `None` when no transformation has that name.
+    pub(crate) fn contract(&self, name: &str) -> Option<&[(Var, ParamKind)]> {
+        self.contracts.get(name).map(Vec::as_slice)
     }
 
     /// Whether the invariant named `name` holds in `state`. `pre_state`
     /// is the state before a transition, for invariants that use
     /// `pre(...)`. `Ok(None)` when no invariant has that name.
     pub fn eval_invariant(
-        self,
+        &self,
         name: &str,
         state: &State,
         pre_state: Option<&State>,
     ) -> Result<Option<bool>, EvalError> {
-        let Some(inv) = self.0.invariant(name) else {
+        let Some(inv) = self.program.invariant(name) else {
             return Ok(None);
         };
-        crate::derive::eval_invariant(inv, state, pre_state, &self.0.definitions).map(Some)
+        crate::derive::eval_invariant(inv, state, pre_state, &self.program.definitions).map(Some)
     }
 
     /// The rows of the derived claim computing `predicate`, in a
     /// deterministic order. `Ok(None)` when nothing derives it.
     pub fn enumerate_derived(
-        self,
+        &self,
         predicate: &str,
         state: &State,
     ) -> Result<Option<Vec<ClaimInstance>>, EvalError> {
-        let Some(derived) = self.0.derived_claim(predicate) else {
+        let Some(derived) = self.program.derived_claim(predicate) else {
             return Ok(None);
         };
-        crate::derive::enumerate_derived(derived, state, &self.0.definitions).map(Some)
+        crate::derive::enumerate_derived(derived, state, &self.program.definitions).map(Some)
     }
 }
 
@@ -670,15 +684,17 @@ impl std::fmt::Display for ValidationContext {
 /// Strict programme validation, called via [`Program::validate`].
 /// Name-level checks (declarations, disciplines) live here because they
 /// compare names rather than walk bodies; every body walk lives in
-/// [`crate::check::check_program`].
-pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> {
+/// [`crate::check::check_program`]. `Ok` carries the input contracts
+/// that walk observed, so a validated programme keeps them.
+pub(crate) fn validate_program(p: &Program) -> Result<Contracts, Vec<ValidationError>> {
     structural_errors(p)?;
     let mut errors = collect_duplicate_decl_errors(p);
     errors.extend(collect_discipline_errors(p));
     errors.extend(collect_unhashed_errors(p));
-    errors.extend(crate::check::check_program(p).errors);
+    let checked = crate::check::check_program(p);
+    errors.extend(checked.errors);
     if errors.is_empty() {
-        Ok(())
+        Ok(checked.param_kinds)
     } else {
         Err(errors)
     }

@@ -1394,7 +1394,7 @@ pub(crate) struct Compilation {
 
 /// Compile each invariant of a validated programme that the fragment
 /// holds, and say which evaluator checks each, in programme order.
-pub(crate) fn compile_each(program: ValidatedProgram<'_>) -> Compilation {
+pub(crate) fn compile_each(program: &ValidatedProgram<'_>) -> Compilation {
     let program = program.as_program();
     let decls: BTreeMap<&str, &PredicateDecl> = program
         .predicates
@@ -1445,7 +1445,7 @@ pub(crate) fn compile_each(program: ValidatedProgram<'_>) -> Compilation {
 /// differentials ask of a whole-in-fragment programme.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn compile_invariants(
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
 ) -> Result<CompiledInvariantSet, Vec<CompileRefusal>> {
     let compilation = compile_each(program);
     if compilation.refusals.is_empty() {

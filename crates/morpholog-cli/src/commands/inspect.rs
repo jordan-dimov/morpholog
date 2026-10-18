@@ -111,10 +111,10 @@ pub(crate) async fn derived_rows(
     filters: &[FieldFilter],
 ) -> anyhow::Result<Vec<ClaimInstance>> {
     let rows = match as_of {
-        Some(tid) => list_derived_at(pool, program, predicate, tid)
+        Some(tid) => list_derived_at(pool, &program, predicate, tid)
             .await
             .context("list_derived_at failed")?,
-        None => list_derived(pool, program, predicate)
+        None => list_derived(pool, &program, predicate)
             .await
             .context("list_derived failed")?,
     }
@@ -271,7 +271,7 @@ async fn inspect_coverage(args: crate::InspectCoverageArgs) -> anyhow::Result<()
     let parsed = parse_or_report(&args.file)?;
     let validated = validate_or_report(&parsed)?;
     let pool = connect(&args.db.database_url).await?;
-    let report = morpholog_postgres::coverage_replay(&pool, validated)
+    let report = morpholog_postgres::coverage_replay(&pool, &validated)
         .await
         .context("coverage_replay failed")?;
     emit(args.json, &report, || {

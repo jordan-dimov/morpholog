@@ -1431,7 +1431,7 @@ async fn list_derived_trial_balance_over_pg_ledger_state() {
 
     let rows = list_derived(
         &pool,
-        morpholog_test_support::validated(&double_entry_ledger::program()),
+        &morpholog_test_support::validated(&double_entry_ledger::program()),
         double_entry_ledger::trial_balance_row().predicate.as_str(),
     )
     .await
@@ -1474,7 +1474,7 @@ async fn list_derived_on_empty_state_returns_no_rows() {
 
     let rows = list_derived(
         &pool,
-        morpholog_test_support::validated(&double_entry_ledger::program()),
+        &morpholog_test_support::validated(&double_entry_ledger::program()),
         double_entry_ledger::trial_balance_row().predicate.as_str(),
     )
     .await
@@ -1540,7 +1540,7 @@ async fn list_derived_ignores_claims_outside_its_predicate_footprint() {
 
     let rows = list_derived(
         &pool,
-        morpholog_test_support::validated(&double_entry_ledger::program()),
+        &morpholog_test_support::validated(&double_entry_ledger::program()),
         double_entry_ledger::trial_balance_row().predicate.as_str(),
     )
     .await
@@ -2228,7 +2228,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     // 8. Derived `PolicyLimitUsage` matches the cumulative paid.
     let usage_rows = list_derived(
         &pool,
-        morpholog_test_support::validated(&insurance_claim_settlement::program()),
+        &morpholog_test_support::validated(&insurance_claim_settlement::program()),
         insurance_claim_settlement::policy_limit_usage()
             .predicate
             .as_str(),

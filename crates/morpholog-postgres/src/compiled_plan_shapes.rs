@@ -111,7 +111,7 @@ async fn indexes_in_plan_with(
 }
 
 fn compiled_set(program: &Program) -> CompiledInvariantSet {
-    compile_invariants(program.validated().expect("gallery programme validates"))
+    compile_invariants(&program.validated().expect("gallery programme validates"))
         .expect("whole-in-fragment programme compiles")
 }
 

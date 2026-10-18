@@ -897,17 +897,18 @@ impl Program {
     /// `propose` does **not** call this; `morpholog check` does, and so
     /// do the tests over the worked examples.
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
-        validate_program(self)
+        validate_program(self).map(|_| ())
     }
 
     /// Validate and return a proof-of-validity handle. Same checks and
     /// errors as [`Self::validate`]; on success, a
     /// [`crate::ValidatedProgram`] for the analysis API
     /// ([`crate::transformation_param_kinds`],
-    /// [`crate::transformation_arg_schema`]), so validation runs once.
+    /// [`crate::transformation_arg_schema`]), carrying the input
+    /// contracts validation observed, so validation runs once.
     pub fn validated(&self) -> Result<crate::ValidatedProgram<'_>, Vec<ValidationError>> {
-        self.validate()
-            .map(|()| crate::ValidatedProgram::from_validated(self))
+        validate_program(self)
+            .map(|contracts| crate::ValidatedProgram::from_validated(self, contracts))
     }
 }
 

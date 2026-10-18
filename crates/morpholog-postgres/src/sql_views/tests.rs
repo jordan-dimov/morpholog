@@ -19,13 +19,13 @@ fn decl(name: &str, args: &[(&str, PredicateArgKind)]) -> PredicateDecl {
 fn render_ok(src: &str) -> RenderedViews {
     let program = parse_program(src).expect("fixture parses");
     let validated = program.validated().expect("fixture validates");
-    render_views(validated, "morpholog_views", "sha256:testhash").expect("renders")
+    render_views(&validated, "morpholog_views", "sha256:testhash").expect("renders")
 }
 
 fn refusals(src: &str, schema: &str) -> Vec<ViewRefusal> {
     let program = parse_program(src).expect("fixture parses");
     let validated = program.validated().expect("fixture validates");
-    render_views(validated, schema, "sha256:testhash").expect_err("refuses")
+    render_views(&validated, schema, "sha256:testhash").expect_err("refuses")
 }
 
 // ---- snake_case (pinned, acronym-aware) ----
@@ -170,7 +170,7 @@ fn derived_heads_get_a_derived_view_over_the_cache() {
     // predicates read morpholog.claims.
     let program = morpholog_examples::trade_lifecycle::program();
     let validated = program.validated().expect("validates");
-    let r = render_views(validated, "morpholog_views", "sha256:x").expect("renders");
+    let r = render_views(&validated, "morpholog_views", "sha256:x").expect("renders");
     assert!(r.base_view_count >= 1 && r.derived_view_count >= 1);
     assert!(
         r.sql

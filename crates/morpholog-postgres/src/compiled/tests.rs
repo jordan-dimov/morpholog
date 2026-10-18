@@ -7,12 +7,12 @@ fn ledger_program() -> morpholog_core::Program {
 }
 
 fn compiled(program: &morpholog_core::Program) -> CompiledInvariantSet {
-    compile_invariants(program.validated().expect("gallery programme validates"))
+    compile_invariants(&program.validated().expect("gallery programme validates"))
         .expect("every invariant is in the fragment")
 }
 
 fn refusals(program: &morpholog_core::Program) -> Vec<CompileRefusal> {
-    compile_invariants(program.validated().expect("programme validates"))
+    compile_invariants(&program.validated().expect("programme validates"))
         .expect_err("expected at least one refusal")
 }
 
@@ -486,7 +486,7 @@ fn the_provenance_comment_neutralises_a_hostile_invariant_name() {
             ),
         )])
         .build();
-    let set = compile_invariants(program.validated().expect("validates"))
+    let set = compile_invariants(&program.validated().expect("validates"))
         .expect("in-fragment body compiles");
     let sql = set.invariants[0].violation_sql(None);
     // The whole comment head: exactly one opener, exactly one closer.

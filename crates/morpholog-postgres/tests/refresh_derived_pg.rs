@@ -116,7 +116,7 @@ async fn assert_cache_matches_kernel(pool: &PgPool, p: &Program, name: &str) {
     let cache = cache_rows(pool, name).await;
     let kernel = list_derived(
         pool,
-        morpholog_test_support::validated(p),
+        &morpholog_test_support::validated(p),
         derived(p, name).predicate.as_str(),
     )
     .await
@@ -147,7 +147,7 @@ async fn cache_matches_the_kernel_for_each_derived() {
     )
     .await;
 
-    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
 
@@ -165,11 +165,11 @@ async fn refresh_is_idempotent() {
     seed_entry(&pool, &p, "a1", 10).await;
     seed_entry(&pool, &p, "a2", 3).await;
 
-    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     let first = repr(&cache_rows(&pool, "AccountTotal").await);
-    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     let second = repr(&cache_rows(&pool, "AccountTotal").await);
@@ -182,14 +182,14 @@ async fn a_changed_source_is_reflected_after_refresh() {
     reset_db_and_read_cache(&pool).await;
     let p = fixture();
     seed_entry(&pool, &p, "a1", 10).await;
-    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     let before = cache_rows(&pool, "AccountTotal").await;
     assert_eq!(before.len(), 1);
 
     seed_entry(&pool, &p, "a2", 4).await;
-    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     assert_cache_matches_kernel(&pool, &p, "AccountTotal").await;
@@ -202,7 +202,7 @@ async fn no_source_claims_is_a_lawful_empty_projection() {
     reset_db_and_read_cache(&pool).await;
     let p = fixture();
 
-    let summary = refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    let summary = refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     assert_eq!(summary.derived_claim_count, 0);
@@ -230,10 +230,10 @@ async fn each_refresh_publishes_one_generation() {
     let p = fixture();
     seed_entry(&pool, &p, "a1", 1).await;
 
-    let first = refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    let first = refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
-    let second = refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    let second = refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     assert_ne!(first.refresh_id, second.refresh_id);
@@ -260,7 +260,7 @@ async fn propose_does_not_touch_the_read_model() {
     reset_db_and_read_cache(&pool).await;
     let p = fixture();
     seed_entry(&pool, &p, "a1", 10).await;
-    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     let before = repr(&cache_rows(&pool, "AccountTotal").await);
@@ -311,7 +311,7 @@ async fn the_snapshot_marker_is_latest_visible_not_a_lossless_high_water() {
     .unwrap();
 
     // The refresh sees the committed transaction, not the in-flight one.
-    let summary = refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    let summary = refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     assert_eq!(summary.source_snapshot_transition_id, Some(visible_tid));
@@ -327,7 +327,7 @@ async fn the_snapshot_marker_is_latest_visible_not_a_lossless_high_water() {
 
     // Once the writer commits, the next refresh picks it up.
     writer.commit().await.unwrap();
-    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     let after = repr(&cache_rows(&pool, "AccountTotal").await);

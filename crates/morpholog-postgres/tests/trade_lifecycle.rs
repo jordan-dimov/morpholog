@@ -117,7 +117,7 @@ async fn backdated_amendment_changes_the_effective_answer_across_transaction_tim
 
     let at_tid1 = list_derived_at(
         &pool,
-        morpholog_test_support::validated(&trade_lifecycle::program()),
+        &morpholog_test_support::validated(&trade_lifecycle::program()),
         timeline.predicate.as_str(),
         tid1,
     )
@@ -132,7 +132,7 @@ async fn backdated_amendment_changes_the_effective_answer_across_transaction_tim
 
     let at_tid2 = list_derived_at(
         &pool,
-        morpholog_test_support::validated(&trade_lifecycle::program()),
+        &morpholog_test_support::validated(&trade_lifecycle::program()),
         timeline.predicate.as_str(),
         tid2,
     )
@@ -148,7 +148,7 @@ async fn backdated_amendment_changes_the_effective_answer_across_transaction_tim
     // Current state agrees with the latest transaction-time coordinate.
     let current = list_derived(
         &pool,
-        morpholog_test_support::validated(&trade_lifecycle::program()),
+        &morpholog_test_support::validated(&trade_lifecycle::program()),
         timeline.predicate.as_str(),
     )
     .await
@@ -174,7 +174,7 @@ async fn as_of_tid1_timeline_omits_the_later_amendment() {
 
     let at_tid1 = list_derived_at(
         &pool,
-        morpholog_test_support::validated(&trade_lifecycle::program()),
+        &morpholog_test_support::validated(&trade_lifecycle::program()),
         timeline.predicate.as_str(),
         tid1,
     )
@@ -193,7 +193,7 @@ async fn as_of_tid1_timeline_omits_the_later_amendment() {
 
     let at_tid2 = list_derived_at(
         &pool,
-        morpholog_test_support::validated(&trade_lifecycle::program()),
+        &morpholog_test_support::validated(&trade_lifecycle::program()),
         timeline.predicate.as_str(),
         tid2,
     )

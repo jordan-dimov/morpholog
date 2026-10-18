@@ -64,7 +64,7 @@ fn pending_split(boundary: SplitBoundary, cursor: (Timestamp, Uuid)) -> PendingS
 
 /// Construct the scorer. A `pre(...)` candidate is refused as
 /// `InvalidState`; kernel faults pass through.
-fn build_scorer(program: ValidatedProgram<'_>) -> Result<CandidateScorer<'_>, PgError> {
+fn build_scorer<'p>(program: &ValidatedProgram<'p>) -> Result<CandidateScorer<'p>, PgError> {
     match CandidateScorer::new(program) {
         Ok(scorer) => Ok(scorer),
         Err(e @ ScoreError::PreUnsupported(_)) => Err(PgError::InvalidState(e.to_string())),
@@ -101,7 +101,7 @@ fn fold_rows<'a>(
 /// under `SERIALIZABLE READ ONLY DEFERRABLE`. Writes nothing.
 pub async fn score_candidate(
     pool: &PgPool,
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
     split: Option<SplitBoundary>,
 ) -> Result<CandidateScore, PgError> {
     // Reject an unscorable candidate before opening any transaction.
@@ -147,7 +147,7 @@ pub async fn score_candidate(
 /// catches a coordinated rewrite. A genuine pack reproduces the live score
 /// exactly.
 pub fn score_candidate_against_pack(
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
     pack: &EvidencePack,
     anchor: Option<&Checkpoint>,
     split: Option<SplitBoundary>,
@@ -208,7 +208,7 @@ pub fn score_candidate_against_pack(
 /// does; a pack that fails becomes a `Failed` case and the batch goes on.
 /// An unscorable candidate fails the whole call once, up front. Offline.
 pub fn score_candidate_against_packs(
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
     named_packs: &[(String, EvidencePack)],
 ) -> Result<BatchScore, PgError> {
     score_candidate_against_packs_lazily(
@@ -223,7 +223,7 @@ pub fn score_candidate_against_packs(
 /// they are loaded, so only one is held at once. An error loading one ends
 /// the call.
 pub fn score_candidate_against_packs_lazily<E, P>(
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
     named_packs: impl IntoIterator<Item = Result<(String, P), E>>,
 ) -> Result<BatchScore, E>
 where

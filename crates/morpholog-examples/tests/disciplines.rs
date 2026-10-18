@@ -649,7 +649,7 @@ transformation restate(owner, successor, prior):
     admit Supersedes(successor, prior)
 "#,
     );
-    let report = morpholog_core::CoverageTracker::new(morpholog_test_support::validated(&program))
+    let report = morpholog_core::CoverageTracker::new(&morpholog_test_support::validated(&program))
         .into_report();
     let lineage_entry = report
         .invariants
@@ -683,7 +683,7 @@ transformation set_rate(desk, rate, from_date):
         .find(|g| g.invariant == "rate_unique_by_desk_from_date")
         .expect("the generated rule keeps its name");
     assert_eq!(guarantee.from.as_deref(), Some(clause));
-    let report = morpholog_core::CoverageTracker::new(morpholog_test_support::validated(&program))
+    let report = morpholog_core::CoverageTracker::new(&morpholog_test_support::validated(&program))
         .into_report();
     let covered = report
         .invariants

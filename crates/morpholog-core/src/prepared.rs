@@ -28,7 +28,7 @@ use crate::ir::{
 };
 use crate::propose::{Outcome, StagedDelta, SubjectSource, TracedProposal, Transition};
 use crate::state::State;
-use crate::validate::{ValidatedProgram, ValidationError};
+use crate::validate::{Contracts, ValidatedProgram, ValidationError};
 
 /// Index each item to the position of the *first* occurrence of its key,
 /// so a lookup matches the `iter().find()` semantics the `Program::*`
@@ -59,6 +59,9 @@ pub struct PreparedProgram {
     impact: Vec<ImpactPlan>,
     /// The canonical hash of `program`, computed once.
     model_hash: String,
+    /// The input contracts validation observed, kept for the
+    /// [`ValidatedProgram`] view.
+    contracts: Contracts,
 }
 
 impl PreparedProgram {
@@ -68,7 +71,7 @@ impl PreparedProgram {
     /// Each accessor returns the first declaration with that name, like
     /// the `Program::*` lookups.
     pub fn new(program: Program) -> Result<Self, Vec<ValidationError>> {
-        program.validate()?;
+        let contracts = crate::validate::validate_program(&program)?;
         let impact = program
             .invariants
             .iter()
@@ -82,6 +85,7 @@ impl PreparedProgram {
             predicates: position_index(&program.predicates, |p| p.name.clone()),
             intents: position_index(&program.intents, |i| i.name.clone()),
             derived_claims: position_index(&program.derived_claims, |d| d.predicate.clone()),
+            contracts,
             program,
         })
     }
@@ -115,9 +119,10 @@ impl PreparedProgram {
 
     /// A borrowed proof-of-validity view, for the analysis API that
     /// takes [`ValidatedProgram`]. Sound because `self.program` was
-    /// validated at construction.
+    /// validated at construction; the contracts are the ones that
+    /// validation observed.
     pub fn validated(&self) -> ValidatedProgram<'_> {
-        ValidatedProgram::from_validated(&self.program)
+        ValidatedProgram::from_validated(&self.program, self.contracts.clone())
     }
 
     /// Propose `transition`: run the transformation it names against

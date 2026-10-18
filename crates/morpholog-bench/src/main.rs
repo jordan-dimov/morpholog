@@ -1120,13 +1120,13 @@ async fn measure_replay(
     let mut evaluate = Vec::with_capacity(repeat);
     for _ in 0..repeat {
         let t = Instant::now();
-        coverage_replay(pool, validated(&program)?)
+        coverage_replay(pool, &validated(&program)?)
             .await
             .context("coverage_replay")?;
         coverage.push(t.elapsed());
 
         let t = Instant::now();
-        score_candidate(pool, validated(&program)?, None)
+        score_candidate(pool, &validated(&program)?, None)
             .await
             .context("score_candidate")?;
         evaluate.push(t.elapsed());
@@ -1631,7 +1631,7 @@ async fn measure_as_of(
         let t = Instant::now();
         let rows = list_derived_at(
             pool,
-            validated(&ledger)?,
+            &validated(&ledger)?,
             double_entry_ledger::trial_balance_row().predicate.as_str(),
             target_tid,
         )
