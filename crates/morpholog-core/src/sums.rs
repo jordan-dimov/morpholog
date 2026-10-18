@@ -173,9 +173,12 @@ mod tests {
                 Term::Var(Var::from("v")),
                 defined("d0", vec![Term::Var(Var::from("v"))]),
             )),
-            right: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-                "100".to_string(),
-            )))),
+            // A quantity cap, so the programme validates where its depth
+            // allows; the summed kind is what the tests look at.
+            right: Box::new(ValueExpr::Term(Term::Literal(Value::Quantity {
+                amount: "100".to_string(),
+                unit: "t".into(),
+            }))),
         };
         let mut p = program("depth")
             .predicates(vec![predicate("P").quantity("qty", "t").build()])
@@ -243,17 +246,39 @@ mod tests {
     }
 
     /// A chain of distinct definitions resolves the summed variable's
-    /// kind all the way down, up to the depth validation permits.
+    /// kind all the way down, up to the depth validation permits; one
+    /// link past that, the programme is not walked and validation
+    /// refuses it, so the seed is never typed for a programme that
+    /// cannot run.
     #[test]
     fn a_long_chain_of_definitions_still_resolves_the_summed_kind() {
         let mut deep = chained(64);
         lower_sum_seeds(&mut deep);
         assert_eq!(seed_of(&deep), SumSeed::Quantity("t".into()));
 
-        // The deepest chain validation accepts still resolves.
-        let mut at_limit = chained(MAX_EXPR_DEPTH - 1);
-        lower_sum_seeds(&mut at_limit);
-        assert_eq!(seed_of(&at_limit), SumSeed::Quantity("t".into()));
+        let lowered = |layers: usize| {
+            let mut p = chained(layers);
+            lower_sum_seeds(&mut p);
+            p
+        };
+        let deepest_accepted = (1..MAX_EXPR_DEPTH)
+            .rev()
+            .find(|&layers| lowered(layers).validate().is_ok())
+            .expect("some chain validates");
+        assert!(deepest_accepted > 64, "the limit is well past 64 links");
+        assert_eq!(
+            seed_of(&lowered(deepest_accepted)),
+            SumSeed::Quantity("t".into()),
+            "the deepest chain validation accepts resolves"
+        );
+        let one_past = lowered(deepest_accepted + 1);
+        assert_eq!(seed_of(&one_past), SumSeed::Decimal);
+        assert!(
+            one_past.validate().is_err_and(|errors| errors
+                .iter()
+                .any(|e| matches!(e, crate::ValidationError::NestingTooDeep { .. }))),
+            "one link past the limit is refused by name"
+        );
     }
 
     /// Lowering runs before validation's depth guard, so a huge acyclic
