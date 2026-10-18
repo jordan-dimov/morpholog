@@ -21,7 +21,7 @@ pub(crate) fn issue(args: &ReceiptArgs) -> anyhow::Result<()> {
     let program = validate_or_report(&parsed)?;
     let pack = read_complete_prefix(&args.pack)?;
     let receipt = issue_receipt(
-        program,
+        &program,
         &pack,
         ReceiptQuery::Derived {
             predicate: args.derived.clone(),
@@ -90,7 +90,7 @@ pub(crate) fn verify(args: &ReceiptVerifyArgs) -> anyhow::Result<()> {
         Ok(r) if completeness == Completeness::Complete => {
             let pack =
                 complete_prefix_of(open_pack_from(&pack_bytes[..], &args.pack)?, &args.pack)?;
-            reproduce(program, r, &pack)
+            reproduce(&program, r, &pack)
         }
         _ => (CheckpointMatch::NotChecked, Evaluation::NotEvaluated),
     };

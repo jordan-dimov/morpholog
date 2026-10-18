@@ -276,7 +276,7 @@ async fn live_view_hash(
 /// antecedent. An offline auditor command, not a hot path.
 pub async fn coverage_replay(
     pool: &PgPool,
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
 ) -> Result<CoverageReport, PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
     let mut tracker = CoverageTracker::new(program);

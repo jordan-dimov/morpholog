@@ -89,7 +89,7 @@ async fn seed_fixture(
 }
 
 fn render(p: &Program, schema: &str) -> String {
-    render_views(p.validated().unwrap(), schema, SENTINEL_HASH)
+    render_views(&p.validated().unwrap(), schema, SENTINEL_HASH)
         .expect("renders")
         .sql
 }
@@ -441,7 +441,7 @@ async fn derived_view_returns_kernel_rows_after_refresh() {
     let p = derived_fixture();
     seed_entry(&pool, &p, "a1", 10).await;
     seed_entry(&pool, &p, "a1", 5).await;
-    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
@@ -473,7 +473,7 @@ async fn derived_view_is_empty_for_a_mismatched_model_hash() {
     seed_entry(&pool, &p, "a1", 10).await;
     // The active generation is from a different model, so the view shows
     // nothing rather than another model's rows.
-    refresh_derived(&pool, p.validated().unwrap(), "sha256:another-model")
+    refresh_derived(&pool, &p.validated().unwrap(), "sha256:another-model")
         .await
         .unwrap();
     sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
@@ -482,7 +482,7 @@ async fn derived_view_is_empty_for_a_mismatched_model_hash() {
         .expect("script applies");
     assert_eq!(account_total(&pool, "a1").await, None);
     // Refreshing for the matching model surfaces the row.
-    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     assert_eq!(account_total(&pool, "a1").await, Some(Decimal::from(10)));
@@ -494,7 +494,7 @@ async fn derived_view_is_not_updatable() {
     reset(&pool).await;
     let p = derived_fixture();
     seed_entry(&pool, &p, "a1", 10).await;
-    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
@@ -518,7 +518,7 @@ async fn derived_view_reflects_a_new_generation() {
     reset(&pool).await;
     let p = derived_fixture();
     seed_entry(&pool, &p, "a1", 10).await;
-    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     sqlx::raw_sql(sqlx::AssertSqlSafe(render(&p, "morpholog_views")))
@@ -529,7 +529,7 @@ async fn derived_view_reflects_a_new_generation() {
     // A new claim and a new refresh generation: the view follows the
     // active-generation pointer.
     seed_entry(&pool, &p, "a1", 7).await;
-    refresh_derived(&pool, p.validated().unwrap(), SENTINEL_HASH)
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
         .await
         .unwrap();
     assert_eq!(account_total(&pool, "a1").await, Some(Decimal::from(17)));

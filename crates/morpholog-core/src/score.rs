@@ -190,7 +190,7 @@ pub struct CandidateScorer<'p> {
 }
 
 impl<'p> CandidateScorer<'p> {
-    pub fn new(program: crate::ValidatedProgram<'p>) -> Result<Self, ScoreError> {
+    pub fn new(program: &crate::ValidatedProgram<'p>) -> Result<Self, ScoreError> {
         let program = program.as_program();
         let pre = invariants_using_pre(program);
         if !pre.is_empty() {
@@ -326,7 +326,7 @@ impl<'p> CandidateScorer<'p> {
 mod tests {
     /// The scorer over a test programme, which must validate.
     fn scorer(program: &Program) -> Result<CandidateScorer<'_>, ScoreError> {
-        CandidateScorer::new(program.validated().expect("a test programme must validate"))
+        CandidateScorer::new(&program.validated().expect("a test programme must validate"))
     }
 
     use super::*;

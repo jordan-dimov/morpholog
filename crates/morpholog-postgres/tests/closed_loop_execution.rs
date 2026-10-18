@@ -313,7 +313,7 @@ async fn ingest(pool: &PgPool, venue: &Venue, first_sequence: i64) {
 
 async fn finding(pool: &PgPool, predicate: &str) -> Vec<Vec<EvalValue>> {
     let p = cle::program();
-    list_derived(pool, validated(&p), predicate)
+    list_derived(pool, &validated(&p), predicate)
         .await
         .unwrap()
         .expect("the programme derives it")

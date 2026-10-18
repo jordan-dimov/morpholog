@@ -32,7 +32,7 @@ use uuid::Uuid;
 /// deterministic for a given state.
 pub async fn list_derived(
     pool: &PgPool,
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
     predicate: &str,
 ) -> Result<Option<Vec<ClaimInstance>>, PgError> {
     let Some(footprint) = derived_footprint(program, predicate) else {
@@ -45,7 +45,7 @@ pub async fn list_derived(
 
 /// The predicates the derived claim computing `predicate` reads, or
 /// `None` when nothing derives it.
-fn derived_footprint(program: ValidatedProgram<'_>, predicate: &str) -> Option<Vec<String>> {
+fn derived_footprint(program: &ValidatedProgram<'_>, predicate: &str) -> Option<Vec<String>> {
     let p = program.as_program();
     let derived = p.derived_claim(predicate)?;
     Some(
@@ -97,7 +97,7 @@ pub struct RefreshSummary {
 /// materialised by accident.
 pub async fn refresh_derived(
     pool: &PgPool,
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
     model_hash: &str,
 ) -> Result<RefreshSummary, PgError> {
     let validated = program;
@@ -233,7 +233,7 @@ pub async fn refresh_derived(
 /// unknown id is [`PgError::TransitionNotFound`], never current state.
 pub async fn list_derived_at(
     pool: &PgPool,
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
     predicate: &str,
     transition_id: Uuid,
 ) -> Result<Option<Vec<ClaimInstance>>, PgError> {

@@ -133,7 +133,7 @@ fn canonical(mut answer: Vec<ClaimInstance>) -> Vec<ClaimInstance> {
 /// the pack verifies intact. `None` when the programme derives no such
 /// predicate, which is not an empty answer.
 fn derive_over_pack(
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
     pack: &EvidencePack,
     predicate: &str,
 ) -> Result<Option<Vec<ClaimInstance>>, PgError> {
@@ -167,7 +167,7 @@ fn state_of(pack: &EvidencePack) -> State {
 /// Evaluate `query` over a complete prefix and state the result as a
 /// receipt naming the pack's covering checkpoint.
 pub fn issue_receipt(
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
     pack: &EvidencePack,
     query: ReceiptQuery,
 ) -> Result<EvaluationReceipt, PgError> {
@@ -335,7 +335,7 @@ pub enum Evaluation {
 /// an anchor or any policy: trust beyond the pack itself is the caller's
 /// to establish, and this says nothing about it.
 pub fn reproduce(
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
     receipt: &ParsedReceipt,
     pack: &EvidencePack,
 ) -> (CheckpointMatch, Evaluation) {
@@ -361,7 +361,7 @@ pub fn reproduce(
 }
 
 fn reevaluate(
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
     receipt: &EvaluationReceipt,
     pack: &EvidencePack,
 ) -> Evaluation {

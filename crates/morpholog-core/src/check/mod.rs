@@ -330,7 +330,7 @@ pub(crate) struct Checked {
     pub(crate) errors: Vec<ValidationError>,
     /// Per transformation, each parameter's [`ParamKind`] in
     /// declaration order. Meaningful only when `errors` is empty.
-    pub(crate) param_kinds: BTreeMap<String, Vec<(Var, ParamKind)>>,
+    pub(crate) param_kinds: crate::validate::Contracts,
     /// The empty-case seed each `Sum` node's target kind gives, keyed by
     /// the node's address in the programme that was checked. Valid only
     /// while that programme is neither moved nor rebuilt; the seed

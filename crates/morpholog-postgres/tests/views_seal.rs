@@ -25,7 +25,7 @@ async fn apply_views(pool: &PgPool) {
     .unwrap();
     let program = double_entry_ledger::program();
     let rendered = render_views(
-        program.validated().unwrap(),
+        &program.validated().unwrap(),
         SCHEMA,
         &canonical_hash(&program),
     )

@@ -581,7 +581,7 @@ fn later_randomisation_must_use_active_protocol_version() {
 fn scoring_charges_a_write_only_in_the_case_it_touches() {
     let program = cte::program();
     let mut scorer =
-        CandidateScorer::new(morpholog_test_support::validated(&program)).expect("scorable");
+        CandidateScorer::new(&morpholog_test_support::validated(&program)).expect("scorable");
     let mut held: Vec<morpholog_core::ClaimInstance> = Vec::new();
     let consent = |participant: &str, on: &str| {
         claim_instance(

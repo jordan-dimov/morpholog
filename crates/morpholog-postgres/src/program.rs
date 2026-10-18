@@ -90,7 +90,7 @@ impl<'a> Route<'a> {
 
 impl PgProgram {
     pub fn new(prepared: PreparedProgram) -> Self {
-        let compilation = compile_each(prepared.validated());
+        let compilation = compile_each(&prepared.validated());
         let interpreted = ExecutionPlan::interpreted_indices(&compilation.runs);
         Self {
             prepared,

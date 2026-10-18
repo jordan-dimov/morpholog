@@ -269,7 +269,7 @@ impl<'p> CoverageTracker<'p> {
     /// Classify every invariant of `program` and seed the usage table
     /// with its declared transformations (so dead ones appear at
     /// zero).
-    pub fn new(program: crate::ValidatedProgram<'p>) -> Self {
+    pub fn new(program: &crate::ValidatedProgram<'p>) -> Self {
         let program = program.as_program();
         let provenance = crate::disciplines::discipline_provenance(program);
         let entries: Vec<Entry<'p>> = program

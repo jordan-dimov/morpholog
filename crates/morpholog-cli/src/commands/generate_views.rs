@@ -20,7 +20,7 @@ pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
     let validated = validate_or_report(&parsed)?;
     let hash = crate::commands::hash::canonical_hash(&parsed.program);
 
-    let rendered = match render_views(validated, &args.schema, &hash) {
+    let rendered = match render_views(&validated, &args.schema, &hash) {
         Ok(rendered) => rendered,
         Err(refusals) => {
             for refusal in &refusals {

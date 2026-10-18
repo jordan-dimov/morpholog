@@ -20,7 +20,7 @@ use serde_json::Value;
 #[test]
 fn every_transformation_param_resolves_to_concrete() {
     let program = trade_lifecycle::program();
-    // Validate once: `ValidatedProgram` is `Copy`, and validating is a full walk.
+    // Validate once: the handle carries every contract.
     let validated = program.validated().expect("trade_lifecycle validates");
     let mut failures: Vec<String> = Vec::new();
     for transformation in &program.transformations {

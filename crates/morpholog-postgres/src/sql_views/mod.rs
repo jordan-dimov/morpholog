@@ -301,7 +301,7 @@ impl ViewKind {
 /// byte-identical output. On any refusal, returns every finding and
 /// renders nothing.
 pub fn render_views(
-    program: ValidatedProgram<'_>,
+    program: &ValidatedProgram<'_>,
     schema: &str,
     model_hash: &str,
 ) -> Result<RenderedViews, Vec<ViewRefusal>> {

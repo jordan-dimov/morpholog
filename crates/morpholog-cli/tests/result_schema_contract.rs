@@ -1462,7 +1462,7 @@ fn coverage_report_serializes_as_pinned() {
     let p = morpholog_surface::parse_program(source).unwrap();
     p.validate().unwrap();
 
-    let mut tracker = CoverageTracker::new(morpholog_test_support::validated(&p));
+    let mut tracker = CoverageTracker::new(&morpholog_test_support::validated(&p));
     let empty = State::from_claims(vec![]);
     let with_ref = State::from_claims(vec![ClaimInstance {
         predicate: "CurrentRef".into(),
@@ -1791,12 +1791,12 @@ fn score_reports_serialize_as_pinned() {
     let admitted = effective_delta(&empty, std::slice::from_ref(&flag_claim), &[]);
     let retracted = effective_delta(&flagged, &[], std::slice::from_ref(&flag_claim));
 
-    let mut scorer = CandidateScorer::new(morpholog_test_support::validated(&candidate)).unwrap();
+    let mut scorer = CandidateScorer::new(&morpholog_test_support::validated(&candidate)).unwrap();
     scorer.observe_transition(&flagged, &admitted, t1).unwrap();
     let report = scorer.into_report();
     assert_golden_bytes("score_report.json", &report);
 
-    let mut scorer = CandidateScorer::new(morpholog_test_support::validated(&candidate)).unwrap();
+    let mut scorer = CandidateScorer::new(&morpholog_test_support::validated(&candidate)).unwrap();
     scorer.observe_transition(&flagged, &admitted, t1).unwrap();
     // Render the boundaries as the scorer does, not typed by hand.
     let split_at = morpholog_postgres::wire_time::parse("2026-06-01T12:00:00Z").unwrap();

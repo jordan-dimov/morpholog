@@ -23,7 +23,7 @@ pub(crate) async fn run(args: &RefreshDerivedArgs) -> anyhow::Result<()> {
     let model_hash = canonical_hash(&parsed.program);
 
     let pool = connect(&args.db.database_url).await?;
-    let summary = refresh_derived(&pool, validated, &model_hash).await?;
+    let summary = refresh_derived(&pool, &validated, &model_hash).await?;
 
     let snapshot = summary.source_snapshot_transition_id.map_or_else(
         || "(no committed transitions)".to_string(),

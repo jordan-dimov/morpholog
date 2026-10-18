@@ -647,23 +647,19 @@ pub enum AnalysisError {
 /// [`ParamKind`] of every parameter, in declaration order (never hash
 /// order; generated forms and clients depend on it).
 ///
-/// The static checker observes it while it walks: every position a
-/// parameter reaches, through `let` aliases, `or` branches, `require`,
-/// loop bindings and definition calls, records the kind it was used as,
-/// and the parameter's kind set projects to a [`ParamKind`]. There is
-/// no second walk.
-///
-/// Takes a [`ValidatedProgram`], so the programme is known valid and is
-/// not re-validated here.
+/// The static checker observes it while validation walks: every
+/// position a parameter reaches, through `let` aliases, `or` branches,
+/// `require`, loop bindings and definition calls, records the kind it
+/// was used as, and the parameter's kind set projects to a
+/// [`ParamKind`]. The [`ValidatedProgram`] keeps the result, so this is
+/// a lookup: no second walk, no re-validation.
 pub fn transformation_param_kinds(
     program: &ValidatedProgram<'_>,
     name: &TransformationName,
 ) -> Result<Vec<(Var, ParamKind)>, AnalysisError> {
-    let inner = program.as_program();
-    let mut checked = crate::check::check_program(inner);
-    checked
-        .param_kinds
-        .remove(name.as_str())
+    program
+        .contract(name.as_str())
+        .map(<[_]>::to_vec)
         .ok_or_else(|| AnalysisError::UnknownTransformation { name: name.clone() })
 }
 

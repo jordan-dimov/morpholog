@@ -229,3 +229,29 @@ fn every_example_program_passes_strict_arity_validation() {
         }
     }
 }
+
+/// Validation establishes each transformation's input contract once, and
+/// both proof-of-validity handles expose that same contract: the one
+/// `Program::validated` returns and the one a `PreparedProgram` lends.
+#[test]
+fn both_validated_handles_carry_the_same_contracts() {
+    use morpholog_core::{PreparedProgram, transformation_param_kinds};
+
+    let mut compared = 0;
+    for program in common::all_programs() {
+        let validated = program.validated().expect("gallery programme validates");
+        let prepared = PreparedProgram::new(program.clone()).expect("gallery programme prepares");
+        let lent = prepared.validated();
+        for transformation in &program.transformations {
+            let direct = transformation_param_kinds(&validated, &transformation.name).unwrap();
+            let via_prepared = transformation_param_kinds(&lent, &transformation.name).unwrap();
+            assert_eq!(
+                direct, via_prepared,
+                "{}.{}",
+                program.name, transformation.name
+            );
+            compared += 1;
+        }
+    }
+    assert!(compared > 0, "the gallery has transformations to compare");
+}
