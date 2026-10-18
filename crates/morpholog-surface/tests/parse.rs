@@ -1468,8 +1468,8 @@ transformation t(d):
 }
 
 #[test]
-fn an_impossible_calendar_timestamp_is_a_lex_diagnostic() {
-    // Well-shaped but month 13: a lex error.
+fn an_impossible_calendar_timestamp_is_a_parse_diagnostic() {
+    // Well-shaped, so it lexes; month 13 is refused where the text becomes a value.
     let source = "program bad_instant
 predicate E(at: Timestamp)
 transformation t(v):
@@ -1650,8 +1650,8 @@ fn every_builtin_round_trips_through_the_formatter() {
         "min(a, b)",
         "max(a, b)",
         "min(cap, max(floor, x))",
-        "period_index(@2000-04-01, span(P1Y), d)",
-        "period_start_of(@2000-04-01, span(P1Y), c)",
+        "period_index(@2000-04-01, span(P12M), d)",
+        "period_start_of(@2000-04-01, span(P12M), c)",
         // A call inside arithmetic, and arithmetic inside a call: the
         // call is self-delimiting, the operators are not.
         "abs(a - b) + 1",

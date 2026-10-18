@@ -20,7 +20,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::definitions::DefinitionTable;
-use crate::eval::literal_value;
 use crate::ir::{
     Claim, Definition, DefinitionName, PredicateName, Prop, Stmt, Term, Transformation, Value,
     ValueExpr, Var,
@@ -96,7 +95,7 @@ impl ReadFilter {
             let mut coordinates = Vec::with_capacity(pattern.coordinates.len());
             for (position, term) in &pattern.coordinates {
                 let value = match term {
-                    KnownTerm::Literal(v) => literal_value(v).ok()?,
+                    KnownTerm::Literal(v) => EvalValue::from(v),
                     KnownTerm::Actor => EvalValue::Subject(transition.actor.clone()),
                     KnownTerm::Parameter(p) => {
                         let index = transformation.parameters.iter().position(|q| q == p)?;

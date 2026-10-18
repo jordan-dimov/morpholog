@@ -582,10 +582,7 @@ fn invalid_program_surfaces_at_the_validated_gate() {
 use morpholog_core::{ArithOp, Term, Value, ValueExpr};
 
 fn qty_lit(amount: &str, unit: &str) -> ValueExpr {
-    ValueExpr::Term(Term::Literal(Value::Quantity {
-        amount: amount.to_string(),
-        unit: unit.into(),
-    }))
+    ValueExpr::Term(Term::Literal(Value::quantity(amount, unit.into()).unwrap()))
 }
 
 fn var_value(name: &str) -> ValueExpr {
@@ -664,10 +661,7 @@ fn decimal_only_operators_force_both_unknown_operands() {
         .transformations(vec![transformation(
             "check_product",
             params(&["x", "y"]),
-            vec![require(le(
-                product,
-                ValueExpr::Term(Term::Literal(Value::Decimal("100".to_string()))),
-            ))],
+            vec![require(le(product, ValueExpr::Term(dec("100"))))],
         )])
         .build();
     assert_eq!(

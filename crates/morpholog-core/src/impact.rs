@@ -16,8 +16,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 
-use rust_decimal::Decimal;
-
 use crate::analysis::predicates_referenced_by_prop;
 use crate::definitions::DefinitionTable;
 use crate::fold::{Node, mentions_pre, walk_prop};
@@ -537,7 +535,7 @@ fn literal_matches(lit: &Value, ev: &EvalValue) -> bool {
     }
     match (lit, ev) {
         (Value::Subject(a), EvalValue::Subject(b)) => a == b,
-        (Value::Decimal(a), EvalValue::Decimal(b)) => a.parse::<Decimal>().is_ok_and(|a| a == *b),
+        (Value::Decimal(a), EvalValue::Decimal(b)) => a.value() == *b,
         _ => true,
     }
 }

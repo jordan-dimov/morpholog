@@ -142,9 +142,9 @@ fn stamp_stmt(stmt: &mut Stmt, seeds: &Seeds) {
 mod tests {
     use super::*;
     use crate::ir::Definition;
-    use crate::ir_builder::{defined, invariant, predicate, program, sum};
+    use crate::ir_builder::{dec, defined, duration, invariant, predicate, program, qty, sum};
     use crate::validate::MAX_EXPR_DEPTH;
-    use crate::{CompareOp, OrderedDomain, Term, Value, Var};
+    use crate::{CompareOp, OrderedDomain, Term, Var};
 
     /// A programme whose one invariant sums through `layers` chained
     /// definition calls down to a quantity-kinded claim position.
@@ -175,10 +175,7 @@ mod tests {
             )),
             // A quantity cap, so the programme validates where its depth
             // allows; the summed kind is what the tests look at.
-            right: Box::new(ValueExpr::Term(Term::Literal(Value::Quantity {
-                amount: "100".to_string(),
-                unit: "t".into(),
-            }))),
+            right: Box::new(ValueExpr::Term(qty("100", "t"))),
         };
         let mut p = program("depth")
             .predicates(vec![predicate("P").quantity("qty", "t").build()])
@@ -208,10 +205,7 @@ mod tests {
             predicate: "P".into(),
             args: vec![Term::Wildcard],
         };
-        let dur_sum = sum(
-            Term::Literal(Value::Duration("PT1H".to_string())),
-            body.clone(),
-        );
+        let dur_sum = sum(duration("PT1H"), body.clone());
         let qty_sum = sum(
             Term::Var(Var::from("q")),
             Prop::Claim {
@@ -325,10 +319,7 @@ mod tests {
                     predicate: "P".into(),
                     args: vec![Term::Var(Var::from("x"))],
                 },
-                le(
-                    sum(target, over),
-                    term(Term::Literal(Value::Decimal("100".to_string()))),
-                ),
+                le(sum(target, over), term(dec("100"))),
             )
         };
         let x = || ValueExpr::Term(Term::Var(Var::from("x")));
@@ -399,7 +390,7 @@ mod tests {
                                 args: vec![Term::Var(Var::from("x"))],
                             },
                         ),
-                        term(Term::Literal(Value::Decimal("100".to_string()))),
+                        term(dec("100")),
                     ),
                 ),
             )])
@@ -432,7 +423,7 @@ mod tests {
                             args: vec![wildcard()],
                         },
                     ),
-                    term(Term::Literal(Value::Decimal("100".to_string()))),
+                    term(dec("100")),
                 ))],
             )])
             .build();

@@ -360,7 +360,7 @@ fn the_extractor_round_trips_through_the_formatter() {
         .build();
     let rendered = crate::format::format_program(&p);
     assert!(
-        rendered.contains("period_index(@2000-04-01, span(P1Y), @2026-07-01)"),
+        rendered.contains("period_index(@2000-04-01, span(P12M), @2026-07-01)"),
         "{rendered}"
     );
 }

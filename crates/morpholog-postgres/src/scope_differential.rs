@@ -469,7 +469,7 @@ fn the_read_plan_keys_what_the_body_fixes_and_nothing_else() {
             (0, param("k")),
             (
                 1,
-                KnownTerm::Literal(morpholog_core::Value::Decimal("1".into()))
+                KnownTerm::Literal(morpholog_core::Value::decimal("1").unwrap())
             )
         ]])
     );

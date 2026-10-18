@@ -111,6 +111,7 @@ pub fn morpholog_core::fold::walk_prop<'a>(&'a morpholog_core::Prop, &mut dyn co
 pub fn morpholog_core::fold::walk_stmt<'a>(&'a morpholog_core::Stmt, &mut dyn core::ops::function::FnMut(morpholog_core::fold::Node<'a>))
 pub fn morpholog_core::fold::walk_value<'a>(&'a morpholog_core::ValueExpr, &mut dyn core::ops::function::FnMut(morpholog_core::fold::Node<'a>))
 pub mod morpholog_core::format
+pub const morpholog_core::format::CANONICAL_ENCODING: u32
 pub fn morpholog_core::format::canonical_hash(&morpholog_core::Program) -> alloc::string::String
 pub fn morpholog_core::format::compare_token(morpholog_core::CompareOp, morpholog_core::OrderedDomain) -> &'static str
 pub fn morpholog_core::format::format_program(&morpholog_core::Program) -> alloc::string::String
@@ -524,6 +525,8 @@ impl core::cmp::Eq for morpholog_core::EvalValue
 pub fn morpholog_core::EvalValue::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::EvalValue
 pub fn morpholog_core::EvalValue::eq(&self, &morpholog_core::EvalValue) -> bool
+impl core::convert::From<&morpholog_core::Value> for morpholog_core::EvalValue
+pub fn morpholog_core::EvalValue::from(&morpholog_core::Value) -> Self
 impl core::fmt::Debug for morpholog_core::EvalValue
 pub fn morpholog_core::EvalValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for morpholog_core::EvalValue
@@ -1403,21 +1406,30 @@ impl core::marker::UnsafeUnpin for morpholog_core::ValidationError
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::ValidationError
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::ValidationError
 pub enum morpholog_core::Value
-pub morpholog_core::Value::CalendarSpan(alloc::string::String)
-pub morpholog_core::Value::Date(alloc::string::String)
-pub morpholog_core::Value::Decimal(alloc::string::String)
-pub morpholog_core::Value::Duration(alloc::string::String)
+pub morpholog_core::Value::CalendarSpan(morpholog_core::calendar::CalendarSpan)
+pub morpholog_core::Value::Date(jiff::civil::date::Date)
+pub morpholog_core::Value::Decimal(morpholog_core::LiteralDecimal)
+pub morpholog_core::Value::Duration(jiff::signed_duration::SignedDuration)
 pub morpholog_core::Value::Quantity
-pub morpholog_core::Value::Quantity::amount: alloc::string::String
+pub morpholog_core::Value::Quantity::amount: morpholog_core::LiteralDecimal
 pub morpholog_core::Value::Quantity::unit: morpholog_core::Unit
 pub morpholog_core::Value::Subject(morpholog_core::Subject)
-pub morpholog_core::Value::Timestamp(alloc::string::String)
+pub morpholog_core::Value::Timestamp(jiff::timestamp::Timestamp)
+impl morpholog_core::Value
+pub fn morpholog_core::Value::date(&str) -> core::result::Result<Self, alloc::string::String>
+pub fn morpholog_core::Value::decimal(&str) -> core::result::Result<Self, alloc::string::String>
+pub fn morpholog_core::Value::duration(&str) -> core::result::Result<Self, alloc::string::String>
+pub fn morpholog_core::Value::quantity(&str, morpholog_core::Unit) -> core::result::Result<Self, alloc::string::String>
+pub fn morpholog_core::Value::span(&str) -> core::result::Result<Self, alloc::string::String>
+pub fn morpholog_core::Value::timestamp(&str) -> core::result::Result<Self, alloc::string::String>
 impl core::clone::Clone for morpholog_core::Value
 pub fn morpholog_core::Value::clone(&self) -> morpholog_core::Value
 impl core::cmp::Eq for morpholog_core::Value
 pub fn morpholog_core::Value::assert_fields_are_eq(&self)
 impl core::cmp::PartialEq for morpholog_core::Value
 pub fn morpholog_core::Value::eq(&self, &morpholog_core::Value) -> bool
+impl core::convert::From<&morpholog_core::Value> for morpholog_core::EvalValue
+pub fn morpholog_core::EvalValue::from(&morpholog_core::Value) -> Self
 impl core::fmt::Debug for morpholog_core::Value
 pub fn morpholog_core::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for morpholog_core::Value
@@ -2446,6 +2458,33 @@ impl core::marker::Unpin for morpholog_core::KeyedPattern
 impl core::marker::UnsafeUnpin for morpholog_core::KeyedPattern
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::KeyedPattern
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::KeyedPattern
+pub struct morpholog_core::LiteralDecimal(_)
+impl morpholog_core::LiteralDecimal
+pub const morpholog_core::LiteralDecimal::ZERO: Self
+pub fn morpholog_core::LiteralDecimal::parse(&str) -> core::result::Result<Self, alloc::string::String>
+pub fn morpholog_core::LiteralDecimal::value(self) -> rust_decimal::decimal::Decimal
+impl core::clone::Clone for morpholog_core::LiteralDecimal
+pub fn morpholog_core::LiteralDecimal::clone(&self) -> morpholog_core::LiteralDecimal
+impl core::clone::TrivialClone for morpholog_core::LiteralDecimal
+impl core::cmp::Eq for morpholog_core::LiteralDecimal
+impl core::cmp::PartialEq for morpholog_core::LiteralDecimal
+pub fn morpholog_core::LiteralDecimal::eq(&self, &Self) -> bool
+impl core::convert::From<rust_decimal::decimal::Decimal> for morpholog_core::LiteralDecimal
+pub fn morpholog_core::LiteralDecimal::from(rust_decimal::decimal::Decimal) -> Self
+impl core::fmt::Debug for morpholog_core::LiteralDecimal
+pub fn morpholog_core::LiteralDecimal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for morpholog_core::LiteralDecimal
+pub fn morpholog_core::LiteralDecimal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for morpholog_core::LiteralDecimal
+pub fn morpholog_core::LiteralDecimal::hash<H: core::hash::Hasher>(&self, &mut H)
+impl core::marker::Copy for morpholog_core::LiteralDecimal
+impl core::marker::Freeze for morpholog_core::LiteralDecimal
+impl core::marker::Send for morpholog_core::LiteralDecimal
+impl core::marker::Sync for morpholog_core::LiteralDecimal
+impl core::marker::Unpin for morpholog_core::LiteralDecimal
+impl core::marker::UnsafeUnpin for morpholog_core::LiteralDecimal
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::LiteralDecimal
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::LiteralDecimal
 pub struct morpholog_core::MissingClaim
 pub morpholog_core::MissingClaim::candidate_supplier_transformations: alloc::vec::Vec<alloc::string::String>
 pub morpholog_core::MissingClaim::predicate: alloc::string::String
@@ -3149,7 +3188,6 @@ pub fn morpholog_core::in_force_signature(&morpholog_core::PredicateName, &[allo
 pub fn morpholog_core::intent_arg_schema(&morpholog_core::ValidatedProgram<'_>, &morpholog_core::IntentName) -> core::option::Option<serde_json::value::Value>
 pub fn morpholog_core::invariants_using_pre(&morpholog_core::Program) -> alloc::vec::Vec<alloc::string::String>
 pub fn morpholog_core::lints(&morpholog_core::PreparedProgram) -> alloc::vec::Vec<morpholog_core::Lint>
-pub fn morpholog_core::literal_value(&morpholog_core::Value) -> core::result::Result<morpholog_core::EvalValue, morpholog_core::EvalError>
 pub fn morpholog_core::lower_discipline_definitions(&mut morpholog_core::Program)
 pub fn morpholog_core::lower_disciplines(&mut morpholog_core::Program)
 pub fn morpholog_core::lower_sum_seeds(&mut morpholog_core::Program)

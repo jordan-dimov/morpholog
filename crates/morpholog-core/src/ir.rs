@@ -10,8 +10,10 @@
 //! a proposition belongs. They meet where the grammar says: a comparison
 //! relates two values, a sum ranges over a proposition.
 
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
+use crate::calendar::CalendarSpan;
 use crate::validate::{ValidationError, validate_program};
 
 /// Defines an opaque identifier newtype over `String`, used for every
@@ -651,41 +653,132 @@ pub enum Term {
     Actor,
 }
 
-/// A literal constant in an IR `Term`. Unlike the runtime `EvalValue`, it
-/// has no booleans or collections.
+/// A decimal literal: a [`Decimal`] whose identity keeps the scale it
+/// was written with. `1.50` and `1.5` are one number at runtime and two
+/// literals here, because a figure computed from a literal keeps its
+/// scale, and the canonical encoding renders the literal as written.
+#[derive(Debug, Clone, Copy)]
+pub struct LiteralDecimal(Decimal);
+
+impl LiteralDecimal {
+    /// The literal `0`.
+    pub const ZERO: Self = Self(Decimal::ZERO);
+
+    /// Parse exactly. A text the type cannot hold exactly is refused,
+    /// never rounded.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        Decimal::from_str_exact(s)
+            .map(Self)
+            .map_err(|e| format!("invalid decimal `{s}`: {e}"))
+    }
+
+    /// The number, with ordinary decimal equality.
+    pub fn value(self) -> Decimal {
+        self.0
+    }
+}
+
+impl From<Decimal> for LiteralDecimal {
+    fn from(d: Decimal) -> Self {
+        Self(d)
+    }
+}
+
+impl PartialEq for LiteralDecimal {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.mantissa() == other.0.mantissa() && self.0.scale() == other.0.scale()
+    }
+}
+
+impl Eq for LiteralDecimal {}
+
+impl std::hash::Hash for LiteralDecimal {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.mantissa().hash(state);
+        self.0.scale().hash(state);
+    }
+}
+
+impl std::fmt::Display for LiteralDecimal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// A literal constant in an IR `Term`, already parsed: the source
+/// frontend and [`crate::ir_builder`] read literal text once, and
+/// nothing downstream reads it again. Unlike the runtime `EvalValue`, it
+/// has no booleans or collections. A literal is a valid value; whether
+/// it has a surface spelling is the formatter's concern, and every
+/// value parsed from source does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
-    /// Arbitrary-precision decimal, kept as its exact source string and
-    /// parsed at evaluation.
-    Decimal(String),
+    /// An exact decimal within the precision the type holds (a text past
+    /// it is refused at parse), identity by coefficient and scale.
+    Decimal(LiteralDecimal),
     /// A named subject constant (a purpose, status, or authority), so it
     /// need not be passed as a parameter.
     Subject(Subject),
-    /// ISO-8601 civil date (`YYYY-MM-DD`), kept as its source string and
-    /// parsed into [`jiff::civil::Date`] at evaluation. No time of day and
-    /// no time zone.
-    Date(String),
-    /// An exact UTC instant (RFC 3339, e.g. `2026-10-24T14:00:00Z`), kept
-    /// as its source string and parsed into [`jiff::Timestamp`] at
-    /// evaluation. No time zone: local time is domain knowledge, admitted
-    /// as claims.
-    Timestamp(String),
-    /// An exact span of time (ISO 8601, e.g. `PT6H`), kept as its source
-    /// string and parsed into [`jiff::SignedDuration`] at evaluation.
-    /// Exact seconds only; months and years vary in length, so they are
+    /// ISO-8601 civil date (`@2026-04-01`). No time of day and no time
+    /// zone.
+    Date(jiff::civil::Date),
+    /// An exact UTC instant (`@2026-10-24T14:00:00Z`). No time zone:
+    /// local time is domain knowledge, admitted as claims.
+    Timestamp(jiff::Timestamp),
+    /// An exact span of time (`duration(PT6H)`), exact seconds only;
+    /// months and years vary in length, so they are
     /// [`Value::CalendarSpan`].
-    Duration(String),
-    /// A calendar span (`P3M`, `P45D`), kept as its source string and
-    /// parsed via [`crate::calendar::parse_calendar_span`] at evaluation.
-    /// It only shifts a `Date`: it cannot be declared as an argument kind,
-    /// admitted in a claim or intent, ordered, or summed. Equality compares
-    /// normalised values (`span(P1Y) = span(P12M)` holds). Separate from
+    Duration(jiff::SignedDuration),
+    /// A calendar span (`span(P3M)`, `span(P45D)`). It only shifts a
+    /// `Date`: it cannot be declared as an argument kind, admitted in a
+    /// claim or intent, ordered, or summed. Normalised, so `span(P1Y)`
+    /// and `span(P12M)` are one literal. Separate from
     /// [`Value::Duration`] because a month has no fixed length.
-    CalendarSpan(String),
-    /// A unit-tagged exact decimal (`25000 USD`, `0 t`). The amount is
-    /// kept as its source string, like [`Value::Decimal`]; the unit is an
+    CalendarSpan(CalendarSpan),
+    /// A unit-tagged exact decimal (`25000 USD`, `0 t`); the unit is an
     /// opaque [`Unit`].
-    Quantity { amount: String, unit: Unit },
+    Quantity { amount: LiteralDecimal, unit: Unit },
+}
+
+impl Value {
+    /// A decimal literal from its text, exactly or not at all.
+    pub fn decimal(s: &str) -> Result<Self, String> {
+        LiteralDecimal::parse(s).map(Self::Decimal)
+    }
+
+    /// A civil date literal from `YYYY-MM-DD`.
+    pub fn date(s: &str) -> Result<Self, String> {
+        s.parse::<jiff::civil::Date>()
+            .map(Self::Date)
+            .map_err(|e| format!("invalid civil date `{s}`: {e}"))
+    }
+
+    /// A UTC instant literal from RFC 3339 text.
+    pub fn timestamp(s: &str) -> Result<Self, String> {
+        s.parse::<jiff::Timestamp>()
+            .map(Self::Timestamp)
+            .map_err(|e| format!("invalid timestamp `{s}`: {e}"))
+    }
+
+    /// An exact duration literal from ISO 8601 time units (`PT6H`).
+    /// Calendar units are refused by the type itself.
+    pub fn duration(s: &str) -> Result<Self, String> {
+        s.parse::<jiff::SignedDuration>()
+            .map(Self::Duration)
+            .map_err(|e| format!("invalid duration `{s}`: {e}"))
+    }
+
+    /// A calendar span literal from ISO 8601 date units (`P3M`, `P45D`).
+    pub fn span(s: &str) -> Result<Self, String> {
+        crate::calendar::parse_calendar_span(s)
+            .map(Self::CalendarSpan)
+            .map_err(|reason| format!("invalid span `{s}` ({reason})"))
+    }
+
+    /// A quantity literal from its amount's text and its unit.
+    pub fn quantity(amount: &str, unit: Unit) -> Result<Self, String> {
+        LiteralDecimal::parse(amount).map(|amount| Self::Quantity { amount, unit })
+    }
 }
 
 /// A Claim is an admitted assertion candidate - a statement that may be

@@ -315,17 +315,10 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
                 .then(time_part.or_not())
                 .to_slice(),
         )
-        .validate(|s: &str, e, emitter| {
+        // The shape only; the parser turns the text into a value, or a
+        // diagnostic, once.
+        .map(|s: &str| {
             if s.contains('T') {
-                // Reject impossible instants here, with a span, rather than at evaluation.
-                if s.parse::<jiff::Timestamp>().is_err() {
-                    emitter.emit(Rich::custom(
-                        e.span(),
-                        format!(
-                            "invalid timestamp literal `@{s}` (expected a real RFC 3339 instant)"
-                        ),
-                    ));
-                }
                 Token::TimestampLit(s.to_string())
             } else {
                 Token::DateLit(s.to_string())

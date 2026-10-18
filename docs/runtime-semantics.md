@@ -121,8 +121,10 @@ Transition                       -- the value object proposed against a Transfor
 Term                             -- a node inside a claim's args, a comprehension binding, etc.
   Var(name)                      -- bound by surrounding context
   Wildcard                       -- matches anything
-  Literal(Value)                 -- IR literal: subject, decimal, quantity, date,
-                                    timestamp, duration, calendar span or bool
+  Literal(Value)                 -- IR literal, already a value: subject, decimal
+                                    (scale kept), quantity, date, timestamp, duration
+                                    or calendar span; read once by the source frontend
+                                    or the builder, never parsed downstream
   Actor                          -- resolves to the proposing transition's actor;
                                     in invariant bodies it raises EvalError::UnboundActor
                                     (authority checks live in `require`, not in invariants)
@@ -617,12 +619,12 @@ A programme passes through three levels on its way to a decision, and only the f
 - **The prepared programme** (`PreparedProgram`) is the programme validated, with the preparation worth keeping across proposals: lookups by name, each invariant's impact plan, and the input contracts validation observed. Light borrowed views, such as the definition table, are built on demand. It is a cache. It can be thrown away and recomputed, and a better analysis may replace any part of it without moving the hash, the audit record or any decision.
 - **The execution plan** chooses machinery for one backend: which invariants run as SQL and which in the kernel, in programme order. On PostgreSQL, `PgProgram` binds a prepared programme to its plan, and derives read plans and index requirements from it when asked.
 
-The hash is `sha256:` over canonical encoding 1, a positional rendering of the programme. **Anything the encoding leaves out is either irrelevant to meaning or fixed by validation**: generated discipline invariants and definitions must be exactly what lowering gives, so must each sum's empty-case seed, and an invariant's version must be 1. So the identity is a promise about validated programmes; an invalid one may share a valid one's hash. It keeps two promises:
+The hash is `sha256:` over the canonical encoding (`CANONICAL_ENCODING`, now 2), a positional rendering of the programme in which every literal has one spelling: `span(P1Y)` and `span(P12M)` are one literal, as are two timestamps naming one instant, while `1.50` and `1.5` are two, because a figure computed from a literal keeps its scale. **Anything the encoding leaves out is either irrelevant to meaning or fixed by validation**: generated discipline invariants and definitions must be exactly what lowering gives, so must each sum's empty-case seed, and an invariant's version must be 1. So the identity is a promise about validated programmes; an invalid one may share a valid one's hash. It keeps two promises:
 
-- **Surface spellings that lower to the same programme keep one identity.** Formatting, comments, named patterns, `let` and `const` do not move it. Rules that are only logically equivalent, such as `a and b` and `b and a`, may hash differently.
+- **Surface spellings that lower to the same programme keep one identity.** Formatting, comments, named patterns, `let`, `const` and the spelling of a literal do not move it. Rules that are only logically equivalent, such as `a and b` and `b and a`, may hash differently.
 - **An unchanged rulebook is not reinterpreted by an upgrade.** The same source hashes the same under every later release, so a committed `model_hash` keeps naming its programme.
 
-Encoding 1 is frozen. A new construct may add rendering for itself; nothing may change how an existing programme renders. A change that cannot keep that becomes a new identifier scheme with its own prefix, never a different hash under `sha256:`. The encoding is pinned byte for byte over a carrier programme built directly as IR (`crates/morpholog-core/src/kernel_tests/canonical.rs`), and every gallery source's hash is pinned beside its source digest (`crates/morpholog-examples/tests/canonical_identity.rs`): an unchanged source whose hash moved fails even when the golden is regenerated.
+The encoding is pinned. A new construct may add rendering for itself; nothing else may change how an existing programme renders without moving `CANONICAL_ENCODING`, which retires every committed hash of a programme the change re-renders and is done knowingly, with a release note. Encoding 1 rendered a literal as the author spelled it; encoding 2 renders the value, so only programmes with a non-canonical spelling changed identity at that move. The encoding is pinned byte for byte over a carrier programme built directly as IR (`crates/morpholog-core/src/kernel_tests/canonical.rs`), and every gallery source's hash is pinned beside its source digest and the encoding that produced it (`crates/morpholog-examples/tests/canonical_identity.rs`): an unchanged source whose hash moved under the same encoding fails even when the golden is regenerated.
 
 The law between them: **preparation and execution may change cost, never meaning.** For the same programme, admitted state and proposal, every lawful preparation and execution plan produces the same semantic outcome: the same admitted change and emitted intents, or the same rejection, naming the same rule, version and witness, or the same error.
 

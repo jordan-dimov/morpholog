@@ -5,10 +5,10 @@ use super::*;
 
 #[test]
 fn decimal_literal_constructs() {
-    let v = Value::Decimal("1250.75".to_string());
+    let v = Value::decimal("1250.75").unwrap();
     assert_eq!(
         Term::Literal(v),
-        Term::Literal(Value::Decimal("1250.75".to_string()))
+        Term::Literal(Value::decimal("1250.75").unwrap())
     );
 }
 
@@ -319,12 +319,12 @@ fn predicates_read_by_stmt_excludes_assert_includes_retract_and_reads() {
 fn add_sums_two_decimals() {
     let expr = ValueExpr::Arith {
         op: ArithOp::Add,
-        left: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-            "10".to_string(),
-        )))),
-        right: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-            "32.5".to_string(),
-        )))),
+        left: Box::new(ValueExpr::Term(Term::Literal(
+            Value::decimal("10").unwrap(),
+        ))),
+        right: Box::new(ValueExpr::Term(Term::Literal(
+            Value::decimal("32.5").unwrap(),
+        ))),
     };
     let v = eval_value(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new())).unwrap();
     assert_eq!(v, EvalValue::Decimal(Decimal::new(425, 1)));
@@ -336,9 +336,9 @@ fn add_sums_two_decimals() {
 fn add_with_non_decimal_operand_is_type_mismatch() {
     let expr = ValueExpr::Arith {
         op: ArithOp::Add,
-        left: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-            "10".to_string(),
-        )))),
+        left: Box::new(ValueExpr::Term(Term::Literal(
+            Value::decimal("10").unwrap(),
+        ))),
         right: Box::new(ValueExpr::Term(Term::Literal(Value::Subject(
             "oops".into(),
         )))),
@@ -352,7 +352,7 @@ fn add_with_non_decimal_operand_is_type_mismatch() {
 }
 
 fn date_lit(s: &str) -> ValueExpr {
-    ValueExpr::Term(Term::Literal(Value::Date(s.to_string())))
+    ValueExpr::Term(Term::Literal(Value::date(s).unwrap()))
 }
 
 /// `DateLe(a, b)` admits `a <= b` with bindings unchanged, like
@@ -374,20 +374,14 @@ fn date_le_pins_direction_and_inclusivity() {
 }
 
 /// Mixed operand kinds on either side raise `TypeMismatch`, not a
-/// silent no-match. A malformed `Value::Date` string fails the same
-/// way at evaluation time, like an invalid `Value::Decimal`.
+/// silent no-match.
 #[test]
 fn date_le_operand_type_guards_raise_type_mismatch() {
-    let dec_lit = ValueExpr::Term(Term::Literal(Value::Decimal("1".to_string())));
+    let dec_lit = ValueExpr::Term(Term::Literal(Value::decimal("1").unwrap()));
     let subj_lit = ValueExpr::Term(Term::Literal(Value::Subject("oops".into())));
     let cases = [
         (dec_lit, date_lit("2026-03-12"), "civil-date"),
         (date_lit("2026-03-12"), subj_lit, "civil-date"),
-        (
-            date_lit("not-a-date"),
-            date_lit("2026-03-12"),
-            "invalid civil date",
-        ),
     ];
     for (lhs, rhs, fragment) in cases {
         let expr = date_le_(Box::new(lhs), Box::new(rhs));
@@ -406,11 +400,7 @@ fn date_le_operand_type_guards_raise_type_mismatch() {
 /// direction: `Gt`/`Lt` are strict, `Ge` includes equality.
 #[test]
 fn decimal_strict_comparators_pin_direction() {
-    let d = |s: &str| {
-        Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-            s.to_string(),
-        ))))
-    };
+    let d = |s: &str| Box::new(ValueExpr::Term(Term::Literal(Value::decimal(s).unwrap())));
     let admits = |e: Prop| {
         !find_matches(&e, &ctx(&State::from_claims(vec![]), &Bindings::new()))
             .unwrap()
@@ -466,14 +456,14 @@ fn date_literal_unifies_with_matching_date_arg() {
     let state = State::from_claims(vec![claim]);
     let expr = Prop::Claim {
         predicate: "OnDate".into(),
-        args: vec![Term::Literal(Value::Date("2026-03-12".to_string()))],
+        args: vec![Term::Literal(Value::date("2026-03-12").unwrap())],
     };
     let matches = find_matches(&expr, &ctx(&state, &Bindings::new())).unwrap();
     assert_eq!(matches.len(), 1, "literal date arg must unify");
 
     let other = Prop::Claim {
         predicate: "OnDate".into(),
-        args: vec![Term::Literal(Value::Date("2026-03-13".to_string()))],
+        args: vec![Term::Literal(Value::date("2026-03-13").unwrap())],
     };
     let none = find_matches(&other, &ctx(&state, &Bindings::new())).unwrap();
     assert!(
@@ -486,9 +476,9 @@ fn date_literal_unifies_with_matching_date_arg() {
 /// (`running + proposed <= cap`).
 #[test]
 fn add_nests_under_le_for_cumulative_cap() {
-    let running = ValueExpr::Term(Term::Literal(Value::Decimal("60".to_string())));
-    let proposed = ValueExpr::Term(Term::Literal(Value::Decimal("40".to_string())));
-    let cap = ValueExpr::Term(Term::Literal(Value::Decimal("100".to_string())));
+    let running = ValueExpr::Term(Term::Literal(Value::decimal("60").unwrap()));
+    let proposed = ValueExpr::Term(Term::Literal(Value::decimal("40").unwrap()));
+    let cap = ValueExpr::Term(Term::Literal(Value::decimal("100").unwrap()));
 
     // 60 + 40 <= 100 admits (binding pass-through).
     let under_cap = le_(
@@ -511,9 +501,9 @@ fn add_nests_under_le_for_cumulative_cap() {
         Box::new(ValueExpr::Arith {
             op: ArithOp::Add,
             left: Box::new(running),
-            right: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-                "50".to_string(),
-            )))),
+            right: Box::new(ValueExpr::Term(Term::Literal(
+                Value::decimal("50").unwrap(),
+            ))),
         }),
         Box::new(cap),
     );
@@ -683,9 +673,7 @@ fn pre_flips_predicate_lookup_to_pre_state() {
             Box::new(ValueExpr::Arith {
                 op: ArithOp::Add,
                 left: Box::new(ValueExpr::Term(Term::Var("m".into()))),
-                right: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-                    "1".to_string(),
-                )))),
+                right: Box::new(ValueExpr::Term(Term::Literal(Value::decimal("1").unwrap()))),
             }),
         )),
     };
@@ -817,12 +805,12 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
             name: "result".into(),
             expr: ValueExpr::Arith {
                 op: ArithOp::Sub,
-                left: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-                    "100".to_string(),
-                )))),
-                right: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-                    "30".to_string(),
-                )))),
+                left: Box::new(ValueExpr::Term(Term::Literal(
+                    Value::decimal("100").unwrap(),
+                ))),
+                right: Box::new(ValueExpr::Term(Term::Literal(
+                    Value::decimal("30").unwrap(),
+                ))),
             },
         }],
         domain: Prop::Claim {
@@ -843,9 +831,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
             name: "result".into(),
             expr: ValueExpr::Arith {
                 op: ArithOp::Sub,
-                left: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
-                    "1".to_string(),
-                )))),
+                left: Box::new(ValueExpr::Term(Term::Literal(Value::decimal("1").unwrap()))),
                 right: Box::new(ValueExpr::Term(Term::Literal(Value::Subject(
                     "not_a_number".into(),
                 )))),

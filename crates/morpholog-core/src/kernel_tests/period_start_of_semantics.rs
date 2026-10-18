@@ -373,7 +373,7 @@ fn the_boundary_form_round_trips_through_the_formatter() {
         .build();
     let rendered = crate::format::format_program(&p);
     assert!(
-        rendered.contains("period_start_of(@2000-04-01, span(P1Y), 26)"),
+        rendered.contains("period_start_of(@2000-04-01, span(P12M), 26)"),
         "{rendered}"
     );
 }

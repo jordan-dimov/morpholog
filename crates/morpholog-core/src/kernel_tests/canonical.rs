@@ -1,9 +1,9 @@
-//! Canonical encoding 1, the bytes `sha256:` names, frozen over one carrier
-//! programme built directly as IR. Built after parsing, so a parser change
-//! cannot move it and an example edit cannot excuse it: if this fails, the
-//! encoder changed what an existing programme hashes to. That is never
-//! regenerated under the same prefix; a new construct may only add
-//! rendering for itself.
+//! The canonical encoding, the bytes `sha256:` names, pinned over one
+//! carrier programme built directly as IR. Built after parsing, so a parser
+//! change cannot move it and an example edit cannot excuse it: if this
+//! fails, the encoder changed what an existing programme hashes to. That is
+//! never re-pinned quietly: a new construct may only add rendering for
+//! itself, and anything else moves `CANONICAL_ENCODING` on purpose.
 
 use crate::format::{canonical_hash, canonical_preimage};
 use crate::ir::{
@@ -13,8 +13,8 @@ use crate::ir::{
 };
 use crate::ir_builder::*;
 
-const PREIMAGE: &str = include_str!("../../tests/golden/canonical_encoding_v1.txt");
-const HASH: &str = "sha256:ee3ed284180fc4021c60c350268ec262dc4bd78f5d50ac4f3076b1e29e76f2f6";
+const PREIMAGE: &str = include_str!("../../tests/golden/canonical_encoding.txt");
+const HASH: &str = "sha256:e4548c1559d838cbe16de27e6d52e85ff8cc7db2d92b944bc6d40b4cb4726811";
 
 fn compare(op: CompareOp, domain: OrderedDomain, l: ValueExpr, r: ValueExpr) -> Prop {
     Prop::Compare {
@@ -39,8 +39,8 @@ fn v(name: &str) -> ValueExpr {
 
 /// Every declaration kind, discipline, proposition, value, builtin,
 /// operator, ordered domain, sum seed, statement and literal the IR had
-/// when encoding 1 was frozen. A later construct adds its own carrier.
-fn encoding_v1_carrier() -> Program {
+/// when the encoding was pinned. A later construct adds its own carrier.
+fn encoding_carrier() -> Program {
     let predicates = vec![
         predicate("Account")
             .subject("id")
@@ -292,7 +292,7 @@ fn encoding_v1_carrier() -> Program {
             emit("Notify", vec![var("id"), var("amount")]),
         ],
     );
-    let mut program = program("encoding_v1_carrier")
+    let mut program = program("encoding_carrier")
         .predicates(predicates)
         .intents(intents)
         .definitions(definitions)
@@ -305,13 +305,14 @@ fn encoding_v1_carrier() -> Program {
 }
 
 #[test]
-fn canonical_encoding_v1_is_frozen() {
-    let program = encoding_v1_carrier();
+fn the_canonical_encoding_is_pinned() {
+    let program = encoding_carrier();
     let preimage = canonical_preimage(&program);
     assert_eq!(
         preimage, PREIMAGE,
-        "the canonical encoding of an existing programme changed; `sha256:` names \
-         encoding 1, frozen. A new construct may only add rendering for itself."
+        "the canonical encoding of an existing programme changed, which moves every \
+         committed model hash. A new construct may only add rendering for itself; \
+         anything else moves CANONICAL_ENCODING and is retired deliberately."
     );
     assert_eq!(canonical_hash(&program), HASH);
 }

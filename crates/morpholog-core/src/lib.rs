@@ -68,7 +68,7 @@ pub use disciplines::{
     InForceSignature, in_force_define_name, in_force_signature, lower_discipline_definitions,
     lower_disciplines,
 };
-pub use eval::{EvalError, RenderedClaim, literal_value, ordered_compare_error};
+pub use eval::{EvalError, RenderedClaim, ordered_compare_error};
 pub use explain::{
     ErrorRejection, Explanation, GateKind, GateRejection, InvariantRejection, MissingClaim,
     Rejection, TransitionRef, Verdict,
@@ -78,9 +78,9 @@ pub use impact::{Bounding, Impact, ImpactPlan, Widening};
 pub use ir::{
     ArgDecl, ArithOp, Builtin, Claim, CompareOp, Definition, DefinitionName, DefinitionOrigin,
     DerivedClaim, DerivedValue, Discipline, ExtremumOp, Intent, IntentDecl, IntentName, Invariant,
-    InvariantName, InvariantOrigin, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName,
-    Program, Prop, RuleName, Stmt, Subject, SumSeed, Term, Transformation, TransformationName,
-    Unit, Value, ValueExpr, Var,
+    InvariantName, InvariantOrigin, LiteralDecimal, OrderedDomain, PredicateArgKind, PredicateDecl,
+    PredicateName, Program, Prop, RuleName, Stmt, Subject, SumSeed, Term, Transformation,
+    TransformationName, Unit, Value, ValueExpr, Var,
 };
 pub use lint::{
     Lint, PYTHON_CLIENT_MEMBERS, PYTHON_KEYWORDS, SharedWriterPeer, client_refuses_name, lints,

@@ -61,12 +61,20 @@ pub(crate) fn arith_token(op: ArithOp) -> &'static str {
     }
 }
 
+/// Which canonical encoding `sha256:` names. Encoding 2 renders every
+/// literal in its one spelling, so two spellings of one value are one
+/// programme; encoding 1 rendered the author's text. A move here gives
+/// every programme whose literals were not already in that spelling a
+/// new hash, and the gallery's identity golden records the encoding so
+/// it can tell that move from an accidental one.
+pub const CANONICAL_ENCODING: u32 = 2;
+
 /// The content hash of a programme: `sha256:<hex>`, where the prefix
-/// names SHA-256 over canonical encoding 1, a stable positional rendering
-/// of the IR, not [`format_program`], whose output may evolve. It
-/// identifies the rules, not the file: formatting, comments, and surface
-/// spellings that lower to the same IR (named vs positional patterns) do
-/// not change it. Whatever the encoding leaves out is either irrelevant to
+/// names SHA-256 over the canonical encoding ([`CANONICAL_ENCODING`]), a
+/// stable positional rendering of the IR, not [`format_program`], whose
+/// output may evolve. It identifies the rules, not the file: formatting,
+/// comments, and surface spellings that lower to the same IR (named vs
+/// positional patterns, `P1Y` vs `P12M`) do not change it. Whatever the encoding leaves out is either irrelevant to
 /// meaning or fixed by validation, so the identity is a promise about
 /// validated programmes; an invalid one may share a valid one's hash.
 pub fn canonical_hash(p: &Program) -> String {
@@ -82,9 +90,10 @@ pub fn canonical_hash(p: &Program) -> String {
     out
 }
 
-/// The bytes `canonical_hash` digests: canonical encoding 1, which
-/// `sha256:` names. Frozen for every programme it can already express; a
-/// new construct may only add rendering for itself.
+/// The bytes `canonical_hash` digests: the canonical encoding
+/// ([`CANONICAL_ENCODING`]) that `sha256:` names. Pinned for every
+/// programme it can already express; a new construct may only add
+/// rendering for itself.
 pub(crate) fn canonical_preimage(p: &Program) -> String {
     // Positional, so a nicer spelling in the formatter never moves the
     // hash. The declaration table is still needed for a `value` lookup
@@ -768,15 +777,16 @@ fn format_value(v: &Value) -> String {
             );
             format!("#{s}")
         }
-        Value::Decimal(s) => s.clone(),
+        // Each value renders in its one canonical spelling, so two
+        // spellings of one value are one programme.
+        Value::Decimal(d) => d.to_string(),
         // Date literals use the @YYYY-MM-DD sigil.
-        Value::Date(s) => format!("@{s}"),
+        Value::Date(d) => format!("@{d}"),
         // Timestamp literals extend the same sigil to a full RFC 3339
         // instant: @2026-10-24T14:00:00Z.
-        Value::Timestamp(s) => format!("@{s}"),
+        Value::Timestamp(t) => format!("@{t}"),
         // A constructor form; no quotes, as the surface has no strings.
-        Value::Duration(s) => format!("duration({s})"),
-        // Same shape as durations; the source string round-trips.
+        Value::Duration(d) => format!("duration({d})"),
         Value::CalendarSpan(s) => format!("span({s})"),
         // Amount then unit, as an invoice writes them.
         Value::Quantity { amount, unit } => format!("{amount} {unit}"),
@@ -974,14 +984,8 @@ mod tests {
             format_term(&Term::Literal(Value::Subject("foo".into()))),
             "#foo"
         );
-        assert_eq!(
-            format_term(&Term::Literal(Value::Decimal("1250.75".to_string()))),
-            "1250.75"
-        );
-        assert_eq!(
-            format_term(&Term::Literal(Value::Date("2026-03-12".to_string()))),
-            "@2026-03-12"
-        );
+        assert_eq!(format_term(&dec("1250.75")), "1250.75");
+        assert_eq!(format_term(&date("2026-03-12")), "@2026-03-12");
         assert_eq!(format_term(&Term::Wildcard), "_");
         assert_eq!(format_term(&Term::Actor), "actor");
         assert_eq!(format_term(&Term::Var("x".into())), "x");

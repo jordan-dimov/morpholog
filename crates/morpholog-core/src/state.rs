@@ -57,6 +57,25 @@ pub enum EvalValue {
     },
 }
 
+/// An IR literal is a runtime value already; nothing can fail here.
+impl From<&crate::ir::Value> for EvalValue {
+    fn from(value: &crate::ir::Value) -> Self {
+        use crate::ir::Value;
+        match value {
+            Value::Decimal(d) => EvalValue::Decimal(d.value()),
+            Value::Subject(s) => EvalValue::Subject(s.clone()),
+            Value::Date(d) => EvalValue::Date(*d),
+            Value::Timestamp(t) => EvalValue::Timestamp(*t),
+            Value::Duration(d) => EvalValue::Duration(*d),
+            Value::CalendarSpan(s) => EvalValue::CalendarSpan(*s),
+            Value::Quantity { amount, unit } => EvalValue::Quantity {
+                amount: amount.value(),
+                unit: unit.clone(),
+            },
+        }
+    }
+}
+
 impl EvalValue {
     /// Does this value carry a calendar span, directly or inside a
     /// collection? Every storage and wire boundary refuses such a value.
