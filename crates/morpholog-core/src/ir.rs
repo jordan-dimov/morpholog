@@ -160,6 +160,16 @@ pub enum SumSeed {
     Quantity(Unit),
 }
 
+impl std::fmt::Display for SumSeed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SumSeed::Decimal => f.write_str("a decimal zero"),
+            SumSeed::Duration => f.write_str("a zero duration"),
+            SumSeed::Quantity(unit) => write!(f, "a zero Decimal[{unit}]"),
+        }
+    }
+}
+
 /// A named, versioned rule that says what lawful state is. A
 /// [`Transformation`] is admitted only if every case it touches satisfies
 /// the rule afterwards; otherwise the whole transformation is rejected.

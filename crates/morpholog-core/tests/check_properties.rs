@@ -19,6 +19,7 @@ use morpholog_core::{
     ArgDecl, ArithOp, Claim, CompareOp, Definition, DerivedClaim, DerivedValue, Discipline,
     IntentDecl, Invariant, OrderedDomain, PredicateArgKind, PredicateDecl, PredicateName, Program,
     Prop, Stmt, SumSeed, Term, Transformation, ValidationError, Value, ValueExpr, Var,
+    lower_sum_seeds,
 };
 use proptest::prelude::*;
 
@@ -350,6 +351,22 @@ proptest! {
     #[test]
     fn validate_is_deterministic(p in arb_program()) {
         prop_assert_eq!(p.validate(), p.validate());
+    }
+
+    /// Lowering stamps what the checker expects, on any IR: after it,
+    /// validation never finds an unfaithful seed, whatever else it finds.
+    #[test]
+    fn lowered_seeds_are_always_faithful(p in arb_program()) {
+        let mut lowered = p.clone();
+        lower_sum_seeds(&mut lowered);
+        if let Err(errors) = lowered.validate() {
+            for error in errors {
+                prop_assert!(
+                    !matches!(error, ValidationError::SumSeedNotFaithful { .. }),
+                    "lowering left an unfaithful seed: {error}"
+                );
+            }
+        }
     }
 }
 
