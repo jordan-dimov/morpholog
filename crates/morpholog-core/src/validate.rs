@@ -741,7 +741,7 @@ pub(crate) fn validate_program(p: &Program) -> Result<(), Vec<ValidationError>> 
     let mut errors = collect_duplicate_decl_errors(p);
     errors.extend(collect_discipline_errors(p));
     errors.extend(collect_unhashed_errors(p));
-    errors.extend(crate::check::check_program(p));
+    errors.extend(crate::check::check_program(p).errors);
     if errors.is_empty() {
         Ok(())
     } else {

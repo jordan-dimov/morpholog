@@ -712,3 +712,185 @@ fn intent_arguments_type_their_parameters() {
         )],
     );
 }
+
+// ------------------------------------------------------------------
+// The checker owns the contract: one walk observes the body, and the
+// contract is what that walk saw a parameter used as.
+// ------------------------------------------------------------------
+
+use morpholog_core::{EvalError, Outcome, State};
+use morpholog_test_support::{
+    claim_instance, dec as dec_v, propose_with_test_actor, qty as qty_v, subj as subj_v,
+};
+
+/// `p = 1` says nothing about `p`'s kind: equality relates values of
+/// any kind, and a Subject there fails the gate rather than raising. The
+/// checker refines `p` for its own conflict detection; the contract does
+/// not follow that refinement.
+#[test]
+fn equality_with_a_literal_leaves_the_parameter_unconstrained() {
+    let prog = program("eq")
+        .predicates(vec![predicate("Marker").subject("m").build()])
+        .transformations(vec![transformation(
+            "t",
+            params(&["p"]),
+            vec![require(eq(var_value("p"), term(dec("1"))))],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "t"),
+        vec![(Var::from("p"), ParamKind::Unconstrained)]
+    );
+    let out = propose_with_test_actor(
+        prog.transformation("t").unwrap(),
+        vec![subj_v("s")],
+        &State::from_claims(vec![]),
+        &prog,
+    );
+    assert!(matches!(out, Ok(Outcome::Rejected { .. })), "{out:?}");
+}
+
+/// Nor does an equality refinement reach the parameter through an alias.
+#[test]
+fn equality_through_an_alias_leaves_the_parameter_unconstrained() {
+    let prog = program("eq_alias")
+        .predicates(vec![predicate("Marker").subject("m").build()])
+        .transformations(vec![transformation(
+            "t",
+            params(&["p"]),
+            vec![
+                let_("q", term(var("p"))),
+                require(eq(var_value("q"), term(dec("1")))),
+            ],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "t"),
+        vec![(Var::from("p"), ParamKind::Unconstrained)]
+    );
+}
+
+/// `p + sum(1 | Foo(_)) <= 10`: the sum is a decimal, so `p` is one. The
+/// contract follows the checker's inference of the whole operand, not
+/// the shape of the operand next to `p`. The kernel agrees: a Subject
+/// here is a kernel error.
+#[test]
+fn arithmetic_against_a_computed_operand_types_the_parameter() {
+    let prog = program("arith")
+        .predicates(vec![predicate("Foo").subject("f").build()])
+        .transformations(vec![transformation(
+            "t",
+            params(&["p"]),
+            vec![require(le(
+                add(
+                    var_value("p"),
+                    sum(term(dec("1")), claim("Foo", vec![wildcard()])),
+                ),
+                term(dec("10")),
+            ))],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "t"),
+        vec![(
+            Var::from("p"),
+            ParamKind::Concrete(PredicateArgKind::Decimal)
+        )]
+    );
+    let out = propose_with_test_actor(
+        prog.transformation("t").unwrap(),
+        vec![subj_v("s")],
+        &State::from_claims(vec![]),
+        &prog,
+    );
+    assert!(matches!(out, Err(EvalError::TypeMismatch(_))), "{out:?}");
+}
+
+/// `bind Cap(cap); require p <= cap * 2` with `Cap: Decimal[t]`: the
+/// product keeps the unit, so `p` is a `Decimal[t]`. The kernel refuses
+/// a bare decimal there, so a contract naming Decimal would offer a
+/// field no proposal could use.
+#[test]
+fn a_quantity_reached_through_arithmetic_types_the_parameter_with_its_unit() {
+    let prog = program("qty_arith")
+        .predicates(vec![predicate("Cap").quantity("cap", "t").build()])
+        .transformations(vec![transformation(
+            "t",
+            params(&["p"]),
+            vec![
+                bind_one(claim("Cap", vec![var("cap")])),
+                require(le(var_value("p"), mul(var_value("cap"), term(dec("2"))))),
+            ],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "t"),
+        vec![(
+            Var::from("p"),
+            ParamKind::Concrete(PredicateArgKind::Quantity("t".into()))
+        )]
+    );
+    let state = State::from_claims(vec![claim_instance("Cap", &[qty_v("100", "t")])]);
+    let t = prog.transformation("t").unwrap();
+    let bare = propose_with_test_actor(t, vec![dec_v(1)], &state, &prog);
+    assert!(matches!(bare, Err(EvalError::TypeMismatch(_))), "{bare:?}");
+    let unit = propose_with_test_actor(t, vec![qty_v("1", "t")], &state, &prog);
+    assert!(matches!(unit, Ok(Outcome::Accepted { .. })), "{unit:?}");
+}
+
+/// A `forall` binding is the loop's own name, as a `for` binding is: a
+/// parameter of the same name stays untyped, and the body's uses type
+/// the source collection's elements.
+#[test]
+fn a_forall_binding_reusing_a_parameter_name_types_the_collection_not_the_parameter() {
+    let prog = program("forall_shadow")
+        .predicates(vec![predicate("D").decimal("d").build()])
+        .transformations(vec![transformation(
+            "t",
+            params(&["x", "xs"]),
+            vec![require(forall(
+                "x",
+                in_(var("x"), var("xs")),
+                claim("D", vec![var("x")]),
+            ))],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "t"),
+        vec![
+            (Var::from("x"), ParamKind::Unconstrained),
+            (
+                Var::from("xs"),
+                ParamKind::Collection(Box::new(ParamKind::Concrete(PredicateArgKind::Decimal))),
+            ),
+        ]
+    );
+}
+
+/// A conditional has one kind, so a bare variable in one branch is used
+/// as the other branch's kind.
+#[test]
+fn a_conditional_branch_takes_the_other_branches_kind() {
+    let prog = program("cond")
+        .predicates(vec![predicate("Marker").subject("m").build()])
+        .transformations(vec![transformation(
+            "t",
+            params(&["p"]),
+            vec![let_(
+                "z",
+                cond(
+                    claim("Marker", vec![wildcard()]),
+                    var_value("p"),
+                    term(dec("1")),
+                ),
+            )],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "t"),
+        vec![(
+            Var::from("p"),
+            ParamKind::Concrete(PredicateArgKind::Decimal)
+        )]
+    );
+}

@@ -22,10 +22,12 @@ fn refine_keeps_the_more_specific_kind_or_reports_conflict() {
 
 #[test]
 fn kindenv_observe_then_lookup_returns_refined_kind() {
+    let mut cells = Cells::default();
     let mut env = KindEnv::default();
     env.observe(
         &Var::from("amount"),
         InferredKind::Known(PredicateArgKind::Decimal),
+        &mut cells,
     )
     .expect("first observation always succeeds against UnknownOrAny");
     assert_eq!(
@@ -36,12 +38,18 @@ fn kindenv_observe_then_lookup_returns_refined_kind() {
 
 #[test]
 fn kindenv_observe_refines_through_any() {
+    let mut cells = Cells::default();
     let mut env = KindEnv::default();
-    env.observe(&Var::from("x"), InferredKind::Known(PredicateArgKind::Any))
-        .unwrap();
+    env.observe(
+        &Var::from("x"),
+        InferredKind::Known(PredicateArgKind::Any),
+        &mut cells,
+    )
+    .unwrap();
     env.observe(
         &Var::from("x"),
         InferredKind::Known(PredicateArgKind::Decimal),
+        &mut cells,
     )
     .unwrap();
     assert_eq!(
@@ -52,16 +60,19 @@ fn kindenv_observe_refines_through_any() {
 
 #[test]
 fn kindenv_observe_reports_conflict_with_previous_kinds() {
+    let mut cells = Cells::default();
     let mut env = KindEnv::default();
     env.observe(
         &Var::from("x"),
         InferredKind::Known(PredicateArgKind::Decimal),
+        &mut cells,
     )
     .unwrap();
     let err = env
         .observe(
             &Var::from("x"),
             InferredKind::Known(PredicateArgKind::Subject),
+            &mut cells,
         )
         .expect_err("conflict");
     assert_eq!(err, (PredicateArgKind::Decimal, PredicateArgKind::Subject));
@@ -107,7 +118,7 @@ fn clean_programme_returns_no_kind_errors() {
         "any_policy_has_positive_limit",
         claim("Policy", vec![var("p"), var("l")]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.is_empty(),
         "clean programme should report no errors; got {errs:?}"
@@ -119,7 +130,7 @@ fn decimal_literal_in_subject_slot_is_flagged() {
     let mut p = empty_program();
     p.predicates = vec![pdecl("Policy", &[("policy_id", PredicateArgKind::Subject)])];
     p.invariants = vec![invariant("bad", claim("Policy", vec![dec("123")]))];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert_eq!(errs.len(), 1, "expected one kind error; got {errs:?}");
     match &errs[0] {
         ValidationError::ArgKindMismatch {
@@ -152,7 +163,7 @@ fn variable_kind_refined_across_claim_uses() {
         "refine",
         and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.is_empty(),
         "consistent refinement should pass; got {errs:?}"
@@ -172,7 +183,7 @@ fn variable_kind_conflict_across_claim_uses_is_flagged() {
         "conflict",
         and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert_eq!(errs.len(), 1, "expected one conflict; got {errs:?}");
     match &errs[0] {
         ValidationError::VariableKindConflict {
@@ -203,7 +214,7 @@ fn any_slot_observes_variable_without_constraining_it() {
         "refines_through_any",
         and(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.is_empty(),
         "Any-then-Decimal should refine; got {errs:?}"
@@ -222,7 +233,7 @@ fn actor_term_carries_subject_kind() {
         vec![],
         vec![assert_("Limit", vec![actor()])],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert_eq!(
         errs.len(),
         1,
@@ -255,7 +266,7 @@ fn actor_in_invariant_body_flags_actor_not_available() {
         "mentions_actor",
         claim("Approver", vec![actor()]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -319,7 +330,7 @@ fn actor_in_derived_claim_value_flags_actor_not_available() {
         }],
         domain: claim("Src", vec![var("k")]),
     }];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -397,7 +408,7 @@ fn no_rule_may_name_a_derived_claim() {
         ("admit", admit_case),
         ("another derived's domain", derived_case),
     ] {
-        let errs = check_program(&program);
+        let errs = check_program(&program).errors;
         assert!(
             errs.iter()
                 .any(|e| matches!(e, ValidationError::DerivedInRule { .. })),
@@ -431,7 +442,7 @@ fn a_derived_output_cannot_carry_a_discipline() {
             values: vec![],
             domain: claim("Src", vec![var("k")]),
         }];
-        let errs = check_program(&p);
+        let errs = check_program(&p).errors;
         assert!(
             errs.iter()
                 .any(|e| matches!(e, ValidationError::DisciplineOnDerived { .. })),
@@ -455,7 +466,7 @@ fn a_derived_may_read_the_claims_it_is_computed_from() {
         values: vec![],
         domain: claim("Src", vec![var("k")]),
     }];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         !errs
             .iter()
@@ -475,7 +486,7 @@ fn actor_in_transformation_body_is_allowed() {
         vec![],
         vec![assert_("Approver", vec![actor()])],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         !errs
             .iter()
@@ -502,7 +513,7 @@ fn bind_one_extends_env_for_subsequent_statements() {
             assert_("B", vec![var("x")]),
         ],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.is_empty(),
         "bind_one then matching assert should pass; got {errs:?}"
@@ -525,7 +536,7 @@ fn bind_one_then_conflicting_assert_flags_variable_conflict() {
             assert_("B", vec![var("x")]),
         ],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert_eq!(errs.len(), 1, "expected conflict; got {errs:?}");
     assert!(matches!(
         errs[0],
@@ -556,7 +567,7 @@ fn require_does_not_export_bindings_to_subsequent_statements() {
             assert_("B", vec![var("x")]),
         ],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -583,7 +594,7 @@ fn params_flow_to_admit_without_a_binding_statement() {
         params(&["p", "limit"]),
         vec![assert_("Payment", vec![var("p"), var("limit")])],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.is_empty(),
         "parameters are bound at entry; the admit is clean. got {errs:?}"
@@ -681,7 +692,7 @@ fn branch_binding_exports_only_when_every_branch_binds() {
             "xor: one operand binds m -> no export",
         ),
     ] {
-        let errs = check_program(&branch_export_program(op, both_bind));
+        let errs = check_program(&branch_export_program(op, both_bind)).errors;
         if expect_ok {
             assert!(errs.is_empty(), "{label}: expected no errors; got {errs:?}");
         } else {
@@ -723,7 +734,7 @@ fn in_generator_binds_unbound_element_in_sum_body() {
             ),
         )],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.is_empty(),
         "`in` binds the unbound element; the sum body is clean. got {errs:?}"
@@ -741,7 +752,7 @@ fn let_new_subject_binds_name_as_subject() {
         vec![],
         vec![let_new_subject("fresh"), assert_("Amt", vec![var("fresh")])],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert_eq!(
         errs.len(),
         1,
@@ -767,7 +778,7 @@ fn retract_args_are_kind_checked() {
         vec![],
         vec![retract("P", vec![dec("99")])],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert_eq!(errs.len(), 1);
     assert!(matches!(
         errs[0],
@@ -802,7 +813,7 @@ fn comparator_operand_mismatches_flag_operator_and_kinds() {
             "bad_compare",
             comparator(term(date("2026-01-01")), term(dec("100"))),
         )];
-        let errs = check_program(&p);
+        let errs = check_program(&p).errors;
         assert_eq!(
             errs.len(),
             1,
@@ -833,7 +844,7 @@ fn abs_of_a_subject_flags_abs_kind() {
         "bad_abs",
         le(abs(term(subj("not_a_number"))), term(dec("100"))),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -854,7 +865,7 @@ fn abs_of_a_decimal_is_accepted() {
         le(abs(term(dec("10"))), term(dec("100"))),
     )];
     assert!(
-        check_program(&p).is_empty(),
+        check_program(&p).errors.is_empty(),
         "abs of a decimal should type-check"
     );
 }
@@ -872,7 +883,7 @@ fn abs_refines_the_variable_it_wraps() {
             le(abs(term(var("x"))), term(dec("10"))),
         ]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -894,7 +905,7 @@ fn add_with_subject_literal_operand_flags_no_arith_rule() {
             term(dec("100")),
         ),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -927,7 +938,7 @@ fn comparator_refines_variable_for_subsequent_uses() {
             claim("B", vec![var("x")]),
         ]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -952,7 +963,7 @@ fn strict_equality_flags_distinct_operand_kinds() {
     ] {
         let mut p = empty_program();
         p.invariants = vec![invariant(name, body)];
-        let errs = check_program(&p);
+        let errs = check_program(&p).errors;
         assert_eq!(errs.len(), 1, "{operator}: {errs:?}");
         assert!(
             matches!(
@@ -977,7 +988,7 @@ fn eq_refines_variable_to_concrete_kind_for_subsequent_uses() {
             claim("B", vec![var("x")]),
         ]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1009,7 +1020,7 @@ fn let_binds_name_at_inferred_value_kind() {
             assert_("S", vec![var("y")]),
         ],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1041,7 +1052,7 @@ fn comparator_clean_when_operands_match_expected_kind() {
             le(term(var("amount")), term(var("limit"))),
         ]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(errs.is_empty(), "happy path should pass; got {errs:?}");
 }
 
@@ -1073,7 +1084,7 @@ fn sum_with_body_refined_value_term_passes() {
             term(dec("1000")),
         ),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(errs.is_empty(), "well-typed Sum should pass; got {errs:?}");
 }
 
@@ -1096,7 +1107,7 @@ fn sum_with_subject_value_term_flags_operand_mismatch() {
             term(dec("1000")),
         ),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1123,7 +1134,7 @@ fn sum_with_date_literal_value_term_flags_operand_mismatch() {
             term(dec("100")),
         ),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1168,7 +1179,7 @@ fn sum_body_bindings_do_not_leak_to_surrounding_env() {
             assert_("S", vec![var("amount")]),
         ],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1198,7 +1209,7 @@ fn value_of_resolves_to_wildcard_slot_kind() {
             term(dec("100")),
         ))],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.is_empty(),
         "ValueOf at decimal slot should be Decimal; got {errs:?}"
@@ -1224,7 +1235,7 @@ fn value_of_with_subject_slot_in_comparator_flags_operand_mismatch() {
             term(dec("100")),
         ),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1270,7 +1281,7 @@ fn derived_claim_key_var_with_wrong_kind_flags_predicate_arg_kind_mismatch() {
         }],
         domain: claim("P", vec![var("account")]),
     }];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1317,7 +1328,7 @@ fn derived_claim_value_expr_with_wrong_kind_flags_predicate_arg_kind_mismatch() 
         }],
         domain: claim("P", vec![var("account"), wildcard()]),
     }];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1363,7 +1374,7 @@ fn derived_claim_clean_when_keys_and_values_match_declared_kinds() {
         }],
         domain: claim("Line", vec![var("account"), wildcard()]),
     }];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.is_empty(),
         "well-typed derived claim should pass; got {errs:?}"
@@ -1388,7 +1399,7 @@ fn for_with_non_collection_variable_flags_operand_mismatch() {
             for_("e", term(var("x")), vec![]),
         ],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1418,7 +1429,7 @@ fn for_collection_variable_refines_to_collection() {
             assert_("P", vec![var("xs")]),
         ],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1442,7 +1453,7 @@ fn in_with_non_collection_literal_flags_operand_mismatch() {
         "in_lit",
         Prop::In(Term::Var("x".into()), dec("100")),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1488,7 +1499,7 @@ fn emit_with_literal_in_wrong_kind_slot_flags_arg_kind_mismatch() {
         vec![],
         vec![emit("Notify", vec![dec("100")])],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1521,7 +1532,7 @@ fn emit_variable_observed_against_declared_intent_arg_kind() {
             emit("Notify", vec![var("x")]),
         ],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1556,7 +1567,7 @@ fn emit_with_arg_kinds_matching_declared_intent_is_clean() {
             emit("Notify", vec![var("x"), dec("5")]),
         ],
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(errs.is_empty(), "well-typed emit should pass; got {errs:?}");
 }
 
@@ -1582,7 +1593,7 @@ fn or_branches_with_disjoint_kind_constraints_do_not_conflict() {
         "or_disjoint",
         or(vec![claim("A", vec![var("x")]), claim("B", vec![var("x")])]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.is_empty(),
         "Or branches must check independently; got {errs:?}"
@@ -1607,7 +1618,7 @@ fn or_branch_refinements_do_not_leak_after_or() {
             claim("C", vec![var("x")]),
         ]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.is_empty(),
         "Or branch refinements must not leak; got {errs:?}"
@@ -1624,7 +1635,7 @@ fn or_still_walks_branches_for_in_branch_kind_errors() {
         "or_inner_error",
         or(vec![claim("A", vec![dec("100")])]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1662,7 +1673,7 @@ fn forall_with_kind_conflicting_outer_variable_flags_conflict() {
             forall("x", claim("P", vec![var("x")]), claim("C", vec![var("x")])),
         ]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1691,7 +1702,7 @@ fn exists_with_kind_conflicting_outer_variable_flags_conflict() {
             exists("x", claim("D", vec![var("x")])),
         ]),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
@@ -1729,7 +1740,7 @@ fn value_of_default_kind_mismatch_flags_operand_mismatch() {
             term(dec("100")),
         ),
     )];
-    let errs = check_program(&p);
+    let errs = check_program(&p).errors;
     assert!(
         errs.iter().any(|e| matches!(
             e,
