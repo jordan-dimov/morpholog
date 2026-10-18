@@ -894,3 +894,194 @@ fn a_conditional_branch_takes_the_other_branches_kind() {
         )]
     );
 }
+
+// ------------------------------------------------------------------
+// An expected kind reaches the variables under `min`/`max`, `abs`, `if`
+// branches and a lookup default for the contract, without becoming a
+// validation constraint.
+// ------------------------------------------------------------------
+
+/// `min(p, q) <= 10` needs two decimals from the caller.
+#[test]
+fn an_expectation_reaches_the_operands_of_min() {
+    let prog = program("min")
+        .predicates(vec![predicate("Marker").subject("m").build()])
+        .transformations(vec![transformation(
+            "t",
+            params(&["p", "q"]),
+            vec![require(le(
+                min(var_value("p"), var_value("q")),
+                term(dec("10")),
+            ))],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "t"),
+        vec![
+            (
+                Var::from("p"),
+                ParamKind::Concrete(PredicateArgKind::Decimal)
+            ),
+            (
+                Var::from("q"),
+                ParamKind::Concrete(PredicateArgKind::Decimal)
+            ),
+        ]
+    );
+}
+
+/// The expectation is a contract observation, not a validation
+/// constraint: a parameter also used at a Subject slot still validates,
+/// and the contract reports both kinds.
+#[test]
+fn an_expectation_through_min_does_not_tighten_validation() {
+    let prog = program("min_lenient")
+        .predicates(vec![predicate("S").subject("s").build()])
+        .transformations(vec![transformation(
+            "t",
+            params(&["p", "q"]),
+            vec![
+                require(le(min(var_value("p"), var_value("q")), term(dec("10")))),
+                assert_("S", vec![var("p")]),
+            ],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "t"),
+        vec![
+            (
+                Var::from("p"),
+                ParamKind::Ambiguous(vec![PredicateArgKind::Subject, PredicateArgKind::Decimal]),
+            ),
+            (
+                Var::from("q"),
+                ParamKind::Concrete(PredicateArgKind::Decimal)
+            ),
+        ]
+    );
+}
+
+/// Both result branches of `if` take the expectation; the condition does
+/// not.
+#[test]
+fn an_expectation_reaches_both_branches_of_a_conditional() {
+    let prog = program("cond_expect")
+        .predicates(vec![predicate("Marker").subject("m").build()])
+        .transformations(vec![transformation(
+            "t",
+            params(&["m", "p", "q", "r"]),
+            vec![require(le(
+                cond(
+                    claim("Marker", vec![var("m")]),
+                    var_value("p"),
+                    var_value("q"),
+                ),
+                var_value("r"),
+            ))],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "t"),
+        vec![
+            (
+                Var::from("m"),
+                ParamKind::Concrete(PredicateArgKind::Subject)
+            ),
+            (
+                Var::from("p"),
+                ParamKind::Concrete(PredicateArgKind::Decimal)
+            ),
+            (
+                Var::from("q"),
+                ParamKind::Concrete(PredicateArgKind::Decimal)
+            ),
+            (
+                Var::from("r"),
+                ParamKind::Concrete(PredicateArgKind::Decimal)
+            ),
+        ]
+    );
+}
+
+/// A lookup's default stands in for the value, so it takes the
+/// expectation.
+#[test]
+fn an_expectation_reaches_a_lookup_default() {
+    let prog = program("default_expect")
+        .predicates(vec![predicate("P").subject("k").decimal("v").build()])
+        .transformations(vec![transformation(
+            "t",
+            params(&["k", "p"]),
+            vec![require(le(
+                value_of_with_default("P", vec![var("k"), wildcard()], var_value("p")),
+                term(dec("10")),
+            ))],
+        )])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "t"),
+        vec![
+            (
+                Var::from("k"),
+                ParamKind::Concrete(PredicateArgKind::Subject)
+            ),
+            (
+                Var::from("p"),
+                ParamKind::Concrete(PredicateArgKind::Decimal)
+            ),
+        ]
+    );
+}
+
+/// The shapes nest, and a temporal or unit expectation travels the same
+/// way: `max(abs(p), q) no_longer_than PT1H` and `min(p, q) <= 100 t`.
+#[test]
+fn an_expectation_nests_and_carries_temporal_and_unit_kinds() {
+    let prog = program("nested_expect")
+        .predicates(vec![predicate("Marker").subject("m").build()])
+        .transformations(vec![
+            transformation(
+                "gap",
+                params(&["p", "q"]),
+                vec![require(duration_le(
+                    max(abs(var_value("p")), var_value("q")),
+                    term(duration("PT1H")),
+                ))],
+            ),
+            transformation(
+                "load",
+                params(&["p", "q"]),
+                vec![require(le(
+                    min(var_value("p"), var_value("q")),
+                    qty_lit("100", "t"),
+                ))],
+            ),
+        ])
+        .build();
+    assert_eq!(
+        kinds_of(&prog, "gap"),
+        vec![
+            (
+                Var::from("p"),
+                ParamKind::Concrete(PredicateArgKind::Duration)
+            ),
+            (
+                Var::from("q"),
+                ParamKind::Concrete(PredicateArgKind::Duration)
+            ),
+        ]
+    );
+    assert_eq!(
+        kinds_of(&prog, "load"),
+        vec![
+            (
+                Var::from("p"),
+                ParamKind::Concrete(PredicateArgKind::Quantity("t".into())),
+            ),
+            (
+                Var::from("q"),
+                ParamKind::Concrete(PredicateArgKind::Quantity("t".into())),
+            ),
+        ]
+    );
+}

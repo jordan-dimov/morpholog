@@ -952,6 +952,7 @@ impl CheckCtx<'_> {
         // A variable inside `abs(...)` refines too, so
         // `abs(d) <cmp> duration(...)` pins `d` to Duration.
         self.refine_through_abs(operand, &expected, scope);
+        self.record_expected(operand, &expected, scope);
         let inferred = self.infer_value(operand, scope);
         if let InferredKind::Known(actual) = inferred
             && !kinds_compatible(&expected, &actual)
@@ -1000,6 +1001,7 @@ impl CheckCtx<'_> {
             } else {
                 // `abs(gap) no_longer_than allowed` pins `gap` to Duration.
                 self.refine_through_abs(operand, &expected, scope);
+                self.record_expected(operand, &expected, scope);
             }
         }
     }
@@ -1073,6 +1075,51 @@ impl CheckCtx<'_> {
         }
     }
 
+    /// Record, for the contract only, that the variables an expected kind
+    /// reaches through kind-transparent shapes are used as that kind: the
+    /// operands of `abs`, `min` and `max`, the branches of `if`, a lookup's
+    /// default. `min(p, q) <= 10` needs two decimals from the caller
+    /// whatever the checker can prove about them, so the contract says
+    /// so. The inferred kinds are untouched, so validation does not
+    /// change.
+    fn record_expected(&mut self, operand: &ValueExpr, expected: &PredicateArgKind, scope: &Scope) {
+        match operand {
+            ValueExpr::Term(Term::Var(name)) => {
+                if let Some(cell) = scope.kinds.cell(name) {
+                    self.cells.record(cell, expected.clone());
+                }
+            }
+            ValueExpr::Call {
+                builtin: Builtin::Abs | Builtin::Min | Builtin::Max,
+                args,
+            } => {
+                for arg in args {
+                    self.record_expected(arg, expected, scope);
+                }
+            }
+            ValueExpr::Cond {
+                then, otherwise, ..
+            } => {
+                self.record_expected(then, expected, scope);
+                self.record_expected(otherwise, expected, scope);
+            }
+            ValueExpr::ValueOf {
+                default: Some(default),
+                ..
+            } => self.record_expected(default, expected, scope),
+            // A literal, `actor` or a wildcard binds nothing; arithmetic,
+            // a sum, an extremum and the remaining builtins decide their
+            // own operand kinds, which the walk observes where it checks
+            // them.
+            ValueExpr::Term(_)
+            | ValueExpr::Arith { .. }
+            | ValueExpr::Sum { .. }
+            | ValueExpr::Extremum { .. }
+            | ValueExpr::ValueOf { default: None, .. }
+            | ValueExpr::Call { .. } => {}
+        }
+    }
+
     /// One operand of a decimal-domain comparison, plus whether it was
     /// refused. An unknown variable's flavour is decided later from the
     /// other operand. A known kind that is neither a decimal nor a
@@ -1131,6 +1178,7 @@ impl CheckCtx<'_> {
                 } else {
                     // `abs(x) <= 10` pins `x` to Decimal.
                     this.refine_through_abs(operand, &kind, scope);
+                    this.record_expected(operand, &kind, scope);
                 }
             };
         match (l, r) {
