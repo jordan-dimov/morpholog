@@ -1,11 +1,14 @@
 //! What every gallery programme's source hashes to, so an upgrade cannot
 //! quietly give an unchanged rulebook a new identity.
 //!
-//! The golden holds, per `.morph` file, a digest of its source bytes and
-//! the programme's canonical hash. An unchanged source whose hash moved
-//! fails always, even under `UPDATE_GOLDENS=1`: the parser or the encoder
-//! now reads the same rules as different ones, and every audit row stamped
-//! with the old hash would stop naming its programme. An edited, added or
+//! The golden holds, per `.morph` file, a digest of its source bytes, the
+//! programme's canonical hash and the canonical encoding that produced it.
+//! An unchanged source whose hash moved under the same encoding fails
+//! always, even under `UPDATE_GOLDENS=1`: the parser or the encoder now
+//! reads the same rules as different ones, and every audit row stamped
+//! with the old hash would stop naming its programme. A deliberate move of
+//! `CANONICAL_ENCODING` is the one thing that may move those hashes, and
+//! regenerating under the new encoding accepts them. An edited, added or
 //! removed source fails until the golden is regenerated, so the new
 //! identity shows in review.
 
@@ -14,12 +17,18 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use morpholog_core::format::canonical_hash;
+use morpholog_core::format::{CANONICAL_ENCODING, canonical_hash};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 /// `(source digest, canonical hash)` per path relative to the repository.
 type Identities = BTreeMap<String, (String, String)>;
+
+/// The golden's rows, and the encoding they were made under.
+struct Golden {
+    encoding: u32,
+    identities: Identities,
+}
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -56,29 +65,45 @@ fn gallery() -> Identities {
     out
 }
 
-fn read_golden() -> Option<Identities> {
+fn read_golden() -> Option<Golden> {
     let text = std::fs::read_to_string(golden_path()).ok()?;
-    Some(
-        text.lines()
-            .map(|line| {
-                let row: Value = serde_json::from_str(line).unwrap();
+    let mut encoding = None;
+    let identities = text
+        .lines()
+        .map(|line| {
+            let row: Value = serde_json::from_str(line).unwrap();
+            // A row written before the field was recorded is encoding 1.
+            let this = u32::try_from(row["encoding"].as_u64().unwrap_or(1)).unwrap();
+            assert!(
+                encoding.replace(this).is_none_or(|was| was == this),
+                "one golden, one encoding"
+            );
+            (
+                row["path"].as_str().unwrap().to_string(),
                 (
-                    row["path"].as_str().unwrap().to_string(),
-                    (
-                        row["source_sha256"].as_str().unwrap().to_string(),
-                        row["canonical_hash"].as_str().unwrap().to_string(),
-                    ),
-                )
-            })
-            .collect(),
-    )
+                    row["source_sha256"].as_str().unwrap().to_string(),
+                    row["canonical_hash"].as_str().unwrap().to_string(),
+                ),
+            )
+        })
+        .collect();
+    Some(Golden {
+        encoding: encoding.expect("an empty golden names no encoding"),
+        identities,
+    })
 }
 
 fn write_golden(identities: &Identities) {
     let text: String = identities
         .iter()
         .map(|(path, (source, hash))| {
-            json!({"path": path, "source_sha256": source, "canonical_hash": hash}).to_string()
+            json!({
+                "path": path,
+                "source_sha256": source,
+                "canonical_hash": hash,
+                "encoding": CANONICAL_ENCODING,
+            })
+            .to_string()
                 + "\n"
         })
         .collect();
@@ -89,11 +114,14 @@ fn write_golden(identities: &Identities) {
 fn an_unchanged_source_keeps_its_canonical_hash() {
     let now = gallery();
     let golden = read_golden();
-    if let Some(golden) = &golden {
+    if let Some(golden) = &golden
+        && golden.encoding == CANONICAL_ENCODING
+    {
         let moved: Vec<_> = now
             .iter()
             .filter(|(path, (source, hash))| {
                 golden
+                    .identities
                     .get(*path)
                     .is_some_and(|(was_source, was)| was_source == source && was != hash)
             })
@@ -101,16 +129,18 @@ fn an_unchanged_source_keeps_its_canonical_hash() {
             .collect();
         assert!(
             moved.is_empty(),
-            "these sources are unchanged but their canonical hash moved, so committed audit \
-             rows would no longer name their programme. `sha256:` names canonical encoding 1, \
-             which is frozen; regenerating the golden cannot accept this. Moved: {moved:?}"
+            "these sources are unchanged but their canonical hash moved under the same \
+             canonical encoding, so committed audit rows would no longer name their \
+             programme; regenerating the golden cannot accept this. Moved: {moved:?}"
         );
     }
     if std::env::var_os("UPDATE_GOLDENS").is_some() {
         write_golden(&now);
         return;
     }
-    let golden = golden.expect("no golden; generate it with UPDATE_GOLDENS=1");
+    let golden = golden
+        .expect("no golden; generate it with UPDATE_GOLDENS=1")
+        .identities;
     let changed: Vec<_> = now
         .keys()
         .chain(golden.keys())

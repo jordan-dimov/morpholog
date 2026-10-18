@@ -1,4 +1,4 @@
-program encoding_v1_carrier
+program encoding_carrier
 
 predicate Account(id: Subject, balance: Decimal)
   unique by (id)
@@ -33,7 +33,7 @@ invariant orderings:
   (x <= 10) and (d before @2026-04-01) and (t at_or_after @2026-04-01T00:00:00Z) and (g longer_than duration(PT1H))
 
 invariant values:
-  ((x + (y - z)) = ((x / y) * (y % 2))) and (sum(g | Ping(_, _, g)) = sum(q | Charge(_, q))) and (max(n | Account(_, n)) = min(n | Account(_, n))) and (value Account(#acct, _) = value Rate(a, _) default 0) and (value Window(id: a, value: _, ..) = if(Flag(a, _), abs(x), round(x, 0.01))) and (period_index(@2026-04-01, span(P1Y), d) = min(x, max(y, z))) and (period_start_of(@2026-04-01, span(P3M), i) = 12.5 USD)
+  ((x + (y - z)) = ((x / y) * (y % 2))) and (sum(g | Ping(_, _, g)) = sum(q | Charge(_, q))) and (max(n | Account(_, n)) = min(n | Account(_, n))) and (value Account(#acct, _) = value Rate(a, _) default 0) and (value Window(id: a, value: _, ..) = if(Flag(a, _), abs(x), round(x, 0.01))) and (period_index(@2026-04-01, span(P12M), d) = min(x, max(y, z))) and (period_start_of(@2026-04-01, span(P3M), i) = 12.5 USD)
 
 transformation statements(id, items, amount):
   require Account(id, _)
