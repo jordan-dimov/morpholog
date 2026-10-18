@@ -1470,8 +1470,9 @@ impl CheckCtx<'_> {
                 self.sum_seeds
                     .insert(std::ptr::from_ref(expr), expected.clone());
                 if *seed != expected {
-                    // Once per node: a node under arithmetic can be
-                    // inferred twice.
+                    // A node under arithmetic is inferred twice, so an
+                    // identical diagnostic is kept once; two like sums in
+                    // one rule share it.
                     let error = ValidationError::SumSeedNotFaithful {
                         found: seed.clone(),
                         expected,
