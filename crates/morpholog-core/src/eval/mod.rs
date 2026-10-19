@@ -588,6 +588,47 @@ fn require_positive_span(
     Ok(())
 }
 
+/// The start of every `step`-wide period, anchored at the Unix epoch,
+/// that meets `[from, until)`. Division is Euclidean, so a window before
+/// 1970 aligns the same way as one after it. A start outside the
+/// timeline is refused by name; the window gate validation demands
+/// keeps the count the rule's own.
+pub(crate) fn period_starts(
+    from: jiff::Timestamp,
+    until: jiff::Timestamp,
+    step: jiff::SignedDuration,
+) -> Result<Vec<EvalValue>, EvalError> {
+    let step_ns = step.as_nanos();
+    if step_ns <= 0 {
+        return Err(EvalError::PeriodSpanNotPositive {
+            builtin: "periods",
+            span: step.to_string(),
+        });
+    }
+    // An empty window meets nothing, whatever period `from` sits in.
+    if until <= from {
+        return Ok(Vec::new());
+    }
+    let until_ns = until.as_nanosecond();
+    let mut start_ns = from.as_nanosecond().div_euclid(step_ns) * step_ns;
+    // jiff's constructor asserts its range rather than reporting it.
+    let timeline = jiff::Timestamp::MIN.as_nanosecond()..=jiff::Timestamp::MAX.as_nanosecond();
+    let mut starts = Vec::new();
+    while start_ns < until_ns {
+        if !timeline.contains(&start_ns) {
+            return Err(EvalError::ArithOutOfRange(format!(
+                "periods: the period holding {from} starts before the timeline begins"
+            )));
+        }
+        let start = jiff::Timestamp::from_nanosecond(start_ns).map_err(|e| {
+            EvalError::ArithOutOfRange(format!("periods: a period start leaves the timeline: {e}"))
+        })?;
+        starts.push(EvalValue::Timestamp(start));
+        start_ns += step_ns;
+    }
+    Ok(starts)
+}
+
 /// The first day of period `index`: the inverse of [`period_index_of`]
 /// wherever the boundary is representable. `period_index` clips its
 /// outer periods, but an index whose boundary leaves the calendar has no
@@ -1340,6 +1381,22 @@ pub(crate) fn eval_builtin(builtin: Builtin, args: &[EvalValue]) -> Result<EvalV
                 )));
             };
             period_start_of_date(*anchor, *span, *index).map(EvalValue::Date)
+        }
+        Builtin::Periods => {
+            let (
+                EvalValue::Timestamp(from),
+                EvalValue::Timestamp(until),
+                EvalValue::Duration(step),
+            ) = (&args[0], &args[1], &args[2])
+            else {
+                return Err(EvalError::TypeMismatch(format!(
+                    "periods takes two timestamps and a duration, got {}, {} and {}",
+                    runtime_kind_label(&args[0]),
+                    runtime_kind_label(&args[1]),
+                    runtime_kind_label(&args[2])
+                )));
+            };
+            period_starts(*from, *until, *step).map(EvalValue::Collection)
         }
         Builtin::Min | Builtin::Max => extremum_of(builtin, &args[0], &args[1]),
     }

@@ -472,6 +472,17 @@ pub enum Builtin {
     /// stays inexpressible. Reads no state, so a fully literal use is
     /// allowed in a `const`. Span rules are as for `period_index`.
     PeriodStartOf,
+    /// `periods(from, until, step)`: the start instant of every
+    /// `step`-wide period that meets the half-open window `[from, until)`,
+    /// as a collection of timestamps. Periods are anchored at the Unix
+    /// epoch, so the first element is the start of the period holding
+    /// `from`, and a window whose edges sit on the grid yields exactly
+    /// one start per step. An empty window gives the empty collection. A
+    /// non-positive step is refused at validation when literal and at
+    /// evaluation otherwise. The window must be bounded by an earlier
+    /// gate, `until - from no_longer_than duration(...)`, so the grid's
+    /// size is a property of the rule, never of the proposal.
+    Periods,
     /// `min(a, b)` / `max(a, b)`: the smaller or larger of two values.
     /// The forms over a proposition are [`ValueExpr::Extremum`].
     Min,
@@ -486,6 +497,7 @@ impl Builtin {
             Builtin::Round => "round",
             Builtin::PeriodIndex => "period_index",
             Builtin::PeriodStartOf => "period_start_of",
+            Builtin::Periods => "periods",
             Builtin::Min => "min",
             Builtin::Max => "max",
         }
@@ -496,7 +508,7 @@ impl Builtin {
         match self {
             Builtin::Abs => 1,
             Builtin::Round | Builtin::Min | Builtin::Max => 2,
-            Builtin::PeriodIndex | Builtin::PeriodStartOf => 3,
+            Builtin::PeriodIndex | Builtin::PeriodStartOf | Builtin::Periods => 3,
         }
     }
 }

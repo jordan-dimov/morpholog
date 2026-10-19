@@ -8,10 +8,11 @@ use std::collections::BTreeSet;
 use crate::analysis::{has_admission_gate, predicates_written_by};
 use crate::definitions::DefinitionTable;
 use crate::disciplines::append_only_predicates;
+use crate::fold;
 use crate::impact::ImpactPlan;
 use crate::ir::{
-    DefinitionName, Discipline, Invariant, InvariantOrigin, PredicateName, Program, Prop, Term,
-    ValueExpr,
+    DefinitionName, Discipline, Invariant, InvariantOrigin, PredicateName, Program, Prop, Stmt,
+    Term, Value, ValueExpr, Var,
 };
 use crate::prepared::PreparedProgram;
 
@@ -172,7 +173,22 @@ pub enum Lint {
         first: usize,
         again: usize,
     },
+
+    /// A `periods` grid whose window gate still allows a very large grid:
+    /// every rule ranging over it runs once per period on every
+    /// proposal. `periods` is the most the grid can hold under the gate's
+    /// bound and the call's step. A hint, because the cost may be meant;
+    /// a shorter bound or a coarser step says so in the source.
+    LargeGrid {
+        transformation: String,
+        bound: String,
+        step: String,
+        periods: u128,
+    },
 }
+
+/// Above this many periods per proposal, a grid earns [`Lint::LargeGrid`].
+pub const LARGE_GRID_PERIODS: u128 = 10_000;
 
 /// A writing transformation on the other side of a [`Lint::SharedWriter`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -219,6 +235,18 @@ pub fn shared_writer_lints(this: &Program, other: &Program) -> Vec<Lint> {
 impl std::fmt::Display for Lint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Lint::LargeGrid {
+                transformation,
+                bound,
+                step,
+                periods,
+            } => write!(
+                f,
+                "`{transformation}` builds a grid of up to {periods} periods on every proposal \
+                 (a window up to {bound} in steps of {step}), and each rule over the grid runs \
+                 once per period. If that cost is not meant, shorten the window bound or coarsen \
+                 the step"
+            ),
             Lint::RequireRematch {
                 transformation,
                 variable,
@@ -506,7 +534,59 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
             );
         }
     }
+    for t in &program.transformations {
+        large_grid_findings(t, &mut out);
+    }
     out
+}
+
+/// Each `periods` grid in `t` whose gate still allows more than
+/// [`LARGE_GRID_PERIODS`] periods, in statement order. The gate is
+/// matched by name here; validation has already held every grid to one.
+fn large_grid_findings(t: &crate::ir::Transformation, out: &mut Vec<Lint>) {
+    use crate::check::grid;
+    let mut bounds: Vec<(&Var, &Var, jiff::SignedDuration)> = Vec::new();
+    for stmt in &t.body {
+        if let Stmt::Require { prop, .. } = stmt {
+            for conjunct in grid::conjuncts(prop) {
+                if let Some(b) = grid::window_bound(conjunct) {
+                    bounds.push((b.until, b.from, b.bound));
+                }
+            }
+        }
+        fold::walk_stmt(stmt, &mut |node| {
+            let fold::Node::Value(expr) = node else {
+                return;
+            };
+            let Some((from, until, step)) = grid::grid_call(expr) else {
+                return;
+            };
+            let (
+                ValueExpr::Term(Term::Var(from)),
+                ValueExpr::Term(Term::Var(until)),
+                ValueExpr::Term(Term::Literal(Value::Duration(step))),
+            ) = (from, until, step)
+            else {
+                return;
+            };
+            let Some(bound) = bounds
+                .iter()
+                .find(|(u, f, _)| *u == until && *f == from)
+                .map(|(_, _, b)| *b)
+            else {
+                return;
+            };
+            let periods = grid::max_periods(bound, *step);
+            if periods > LARGE_GRID_PERIODS {
+                out.push(Lint::LargeGrid {
+                    transformation: t.name.to_string(),
+                    bound: bound.to_string(),
+                    step: step.to_string(),
+                    periods,
+                });
+            }
+        });
+    }
 }
 
 /// Declared names the generated client would refuse: predicate and

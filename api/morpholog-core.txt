@@ -195,6 +195,7 @@ pub fn morpholog_core::ir_builder::or(alloc::vec::Vec<morpholog_core::Prop>) -> 
 pub fn morpholog_core::ir_builder::params(&[&str]) -> alloc::vec::Vec<morpholog_core::Var>
 pub fn morpholog_core::ir_builder::period_index(morpholog_core::ValueExpr, morpholog_core::ValueExpr, morpholog_core::ValueExpr) -> morpholog_core::ValueExpr
 pub fn morpholog_core::ir_builder::period_start_of(morpholog_core::ValueExpr, morpholog_core::ValueExpr, morpholog_core::ValueExpr) -> morpholog_core::ValueExpr
+pub fn morpholog_core::ir_builder::periods(morpholog_core::ValueExpr, morpholog_core::ValueExpr, morpholog_core::ValueExpr) -> morpholog_core::ValueExpr
 pub fn morpholog_core::ir_builder::pre(morpholog_core::Prop) -> morpholog_core::Prop
 pub fn morpholog_core::ir_builder::predicate(&str) -> morpholog_core::ir_builder::PredicateDeclBuilder
 pub fn morpholog_core::ir_builder::program(&str) -> morpholog_core::ir_builder::ProgramBuilder
@@ -319,6 +320,7 @@ pub morpholog_core::Builtin::Max
 pub morpholog_core::Builtin::Min
 pub morpholog_core::Builtin::PeriodIndex
 pub morpholog_core::Builtin::PeriodStartOf
+pub morpholog_core::Builtin::Periods
 pub morpholog_core::Builtin::Round
 impl morpholog_core::Builtin
 pub fn morpholog_core::Builtin::arity(self) -> usize
@@ -672,6 +674,11 @@ pub morpholog_core::Lint::GateVsInvariant::pointer: alloc::string::String
 pub morpholog_core::Lint::GoverningSelectionWithoutTotality
 pub morpholog_core::Lint::GoverningSelectionWithoutTotality::invariant: alloc::string::String
 pub morpholog_core::Lint::GoverningSelectionWithoutTotality::predicates: alloc::vec::Vec<alloc::string::String>
+pub morpholog_core::Lint::LargeGrid
+pub morpholog_core::Lint::LargeGrid::bound: alloc::string::String
+pub morpholog_core::Lint::LargeGrid::periods: u128
+pub morpholog_core::Lint::LargeGrid::step: alloc::string::String
+pub morpholog_core::Lint::LargeGrid::transformation: alloc::string::String
 pub morpholog_core::Lint::RequireRematch
 pub morpholog_core::Lint::RequireRematch::again: usize
 pub morpholog_core::Lint::RequireRematch::first: usize
@@ -1350,6 +1357,10 @@ pub morpholog_core::ValidationError::PeriodSpanNotPositive
 pub morpholog_core::ValidationError::PeriodSpanNotPositive::builtin: &'static str
 pub morpholog_core::ValidationError::PeriodSpanNotPositive::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::PeriodSpanNotPositive::span: alloc::string::String
+pub morpholog_core::ValidationError::PeriodsUnbounded
+pub morpholog_core::ValidationError::PeriodsUnbounded::context: morpholog_core::ValidationContext
+pub morpholog_core::ValidationError::PeriodsUnbounded::from: alloc::string::String
+pub morpholog_core::ValidationError::PeriodsUnbounded::until: alloc::string::String
 pub morpholog_core::ValidationError::PreNotAvailable
 pub morpholog_core::ValidationError::PreNotAvailable::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::RetractsAppendOnly

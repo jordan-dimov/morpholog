@@ -111,6 +111,10 @@ fn value(v: &ValueExpr) -> &'static [Draws] {
             | Builtin::Max => &[Children],
             // A binary search over the calendar's day range.
             Builtin::PeriodIndex => &[Children, InternallyBounded],
+            // One start per step from the period holding `from` until
+            // `until`: the periods left strictly fall, and the rule's own
+            // window gate bounds how many there were to begin with.
+            Builtin::Periods => &[Children, InternallyBounded],
         },
     }
 }

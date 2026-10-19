@@ -276,6 +276,11 @@ pub fn period_start_of(anchor: ValueExpr, span: ValueExpr, index: ValueExpr) -> 
     call(Builtin::PeriodStartOf, vec![anchor, span, index])
 }
 
+/// `periods(from, until, step)` - the start of every period meeting the window.
+pub fn periods(from: ValueExpr, until: ValueExpr, step: ValueExpr) -> ValueExpr {
+    call(Builtin::Periods, vec![from, until, step])
+}
+
 /// `if(when, then, otherwise)` - `then` if the proposition holds, else
 /// `otherwise`. Only the chosen branch is evaluated; the condition binds
 /// nothing.
