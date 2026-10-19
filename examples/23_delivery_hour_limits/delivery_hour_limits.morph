@@ -1,0 +1,133 @@
+program delivery_hour_limits
+
+-- ============================================================
+-- Delivery-hour limits: a position cap that holds in every hour
+-- ============================================================
+--
+-- A power trading desk buys and sells electricity for delivery
+-- later: this many megawatts, from this instant to that one. A
+-- "block" is one trade covering several consecutive hours, a "day"
+-- product covers a whole local calendar day. Risk gives each book a
+-- cap: the book's net position, buys less sells, may not exceed the
+-- cap in any delivery hour. Not on average over the trade, not in
+-- total across the day - in each hour, because each hour is settled
+-- on its own.
+--
+-- That last phrase is the whole difficulty. A trade is one claim with
+-- two instants on it. The rule has to look at every hour the trade
+-- touches, add up what the book already holds in that hour, and ask
+-- whether this trade still fits. Adding up every trade that OVERLAPS
+-- the new one is wrong: two trades that never share an hour would be
+-- counted together, and a trade that fits would be refused. The grid
+-- of hours is the thing the rule has to range over.
+--
+-- The record builds that grid itself. `periods(starts_at, ends_at,
+-- duration(PT1H))` is the start of every hour the window touches,
+-- hours counted on the hour from a fixed epoch, so two trades agree on
+-- where an hour begins without either saying so. The caller passes
+-- the trade and nothing else: no list of hours to be checked against
+-- the trade, because the grid is computed from the trade.
+--
+-- One honesty the record demands in return: before it builds a grid
+-- it is told how long a window may be. A rule says `require ends_at -
+-- starts_at no_longer_than duration(PT744H)` and only then asks for
+-- the hours. That is a business rule - a product is at most a month -
+-- and it is also what keeps the size of the work the rule's own,
+-- whatever a caller sends.
+
+-- A book's cap, in megawatts, on the net position in any one hour.
+predicate Limit(book: Subject, cap_mw: Decimal)
+    unique by (book)
+
+-- A captured trade: signed megawatts (bought positive, sold negative)
+-- delivered over a half-open window of UTC instants.
+predicate Trade(book: Subject, trade: Subject, mw: Decimal, starts_at: Timestamp, ends_at: Timestamp)
+    unique by (trade)
+
+-- A local calendar day, as a calendar authority publishes it: which
+-- instants it runs between, under which version of the time-zone
+-- database. The record does not compute this. Clocks change on days
+-- the law decides, and the law changes; so the day's bounds are a
+-- claim, with their authority and version on them, and the rules below
+-- read the claim. A spring-forward day is 23 hours long, a fall-back
+-- day 25, and nothing here needs to know which is which.
+predicate DeliveryDay(calendar: Subject, local_date: Date, starts_at: Timestamp, ends_at: Timestamp, tzdb_version: Subject)
+    unique by (calendar, local_date)
+
+-- Who may publish a calendar's days.
+predicate CalendarPublisher(calendar: Subject, publisher: Subject)
+    unique by (calendar)
+
+-- A cap is a positive figure.
+invariant limits_are_positive:
+    Limit(book, cap_mw) implies 0 < cap_mw
+
+-- A published day is a civil day: 23, 24 or 25 hours long. A record
+-- outside that is a publishing mistake, refused before any trade can
+-- be captured against it.
+invariant a_delivery_day_is_a_civil_day:
+    DeliveryDay(calendar, local_date, starts_at, ends_at, _)
+    implies (duration(PT23H) no_longer_than ends_at - starts_at and ends_at - starts_at no_longer_than duration(PT25H))
+
+-- The acts.
+
+transformation set_limit(book, cap_mw):
+    require not Limit(book, _)
+    admit Limit(book, cap_mw)
+
+-- The first act names the calendar's publisher; from then on only the
+-- publisher's login can add days.
+transformation appoint_calendar_publisher(calendar, publisher):
+    require not CalendarPublisher(calendar, _)
+    admit CalendarPublisher(calendar, publisher)
+
+transformation publish_delivery_day(calendar, local_date, starts_at, ends_at, tzdb_version):
+    require CalendarPublisher(calendar, actor)
+    require not DeliveryDay(calendar, local_date, _, _, _)
+    admit DeliveryDay(calendar, local_date, starts_at, ends_at, tzdb_version)
+
+-- Capturing a block. The gates run in order, and the order matters.
+-- First the window: forward, at most a month. Then the grid, built
+-- from the window. Then alignment: a product runs from an hour
+-- boundary to an hour boundary, so the hours it touches are exactly
+-- as many as its length holds; a trade starting at half past touches
+-- one hour more than it is long, and is refused. Only then the limit,
+-- hour by hour: what the book already holds in that hour, counting a
+-- trade when it covers the hour's start, plus this trade, within the
+-- cap either way round. The refusal names the hour.
+--
+-- This is a gate, not an invariant, on purpose. A pre-trade limit is
+-- checked when the trade is captured; lowering a cap later does not
+-- unwind trades, it raises a breach to be managed, which is another
+-- act and another record.
+transformation capture(book, trade, mw, starts_at, ends_at):
+    bind Limit(book, cap_mw)
+    require not Trade(trade: trade, ..)
+    require starts_at strictly_before ends_at
+    require ends_at - starts_at no_longer_than duration(PT744H)
+    let hours = periods(starts_at, ends_at, duration(PT1H))
+    require whole_hours: (ends_at - starts_at) / duration(PT1H) = sum(1 | h in hours)
+    require hour_within_limit: forall h in hours: abs(sum(m | Trade(book, _, m, s, e) and s at_or_before h and h strictly_before e) + mw) <= cap_mw
+    admit Trade(book, trade, mw, starts_at, ends_at)
+
+-- Capturing a day product. The caller names the calendar and the
+-- local date; the window is the published day's, so the caller cannot
+-- state it, and a day the authority never published cannot be traded.
+-- The same hour-by-hour limit then runs over 23, 24 or 25 hours,
+-- whichever the day has.
+transformation capture_day(book, trade, mw, calendar, local_date):
+    bind Limit(book, cap_mw)
+    bind DeliveryDay(calendar, local_date, starts_at, ends_at, _)
+    require not Trade(trade: trade, ..)
+    require ends_at - starts_at no_longer_than duration(PT25H)
+    let hours = periods(starts_at, ends_at, duration(PT1H))
+    require whole_hours: (ends_at - starts_at) / duration(PT1H) = sum(1 | h in hours)
+    require hour_within_limit: forall h in hours: abs(sum(m | Trade(book, _, m, s, e) and s at_or_before h and h strictly_before e) + mw) <= cap_mw
+    admit Trade(book, trade, mw, starts_at, ends_at)
+
+-- What this example deliberately does not cover: quarter-hour
+-- products (the same grid with a 15-minute step), a cap that changes
+-- over time, the breach raised when a cap is lowered under open
+-- trades, and where the published days come from. The calendar
+-- authority's claims are trusted as claims; the record governs what
+-- is done with them, not whether the authority read its clock right.

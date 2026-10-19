@@ -768,7 +768,7 @@ fn format_intent(i: &Intent) -> String {
     fmt_predicate_call(i.name.as_str(), &i.args, FormatContext::DIAGNOSTIC)
 }
 
-fn format_term(t: &Term) -> String {
+pub(crate) fn format_term(t: &Term) -> String {
     match t {
         Term::Var(name) => name.to_string(),
         Term::Wildcard => "_".to_string(),

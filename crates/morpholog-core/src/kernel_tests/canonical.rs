@@ -407,3 +407,58 @@ fn an_invariant_version_other_than_1_is_refused() {
         "expected InvariantVersionNotOne naming `capped`, got {errors:?}"
     );
 }
+
+/// The encoding of a construct added after the carrier above was pinned
+/// gets its own carrier, so the first never moves: a `periods` grid
+/// behind its window gate, ranged by `forall` and `sum`.
+fn periods_carrier() -> Program {
+    let gate = require(duration_le(
+        sub(v("until"), v("from")),
+        term(duration("PT744H")),
+    ));
+    let grid = let_(
+        "hours",
+        periods(v("from"), v("until"), term(duration("PT1H"))),
+    );
+    let whole = require(eq(
+        sum(term(dec("1")), in_(var("h"), var("hours"))),
+        term(dec("24")),
+    ));
+    let each = require(forall(
+        "h",
+        in_(var("h"), var("hours")),
+        timestamp_le(v("from"), v("h")),
+    ));
+    program("periods_carrier")
+        .predicates(vec![
+            predicate("Window")
+                .subject("id")
+                .timestamp("from")
+                .timestamp("until")
+                .build(),
+        ])
+        .transformations(vec![transformation(
+            "open",
+            params(&["id", "from", "until"]),
+            vec![
+                gate,
+                grid,
+                whole,
+                each,
+                assert_("Window", vec![var("id"), var("from"), var("until")]),
+            ],
+        )])
+        .build()
+}
+
+const PERIODS_PREIMAGE: &str = "program periods_carrier\n\npredicate Window(id: Subject, from: Timestamp, until: Timestamp)\n\ntransformation open(id, from, until):\n  require (until - from) no_longer_than duration(PT744H)\n  let hours = periods(from, until, duration(PT1H))\n  require sum(1 | h in hours) = 24\n  require forall h in hours: from at_or_before h\n  admit Window(id, from, until)\n";
+const PERIODS_HASH: &str =
+    "sha256:185cf4fc11a41b81678aa641402930ed1dc568691c56705ce7fd0b8df557940a";
+
+#[test]
+fn the_periods_encoding_is_pinned() {
+    let program = periods_carrier();
+    program.validate().expect("the carrier validates");
+    assert_eq!(canonical_preimage(&program), PERIODS_PREIMAGE);
+    assert_eq!(canonical_hash(&program), PERIODS_HASH);
+}

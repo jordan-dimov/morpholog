@@ -922,11 +922,12 @@ where
                 otherwise: Box::new(otherwise),
             });
 
-        // `period_index(anchor, span, date)` and its inverse `period_start_of(anchor, span,
-        // index)`. Contextual, like `if`.
+        // `period_index(anchor, span, date)`, its inverse `period_start_of(anchor, span,
+        // index)`, and `periods(from, until, step)`. Contextual, like `if`.
         let period_builtin_expr = select! {
             Token::Ident(s) if s == "period_index" => Builtin::PeriodIndex,
             Token::Ident(s) if s == "period_start_of" => Builtin::PeriodStartOf,
+            Token::Ident(s) if s == "periods" => Builtin::Periods,
         }
         .then(
             value

@@ -288,7 +288,11 @@ kind: decimals and quantities `<= < >= >`; dates `on_or_before`,
 `a <= x <= b` chains. A date minus a date is days as a decimal; an
 instant minus an instant is a duration. `period_index(anchor, span, at)`
 counts periods from an anchor and `period_start_of(anchor, span, index)`
-goes back.
+goes back. `periods(from, until, duration(PT1H))` is the start of every
+hour a window touches, for a rule that must hold in each one; a
+transformation bounds the window first, `require until - from
+no_longer_than duration(PT744H)`, then ranges over the grid with `let
+hours = periods(...)` and `forall h in hours`, or directly with `for`.
 
 ## Declarations that promise something
 

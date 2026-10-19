@@ -33,7 +33,8 @@ fn unsupplied_missing(found: &[Lint]) -> Vec<&str> {
             | Lint::EffectiveWithoutDeclaredTotality { .. }
             | Lint::SharedWriter { .. }
             | Lint::CaseWiderThanClaim { .. }
-            | Lint::RequireRematch { .. } => None,
+            | Lint::RequireRematch { .. }
+            | Lint::LargeGrid { .. } => None,
         })
         .unwrap_or_default()
 }
@@ -56,7 +57,8 @@ fn governing_finding(found: &[Lint]) -> Option<(&str, Vec<&str>)> {
         | Lint::EffectiveWithoutDeclaredTotality { .. }
         | Lint::SharedWriter { .. }
         | Lint::CaseWiderThanClaim { .. }
-        | Lint::RequireRematch { .. } => None,
+        | Lint::RequireRematch { .. }
+        | Lint::LargeGrid { .. } => None,
     })
 }
 

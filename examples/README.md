@@ -70,6 +70,8 @@ one act is a margin-call run.
 | compute a period's start date back from its number | [19_charging_years](19_charging_years/) | `period_start_of(anchor, span, index)` |
 | recompute an expected value exactly, and refuse any other figure | [20_operational_information](20_operational_information/) | an expression, probability times loss, as the target of `sum` |
 | verify a statement over a finite domain, and refuse it over an incomplete one | [22_residue_classes](22_residue_classes/) | `sum` counting the domain, and `%` in the rule |
+| hold a cap in every hour a trade touches, with the hours computed from the trade | [23_delivery_hour_limits](23_delivery_hour_limits/) | `periods(starts_at, ends_at, duration(PT1H))` |
+| say how long a window may be before the record builds a grid over it | [23_delivery_hour_limits](23_delivery_hour_limits/) | `require ends_at - starts_at no_longer_than duration(PT744H)` |
 | call Morpholog from an application | [etrm_embedder](etrm_embedder/) | the generated Python client |
 
 ## If the thing you want is not here

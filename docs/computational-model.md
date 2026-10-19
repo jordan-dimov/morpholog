@@ -112,6 +112,7 @@ So, by induction on rank, every evaluation is finite. A transformation reaches `
 The argument works at the level of the language's own operations. Library operations over finite scalar values, such as parsing a decimal or a date literal or multiplying two decimals, are assumed to terminate. A few loops the kernel writes itself iterate no finite container, and each carries its own ranking argument:
 
 - `period_index` searches by halving: its bounds start a fixed distance apart (twice the number of days in the calendar, plus four) and the gap halves each step;
+- `periods` walks from the period holding `from` towards `until` one positive step at a time, so the distance left strictly falls; how far it could have been is fixed by the window gate validation requires ahead of every grid, a literal duration in the rule, never a figure from the proposal;
 - an exact sum's total sheds one trailing zero per step, and its scale strictly falls;
 - a calendar span's text is consumed as it is parsed.
 

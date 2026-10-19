@@ -83,6 +83,7 @@ impl SourceMap {
             | ValidationError::CondBranchKindMismatch { context, .. }
             | ValidationError::PeriodSpanNotPositive { context, .. }
             | ValidationError::PeriodIndexNotWhole { context, .. }
+            | ValidationError::PeriodsUnbounded { context, .. }
             | ValidationError::BuiltinArity { context, .. }
             | ValidationError::BuiltinKind { context, .. }
             | ValidationError::AbsKind { context, .. }
@@ -187,6 +188,10 @@ impl SourceMap {
             }
             // On this programme's transformation; the message names the other programme.
             Lint::SharedWriter { transformation, .. } => {
+                self.decl_span(DeclKind::Transformation, transformation)
+            }
+            // On the transformation whose gate and step set the grid's size.
+            Lint::LargeGrid { transformation, .. } => {
                 self.decl_span(DeclKind::Transformation, transformation)
             }
             // On the statement that matches afresh, where the fix (or the rename) goes.

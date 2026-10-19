@@ -27,6 +27,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::analysis::{ParamKind, project};
 use crate::fold;
 use crate::format::{arith_token, compare_token};
+
+pub(crate) mod grid;
 use crate::ir::{
     ArithOp, Builtin, CompareOp, OrderedDomain, PredicateArgKind, PredicateDecl, Program, Prop,
     RuleName, Stmt, SumSeed, Term, Value, ValueExpr, Var, arith_result_kind,
@@ -80,6 +82,14 @@ impl InferredKind {
 
 /// Two declared kinds are compatible if either is `Any` or they are
 /// equal.
+/// A grid edge as the author wrote it, for a diagnostic.
+fn render_operand(operand: &ValueExpr) -> String {
+    match operand {
+        ValueExpr::Term(t) => crate::format::format_term(t),
+        other => format!("{other:?}"),
+    }
+}
+
 fn kinds_compatible(a: &PredicateArgKind, b: &PredicateArgKind) -> bool {
     *a == PredicateArgKind::Any || *b == PredicateArgKind::Any || a == b
 }
@@ -106,6 +116,10 @@ pub(crate) struct Cells {
     observed: Vec<BTreeSet<PredicateArgKind>>,
     /// What the loop bindings iterating a collection cell were used as.
     elements: HashMap<CellId, BTreeSet<PredicateArgKind>>,
+    /// The element kind a collection cell holds by construction (a
+    /// `periods` grid holds timestamps), which types its loop bindings
+    /// before their first use. A supplied collection has none.
+    generated: HashMap<CellId, PredicateArgKind>,
 }
 
 impl Cells {
@@ -270,6 +284,9 @@ impl BoundEnv {
 struct Scope {
     kinds: KindEnv,
     bound: BoundEnv,
+    /// Windows an earlier `require` has bounded, as (until, from) cells,
+    /// so a `periods` grid over them has a size the rule fixes.
+    windows: Vec<(CellId, CellId)>,
 }
 
 impl Scope {
@@ -830,6 +847,12 @@ impl CheckCtx<'_> {
                             name,
                             InferredKind::Known(PredicateArgKind::Collection),
                         );
+                        if let Term::Var(each) = element
+                            && let Some(cell) = scope.kinds.cell(name)
+                            && let Some(kind) = self.cells.generated.get(&cell).cloned()
+                        {
+                            self.observe_or_report(scope, each, InferredKind::Known(kind));
+                        }
                     }
                     Term::Wildcard => {}
                     other => {
@@ -882,6 +905,14 @@ impl CheckCtx<'_> {
             Stmt::Require { prop, .. } => {
                 let mut scoped = scope.clone();
                 self.walk_prop(prop, &mut scoped);
+                for conjunct in grid::conjuncts(prop) {
+                    if let Some(bound) = grid::window_bound(conjunct)
+                        && let (Some(until), Some(from)) =
+                            (scope.kinds.cell(bound.until), scope.kinds.cell(bound.from))
+                    {
+                        scope.windows.push((until, from));
+                    }
+                }
             }
             Stmt::BindOne { prop, .. } => {
                 self.walk_prop(prop, scope);
@@ -897,6 +928,11 @@ impl CheckCtx<'_> {
                     _ => scope.kinds.rebind(name, &mut self.cells),
                 }
                 self.refine_or_report(scope, name, value_kind);
+                if let Some(element) = self.generated_element(value, scope)
+                    && let Some(cell) = scope.kinds.cell(name)
+                {
+                    self.cells.generated.insert(cell, element);
+                }
             }
             Stmt::LetNewSubject { name } => {
                 scope.bound.bind(name);
@@ -925,6 +961,9 @@ impl CheckCtx<'_> {
                 let mut scoped = scope.clone();
                 scoped.bound.bind(binding);
                 scoped.kinds.rebind(binding, &mut self.cells);
+                if let Some(element) = self.generated_element(collection, scope) {
+                    self.observe_or_report(&mut scoped, binding, InferredKind::Known(element));
+                }
                 for inner in body {
                     self.walk_stmt(inner, &mut scoped);
                 }
@@ -1624,6 +1663,29 @@ impl CheckCtx<'_> {
                 }
                 InferredKind::Known(PredicateArgKind::Date)
             }
+            Builtin::Periods => {
+                self.check_operand_kind(&args[0], PredicateArgKind::Timestamp, "periods", scope);
+                self.check_operand_kind(&args[1], PredicateArgKind::Timestamp, "periods", scope);
+                self.check_operand_kind(&args[2], PredicateArgKind::Duration, "periods", scope);
+                if let ValueExpr::Term(Term::Literal(Value::Duration(step))) = &args[2]
+                    && (step.is_zero() || step.is_negative())
+                {
+                    self.report(|context| ValidationError::PeriodSpanNotPositive {
+                        builtin: "periods",
+                        span: step.to_string(),
+                        context,
+                    });
+                }
+                if !self.window_is_bounded(&args[0], &args[1], scope) {
+                    let (from, until) = (render_operand(&args[0]), render_operand(&args[1]));
+                    self.report(|context| ValidationError::PeriodsUnbounded {
+                        from,
+                        until,
+                        context,
+                    });
+                }
+                InferredKind::Known(PredicateArgKind::Collection)
+            }
             // Both arguments of one kind, which is the result kind,
             // over the kinds `ordered_domain` allows.
             Builtin::Min | Builtin::Max => {
@@ -1669,6 +1731,38 @@ impl CheckCtx<'_> {
     /// The period builtins' span rule: a literal zero span is refused
     /// here by name; the runtime checks one passed in through a
     /// parameter.
+    /// The element kind a collection expression holds by construction:
+    /// a `periods` grid, or a name bound to one.
+    fn generated_element(&self, collection: &ValueExpr, scope: &Scope) -> Option<PredicateArgKind> {
+        match collection {
+            ValueExpr::Call {
+                builtin: Builtin::Periods,
+                ..
+            } => Some(PredicateArgKind::Timestamp),
+            ValueExpr::Term(Term::Var(name)) => scope
+                .kinds
+                .cell(name)
+                .and_then(|cell| self.cells.generated.get(&cell).cloned()),
+            _ => None,
+        }
+    }
+
+    /// Whether a grid over `[from, until)` has a size the rule fixes: both
+    /// edges literal, or both named and bounded by an earlier gate on the
+    /// same two names (through any `let` alias, since cells are shared).
+    fn window_is_bounded(&self, from: &ValueExpr, until: &ValueExpr, scope: &Scope) -> bool {
+        match (from, until) {
+            (ValueExpr::Term(Term::Literal(_)), ValueExpr::Term(Term::Literal(_))) => true,
+            (ValueExpr::Term(Term::Var(from)), ValueExpr::Term(Term::Var(until))) => {
+                match (scope.kinds.cell(until), scope.kinds.cell(from)) {
+                    (Some(until), Some(from)) => scope.windows.contains(&(until, from)),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
     fn refuse_literal_zero_span(&mut self, span_arg: &ValueExpr, builtin: &'static str) {
         if let ValueExpr::Term(Term::Literal(Value::CalendarSpan(span))) = span_arg
             && span.months == 0
