@@ -95,7 +95,7 @@ invariant runs_record_their_own_charging_year:
 -- and became record law. The gate below refuses it at the act, this
 -- invariant against any path that skirts the gate.
 invariant runs_price_from_their_years_sheet:
-    BillingRun(_, _, _, charging_year, rate_sheet)
+    BillingRun(charging_year: charging_year, rate_sheet: rate_sheet, ..)
     implies (exists year_starts_on: RateSheet(rate_sheet, year_starts_on) and year_starts_on = period_start_of(charging_epoch, span(P1Y), charging_year - charging_epoch_year))
 
 -- The billing act. The caller names the sheet it priced from; the

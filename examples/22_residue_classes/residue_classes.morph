@@ -163,7 +163,7 @@ invariant conclusion_rests_on_a_verified_core:
     Conclusion(_, statement) implies Verified(statement, 4)
 
 invariant conclusion_rests_on_a_check:
-    Conclusion(conclusion, _) implies Checked(conclusion, _, _, _)
+    Conclusion(conclusion, _) implies Checked(statement: conclusion, ..)
 
 -- The acts.
 

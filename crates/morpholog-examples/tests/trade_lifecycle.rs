@@ -248,7 +248,7 @@ fn amendment_admits_a_new_version_and_keeps_the_old() {
 #[test]
 fn amending_an_unknown_version_is_rejected() {
     // The version being amended must exist: the gate
-    // `require TradeTerms(trade, prior_version_id, _, _, _)` fails for tv9.
+    // `require TradeTerms(trade: trade, version_id: prior_version_id, ..)` fails for tv9.
     let pre = grant(captured(100), "mo", "power");
     ex().must_reject_as(
         &trade_lifecycle::amend_trade_terms(),

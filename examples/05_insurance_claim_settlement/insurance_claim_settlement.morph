@@ -105,7 +105,7 @@ invariant paid_implies_authorised:
 -- would otherwise be trivially satisfied if no headroom counter existed
 -- at all.
 invariant paid_implies_headroom:
-    SettlementPaid(p, _, _, _) implies (exists r: PolicyHeadroom(p, r))
+    SettlementPaid(policy_id: p, ..) implies (exists r: PolicyHeadroom(p, r))
 
 -- The conservation law. This is the rule that compares the policy's
 -- state *before* a transaction to its state after: the headroom must go
@@ -228,5 +228,5 @@ transformation authorise_settlement(claim_id, settlement_id, amount):
 -- counter, which is live operational state; this view can be replayed
 -- as it stood at any past moment to answer "what was the position then?".
 derived PolicyLimitUsage(policy_id):
-    over SettlementPaid(policy_id, _, _, _)
+    over SettlementPaid(policy_id: policy_id, ..)
     value used = sum(paid | SettlementPaid(policy_id, _, _, paid))

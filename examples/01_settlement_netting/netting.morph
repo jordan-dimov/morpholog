@@ -66,7 +66,7 @@ intent NetSettlementCreated(net: Subject)
 -- payment for nothing. Every net must reference at least one line. Read
 -- `implies` as "whenever the left is true, the right must be too".
 invariant net_settlement_has_lines:
-    NetSettlement(net, _, _, _) implies (exists line: SettlementLine(line, net, _))
+    NetSettlement(net_id: net, ..) implies (exists line: SettlementLine(line, net, _))
 
 -- The heart of netting: the net amount must equal the signed sum of its
 -- lines, exactly. If the arithmetic does not tie out, the books are

@@ -191,7 +191,7 @@ intent PositionLimitSet(commodity: Subject, limit: Decimal)
 -- quantity back as `qty`.
 define current_quantity(trade, qty):
     TradeTerms(trade, _, qty, _, ef)
-    and not (exists later: TradeTerms(trade, _, _, _, later) and later after ef)
+    and not (exists later: TradeTerms(trade: trade, effective_from: later, ..) and later after ef)
 
 
 -- The standing rules. Any change that would break one of these is
@@ -211,13 +211,13 @@ invariant official_price_has_captured_trade:
 -- Every terms version belongs to a trade that was actually captured -
 -- the same provenance discipline the official price obeys.
 invariant terms_belong_to_captured_trade:
-    TradeTerms(trade, _, _, _, _) implies TradeCaptured(trade, _, _)
+    TradeTerms(trade: trade, ..) implies TradeCaptured(trade, _, _)
 
 -- A terms quantity is a positive figure. A trade for zero or a negative
 -- quantity is not a trade; forbidding it keeps the effective cap, which
 -- sums signed quantities, honest about what it is bounding.
 invariant trade_terms_quantity_is_positive:
-    TradeTerms(_, version_id, qty, _, _) implies qty > 0
+    TradeTerms(version_id: version_id, quantity: qty, ..) implies qty > 0
 
 -- The quantitative rule at the heart of settlement, now on the effective
 -- axis. A trade settles in slices, each effective on a business date. For
@@ -230,7 +230,7 @@ invariant trade_terms_quantity_is_positive:
 -- slice that was over the old quantity but within the new one becomes
 -- admissible. The comparison is inclusive.
 invariant settled_within_effective_terms:
-    (TradeSettled(trade, _, _, _, d) and trade_terms_in_force_on(trade: trade, as_of: d, quantity: qty, ..))
+    (TradeSettled(trade: trade, effective_on: d, ..) and trade_terms_in_force_on(trade: trade, as_of: d, quantity: qty, ..))
     implies sum(s | TradeSettled(trade, s, _, _, sd) and sd on_or_before d) <= qty
 
 -- Every settled date has terms effective by it. Without this, a slice
@@ -245,7 +245,7 @@ invariant settled_within_effective_terms:
 -- instead of recognising its shape, and an author who deletes this rule
 -- is told what they broke.
 invariant settled_date_has_effective_terms total over TradeTerms:
-    TradeSettled(trade, _, _, _, d) implies (exists ef: TradeTerms(trade, _, _, _, ef) and ef on_or_before d)
+    TradeSettled(trade: trade, effective_on: d, ..) implies (exists ef: TradeTerms(trade: trade, effective_from: ef, ..) and ef on_or_before d)
 
 -- A settled quantity is a positive figure. A "slice" of zero or a
 -- negative amount is not a settlement; forbidding it stops a negative
@@ -253,14 +253,14 @@ invariant settled_date_has_effective_terms total over TradeTerms:
 -- over-large positive one. Reversals, if ever modelled, would be an
 -- explicit claim of their own, not a negative settlement.
 invariant settled_quantity_is_positive:
-    TradeSettled(_, qty, settlement_id, _, _) implies qty > 0
+    TradeSettled(settled_qty: qty, settlement_id: settlement_id, ..) implies qty > 0
 
 -- Settlement can never run ahead of confirmation: a settled trade must
 -- have been confirmed. The settle action relies on the official price in
 -- force, which only a confirmed trade has, so this invariant guards the
 -- property whatever path a change takes.
 invariant settled_trade_was_confirmed:
-    TradeSettled(trade, _, _, _, _) implies TradeConfirmed(trade, _, _, _)
+    TradeSettled(trade: trade, ..) implies TradeConfirmed(trade: trade, ..)
 
 -- The position limit. A desk's net position on a commodity is its buys
 -- minus its sells - a signed figure: positive is net long, negative is net
@@ -311,7 +311,7 @@ transformation capture_trade(trade, commodity, direction, version_id, quantity, 
 -- the amendment governs only what the effective-quantity cap allows next.
 transformation amend_trade_terms(trade, prior_version_id, new_version_id, quantity, delivery_period, effective_from):
     require TradeCaptured(trade, commodity, _) and MayConfirm(actor, commodity)
-    require TradeTerms(trade, prior_version_id, _, _, _)
+    require TradeTerms(trade: trade, version_id: prior_version_id, ..)
     require not TradeTermsSupersedes(_, prior_version_id)
     admit TradeTerms(trade, new_version_id, quantity, delivery_period, effective_from)
     admit TradeTermsSupersedes(new_version_id, prior_version_id)
@@ -345,7 +345,7 @@ transformation set_position_limit(commodity, limit):
 -- price in force yet.
 transformation confirm_trade(trade, counterparty, confirmation_id, official_price_id, confirmed_price):
     require TradeCaptured(trade, commodity, _) and MayConfirm(actor, commodity)
-    require not TradeConfirmed(trade, _, _, _)
+    require not TradeConfirmed(trade: trade, ..)
     require not CurrentOfficialPrice(trade, _)
     admit TradeConfirmed(trade, counterparty, confirmation_id, actor)
     admit OfficialPrice(trade, confirmed_price, official_price_id)
@@ -390,8 +390,8 @@ transformation correct_official_price(trade, prior_official_price_id, new_offici
 -- legitimate.
 transformation settle_trade(trade, settled_qty, settlement_id, official_price_id, effective_on):
     require CurrentOfficialPrice(trade, official_price_id)
-    require TradeTerms(trade, _, _, _, ef) and ef on_or_before effective_on
-    require not TradeSettled(_, _, settlement_id, _, _)
+    require TradeTerms(trade: trade, effective_from: ef, ..) and ef on_or_before effective_on
+    require not TradeSettled(settlement_id: settlement_id, ..)
     -- Which version governs? The latest effective date that is not after
     -- the settlement's own date. The generated selector asks the same
     -- question, but it can only ANSWER yes or no - an invariant needs a
@@ -403,7 +403,7 @@ transformation settle_trade(trade, settled_qty, settlement_id, official_price_id
     -- nothing has no answer and stops the runtime with an error; the gate
     -- refuses first, lawfully, so this line only ever runs where a
     -- version exists.
-    let governing_from = max(ef | TradeTerms(trade, _, _, _, ef) and ef on_or_before effective_on)
+    let governing_from = max(ef | TradeTerms(trade: trade, effective_from: ef, ..) and ef on_or_before effective_on)
     bind TradeTerms(trade, governing_version, _, _, governing_from)
     admit TradeSettled(trade, settled_qty, settlement_id, official_price_id, effective_on)
     admit SettledUnderTerms(settlement_id, governing_version)

@@ -69,6 +69,14 @@ predicate ChargeLine(
 predicate InvoiceSealed(invoice: Subject, total_gbp: Decimal)
     unique by (invoice)
 
+-- A credit note reverses one billed line. It carries no rate and no
+-- volume, because nothing is priced again: its figures are the
+-- line's own with the sign turned, to the penny the line was rounded
+-- to. A line is reversed at most once.
+predicate CreditNote(credit: Subject, reverses: Subject, net_gbp: Decimal, vat_gbp: Decimal)
+    unique by (credit)
+    unique by (reverses)
+
 -- The rules. An invariant is a rule the runtime will not let any
 -- change break - not a check the engine is asked to run, but a
 -- property the ledger cannot leave.
@@ -111,10 +119,10 @@ invariant every_line_names_a_declared_rate:
 -- of the net, and a metered volume or tariff rate is never negative
 -- here. Without these two rules the model would quietly accept a
 -- negative line - a credit note by accident, independently rounded.
--- Credits are a real thing, but they are a DIFFERENT model (an
+-- Credits are a real thing, and they are a DIFFERENT model: an
 -- amount copy-negated from the committed line it reverses, never
--- re-rounded), and a boundary a programme only describes in prose is
--- not a boundary. These rules close it.
+-- re-rounded. That model has its own claim below; these rules keep
+-- it out of the charge lines.
 invariant vat_rate_is_a_fraction:
     VatRate(rate_id, rate) implies 0 <= rate <= 1
 
@@ -134,6 +142,21 @@ invariant sealed_total_is_the_sum_of_its_lines:
     let net_total = (sum(n | ChargeLine(invoice: invoice, net_gbp: n, ..)))
     let vat_total = (sum(v | ChargeLine(invoice: invoice, vat_gbp: v, ..)))
     InvoiceSealed(invoice, total_gbp) implies total_gbp = net_total + vat_total
+
+-- A credit copy-negates its line. `-net_gbp` is the line's net with
+-- the sign turned: the same pennies, the other way. A credit that
+-- recomputed and re-rounded on its own, or forgot the sign, cannot
+-- be admitted. There is no second rounding to argue about, because
+-- there is no second computation.
+invariant a_credit_copy_negates_its_line:
+    (CreditNote(_, line, credit_net, credit_vat) and ChargeLine(line: line, net_gbp: net_gbp, vat_gbp: vat_gbp, ..))
+    implies (credit_net = -net_gbp and credit_vat = -vat_gbp)
+
+-- ... and, as with the VAT rate, the companion: a credit must name a
+-- line that exists, or the rule above has nothing to compare against
+-- and passes emptily.
+invariant every_credit_reverses_a_line:
+    CreditNote(reverses: line, ..) implies ChargeLine(line: line, ..)
 
 -- The only ways state may change.
 
@@ -160,10 +183,22 @@ transformation seal_invoice(invoice, total_gbp):
     require not InvoiceSealed(invoice, _)
     admit InvoiceSealed(invoice, total_gbp)
 
--- What this example deliberately does not cover: credit notes and
--- reversals (amounts copy-negate the committed line, never re-round
--- - a modelling rule this gallery pins elsewhere; the non-negative
--- rules above make the exclusion enforced, not just stated),
--- corrections after sealing (supersession, as in the verified-
--- revenue example), and period assignment for the volumes. One
--- convention, made law, is the point.
+-- A credit note is raised against a line already billed: the invoice
+-- is sealed, and the line has not been reversed before. The caller
+-- names the line and nothing else. The figures are not proposed and
+-- checked, as a charge line's are; they are read off the committed
+-- line and negated here, so there is no figure for anyone to get
+-- wrong. A number the record can compute is a number the caller
+-- cannot state.
+transformation credit_line(credit, line):
+    bind ChargeLine(line: line, invoice: invoice, net_gbp: net_gbp, vat_gbp: vat_gbp, ..)
+    require InvoiceSealed(invoice, _)
+    require not CreditNote(reverses: line, ..)
+    let credit_net = -net_gbp
+    let credit_vat = -vat_gbp
+    admit CreditNote(credit, line, credit_net, credit_vat)
+
+-- What this example deliberately does not cover: corrections after
+-- sealing (supersession, as in the verified-revenue example), and
+-- period assignment for the volumes. One convention, made law, is
+-- the point.

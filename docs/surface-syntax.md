@@ -257,7 +257,7 @@ transformation deliver(delivery, contract, delivered_at, tonnes):
     admit Delivery(delivery, contract, delivered_at, tonnes)
 
 transformation invoice(invoice, contract, issued_on):
-    bind Contract(contract, signed_on, _, _, _)
+    bind Contract(contract: contract, signed_on: signed_on, ..)
     require signed_on on_or_before issued_on
     require issued_on before signed_on + span(P1Y)
     let index = period_index(epoch, span(P1Y), issued_on)
@@ -266,14 +266,14 @@ transformation invoice(invoice, contract, issued_on):
     admit Invoice(invoice, contract, issued_on, year, year_starts_on)
 
 invariant delivered_within_the_hold:
-    Contract(c, _, _, _, cargo) implies sum(t | Delivery(_, c, _, t)) <= cargo
+    Contract(contract: c, cargo: cargo, ..) implies sum(t | Delivery(_, c, _, t)) <= cargo
 
 invariant notice_is_at_least_a_day:
-    Contract(c, _, _, notice, _) implies duration(PT24H) no_longer_than notice
+    Contract(contract: c, notice: notice, ..) implies duration(PT24H) no_longer_than notice
 
 invariant invoices_follow_signing:
     let deadline = (signed_on + span(P1Y))
-    Contract(c, signed_on, _, _, _) and Invoice(i, c, issued_on, _, _) implies signed_on on_or_before issued_on and issued_on before deadline
+    Contract(contract: c, signed_on: signed_on, ..) and Invoice(i, c, issued_on, _, _) implies signed_on on_or_before issued_on and issued_on before deadline
 ```
 
 Literals: a date `@2026-05-22`; an instant `@2026-10-24T14:00:00Z`, or
@@ -349,7 +349,7 @@ transformation discount(trade, pct, effective_from):
     admit Discount(trade, pct, effective_from)
 
 transformation settle(trade, on, qty):
-    require Terms(trade, _, _, _)
+    require Terms(trade: trade, ..)
     admit Settled(trade, on, qty)
 
 invariant settlements_have_terms total over Terms:
@@ -398,7 +398,7 @@ invariant every_enrolment_was_consented:
 predicate TrialBalance(account: Subject, balance: Decimal)
 
 derived TrialBalance(account):
-    over Journal(_, account, _, _)
+    over Journal(account: account, ..)
     value balance = sum(d | Journal(_, account, d, _)) - sum(c | Journal(_, account, _, c))
 ```
 
