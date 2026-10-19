@@ -42,6 +42,11 @@ fn an_unbounded_grid_is_refused_at_validation() {
         format!("{GRID}{BOUND}"),
         format!("    require ends_at - starts_at no_longer_than mw * duration(PT1H)\n{GRID}"),
         format!("    require starts_at at_or_before ends_at\n{GRID}"),
+        // A step the proposer supplies makes the count theirs, however
+        // short the window.
+        format!(
+            "{BOUND}    let step = mw * duration(PT1H)\n    let hours = periods(starts_at, ends_at, step)\n"
+        ),
     ];
     for body in unbounded {
         let errs = programme(&body).expect_err(&body);
@@ -54,13 +59,18 @@ fn an_unbounded_grid_is_refused_at_validation() {
 }
 
 /// The gate is matched through the checker's cells, so a renamed edge
-/// still counts, and a strict bound does too.
+/// still counts; a strict bound does too, and so does the comparison
+/// written the other way round.
 #[test]
-fn the_bound_follows_an_alias_and_accepts_a_strict_gate() {
+fn the_bound_follows_an_alias_and_accepts_the_gate_either_way_round() {
     programme(
         "    let until = ends_at\n    require until - starts_at shorter_than duration(PT744H)\n    let hours = periods(starts_at, until, duration(PT1H))\n    require sum(1 | h in hours) <= 744\n",
     )
     .expect("an aliased, strictly bounded window is bounded");
+    programme(
+        "    require duration(PT744H) no_shorter_than ends_at - starts_at\n    let hours = periods(starts_at, ends_at, duration(PT1H))\n    require sum(1 | h in hours) <= 745\n",
+    )
+    .expect("the reversed comparison bounds the window too");
 }
 
 /// A grid's elements are timestamps by construction, so a loop binder

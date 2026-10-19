@@ -7,7 +7,8 @@ use jiff::SignedDuration;
 use crate::ir::{ArithOp, Builtin, CompareOp, OrderedDomain, Prop, Term, Value, ValueExpr, Var};
 
 /// A gate of the form `until - from no_longer_than duration(...)` (or
-/// strictly shorter), with a positive literal bound.
+/// strictly shorter), or the same comparison written the other way
+/// round, with a positive literal bound.
 pub(crate) struct WindowBound<'a> {
     pub(crate) until: &'a Var,
     pub(crate) from: &'a Var,
@@ -24,7 +25,7 @@ pub(crate) fn conjuncts(prop: &Prop) -> Vec<&Prop> {
 
 pub(crate) fn window_bound(prop: &Prop) -> Option<WindowBound<'_>> {
     let Prop::Compare {
-        op: CompareOp::Le | CompareOp::Lt,
+        op,
         domain: OrderedDomain::Duration,
         left,
         right,
@@ -32,11 +33,16 @@ pub(crate) fn window_bound(prop: &Prop) -> Option<WindowBound<'_>> {
     else {
         return None;
     };
+    // The window on the small side of the comparison, the bound on the large.
+    let (window, limit) = match op {
+        CompareOp::Le | CompareOp::Lt => (left, right),
+        CompareOp::Ge | CompareOp::Gt => (right, left),
+    };
     let ValueExpr::Arith {
         op: ArithOp::Sub,
         left: until,
         right: from,
-    } = left.as_ref()
+    } = window.as_ref()
     else {
         return None;
     };
@@ -45,7 +51,7 @@ pub(crate) fn window_bound(prop: &Prop) -> Option<WindowBound<'_>> {
     else {
         return None;
     };
-    let ValueExpr::Term(Term::Literal(Value::Duration(bound))) = right.as_ref() else {
+    let ValueExpr::Term(Term::Literal(Value::Duration(bound))) = limit.as_ref() else {
         return None;
     };
     if bound.is_zero() || bound.is_negative() {

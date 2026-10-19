@@ -419,14 +419,16 @@ pub enum ValidationError {
         index: String,
         context: ValidationContext,
     },
-    /// A `periods` grid over a window no earlier gate bounds. The grid's
-    /// size must be the rule's own, so the call needs `require {until} -
-    /// {from} no_longer_than duration(...)` before it, with a literal
-    /// bound; a transformation body is the only place that gate can
-    /// stand.
+    /// A `periods` grid whose size the rule does not fix. The most periods
+    /// a grid can hold is its window's bound over its step, so the step
+    /// must be a literal duration and an earlier gate must bound the
+    /// window, `require {until} - {from} no_longer_than duration(...)`
+    /// with a literal bound; a transformation body is the only place that
+    /// gate can stand.
     #[error(
-        "periods needs its window bounded first: `require {until} - {from} no_longer_than \
-         duration(...)` with a literal bound, earlier in the same transformation, in {context}"
+        "periods needs a size the rule fixes: a literal step, and `require {until} - {from} \
+         no_longer_than duration(...)` with a literal bound earlier in the same \
+         transformation, in {context}"
     )]
     PeriodsUnbounded {
         from: String,

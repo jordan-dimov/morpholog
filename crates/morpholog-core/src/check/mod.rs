@@ -1676,7 +1676,8 @@ impl CheckCtx<'_> {
                         context,
                     });
                 }
-                if !self.window_is_bounded(&args[0], &args[1], scope) {
+                let literal_step = matches!(&args[2], ValueExpr::Term(Term::Literal(_)));
+                if !literal_step || !self.window_is_bounded(&args[0], &args[1], scope) {
                     let (from, until) = (render_operand(&args[0]), render_operand(&args[1]));
                     self.report(|context| ValidationError::PeriodsUnbounded {
                         from,

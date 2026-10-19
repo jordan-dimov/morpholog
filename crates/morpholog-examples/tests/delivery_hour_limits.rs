@@ -319,27 +319,31 @@ fn only_the_appointed_publisher_publishes_days() {
     );
 }
 
+/// Exactly 23, 24 or 25 hours: a 22-hour day and a 23-and-a-half-hour
+/// day are both publishing mistakes.
 #[test]
 fn a_published_day_must_be_a_civil_day() {
-    let outcome = ex().propose_as(
-        &delivery_hour_limits::publish_delivery_day(),
-        vec![
-            subj(BERLIN),
-            date("2026-07-01"),
-            ts("2026-06-30T22:00:00Z"),
-            ts("2026-07-01T20:00:00Z"),
-            subj("tzdb_2026a"),
-        ],
-        PUBLISHER,
-        &with_published_days(),
-    );
-    assert!(
-        matches!(
-            &outcome,
-            Ok(Outcome::Rejected {
-                reason: RejectionReason::Invariant { name, .. }
-            }) if name.as_str() == "a_delivery_day_is_a_civil_day"
-        ),
-        "a 22-hour day is refused by name: {outcome:?}"
-    );
+    for ends_at in ["2026-07-01T20:00:00Z", "2026-07-01T21:30:00Z"] {
+        let outcome = ex().propose_as(
+            &delivery_hour_limits::publish_delivery_day(),
+            vec![
+                subj(BERLIN),
+                date("2026-07-01"),
+                ts("2026-06-30T22:00:00Z"),
+                ts(ends_at),
+                subj("tzdb_2026a"),
+            ],
+            PUBLISHER,
+            &with_published_days(),
+        );
+        assert!(
+            matches!(
+                &outcome,
+                Ok(Outcome::Rejected {
+                    reason: RejectionReason::Invariant { name, .. }
+                }) if name.as_str() == "a_delivery_day_is_a_civil_day"
+            ),
+            "a day ending {ends_at} is refused by name: {outcome:?}"
+        );
+    }
 }

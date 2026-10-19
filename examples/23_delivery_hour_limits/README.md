@@ -28,7 +28,7 @@ the start of every period a window touches, computed in the rule.
 | Rule | What it refuses |
 |---|---|
 | `limits_are_positive` | A cap that is not a positive figure. |
-| `a_delivery_day_is_a_civil_day` | A published day shorter than 23 hours or longer than 25. |
+| `a_delivery_day_is_a_civil_day` | A published day that is not exactly 23, 24 or 25 hours long. |
 | `capture`'s gates, in order | A window running backwards or longer than a month; a window off the hour grid, since it touches more hours than its length holds; and the trade that would take any hour's net position past the cap, named by the hour. |
 | `capture_day`'s gates | The same, with the window read from the published day, so the caller cannot state it and an unpublished day cannot be traded. |
 

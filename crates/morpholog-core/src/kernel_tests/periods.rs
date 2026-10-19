@@ -47,10 +47,14 @@ fn a_window_off_the_grid_starts_at_the_period_holding_from() {
     );
 }
 
+/// Empty whether or not the edges sit on the grid: the period holding
+/// `from` is not met by a window that holds nothing.
 #[test]
 fn an_empty_window_gives_no_periods() {
     assert!(starts("2026-03-29T01:00:00Z", "2026-03-29T01:00:00Z", "PT1H").is_empty());
     assert!(starts("2026-03-29T02:00:00Z", "2026-03-29T01:00:00Z", "PT1H").is_empty());
+    assert!(starts("2026-03-29T01:30:00Z", "2026-03-29T01:30:00Z", "PT1H").is_empty());
+    assert!(starts("2026-03-29T01:45:00Z", "2026-03-29T01:30:00Z", "PT1H").is_empty());
 }
 
 #[test]

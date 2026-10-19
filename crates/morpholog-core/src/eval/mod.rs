@@ -605,6 +605,10 @@ pub(crate) fn period_starts(
             span: step.to_string(),
         });
     }
+    // An empty window meets nothing, whatever period `from` sits in.
+    if until <= from {
+        return Ok(Vec::new());
+    }
     let until_ns = until.as_nanosecond();
     let mut start_ns = from.as_nanosecond().div_euclid(step_ns) * step_ns;
     // jiff's constructor asserts its range rather than reporting it.
