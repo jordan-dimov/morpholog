@@ -389,7 +389,7 @@ fn the_gallery_hashes_did_not_move_when_named_patterns_arrived() {
     // shows the hash renders positionally, so a named source shares its positional twin's hash.
     let cases = [(
         "../../examples/15_metered_billing/metered_billing.morph",
-        "sha256:9bbd6c4313dd7a8d22bd97579bbe75eeaeb8d4063790ce15bedc22d5d63cc591",
+        "sha256:afd333f4db4ca8ee099836105314e99b54e4758dfe77fa6168a3b6f6ea7ec4eb",
     )];
     for (rel, expected) in cases {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
@@ -418,7 +418,7 @@ fn the_gallery_hashes_did_not_move_when_named_patterns_arrived() {
     }
     assert_eq!(
         canonical_hash(&parse_program(&before).unwrap()),
-        "sha256:5777060fd9d8f488c726c55c4fe1678a63bdecaaced234361bb834c1aee96ef3",
+        "sha256:1bdb4fb757bc8d9656b9823edd024f7fc904191a750b695f7033f3feead268e5",
         "the pre-respelling metered billing no longer hashes as it did"
     );
 }
@@ -439,6 +439,27 @@ fn biometric_oversight_hashes_as_its_positional_twin() {
         (
             "UseStarted(use: use, system: system, ..)",
             "UseStarted(use, system, _, _, _)",
+        ),
+        (
+            "UseStarted(use: u, started_at: started, ..)",
+            "UseStarted(u, _, _, _, started)",
+        ),
+        (
+            "UseStarted(use: use, started_at: started_at, ..)",
+            "UseStarted(use, _, _, _, started_at)",
+        ),
+        ("UseStarted(use: use, ..)", "UseStarted(use, _, _, _, _)"),
+        (
+            "MatchRecorded(match: match, use: use, ..)",
+            "MatchRecorded(match, use, _, _, _)",
+        ),
+        (
+            "MatchRecorded(match: match, ..)",
+            "MatchRecorded(match, _, _, _, _)",
+        ),
+        (
+            "IdentificationDecision(match: match, ..)",
+            "IdentificationDecision(_, match, _, _, _)",
         ),
     ] {
         assert!(
@@ -494,6 +515,22 @@ fn metered_billing_hashes_as_its_positional_twin() {
         (
             "ChargeLine(invoice: invoice, ..)",
             "ChargeLine(_, invoice, _, _, _, _, _)",
+        ),
+        (
+            "ChargeLine(line: line, net_gbp: net_gbp, vat_gbp: vat_gbp, ..)",
+            "ChargeLine(line, _, _, _, net_gbp, _, vat_gbp)",
+        ),
+        (
+            "ChargeLine(line: line, ..)",
+            "ChargeLine(line, _, _, _, _, _, _)",
+        ),
+        (
+            "CreditNote(reverses: line, ..)",
+            "CreditNote(_, line, _, _)",
+        ),
+        (
+            "ChargeLine(line: line, invoice: invoice, net_gbp: net_gbp, vat_gbp: vat_gbp, ..)",
+            "ChargeLine(line, invoice, _, _, net_gbp, _, vat_gbp)",
         ),
     ] {
         assert!(

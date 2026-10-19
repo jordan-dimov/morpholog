@@ -9,7 +9,9 @@ a law of the ledger: every line's net is the recomputed
 rate-times-volume rounded to the nearest penny (exact halves away
 from zero), VAT is the rounded recompute from a declared rate, and a
 sealed invoice's total is the sum of its rounded lines. A figure that
-disagrees by a penny cannot be committed by anyone.
+disagrees by a penny cannot be committed by anyone. A credit note
+reverses a billed line with its figures negated, never re-rounded,
+and the caller cannot state them at all.
 
 This is the worked example that forced `round(x, quantum)` into the
 kernel: one rounding mode, measured against a real billing
@@ -23,16 +25,20 @@ repeated its product expression across every branch.
 | `VatRate(rate_id, rate)` | A tax rate declared as law, under its own identity. |
 | `ChargeLine(line, invoice, rate_p_per_kwh, volume_kwh, net_gbp, vat_rate_id, vat_gbp)` | One priced line: the engine's computed figures, admitted only if the rules agree. |
 | `InvoiceSealed(invoice, total_gbp)` | The invoice closed at its official total. |
+| `CreditNote(credit, reverses, net_gbp, vat_gbp)` | A billed line reversed: its own figures, sign turned, one credit per line. |
 
 | Rule | What it refuses |
 |---|---|
 | `line_net_is_the_rounded_recompute` | Any net that is not `round((rate * volume) / 100, 0.01)` - a 1p tamper, a stale figure, a different convention. |
 | `line_vat_is_the_rounded_recompute` | Any VAT that is not the rounded recompute from the declared rate the line names. |
 | `every_line_names_a_declared_rate` | A line naming a rate nobody declared - the totality companion that keeps the VAT rule from passing emptily. |
-| `vat_rate_is_a_fraction`, `charge_inputs_are_non_negative` | Rates outside [0, 1] and negative tariffs or volumes - the accidental credit note. Credits are a different model (copy-negation from a committed line), and the boundary is enforced, not just stated in prose. |
+| `vat_rate_is_a_fraction`, `charge_inputs_are_non_negative` | Rates outside [0, 1] and negative tariffs or volumes - the accidental credit note. Credits are a different model, with their own claim, and the boundary is enforced, not just stated in prose. |
 | `sealed_total_is_the_sum_of_its_lines` | A total computed any way other than per-line-then-sum - including the rival round-the-aggregate figure, which genuinely differs (two 0.4p lines: 0.00 per-line, 0.01 aggregate). |
+| `a_credit_copy_negates_its_line`, `every_credit_reverses_a_line` | A credit whose figures are not the line's own negated (`-net_gbp`): one that re-rounded, or forgot the sign - and a credit naming no line, so the first rule cannot pass emptily. |
 
-Transformations: `declare_vat_rate`, `add_charge_line`, `seal_invoice`.
+Transformations: `declare_vat_rate`, `add_charge_line`, `seal_invoice`,
+`credit_line` (the caller names the line; the figures are computed, not
+proposed).
 
 ## Run it
 
@@ -47,7 +53,6 @@ there, not here.
 
 ## Deliberately not covered
 
-Credit notes and reversals (amounts copy-negate the committed line,
-never re-round), corrections after sealing (supersession, as in the
-verified-revenue example), and period assignment for volumes. One
-convention made law is the point.
+Corrections after sealing (supersession, as in the verified-revenue
+example) and period assignment for volumes. One convention made law
+is the point.

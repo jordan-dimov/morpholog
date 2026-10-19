@@ -194,6 +194,40 @@ value_ok!(
         var_value("c")
     )
 );
+// Unary minus is `0 - x`: the literal `0`, never a signed literal.
+fn neg(x: ValueExpr) -> ValueExpr {
+    arith(ArithOp::Sub, dec_value("0"), x)
+}
+value_ok!(parses_unary_minus, "-x", neg(var_value("x")));
+value_ok!(
+    negated_literal_is_a_subtraction,
+    "-100",
+    neg(dec_value("100"))
+);
+value_ok!(
+    unary_minus_over_parenthesised_sum,
+    "-(a + b)",
+    neg(arith(ArithOp::Add, var_value("a"), var_value("b")))
+);
+value_ok!(unary_minus_nests, "- -x", neg(neg(var_value("x"))));
+// `-x * y` is `(-x) * y`: unary minus binds tightest.
+value_ok!(
+    unary_minus_binds_tighter_than_multiplication,
+    "-x * y",
+    arith(ArithOp::Mul, neg(var_value("x")), var_value("y"))
+);
+value_ok!(
+    unary_minus_binds_tighter_than_addition,
+    "-x + y",
+    arith(ArithOp::Add, neg(var_value("x")), var_value("y"))
+);
+value_ok!(
+    subtraction_of_a_negation,
+    "a - -b",
+    arith(ArithOp::Sub, var_value("a"), neg(var_value("b")))
+);
+// A term slot takes a literal, and `-100` is not one.
+prop_err!(a_signed_literal_is_not_a_term, "Score(x, -100)");
 value_ok!(
     parses_multiplication,
     "a * b",

@@ -962,16 +962,30 @@ where
             bare_ident,
         ));
 
-        // factor ::= primary (("*" | "/" | "%") primary)*  (left-assoc, tighter than `+`/`-`)
+        // unary ::= "-" unary | primary  (sugar: `-x` is `0 - x`, never a signed literal)
+        let unary = recursive(|unary| {
+            just(Token::Minus)
+                .ignore_then(unary)
+                .map(|operand| ValueExpr::Arith {
+                    op: ArithOp::Sub,
+                    left: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+                        morpholog_core::LiteralDecimal::ZERO,
+                    )))),
+                    right: Box::new(operand),
+                })
+                .or(primary)
+        });
+
+        // factor ::= unary (("*" | "/" | "%") unary)*  (left-assoc, tighter than `+`/`-`)
         let mul_op = choice((
             just(Token::Star).to(ArithOp::Mul),
             just(Token::Slash).to(ArithOp::Div),
             just(Token::Percent).to(ArithOp::Mod),
         ));
         let factor =
-            primary
+            unary
                 .clone()
-                .foldl(mul_op.then(primary.clone()).repeated(), |lhs, (op, rhs)| {
+                .foldl(mul_op.then(unary.clone()).repeated(), |lhs, (op, rhs)| {
                     ValueExpr::Arith {
                         op,
                         left: Box::new(lhs),

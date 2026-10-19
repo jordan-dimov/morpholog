@@ -78,7 +78,7 @@ invariant balanced_posted_entry:
 -- An entry with no lines is meaningless paperwork. Every entry must
 -- have at least one line.
 invariant journal_entry_has_lines:
-    JournalEntry(entry, _, _) implies JournalLine(entry, _, _, _)
+    JournalEntry(entry, _, _) implies JournalLine(entry_id: entry, ..)
 
 
 -- The only ways state may change. A transformation proposes a set of
@@ -149,5 +149,5 @@ transformation restate_entry(
 -- - the reconciliation bug that haunts real accounting systems simply
 -- cannot occur. One row per account; balance is debits minus credits.
 derived TrialBalanceRow(account):
-    over JournalLine(_, account, _, _)
+    over JournalLine(account: account, ..)
     value balance = sum(d | JournalLine(_, account, d, _)) - sum(c | JournalLine(_, account, _, c))

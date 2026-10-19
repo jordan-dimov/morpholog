@@ -62,7 +62,7 @@ predicate ChargeLine(line: Subject, charge: Subject, meter: Subject, proposed_qt
 -- Every line names a charge the tariff declares - the totality
 -- companion that keeps the selection below from passing emptily.
 invariant lines_name_a_declared_charge:
-    ChargeLine(_, charge, _, _, _) implies TariffCharge(charge, _)
+    ChargeLine(charge: charge, ..) implies TariffCharge(charge, _)
 
 -- A source the rules do not know is refused at the declaration, so
 -- the selection can never meet a third case it has no branch for.

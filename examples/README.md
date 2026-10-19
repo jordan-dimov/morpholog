@@ -47,6 +47,7 @@ one act is a margin-call run.
 | round money to the penny, the way the contract says | [15_metered_billing](15_metered_billing/) | `round(x, quantum)` |
 | name a figure the whole rulebook shares | [15_metered_billing](15_metered_billing/) | `const name = (value)` |
 | match a wide claim by naming the fields it reads, not by counting underscores | [15_metered_billing](15_metered_billing/) | `ChargeLine(invoice: invoice, net_gbp: n, ..)` |
+| reverse a billed figure with its sign turned, never re-rounded | [15_metered_billing](15_metered_billing/) | `let credit_net = -net_gbp` |
 | hold a ratio, a rate or an advance limit | [11_borrowing_base](11_borrowing_base/) | multiplication and division, cross-multiplied for exactness |
 | compute a read-side view from admitted claims | [03_double_entry_ledger](03_double_entry_ledger/) | `derived ... over ... value ...` |
 | project several coordinates of a join into one view | [10_trade_lifecycle](10_trade_lifecycle/) | a `derived` head binding more than the key |

@@ -16,8 +16,8 @@
 
 use crate::{
     ArithOp, Claim, CompareOp, Definition, DerivedClaim, Discipline, Intent, Invariant,
-    InvariantOrigin, OrderedDomain, PredicateDecl, Program, Prop, Stmt, Term, Transformation,
-    Value, ValueExpr, Var,
+    InvariantOrigin, LiteralDecimal, OrderedDomain, PredicateDecl, Program, Prop, Stmt, Term,
+    Transformation, Value, ValueExpr, Var,
 };
 
 /// The surface token for an ordered comparison, used by the formatter
@@ -119,8 +119,9 @@ struct Naming<'a> {
 /// What every formatting call carries. `naming` supplies field and
 /// parameter names; it is `None` for diagnostic display text (rejection
 /// reasons, witnesses). `named_canonical` turns on the human-facing form,
-/// where wildcard runs print named; off, the rendering is the stable
-/// positional one the hash uses. In either mode, a `value` lookup whose
+/// where wildcard runs print named and a subtraction from the literal
+/// `0` prints as `-x`; off, the rendering is the stable positional one
+/// the hash uses. In either mode, a `value` lookup whose
 /// hole is not its first wildcard prints named when it can, because the
 /// positional text would reparse differently.
 #[derive(Clone, Copy)]
@@ -531,6 +532,14 @@ fn fmt_prop(p: &Prop, ctx: FormatContext) -> String {
     }
 }
 
+/// The decimal literal `0` itself, by scale: `0.0 - x` is not `-x`.
+fn is_literal_zero(e: &ValueExpr) -> bool {
+    matches!(
+        e,
+        ValueExpr::Term(Term::Literal(Value::Decimal(d))) if *d == LiteralDecimal::ZERO
+    )
+}
+
 /// Render a value expression for an operand position. Infix arithmetic
 /// is the only ambiguous form, so it alone is parenthesised; everything
 /// else is self-delimiting.
@@ -631,6 +640,9 @@ fn fmt_value(e: &ValueExpr, ctx: FormatContext) -> String {
             }
         }
         ValueExpr::Arith { op, left, right } => {
+            if ctx.named_canonical && *op == ArithOp::Sub && is_literal_zero(left) {
+                return format!("-{}", value_primary(right, ctx));
+            }
             format!(
                 "{} {} {}",
                 value_primary(left, ctx),

@@ -4,7 +4,8 @@
 //! Each charge line's payable figure IS rate times volume, rounded to the
 //! penny with exact halves away from zero. Covered: a 1p tamper is refused,
 //! halves round away from zero, an undeclared VAT rate is refused rather
-//! than passing emptily, and the invoice total rounds per line, then sums.
+//! than passing emptily, the invoice total rounds per line, then sums, and
+//! a credit note is the billed line negated, computed rather than proposed.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -14,6 +15,7 @@ use std::sync::OnceLock;
 use common::{Example, claim_instance, dec_str, subj, test_actor};
 use morpholog_core::{EvalError, Outcome, RejectionReason, State};
 use morpholog_examples::metered_billing;
+use morpholog_test_support::eval_invariant;
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
@@ -271,6 +273,110 @@ fn a_sealed_invoice_takes_no_further_lines() {
         matches!(outcome, Ok(Outcome::Rejected { .. })),
         "a sealed invoice is closed to new lines: {outcome:?}"
     );
+}
+
+/// One charge line on a sealed invoice: a billed line.
+fn billed_line() -> State {
+    let mut claims = with_vat_rate().claims().to_vec();
+    claims.push(claim_instance(
+        "ChargeLine",
+        &[
+            subj("line_a"),
+            subj("inv_1"),
+            dec_str("13.5"),
+            dec_str("431.7"),
+            dec_str("58.28"),
+            subj("vat_reduced"),
+            dec_str("2.91"),
+        ],
+    ));
+    claims.push(claim_instance(
+        "InvoiceSealed",
+        &[subj("inv_1"), dec_str("61.19")],
+    ));
+    State::from_claims(claims)
+}
+
+fn credit_note(credit: &str, net: &str, vat: &str) -> morpholog_core::ClaimInstance {
+    claim_instance(
+        "CreditNote",
+        &[subj(credit), subj("line_a"), dec_str(net), dec_str(vat)],
+    )
+}
+
+/// Propose a credit against a line, naming only the line.
+fn credit(line: &str, state: &State) -> Result<Outcome, EvalError> {
+    ex().propose_as(
+        &metered_billing::credit_line(),
+        vec![subj("credit_1"), subj(line)],
+        test_actor(),
+        state,
+    )
+}
+
+#[test]
+fn a_credit_note_is_the_billed_line_negated_to_the_penny() {
+    let outcome = credit("line_a", &billed_line()).unwrap();
+    let Outcome::Accepted {
+        asserted_claims, ..
+    } = &outcome
+    else {
+        panic!("a billed line can be credited: {outcome:?}");
+    };
+    assert_eq!(
+        asserted_claims,
+        &vec![credit_note("credit_1", "-58.28", "-2.91")],
+        "the credit's figures are the line's own, sign turned, no re-rounding"
+    );
+}
+
+#[test]
+fn a_line_not_yet_billed_cannot_be_credited() {
+    let mut claims = billed_line().claims().to_vec();
+    claims.retain(|c| c.predicate.as_str() != "InvoiceSealed");
+    let outcome = credit("line_a", &State::from_claims(claims));
+    assert!(
+        matches!(
+            outcome,
+            Ok(Outcome::Rejected {
+                reason: RejectionReason::Require { .. },
+            })
+        ),
+        "an unsealed invoice has nothing to credit: {outcome:?}"
+    );
+}
+
+#[test]
+fn a_line_is_reversed_at_most_once() {
+    let mut claims = billed_line().claims().to_vec();
+    claims.push(credit_note("credit_0", "-58.28", "-2.91"));
+    let outcome = credit("line_a", &State::from_claims(claims));
+    assert!(
+        matches!(outcome, Ok(Outcome::Rejected { .. })),
+        "a second credit against one line is refused: {outcome:?}"
+    );
+}
+
+/// A credit written by hand that re-rounds on its own, or forgets the
+/// sign, breaks the copy-negation rule. No transformation can state the
+/// figures, so the rule is asked directly.
+#[test]
+fn a_credit_that_recomputes_or_forgets_the_sign_breaks_the_rule() {
+    for (net, vat) in [("-58.3", "-2.9"), ("58.28", "2.91")] {
+        let mut claims = billed_line().claims().to_vec();
+        claims.push(credit_note("credit_x", net, vat));
+        let holds = eval_invariant(
+            &metered_billing::program(),
+            &metered_billing::a_credit_copy_negates_its_line(),
+            &State::from_claims(claims),
+            None,
+        )
+        .unwrap();
+        assert!(
+            !holds,
+            "a credit of ({net}, {vat}) against 58.28/2.91 must break the rule"
+        );
+    }
 }
 
 /// A refusal names which line, and by how much.

@@ -152,7 +152,7 @@ invariant cargo_within_capacity:
 -- charterparty does: settled at most the daily rate times the excess
 -- in days.
 invariant settlements_within_due:
-    let counted = (sum(len | CountingInterval(_, v, _, _, len)))
+    let counted = (sum(len | CountingInterval(voyage: v, len: len, ..)))
     let excess = (max(counted - allowed, duration(PT0S)))
     ((DemurrageRate(v, daily) and VoyageFixture(v, _, _, allowed) and LaytimeCommenced(v, _)) implies
         sum(amount | DemurrageSettled(_, v, amount)) <=
@@ -172,14 +172,14 @@ invariant settlement_requires_rate:
 -- stays untouched by everything that follows; the question is only
 -- ever how the counted time compares to it.
 transformation fix_voyage(voyage, vessel, port, allowed):
-    require not VoyageFixture(voyage, _, _, _)
+    require not VoyageFixture(voyage: voyage, ..)
     admit VoyageFixture(voyage, vessel, port, allowed)
 
 -- The master tenders Notice of Readiness: a formal "we are here and
 -- ready", at an exact instant. Everything downstream hangs off this
 -- moment, which is why it is a first-class claim with its own id.
 transformation tender_nor(nor, voyage, tendered_at):
-    require VoyageFixture(voyage, _, _, _)
+    require VoyageFixture(voyage: voyage, ..)
     require not NorTendered(_, voyage, _)
     admit NorTendered(nor, voyage, tendered_at)
 
@@ -217,7 +217,7 @@ transformation complete_cargo_ops(voyage, completed_at):
 
 -- Declare what the vessel can carry.
 transformation declare_capacity(voyage, capacity):
-    require VoyageFixture(voyage, _, _, _)
+    require VoyageFixture(voyage: voyage, ..)
     require not VesselCapacity(voyage, _)
     admit VesselCapacity(voyage, capacity)
 
@@ -232,7 +232,7 @@ transformation load_parcel(parcel, voyage, qty):
 -- delay. "Per day" is not a unit the system knows; it is the formula
 -- in the invariant and the derived figure below.
 transformation agree_demurrage_rate(voyage, daily):
-    require VoyageFixture(voyage, _, _, _)
+    require VoyageFixture(voyage: voyage, ..)
     require not DemurrageRate(voyage, _)
     admit DemurrageRate(voyage, daily)
 
@@ -263,7 +263,7 @@ transformation settle_demurrage(settlement, voyage, amount):
 -- zero-length excess, not an error.
 derived TimeOnDemurrage(voyage, allowed):
     over VoyageFixture(voyage, _, _, allowed) and LaytimeCommenced(voyage, _)
-    value excess = max(sum(len | CountingInterval(_, voyage, _, _, len)) - allowed, duration(PT0S))
+    value excess = max(sum(len | CountingInterval(voyage: voyage, len: len, ..)) - allowed, duration(PT0S))
 
 -- And what it is worth: the same excess, divided by twenty-four hours
 -- into an exact count of days (5.5 days is 5.5, not "about five"),
@@ -271,4 +271,4 @@ derived TimeOnDemurrage(voyage, allowed):
 -- bare number is dollars - the only multiplication the units allow.
 derived DemurrageDue(voyage, allowed, daily):
     over VoyageFixture(voyage, _, _, allowed) and DemurrageRate(voyage, daily) and LaytimeCommenced(voyage, _)
-    value due = daily * (max(sum(len | CountingInterval(_, voyage, _, _, len)) - allowed, duration(PT0S)) / duration(PT24H))
+    value due = daily * (max(sum(len | CountingInterval(voyage: voyage, len: len, ..)) - allowed, duration(PT0S)) / duration(PT24H))

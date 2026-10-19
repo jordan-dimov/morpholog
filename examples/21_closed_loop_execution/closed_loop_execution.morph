@@ -101,7 +101,7 @@ intent PlaceOrder(order: Subject, venue: Subject, instrument: Subject,
 -- state cannot hold one however it got there, which is what a reader
 -- of the record is promised.
 invariant authorised_order_is_positive:
-    OrderAuthorised(order, _, _, _, qty, price) implies 0 < qty and 0 < price
+    OrderAuthorised(order: order, qty: qty, price: price, ..) implies 0 < qty and 0 < price
 
 -- Putting the operator on the record, and closing the door behind it
 -- in the same act. Arm first and grant later, and between the two
@@ -193,7 +193,7 @@ predicate Mismatched(report: Subject, order: Subject, reported_qty: Decimal, aut
 derived Mismatched(report, order):
     over (VenueReport(report: report, venue: venue, order_ref: order,
                       instrument: instrument, side: side, qty: qty, price: price, ..)
-          and OrderAuthorised(order, _, _, _, _, _)
+          and OrderAuthorised(order: order, ..)
           and not OrderAuthorised(order, venue, instrument, side, qty, price))
     value reported_qty = value VenueReport(report: report, qty: _, ..)
     value authorised_qty = value OrderAuthorised(order: order, qty: _, ..)
@@ -204,7 +204,7 @@ derived Mismatched(report, order):
 -- the venue all look the same from here until the venue says more.
 predicate Unobserved(order: Subject, qty: Decimal)
 derived Unobserved(order):
-    over (OrderAuthorised(order, _, _, _, _, _)
+    over (OrderAuthorised(order: order, ..)
           and not VenueReport(order_ref: order, ..))
     value qty = value OrderAuthorised(order: order, qty: _, ..)
 
@@ -217,7 +217,7 @@ derived Unobserved(order):
 predicate Unauthorised(report: Subject, venue_order_id: Subject, qty: Decimal, price: Decimal)
 derived Unauthorised(report, venue_order_id):
     over (VenueReport(report: report, order_ref: order_ref, venue_order_id: venue_order_id, ..)
-          and not OrderAuthorised(order_ref, _, _, _, _, _))
+          and not OrderAuthorised(order: order_ref, ..))
     value qty = value VenueReport(report: report, qty: _, ..)
     value price = value VenueReport(report: report, price: _, ..)
 
@@ -229,7 +229,7 @@ derived Unauthorised(report, venue_order_id):
 -- lists the individual reports for whoever investigates.
 predicate Ambiguous(order: Subject, reports: Decimal)
 derived Ambiguous(order):
-    over (OrderAuthorised(order, _, _, _, _, _)
+    over (OrderAuthorised(order: order, ..)
           and VenueReport(order_ref: order, venue_order_id: first, ..)
           and VenueReport(order_ref: order, venue_order_id: second, ..)
           and first != second)

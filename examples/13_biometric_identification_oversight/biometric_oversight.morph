@@ -143,7 +143,7 @@ define two_distinct_prior_verifications(match, moment):
 
 -- A match belongs inside its use: never before the use started.
 invariant match_after_use_start:
-    MatchRecorded(m, u, _, _, at) implies (UseStarted(u, _, _, _, started) and started at_or_before at)
+    MatchRecorded(m, u, _, _, at) implies (UseStarted(use: u, started_at: started, ..) and started at_or_before at)
 
 -- And once the use has an end, never after it. This is the quiet
 -- centrepiece: you cannot close a use period to a moment earlier
@@ -279,7 +279,7 @@ transformation withdraw_verifier_login(person, login_role, system):
 transformation start_use(use, system, version, reference_db, started_at):
     require actor = system
     require (VersionInService(system, version, f, t) and f at_or_before started_at and started_at at_or_before t)
-    require not UseStarted(use, _, _, _, _)
+    require not UseStarted(use: use, ..)
     admit UseStarted(use, system, version, reference_db, started_at)
 
 -- The AI system's raw output enters the record - and only the
@@ -298,7 +298,7 @@ transformation record_match(match, use, input_ref, candidate, matched_at):
     require actor = system
     require started_at at_or_before matched_at
     require not UseEnded(use, _)
-    require not MatchRecorded(match, _, _, _, _)
+    require not MatchRecorded(match: match, ..)
     admit MatchRecorded(match, use, input_ref, candidate, matched_at)
     emit MatchAwaitingVerification(match)
 
@@ -337,12 +337,12 @@ transformation verify_match(match, verified_at):
 -- explanation names the condition and the missing verification in
 -- the statute's own terms.
 transformation decide_on_identification(decision, match, outcome, decided_at):
-    bind MatchRecorded(match, use, _, _, _)
+    bind MatchRecorded(match: match, use: use, ..)
     bind UseStarted(use: use, system: system, ..)
     require OversightAssigned(actor, system)
     require ActorAssertionRestricted(actor)
     require two_distinct_prior_verifications(match, decided_at)
-    require not IdentificationDecision(_, match, _, _, _)
+    require not IdentificationDecision(match: match, ..)
     admit IdentificationDecision(decision, match, outcome, decided_at, actor)
     emit IdentificationDecided(decision)
 
@@ -351,5 +351,5 @@ transformation decide_on_identification(decision, match, outcome, decided_at):
 -- ride along as keys, so the row reads like the statute's own log
 -- line: use, start, end, duration.
 derived UsePeriod(use, started_at, ended_at):
-    over UseStarted(use, _, _, _, started_at) and UseEnded(use, ended_at)
+    over UseStarted(use: use, started_at: started_at, ..) and UseEnded(use, ended_at)
     value length = ended_at - started_at
