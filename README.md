@@ -40,7 +40,7 @@ Your ETRM, ERP, workflow engine and AI platform stay where they are. Morpholog o
 | ETRM or ERP | Run the business. | Leave it running the business; send it each accepted action. |
 | PostgreSQL | Store and query data. | Use it as the durable store: Morpholog's tables can live in their own schema in your existing database. |
 
-## What you can answer afterwards
+## What you can answer
 
 | The question | The answer |
 |---|---|
@@ -48,9 +48,9 @@ Your ETRM, ERP, workflow engine and AI platform stay where they are. Morpholog o
 | Was this person allowed to act when they acted? | Authority is checked at the moment of the action and recorded with it. Withdrawn tomorrow, it stops tomorrow's actions; today's stay valid. |
 | What happens when a figure is corrected later? | The correction changes what may happen next. It does not rewrite what was decided on the old figure. |
 | Can we prove all this later? | Any past moment can be rebuilt exactly. Every change records the rules that accepted it. And someone outside your organisation can check that the history was not edited. |
-| Would a stricter rule have helped? | Write it and ask [`evaluate`](docs/embedder-integration.md#when-the-programme-changes-and-the-ledger-stays). It replays the history under the new rule, deploys nothing, and names the past changes the rule would have refused. A holdout split shows whether the rule was tuned to the past. Rules about the act itself, who may perform it and what it changes, are not scored yet. |
-| Can we tighten a rule when old records already break it? | Yes. A change is judged over the cases it touches, so an old breach blocks only the changes that touch it, until it is repaired, and the rest of the business carries on. `check` names the rules that must be judged whole instead. |
-| Can someone else check a conclusion, not only the history? | [`audit receipt`](docs/runtime-semantics.md#evaluation-receipts) answers a question over the exported history and names the rules and the checkpoint it used. The recipient recomputes the answer offline and compares. It proves the answer follows from the records, not that the records are complete or true. |
+| Which past changes would a stricter rule have refused? | Write it and ask [`evaluate`](docs/embedder-integration.md#when-the-programme-changes-and-the-ledger-stays). It replays the history under the new rule, deploys nothing, and names the past changes the rule would have refused. You can split the history into a training period and a holdout period. Whether refusing them would have been better is a question for the people reading the result. Rules about the act itself, who may perform it and what it changes, are not scored yet. |
+| Can we tighten a rule when old records already break it? | For a rule judged over the cases a change touches, yes: an old breach blocks only the changes that touch its case, until it is repaired, and clean cases carry on. `check` names the rules judged whole instead, where one old breach refuses every change that re-checks the rule. |
+| Can someone else check a conclusion, not only the history? | [`audit receipt`](docs/runtime-semantics.md#evaluation-receipts) answers a question over the exported history and names the rules and the checkpoint it used. The recipient recomputes the answer offline and compares. It proves the answer follows from the records, not that the records are complete or true. Today the recipient needs the whole history up to that checkpoint, not only the records the answer rests on. |
 | Did the outside world do something we never authorised? | Bring the outside system's own report in as records and let a read compare it with what was authorised. In [closed-loop execution](examples/21_closed_loop_execution/), the venue's report exposes an order nobody here authorised. |
 
 ## A rule, read aloud
