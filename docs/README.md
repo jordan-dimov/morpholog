@@ -32,6 +32,9 @@ in the [glossary](#glossary) at the end.
   any language: the request and response shapes, the generated Python
   client, deploying, batches, several proposals as one decision, and
   retries.
+  Also what to do before the rules change (`evaluate` against the
+  history, and what an old breach does to a tightened rule), and how
+  a receipt lets someone else recompute an answer offline.
 
 ## Reference and design
 

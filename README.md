@@ -48,6 +48,10 @@ Your ETRM, ERP, workflow engine and AI platform stay where they are. Morpholog o
 | Was this person allowed to act when they acted? | Authority is checked at the moment of the action and recorded with it. Withdrawn tomorrow, it stops tomorrow's actions; today's stay valid. |
 | What happens when a figure is corrected later? | The correction changes what may happen next. It does not rewrite what was decided on the old figure. |
 | Can we prove all this later? | Any past moment can be rebuilt exactly. Every change records the rules that accepted it. And someone outside your organisation can check that the history was not edited. |
+| Would a stricter rule have helped? | Write it and ask [`evaluate`](docs/embedder-integration.md#when-the-programme-changes-and-the-ledger-stays). It replays the history under the new rule, deploys nothing, and names the past changes the rule would have refused. A holdout split shows whether the rule was tuned to the past. Rules about the act itself, who may perform it and what it changes, are not scored yet. |
+| Can we tighten a rule when old records already break it? | Yes. A change is judged over the cases it touches, so an old breach blocks only the changes that touch it, until it is repaired, and the rest of the business carries on. `check` names the rules that must be judged whole instead. |
+| Can someone else check a conclusion, not only the history? | [`audit receipt`](docs/runtime-semantics.md#evaluation-receipts) answers a question over the exported history and names the rules and the checkpoint it used. The recipient recomputes the answer offline and compares. It proves the answer follows from the records, not that the records are complete or true. |
+| Did the outside world do something we never authorised? | Bring the outside system's own report in as records and let a read compare it with what was authorised. In [closed-loop execution](examples/21_closed_loop_execution/), the venue's report exposes an order nobody here authorised. |
 
 ## A rule, read aloud
 
