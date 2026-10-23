@@ -1,0 +1,136 @@
+{
+  "rehearsal_format_version": 1,
+  "contract": "canonical_audit_prefix_v1",
+  "program": "candidate",
+  "program_hash": "sha256:e27802aee5ee725a44571267e237fc7c7d120980f32538cca546ba994490d852",
+  "semantics_version": 3,
+  "transitions_replayed": 5,
+  "totals": {
+    "same": 1,
+    "different_delta": 1,
+    "would_reject": 1,
+    "would_error": 1,
+    "unreplayable": 1
+  },
+  "refusals": [
+    {
+      "rule": "position_within_limit",
+      "kind": "invariant",
+      "would_refuse": 1,
+      "refused_transitions": [
+        "01900000-0000-7000-8000-000000000002"
+      ]
+    }
+  ],
+  "differences": [
+    {
+      "transition_id": "01900000-0000-7000-8000-000000000002",
+      "transformation": "book_position",
+      "semantics_version": 3,
+      "class": "would_reject",
+      "rule": "position_within_limit",
+      "kind": "invariant",
+      "witness": [
+        {
+          "var": "book",
+          "value": {
+            "type": "subject",
+            "value": "A"
+          }
+        },
+        {
+          "var": "cap",
+          "value": {
+            "type": "decimal",
+            "value": "10"
+          }
+        },
+        {
+          "var": "qty",
+          "value": {
+            "type": "decimal",
+            "value": "50"
+          }
+        }
+      ],
+      "compared": {
+        "op": "<=",
+        "left": {
+          "type": "decimal",
+          "value": "50"
+        },
+        "right": {
+          "type": "decimal",
+          "value": "10"
+        }
+      }
+    },
+    {
+      "transition_id": "01900000-0000-7000-8000-000000000003",
+      "transformation": "book_position",
+      "semantics_version": 3,
+      "class": "different_delta",
+      "recorded": {
+        "asserted": [
+          {
+            "predicate": "Position",
+            "args": [
+              {
+                "type": "subject",
+                "value": "A"
+              },
+              {
+                "type": "decimal",
+                "value": "5"
+              }
+            ]
+          },
+          {
+            "predicate": "Note",
+            "args": [
+              {
+                "type": "subject",
+                "value": "A"
+              }
+            ]
+          }
+        ],
+        "retracted": [],
+        "emitted": []
+      },
+      "candidate": {
+        "asserted": [
+          {
+            "predicate": "Position",
+            "args": [
+              {
+                "type": "subject",
+                "value": "A"
+              },
+              {
+                "type": "decimal",
+                "value": "5"
+              }
+            ]
+          }
+        ],
+        "retracted": [],
+        "emitted": []
+      }
+    },
+    {
+      "transition_id": "01900000-0000-7000-8000-000000000004",
+      "transformation": "erring",
+      "semantics_version": 3,
+      "class": "would_error",
+      "error": "division by zero"
+    },
+    {
+      "transition_id": "01900000-0000-7000-8000-000000000005",
+      "transformation": "vanished",
+      "semantics_version": 3,
+      "class": "unreplayable",
+      "reason": "the candidate has no transformation `vanished`"
+    }
+  ]
+}

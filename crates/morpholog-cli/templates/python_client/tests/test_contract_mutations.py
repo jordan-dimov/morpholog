@@ -122,6 +122,7 @@ CASES = {
     "guarantees.json": ("guarantee_array", _list_of(E.Guarantee.from_json)),
     "score_report.json": ("score_report", E.ScoreReport.from_json),
     "score_report_split.json": ("score_report", E.ScoreReport.from_json),
+    "rehearsal_report.json": ("rehearsal_report", E.RehearsalReport.from_json),
     "named_claims.json": ("named_claim_array", _list_of(E.NamedClaim.from_json)),
     "claim_reads.json": ("claim_read_array", _list_of(E.ClaimRead.from_json)),
     "named_claim_reads.json": ("named_claim_read_array", _list_of(E.NamedClaimRead.from_json)),

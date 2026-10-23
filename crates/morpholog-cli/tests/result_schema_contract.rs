@@ -20,13 +20,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use morpholog_core::ir_builder::{
-    assert_, claim, implies, invariant, not, params, predicate, program, require, transformation,
-    var,
+    assert_, claim, div, implies, invariant, le, let_, not, params, predicate, program, require,
+    sub, term, transformation, var,
 };
 use morpholog_core::{
     BatchScore, CandidateScorer, CaseOutcome, CaseResult, ClaimInstance, Compared, CoverageTracker,
-    EvalValue, IntentInstance, RefusalKind, SplitBoundaryReport, State, Subject, Transition,
-    WitnessBinding, effective_delta,
+    EvalValue, IntentInstance, RecordedProposal, RefusalKind, Rehearsal, SplitBoundaryReport,
+    State, Subject, Transition, WitnessBinding, effective_delta,
 };
 use morpholog_postgres::{
     AtomicAct, AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, CheckpointWitnesses,
@@ -41,7 +41,7 @@ use morpholog_postgres::{
     CheckpointMatch, Completeness, Evaluation, EvaluationReceipt, ProgramMatch, ReceiptCheckpoint,
     ReceiptForm, ReceiptQuery, ReceiptVerificationReport, VerdictKind,
 };
-use morpholog_test_support::explain;
+use morpholog_test_support::{explain, prepare};
 use rust_decimal::Decimal;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -1768,6 +1768,134 @@ fn refresh_derived_report_rejects_one_sided_snapshot() {
     assert!(err.contains("dependentRequired"), "unexpected error: {err}");
 }
 
+// The rehearsal report, pinned byte for byte: one row of every class the
+// candidate can give a recorded proposal, and a `same` row that is counted
+// and not listed.
+#[test]
+fn rehearsal_report_serializes_as_pinned() {
+    let candidate = program("candidate")
+        .predicates(vec![
+            predicate("Limit").subject("book").decimal("cap").build(),
+            predicate("Position").subject("book").decimal("qty").build(),
+            predicate("Note").subject("book").build(),
+        ])
+        .invariants(vec![invariant(
+            "position_within_limit",
+            implies(
+                morpholog_core::ir_builder::and(vec![
+                    claim("Position", vec![var("book"), var("qty")]),
+                    claim("Limit", vec![var("book"), var("cap")]),
+                ]),
+                le(term(var("qty")), term(var("cap"))),
+            ),
+        )])
+        .transformations(vec![
+            transformation(
+                "set_limit",
+                params(&["book", "cap"]),
+                vec![assert_("Limit", vec![var("book"), var("cap")])],
+            ),
+            transformation(
+                "book_position",
+                params(&["book", "qty"]),
+                vec![assert_("Position", vec![var("book"), var("qty")])],
+            ),
+            transformation(
+                "erring",
+                params(&["book", "qty"]),
+                vec![
+                    let_("nothing", sub(term(var("qty")), term(var("qty")))),
+                    let_("r", div(term(var("qty")), term(var("nothing")))),
+                    require(le(term(var("r")), term(var("r")))),
+                    assert_("Position", vec![var("book"), var("qty")]),
+                ],
+            ),
+        ])
+        .build();
+    let prepared = prepare(&candidate);
+    let mut rehearsal = Rehearsal::new(&prepared);
+    let book = EvalValue::Subject(Subject::from("A"));
+    let desk = Subject::from("desk");
+    let claim_of = |predicate: &str, args: Vec<EvalValue>| ClaimInstance {
+        predicate: predicate.into(),
+        args,
+    };
+    let ids: Vec<String> = (1..=5)
+        .map(|i| format!("01900000-0000-7000-8000-00000000000{i}"))
+        .collect();
+    let row =
+        |i: usize,
+         transformation: &'static str,
+         args: Vec<EvalValue>,
+         asserted: Vec<ClaimInstance>| { (ids[i].clone(), transformation, args, asserted) };
+    let rows = [
+        // Same: the limit, decided as recorded.
+        row(
+            0,
+            "set_limit",
+            vec![book.clone(), EvalValue::Decimal(Decimal::new(10, 0))],
+            vec![claim_of(
+                "Limit",
+                vec![book.clone(), EvalValue::Decimal(Decimal::new(10, 0))],
+            )],
+        ),
+        // Would reject: the candidate's invariant refuses the over-limit position.
+        row(
+            1,
+            "book_position",
+            vec![book.clone(), EvalValue::Decimal(Decimal::new(50, 0))],
+            vec![claim_of(
+                "Position",
+                vec![book.clone(), EvalValue::Decimal(Decimal::new(50, 0))],
+            )],
+        ),
+        // Different delta: the record also holds a note the candidate's act does not admit.
+        row(
+            2,
+            "book_position",
+            vec![book.clone(), EvalValue::Decimal(Decimal::new(5, 0))],
+            vec![
+                claim_of(
+                    "Position",
+                    vec![book.clone(), EvalValue::Decimal(Decimal::new(5, 0))],
+                ),
+                claim_of("Note", vec![book.clone()]),
+            ],
+        ),
+        // Would error: a division by zero in the act.
+        row(
+            3,
+            "erring",
+            vec![book.clone(), EvalValue::Decimal(Decimal::new(1, 0))],
+            vec![claim_of(
+                "Position",
+                vec![book.clone(), EvalValue::Decimal(Decimal::new(1, 0))],
+            )],
+        ),
+        // Unreplayable: an act the candidate lacks.
+        row(4, "vanished", vec![book.clone()], vec![]),
+    ];
+    let mut pre = State::from_claims(vec![]);
+    for (id, transformation, args, asserted) in &rows {
+        rehearsal.observe(
+            &pre,
+            &RecordedProposal {
+                transition_id: id,
+                transformation,
+                args,
+                actor: &desk,
+                asserted,
+                retracted: &[],
+                emitted: &[],
+                drawn: Some(&[]),
+                semantics_version: Some(3),
+            },
+        );
+        pre.apply(asserted, &[]);
+    }
+    assert_golden_bytes("rehearsal_report.json", &rehearsal.into_report());
+}
+
 // The evaluate reports, pinned byte for byte as printed, including
 // `CaseResult`'s flatten: a discovery harness reads this stdout.
 #[test]
@@ -2918,6 +3046,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("score_report.json", "score_report"),
         ("score_report_split.json", "score_report"),
         ("batch_score.json", "batch_score"),
+        ("rehearsal_report.json", "rehearsal_report"),
         ("audit_row.json", "audit_row"),
         ("audit_row_attested.json", "audit_row"),
         ("audit_row_attested_with_role_oid.json", "audit_row"),

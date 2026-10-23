@@ -40,7 +40,7 @@ mod commands;
         governing state          propose, explain, inspect, session\n  \
         running a deployment     init, roles, refresh, outbox\n  \
         proving the record       audit\n  \
-        discovering rules        evaluate\n\n\
+        discovering rules        evaluate, rehearse\n\n\
         Only invariants and transformations are first-class in Morpholog: propose\n\
         is the one verb by which governed state changes, and everything else\n\
         either prepares a programme or observes what the rules have done.\n\n\
@@ -187,6 +187,21 @@ enum Command {
     /// signal for discovering controls nobody hand-authored. Output is JSON. Scores state invariants only;
     /// transition-relational candidates using `pre(...)` are rejected.
     Evaluate(EvaluateArgs),
+
+    /// Rehearse a candidate programme over committed history.
+    ///
+    /// Re-decides every committed proposal under the candidate - which
+    /// is NOT deployed - through the ordinary kernel: its gates, bindings,
+    /// claims and intents, not only its invariants. Each proposal is decided
+    /// against the state the audit rows before it build in canonical
+    /// order, and reported as the same decision, a different effect, a
+    /// refusal by the first rule that said no, a kernel error, or
+    /// unreplayable (an act the candidate lacks, arguments it does not
+    /// take, more fresh subjects than the row recorded). Refusals are
+    /// counted per rule. Read-only; output is JSON. The log holds admitted
+    /// history only, so this answers what the candidate would have refused,
+    /// never what demand there was.
+    Rehearse(RehearseArgs),
 
     /// Everything about the audit log: prove it, anchor it, carry it.
     ///
@@ -582,6 +597,29 @@ pub(crate) struct EvaluateArgs {
     /// the unit a harness assigns to a slice.
     #[arg(long, conflicts_with = "packs")]
     pub(crate) train_until: Option<String>,
+}
+
+/// Arguments for `rehearse`: a candidate `.morph` path, and the history to
+/// rehearse it over - a database or an evidence pack.
+#[derive(clap::Args, Debug)]
+pub(crate) struct RehearseArgs {
+    /// Path to the candidate `.morph` source file to rehearse
+    pub(crate) file: std::path::PathBuf,
+
+    /// Rehearse against the committed audit log at this connection (or
+    /// `DATABASE_URL`). The default mode; omit when using `--pack`
+    #[arg(long, env = "DATABASE_URL")]
+    pub(crate) database_url: Option<String>,
+
+    /// Rehearse offline against a portable evidence pack instead of a
+    /// database. When given, no connection is opened or used
+    #[arg(long)]
+    pub(crate) pack: Option<std::path::PathBuf>,
+
+    /// An external checkpoint anchor for `--pack`, held outside the
+    /// database: the pack must verify against it before it is rehearsed
+    #[arg(long, requires = "pack")]
+    pub(crate) anchor_file: Option<std::path::PathBuf>,
 }
 
 /// The audit log's integrity, end to end. `verify`, `checkpoint` and
@@ -1683,6 +1721,7 @@ async fn run() -> anyhow::Result<()> {
         },
         Command::Schema(args) => commands::schema::run(args),
         Command::Evaluate(args) => commands::evaluate::run(args).await,
+        Command::Rehearse(args) => commands::rehearse::run(args).await,
         Command::Provision { what } => match what {
             ProvisionCmd::Indexes(args) => commands::provision::indexes(args).await,
         },

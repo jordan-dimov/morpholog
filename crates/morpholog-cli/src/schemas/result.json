@@ -1031,6 +1031,114 @@
         }
       }
     },
+    "rehearsal_report": {
+      "description": "Every committed proposal re-decided under a candidate programme, each against the state the audit rows before it build in canonical order (the contract names this; it is not the snapshot the proposal saw under concurrent writers). The log holds admitted history only: this says what the candidate would have refused, never what demand there was.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rehearsal_format_version", "contract", "program", "program_hash", "semantics_version", "transitions_replayed", "totals", "refusals", "differences"],
+      "properties": {
+        "rehearsal_format_version": { "type": "integer", "minimum": 1 },
+        "contract": { "const": "canonical_audit_prefix_v1" },
+        "program": { "type": "string" },
+        "program_hash": { "type": "string", "pattern": "^sha256:" },
+        "semantics_version": { "type": "integer", "minimum": 1 },
+        "transitions_replayed": { "type": "integer", "minimum": 0 },
+        "totals": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["same", "different_delta", "would_reject", "would_error", "unreplayable"],
+          "properties": {
+            "same": { "type": "integer", "minimum": 0 },
+            "different_delta": { "type": "integer", "minimum": 0 },
+            "would_reject": { "type": "integer", "minimum": 0 },
+            "would_error": { "type": "integer", "minimum": 0 },
+            "unreplayable": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "refusals": { "type": "array", "items": { "$ref": "#/$defs/rule_refusals" } },
+        "differences": { "type": "array", "items": { "$ref": "#/$defs/rehearsal_row" } }
+      }
+    },
+    "rule_refusals": {
+      "description": "The proposals one rule refused first; a proposal that would break several rules counts once, under the first.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule", "kind", "would_refuse", "refused_transitions"],
+      "properties": {
+        "rule": { "type": "string" },
+        "kind": { "enum": ["require", "bind", "invariant"] },
+        "would_refuse": { "type": "integer", "minimum": 0 },
+        "refused_transitions": { "type": "array", "items": { "type": "string", "format": "uuid" } }
+      }
+    },
+    "rehearsal_effect": {
+      "description": "What one admission changed against the prefix state, and what it emitted, in order.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asserted", "retracted", "emitted"],
+      "properties": {
+        "asserted": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
+        "retracted": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
+        "emitted": { "type": "array", "items": { "$ref": "#/$defs/intent_instance" } }
+      }
+    },
+    "rehearsal_row": {
+      "description": "A proposal the candidate does not decide the same way. `semantics_version` is the one the row was admitted under, absent on rows written before it was recorded.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transition_id", "transformation", "class", "recorded", "candidate"],
+          "properties": {
+            "transition_id": { "type": "string", "format": "uuid" },
+            "transformation": { "type": "string" },
+            "semantics_version": { "type": "integer", "minimum": 1 },
+            "class": { "const": "different_delta" },
+            "recorded": { "$ref": "#/$defs/rehearsal_effect" },
+            "candidate": { "$ref": "#/$defs/rehearsal_effect" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transition_id", "transformation", "class", "rule", "kind"],
+          "properties": {
+            "transition_id": { "type": "string", "format": "uuid" },
+            "transformation": { "type": "string" },
+            "semantics_version": { "type": "integer", "minimum": 1 },
+            "class": { "const": "would_reject" },
+            "rule": { "type": "string" },
+            "kind": { "enum": ["require", "bind", "invariant"] },
+            "witness": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/witness_binding" } },
+            "compared": { "$ref": "#/$defs/compared" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transition_id", "transformation", "class", "error"],
+          "properties": {
+            "transition_id": { "type": "string", "format": "uuid" },
+            "transformation": { "type": "string" },
+            "semantics_version": { "type": "integer", "minimum": 1 },
+            "class": { "const": "would_error" },
+            "error": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transition_id", "transformation", "class", "reason"],
+          "properties": {
+            "transition_id": { "type": "string", "format": "uuid" },
+            "transformation": { "type": "string" },
+            "semantics_version": { "type": "integer", "minimum": 1 },
+            "class": { "const": "unreplayable" },
+            "reason": { "type": "string" }
+          }
+        }
+      ]
+    },
     "score_report": {
       "type": "object",
       "additionalProperties": false,

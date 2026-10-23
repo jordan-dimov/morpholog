@@ -703,6 +703,41 @@ class Score(unittest.TestCase):
             envelopes.ScoreReport.from_json(payload)
 
 
+
+class Rehearsal(unittest.TestCase):
+    def test_a_rehearsal_report_reads_whole_with_one_row_of_each_class(self):
+        report = envelopes.RehearsalReport.from_json(golden("rehearsal_report.json"))
+        self.assertEqual(report.contract, "canonical_audit_prefix_v1")
+        self.assertEqual(report.transitions_replayed, 5)
+        self.assertEqual(report.totals.same, 1)
+        self.assertEqual([r.klass for r in report.differences],
+                         ["would_reject", "different_delta", "would_error", "unreplayable"])
+        refused = report.differences[0]
+        self.assertEqual((refused.rule, refused.kind), ("position_within_limit", "invariant"))
+        assert refused.witness is not None and refused.compared is not None
+        self.assertEqual(refused.compared.op, "<=")
+        self.assertEqual(refused.semantics_version, 3)
+        differing = report.differences[1]
+        assert differing.recorded is not None and differing.candidate is not None
+        self.assertEqual(len(differing.recorded.asserted), 2)
+        self.assertEqual(len(differing.candidate.asserted), 1)
+        self.assertEqual(report.differences[2].error, "division by zero")
+        self.assertIn("vanished", report.differences[3].reason or "")
+        self.assertEqual(report.refusals[0].refused_transitions, [refused.transition_id])
+
+    def test_a_rehearsal_row_carries_only_its_class_fields(self):
+        payload = golden("rehearsal_report.json")
+        row = payload["differences"][3]
+        row["rule"] = "x"
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "rule"):
+            envelopes.RehearsalReport.from_json(payload)
+
+    def test_a_rehearsal_report_refuses_a_field_it_does_not_know(self):
+        payload = golden("rehearsal_report.json")
+        payload["safe_to_deploy"] = True
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "safe_to_deploy"):
+            envelopes.RehearsalReport.from_json(payload)
+
 class AuditTail(unittest.TestCase):
     def test_the_audit_row_round_trips_the_golden(self):
         row = envelopes.AuditRow.from_json(golden("audit_row.json"))

@@ -43,6 +43,7 @@ mod lint;
 mod prepared;
 mod propose;
 mod reads;
+pub mod rehearse;
 pub mod schema;
 mod score;
 mod state;
@@ -93,6 +94,10 @@ pub use propose::{
     finish_staged_delta_with,
 };
 pub use reads::{KeyedPattern, KnownTerm, ReadFilter, ReadPlan};
+pub use rehearse::{
+    Effect, REHEARSAL_CONTRACT, REHEARSAL_FORMAT_VERSION, RecordedProposal, Rehearsal,
+    RehearsalReport, RowClass, RowReport, RuleRefusals, Totals,
+};
 pub use schema::{intent_arg_schema, transformation_arg_schema};
 pub use score::{
     BatchScore, CandidateScore, CandidateScorer, CaseOutcome, CaseResult, InvariantScore,

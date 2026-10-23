@@ -554,6 +554,22 @@ class Morpholog:
         args.extend(self._opt("--train-until", train_until))
         return envelopes.ScoreReport.from_json(self._json(*args))
 
+    def rehearse(self, pack: str | None = None) -> envelopes.RehearsalReport:
+        """Re-decide every committed proposal under this client's programme
+        file, through the ordinary kernel (gates, bindings, claims and
+        intents, not only invariants), each against the state the audit
+        rows before it build in canonical order: from ``pack``, an evidence
+        pack read offline, or else from this client's database. Reports
+        the rows decided differently and refusals counted per rule. The
+        record holds admitted history only, so this says what the
+        programme would have refused, never what demand there was."""
+        args = ["rehearse", self.file]
+        if pack is None:
+            args.extend(["--database-url", self.database_url])
+        else:
+            args.extend(["--pack", str(pack)])
+        return envelopes.RehearsalReport.from_json(self._json(*args))
+
     # ------------------------------------------------------------
     # The commit path.
     # ------------------------------------------------------------

@@ -32,6 +32,7 @@ pub(crate) mod propose;
 pub(crate) mod provision;
 pub(crate) mod receipt;
 pub(crate) mod refresh;
+pub(crate) mod rehearse;
 pub(crate) mod roles;
 pub(crate) mod schema;
 pub(crate) mod session;
