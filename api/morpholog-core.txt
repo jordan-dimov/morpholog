@@ -814,6 +814,12 @@ impl core::marker::UnsafeUnpin for morpholog_core::KnownTerm
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::KnownTerm
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::KnownTerm
 pub enum morpholog_core::Lint
+pub morpholog_core::Lint::BindOnlyToRetract
+pub morpholog_core::Lint::BindOnlyToRetract::bind: usize
+pub morpholog_core::Lint::BindOnlyToRetract::pattern: alloc::string::String
+pub morpholog_core::Lint::BindOnlyToRetract::predicate: alloc::string::String
+pub morpholog_core::Lint::BindOnlyToRetract::retract: usize
+pub morpholog_core::Lint::BindOnlyToRetract::transformation: alloc::string::String
 pub morpholog_core::Lint::CaseWiderThanClaim
 pub morpholog_core::Lint::CaseWiderThanClaim::case: alloc::vec::Vec<alloc::string::String>
 pub morpholog_core::Lint::CaseWiderThanClaim::invariant: alloc::string::String

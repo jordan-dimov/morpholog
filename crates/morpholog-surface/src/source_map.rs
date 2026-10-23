@@ -194,6 +194,14 @@ impl SourceMap {
             Lint::LargeGrid { transformation, .. } => {
                 self.decl_span(DeclKind::Transformation, transformation)
             }
+            // On the bind, which the pattern retract makes unnecessary.
+            Lint::BindOnlyToRetract {
+                transformation,
+                bind,
+                ..
+            } => self
+                .statement_span(transformation, *bind)
+                .or_else(|| self.decl_span(DeclKind::Transformation, transformation)),
             // On the statement that matches afresh, where the fix (or the rename) goes.
             Lint::RequireRematch {
                 transformation,
