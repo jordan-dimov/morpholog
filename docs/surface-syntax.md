@@ -88,6 +88,13 @@ transformation flag_all(orders):
 transformation unflag(order):
     require Flagged(order)
     retract Flagged(order)
+
+transformation withdraw_mandate(trader, desk):
+    -- A retract takes a pattern: name the key, elide the rest with `..`.
+    -- Every claim that matches goes; none matching is a no-op, so the
+    -- `require` is what refuses when there is nothing to withdraw.
+    require held: Mandate(trader: trader, desk: desk, ..)
+    retract Mandate(trader: trader, desk: desk, ..)
 ```
 
 Every statement reads the state as it was when the act began: a claim

@@ -439,6 +439,44 @@ transformation enter(round_id):
     assert!(!strict.status.success(), "--strict promotes it");
 }
 
+// A bind-only-to-retract hint carets the bind, here 8:5, spells the
+// pattern form, and --strict makes it an error.
+#[test]
+fn a_bind_only_to_retract_hint_points_at_the_bind() {
+    let f = temp_morph(
+        "program rows
+
+predicate Row(row: Subject, a: Decimal, b: Decimal, c: Decimal)
+    unique by (row)
+
+transformation drop_row(row):
+    require present: Row(row: row, ..)
+    bind the_row: Row(row, a, b, c)
+    retract Row(row, a, b, c)
+",
+    );
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(f.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("hint:")
+            && stderr.contains(":8:5")
+            && stderr.contains("`retract Row(row: row, ..)`"),
+        "got: {stderr}"
+    );
+    let strict = Command::new(bin())
+        .arg("check")
+        .arg(f.path())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert!(!strict.status.success(), "--strict promotes it");
+}
+
 // --strict promotes the same finding to an error and a failing exit.
 #[test]
 fn check_strict_promotes_the_hint_to_an_error() {

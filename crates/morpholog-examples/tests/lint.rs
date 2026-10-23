@@ -34,7 +34,8 @@ fn unsupplied_missing(found: &[Lint]) -> Vec<&str> {
             | Lint::SharedWriter { .. }
             | Lint::CaseWiderThanClaim { .. }
             | Lint::RequireRematch { .. }
-            | Lint::LargeGrid { .. } => None,
+            | Lint::LargeGrid { .. }
+            | Lint::BindOnlyToRetract { .. } => None,
         })
         .unwrap_or_default()
 }
@@ -58,7 +59,8 @@ fn governing_finding(found: &[Lint]) -> Option<(&str, Vec<&str>)> {
         | Lint::SharedWriter { .. }
         | Lint::CaseWiderThanClaim { .. }
         | Lint::RequireRematch { .. }
-        | Lint::LargeGrid { .. } => None,
+        | Lint::LargeGrid { .. }
+        | Lint::BindOnlyToRetract { .. } => None,
     })
 }
 
@@ -1587,4 +1589,58 @@ fn a_later_pattern_of_the_same_predicate_still_fires_once() {
         "risk_within_limit: Entry(e, risk) and Limit(d, _) and Limit(_, cap) implies risk <= cap",
     ));
     assert_eq!(rechecks(&found), [("Entry", "Limit")]);
+}
+
+const WIDE_ROW: &str = r#"
+program wide
+
+predicate Row(row: Subject, a: Decimal, b: Decimal, c: Decimal, d: Decimal)
+    unique by (row)
+predicate Importing(register: Subject)
+intent Dropped(row: Subject, a: Decimal)
+
+transformation drop_row(row):
+    require importing: Importing(#tec)
+    bind the_row: Row(row, a, b, c, d)
+    retract Row(row, a, b, c, d)
+
+transformation drop_row_and_tell(row):
+    bind the_row: Row(row, a, b, c, d)
+    retract Row(row, a, b, c, d)
+    emit Dropped(row, a)
+
+transformation drop_a_known_row(row, a, b, c, d):
+    bind the_row: Row(row, a, b, c, d)
+    retract Row(row, a, b, c, d)
+"#;
+
+/// The findings of the bind-only-to-retract hint, as (transformation,
+/// bind, retract, pattern).
+fn bind_only_to_retract(found: &[Lint]) -> Vec<(&str, usize, usize, &str)> {
+    found
+        .iter()
+        .filter_map(|l| match l {
+            Lint::BindOnlyToRetract {
+                transformation,
+                bind,
+                retract,
+                pattern,
+                ..
+            } => Some((transformation.as_str(), *bind, *retract, pattern.as_str())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A bind whose every field serves only the retract that follows is
+/// the hint's shape; the suggested pattern names the key and elides the
+/// rest. A field read elsewhere, or no field bound at all, keeps it quiet.
+#[test]
+fn a_bind_that_only_feeds_a_retract_is_hinted_with_the_pattern_form() {
+    let found = lints_of(WIDE_ROW);
+    assert_eq!(
+        bind_only_to_retract(&found),
+        vec![("drop_row", 1, 2, "Row(row: row, ..)")],
+        "{found:?}"
+    );
 }

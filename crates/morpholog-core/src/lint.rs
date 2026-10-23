@@ -185,6 +185,22 @@ pub enum Lint {
         step: String,
         periods: u128,
     },
+
+    /// A `bind` that matches a claim only so a later `retract` can name
+    /// every field: none of the fields it binds is read anywhere else.
+    /// A retract takes a pattern, so the fields need not be bound at
+    /// all. `bind` and `retract` are 0-based top-level statement
+    /// indexes; `pattern` is the retract as the formatter spells it. A
+    /// hint, because a `bind` also refuses the act when no claim
+    /// matches, where a pattern retract is a no-op; a `require` keeps
+    /// that refusal.
+    BindOnlyToRetract {
+        transformation: String,
+        predicate: String,
+        bind: usize,
+        retract: usize,
+        pattern: String,
+    },
 }
 
 /// Above this many periods per proposal, a grid earns [`Lint::LargeGrid`].
@@ -246,6 +262,21 @@ impl std::fmt::Display for Lint {
                  (a window up to {bound} in steps of {step}), and each rule over the grid runs \
                  once per period. If that cost is not meant, shorten the window bound or coarsen \
                  the step"
+            ),
+            Lint::BindOnlyToRetract {
+                transformation,
+                predicate,
+                bind,
+                retract,
+                pattern,
+            } => write!(
+                f,
+                "`{transformation}` binds `{predicate}` in statement {} only to retract it in \
+                 statement {}; `retract {pattern}` retracts the matching claim without binding \
+                 its fields, and is a no-op when none matches, so keep a `require` before it if \
+                 the act must refuse then",
+                bind + 1,
+                retract + 1
             ),
             Lint::RequireRematch {
                 transformation,
@@ -503,6 +534,7 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
     client_name_findings(program, &mut out);
     for t in &program.transformations {
         require_rematch_findings(t, &mut out);
+        bind_only_to_retract_findings(program, t, &mut out);
     }
 
     for (index, inv) in program.invariants.iter().enumerate() {
@@ -733,6 +765,100 @@ fn direct_positive_patterns(prop: &Prop) -> Vec<(&PredicateName, &[Term])> {
 
 /// The re-match hints for one transformation: once per variable, at the
 /// first later statement that names it while it is still unbound.
+fn bind_only_to_retract_findings(
+    program: &Program,
+    t: &crate::ir::Transformation,
+    out: &mut Vec<Lint>,
+) {
+    use crate::ir::Stmt;
+    let mut bound: BTreeSet<&crate::ir::Var> = t.parameters.iter().collect();
+    for (b, stmt) in t.body.iter().enumerate() {
+        if let Stmt::BindOne {
+            prop: Prop::Claim { predicate, args },
+            ..
+        } = stmt
+        {
+            let introduced: BTreeSet<&crate::ir::Var> =
+                pattern_vars(args).filter(|v| !bound.contains(v)).collect();
+            let retract = t.body.iter().enumerate().skip(b + 1).find(|(_, s)| {
+                matches!(s, Stmt::Retract { predicate: p, args: a } if p == predicate && a == args)
+            });
+            if let Some((r, _)) = retract
+                && !introduced.is_empty()
+                && !t.body.iter().enumerate().any(|(i, s)| {
+                    i != b && i != r && mentions(s).iter().any(|v| introduced.contains(v))
+                })
+            {
+                out.push(Lint::BindOnlyToRetract {
+                    transformation: t.name.to_string(),
+                    predicate: predicate.to_string(),
+                    bind: b,
+                    retract: r,
+                    pattern: pattern_without(program, predicate, args, &introduced),
+                });
+            }
+        }
+        match stmt {
+            Stmt::BindOne { prop, .. } => bound.extend(matched_by(prop)),
+            Stmt::Let { name, .. } | Stmt::LetNewSubject { name } => {
+                bound.insert(name);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The claim pattern with `dropped` elided: the named form over the
+/// declaration's field names where every kept term is a variable, the
+/// positional form with wildcards otherwise.
+fn pattern_without(
+    program: &Program,
+    predicate: &PredicateName,
+    args: &[Term],
+    dropped: &BTreeSet<&crate::ir::Var>,
+) -> String {
+    let decl = program.predicates.iter().find(|d| d.name == *predicate);
+    let kept: Vec<(usize, &crate::ir::Var)> = args
+        .iter()
+        .enumerate()
+        .filter_map(|(i, term)| match term {
+            Term::Var(v) if !dropped.contains(v) => Some((i, v)),
+            _ => None,
+        })
+        .collect();
+    let all_vars = kept.len() + dropped.len() == args.len();
+    if let Some(decl) = decl
+        && all_vars
+    {
+        let fields: Vec<String> = kept
+            .iter()
+            .map(|(i, v)| format!("{}: {v}", decl.args[*i].name))
+            .collect();
+        return format!("{predicate}({}, ..)", fields.join(", "));
+    }
+    crate::format::format_prop_inline(&Prop::Claim {
+        predicate: predicate.clone(),
+        args: args
+            .iter()
+            .map(|term| match term {
+                Term::Var(v) if dropped.contains(v) => Term::Wildcard,
+                other => other.clone(),
+            })
+            .collect(),
+    })
+}
+
+/// Every variable a statement names, its `for` body included.
+fn mentions(stmt: &crate::ir::Stmt) -> BTreeSet<&crate::ir::Var> {
+    let mut out: BTreeSet<&crate::ir::Var> = named_here(stmt).into_iter().collect();
+    if let crate::ir::Stmt::For { body, .. } = stmt {
+        for inner in body {
+            out.extend(mentions(inner));
+        }
+    }
+    out
+}
+
 fn require_rematch_findings(t: &crate::ir::Transformation, out: &mut Vec<Lint>) {
     let mut rematch = Rematch {
         transformation: t,
