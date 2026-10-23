@@ -187,13 +187,15 @@ pub enum Lint {
     },
 
     /// A `bind` that matches a claim only so a later `retract` can name
-    /// every field: none of the fields it binds is read anywhere else.
-    /// A retract takes a pattern, so the fields need not be bound at
-    /// all. `bind` and `retract` are 0-based top-level statement
-    /// indexes; `pattern` is the retract as the formatter spells it. A
-    /// hint, because a `bind` also refuses the act when no claim
-    /// matches, where a pattern retract is a no-op; a `require` keeps
-    /// that refusal.
+    /// every field: none of the fields it binds is read anywhere else,
+    /// and the fields it keeps cover an enforced uniqueness key, each
+    /// grounded before the bind or a literal, so the pattern pins the
+    /// one claim the bind did. A retract takes a pattern, so the fields
+    /// need not be bound at all. `bind` and `retract` are 0-based
+    /// top-level statement indexes; `pattern` is the retract in the
+    /// named spelling. A hint, because a `bind` also refuses the act
+    /// when no claim matches, where a pattern retract is a no-op; a
+    /// `require` keeps that refusal.
     BindOnlyToRetract {
         transformation: String,
         predicate: String,
@@ -783,8 +785,21 @@ fn bind_only_to_retract_findings(
             let retract = t.body.iter().enumerate().skip(b + 1).find(|(_, s)| {
                 matches!(s, Stmt::Retract { predicate: p, args: a } if p == predicate && a == args)
             });
+            // A `bind` refuses when several claims match; a pattern
+            // retract removes them all. The hint is safe only where the
+            // fields kept pin one claim: an enforced uniqueness key, every
+            // field of it grounded before the bind or a literal.
+            let kept = |i: usize| match &args[i] {
+                Term::Var(v) => !introduced.contains(v),
+                Term::Literal(_) => true,
+                Term::Wildcard | Term::Actor => false,
+            };
+            let keyed = crate::disciplines::uniqueness_keys_for(program, predicate)
+                .iter()
+                .any(|key| key.iter().all(|&i| kept(i)));
             if let Some((r, _)) = retract
                 && !introduced.is_empty()
+                && keyed
                 && !t.body.iter().enumerate().any(|(i, s)| {
                     i != b && i != r && mentions(s).iter().any(|v| introduced.contains(v))
                 })

@@ -1644,3 +1644,93 @@ fn a_bind_that_only_feeds_a_retract_is_hinted_with_the_pattern_form() {
         "{found:?}"
     );
 }
+
+const KEYS: &str = r#"
+program keys
+
+predicate Loose(batch: Subject, amount: Decimal)
+predicate Keyed(id: Subject, amount: Decimal)
+    unique by (id)
+predicate Pair(left: Subject, right: Subject, amount: Decimal)
+    unique by (left, right)
+
+transformation drop_loose(batch):
+    bind row: Loose(batch, amount)
+    retract Loose(batch, amount)
+
+transformation drop_some_keyed():
+    bind row: Keyed(id, amount)
+    retract Keyed(id, amount)
+
+transformation drop_half_pair(left):
+    bind row: Pair(left, right, amount)
+    retract Pair(left, right, amount)
+
+transformation drop_pair(left, right):
+    bind row: Pair(left, right, amount)
+    retract Pair(left, right, amount)
+"#;
+
+/// The hint is safe only where the kept fields pin one claim: it stays
+/// silent for a predicate with no uniqueness key, for a key the bind
+/// itself introduces, and for a composite key only half grounded; it
+/// fires once every key field is grounded before the bind.
+#[test]
+fn the_hint_needs_a_grounded_uniqueness_key() {
+    let found = lints_of(KEYS);
+    assert_eq!(
+        bind_only_to_retract(&found),
+        vec![("drop_pair", 0, 1, "Pair(left: left, right: right, ..)")],
+        "{found:?}"
+    );
+}
+
+/// Why the hint is conservative: over two matching claims a `bind`
+/// errors, where a pattern retract removes both.
+#[test]
+fn a_bind_over_two_matches_errors_where_a_pattern_retract_removes_both() {
+    use morpholog_core::{EvalError, Outcome, State};
+    use morpholog_test_support::{Example, claim_instance, dec_str, subj};
+    let program = parse_program(
+        "program two
+
+predicate Loose(batch: Subject, amount: Decimal)
+
+transformation drop_bound(batch):
+    bind row: Loose(batch, amount)
+    retract Loose(batch, amount)
+
+transformation drop_pattern(batch):
+    retract Loose(batch: batch, ..)
+",
+    )
+    .expect("parses");
+    let ex = Example::new(&program);
+    let two = State::from_claims(vec![
+        claim_instance("Loose", &[subj("a"), dec_str("10")]),
+        claim_instance("Loose", &[subj("a"), dec_str("20")]),
+    ]);
+    let bound = program
+        .transformations
+        .iter()
+        .find(|t| t.name.as_str() == "drop_bound")
+        .unwrap();
+    let pattern = program
+        .transformations
+        .iter()
+        .find(|t| t.name.as_str() == "drop_pattern")
+        .unwrap();
+    assert!(
+        matches!(
+            ex.propose(bound, vec![subj("a")], &two),
+            Err(EvalError::TypeMismatch(_))
+        ),
+        "a bind over two matches is an error"
+    );
+    match ex.propose(pattern, vec![subj("a")], &two) {
+        Ok(Outcome::Accepted {
+            retracted_claims, ..
+        }) => assert_eq!(retracted_claims.len(), 2, "a pattern retract removes both"),
+        other => panic!("{other:?}"),
+    }
+}
