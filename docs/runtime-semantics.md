@@ -552,8 +552,11 @@ templates. The discipline clauses:
   Enforced statically: retraction only happens through a `retract`
   statement, so the authoring-time ban is complete and costs nothing
   at runtime. Ordinary programmes correct append-only claims by
-  supersession or exception claims, never retraction; there is no
-  escape hatch.
+  supersession (a newer figure, and a pointer that moves to it) or by
+  an erratum (an append-only claim naming the recorded line by its own
+  identity as not to stand, with rules reading the line through a
+  definition of standing; `examples/24_order_blotter/`), never
+  retraction; there is no escape hatch.
 - **`current pointer by (fields)`** - this predicate is a retractable
   current-pointer (the doctrine's middle class, beside append-only
   content and append-only lineage). Lowers exactly a `unique by`
