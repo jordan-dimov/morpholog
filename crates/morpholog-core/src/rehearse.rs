@@ -387,7 +387,10 @@ mod tests {
     /// first, A raised the flag and started first, so A sorts before B
     /// in the audit order. B's prefix then holds the flag it never saw,
     /// and the rehearsal refuses B under the very programme that
-    /// admitted it. This is the limit the contract names.
+    /// admitted it. This is the limit the contract names. The history
+    /// is constructed here, not produced by PostgreSQL: the test pins
+    /// what the rehearsal says of such an order, not that the database
+    /// produces it.
     #[test]
     fn the_prefix_is_the_audit_order_not_the_snapshot_a_writer_saw() {
         let prepared = PreparedProgram::new(flag_program()).expect("validates");
@@ -441,6 +444,49 @@ mod tests {
             "{:?}",
             report.differences[0].class
         );
+    }
+
+    /// Two claims admitted in the other order are the same effect: the
+    /// effective delta is compared as a set, the intents in order.
+    #[test]
+    fn claims_admitted_in_another_order_are_the_same_effect() {
+        let prepared = PreparedProgram::new(
+            program("pair")
+                .predicates(vec![
+                    predicate("Flag").subject("x").build(),
+                    predicate("Other").subject("x").build(),
+                ])
+                .transformations(vec![transformation(
+                    "both",
+                    params(&["x"]),
+                    vec![
+                        assert_("Other", vec![var("x")]),
+                        assert_("Flag", vec![var("x")]),
+                    ],
+                )])
+                .build(),
+        )
+        .expect("validates");
+        let mut rehearsal = Rehearsal::new(&prepared);
+        let desk = Subject::from("desk");
+        let x = [EvalValue::Subject(Subject::from("x"))];
+        let recorded = [flag("x"), other("x")];
+        rehearsal.observe(
+            &State::from_claims(vec![]),
+            &RecordedProposal {
+                transition_id: "p",
+                transformation: "both",
+                args: &x,
+                actor: &desk,
+                asserted: &recorded,
+                retracted: &[],
+                emitted: &[],
+                drawn: Some(&[]),
+                semantics_version: None,
+            },
+        );
+        let report = rehearsal.into_report();
+        assert_eq!(report.totals.same, 1, "{:?}", report.differences);
     }
 
     /// A row from before draws were recorded: an act that draws is
