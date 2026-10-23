@@ -1954,6 +1954,192 @@ class ScoreReport:
         )
 
 
+
+
+def _non_empty(data: _Fields, key: str, items: list[_T]) -> list[_T]:
+    if not items:
+        raise data.fail(key, "a non-empty list (absent, never empty)")
+    return items
+
+_REHEARSAL_CLASSES = frozenset(
+    {"different_delta", "would_reject", "would_error", "unreplayable"}
+)
+_REHEARSAL_REFUSAL_KINDS = frozenset({"require", "bind", "invariant"})
+
+
+@dataclass(frozen=True)
+class RehearsalEffect:
+    """What one admission changed against the prefix state, and what it
+    emitted, in order."""
+
+    asserted: list[ClaimInstance]
+    retracted: list[ClaimInstance]
+    emitted: list[IntentInstance]
+
+    @classmethod
+    def from_json(cls, payload: object) -> RehearsalEffect:
+        data = _strict("rehearsal effect", payload, {"asserted", "retracted", "emitted"})
+        return cls(
+            asserted=data.array("asserted", ClaimInstance.from_json),
+            retracted=data.array("retracted", ClaimInstance.from_json),
+            emitted=data.array("emitted", IntentInstance.from_json),
+        )
+
+
+@dataclass(frozen=True)
+class RehearsalRow:
+    """A recorded proposal the candidate does not decide the same way.
+    ``klass`` is ``different_delta`` (``recorded`` and ``candidate``
+    effects), ``would_reject`` (``rule``, ``kind``, ``witness`` absent when
+    no binding was pinned, ``compared`` when a comparison failed),
+    ``would_error`` (``error``) or ``unreplayable`` (``reason``).
+    ``semantics_version`` is the one the row was admitted under, ``None``
+    on rows written before it was recorded."""
+
+    transition_id: str
+    transformation: str
+    klass: str
+    semantics_version: int | None = None
+    recorded: RehearsalEffect | None = None
+    candidate: RehearsalEffect | None = None
+    rule: str | None = None
+    kind: str | None = None
+    witness: list[WitnessBinding] | None = None
+    compared: Compared | None = None
+    error: str | None = None
+    reason: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> RehearsalRow:
+        base = {"transition_id", "transformation", "class"}
+        head = _strict("rehearsal row", payload, base, _REHEARSAL_ROW_OPTIONAL)
+        klass = head.member("class", _REHEARSAL_CLASSES)
+        required, optional = _REHEARSAL_ROW_SHAPES[klass]
+        data = _strict(
+            f"rehearsal row ({klass})",
+            payload,
+            base | required,
+            optional | {"semantics_version"},
+        )
+        return cls(
+            transition_id=data.text("transition_id"),
+            transformation=data.text("transformation"),
+            klass=klass,
+            semantics_version=data.optional_integer("semantics_version", minimum=1),
+            recorded=data.optional_nested("recorded", RehearsalEffect.from_json),
+            candidate=data.optional_nested("candidate", RehearsalEffect.from_json),
+            rule=data.optional_text("rule"),
+            kind=data.member("kind", _REHEARSAL_REFUSAL_KINDS) if "kind" in data else None,
+            witness=(
+                _non_empty(data, "witness", data.array("witness", WitnessBinding.from_json))
+                if "witness" in data
+                else None
+            ),
+            compared=data.optional_nested("compared", Compared.from_json),
+            error=data.optional_text("error"),
+            reason=data.optional_text("reason"),
+        )
+
+
+_REHEARSAL_ROW_SHAPES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "different_delta": (frozenset({"recorded", "candidate"}), frozenset()),
+    "would_reject": (frozenset({"rule", "kind"}), frozenset({"witness", "compared"})),
+    "would_error": (frozenset({"error"}), frozenset()),
+    "unreplayable": (frozenset({"reason"}), frozenset()),
+}
+_REHEARSAL_ROW_OPTIONAL = frozenset(
+    {"semantics_version", "recorded", "candidate", "rule", "kind", "witness", "compared", "error", "reason"}
+)
+
+
+@dataclass(frozen=True)
+class RuleRefusals:
+    """The proposals one rule refused first; a proposal that would break
+    several rules counts once, under the first."""
+
+    rule: str
+    kind: str
+    would_refuse: int
+    refused_transitions: list[str]
+
+    @classmethod
+    def from_json(cls, payload: object) -> RuleRefusals:
+        data = _strict(
+            "rule refusals", payload, {"rule", "kind", "would_refuse", "refused_transitions"}
+        )
+        return cls(
+            rule=data.text("rule"),
+            kind=data.member("kind", _REHEARSAL_REFUSAL_KINDS),
+            would_refuse=data.integer("would_refuse", minimum=0),
+            refused_transitions=data.texts("refused_transitions"),
+        )
+
+
+@dataclass(frozen=True)
+class RehearsalTotals:
+    same: int
+    different_delta: int
+    would_reject: int
+    would_error: int
+    unreplayable: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> RehearsalTotals:
+        keys = {"same", "different_delta", "would_reject", "would_error", "unreplayable"}
+        data = _strict("rehearsal totals", payload, keys)
+        return cls(**{k: data.integer(k, minimum=0) for k in keys})
+
+
+@dataclass(frozen=True)
+class RehearsalReport:
+    """Every committed proposal re-decided under a candidate programme,
+    each against the state the audit rows before it build in canonical
+    order: ``contract`` names that, and it is not the snapshot a proposal
+    saw under concurrent writers. The log holds admitted history only, so
+    this says what the candidate would have refused, never what demand
+    there was. ``differences`` lists every row not decided the same way;
+    ``totals`` counts them all."""
+
+    rehearsal_format_version: int
+    contract: str
+    program: str
+    program_hash: str
+    semantics_version: int
+    transitions_replayed: int
+    totals: RehearsalTotals
+    refusals: list[RuleRefusals]
+    differences: list[RehearsalRow]
+
+    @classmethod
+    def from_json(cls, payload: object) -> RehearsalReport:
+        data = _strict(
+            "rehearsal report",
+            payload,
+            {
+                "rehearsal_format_version",
+                "contract",
+                "program",
+                "program_hash",
+                "semantics_version",
+                "transitions_replayed",
+                "totals",
+                "refusals",
+                "differences",
+            },
+        )
+        data.constant("contract", "canonical_audit_prefix_v1")
+        return cls(
+            rehearsal_format_version=data.integer("rehearsal_format_version", minimum=1),
+            contract=data.text("contract"),
+            program=data.text("program"),
+            program_hash=_hash(data, "program_hash"),
+            semantics_version=data.integer("semantics_version", minimum=1),
+            transitions_replayed=data.integer("transitions_replayed", minimum=0),
+            totals=data.nested("totals", RehearsalTotals.from_json),
+            refusals=data.array("refusals", RuleRefusals.from_json),
+            differences=data.array("differences", RehearsalRow.from_json),
+        )
+
 def version_skew(payload: object, expected: str) -> str | None:
     """The version the binary states in its envelope against the one this
     client was generated for, or ``None`` when they agree or the envelope

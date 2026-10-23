@@ -219,6 +219,168 @@ pub fn morpholog_core::ir_builder::value_of_with_default(&str, alloc::vec::Vec<m
 pub fn morpholog_core::ir_builder::var(&str) -> morpholog_core::Term
 pub fn morpholog_core::ir_builder::wildcard() -> morpholog_core::Term
 pub fn morpholog_core::ir_builder::xor(morpholog_core::Prop, morpholog_core::Prop) -> morpholog_core::Prop
+pub mod morpholog_core::rehearse
+pub enum morpholog_core::rehearse::RowClass
+pub morpholog_core::rehearse::RowClass::DifferentDelta
+pub morpholog_core::rehearse::RowClass::DifferentDelta::candidate: morpholog_core::rehearse::Effect
+pub morpholog_core::rehearse::RowClass::DifferentDelta::recorded: morpholog_core::rehearse::Effect
+pub morpholog_core::rehearse::RowClass::Same
+pub morpholog_core::rehearse::RowClass::Unreplayable
+pub morpholog_core::rehearse::RowClass::Unreplayable::reason: alloc::string::String
+pub morpholog_core::rehearse::RowClass::WouldError
+pub morpholog_core::rehearse::RowClass::WouldError::error: alloc::string::String
+pub morpholog_core::rehearse::RowClass::WouldReject
+pub morpholog_core::rehearse::RowClass::WouldReject::compared: core::option::Option<morpholog_core::Compared>
+pub morpholog_core::rehearse::RowClass::WouldReject::kind: morpholog_core::RefusalKind
+pub morpholog_core::rehearse::RowClass::WouldReject::rule: alloc::string::String
+pub morpholog_core::rehearse::RowClass::WouldReject::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
+impl core::clone::Clone for morpholog_core::rehearse::RowClass
+pub fn morpholog_core::rehearse::RowClass::clone(&self) -> morpholog_core::rehearse::RowClass
+impl core::fmt::Debug for morpholog_core::rehearse::RowClass
+pub fn morpholog_core::rehearse::RowClass::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::RowClass
+pub fn morpholog_core::rehearse::RowClass::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::RowClass
+impl core::marker::Send for morpholog_core::rehearse::RowClass
+impl core::marker::Sync for morpholog_core::rehearse::RowClass
+impl core::marker::Unpin for morpholog_core::rehearse::RowClass
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::RowClass
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::RowClass
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::RowClass
+pub struct morpholog_core::rehearse::Effect
+pub morpholog_core::rehearse::Effect::asserted: alloc::vec::Vec<morpholog_core::ClaimInstance>
+pub morpholog_core::rehearse::Effect::emitted: alloc::vec::Vec<morpholog_core::IntentInstance>
+pub morpholog_core::rehearse::Effect::retracted: alloc::vec::Vec<morpholog_core::ClaimInstance>
+impl core::clone::Clone for morpholog_core::rehearse::Effect
+pub fn morpholog_core::rehearse::Effect::clone(&self) -> morpholog_core::rehearse::Effect
+impl core::fmt::Debug for morpholog_core::rehearse::Effect
+pub fn morpholog_core::rehearse::Effect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::Effect
+pub fn morpholog_core::rehearse::Effect::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::Effect
+impl core::marker::Send for morpholog_core::rehearse::Effect
+impl core::marker::Sync for morpholog_core::rehearse::Effect
+impl core::marker::Unpin for morpholog_core::rehearse::Effect
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::Effect
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::Effect
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::Effect
+pub struct morpholog_core::rehearse::RecordedProposal<'a>
+pub morpholog_core::rehearse::RecordedProposal::actor: &'a morpholog_core::Subject
+pub morpholog_core::rehearse::RecordedProposal::args: &'a [morpholog_core::EvalValue]
+pub morpholog_core::rehearse::RecordedProposal::asserted: &'a [morpholog_core::ClaimInstance]
+pub morpholog_core::rehearse::RecordedProposal::drawn: core::option::Option<&'a [morpholog_core::Subject]>
+pub morpholog_core::rehearse::RecordedProposal::emitted: &'a [morpholog_core::IntentInstance]
+pub morpholog_core::rehearse::RecordedProposal::retracted: &'a [morpholog_core::ClaimInstance]
+pub morpholog_core::rehearse::RecordedProposal::semantics_version: core::option::Option<u32>
+pub morpholog_core::rehearse::RecordedProposal::transformation: &'a str
+pub morpholog_core::rehearse::RecordedProposal::transition_id: &'a str
+impl<'a> core::clone::Clone for morpholog_core::rehearse::RecordedProposal<'a>
+pub fn morpholog_core::rehearse::RecordedProposal<'a>::clone(&self) -> morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::clone::TrivialClone for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::fmt::Debug for morpholog_core::rehearse::RecordedProposal<'a>
+pub fn morpholog_core::rehearse::RecordedProposal<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::marker::Freeze for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::marker::Send for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::marker::Sync for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::marker::Unpin for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::marker::UnsafeUnpin for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::RecordedProposal<'a>
+pub struct morpholog_core::rehearse::Rehearsal<'p>
+impl<'p> morpholog_core::rehearse::Rehearsal<'p>
+pub fn morpholog_core::rehearse::Rehearsal<'p>::into_report(self) -> morpholog_core::rehearse::RehearsalReport
+pub fn morpholog_core::rehearse::Rehearsal<'p>::new(&'p morpholog_core::PreparedProgram) -> Self
+pub fn morpholog_core::rehearse::Rehearsal<'p>::observe(&mut self, &morpholog_core::State, &morpholog_core::rehearse::RecordedProposal<'_>)
+impl<'p> core::marker::Freeze for morpholog_core::rehearse::Rehearsal<'p>
+impl<'p> core::marker::Send for morpholog_core::rehearse::Rehearsal<'p>
+impl<'p> core::marker::Sync for morpholog_core::rehearse::Rehearsal<'p>
+impl<'p> core::marker::Unpin for morpholog_core::rehearse::Rehearsal<'p>
+impl<'p> core::marker::UnsafeUnpin for morpholog_core::rehearse::Rehearsal<'p>
+impl<'p> core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::Rehearsal<'p>
+impl<'p> core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::Rehearsal<'p>
+pub struct morpholog_core::rehearse::RehearsalReport
+pub morpholog_core::rehearse::RehearsalReport::contract: alloc::string::String
+pub morpholog_core::rehearse::RehearsalReport::differences: alloc::vec::Vec<morpholog_core::rehearse::RowReport>
+pub morpholog_core::rehearse::RehearsalReport::program: alloc::string::String
+pub morpholog_core::rehearse::RehearsalReport::program_hash: alloc::string::String
+pub morpholog_core::rehearse::RehearsalReport::refusals: alloc::vec::Vec<morpholog_core::rehearse::RuleRefusals>
+pub morpholog_core::rehearse::RehearsalReport::rehearsal_format_version: u32
+pub morpholog_core::rehearse::RehearsalReport::semantics_version: u32
+pub morpholog_core::rehearse::RehearsalReport::totals: morpholog_core::rehearse::Totals
+pub morpholog_core::rehearse::RehearsalReport::transitions_replayed: u64
+impl core::clone::Clone for morpholog_core::rehearse::RehearsalReport
+pub fn morpholog_core::rehearse::RehearsalReport::clone(&self) -> morpholog_core::rehearse::RehearsalReport
+impl core::fmt::Debug for morpholog_core::rehearse::RehearsalReport
+pub fn morpholog_core::rehearse::RehearsalReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::RehearsalReport
+pub fn morpholog_core::rehearse::RehearsalReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::RehearsalReport
+impl core::marker::Send for morpholog_core::rehearse::RehearsalReport
+impl core::marker::Sync for morpholog_core::rehearse::RehearsalReport
+impl core::marker::Unpin for morpholog_core::rehearse::RehearsalReport
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::RehearsalReport
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::RehearsalReport
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::RehearsalReport
+pub struct morpholog_core::rehearse::RowReport
+pub morpholog_core::rehearse::RowReport::class: morpholog_core::rehearse::RowClass
+pub morpholog_core::rehearse::RowReport::semantics_version: core::option::Option<u32>
+pub morpholog_core::rehearse::RowReport::transformation: alloc::string::String
+pub morpholog_core::rehearse::RowReport::transition_id: alloc::string::String
+impl core::clone::Clone for morpholog_core::rehearse::RowReport
+pub fn morpholog_core::rehearse::RowReport::clone(&self) -> morpholog_core::rehearse::RowReport
+impl core::fmt::Debug for morpholog_core::rehearse::RowReport
+pub fn morpholog_core::rehearse::RowReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::RowReport
+pub fn morpholog_core::rehearse::RowReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::RowReport
+impl core::marker::Send for morpholog_core::rehearse::RowReport
+impl core::marker::Sync for morpholog_core::rehearse::RowReport
+impl core::marker::Unpin for morpholog_core::rehearse::RowReport
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::RowReport
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::RowReport
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::RowReport
+pub struct morpholog_core::rehearse::RuleRefusals
+pub morpholog_core::rehearse::RuleRefusals::kind: morpholog_core::RefusalKind
+pub morpholog_core::rehearse::RuleRefusals::refused_transitions: alloc::vec::Vec<alloc::string::String>
+pub morpholog_core::rehearse::RuleRefusals::rule: alloc::string::String
+pub morpholog_core::rehearse::RuleRefusals::would_refuse: u64
+impl core::clone::Clone for morpholog_core::rehearse::RuleRefusals
+pub fn morpholog_core::rehearse::RuleRefusals::clone(&self) -> morpholog_core::rehearse::RuleRefusals
+impl core::fmt::Debug for morpholog_core::rehearse::RuleRefusals
+pub fn morpholog_core::rehearse::RuleRefusals::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::RuleRefusals
+pub fn morpholog_core::rehearse::RuleRefusals::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::RuleRefusals
+impl core::marker::Send for morpholog_core::rehearse::RuleRefusals
+impl core::marker::Sync for morpholog_core::rehearse::RuleRefusals
+impl core::marker::Unpin for morpholog_core::rehearse::RuleRefusals
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::RuleRefusals
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::RuleRefusals
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::RuleRefusals
+pub struct morpholog_core::rehearse::Totals
+pub morpholog_core::rehearse::Totals::different_delta: u64
+pub morpholog_core::rehearse::Totals::same: u64
+pub morpholog_core::rehearse::Totals::unreplayable: u64
+pub morpholog_core::rehearse::Totals::would_error: u64
+pub morpholog_core::rehearse::Totals::would_reject: u64
+impl core::clone::Clone for morpholog_core::rehearse::Totals
+pub fn morpholog_core::rehearse::Totals::clone(&self) -> morpholog_core::rehearse::Totals
+impl core::default::Default for morpholog_core::rehearse::Totals
+pub fn morpholog_core::rehearse::Totals::default() -> morpholog_core::rehearse::Totals
+impl core::fmt::Debug for morpholog_core::rehearse::Totals
+pub fn morpholog_core::rehearse::Totals::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::Totals
+pub fn morpholog_core::rehearse::Totals::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::Totals
+impl core::marker::Send for morpholog_core::rehearse::Totals
+impl core::marker::Sync for morpholog_core::rehearse::Totals
+impl core::marker::Unpin for morpholog_core::rehearse::Totals
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::Totals
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::Totals
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::Totals
+pub const morpholog_core::rehearse::REHEARSAL_CONTRACT: &str
+pub const morpholog_core::rehearse::REHEARSAL_FORMAT_VERSION: u32
 pub mod morpholog_core::schema
 pub fn morpholog_core::schema::intent_arg_schema(&morpholog_core::ValidatedProgram<'_>, &morpholog_core::IntentName) -> core::option::Option<serde_json::value::Value>
 pub fn morpholog_core::schema::transformation_arg_schema(&morpholog_core::ValidatedProgram<'_>, &morpholog_core::TransformationName) -> core::result::Result<serde_json::value::Value, morpholog_core::analysis::AnalysisError>
@@ -1001,6 +1163,33 @@ impl core::marker::Unpin for morpholog_core::RequireOutcome
 impl core::marker::UnsafeUnpin for morpholog_core::RequireOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::RequireOutcome
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::RequireOutcome
+pub enum morpholog_core::RowClass
+pub morpholog_core::RowClass::DifferentDelta
+pub morpholog_core::RowClass::DifferentDelta::candidate: morpholog_core::rehearse::Effect
+pub morpholog_core::RowClass::DifferentDelta::recorded: morpholog_core::rehearse::Effect
+pub morpholog_core::RowClass::Same
+pub morpholog_core::RowClass::Unreplayable
+pub morpholog_core::RowClass::Unreplayable::reason: alloc::string::String
+pub morpholog_core::RowClass::WouldError
+pub morpholog_core::RowClass::WouldError::error: alloc::string::String
+pub morpholog_core::RowClass::WouldReject
+pub morpholog_core::RowClass::WouldReject::compared: core::option::Option<morpholog_core::Compared>
+pub morpholog_core::RowClass::WouldReject::kind: morpholog_core::RefusalKind
+pub morpholog_core::RowClass::WouldReject::rule: alloc::string::String
+pub morpholog_core::RowClass::WouldReject::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
+impl core::clone::Clone for morpholog_core::rehearse::RowClass
+pub fn morpholog_core::rehearse::RowClass::clone(&self) -> morpholog_core::rehearse::RowClass
+impl core::fmt::Debug for morpholog_core::rehearse::RowClass
+pub fn morpholog_core::rehearse::RowClass::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::RowClass
+pub fn morpholog_core::rehearse::RowClass::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::RowClass
+impl core::marker::Send for morpholog_core::rehearse::RowClass
+impl core::marker::Sync for morpholog_core::rehearse::RowClass
+impl core::marker::Unpin for morpholog_core::rehearse::RowClass
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::RowClass
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::RowClass
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::RowClass
 pub enum morpholog_core::ScoreError
 pub morpholog_core::ScoreError::Eval(morpholog_core::EvalError)
 pub morpholog_core::ScoreError::PreUnsupported(alloc::vec::Vec<alloc::string::String>)
@@ -1928,6 +2117,23 @@ impl core::marker::Unpin for morpholog_core::DerivedValue
 impl core::marker::UnsafeUnpin for morpholog_core::DerivedValue
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::DerivedValue
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::DerivedValue
+pub struct morpholog_core::Effect
+pub morpholog_core::Effect::asserted: alloc::vec::Vec<morpholog_core::ClaimInstance>
+pub morpholog_core::Effect::emitted: alloc::vec::Vec<morpholog_core::IntentInstance>
+pub morpholog_core::Effect::retracted: alloc::vec::Vec<morpholog_core::ClaimInstance>
+impl core::clone::Clone for morpholog_core::rehearse::Effect
+pub fn morpholog_core::rehearse::Effect::clone(&self) -> morpholog_core::rehearse::Effect
+impl core::fmt::Debug for morpholog_core::rehearse::Effect
+pub fn morpholog_core::rehearse::Effect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::Effect
+pub fn morpholog_core::rehearse::Effect::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::Effect
+impl core::marker::Send for morpholog_core::rehearse::Effect
+impl core::marker::Sync for morpholog_core::rehearse::Effect
+impl core::marker::Unpin for morpholog_core::rehearse::Effect
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::Effect
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::Effect
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::Effect
 pub struct morpholog_core::EffectiveDelta
 pub morpholog_core::EffectiveDelta::asserted: alloc::vec::Vec<morpholog_core::ClaimInstance>
 pub morpholog_core::EffectiveDelta::retracted: alloc::vec::Vec<morpholog_core::ClaimInstance>
@@ -2674,6 +2880,29 @@ impl core::marker::Unpin for morpholog_core::ReadPlan
 impl core::marker::UnsafeUnpin for morpholog_core::ReadPlan
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::ReadPlan
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::ReadPlan
+pub struct morpholog_core::RecordedProposal<'a>
+pub morpholog_core::RecordedProposal::actor: &'a morpholog_core::Subject
+pub morpholog_core::RecordedProposal::args: &'a [morpholog_core::EvalValue]
+pub morpholog_core::RecordedProposal::asserted: &'a [morpholog_core::ClaimInstance]
+pub morpholog_core::RecordedProposal::drawn: core::option::Option<&'a [morpholog_core::Subject]>
+pub morpholog_core::RecordedProposal::emitted: &'a [morpholog_core::IntentInstance]
+pub morpholog_core::RecordedProposal::retracted: &'a [morpholog_core::ClaimInstance]
+pub morpholog_core::RecordedProposal::semantics_version: core::option::Option<u32>
+pub morpholog_core::RecordedProposal::transformation: &'a str
+pub morpholog_core::RecordedProposal::transition_id: &'a str
+impl<'a> core::clone::Clone for morpholog_core::rehearse::RecordedProposal<'a>
+pub fn morpholog_core::rehearse::RecordedProposal<'a>::clone(&self) -> morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::clone::TrivialClone for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::fmt::Debug for morpholog_core::rehearse::RecordedProposal<'a>
+pub fn morpholog_core::rehearse::RecordedProposal<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::marker::Freeze for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::marker::Send for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::marker::Sync for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::marker::Unpin for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::marker::UnsafeUnpin for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::RecordedProposal<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::RecordedProposal<'a>
 pub struct morpholog_core::RefusalCause
 pub morpholog_core::RefusalCause::kind: morpholog_core::RefusalKind
 pub morpholog_core::RefusalCause::proposals_refused: u64
@@ -2691,6 +2920,41 @@ impl core::marker::Unpin for morpholog_core::RefusalCause
 impl core::marker::UnsafeUnpin for morpholog_core::RefusalCause
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::RefusalCause
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::RefusalCause
+pub struct morpholog_core::Rehearsal<'p>
+impl<'p> morpholog_core::rehearse::Rehearsal<'p>
+pub fn morpholog_core::rehearse::Rehearsal<'p>::into_report(self) -> morpholog_core::rehearse::RehearsalReport
+pub fn morpholog_core::rehearse::Rehearsal<'p>::new(&'p morpholog_core::PreparedProgram) -> Self
+pub fn morpholog_core::rehearse::Rehearsal<'p>::observe(&mut self, &morpholog_core::State, &morpholog_core::rehearse::RecordedProposal<'_>)
+impl<'p> core::marker::Freeze for morpholog_core::rehearse::Rehearsal<'p>
+impl<'p> core::marker::Send for morpholog_core::rehearse::Rehearsal<'p>
+impl<'p> core::marker::Sync for morpholog_core::rehearse::Rehearsal<'p>
+impl<'p> core::marker::Unpin for morpholog_core::rehearse::Rehearsal<'p>
+impl<'p> core::marker::UnsafeUnpin for morpholog_core::rehearse::Rehearsal<'p>
+impl<'p> core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::Rehearsal<'p>
+impl<'p> core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::Rehearsal<'p>
+pub struct morpholog_core::RehearsalReport
+pub morpholog_core::RehearsalReport::contract: alloc::string::String
+pub morpholog_core::RehearsalReport::differences: alloc::vec::Vec<morpholog_core::rehearse::RowReport>
+pub morpholog_core::RehearsalReport::program: alloc::string::String
+pub morpholog_core::RehearsalReport::program_hash: alloc::string::String
+pub morpholog_core::RehearsalReport::refusals: alloc::vec::Vec<morpholog_core::rehearse::RuleRefusals>
+pub morpholog_core::RehearsalReport::rehearsal_format_version: u32
+pub morpholog_core::RehearsalReport::semantics_version: u32
+pub morpholog_core::RehearsalReport::totals: morpholog_core::rehearse::Totals
+pub morpholog_core::RehearsalReport::transitions_replayed: u64
+impl core::clone::Clone for morpholog_core::rehearse::RehearsalReport
+pub fn morpholog_core::rehearse::RehearsalReport::clone(&self) -> morpholog_core::rehearse::RehearsalReport
+impl core::fmt::Debug for morpholog_core::rehearse::RehearsalReport
+pub fn morpholog_core::rehearse::RehearsalReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::RehearsalReport
+pub fn morpholog_core::rehearse::RehearsalReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::RehearsalReport
+impl core::marker::Send for morpholog_core::rehearse::RehearsalReport
+impl core::marker::Sync for morpholog_core::rehearse::RehearsalReport
+impl core::marker::Unpin for morpholog_core::rehearse::RehearsalReport
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::RehearsalReport
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::RehearsalReport
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::RehearsalReport
 pub struct morpholog_core::RenderedClaim
 pub morpholog_core::RenderedClaim::predicate: alloc::string::String
 pub morpholog_core::RenderedClaim::rendered: alloc::string::String
@@ -2714,6 +2978,24 @@ impl core::marker::Unpin for morpholog_core::RenderedClaim
 impl core::marker::UnsafeUnpin for morpholog_core::RenderedClaim
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::RenderedClaim
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::RenderedClaim
+pub struct morpholog_core::RowReport
+pub morpholog_core::RowReport::class: morpholog_core::rehearse::RowClass
+pub morpholog_core::RowReport::semantics_version: core::option::Option<u32>
+pub morpholog_core::RowReport::transformation: alloc::string::String
+pub morpholog_core::RowReport::transition_id: alloc::string::String
+impl core::clone::Clone for morpholog_core::rehearse::RowReport
+pub fn morpholog_core::rehearse::RowReport::clone(&self) -> morpholog_core::rehearse::RowReport
+impl core::fmt::Debug for morpholog_core::rehearse::RowReport
+pub fn morpholog_core::rehearse::RowReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::RowReport
+pub fn morpholog_core::rehearse::RowReport::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::RowReport
+impl core::marker::Send for morpholog_core::rehearse::RowReport
+impl core::marker::Sync for morpholog_core::rehearse::RowReport
+impl core::marker::Unpin for morpholog_core::rehearse::RowReport
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::RowReport
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::RowReport
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::RowReport
 pub struct morpholog_core::RuleName(_)
 impl morpholog_core::RuleName
 pub fn morpholog_core::RuleName::as_str(&self) -> &str
@@ -2753,6 +3035,24 @@ impl core::marker::Unpin for morpholog_core::RuleName
 impl core::marker::UnsafeUnpin for morpholog_core::RuleName
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::RuleName
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::RuleName
+pub struct morpholog_core::RuleRefusals
+pub morpholog_core::RuleRefusals::kind: morpholog_core::RefusalKind
+pub morpholog_core::RuleRefusals::refused_transitions: alloc::vec::Vec<alloc::string::String>
+pub morpholog_core::RuleRefusals::rule: alloc::string::String
+pub morpholog_core::RuleRefusals::would_refuse: u64
+impl core::clone::Clone for morpholog_core::rehearse::RuleRefusals
+pub fn morpholog_core::rehearse::RuleRefusals::clone(&self) -> morpholog_core::rehearse::RuleRefusals
+impl core::fmt::Debug for morpholog_core::rehearse::RuleRefusals
+pub fn morpholog_core::rehearse::RuleRefusals::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::RuleRefusals
+pub fn morpholog_core::rehearse::RuleRefusals::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::RuleRefusals
+impl core::marker::Send for morpholog_core::rehearse::RuleRefusals
+impl core::marker::Sync for morpholog_core::rehearse::RuleRefusals
+impl core::marker::Unpin for morpholog_core::rehearse::RuleRefusals
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::RuleRefusals
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::RuleRefusals
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::RuleRefusals
 pub struct morpholog_core::SharedWriterPeer
 pub morpholog_core::SharedWriterPeer::guarded: bool
 pub morpholog_core::SharedWriterPeer::transformation: alloc::string::String
@@ -2903,6 +3203,27 @@ impl core::marker::Unpin for morpholog_core::Subject
 impl core::marker::UnsafeUnpin for morpholog_core::Subject
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Subject
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Subject
+pub struct morpholog_core::Totals
+pub morpholog_core::Totals::different_delta: u64
+pub morpholog_core::Totals::same: u64
+pub morpholog_core::Totals::unreplayable: u64
+pub morpholog_core::Totals::would_error: u64
+pub morpholog_core::Totals::would_reject: u64
+impl core::clone::Clone for morpholog_core::rehearse::Totals
+pub fn morpholog_core::rehearse::Totals::clone(&self) -> morpholog_core::rehearse::Totals
+impl core::default::Default for morpholog_core::rehearse::Totals
+pub fn morpholog_core::rehearse::Totals::default() -> morpholog_core::rehearse::Totals
+impl core::fmt::Debug for morpholog_core::rehearse::Totals
+pub fn morpholog_core::rehearse::Totals::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::Totals
+pub fn morpholog_core::rehearse::Totals::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::Totals
+impl core::marker::Send for morpholog_core::rehearse::Totals
+impl core::marker::Sync for morpholog_core::rehearse::Totals
+impl core::marker::Unpin for morpholog_core::rehearse::Totals
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::Totals
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::Totals
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::Totals
 pub struct morpholog_core::Transformation
 pub morpholog_core::Transformation::body: alloc::vec::Vec<morpholog_core::Stmt>
 pub morpholog_core::Transformation::name: morpholog_core::TransformationName
@@ -3181,6 +3502,8 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::WitnessBinding
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::WitnessBinding
 pub const morpholog_core::PYTHON_CLIENT_MEMBERS: &[&str]
 pub const morpholog_core::PYTHON_KEYWORDS: &[&str]
+pub const morpholog_core::REHEARSAL_CONTRACT: &str
+pub const morpholog_core::REHEARSAL_FORMAT_VERSION: u32
 pub const morpholog_core::SCORE_FORMAT_VERSION: u32
 pub const morpholog_core::SCORE_SEMANTICS: &str
 pub const morpholog_core::SEMANTICS_VERSION: u32

@@ -2704,6 +2704,8 @@ pub async fn morpholog_postgres::reconstruct_state_at(&sqlx_postgres::PgPool, uu
 pub async fn morpholog_postgres::record_compensation(&sqlx_postgres::PgPool, uuid::Uuid, uuid::Uuid) -> core::result::Result<(), morpholog_postgres::PgError>
 pub fn morpholog_postgres::redact_database_url(&str) -> alloc::string::String
 pub async fn morpholog_postgres::refresh_derived(&sqlx_postgres::PgPool, &morpholog_core::validate::ValidatedProgram<'_>, &str) -> core::result::Result<morpholog_postgres::RefreshSummary, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::rehearse_candidate(&sqlx_postgres::PgPool, &morpholog_core::prepared::PreparedProgram) -> core::result::Result<morpholog_core::rehearse::RehearsalReport, morpholog_postgres::PgError>
+pub fn morpholog_postgres::rehearse_candidate_against_pack(&morpholog_core::prepared::PreparedProgram, &morpholog_postgres::EvidencePack, core::option::Option<&morpholog_postgres::Checkpoint>) -> core::result::Result<morpholog_core::rehearse::RehearsalReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::release_outbox_claim(&sqlx_postgres::PgPool, uuid::Uuid, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub fn morpholog_postgres::render_public_key(&ed25519_dalek::verifying::VerifyingKey) -> alloc::string::String
 pub fn morpholog_postgres::render_signature(&ed25519::Signature) -> alloc::string::String
