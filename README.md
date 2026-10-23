@@ -193,6 +193,7 @@ If you came with a question rather than an industry - "can it accept a whole bat
 - [Metered billing](examples/15_metered_billing/) - a bill correct to the penny, every line recomputed and rounded the agreed way.
 - [Covenant reporting](examples/17_covenant_reporting/) - a loan's reporting calendar, three calendar months at a time, with overdue notices that must count the days correctly.
 - [Laytime and demurrage](examples/12_laytime_demurrage/) - shipping's argument about minutes: exact times, computed deadlines, tonnes of cargo and dollars of delay.
+- [Order blotter](examples/24_order_blotter/) - a cancel recorded by mistake on an append-only blotter: marked in error by an appointed corrector, never removed, and the fill it blocked admitted afterwards.
 
 **Evidence, authority and regulation**
 

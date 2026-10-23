@@ -16,6 +16,7 @@ by what you want to write in a `.morph` file.
 | Accept a batch only if it is complete, not just correct line by line | [Margin call run](14_margin_call_run/) |
 | Check authority at the moment someone acts, and withdraw it later | [Trade lifecycle](10_trade_lifecycle/), [Approval controls](04_approval_controls/) |
 | Correct a figure without rewriting decisions made on the old one | [Verified revenue](02_verified_revenue/), [Trade lifecycle](10_trade_lifecycle/) |
+| Say a recorded line was a mistake, on a record that never forgets | [Order blotter](24_order_blotter/) |
 | Hold a running total under a limit | [Insurance claim settlement](05_insurance_claim_settlement/), [Borrowing base](11_borrowing_base/) |
 | Show what the record said at a past moment | [Double-entry ledger](03_double_entry_ledger/), [Trade lifecycle](10_trade_lifecycle/) |
 | Require human oversight of an AI's output | [Biometric identification oversight](13_biometric_identification_oversight/) |
@@ -72,6 +73,7 @@ one act is a margin-call run.
 | verify a statement over a finite domain, and refuse it over an incomplete one | [22_residue_classes](22_residue_classes/) | `sum` counting the domain, and `%` in the rule |
 | hold a cap in every hour a trade touches, with the hours computed from the trade | [23_delivery_hour_limits](23_delivery_hour_limits/) | `periods(starts_at, ends_at, duration(PT1H))` |
 | say how long a window may be before the record builds a grid over it | [23_delivery_hour_limits](23_delivery_hour_limits/) | `require ends_at - starts_at no_longer_than duration(PT744H)` |
+| mark an append-only claim as recorded in error, without removing it | [24_order_blotter](24_order_blotter/) | an `append only` claim naming another claim's identity, read through a `define` of standing |
 | call Morpholog from an application | [etrm_embedder](etrm_embedder/) | the generated Python client |
 
 ## If the thing you want is not here

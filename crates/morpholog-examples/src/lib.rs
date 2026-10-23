@@ -98,6 +98,7 @@ example_module!(laytime_demurrage);
 example_module!(margin_call_run);
 example_module!(metered_billing);
 example_module!(operational_information);
+example_module!(order_blotter);
 example_module!(release_governance);
 example_module!(residue_classes);
 example_module!(scoped_charges);
