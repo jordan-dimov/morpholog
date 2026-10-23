@@ -225,6 +225,52 @@ fn an_erratum_changes_one_cancels_standing_only() {
     cancelled(state, "o3", "c3");
 }
 
+/// Uniqueness over standing cancels, not recorded ones: a second cancel
+/// is refused while the first stands, and admitted once the first is
+/// marked, with both still on the record.
+#[test]
+fn marking_a_cancel_frees_the_order_for_a_genuine_one() {
+    let state = the_wrong_cancel();
+    let reason = ex().must_reject(
+        &order_blotter::cancel(),
+        vec![subj("o1"), subj("c2")],
+        &state,
+    );
+    assert!(
+        invariant_named(&reason, "one_standing_cancel_per_order"),
+        "{reason:?}"
+    );
+    let state = admitted(erratum("c1", CORRECTOR, &state));
+    let state = cancelled(state, "o1", "c2");
+    assert!(has_claim(&state, "Cancel", &[subj("o1"), subj("c1")]));
+    assert!(has_claim(&state, "Cancel", &[subj("o1"), subj("c2")]));
+    let still_closed = refused(fill("o1", "f1", "100", &state));
+    assert!(
+        invariant_named(&still_closed, "a_cancel_closes_only_an_unfilled_order"),
+        "c2 stands: {still_closed:?}"
+    );
+}
+
+/// A quantity that is not positive is refused at the gate: a negative
+/// fill could make room past the order for a later one.
+#[test]
+fn quantities_are_positive() {
+    let reason = ex().must_reject(
+        &order_blotter::place(),
+        vec![subj("o9"), subj("book_a"), dec_str("0")],
+        &State::from_claims(vec![]),
+    );
+    assert!(
+        matches!(reason, RejectionReason::Require { .. }),
+        "{reason:?}"
+    );
+    let reason = refused(fill("o1", "f1", "-100", &the_wrong_cancel()));
+    assert!(
+        matches!(reason, RejectionReason::Require { .. }),
+        "{reason:?}"
+    );
+}
+
 /// A breach history left behind, a fill beside a standing cancel on one
 /// order, blocks nothing on another order: every rule is checked case
 /// by case, and the breached order itself stays closed to change until

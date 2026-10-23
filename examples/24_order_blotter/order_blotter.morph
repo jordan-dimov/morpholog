@@ -6,20 +6,20 @@ program order_blotter
 -- ============================================================
 --
 -- A trading desk keeps a blotter: the list of orders it placed, the
--- fills it got back, the cancels it sent. Each line is an event that
--- happened, so the blotter is append only - nothing on it is ever
--- removed. That is the right property for an audit record, and it
--- raises one hard question: what does the desk do when a line was
--- written by mistake?
+-- fills the venue reported, the orders recorded as cancelled. Each
+-- line is a record of something the desk took to be so, and the
+-- blotter is append only - nothing on it is ever removed. That is the
+-- right property for an audit record, and it raises one hard
+-- question: what does the desk do when a line was written by mistake?
 --
--- This example is built around that question. A cancel was recorded
--- on an order that had in truth been filled. The cancel is true as an
--- event, the desk did send it, and wrong as a conclusion, the order
--- was not open to cancel. Retracting it is not allowed: the blotter
--- is append only, and the runtime refuses any act that tries. The
--- correction pattern the gallery already teaches, where a figure is
--- superseded and a pointer moves to the new one, does not fit either:
--- a cancel is not a figure, and there is no pointer.
+-- This example is built around that question. An order was recorded
+-- as cancelled; the venue then reported that it had filled. The
+-- cancel line is wrong: the order was never cancelled. Retracting it
+-- is not allowed: the blotter is append only, and the runtime refuses
+-- any act that tries. The correction pattern the gallery already
+-- teaches, where a figure is superseded and a pointer moves to the
+-- new one, does not fit either: a cancel is not a figure, and there
+-- is no pointer.
 --
 -- The answer is an erratum: a claim about a claim. It names the
 -- recorded line by its own identity, gives a reason, and is itself
@@ -45,8 +45,10 @@ predicate Fill(order: Subject, fill_id: Subject, qty: Decimal)
     unique by (fill_id)
     append only
 
--- A cancel the desk sent. Its own identity matters here more than
--- anywhere: an erratum will name this line, and only this line, by it.
+-- An order recorded as cancelled: the desk's assertion that the venue
+-- cancelled it, not a request on its way there. Its own identity
+-- matters here more than anywhere: an erratum will name this line,
+-- and only this line, by it.
 predicate Cancel(order: Subject, cancel_id: Subject)
     unique by (cancel_id)
     append only
@@ -81,8 +83,8 @@ invariant cancel_has_an_order:
 invariant erratum_names_a_cancel:
     RecordedInError(cancel_id, _) implies Cancel(_, cancel_id)
 
--- A cancel closes only an unfilled order: a fill and a standing cancel
--- never meet. The rule starts from the recorded cancel, so the runtime
+-- An order is cancelled or filled, never both: a fill and a standing
+-- cancel never meet. The rule starts from the recorded cancel, so the runtime
 -- knows which order and which cancel a change concerns and checks
 -- that case alone; a rule written only over standing cancels would be
 -- checked over the whole blotter on every change.
@@ -101,22 +103,28 @@ invariant fills_within_the_order:
 
 -- The acts.
 
+-- Quantities are positive, or a negative fill could make room past
+-- the order for a later one.
 transformation place(order, book, qty):
+    require qty > 0
     require not Order(order: order, ..)
     admit Order(order, book, qty)
 
--- A fill carries no gate of its own: the rules above refuse a fill on
--- an unknown order, past the order's quantity, or against a standing
--- cancel, each by name.
+-- A fill carries no gate of its own beyond its quantity: the rules
+-- above refuse a fill on an unknown order, past the order's quantity,
+-- or against a standing cancel, each by name.
 transformation fill(order, fill_id, qty):
+    require qty > 0
     admit Fill(order, fill_id, qty)
 
 transformation cancel(order, cancel_id):
     admit Cancel(order, cancel_id)
 
 -- The first appointment names a book's corrector; from then on the
--- appointment cannot be replaced. Who makes that first appointment is
--- the desk's own trust root, outside this record.
+-- appointment cannot be replaced. The act itself checks no authority,
+-- so it must be reachable only from the desk's trusted setup: anyone
+-- who can run it on an unappointed book becomes its corrector. The
+-- record governs every correction after that, not this first step.
 transformation appoint_corrector(book, corrector):
     require not MayCorrect(book, _)
     admit MayCorrect(book, corrector)
