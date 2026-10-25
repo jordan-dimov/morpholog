@@ -340,11 +340,15 @@ fn an_amendment_must_extend_a_clean_chain_of_distinct_versions() {
         );
     }
     // The chain never forks: once tv1 is amended, it cannot be again.
+    // Replaying the very same amendment is refused too: it would change
+    // no claim, but would send the amendment notice a second time.
     let amended = amend(pre, "tv1", "tv2", 120, "2026-02-01");
-    refused_by_gate(
-        &amend_refused(&amended, "tv1", "tv3", 130, "2026-03-01"),
-        "prior_version_not_yet_amended",
-    );
+    for (new, qty, eff) in [("tv2", 120, "2026-02-01"), ("tv3", 130, "2026-03-01")] {
+        refused_by_gate(
+            &amend_refused(&amended, "tv1", new, qty, eff),
+            "prior_version_not_yet_amended",
+        );
+    }
 }
 
 #[test]
@@ -483,11 +487,13 @@ fn settlements_over_the_effective_quantity_are_rejected() {
         &settle_refused(&first, 60, "s2", "op1", "2026-01-25"),
         "settled_within_effective_terms",
     );
-    // A negative slice cannot make room under the cap.
-    refused_by_invariant(
-        &settle_refused(&confirmed(), -10, "s1", "op1", "2026-01-20"),
-        "settled_quantity_is_positive",
-    );
+    // A slice is positive: a negative one cannot make room under the cap.
+    for qty in [-10, 0] {
+        refused_by_invariant(
+            &settle_refused(&confirmed(), qty, "s1", "op1", "2026-01-20"),
+            "settled_quantity_is_positive",
+        );
+    }
 }
 
 #[test]
