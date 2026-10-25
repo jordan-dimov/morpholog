@@ -299,6 +299,13 @@ struct AsOfArgs {
     #[arg(long, default_value_t = 0)]
     retract_fraction: usize,
 
+    /// Revise K records instead: the first K transitions admit them and
+    /// every later one replaces one record's current version, so the
+    /// live set stays at 3K claims however long the history grows - a
+    /// register revised in vintages. `0` (default) is off.
+    #[arg(long, default_value_t = 0, conflicts_with = "retract_fraction")]
+    revise: usize,
+
     /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
     /// The target database is truncated before each run.
     #[arg(long, env = "DATABASE_URL")]
@@ -740,7 +747,7 @@ async fn require_migration_head(pool: &PgPool) -> Result<()> {
 /// Bumped only when what the benchmark measures changes (cases,
 /// fixtures, ladders, aggregation), never for a change in the code
 /// being measured. See docs/benchmarking.md.
-const SUITE_CONTRACT: u32 = 2;
+const SUITE_CONTRACT: u32 = 3;
 
 /// One metric of one case: named samples with a unit, in repeat order.
 /// `samples[0]` is the `first` reading, not a "cold" one: building the
@@ -1569,6 +1576,24 @@ fn retract_stride_for(retract_fraction: usize) -> i64 {
     }
 }
 
+/// The shape of the fabricated as-of log: asserts with a percentage
+/// retracting an earlier entry, or `k` records revised in turn.
+#[derive(Clone, Copy)]
+enum AsOfLog {
+    Retracting(usize),
+    Revising(usize),
+}
+
+impl AsOfLog {
+    fn of(retract_fraction: usize, revise: usize) -> Self {
+        if revise > 0 {
+            AsOfLog::Revising(revise)
+        } else {
+            AsOfLog::Retracting(retract_fraction)
+        }
+    }
+}
+
 /// The as-of case: one immutable fabricated log, reused across
 /// repeats; one `reconstruct_state_at` plus one `list_derived_at` per
 /// repeat against the `--at`-selected target.
@@ -1578,16 +1603,19 @@ async fn measure_as_of(
     case: &str,
     n: usize,
     at: f64,
-    retract_fraction: usize,
+    log: AsOfLog,
     repeat: usize,
 ) -> Result<CaseResult> {
     // The programmes whose index condition this scenario establishes.
     let cores: Vec<Program> = vec![double_entry_ledger::program()];
-    let retract_stride = retract_stride_for(retract_fraction);
-    let retract_count = if retract_stride == 0 {
-        0
-    } else {
-        n as i64 / retract_stride
+    let retract_stride = match log {
+        AsOfLog::Retracting(fraction) => retract_stride_for(fraction),
+        AsOfLog::Revising(_) => 0,
+    };
+    let retract_count = match log {
+        AsOfLog::Revising(k) => n.saturating_sub(k) as i64,
+        AsOfLog::Retracting(_) if retract_stride == 0 => 0,
+        AsOfLog::Retracting(_) => n as i64 / retract_stride,
     };
 
     let t = Instant::now();
@@ -1596,7 +1624,10 @@ async fn measure_as_of(
     // The index condition is established outside the sample.
     establish(pool, implementation, &cores).await?;
     let t = Instant::now();
-    fabricate_audit_rows(pool, n, retract_stride).await?;
+    match log {
+        AsOfLog::Revising(k) => fabricate_revision_log(pool, n, k).await?,
+        AsOfLog::Retracting(_) => fabricate_audit_rows(pool, n, retract_stride).await?,
+    }
     let fixture = reset_took + t.elapsed();
     analyze_audit(pool).await?;
 
@@ -1682,8 +1713,8 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
     let pool = connect(&args.database_url).await?;
     require_migration_head(&pool).await?;
     println!(
-        "scenario=as-of n={} at={} retract_fraction={} repeat={}",
-        args.n, args.at, args.retract_fraction, args.repeat
+        "scenario=as-of n={} at={} retract_fraction={} revise={} repeat={}",
+        args.n, args.at, args.retract_fraction, args.revise, args.repeat
     );
     let result = measure_as_of(
         args.implementation,
@@ -1691,7 +1722,7 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
         "asof",
         args.n,
         args.at,
-        args.retract_fraction,
+        AsOfLog::of(args.retract_fraction, args.revise),
         args.repeat,
     )
     .await?;
@@ -2450,6 +2481,70 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> R
     Ok(())
 }
 
+/// Fabricate `n` audit transitions revising `k` records: transition `i`
+/// admits version `i` of record `(i - 1) mod k` (an entry dated `d_i`
+/// with balanced lines of amount `i`) and, once every record exists,
+/// retracts that record's previous version, admitted at `i - k`.
+async fn fabricate_revision_log(pool: &PgPool, n: usize, k: usize) -> Result<()> {
+    let n_i: i64 = n
+        .try_into()
+        .map_err(|_| anyhow!("n={n} too large for i64"))?;
+    let k_i: i64 = k
+        .try_into()
+        .map_err(|_| anyhow!("k={k} too large for i64"))?;
+    let version = |rec: &str, ver: &str| {
+        format!(
+            "jsonb_build_array(
+                jsonb_build_object('predicate', 'JournalEntry', 'args', jsonb_build_array(
+                    jsonb_build_object('type','subject','value','bench_entry_' || {rec}),
+                    jsonb_build_object('type','subject','value','d_' || {ver}),
+                    jsonb_build_object('type','subject','value','p_bench'))),
+                jsonb_build_object('predicate', 'JournalLine', 'args', jsonb_build_array(
+                    jsonb_build_object('type','subject','value','bench_entry_' || {rec}),
+                    jsonb_build_object('type','subject','value','account_cash'),
+                    jsonb_build_object('type','decimal','value',{ver}::text),
+                    jsonb_build_object('type','decimal','value','0'))),
+                jsonb_build_object('predicate', 'JournalLine', 'args', jsonb_build_array(
+                    jsonb_build_object('type','subject','value','bench_entry_' || {rec}),
+                    jsonb_build_object('type','subject','value','account_revenue'),
+                    jsonb_build_object('type','decimal','value','0'),
+                    jsonb_build_object('type','decimal','value',{ver}::text))))"
+        )
+    };
+    let sql = format!(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents,
+            committed_at, attestation, parameters, model_hash, semantics_version,
+            drawn_subjects
+        )
+        SELECT
+            gen_random_uuid(), 'bench_as_of_revise', '[]'::jsonb,
+            '{{\"type\":\"subject\",\"value\":\"bench\"}}'::jsonb,
+            1, '[]'::jsonb,
+            {current},
+            CASE WHEN prev > 0 THEN {previous} ELSE '[]'::jsonb END,
+            '[]'::jsonb,
+            now() + (i * interval '1 microsecond'),
+            '{{\"mode\":\"gateway\",\"authenticated_by\":\"bench-fixture\"}}'::jsonb,
+            '[]'::jsonb, 'sha256:' || repeat('0', 64), 1, '[]'::jsonb
+        FROM (
+            SELECT i, (i - 1) % $2 AS rec, i - $2 AS prev
+            FROM generate_series(1, $1) AS i
+        ) versions",
+        current = version("rec", "i"),
+        previous = version("rec", "prev"),
+    );
+    sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(n_i)
+        .bind(k_i)
+        .execute(pool)
+        .await
+        .context("fabricate revision log")?;
+    Ok(())
+}
+
 async fn reset_db(pool: &PgPool) -> Result<()> {
     sqlx::query(morpholog_postgres::testing::RESET_SQL)
         .execute(pool)
@@ -2614,7 +2709,9 @@ const CASE_PROVENANCE: &[(&str, &str)] = &[
     (
         "asof",
         "audit-log replay; /retract is the replay's retract-path control \
-         (the asserts-only default is best-case)",
+         (the asserts-only default is best-case); /revise is a register \
+         revised in vintages, its live set a hundredth of its history \
+         (NESO's TEC archive)",
     ),
     (
         "contend",
@@ -2666,6 +2763,7 @@ enum CaseKind {
     AsOf {
         n: usize,
         retract_fraction: usize,
+        revise: usize,
     },
     Contend {
         workers: usize,
@@ -2771,6 +2869,7 @@ fn suite_plan(ladder: Ladder) -> Vec<CaseSpec> {
             kind: CaseKind::AsOf {
                 n,
                 retract_fraction: 0,
+                revise: 0,
             },
         });
         plan.push(CaseSpec {
@@ -2778,6 +2877,15 @@ fn suite_plan(ladder: Ladder) -> Vec<CaseSpec> {
             kind: CaseKind::AsOf {
                 n,
                 retract_fraction: 50,
+                revise: 0,
+            },
+        });
+        plan.push(CaseSpec {
+            case: "asof/revise",
+            kind: CaseKind::AsOf {
+                n,
+                retract_fraction: 0,
+                revise: (n / 100).max(1),
             },
         });
         plan.push(CaseSpec {
@@ -2907,6 +3015,7 @@ async fn run_case(
         CaseKind::AsOf {
             n,
             retract_fraction,
+            revise,
         } => {
             measure_as_of(
                 implementation,
@@ -2914,7 +3023,7 @@ async fn run_case(
                 spec.case,
                 *n,
                 1.0,
-                *retract_fraction,
+                AsOfLog::of(*retract_fraction, *revise),
                 repeat,
             )
             .await
@@ -3592,6 +3701,7 @@ mod smoke {
                 n: 4,
                 at: 1.0,
                 retract_fraction: 50,
+                revise: 0,
                 database_url: url.clone(),
                 reset: true,
                 implementation,
@@ -3699,6 +3809,7 @@ mod smoke {
             n: 4,
             at: 1.0,
             retract_fraction: 0,
+            revise: 0,
             database_url: url.clone(),
             reset: true,
             implementation: Implementation::Interpreted,
@@ -3713,6 +3824,7 @@ mod smoke {
             n: 10,
             at: 1.0,
             retract_fraction: 50,
+            revise: 0,
             database_url: url.clone(),
             reset: true,
             implementation: Implementation::Interpreted,
@@ -3720,6 +3832,19 @@ mod smoke {
         })
         .await
         .expect("as-of scenario smoke (retract-heavy)");
+
+        run_as_of(AsOfArgs {
+            n: 10,
+            at: 1.0,
+            retract_fraction: 0,
+            revise: 3,
+            database_url: url.clone(),
+            reset: true,
+            implementation: Implementation::Interpreted,
+            repeat: 1,
+        })
+        .await
+        .expect("as-of scenario smoke (revisions)");
 
         run_contend(ContendArgs {
             workers: 2,
@@ -3794,6 +3919,7 @@ mod smoke {
                 kind: CaseKind::AsOf {
                     n: 2,
                     retract_fraction: 0,
+                    revise: 0,
                 },
             },
             CaseSpec {
@@ -3921,7 +4047,7 @@ mod smoke {
     /// Pins fingerprints of the canonical plans under the current suite
     /// contract, so `suite_plan` cannot change without a contract bump.
     #[test]
-    fn the_canonical_matrix_is_frozen_under_contract_2() {
+    fn the_canonical_matrix_is_frozen_under_contract_3() {
         use sha2::{Digest, Sha256};
         let fingerprint = |ladder: Ladder| {
             let canonical: String = suite_plan(ladder)
@@ -3935,15 +4061,15 @@ mod smoke {
                 out
             })
         };
-        assert_eq!(SUITE_CONTRACT, 2, "bumping the contract re-pins these");
+        assert_eq!(SUITE_CONTRACT, 3, "bumping the contract re-pins these");
         assert_eq!(
             fingerprint(Ladder::Quick),
-            "ffd974c7fe2fa3624d92e3a94b2b8df3d43f3dd3a2e197483e66edbef369cb37",
+            "e608af751464f895942db3ab82f59cb87a502e2742fa86d8e3c2b4de28353238",
             "the quick matrix changed without a contract bump"
         );
         assert_eq!(
             fingerprint(Ladder::Full),
-            "d2fecec898de1d87f0ff08817f92da0867b552d78e229425bc56b1a3671a7a24",
+            "69b159fffb36ea5c8983d8f286c42ed63c8c50ec3b4b3e56dfeead5ff007c925",
             "the full matrix changed without a contract bump"
         );
     }
