@@ -64,9 +64,9 @@ The absence of an invariant tying `SettlementAuthority` to historical `Settlemen
 
 | Transformation | Effect |
 | --- | --- |
-| `issue_policy(policy_id, aggregate_limit)` | Opens a policy. Admits two claims: the immutable `Policy` and an initial `PolicyHeadroom` equal to the aggregate (no spend yet). |
-| `report_claim(claim_id, policy_id, claimed_amount)` | Records a reported loss. Requires the policy to exist. |
-| `grant_settlement_authority(actor, limit)` | Grants a claims handler their authority ceiling. |
+| `issue_policy(policy_id, aggregate_limit)` | Opens a policy. Admits two claims: the immutable `Policy` and an initial `PolicyHeadroom` equal to the aggregate (no spend yet). Refused if the policy id is already issued. |
+| `report_claim(claim_id, policy_id, claimed_amount)` | Records a reported loss. Requires a new claim id and the policy to exist. |
+| `grant_settlement_authority(actor, limit)` | Grants a claims handler their authority ceiling. Refused if that exact ceiling is already granted. |
 | `set_coverage_terms(policy_id, deductible, per_claim_limit)` | Optionally sets the per-claim layer for a policy. Once set, the `settlement_within_eligible_payout` invariant bounds every settlement on the policy's claims. |
 | `authorise_settlement(claim_id, settlement_id, amount)` | The main transformation. Does not take an `actor` parameter - the proposing actor flows through transition context. Checks three things up front: the claim was reported, the proposing actor has authority covering the amount, and the cumulative cap rule holds. If all three pass, it retracts the current headroom and admits a new one with `amount` subtracted, then admits the authorisation and payment records, then emits a payment-request intent. |
 

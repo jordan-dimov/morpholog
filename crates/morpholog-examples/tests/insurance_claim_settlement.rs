@@ -11,7 +11,7 @@
 mod common;
 use std::sync::OnceLock;
 
-use common::{Example, claim_instance, dec, dec_str, has_claim, subj};
+use common::{Example, claim_instance, dec, dec_str, has_claim, refused_by, subj};
 use morpholog_core::{ClaimInstance, Outcome, RejectionReason, State};
 use morpholog_examples::insurance_claim_settlement;
 use morpholog_test_support::{enumerate_derived, eval_invariant};
@@ -71,17 +71,18 @@ fn issue_policy_admits_initial_headroom_equal_to_aggregate_limit() {
 }
 
 #[test]
-fn duplicate_policy_id_violates_uniqueness_invariant() {
+fn a_policy_id_is_issued_once() {
+    // Neither a second policy under the id nor the same issue replayed,
+    // which would change nothing but announce the policy again.
     let pre = issue(State::default(), "policy_001", 100_000);
-    let reason = ex().must_reject(
-        &insurance_claim_settlement::issue_policy(),
-        vec![subj("policy_001"), dec(50_000)],
-        &pre,
-    );
-    assert!(
-        reason.to_string().contains("policy_unique_by_policy_id"),
-        "expected policy_unique_by_policy_id invariant violation, got: {reason}"
-    );
+    for limit in [100_000, 50_000] {
+        let reason = ex().must_reject(
+            &insurance_claim_settlement::issue_policy(),
+            vec![subj("policy_001"), dec(limit)],
+            &pre,
+        );
+        refused_by(&reason, "policy_id_unused");
+    }
 }
 
 #[test]
@@ -110,20 +111,17 @@ fn report_claim_with_policy_admits_claim_reported() {
 }
 
 #[test]
-fn duplicate_claim_id_violates_uniqueness_invariant() {
+fn a_claim_id_is_reported_once() {
     let pre = issue(State::default(), "policy_001", 100_000);
     let pre = report(pre, "claim_001", "policy_001", 20_000);
-    let reason = ex().must_reject(
-        &insurance_claim_settlement::report_claim(),
-        vec![subj("claim_001"), subj("policy_001"), dec(30_000)],
-        &pre,
-    );
-    assert!(
-        reason
-            .to_string()
-            .contains("claim_reported_unique_by_claim_id"),
-        "expected claim_reported_unique_by_claim_id invariant violation, got: {reason}"
-    );
+    for claimed in [20_000, 30_000] {
+        let reason = ex().must_reject(
+            &insurance_claim_settlement::report_claim(),
+            vec![subj("claim_001"), subj("policy_001"), dec(claimed)],
+            &pre,
+        );
+        refused_by(&reason, "claim_id_unused");
+    }
 }
 
 // ============================================================
@@ -139,11 +137,31 @@ fn happy_pre() -> State {
 #[test]
 fn authorise_settlement_happy_path_admits_authorisation_and_payment() {
     let pre = happy_pre();
+    refused_by(
+        &ex().must_reject(
+            &insurance_claim_settlement::grant_settlement_authority(),
+            vec![subj("alex"), dec(50_000)],
+            &pre,
+        ),
+        "authority_not_yet_granted",
+    );
+    let settle = vec![subj("claim_001"), subj("settlement_001"), dec(30_000)];
     let post = ex().must_accept_as(
         &insurance_claim_settlement::authorise_settlement(),
-        vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
+        settle.clone(),
         "alex",
         pre,
+    );
+    // A replay would lower the headroom again with no new payment; the
+    // conservation rule refuses it, so the payment request goes out once.
+    refused_by(
+        &ex().must_reject_as(
+            &insurance_claim_settlement::authorise_settlement(),
+            settle,
+            "alex",
+            &post,
+        ),
+        "headroom_consumed_by_payment",
     );
     // The authorisation records who decided.
     assert!(has_claim(
