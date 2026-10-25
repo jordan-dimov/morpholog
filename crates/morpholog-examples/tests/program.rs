@@ -32,7 +32,7 @@ fn settlement_netting_program_has_expected_shape() {
 fn verified_revenue_program_has_expected_shape() {
     let p = verified_revenue::program();
     assert_eq!(p.name, "verified_revenue");
-    assert_eq!(p.invariants.len(), 4);
+    assert_eq!(p.invariants.len(), 7);
     assert_eq!(p.transformations.len(), 6);
 
     // Restatement-side transformations.
@@ -62,6 +62,13 @@ fn verified_revenue_program_has_expected_shape() {
         p.invariant("supersedes_unique_by_prior_verification_id")
             .is_some()
     );
+    for identity in [
+        "independently_verified_revenue_unique_by_verification_id",
+        "standing_granted_by_unique_by_grant_id",
+        "standing_revoked_unique_by_revocation_id",
+    ] {
+        assert!(p.invariant(identity).is_some(), "{identity}");
+    }
 }
 
 #[test]
