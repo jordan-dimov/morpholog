@@ -6,7 +6,7 @@
 //! The key tests: a backdated amendment can lift the cap so a refused
 //! slice now fits, and a later amendment never unsettles an earlier slice.
 //! Every refusal names the rule that refused: an invariant by name, an
-//! unnamed gate by its text.
+//! unnamed gate by its text, each matched on its own variant.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -22,12 +22,24 @@ fn ex() -> &'static Example {
     EX.get_or_init(|| Example::new(&trade_lifecycle::program()))
 }
 
-/// The refusal names `rule`: an invariant's name, or a gate's text.
-fn refused_by(reason: &RejectionReason, rule: &str) {
-    assert!(
-        reason.to_string().contains(rule),
-        "expected a refusal by `{rule}`, got: {reason}"
-    );
+/// Refused by the invariant named `expected`.
+fn refused_by_invariant(reason: &RejectionReason, expected: &str) {
+    match reason {
+        RejectionReason::Invariant { name, .. } => assert_eq!(name.as_str(), expected),
+        other => panic!("expected invariant {expected}, got: {other}"),
+    }
+}
+
+/// Refused by a gate whose text holds `fragment`: the gates here are
+/// unnamed, so their rendered expression is what identifies them.
+fn refused_by_gate(reason: &RejectionReason, fragment: &str) {
+    match reason {
+        RejectionReason::Require { rendered, .. } => assert!(
+            rendered.contains(fragment),
+            "expected a gate on `{fragment}`, got: {rendered}"
+        ),
+        other => panic!("expected a gate on `{fragment}`, got: {other}"),
+    }
 }
 
 /// A gate refusal judged with `var` bound to `value`: it got past the
@@ -219,7 +231,7 @@ fn duplicate_capture_is_rejected() {
         capture_args("t1", "power", "sell", "tv9", 200),
         &captured(100),
     );
-    refused_by(&reason, "not TradeCaptured(trade, _, _)");
+    refused_by_gate(&reason, "not TradeCaptured(trade, _, _)");
 }
 
 // ============================================================
@@ -237,16 +249,16 @@ fn confirmation_needs_a_captured_trade_and_authority_for_its_commodity() {
         )
     };
     // Authority exists, but the trade was never captured.
-    refused_by(
+    refused_by_gate(
         &confirm(&grant(State::default(), "mo", "power"), "mo"),
         AUTHORITY_GATE,
     );
     // Captured, but the actor holds no authority at all.
-    refused_by(&confirm(&captured(100), "rando"), AUTHORITY_GATE);
+    refused_by_gate(&confirm(&captured(100), "rando"), AUTHORITY_GATE);
     // `mo_gas` may confirm gas; `t1` is power. The gate found the trade's
     // own commodity and refused the authority for it.
     let reason = confirm(&grant(captured(100), "mo_gas", "gas"), "mo_gas");
-    refused_by(&reason, AUTHORITY_GATE);
+    refused_by_gate(&reason, AUTHORITY_GATE);
     witnessed(&reason, "commodity", "power");
 }
 
@@ -278,7 +290,7 @@ fn second_confirmation_is_rejected() {
         "mo",
         &confirmed(),
     );
-    refused_by(&reason, "not TradeConfirmed(");
+    refused_by_gate(&reason, "not TradeConfirmed(");
 }
 
 // ============================================================
@@ -310,28 +322,28 @@ fn amendment_admits_a_new_version_and_keeps_the_old() {
 fn an_amendment_must_extend_a_clean_chain_of_distinct_versions() {
     let pre = grant(captured(100), "mo", "power");
     // The version being amended must exist.
-    refused_by(
+    refused_by_gate(
         &amend_refused(&pre, "tv9", "tv2", 120, "2026-02-01"),
         "TradeTerms(trade, prior_version_id, _, _, _)",
     );
     // A second version on tv1's own effective date.
-    refused_by(
+    refused_by_invariant(
         &amend_refused(&pre, "tv1", "tv2", 120, "2026-01-15"),
         "trade_terms_unique_by_trade_effective_from",
     );
     // tv1 reused as the new id would name a second, conflicting record.
-    refused_by(
+    refused_by_invariant(
         &amend_refused(&pre, "tv1", "tv1", 120, "2026-02-01"),
         "trade_terms_unique_by_version_id",
     );
     // A terms quantity is positive.
-    refused_by(
+    refused_by_invariant(
         &amend_refused(&pre, "tv1", "tv2", -10, "2026-02-01"),
         "trade_terms_quantity_is_positive",
     );
     // The chain never forks: once tv1 is amended, it cannot be again.
     let amended = amend(pre, "tv1", "tv2", 120, "2026-02-01");
-    refused_by(
+    refused_by_gate(
         &amend_refused(&amended, "tv1", "tv3", 130, "2026-03-01"),
         "not TradeTermsSupersedes(_, prior_version_id)",
     );
@@ -389,7 +401,7 @@ fn correct_by_actor_authorised_for_a_different_commodity_is_rejected() {
         "mo_gas",
         &grant(confirmed(), "mo_gas", "gas"),
     );
-    refused_by(&reason, AUTHORITY_GATE);
+    refused_by_gate(&reason, AUTHORITY_GATE);
     witnessed(&reason, "commodity", "power");
 }
 
@@ -404,7 +416,7 @@ fn reusing_an_official_price_id_across_figures_is_rejected() {
         "mo",
         &state,
     );
-    refused_by(&reason, "official_price_unique_by_official_price_id");
+    refused_by_invariant(&reason, "official_price_unique_by_official_price_id");
 }
 
 // ============================================================
@@ -414,7 +426,7 @@ fn reusing_an_official_price_id_across_figures_is_rejected() {
 #[test]
 fn settle_before_confirmation_is_rejected() {
     // No official price in force to settle on.
-    refused_by(
+    refused_by_gate(
         &settle_refused(&captured(100), 100, "s1", "op1", "2026-01-20"),
         "CurrentOfficialPrice(trade, official_price_id)",
     );
@@ -433,18 +445,18 @@ fn trade_settles_in_slices_within_the_effective_quantity() {
 #[test]
 fn settlements_over_the_effective_quantity_are_rejected() {
     // One slice of 150 against the 100 in force.
-    refused_by(
+    refused_by_invariant(
         &settle_refused(&confirmed(), 150, "s1", "op1", "2026-01-20"),
         "settled_within_effective_terms",
     );
     // 60 and then 60 more: each within the cap alone, 120 together.
     let first = settle(confirmed(), 60, "s1", "op1", "2026-01-20");
-    refused_by(
+    refused_by_invariant(
         &settle_refused(&first, 60, "s2", "op1", "2026-01-25"),
         "settled_within_effective_terms",
     );
     // A negative slice cannot make room under the cap.
-    refused_by(
+    refused_by_invariant(
         &settle_refused(&confirmed(), -10, "s1", "op1", "2026-01-20"),
         "settled_quantity_is_positive",
     );
@@ -456,7 +468,7 @@ fn backdated_amendment_lifts_the_effective_cap() {
     // backdated amendment to 120 effective 2026-02-01 then lets the very
     // same slice in. The refused attempt left no trace.
     let confirmed = confirmed();
-    refused_by(
+    refused_by_invariant(
         &settle_refused(&confirmed, 110, "s1", "op1", "2026-02-20"),
         "settled_within_effective_terms",
     );
@@ -492,7 +504,7 @@ fn replaying_a_settlement_id_is_rejected_before_a_second_request() {
     // a duplicate TradeSettlementRequested never reaches the outbox. The
     // duplicate claim alone would dedup in state; the gate stops the re-emit.
     let first = settle(confirmed(), 40, "s1", "op1", "2026-01-20");
-    refused_by(
+    refused_by_gate(
         &settle_refused(&first, 40, "s1", "op1", "2026-01-20"),
         "not TradeSettled(",
     );
@@ -526,7 +538,7 @@ fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
         vec![subj("t1"), subj("s1"), subj("op1"), date("2026-01-20")],
         &confirmed(),
     );
-    refused_by(&reason, "trade_settled_unique_by_settlement_id");
+    refused_by_invariant(&reason, "trade_settled_unique_by_settlement_id");
 }
 
 // ============================================================
@@ -537,7 +549,7 @@ fn conflicting_settlements_under_one_id_are_rejected_by_the_invariant() {
 fn settlement_before_any_effective_terms_is_rejected() {
     // A slice effective 2026-01-01, before any terms (from 2026-01-15), has
     // no quantity to be capped against. The settle gate refuses it.
-    refused_by(
+    refused_by_gate(
         &settle_refused(&confirmed(), 50, "s1", "op1", "2026-01-01"),
         "ef on_or_before effective_on",
     );
@@ -564,7 +576,7 @@ fn settlement_before_effective_terms_is_rejected_by_the_invariant() {
         settle_args(50, "s_early", "op1", "2026-01-01"),
         &confirmed(),
     );
-    refused_by(&reason, "settled_date_has_effective_terms");
+    refused_by_invariant(&reason, "settled_date_has_effective_terms");
 }
 
 // ============================================================
@@ -597,7 +609,7 @@ fn a_single_capture_is_held_within_the_limit_both_ways() {
             capture_args("t1", "power", direction, "tv1", 150),
             &power_limited_to(100),
         );
-        refused_by(&reason, "within_position_limit");
+        refused_by_invariant(&reason, "within_position_limit");
     }
 }
 
@@ -614,7 +626,7 @@ fn an_amendment_that_grows_a_position_past_the_limit_is_refused() {
     // The invariant judges the resulting state, not the action: amending t1
     // up to 150 breaches the limit just as a new capture of 150 would.
     let state = capture_into(power_limited_to(100), "t1", "power", "buy", "tv1", 80);
-    refused_by(
+    refused_by_invariant(
         &amend_refused(&state, "tv1", "tv2", 150, "2026-02-01"),
         "within_position_limit",
     );
