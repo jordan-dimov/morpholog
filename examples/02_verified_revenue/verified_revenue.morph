@@ -190,21 +190,26 @@ transformation revoke_standing(verification_id, purpose, revocation_id):
 -- Record a bank debt-service decision that relies on a figure. The gates
 -- run at the moment of the decision: the figure must match, and there
 -- must be live standing for this specific purpose. The purpose is
--- written right into the gate. Once admitted, the decision is a permanent
--- record - later revoking the standing does not, and must not, reach back
--- and invalidate the decision that was legitimate when it was made.
+-- written right into the gate. The last gate refuses a decision id
+-- already on the record: replaying a decision would change no claim, but
+-- it would send the decision's notice a second time. Once admitted, the
+-- decision is a permanent record - later revoking the standing does not,
+-- and must not, reach back and invalidate the decision that was
+-- legitimate when it was made.
 transformation admit_debt_service_revenue(
     asset, period, amount, decision_id, verification_id
 ):
     require figure_matches: IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
     require live_standing_for_debt_service: AdmissibleFor(verification_id, #bank_debt_service)
+    require decision_not_yet_recorded: not DebtServiceRevenue(decision_id: decision_id, ..)
     admit DebtServiceRevenue(asset, period, amount, decision_id, verification_id)
     emit DebtServiceRevenueAdmitted(decision_id)
 
 
 -- The same shape for an investor-reporting decision: a matching figure
 -- and live standing for the investor-reporting purpose, gated at the
--- moment the figure goes into the report. The two decision paths are
+-- moment the figure goes into the report, and the same refusal of a
+-- report id already recorded. The two decision paths are
 -- deliberately parallel - same figure, different purposes, independent
 -- permissions.
 transformation admit_investor_reported_revenue(
@@ -212,5 +217,6 @@ transformation admit_investor_reported_revenue(
 ):
     require figure_matches: IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
     require live_standing_for_investor_reporting: AdmissibleFor(verification_id, #investor_reporting)
+    require report_not_yet_recorded: not InvestorReportedRevenue(report_id: report_id, ..)
     admit InvestorReportedRevenue(asset, period, amount, report_id, verification_id)
     emit InvestorReportedRevenueAdmitted(report_id)

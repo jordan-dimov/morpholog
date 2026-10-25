@@ -96,20 +96,34 @@ fn admit_then_correct_preserves_history_and_moves_pointer() {
 }
 
 #[test]
-fn cannot_correct_already_superseded_verification() {
-    // The gate in correct_independent_verification and
-    // supersedes_unique_by_prior_verification_id prevent a forked chain.
+fn a_correction_extends_only_an_admitted_figure_not_yet_corrected() {
+    let correct = |amount: i64, new: &str, prior: &str| {
+        vec![asset(), period(), dec(amount), subj(new), subj(prior)]
+    };
+    // A figure that was never admitted cannot be corrected.
+    ex().must_reject(
+        &verified_revenue::correct_independent_verification(),
+        correct(88, "ver_002", "ver_phantom"),
+        &State::default(),
+    );
     let pre = admit_iv(State::default(), 91, "ver_001");
     let pre = ex().must_accept(
         &verified_revenue::correct_independent_verification(),
-        vec![asset(), period(), dec(88), subj("ver_002"), subj("ver_001")],
+        correct(88, "ver_002", "ver_001"),
         pre,
     );
-    ex().must_reject(
-        &verified_revenue::correct_independent_verification(),
-        vec![asset(), period(), dec(85), subj("ver_003"), subj("ver_001")],
-        &pre,
-    );
+    // Neither the same correction replayed, which would change no claim
+    // but send its notice again, nor a fork of the chain is admitted.
+    for args in [
+        correct(88, "ver_002", "ver_001"),
+        correct(85, "ver_003", "ver_001"),
+    ] {
+        ex().must_reject(
+            &verified_revenue::correct_independent_verification(),
+            args,
+            &pre,
+        );
+    }
 }
 
 #[test]
@@ -254,6 +268,33 @@ fn parallel_standings_coexist_on_same_verification() {
         "AdmissibleFor",
         &[subj("ver_001"), subj(verified_revenue::INVESTOR_REPORTING)],
     ));
+
+    // A live standing is not granted again, and a decision is recorded
+    // once: a replay would change no claim, but would send its notice again.
+    ex().must_reject(
+        &verified_revenue::grant_standing(),
+        vec![
+            subj("ver_001"),
+            subj(verified_revenue::BANK_DEBT_SERVICE),
+            subj("credit_committee"),
+            subj("grant_bank_001"),
+        ],
+        &pre,
+    );
+    for (decide, id) in [
+        (
+            verified_revenue::admit_debt_service_revenue(),
+            "decision_001",
+        ),
+        (
+            verified_revenue::admit_investor_reported_revenue(),
+            "report_001",
+        ),
+    ] {
+        let args = vec![asset(), period(), dec(91), subj(id), subj("ver_001")];
+        let post = ex().must_accept(&decide, args.clone(), pre.clone());
+        ex().must_reject(&decide, args, &post);
+    }
 }
 
 #[test]
@@ -312,13 +353,25 @@ fn decision_admits_only_with_matching_standing() {
         "expected the AdmissibleFor gate to reject; trace: {trace:#?}"
     );
 
-    // Bank grants standing; admit succeeds.
+    // Bank grants standing; a decision on the verified 91 admits, and one
+    // recording any other amount does not.
     let pre = grant(
         pre,
         "ver_001",
         verified_revenue::BANK_DEBT_SERVICE,
         "credit_committee",
         "grant_001",
+    );
+    ex().must_reject(
+        &verified_revenue::admit_debt_service_revenue(),
+        vec![
+            asset(),
+            period(),
+            dec(95),
+            subj("decision_001"),
+            subj("ver_001"),
+        ],
+        &pre,
     );
     let post = ex().must_accept(
         &verified_revenue::admit_debt_service_revenue(),
@@ -430,6 +483,16 @@ fn revoking_standing_blocks_future_but_preserves_past() {
             subj("revoke_001"),
         ],
     ));
+    // Revoking again is refused, so the revocation notice goes out once.
+    ex().must_reject(
+        &verified_revenue::revoke_standing(),
+        vec![
+            subj("ver_001"),
+            subj(verified_revenue::BANK_DEBT_SERVICE),
+            subj("revoke_001"),
+        ],
+        &after_revoke,
+    );
     // A new decision against the same verification is rejected.
     ex().must_reject(
         &verified_revenue::admit_debt_service_revenue(),

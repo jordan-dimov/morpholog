@@ -101,7 +101,7 @@ Content claims (figures, grants, revocations, decisions) are append-only. Pointe
 | `correct_independent_verification(asset, period, new_amount, new_verification_id, prior_verification_id)` | The combined-doctrine transformation. Asserts new IV + `Supersedes`; retracts the prior pointer AND every `AdmissibleFor` on the prior verification (pattern retraction); asserts the new pointer. |
 | `grant_standing(verification_id, purpose, authority, grant_id)` | Grants `purpose` standing. Rejected if (a) no IV references the supplied id, (b) the verification is not currently in force, (c) the (verification, purpose) pair has been revoked, or (d) it already has active admissibility. |
 | `revoke_standing(verification_id, purpose, revocation_id)` | Requires currently-active standing; retracts `AdmissibleFor`; asserts terminal `StandingRevoked`. |
-| `admit_debt_service_revenue(asset, period, amount, decision_id, verification_id)` | Requires a matching IV AND `AdmissibleFor(verification_id, bank_debt_service)`. The purpose is embedded as a literal in the require. |
+| `admit_debt_service_revenue(asset, period, amount, decision_id, verification_id)` | Requires a matching IV AND `AdmissibleFor(verification_id, bank_debt_service)`, and refuses a `decision_id` already recorded, so a replay sends no second notice. The purpose is embedded as a literal in the require. |
 | `admit_investor_reported_revenue(asset, period, amount, report_id, verification_id)` | Same shape with `investor_reporting`. |
 
 ## How to run it
