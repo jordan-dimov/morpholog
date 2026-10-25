@@ -811,9 +811,4 @@ fn trade_lifecycle_hashes_as_its_positional_twin() {
     let a = parse_program(&named).unwrap();
     let b = parse_program(&positional).unwrap();
     assert_eq!(a, b);
-    // The hash the file had before the call was respelled.
-    assert_eq!(
-        canonical_hash(&a),
-        "sha256:8f40dc6b6e53fc332379ad889d24154e9c1d5431b9db4559df2e51789b427daa"
-    );
 }

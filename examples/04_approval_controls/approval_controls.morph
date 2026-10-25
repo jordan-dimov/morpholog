@@ -37,6 +37,8 @@
 --     standing rules about authority here; every approval is checked
 --     once, at the moment it is made, and the record then stands on its
 --     own.
+--     Each gate below is written with a name before its condition,
+--     and a refused action is reported under that name.
 --   * The approver chooses WHICH document to approve, never the facts
 --     that decide whether they may. A document is put on the record
 --     first, once, with its kind and - if it is about money - its
@@ -98,12 +100,12 @@ intent DocumentApprovedWithinLimit(doc_id: Subject, actor: Subject, amount: Deci
 -- to record the document's true kind and amount - checking that against
 -- the paper invoice is a separate control.
 transformation submit_document(doc_id, doc_type):
-    require not Document(doc_id, _)
+    require document_id_unused: not Document(doc_id, _)
     admit Document(doc_id, doc_type)
 
 transformation submit_monetary_document(doc_id, doc_type, amount):
-    require not Document(doc_id, _)
-    require 0 < amount
+    require document_id_unused: not Document(doc_id, _)
+    require amount_is_positive: 0 < amount
     admit Document(doc_id, doc_type)
     admit DocumentAmount(doc_id, amount)
 
@@ -123,7 +125,7 @@ transformation grant_approval_authority(principal, doc_type):
 -- held before it can be removed, then retracts it. Revoking only stops
 -- *future* approvals; documents already approved stay approved.
 transformation revoke_approval_authority(principal, doc_type):
-    require MayApprove(principal, doc_type)
+    require authority_is_held: MayApprove(principal, doc_type)
     retract MayApprove(principal, doc_type)
     emit ApprovalAuthorityRevoked(principal, doc_type)
 
@@ -136,8 +138,8 @@ transformation revoke_approval_authority(principal, doc_type):
 -- refused and nothing is recorded.
 transformation approve_document(doc_id):
     bind Document(doc_id, doc_type)
-    require not DocumentAmount(doc_id, _)
-    require MayApprove(actor, doc_type)
+    require document_has_no_amount: not DocumentAmount(doc_id, _)
+    require actor_may_approve_the_kind: MayApprove(actor, doc_type)
     admit Approval(doc_id, doc_type, actor)
     emit DocumentApproved(doc_id, actor)
 
@@ -157,7 +159,7 @@ transformation grant_approval_limit(principal, doc_type, limit):
 -- Remove a specific approval ceiling. The gate requires that exact
 -- grant to exist before it can be taken away.
 transformation revoke_approval_limit(principal, doc_type, limit):
-    require ApprovalLimit(principal, doc_type, limit)
+    require ceiling_is_held: ApprovalLimit(principal, doc_type, limit)
     retract ApprovalLimit(principal, doc_type, limit)
     emit ApprovalLimitRevoked(principal, doc_type, limit)
 
@@ -172,6 +174,6 @@ transformation revoke_approval_limit(principal, doc_type, limit):
 transformation approve_within_limit(doc_id):
     bind Document(doc_id, doc_type)
     bind DocumentAmount(doc_id, amount)
-    require ApprovalLimit(actor, doc_type, limit) and amount <= limit
+    require amount_within_actors_ceiling: ApprovalLimit(actor, doc_type, limit) and amount <= limit
     admit LimitedApproval(doc_id, doc_type, amount, actor)
     emit DocumentApprovedWithinLimit(doc_id, actor, amount)

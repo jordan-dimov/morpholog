@@ -55,6 +55,8 @@
 --     standing later would force the runtime either to refuse the
 --     revocation or to erase the decisions made under it - both wrong.
 --     An invariant governs what is true; a gate governs what you may do.
+--     Each gate below is written with a name before its condition,
+--     and a refused action is reported under that name.
 
 program verified_revenue
 
@@ -126,7 +128,7 @@ invariant admissibility_excludes_revocation:
 transformation admit_independent_verification(
     asset, period, amount, verification_id
 ):
-    require not CurrentVerification(asset, period, _)
+    require no_current_figure_yet: not CurrentVerification(asset, period, _)
     admit IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
     admit CurrentVerification(asset, period, verification_id)
     emit IndependentVerificationAdmitted(verification_id)
@@ -144,8 +146,8 @@ transformation admit_independent_verification(
 transformation correct_independent_verification(
     asset, period, new_amount, new_verification_id, prior_verification_id
 ):
-    require IndependentlyVerifiedRevenue(asset, period, _, prior_verification_id)
-    require not Supersedes(_, prior_verification_id)
+    require prior_figure_exists: IndependentlyVerifiedRevenue(asset, period, _, prior_verification_id)
+    require prior_figure_not_yet_superseded: not Supersedes(_, prior_verification_id)
     admit IndependentlyVerifiedRevenue(asset, period, new_amount, new_verification_id)
     admit Supersedes(new_verification_id, prior_verification_id)
     retract CurrentVerification(asset, period, prior_verification_id)
@@ -164,10 +166,10 @@ transformation correct_independent_verification(
 transformation grant_standing(
     verification_id, purpose, authority, grant_id
 ):
-    require IndependentlyVerifiedRevenue(verification_id: verification_id, ..)
-    require CurrentVerification(_, _, verification_id)
-    require not (exists r: StandingRevoked(verification_id, purpose, r))
-    require not AdmissibleFor(verification_id, purpose)
+    require figure_exists: IndependentlyVerifiedRevenue(verification_id: verification_id, ..)
+    require figure_is_current: CurrentVerification(_, _, verification_id)
+    require purpose_not_revoked: not (exists r: StandingRevoked(verification_id, purpose, r))
+    require standing_not_yet_live: not AdmissibleFor(verification_id, purpose)
     admit StandingGrantedBy(verification_id, purpose, authority, grant_id)
     admit AdmissibleFor(verification_id, purpose)
     emit StandingGranted(grant_id)
@@ -179,7 +181,7 @@ transformation grant_standing(
 -- undo it - which is why the invariants above can treat a revoked
 -- purpose as closed for good.
 transformation revoke_standing(verification_id, purpose, revocation_id):
-    require AdmissibleFor(verification_id, purpose)
+    require standing_is_live: AdmissibleFor(verification_id, purpose)
     retract AdmissibleFor(verification_id, purpose)
     admit StandingRevoked(verification_id, purpose, revocation_id)
     emit StandingRevocationAdmitted(revocation_id)
@@ -194,8 +196,8 @@ transformation revoke_standing(verification_id, purpose, revocation_id):
 transformation admit_debt_service_revenue(
     asset, period, amount, decision_id, verification_id
 ):
-    require IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
-    require AdmissibleFor(verification_id, #bank_debt_service)
+    require figure_matches: IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
+    require live_standing_for_debt_service: AdmissibleFor(verification_id, #bank_debt_service)
     admit DebtServiceRevenue(asset, period, amount, decision_id, verification_id)
     emit DebtServiceRevenueAdmitted(decision_id)
 
@@ -208,7 +210,7 @@ transformation admit_debt_service_revenue(
 transformation admit_investor_reported_revenue(
     asset, period, amount, report_id, verification_id
 ):
-    require IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
-    require AdmissibleFor(verification_id, #investor_reporting)
+    require figure_matches: IndependentlyVerifiedRevenue(asset, period, amount, verification_id)
+    require live_standing_for_investor_reporting: AdmissibleFor(verification_id, #investor_reporting)
     admit InvestorReportedRevenue(asset, period, amount, report_id, verification_id)
     emit InvestorReportedRevenueAdmitted(report_id)

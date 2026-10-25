@@ -15,7 +15,8 @@
 use morpholog_core::{ClaimInstance, EvalValue, State, Transformation};
 use morpholog_examples::trade_lifecycle;
 use morpholog_postgres::{
-    PgPool, PgProgram, PgProposalOutcome, list_derived, list_derived_at, list_rejection_rows,
+    PgPool, PgProgram, PgProposalOutcome, list_derived, list_derived_at, list_outbox_rows,
+    list_rejection_rows,
 };
 use rust_decimal::Decimal;
 use uuid::Uuid;
@@ -265,13 +266,9 @@ async fn a_refused_slice_leaves_only_its_log_row_and_the_admitted_one_its_reques
         .await,
         1
     );
-    assert_eq!(
-        count(
-            &pool,
-            "SELECT count(*) FROM morpholog.outbox WHERE intent_type = 'TradeSettlementRequested' \
-             AND arguments -> 2 ->> 'value' = '110'"
-        )
-        .await,
-        1
-    );
+    let requests = list_outbox_rows(&pool, None, Some("TradeSettlementRequested"))
+        .await
+        .unwrap();
+    let payloads: Vec<_> = requests.iter().map(|r| r.arguments.clone()).collect();
+    assert_eq!(payloads, [vec![subj("s1"), subj("t1"), dec(110)]]);
 }

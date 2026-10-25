@@ -906,10 +906,7 @@ async fn verified_revenue_full_chain_through_pg() {
     )
     .await
     .expect("step 7 propose_against_pg should not error");
-    common::refused_by_unnamed_gate(
-        &outcome,
-        "AdmissibleFor(verification_id, #bank_debt_service)",
-    );
+    common::refused_by(&outcome, "live_standing_for_debt_service");
     assert_eq!(
         list_claims(&pool).await.unwrap().len(),
         claims_before,
@@ -1587,7 +1584,7 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
     )
     .await
     .unwrap();
-    common::refused_by_unnamed_gate(&outcome, "not PeriodClosed(period)");
+    common::refused_by(&outcome, "period_is_open");
 
     // claims still contains only the pre-state PeriodClosed.
     let claims = list_claims(&pool).await.unwrap();
@@ -1872,7 +1869,7 @@ async fn approval_controls_full_chain_through_pg() {
     )
     .await
     .expect("propose should not error");
-    common::refused_by_unnamed_gate(&outcome, "MayApprove(actor, doc_type)");
+    common::refused_by(&outcome, "actor_may_approve_the_kind");
     assert_eq!(
         list_audit_rows(&pool).await.unwrap().len(),
         audit_before,
@@ -1959,10 +1956,7 @@ async fn approval_controls_full_chain_through_pg() {
     )
     .await
     .expect("propose should not error");
-    common::refused_by_unnamed_gate(
-        &outcome,
-        "ApprovalLimit(actor, doc_type, limit) and (amount <= limit)",
-    );
+    common::refused_by(&outcome, "amount_within_actors_ceiling");
     assert_eq!(list_audit_rows(&pool).await.unwrap().len(), audit_before);
     assert_eq!(
         list_pending_outbox(&pool).await.unwrap().len(),

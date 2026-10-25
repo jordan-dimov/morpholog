@@ -103,20 +103,6 @@ pub fn refused_by(outcome: &PgProposalOutcome, rule: &str) {
     }
 }
 
-/// Refused by an unnamed gate whose text holds `fragment`. Such a gate
-/// carries no rule name; the envelope's pinned reason names it.
-pub fn refused_by_unnamed_gate(outcome: &PgProposalOutcome, fragment: &str) {
-    match outcome {
-        PgProposalOutcome::Rejected {
-            rule: None, reason, ..
-        } => assert!(
-            reason.contains(fragment),
-            "expected a gate on `{fragment}`, got: {reason}"
-        ),
-        other => panic!("expected a refusal by a gate on `{fragment}`, got {other:?}"),
-    }
-}
-
 /// Prepare a test programme and bind it to PostgreSQL, on
 /// whatever route it is eligible for.
 pub fn pg_program(program: Program) -> PgProgram {

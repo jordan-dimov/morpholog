@@ -1971,10 +1971,11 @@ async fn inspect_rejections_lists_refusals_and_an_empty_log_is_empty() {
         row["actor"],
         serde_json::json!({"type": "subject", "value": "alex"})
     );
-    assert!(row["rule"].is_string());
-    assert!(
-        row["reason"].as_str().unwrap().contains("require failed"),
-        "the exact envelope reason string is recorded: {row}"
+    assert_eq!(row["rule"], "period_is_open");
+    assert_eq!(
+        row["reason"],
+        "require `period_is_open` failed: not PeriodClosed(period) did not hold over pre-state",
+        "the exact envelope reason string is recorded"
     );
     assert!(
         row.get("invariant_version").is_none(),
