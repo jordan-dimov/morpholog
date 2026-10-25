@@ -11,7 +11,7 @@
 mod common;
 use std::sync::OnceLock;
 
-use common::{Example, claim_instance, dec, has_claim, subj};
+use common::{Example, claim_instance, dec, has_claim, refused_by, subj};
 use morpholog_core::State;
 use morpholog_examples::double_entry_ledger;
 use morpholog_test_support::eval_invariant;
@@ -23,17 +23,23 @@ fn ex() -> &'static Example {
 
 #[test]
 fn simple_entry_balances_and_commits() {
+    let args = vec![
+        subj("entry_001"),
+        subj("d_2026_04_15"),
+        subj("p_2026_04"),
+        subj("account_cash"),
+        subj("account_revenue"),
+        dec(100),
+    ];
     let state = ex().must_accept(
         &double_entry_ledger::post_simple_entry(),
-        vec![
-            subj("entry_001"),
-            subj("d_2026_04_15"),
-            subj("p_2026_04"),
-            subj("account_cash"),
-            subj("account_revenue"),
-            dec(100),
-        ],
+        args.clone(),
         State::default(),
+    );
+    // Posting the same entry again is refused, so its notice goes out once.
+    refused_by(
+        &ex().must_reject(&double_entry_ledger::post_simple_entry(), args, &state),
+        "entry_id_unused",
     );
 
     assert_eq!(state.len(), 3, "1 JournalEntry + 2 JournalLine");
@@ -59,20 +65,25 @@ fn split_entry_balances_and_commits() {
     // Debit 100 to cash; credit 70 to revenue + 30 to deferred revenue.
     // Sums: debits = 100; credits = 70 + 30 = 100. Balance invariant
     // holds.
+    let args = vec![
+        subj("entry_001"),
+        subj("d_2026_04_15"),
+        subj("p_2026_04"),
+        subj("account_cash"),
+        dec(100),
+        subj("account_revenue"),
+        dec(70),
+        subj("account_deferred_revenue"),
+        dec(30),
+    ];
     let state = ex().must_accept(
         &double_entry_ledger::post_split_entry(),
-        vec![
-            subj("entry_001"),
-            subj("d_2026_04_15"),
-            subj("p_2026_04"),
-            subj("account_cash"),
-            dec(100),
-            subj("account_revenue"),
-            dec(70),
-            subj("account_deferred_revenue"),
-            dec(30),
-        ],
+        args.clone(),
         State::default(),
+    );
+    refused_by(
+        &ex().must_reject(&double_entry_ledger::post_split_entry(), args, &state),
+        "entry_id_unused",
     );
 
     assert_eq!(state.len(), 4, "1 JournalEntry + 3 JournalLine");
@@ -317,21 +328,33 @@ fn cannot_restate_already_restated_entry() {
         s1,
     );
 
-    let reason = ex().must_reject(
-        &double_entry_ledger::restate_entry(),
+    let restate = |new: &str, prior: &str| {
         vec![
-            subj("entry_003"),
-            subj("entry_001"),
+            subj(new),
+            subj(prior),
             subj("d_2026_05_20"),
             subj("p_2026_04"),
             subj("account_cash"),
             subj("account_revenue"),
             dec(102),
-        ],
-        &s2,
+        ]
+    };
+    refused_by(
+        &ex().must_reject(
+            &double_entry_ledger::restate_entry(),
+            restate("entry_003", "entry_001"),
+            &s2,
+        ),
+        "prior_entry_not_yet_superseded",
     );
-    assert!(
-        reason.to_string().contains("require"),
-        "got reason: {reason}"
+    // A restatement takes an entry id of its own: restating entry_002
+    // under entry_001's id would merge two entries' lines under one id.
+    refused_by(
+        &ex().must_reject(
+            &double_entry_ledger::restate_entry(),
+            restate("entry_001", "entry_002"),
+            &s2,
+        ),
+        "new_entry_id_unused",
     );
 }

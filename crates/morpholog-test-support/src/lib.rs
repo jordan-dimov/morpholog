@@ -284,6 +284,17 @@ pub fn must_reject_as(
     )
 }
 
+/// Assert `reason` is a refusal by the gate or invariant named `rule`.
+pub fn refused_by(reason: &RejectionReason, rule: &str) {
+    match reason {
+        RejectionReason::Require {
+            name: Some(name), ..
+        } => assert_eq!(name.as_str(), rule),
+        RejectionReason::Invariant { name, .. } => assert_eq!(name.as_str(), rule),
+        other => panic!("expected a refusal by {rule}, got: {other}"),
+    }
+}
+
 // ============================================================
 // Validated evaluation
 // ============================================================
