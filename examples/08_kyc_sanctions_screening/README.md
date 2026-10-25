@@ -29,7 +29,7 @@ See [`kyc.morph`](kyc.morph) for the surface syntax.
 | `Customer(customer_id)` | A registered customer. Append-only. |
 | `Screening(screening_id, customer, list_type, requested_on)` | A screening request against a named list (`#sanctions`, `#pep`). Append-only. |
 | `ScreeningResult(screening_id, disposition, completed_on, expires_on)` | The provider's result - disposition `#clean`, `#match`, `#adjudicated_clear`, or `#adjudicated_confirmed` - with an inclusive expiry. Append-only. |
-| `CurrentScreening(customer, list_type, screening_id)` | Singleton retractable pointer to the screening that counts now for a `(customer, list_type)`. Moves as fresh clean / cleared results arrive; a match never becomes current. |
+| `CurrentScreening(customer, list_type, screening_id)` | Singleton retractable pointer to the screening that counts now for a `(customer, list_type)`. Moves to each clean / cleared result as it arrives, whatever order the screenings were requested in; a match never becomes current. |
 | `MatchUnderReview(screening_id, raised_on)` | A possible match awaiting analyst adjudication. Retractable - cleared when adjudicated. |
 | `MatchAdjudicated(screening_id)` | A match that an analyst has reviewed and resolved (either way). Append-only - the durable marker the exactly-one-outcome invariant keys off. |
 | `OnboardedCustomer(customer, onboarded_on)` | Onboarded standing. Append-only. |
@@ -56,7 +56,7 @@ Each outbox intent routes to a distinct downstream consumer, declared by name so
 | --- | --- |
 | `register_customer(customer_id)` | Registers a customer; rejected if already on file. |
 | `request_screening(screening_id, customer, list_type, requested_on)` | Records a screening request and emits `ScreeningRequested` to the provider; requires a new screening id and the customer to exist. |
-| `record_clean_screening_result(screening_id, completed_on, expires_on)` | Records a `#clean` result and makes it the current screening, replacing the prior pointer. |
+| `record_clean_screening_result(screening_id, completed_on, expires_on)` | Records a `#clean` result and makes it the current screening, replacing the prior pointer; refused for a screening that already has a result. |
 | `record_match_screening_result(screening_id, completed_on, expires_on, raised_on)` | Records a `#match`, flags `MatchUnderReview`, emits `MatchRaised`; refused for a screening that already has a result. Does **not** become current. |
 | `adjudicate_match_as_false_positive(screening_id, adjudicated_on, expires_on)` | An analyst clears a flagged match: requires the match under review, records `#adjudicated_clear`, marks it adjudicated, clears the review flag, makes it current. |
 | `adjudicate_match_as_confirmed(screening_id, adjudicated_on, expires_on)` | The other side of the fork: an analyst confirms a genuine hit. Records `#adjudicated_confirmed`, marks it adjudicated, clears the review flag - but does **not** become current, and the confirmed-match invariant bars onboarding for good. Emits `MatchConfirmed`. |

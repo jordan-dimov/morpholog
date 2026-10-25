@@ -49,9 +49,11 @@ predicate Customer(customer_id: Subject)
 predicate Screening(screening_id: Subject, customer: Subject, list_type: Subject, requested_on: Date)
 predicate ScreeningResult(screening_id: Subject, disposition: Subject, completed_on: Date, expires_on: Date)
 -- The retractable pointer naming which screening counts right now,
--- one per customer and list: a fresh screening takes over as
--- current and the old pointer is removed, so there is never any
--- doubt about which result is in force.
+-- one per customer and list: the latest clean or cleared result to
+-- arrive takes over as current and the old pointer is removed, so there
+-- is never any doubt about which result is in force. Arrival is what
+-- counts, not the order the screenings were requested in; each result is
+-- judged on its own expiry.
 predicate CurrentScreening(customer: Subject, list_type: Subject, screening_id: Subject)
     current pointer by (customer, list_type)
 predicate MatchUnderReview(screening_id: Subject, raised_on: Date)
@@ -165,8 +167,12 @@ transformation request_screening(screening_id, customer, list_type, requested_on
 
 -- The provider came back clean. Record the clean result and make this
 -- the current screening for that customer and list, replacing whatever
--- was current before.
+-- was current before. A screening takes one result from the provider:
+-- replaying an old clean result would take the pointer back from a newer
+-- one, and a clean result after a match would make a flagged screening
+-- current without an analyst.
 transformation record_clean_screening_result(screening_id, completed_on, expires_on):
+    require screening_not_yet_resulted: not ScreeningResult(screening_id: screening_id, ..)
     bind Screening(screening_id, customer, list_type, _)
     admit ScreeningResult(screening_id, #clean, completed_on, expires_on)
     retract CurrentScreening(customer, list_type, _)
