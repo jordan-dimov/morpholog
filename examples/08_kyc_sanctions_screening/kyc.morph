@@ -57,6 +57,7 @@ predicate CurrentScreening(customer: Subject, list_type: Subject, screening_id: 
 predicate MatchUnderReview(screening_id: Subject, raised_on: Date)
 predicate MatchAdjudicated(screening_id: Subject)
 predicate OnboardedCustomer(customer: Subject, onboarded_on: Date)
+predicate CustomerRejection(customer: Subject, reason: Subject)
 
 
 -- Intents are messages the system sends to the outside world once a
@@ -153,8 +154,11 @@ transformation register_customer(customer_id):
 -- PEP, and so on). This does not produce a result on the spot - the
 -- emitted message carries the request out to the external screening
 -- provider, and the answer comes back later through one of the two
--- "record result" steps below.
+-- "record result" steps below. The first gate refuses a screening id
+-- already used: a replayed request would change nothing, but would send
+-- the provider a second request.
 transformation request_screening(screening_id, customer, list_type, requested_on):
+    require screening_id_unused: not Screening(screening_id: screening_id, ..)
     require Customer(customer)
     admit Screening(screening_id, customer, list_type, requested_on)
     emit ScreeningRequested(screening_id, customer, list_type)
@@ -172,8 +176,10 @@ transformation record_clean_screening_result(screening_id, completed_on, expires
 -- flag it for an analyst to review. Crucially, this does NOT become the
 -- current screening - a screening with an unresolved match cannot stand
 -- as the customer's current result until a human has settled it. The
--- emitted message routes the match to the review queue.
+-- emitted message routes the match to the review queue. A screening
+-- takes one result, so a replayed match never reaches the queue twice.
 transformation record_match_screening_result(screening_id, completed_on, expires_on, raised_on):
+    require screening_not_yet_resulted: not ScreeningResult(screening_id: screening_id, ..)
     bind Screening(screening_id, customer, list_type, _)
     admit ScreeningResult(screening_id, #match, completed_on, expires_on)
     admit MatchUnderReview(screening_id, raised_on)
@@ -221,9 +227,11 @@ transformation onboard_customer(customer, onboarded_on):
 
 -- Reject a customer outright - say, a confirmed sanctions hit or a
 -- prohibited jurisdiction. Nothing is removed: the customer record stays
--- on file with the rejection alongside it, so the decision and its
--- reason survive in the audit trail. Reapplying would be a separate
--- process.
+-- on file with the rejection recorded alongside it, so the decision and
+-- its reason survive. A customer is rejected once, so compliance hears
+-- of it once. Reapplying would be a separate process.
 transformation reject_customer(customer, reason):
+    require customer_not_yet_rejected: not CustomerRejection(customer, _)
     require Customer(customer)
+    admit CustomerRejection(customer, reason)
     emit CustomerRejected(customer, reason)
