@@ -91,8 +91,5 @@ async fn the_same_gate_refuses_honestly_when_the_condition_is_unmet() {
     ));
     // Registered but never sealed: the gate finds Box but not Sealed and
     // rejects for the right reason.
-    assert!(matches!(
-        run(&pool, &p, "ship", "crate_2").await,
-        PgProposalOutcome::Rejected { .. }
-    ));
+    common::refused_by_unnamed_gate(&run(&pool, &p, "ship", "crate_2").await, "shippable(item)");
 }

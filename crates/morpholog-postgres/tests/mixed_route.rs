@@ -20,8 +20,8 @@ use common::routes::{RouteObservation, count, observe};
 use common::{reset_db, test_pool};
 use morpholog_core::{ClaimInstance, EvalValue, PreparedProgram, Program, Subject, Transition};
 use morpholog_postgres::{
-    InvariantPlan, PgAtomicOutcome, PgError, PgPool, PgProgram, PgProposalOutcome, Proposal,
-    propose_against_pg, propose_all_against_pg,
+    InvariantPlan, PgAtomicOutcome, PgError, PgPool, PgProgram, Proposal, propose_against_pg,
+    propose_all_against_pg,
 };
 use morpholog_test_support::differential::{sample_args, sample_state};
 use morpholog_test_support::{dec_str as dec, subj, test_actor};
@@ -328,5 +328,5 @@ async fn a_mixed_batch_carries_both_parts_across_acts() {
     let one = propose_against_pg(&pool, &mixed, &Proposal::gateway(&act("first", "11")))
         .await
         .unwrap();
-    assert!(matches!(one, PgProposalOutcome::Rejected { .. }), "{one:?}");
+    common::refused_by(&one, "c_viol");
 }

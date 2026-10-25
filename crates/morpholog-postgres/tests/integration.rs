@@ -906,7 +906,10 @@ async fn verified_revenue_full_chain_through_pg() {
     )
     .await
     .expect("step 7 propose_against_pg should not error");
-    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    common::refused_by_unnamed_gate(
+        &outcome,
+        "AdmissibleFor(verification_id, #bank_debt_service)",
+    );
     assert_eq!(
         list_claims(&pool).await.unwrap().len(),
         claims_before,
@@ -1584,7 +1587,7 @@ async fn rejected_transformation_leaves_audit_and_outbox_empty() {
     )
     .await
     .unwrap();
-    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    common::refused_by_unnamed_gate(&outcome, "not PeriodClosed(period)");
 
     // claims still contains only the pre-state PeriodClosed.
     let claims = list_claims(&pool).await.unwrap();
@@ -1869,7 +1872,7 @@ async fn approval_controls_full_chain_through_pg() {
     )
     .await
     .expect("propose should not error");
-    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    common::refused_by_unnamed_gate(&outcome, "MayApprove(actor, doc_type)");
     assert_eq!(
         list_audit_rows(&pool).await.unwrap().len(),
         audit_before,
@@ -1956,7 +1959,10 @@ async fn approval_controls_full_chain_through_pg() {
     )
     .await
     .expect("propose should not error");
-    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    common::refused_by_unnamed_gate(
+        &outcome,
+        "ApprovalLimit(actor, doc_type, limit) and (amount <= limit)",
+    );
     assert_eq!(list_audit_rows(&pool).await.unwrap().len(), audit_before);
     assert_eq!(
         list_pending_outbox(&pool).await.unwrap().len(),
@@ -2213,7 +2219,7 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     )
     .await
     .expect("over-cap propose should not error");
-    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    common::refused_by(&outcome, "cumulative_spend_within_aggregate_cap");
     assert_eq!(
         list_audit_rows(&pool).await.unwrap().len(),
         audit_before,
