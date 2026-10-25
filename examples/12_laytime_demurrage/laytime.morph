@@ -242,8 +242,10 @@ transformation agree_demurrage_rate(voyage, daily):
 -- cap above has nothing to cap against. Never past what the delay is
 -- worth, which the invariant recomputes rather than trusts. The
 -- amount is dollars by declaration: offer tonnes here and the
--- proposal does not type, let alone commit.
+-- proposal does not type, let alone commit. A settlement id is used
+-- once, so a replayed settlement is not recorded or announced twice.
 transformation settle_demurrage(settlement, voyage, amount):
+    require settlement_id_unused: not DemurrageSettled(settlement, _, _)
     require CargoOpsCompleted(voyage, _)
     require DemurrageRate(voyage, _)
     admit DemurrageSettled(settlement, voyage, amount)

@@ -12,7 +12,7 @@
 mod common;
 use std::sync::OnceLock;
 
-use common::{Example, dur, qty, subj, ts};
+use common::{Example, dur, qty, refused_by, subj, ts};
 use morpholog_core::{EvalValue, State};
 use morpholog_examples::laytime_demurrage as lay;
 use morpholog_test_support::enumerate_derived;
@@ -299,10 +299,11 @@ fn demurrage_settles_to_the_exact_due_figure_and_not_a_cent_more() {
     assert_eq!(rows[0].args[3], qty("137500.00", "USD"));
 
     // Settle the whole figure, to the cent.
-    let state = ex().must_accept(
-        &lay::settle_demurrage(),
-        vec![subj("s1"), subj("v1"), qty("137500.00", "USD")],
-        state,
+    let settle = vec![subj("s1"), subj("v1"), qty("137500.00", "USD")];
+    let state = ex().must_accept(&lay::settle_demurrage(), settle.clone(), state);
+    refused_by(
+        &ex().must_reject(&lay::settle_demurrage(), settle, &state),
+        "settlement_id_unused",
     );
     // A cent past what the delay is worth is refused.
     ex().must_reject(
