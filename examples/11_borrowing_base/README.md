@@ -80,7 +80,7 @@ See [`borrowing_base.morph`](borrowing_base.morph) for the surface form.
 | Transformation | Effect |
 | --- | --- |
 | `open_facility(facility, advance_rate)` | Opens a facility at a fixed advance rate. Refuses a second under the same id. |
-| `pledge_collateral(facility, asset, collateral_value)` | Adds an eligible asset, raising the base the advance limit is measured against. |
+| `pledge_collateral(facility, asset, collateral_value)` | Adds an eligible asset not already pledged, raising the base the advance limit is measured against. |
 | `draw(facility, draw_id, amount)` | Records a drawdown and emits a payment-request intent. Operational gates only; the advance limit is the invariant's job. |
 
 ### Derived claims

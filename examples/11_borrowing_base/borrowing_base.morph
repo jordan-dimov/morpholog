@@ -111,10 +111,12 @@ transformation open_facility(facility, advance_rate):
     admit Facility(facility, advance_rate)
     emit FacilityOpened(facility)
 
--- Pledge an eligible asset to the facility. The gate insists the facility
--- exists; the asset and its value go on the record, raising the base the
--- advance limit is measured against.
+-- Pledge an eligible asset to the facility. The gates refuse an asset
+-- already pledged, so a replayed pledge is not announced twice, and
+-- insist the facility exists; the asset and its value go on the record,
+-- raising the base the advance limit is measured against.
 transformation pledge_collateral(facility, asset, collateral_value):
+    require asset_not_yet_pledged: not EligibleCollateral(_, asset, _)
     require Facility(facility, _)
     admit EligibleCollateral(facility, asset, collateral_value)
     emit CollateralPledged(facility, asset)
