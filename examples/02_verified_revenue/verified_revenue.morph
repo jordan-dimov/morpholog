@@ -68,16 +68,21 @@ program verified_revenue
 -- move as the world changes; `current pointer by` declares the
 -- singleton ("one figure in force per asset and period") and
 -- `superseded via` names the lineage chain, which can then never fork.
+-- `unique by` says which field names one record: a verification id, a
+-- grant id or a revocation id names a single claim, never two.
 predicate IndependentlyVerifiedRevenue(asset: Subject, period: Subject, amount: Decimal, verification_id: Subject)
+    unique by (verification_id)
     append only
 predicate CurrentVerification(asset: Subject, period: Subject, verification_id: Subject)
     current pointer by (asset, period)
     superseded via Supersedes
 predicate Supersedes(new_verification_id: Subject, prior_verification_id: Subject)
 predicate StandingGrantedBy(verification_id: Subject, purpose: Subject, authority: Subject, grant_id: Subject)
+    unique by (grant_id)
     append only
 predicate AdmissibleFor(verification_id: Subject, purpose: Subject)
 predicate StandingRevoked(verification_id: Subject, purpose: Subject, revocation_id: Subject)
+    unique by (revocation_id)
     append only
 predicate DebtServiceRevenue(asset: Subject, period: Subject, amount: Decimal, decision_id: Subject, verification_id: Subject)
     append only

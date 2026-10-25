@@ -123,9 +123,11 @@ In-memory tests cover restatement, standing, and the combined load-bearing test 
 ## What this example deliberately does not cover
 
 - **Who may verify or approve.** `admit_independent_verification` is not
-  gated, and `grant_standing` records the approving authority as a value it
-  is given. A real system would gate both on the actor's own authority,
-  the pattern [approval controls](../04_approval_controls/) shows.
+  gated, and the `authority` argument of `grant_standing` records an
+  asserted authority: the programme does not check that whoever proposes
+  the grant is that authority. A real system would gate both on the
+  actor's own authority, the pattern
+  [approval controls](../04_approval_controls/) shows.
 - **Approval again after revocation.** A revocation here is final.
 - **Effective dates.** A real verification is *for* a period, distinct from
   when it was recorded. [Trade lifecycle](../10_trade_lifecycle/) shows

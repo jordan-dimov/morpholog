@@ -18,12 +18,23 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, dec, has_claim, subj};
-use morpholog_core::{Outcome, State};
+use morpholog_core::{Outcome, RejectionReason, State};
 use morpholog_examples::verified_revenue;
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
     EX.get_or_init(|| Example::new(&verified_revenue::program()))
+}
+
+/// Refused by the gate or invariant named `rule`.
+fn refused_by(reason: &RejectionReason, rule: &str) {
+    match reason {
+        RejectionReason::Require {
+            name: Some(name), ..
+        } => assert_eq!(name.as_str(), rule),
+        RejectionReason::Invariant { name, .. } => assert_eq!(name.as_str(), rule),
+        other => panic!("expected a refusal by {rule}, got: {other}"),
+    }
 }
 
 fn asset() -> morpholog_core::EvalValue {
@@ -101,11 +112,12 @@ fn a_correction_extends_only_an_admitted_figure_not_yet_corrected() {
         vec![asset(), period(), dec(amount), subj(new), subj(prior)]
     };
     // A figure that was never admitted cannot be corrected.
-    ex().must_reject(
+    let reason = ex().must_reject(
         &verified_revenue::correct_independent_verification(),
         correct(88, "ver_002", "ver_phantom"),
         &State::default(),
     );
+    refused_by(&reason, "prior_figure_exists");
     let pre = admit_iv(State::default(), 91, "ver_001");
     let pre = ex().must_accept(
         &verified_revenue::correct_independent_verification(),
@@ -118,11 +130,12 @@ fn a_correction_extends_only_an_admitted_figure_not_yet_corrected() {
         correct(88, "ver_002", "ver_001"),
         correct(85, "ver_003", "ver_001"),
     ] {
-        ex().must_reject(
+        let reason = ex().must_reject(
             &verified_revenue::correct_independent_verification(),
             args,
             &pre,
         );
+        refused_by(&reason, "prior_figure_not_yet_superseded");
     }
 }
 
@@ -135,6 +148,23 @@ fn second_admission_against_existing_current_is_rejected() {
         &verified_revenue::admit_independent_verification(),
         vec![asset(), period(), dec(95), subj("ver_002")],
         &pre,
+    );
+    // Another asset's figure is admitted under its own id, never under
+    // ver_001: a standing granted on ver_001 must not reach it.
+    let other = |ver: &str| vec![subj("asset_b"), period(), dec(50), subj(ver)];
+    let reason = ex().must_reject(
+        &verified_revenue::admit_independent_verification(),
+        other("ver_001"),
+        &pre,
+    );
+    refused_by(
+        &reason,
+        "independently_verified_revenue_unique_by_verification_id",
+    );
+    ex().must_accept(
+        &verified_revenue::admit_independent_verification(),
+        other("ver_b_001"),
+        pre,
     );
 }
 
@@ -250,6 +280,18 @@ fn parallel_standings_coexist_on_same_verification() {
         "credit_committee",
         "grant_bank_001",
     );
+    // The investor standing needs its own grant id: one id names one grant.
+    let reason = ex().must_reject(
+        &verified_revenue::grant_standing(),
+        vec![
+            subj("ver_001"),
+            subj(verified_revenue::INVESTOR_REPORTING),
+            subj("investor_relations"),
+            subj("grant_bank_001"),
+        ],
+        &pre,
+    );
+    refused_by(&reason, "standing_granted_by_unique_by_grant_id");
     let pre = grant(
         pre,
         "ver_001",
@@ -271,7 +313,7 @@ fn parallel_standings_coexist_on_same_verification() {
 
     // A live standing is not granted again, and a decision is recorded
     // once: a replay would change no claim, but would send its notice again.
-    ex().must_reject(
+    let reason = ex().must_reject(
         &verified_revenue::grant_standing(),
         vec![
             subj("ver_001"),
@@ -281,20 +323,42 @@ fn parallel_standings_coexist_on_same_verification() {
         ],
         &pre,
     );
-    for (decide, id) in [
+    refused_by(&reason, "standing_not_yet_live");
+    for (decide, id, rule) in [
         (
             verified_revenue::admit_debt_service_revenue(),
             "decision_001",
+            "decision_not_yet_recorded",
         ),
         (
             verified_revenue::admit_investor_reported_revenue(),
             "report_001",
+            "report_not_yet_recorded",
         ),
     ] {
         let args = vec![asset(), period(), dec(91), subj(id), subj("ver_001")];
         let post = ex().must_accept(&decide, args.clone(), pre.clone());
-        ex().must_reject(&decide, args, &post);
+        refused_by(&ex().must_reject(&decide, args, &post), rule);
     }
+
+    // Revoking the two standings takes two revocation ids.
+    let revoke = |purpose: &str, id: &str| vec![subj("ver_001"), subj(purpose), subj(id)];
+    let pre = ex().must_accept(
+        &verified_revenue::revoke_standing(),
+        revoke(verified_revenue::BANK_DEBT_SERVICE, "revoke_001"),
+        pre,
+    );
+    let reason = ex().must_reject(
+        &verified_revenue::revoke_standing(),
+        revoke(verified_revenue::INVESTOR_REPORTING, "revoke_001"),
+        &pre,
+    );
+    refused_by(&reason, "standing_revoked_unique_by_revocation_id");
+    ex().must_accept(
+        &verified_revenue::revoke_standing(),
+        revoke(verified_revenue::INVESTOR_REPORTING, "revoke_002"),
+        pre,
+    );
 }
 
 #[test]
@@ -362,7 +426,7 @@ fn decision_admits_only_with_matching_standing() {
         "credit_committee",
         "grant_001",
     );
-    ex().must_reject(
+    let reason = ex().must_reject(
         &verified_revenue::admit_debt_service_revenue(),
         vec![
             asset(),
@@ -373,6 +437,7 @@ fn decision_admits_only_with_matching_standing() {
         ],
         &pre,
     );
+    refused_by(&reason, "figure_matches");
     let post = ex().must_accept(
         &verified_revenue::admit_debt_service_revenue(),
         vec![
@@ -484,7 +549,7 @@ fn revoking_standing_blocks_future_but_preserves_past() {
         ],
     ));
     // Revoking again is refused, so the revocation notice goes out once.
-    ex().must_reject(
+    let reason = ex().must_reject(
         &verified_revenue::revoke_standing(),
         vec![
             subj("ver_001"),
@@ -493,6 +558,7 @@ fn revoking_standing_blocks_future_but_preserves_past() {
         ],
         &after_revoke,
     );
+    refused_by(&reason, "standing_is_live");
     // A new decision against the same verification is rejected.
     ex().must_reject(
         &verified_revenue::admit_debt_service_revenue(),
