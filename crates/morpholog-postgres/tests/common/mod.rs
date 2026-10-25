@@ -95,6 +95,14 @@ pub use morpholog_test_support::{
     test_actor, test_transition,
 };
 
+/// Refused by the invariant or the named gate `rule`.
+pub fn refused_by(outcome: &PgProposalOutcome, rule: &str) {
+    match outcome {
+        PgProposalOutcome::Rejected { rule: Some(r), .. } => assert_eq!(r, rule),
+        other => panic!("expected a refusal by `{rule}`, got {other:?}"),
+    }
+}
+
 /// Prepare a test programme and bind it to PostgreSQL, on
 /// whatever route it is eligible for.
 pub fn pg_program(program: Program) -> PgProgram {

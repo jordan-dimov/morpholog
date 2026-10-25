@@ -36,6 +36,8 @@
 --     must not reach back and invalidate the entries that were posted
 --     legitimately while it was open. An invariant governs what is
 --     true; a gate governs what you may do next.
+--     Each gate below is written with a name before its condition,
+--     and a refused action is reported under that name.
 
 program double_entry_ledger
 
@@ -92,7 +94,7 @@ transformation post_simple_entry(
     entry_id, posting_date, period,
     debit_account, credit_account, amount
 ):
-    require not PeriodClosed(period)
+    require period_is_open: not PeriodClosed(period)
     admit JournalEntry(entry_id, posting_date, period)
     admit JournalLine(entry_id, debit_account, amount, 0)
     admit JournalLine(entry_id, credit_account, 0, amount)
@@ -109,7 +111,7 @@ transformation post_split_entry(
     credit_a_account, credit_a_amount,
     credit_b_account, credit_b_amount
 ):
-    require not PeriodClosed(period)
+    require period_is_open: not PeriodClosed(period)
     admit JournalEntry(entry_id, posting_date, period)
     admit JournalLine(entry_id, debit_account, debit_amount, 0)
     admit JournalLine(entry_id, credit_a_account, 0, credit_a_amount)
@@ -119,7 +121,7 @@ transformation post_split_entry(
 -- Close a period. After this, the gate in the posting transformations
 -- turns away any new entry dated in that period.
 transformation close_period(period):
-    require not PeriodClosed(period)
+    require period_not_yet_closed: not PeriodClosed(period)
     admit PeriodClosed(period)
     emit PeriodClosed(period)
 
@@ -132,8 +134,8 @@ transformation restate_entry(
     new_entry_id, prior_entry_id, posting_date, period,
     debit_account, credit_account, amount
 ):
-    require JournalEntry(prior_entry_id, _, period)
-    require not (exists newer: Supersedes(newer, prior_entry_id))
+    require prior_entry_exists: JournalEntry(prior_entry_id, _, period)
+    require prior_entry_not_yet_superseded: not (exists newer: Supersedes(newer, prior_entry_id))
     admit JournalEntry(new_entry_id, posting_date, period)
     admit JournalLine(new_entry_id, debit_account, amount, 0)
     admit JournalLine(new_entry_id, credit_account, 0, amount)

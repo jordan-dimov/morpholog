@@ -72,6 +72,8 @@
 --     decision made today stays valid even if that authority is later
 --     withdrawn. An invariant governs what is true; a gate governs what
 --     you may do.
+--     Each gate below is written with a name before its condition,
+--     and a refused action is reported under that name.
 
 program trade_lifecycle
 
@@ -294,7 +296,7 @@ invariant within_position_limit:
 -- overwrite. The captured price carries no settlement standing on its
 -- own; only a confirmed price will.
 transformation capture_trade(trade, commodity, direction, version_id, quantity, delivery_period, captured_on, price):
-    require not TradeCaptured(trade, _, _)
+    require trade_id_unused: not TradeCaptured(trade, _, _)
     admit TradeCaptured(trade, commodity, direction)
     admit TradeTerms(trade, version_id, quantity, delivery_period, captured_on)
     admit CapturedPrice(trade, price)
@@ -310,9 +312,9 @@ transformation capture_trade(trade, commodity, direction, version_id, quantity, 
 -- forks. A settlement already made under the prior terms stays standing;
 -- the amendment governs only what the effective-quantity cap allows next.
 transformation amend_trade_terms(trade, prior_version_id, new_version_id, quantity, delivery_period, effective_from):
-    require TradeCaptured(trade, commodity, _) and MayConfirm(actor, commodity)
-    require TradeTerms(trade: trade, version_id: prior_version_id, ..)
-    require not TradeTermsSupersedes(_, prior_version_id)
+    require may_confirm_the_trade: TradeCaptured(trade, commodity, _) and MayConfirm(actor, commodity)
+    require prior_version_exists: TradeTerms(trade: trade, version_id: prior_version_id, ..)
+    require prior_version_not_yet_amended: not TradeTermsSupersedes(_, prior_version_id)
     admit TradeTerms(trade, new_version_id, quantity, delivery_period, effective_from)
     admit TradeTermsSupersedes(new_version_id, prior_version_id)
     emit TradeTermsAmended(trade, new_version_id, prior_version_id)
@@ -333,8 +335,8 @@ transformation grant_confirm_authority(principal, commodity):
 -- the `within_position_limit` invariant holds it against every future
 -- capture and amendment.
 transformation set_position_limit(commodity, limit):
-    require MayConfirm(actor, commodity)
-    require not PositionLimit(commodity, _)
+    require may_confirm_the_commodity: MayConfirm(actor, commodity)
+    require no_limit_set_yet: not PositionLimit(commodity, _)
     admit PositionLimit(commodity, limit)
     emit PositionLimitSet(commodity, limit)
 
@@ -344,9 +346,9 @@ transformation set_position_limit(commodity, limit):
 -- rest insist the trade is not already confirmed and has no official
 -- price in force yet.
 transformation confirm_trade(trade, counterparty, confirmation_id, official_price_id, confirmed_price):
-    require TradeCaptured(trade, commodity, _) and MayConfirm(actor, commodity)
-    require not TradeConfirmed(trade: trade, ..)
-    require not CurrentOfficialPrice(trade, _)
+    require may_confirm_the_trade: TradeCaptured(trade, commodity, _) and MayConfirm(actor, commodity)
+    require trade_not_yet_confirmed: not TradeConfirmed(trade: trade, ..)
+    require no_official_price_yet: not CurrentOfficialPrice(trade, _)
     admit TradeConfirmed(trade, counterparty, confirmation_id, actor)
     admit OfficialPrice(trade, confirmed_price, official_price_id)
     admit CurrentOfficialPrice(trade, official_price_id)
@@ -362,9 +364,9 @@ transformation confirm_trade(trade, counterparty, confirmation_id, official_pric
 -- price is left untouched - it stays a true record of what was settled
 -- that day; the correction governs only what may be settled next.
 transformation correct_official_price(trade, prior_official_price_id, new_official_price_id, corrected_price):
-    require TradeCaptured(trade, commodity, _) and MayConfirm(actor, commodity)
-    require CurrentOfficialPrice(trade, prior_official_price_id)
-    require not OfficialPriceSupersedes(_, prior_official_price_id)
+    require may_confirm_the_trade: TradeCaptured(trade, commodity, _) and MayConfirm(actor, commodity)
+    require prior_price_in_force: CurrentOfficialPrice(trade, prior_official_price_id)
+    require prior_price_not_yet_corrected: not OfficialPriceSupersedes(_, prior_official_price_id)
     admit OfficialPrice(trade, corrected_price, new_official_price_id)
     admit OfficialPriceSupersedes(new_official_price_id, prior_official_price_id)
     retract CurrentOfficialPrice(trade, prior_official_price_id)
@@ -389,9 +391,9 @@ transformation correct_official_price(trade, prior_official_price_id, new_offici
 -- computed downstream; Morpholog governs only that the settlement is
 -- legitimate.
 transformation settle_trade(trade, settled_qty, settlement_id, official_price_id, effective_on):
-    require CurrentOfficialPrice(trade, official_price_id)
-    require TradeTerms(trade: trade, effective_from: ef, ..) and ef on_or_before effective_on
-    require not TradeSettled(settlement_id: settlement_id, ..)
+    require official_price_in_force: CurrentOfficialPrice(trade, official_price_id)
+    require terms_effective_by_the_date: TradeTerms(trade: trade, effective_from: ef, ..) and ef on_or_before effective_on
+    require settlement_id_unused: not TradeSettled(settlement_id: settlement_id, ..)
     -- Which version governs? The latest effective date that is not after
     -- the settlement's own date. The generated selector asks the same
     -- question, but it can only ANSWER yes or no - an invariant needs a

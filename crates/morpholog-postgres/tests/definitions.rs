@@ -40,7 +40,7 @@ transformation seal(item):
     admit Sealed(item)
 
 transformation ship(item):
-    require shippable(item)
+    require item_is_shippable: shippable(item)
     admit Shipped(item)
 "#;
 
@@ -91,8 +91,8 @@ async fn the_same_gate_refuses_honestly_when_the_condition_is_unmet() {
     ));
     // Registered but never sealed: the gate finds Box but not Sealed and
     // rejects for the right reason.
-    assert!(matches!(
-        run(&pool, &p, "ship", "crate_2").await,
-        PgProposalOutcome::Rejected { .. }
-    ));
+    common::refused_by(
+        &run(&pool, &p, "ship", "crate_2").await,
+        "item_is_shippable",
+    );
 }

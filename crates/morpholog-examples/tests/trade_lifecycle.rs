@@ -5,8 +5,8 @@
 //! correction, settlement, and the cap on quantity settled by each date.
 //! The key tests: a backdated amendment can lift the cap so a refused
 //! slice now fits, and a later amendment never unsettles an earlier slice.
-//! Every refusal names the rule that refused: an invariant by name, an
-//! unnamed gate by its text, each matched on its own variant.
+//! Every refusal is matched by the name of the rule that refused, on its
+//! own variant: an invariant or a gate.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -30,15 +30,13 @@ fn refused_by_invariant(reason: &RejectionReason, expected: &str) {
     }
 }
 
-/// Refused by a gate whose text holds `fragment`: the gates here are
-/// unnamed, so their rendered expression is what identifies them.
-fn refused_by_gate(reason: &RejectionReason, fragment: &str) {
+/// Refused by the gate named `expected`.
+fn refused_by_gate(reason: &RejectionReason, expected: &str) {
     match reason {
-        RejectionReason::Require { rendered, .. } => assert!(
-            rendered.contains(fragment),
-            "expected a gate on `{fragment}`, got: {rendered}"
-        ),
-        other => panic!("expected a gate on `{fragment}`, got: {other}"),
+        RejectionReason::Require {
+            name: Some(name), ..
+        } => assert_eq!(name.as_str(), expected),
+        other => panic!("expected gate {expected}, got: {other}"),
     }
 }
 
@@ -55,8 +53,6 @@ fn witnessed(reason: &RejectionReason, var: &str, value: &str) {
         "expected {var} = {value} in the witness, got: {witness:?}"
     );
 }
-
-const AUTHORITY_GATE: &str = "TradeCaptured(trade, commodity, _) and MayConfirm(actor, commodity)";
 
 // Capture trade `trade` on `commodity` in `direction` (#buy / #sell) for
 // `qty`, terms version `version`, effective from the trade date. Capture
@@ -231,7 +227,7 @@ fn duplicate_capture_is_rejected() {
         capture_args("t1", "power", "sell", "tv9", 200),
         &captured(100),
     );
-    refused_by_gate(&reason, "not TradeCaptured(trade, _, _)");
+    refused_by_gate(&reason, "trade_id_unused");
 }
 
 // ============================================================
@@ -251,14 +247,14 @@ fn confirmation_needs_a_captured_trade_and_authority_for_its_commodity() {
     // Authority exists, but the trade was never captured.
     refused_by_gate(
         &confirm(&grant(State::default(), "mo", "power"), "mo"),
-        AUTHORITY_GATE,
+        "may_confirm_the_trade",
     );
     // Captured, but the actor holds no authority at all.
-    refused_by_gate(&confirm(&captured(100), "rando"), AUTHORITY_GATE);
+    refused_by_gate(&confirm(&captured(100), "rando"), "may_confirm_the_trade");
     // `mo_gas` may confirm gas; `t1` is power. The gate found the trade's
     // own commodity and refused the authority for it.
     let reason = confirm(&grant(captured(100), "mo_gas", "gas"), "mo_gas");
-    refused_by_gate(&reason, AUTHORITY_GATE);
+    refused_by_gate(&reason, "may_confirm_the_trade");
     witnessed(&reason, "commodity", "power");
 }
 
@@ -290,7 +286,7 @@ fn second_confirmation_is_rejected() {
         "mo",
         &confirmed(),
     );
-    refused_by_gate(&reason, "not TradeConfirmed(");
+    refused_by_gate(&reason, "trade_not_yet_confirmed");
 }
 
 // ============================================================
@@ -324,7 +320,7 @@ fn an_amendment_must_extend_a_clean_chain_of_distinct_versions() {
     // The version being amended must exist.
     refused_by_gate(
         &amend_refused(&pre, "tv9", "tv2", 120, "2026-02-01"),
-        "TradeTerms(trade, prior_version_id, _, _, _)",
+        "prior_version_exists",
     );
     // A second version on tv1's own effective date.
     refused_by_invariant(
@@ -345,7 +341,7 @@ fn an_amendment_must_extend_a_clean_chain_of_distinct_versions() {
     let amended = amend(pre, "tv1", "tv2", 120, "2026-02-01");
     refused_by_gate(
         &amend_refused(&amended, "tv1", "tv3", 130, "2026-03-01"),
-        "not TradeTermsSupersedes(_, prior_version_id)",
+        "prior_version_not_yet_amended",
     );
 }
 
@@ -401,7 +397,7 @@ fn correct_by_actor_authorised_for_a_different_commodity_is_rejected() {
         "mo_gas",
         &grant(confirmed(), "mo_gas", "gas"),
     );
-    refused_by_gate(&reason, AUTHORITY_GATE);
+    refused_by_gate(&reason, "may_confirm_the_trade");
     witnessed(&reason, "commodity", "power");
 }
 
@@ -428,7 +424,7 @@ fn settle_before_confirmation_is_rejected() {
     // No official price in force to settle on.
     refused_by_gate(
         &settle_refused(&captured(100), 100, "s1", "op1", "2026-01-20"),
-        "CurrentOfficialPrice(trade, official_price_id)",
+        "official_price_in_force",
     );
 }
 
@@ -506,7 +502,7 @@ fn replaying_a_settlement_id_is_rejected_before_a_second_request() {
     let first = settle(confirmed(), 40, "s1", "op1", "2026-01-20");
     refused_by_gate(
         &settle_refused(&first, 40, "s1", "op1", "2026-01-20"),
-        "not TradeSettled(",
+        "settlement_id_unused",
     );
 }
 
@@ -551,7 +547,7 @@ fn settlement_before_any_effective_terms_is_rejected() {
     // no quantity to be capped against. The settle gate refuses it.
     refused_by_gate(
         &settle_refused(&confirmed(), 50, "s1", "op1", "2026-01-01"),
-        "ef on_or_before effective_on",
+        "terms_effective_by_the_date",
     );
 }
 
