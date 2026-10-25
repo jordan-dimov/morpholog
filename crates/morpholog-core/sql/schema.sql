@@ -170,6 +170,140 @@ $$;
 
 COMMENT ON FUNCTION date_ordinal(jsonb) IS 'morpholog date coordinate v1';
 
+-- A decimal the kernel can hold, from an exact numeric: rounded half to
+-- even to the largest scale at most 28 whose mantissa fits in 96 bits,
+-- NULL when even scale 0 does not fit. The kernel's addition,
+-- subtraction and multiplication are the exact result fitted this way,
+-- so the compiled checks compute `a + b` as `decimal_fit_v1(a + b)`.
+CREATE FUNCTION decimal_fit_v1(x numeric) RETURNS numeric
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+DECLARE
+    bound constant numeric := 79228162514264337593543950336;
+    shifted numeric;
+    q numeric;
+    r numeric;
+BEGIN
+    IF min_scale(x) <= 28 AND abs(x) * ('1e' || min_scale(x))::numeric < bound THEN
+        RETURN x;
+    END IF;
+    FOR s IN REVERSE 28..0 LOOP
+        shifted := x * ('1e' || s)::numeric;
+        q := trunc(shifted);
+        r := abs(shifted - q);
+        IF r > 0.5 OR (r = 0.5 AND mod(q, 2) <> 0) THEN
+            q := q + sign(x);
+        END IF;
+        IF abs(q) < bound THEN
+            RETURN q * ('1e-' || s)::numeric;
+        END IF;
+    END LOOP;
+    RETURN NULL;
+END
+$$;
+
+COMMENT ON FUNCTION decimal_fit_v1(numeric) IS 'morpholog decimal fit v1';
+
+-- The kernel's quotient: the exact quotient fitted as `decimal_fit_v1`
+-- fits an exact result, from integer steps, since PostgreSQL's `/` rounds
+-- at a scale of its own. NULL on a zero divisor or when nothing fits.
+CREATE FUNCTION decimal_div_v1(a numeric, b numeric) RETURNS numeric
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+DECLARE
+    bound constant numeric := 79228162514264337593543950336;
+    n numeric;
+    q numeric;
+    r numeric;
+BEGIN
+    IF b = 0 THEN
+        RETURN NULL;
+    END IF;
+    FOR s IN REVERSE 28..0 LOOP
+        n := a * ('1e' || s)::numeric;
+        q := div(n, b);
+        r := abs(n - q * b);
+        IF 2 * r > abs(b) OR (2 * r = abs(b) AND mod(q, 2) <> 0) THEN
+            q := q + sign(a) * sign(b);
+        END IF;
+        IF abs(q) < bound THEN
+            RETURN q * ('1e-' || s)::numeric;
+        END IF;
+    END LOOP;
+    RETURN NULL;
+END
+$$;
+
+COMMENT ON FUNCTION decimal_div_v1(numeric, numeric) IS 'morpholog decimal division v1';
+
+-- The kernel's `round(v, q)`, step by step: each step is fitted as the
+-- kernel's own operations are, and the away-from-zero result is needed
+-- only when it wins, so one that does not fit is no error when the
+-- toward-zero result is chosen. NULL where the kernel errs.
+CREATE FUNCTION decimal_round_v1(v numeric, q numeric) RETURNS numeric
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+DECLARE
+    rem numeric;
+    toward numeric;
+    away numeric;
+    doubled numeric;
+BEGIN
+    IF q <= 0 THEN
+        RETURN NULL;
+    END IF;
+    rem := mod(v, q);
+    IF rem = 0 THEN
+        RETURN v;
+    END IF;
+    toward := morpholog.decimal_fit_v1(v - rem);
+    IF toward IS NULL THEN
+        RETURN NULL;
+    END IF;
+    IF v < 0 THEN
+        away := morpholog.decimal_fit_v1(toward - q);
+    ELSE
+        away := morpholog.decimal_fit_v1(toward + q);
+    END IF;
+    doubled := morpholog.decimal_fit_v1(abs(rem) + abs(rem));
+    IF doubled IS NULL OR doubled >= q THEN
+        RETURN away;
+    END IF;
+    RETURN toward;
+END
+$$;
+
+COMMENT ON FUNCTION decimal_round_v1(numeric, numeric) IS 'morpholog decimal round v1';
+
+-- The kernel's `min` of two decimals: strict, so a failed argument is
+-- never skipped, as `LEAST` would skip it.
+CREATE FUNCTION decimal_min_v1(a numeric, b numeric) RETURNS numeric
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+    IF a <= b THEN
+        RETURN a;
+    END IF;
+    RETURN b;
+END
+$$;
+
+COMMENT ON FUNCTION decimal_min_v1(numeric, numeric) IS 'morpholog decimal min v1';
+
+-- The kernel's `max` of two decimals: strict, as `decimal_min_v1` is.
+CREATE FUNCTION decimal_max_v1(a numeric, b numeric) RETURNS numeric
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+    IF a >= b THEN
+        RETURN a;
+    END IF;
+    RETURN b;
+END
+$$;
+
+COMMENT ON FUNCTION decimal_max_v1(numeric, numeric) IS 'morpholog decimal max v1';
+
 -- The one equality the compiled checks compare stored values by: a key
 -- that is equal exactly when the kernel says two values are equal, for
 -- every value the codec writes. Decimals and quantity amounts lose their
@@ -635,4 +769,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (22, 'audit_drawn_subjects'),
     (23, 'deployment_roles'),
     (24, 'gate_witness'),
-    (25, 'rejection_compared');
+    (25, 'rejection_compared'),
+    (26, 'decimal_arithmetic');

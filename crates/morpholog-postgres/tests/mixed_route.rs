@@ -101,8 +101,9 @@ async fn the_mixed_route_reaches_the_kernels_decision_over_the_gallery() {
 // ------------------------------------------------------------
 
 /// A programme with the interpreter's invariants and the database's
-/// interleaved as `order` says: `c` compiles, `i` does not (arithmetic
-/// keeps it out). `c_viol` and `i_viol` refuse an amount over ten;
+/// interleaved as `order` says: `c` compiles, `i` does not (a
+/// conditional value whose condition always holds keeps it out).
+/// `c_viol` and `i_viol` refuse an amount over ten;
 /// `c_err` and `i_err` raise on a figure at the decimal ceiling, in the
 /// database (a sum past the range) and in the kernel (an addition past
 /// it). One act admits both figures, so every invariant is touched.
@@ -115,9 +116,9 @@ fn interleaved(order: &[&str]) -> Program {
     for name in order {
         let body = match *name {
             "c_viol" => "forall a in Amount(id, v): v <= 10",
-            "i_viol" => "forall a in Amount(id, v): v * 2 <= 20",
+            "i_viol" => "forall a in Amount(id, v): if(Amount(id, v), v * 2, v * 2) <= 20",
             "c_err" => "sum(v | Big(id, v)) <= 0",
-            "i_err" => "forall b in Big(id, v): v + 1 <= v",
+            "i_err" => "forall b in Big(id, v): if(Big(id, v), v + 1, v + 1) <= v",
             other => panic!("{other}"),
         };
         text.push_str(&format!("invariant {name}: {body}\n"));
@@ -274,7 +275,7 @@ async fn a_mixed_batch_carries_both_parts_across_acts() {
                 predicate Amount(id: Subject, v: Decimal)\n\
                 predicate Seen(id: Subject)\n\
                 invariant c_viol: forall a in Amount(id, v): v <= 10\n\
-                invariant i_viol: forall a in Amount(id, v): v * 2 <= 18\n\
+                invariant i_viol: forall a in Amount(id, v): if(Amount(id, v), v * 2, v * 2) <= 18\n\
                 transformation first(id, v):\n\
                 \x20   admit Seen(id)\n\
                 \x20   admit Amount(id, v)\n\

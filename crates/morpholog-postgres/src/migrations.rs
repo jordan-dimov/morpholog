@@ -34,6 +34,11 @@ pub(crate) const MIGRATIONS: &[(i32, &str, &str)] = &[
         "rejection_compared",
         include_str!("../sql/migrations/025_rejection_compared.sql"),
     ),
+    (
+        26,
+        "decimal_arithmetic",
+        include_str!("../sql/migrations/026_decimal_arithmetic.sql"),
+    ),
 ];
 
 /// The newest migration this binary carries.

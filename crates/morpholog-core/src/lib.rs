@@ -69,7 +69,7 @@ pub use disciplines::{
     InForceSignature, in_force_define_name, in_force_signature, lower_discipline_definitions,
     lower_disciplines,
 };
-pub use eval::{EvalError, RenderedClaim, ordered_compare_error};
+pub use eval::{EvalError, RenderedClaim, eval_value_over, ordered_compare_error};
 pub use explain::{
     ErrorRejection, Explanation, GateKind, GateRejection, InvariantRejection, MissingClaim,
     Rejection, TransitionRef, Verdict,

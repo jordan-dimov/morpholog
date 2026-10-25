@@ -242,10 +242,10 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
             },
         ),
         (
-            "arithmetic",
-            "invariant r:\n    Amount(x, n) implies 0 <= n + 1\n",
+            "time arithmetic",
+            "invariant r:\n    Dated(x, opened, closed) implies closed - opened <= 30\n",
             CompileReason::Construct {
-                construct: "arithmetic",
+                construct: "time arithmetic",
             },
         ),
         (
@@ -270,10 +270,10 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
             },
         ),
         (
-            "builtin call",
-            "invariant r:\n    Amount(x, n) implies abs(n) <= 100\n",
+            "period builtin",
+            "invariant r:\n    Dated(x, opened, closed) implies period_index(opened, span(P1Y), closed) <= 1\n",
             CompileReason::Construct {
-                construct: "builtin call",
+                construct: "time arithmetic",
             },
         ),
         (
@@ -368,7 +368,7 @@ fn a_quantity_ordering_against_a_literal_is_pinned() {
 SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Terms'
-  AND (NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) OR NOT ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) > ('0'::numeric))
+  AND (NOT (((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND ((CASE WHEN t0.arguments -> 1 ->> 'type' = 'quantity' THEN t0.arguments -> 1 -> 'value' ->> 'unit' END)) IS NOT DISTINCT FROM ('MW'::text)) OR NOT ((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) > ('0'::numeric))
 ORDER BY (morpholog.value_key_v1(t0.arguments -> 1))::text
 LIMIT 1"#
     );
@@ -377,13 +377,13 @@ LIMIT 1"#
     assert_eq!(
         inv.error_sqls(None, &[]).unwrap(),
         [
-            r#"SELECT CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'compare' END AS "kind",
-       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN 'decimal' END AS "domain",
-       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN (t0.arguments -> 1)::text END AS "left",
-       CASE WHEN NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')) THEN ('{"type":"quantity","value":{"amount":"0","unit":"MW"}}'::jsonb)::text END AS "right",
+            r#"SELECT CASE WHEN NOT (((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND ((CASE WHEN t0.arguments -> 1 ->> 'type' = 'quantity' THEN t0.arguments -> 1 -> 'value' ->> 'unit' END)) IS NOT DISTINCT FROM ('MW'::text)) THEN 'compare' END AS "kind",
+       CASE WHEN NOT (((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND ((CASE WHEN t0.arguments -> 1 ->> 'type' = 'quantity' THEN t0.arguments -> 1 -> 'value' ->> 'unit' END)) IS NOT DISTINCT FROM ('MW'::text)) THEN 'decimal' END AS "domain",
+       CASE WHEN NOT (((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND ((CASE WHEN t0.arguments -> 1 ->> 'type' = 'quantity' THEN t0.arguments -> 1 -> 'value' ->> 'unit' END)) IS NOT DISTINCT FROM ('MW'::text)) THEN (t0.arguments -> 1)::text END AS "left",
+       CASE WHEN NOT (((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND ((CASE WHEN t0.arguments -> 1 ->> 'type' = 'quantity' THEN t0.arguments -> 1 -> 'value' ->> 'unit' END)) IS NOT DISTINCT FROM ('MW'::text)) THEN ('{"type":"quantity","value":{"amount":"0","unit":"MW"}}'::jsonb)::text END AS "right",
        NULL::boolean AS "first"
 FROM morpholog.claims t0
-WHERE (t0.predicate_name = 'Terms' AND NOT (COALESCE((t0.arguments -> 1 ->> 'type') = 'quantity', false) AND (t0.arguments -> 1 -> 'value' ->> 'unit') = ('MW')))
+WHERE (t0.predicate_name = 'Terms' AND NOT (((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND ((CASE WHEN t0.arguments -> 1 ->> 'type' = 'quantity' THEN t0.arguments -> 1 -> 'value' ->> 'unit' END)) IS NOT DISTINCT FROM ('MW'::text)))
 ORDER BY t0.arguments_hash
 LIMIT 1"#
         ]
@@ -684,20 +684,20 @@ fn two_orderings_in_a_consequent_are_pinned() {
 SELECT 1 AS "w"
 FROM morpholog.claims t0
 WHERE t0.predicate_name = 'Terms'
-  AND ((NOT COALESCE((t0.arguments -> 1 ->> 'type') = 'decimal', false) OR (('0'::numeric) <= ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric END)) AND NOT COALESCE((t0.arguments -> 2 ->> 'type') = 'decimal', false))) OR NOT (('0'::numeric) <= ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric END)) AND ('0'::numeric) < ((CASE WHEN (t0.arguments -> 2 ->> 'type') = 'decimal' THEN (t0.arguments -> 2 ->> 'value')::numeric END))))
+  AND ((NOT (((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND (NULL::text) IS NOT DISTINCT FROM ((CASE WHEN t0.arguments -> 1 ->> 'type' = 'quantity' THEN t0.arguments -> 1 -> 'value' ->> 'unit' END))) OR (('0'::numeric) <= ((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) AND NOT (((CASE t0.arguments -> 2 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 2 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 2 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND (NULL::text) IS NOT DISTINCT FROM ((CASE WHEN t0.arguments -> 2 ->> 'type' = 'quantity' THEN t0.arguments -> 2 -> 'value' ->> 'unit' END))))) OR NOT (('0'::numeric) <= ((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) AND ('0'::numeric) < ((CASE t0.arguments -> 2 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 2 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 2 -> 'value' ->> 'amount')::numeric END))))
 ORDER BY (morpholog.value_key_v1(t0.arguments -> 1))::text, (morpholog.value_key_v1(t0.arguments -> 0))::text, (morpholog.value_key_v1(t0.arguments -> 2))::text
 LIMIT 1"#
     );
     assert_eq!(
         inv.error_sqls(None, &[]).unwrap(),
         [
-            r#"SELECT CASE WHEN NOT COALESCE((t0.arguments -> 1 ->> 'type') = 'decimal', false) THEN 'compare' WHEN (('0'::numeric) <= ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric END)) AND NOT COALESCE((t0.arguments -> 2 ->> 'type') = 'decimal', false)) THEN 'compare' END AS "kind",
-       CASE WHEN NOT COALESCE((t0.arguments -> 1 ->> 'type') = 'decimal', false) THEN 'decimal' WHEN (('0'::numeric) <= ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric END)) AND NOT COALESCE((t0.arguments -> 2 ->> 'type') = 'decimal', false)) THEN 'decimal' END AS "domain",
-       CASE WHEN NOT COALESCE((t0.arguments -> 1 ->> 'type') = 'decimal', false) THEN ('{"type":"decimal","value":"0"}'::jsonb)::text WHEN (('0'::numeric) <= ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric END)) AND NOT COALESCE((t0.arguments -> 2 ->> 'type') = 'decimal', false)) THEN ('{"type":"decimal","value":"0"}'::jsonb)::text END AS "left",
-       CASE WHEN NOT COALESCE((t0.arguments -> 1 ->> 'type') = 'decimal', false) THEN (t0.arguments -> 1)::text WHEN (('0'::numeric) <= ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric END)) AND NOT COALESCE((t0.arguments -> 2 ->> 'type') = 'decimal', false)) THEN (t0.arguments -> 2)::text END AS "right",
+            r#"SELECT CASE WHEN NOT (((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND (NULL::text) IS NOT DISTINCT FROM ((CASE WHEN t0.arguments -> 1 ->> 'type' = 'quantity' THEN t0.arguments -> 1 -> 'value' ->> 'unit' END))) THEN 'compare' WHEN (('0'::numeric) <= ((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) AND NOT (((CASE t0.arguments -> 2 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 2 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 2 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND (NULL::text) IS NOT DISTINCT FROM ((CASE WHEN t0.arguments -> 2 ->> 'type' = 'quantity' THEN t0.arguments -> 2 -> 'value' ->> 'unit' END)))) THEN 'compare' END AS "kind",
+       CASE WHEN NOT (((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND (NULL::text) IS NOT DISTINCT FROM ((CASE WHEN t0.arguments -> 1 ->> 'type' = 'quantity' THEN t0.arguments -> 1 -> 'value' ->> 'unit' END))) THEN 'decimal' WHEN (('0'::numeric) <= ((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) AND NOT (((CASE t0.arguments -> 2 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 2 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 2 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND (NULL::text) IS NOT DISTINCT FROM ((CASE WHEN t0.arguments -> 2 ->> 'type' = 'quantity' THEN t0.arguments -> 2 -> 'value' ->> 'unit' END)))) THEN 'decimal' END AS "domain",
+       CASE WHEN NOT (((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND (NULL::text) IS NOT DISTINCT FROM ((CASE WHEN t0.arguments -> 1 ->> 'type' = 'quantity' THEN t0.arguments -> 1 -> 'value' ->> 'unit' END))) THEN ('{"type":"decimal","value":"0"}'::jsonb)::text WHEN (('0'::numeric) <= ((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) AND NOT (((CASE t0.arguments -> 2 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 2 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 2 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND (NULL::text) IS NOT DISTINCT FROM ((CASE WHEN t0.arguments -> 2 ->> 'type' = 'quantity' THEN t0.arguments -> 2 -> 'value' ->> 'unit' END)))) THEN ('{"type":"decimal","value":"0"}'::jsonb)::text END AS "left",
+       CASE WHEN NOT (((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND (NULL::text) IS NOT DISTINCT FROM ((CASE WHEN t0.arguments -> 1 ->> 'type' = 'quantity' THEN t0.arguments -> 1 -> 'value' ->> 'unit' END))) THEN (t0.arguments -> 1)::text WHEN (('0'::numeric) <= ((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) AND NOT (((CASE t0.arguments -> 2 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 2 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 2 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND (NULL::text) IS NOT DISTINCT FROM ((CASE WHEN t0.arguments -> 2 ->> 'type' = 'quantity' THEN t0.arguments -> 2 -> 'value' ->> 'unit' END)))) THEN (t0.arguments -> 2)::text END AS "right",
        NULL::boolean AS "first"
 FROM morpholog.claims t0
-WHERE (t0.predicate_name = 'Terms' AND (NOT COALESCE((t0.arguments -> 1 ->> 'type') = 'decimal', false) OR (('0'::numeric) <= ((CASE WHEN (t0.arguments -> 1 ->> 'type') = 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric END)) AND NOT COALESCE((t0.arguments -> 2 ->> 'type') = 'decimal', false))))
+WHERE (t0.predicate_name = 'Terms' AND (NOT (((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND (NULL::text) IS NOT DISTINCT FROM ((CASE WHEN t0.arguments -> 1 ->> 'type' = 'quantity' THEN t0.arguments -> 1 -> 'value' ->> 'unit' END))) OR (('0'::numeric) <= ((CASE t0.arguments -> 1 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 1 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 1 -> 'value' ->> 'amount')::numeric END)) AND NOT (((CASE t0.arguments -> 2 ->> 'type' WHEN 'decimal' THEN (t0.arguments -> 2 ->> 'value')::numeric WHEN 'quantity' THEN (t0.arguments -> 2 -> 'value' ->> 'amount')::numeric END)) IS NOT NULL AND (NULL::text) IS NOT DISTINCT FROM ((CASE WHEN t0.arguments -> 2 ->> 'type' = 'quantity' THEN t0.arguments -> 2 -> 'value' ->> 'unit' END))))))
 ORDER BY t0.arguments_hash
 LIMIT 1"#
         ]
@@ -966,4 +966,121 @@ invariant or_under_exists:
             "{outside}"
         );
     }
+}
+
+/// The gallery's decimal and quantity arithmetic compiles; what stays
+/// interpreted for arithmetic is time arithmetic, in the examples that
+/// compute with dates and instants.
+#[test]
+fn the_gallerys_decimal_arithmetic_compiles_and_time_arithmetic_is_named() {
+    let must_compile: &[(&str, &str)] = &[
+        (
+            "insurance_claim_settlement",
+            "settlement_within_eligible_payout",
+        ),
+        (
+            "chess_transition_invariants",
+            "bishops_on_opposite_square_colors",
+        ),
+        ("borrowing_base", "outstanding_within_advance_limit"),
+        ("margin_call_run", "call_amount_is_the_top_up"),
+        ("metered_billing", "line_net_is_the_rounded_recompute"),
+        ("metered_billing", "line_vat_is_the_rounded_recompute"),
+        ("metered_billing", "sealed_total_is_the_sum_of_its_lines"),
+        ("metered_billing", "a_credit_copy_negates_its_line"),
+        (
+            "operational_information",
+            "decision_value_is_the_risk_given_up",
+        ),
+        ("residue_classes", "residue_is_an_integer_in_range"),
+        ("residue_classes", "square_is_the_recompute"),
+    ];
+    let time_examples = [
+        "laytime_demurrage",
+        "covenant_reporting",
+        "charging_years",
+        "delivery_hour_limits",
+    ];
+    let mut time_refusals = 0;
+    let mut checked = 0;
+    for program in morpholog_examples::all_programs() {
+        let refused = compile_invariants(&program.validated().expect("gallery validates"))
+            .err()
+            .unwrap_or_default();
+        for (example, invariant) in must_compile {
+            if program.name == *example {
+                assert!(
+                    program
+                        .invariants
+                        .iter()
+                        .any(|i| i.name.as_str() == *invariant),
+                    "{example} declares {invariant}"
+                );
+                assert!(
+                    !refused.iter().any(|r| r.invariant.as_str() == *invariant),
+                    "{example}::{invariant} compiles: {refused:?}"
+                );
+                checked += 1;
+            }
+        }
+        for r in &refused {
+            if r.reason
+                == (CompileReason::Construct {
+                    construct: "time arithmetic",
+                })
+            {
+                time_refusals += 1;
+                assert!(
+                    time_examples.contains(&program.name.as_str()),
+                    "{}::{} refused for time arithmetic",
+                    program.name,
+                    r.invariant
+                );
+            }
+        }
+    }
+    assert_eq!(checked, must_compile.len(), "every named example was found");
+    assert!(
+        time_refusals > 0,
+        "anti-vacuity: the gallery still has time arithmetic"
+    );
+}
+
+/// Every operator repeats its operands' SQL a bounded number of times:
+/// a chain of `min` grows its SQL linearly and compiles at the deepest
+/// nesting validation allows, a chain of products, whose unit test grows
+/// too, meets the budget and refuses by name, and either way compiling
+/// returns at once.
+#[test]
+fn deeply_nested_arithmetic_compiles_within_budget_or_refuses() {
+    let nested = |depth: usize, wrap: &str| {
+        let mut body = "n".to_string();
+        for level in 0..depth {
+            body = wrap
+                .replace("{b}", &body)
+                .replace("{l}", &level.to_string());
+        }
+        format!(
+            "program deep\npredicate Amount(x: Subject, n: Decimal)\ninvariant r:\n    Amount(x, n) implies {body} <= 1000\n"
+        )
+    };
+    let started = std::time::Instant::now();
+    let mins = morpholog_surface::parse_program(&nested(250, "min({b}, {l})")).expect("parses");
+    let set = compiled(&mins);
+    assert!(
+        set.invariants[0].violation_sql(None).len() < 1024 * 1024,
+        "a chain of min stays linear"
+    );
+    let products = morpholog_surface::parse_program(&nested(250, "({b}) * 2")).expect("parses");
+    assert_eq!(
+        refusals(&products)[0].reason,
+        CompileReason::Construct {
+            construct: "arithmetic too large to compile"
+        }
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "compilation returned in {:?}",
+        started.elapsed()
+    );
 }

@@ -537,3 +537,80 @@ fn matching_claims_unbound_actor_errors() {
         Err(EvalError::UnboundActor),
     );
 }
+
+mod eval_value_over {
+    use crate::eval::{EvalError, eval_value_over};
+    use crate::ir::ValueExpr;
+    use crate::ir_builder::{add, claim, dec, div, sum, term, var};
+    use crate::state::{Bindings, EvalValue};
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+
+    fn decimal(s: &str) -> EvalValue {
+        EvalValue::Decimal(Decimal::from_str(s).unwrap())
+    }
+
+    fn total() -> ValueExpr {
+        sum(var("p"), claim("Price", vec![var("p")]))
+    }
+
+    fn range() -> EvalError {
+        EvalError::sum_out_of_decimal_range()
+    }
+
+    /// The kernel evaluates the left side first and stops, so a division
+    /// by zero there wins over a sum on the right that cannot be added.
+    #[test]
+    fn the_left_error_wins_over_a_failing_sum_on_the_right() {
+        let expr = add(div(term(dec("1")), term(dec("0"))), total());
+        assert_eq!(
+            eval_value_over(&expr, &Bindings::new(), &[Err(range())]),
+            Some(Err(EvalError::DivisionByZero))
+        );
+        let expr = add(total(), div(term(dec("1")), term(dec("0"))));
+        assert_eq!(
+            eval_value_over(&expr, &Bindings::new(), &[Err(range())]),
+            Some(Err(range()))
+        );
+    }
+
+    /// Two sums that read alike are two nodes, each given its own result.
+    #[test]
+    fn each_sum_takes_the_result_given_for_it() {
+        let expr = div(total(), total());
+        let got = |a: &str, b: &str| {
+            eval_value_over(&expr, &Bindings::new(), &[Ok(decimal(a)), Ok(decimal(b))])
+        };
+        assert_eq!(got("6", "3"), Some(Ok(decimal("2"))));
+        assert_eq!(got("3", "6"), Some(Ok(decimal("0.5"))));
+    }
+
+    #[test]
+    fn bindings_and_literals_evaluate_as_the_kernel_does() {
+        let bindings: Bindings = [(
+            crate::ir::Var::from("x"),
+            decimal("0.0000000000000000000000000001"),
+        )]
+        .into_iter()
+        .collect();
+        let expr = crate::ir_builder::mul(term(var("x")), term(dec("0.5")));
+        assert_eq!(
+            eval_value_over(&expr, &bindings, &[]),
+            Some(Ok(decimal("0")))
+        );
+    }
+
+    /// No result for a sum, or a node that reads state another way, is
+    /// not evaluated against an empty state.
+    #[test]
+    fn an_expression_it_cannot_evaluate_alone_is_refused() {
+        assert_eq!(eval_value_over(&total(), &Bindings::new(), &[]), None);
+        let lookup = ValueExpr::ValueOf {
+            predicate: "Price".into(),
+            args: vec![var("p")],
+            extract: 0,
+            default: None,
+        };
+        assert_eq!(eval_value_over(&lookup, &Bindings::new(), &[]), None);
+    }
+}
