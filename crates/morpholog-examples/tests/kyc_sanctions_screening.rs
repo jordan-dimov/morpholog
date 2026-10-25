@@ -262,8 +262,9 @@ fn a_screening_takes_one_provider_result() {
 }
 
 /// The pointer follows results as they arrive, not the order screenings
-/// were requested: a later request answered first, then an earlier one,
-/// leaves the earlier one current, judged on its own expiry.
+/// were requested or completed in: scr_1 is requested and completed first
+/// but arrives last, and it is the one left current, judged on its own
+/// expiry.
 #[test]
 fn the_current_screening_is_the_latest_result_to_arrive() {
     let program = kyc_sanctions_screening::program();
@@ -285,7 +286,7 @@ fn the_current_screening_is_the_latest_result_to_arrive() {
     let state = run(
         &program,
         "record_clean_screening_result",
-        vec![subj("scr_1"), date("2026-02-05"), date("2027-02-05")],
+        vec![subj("scr_1"), date("2026-01-05"), date("2027-01-05")],
         state,
     );
     assert_eq!(current(&state, "alice", SANCTIONS), Some(subj("scr_1")));
