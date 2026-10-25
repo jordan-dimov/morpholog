@@ -2810,3 +2810,75 @@ transformation set(x, a, b):
         _ => panic!("a bare decimal times 2 compared with a quantity is the kernel's error"),
     }
 }
+
+/// A stored value's flavour decides a comparison of plain columns too:
+/// bare decimals where quantities are declared order as decimals, and
+/// quantities where decimals are declared order as quantities of their
+/// own unit, refusing where the kernel does.
+#[tokio::test]
+async fn column_orderings_read_the_values_own_flavour() {
+    let rule = |kind: &str, body: &str| {
+        format!(
+            "program flavour
+predicate Pair(x: Subject, a: {kind}, b: {kind})
+invariant rule:
+    Pair(x, a, b) implies {body}
+transformation set(x, a, b):
+    admit Pair(x, a, b)
+"
+        )
+    };
+    let q = |amount: &str, unit: &str| -> EvalValue {
+        serde_json::from_value(
+            serde_json::json!({"type": "quantity", "value": {"amount": amount, "unit": unit}}),
+        )
+        .expect("a quantity")
+    };
+    let cases: Vec<(String, EvalValue, EvalValue, &str)> = vec![
+        (
+            rule("Decimal[t]", "a < b"),
+            dec_text("2"),
+            dec_text("3"),
+            "accepted",
+        ),
+        (
+            rule("Decimal[t]", "a < b"),
+            dec_text("3"),
+            dec_text("2"),
+            "rejected",
+        ),
+        (
+            rule("Decimal", "a < b"),
+            q("2", "t"),
+            q("3", "t"),
+            "accepted",
+        ),
+        (
+            rule("Decimal", "a < b"),
+            q("3", "t"),
+            q("2", "t"),
+            "rejected",
+        ),
+        (
+            rule("Decimal", "a < b"),
+            q("2", "t"),
+            q("3", "EUR"),
+            "errored",
+        ),
+        (
+            rule("Decimal[t]", "a > 0 t"),
+            dec_text("2"),
+            dec_text("3"),
+            "errored",
+        ),
+    ];
+    for (source, a, b, expected) in cases {
+        let verdict = arithmetic_probe(&source, &[], "set", vec![subj("p"), a, b]).await;
+        let got = match verdict {
+            Verdict::Accepted => "accepted",
+            Verdict::Rejected => "rejected",
+            Verdict::Errored(_) => "errored",
+        };
+        assert_eq!(got, expected, "{source}");
+    }
+}

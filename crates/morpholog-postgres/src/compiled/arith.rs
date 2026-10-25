@@ -79,24 +79,17 @@ pub(super) fn computed_operand(
         Flavour::Bare => Operand {
             key,
             dd: runtime,
-            computed: true,
+            static_unit: None,
             ordered: Ordered::Numeric {
                 sql: format!("(CASE WHEN ({}) IS NULL THEN {} END)", dd.unit, dd.amount),
-                well_typed: format!("(({}) IS NULL)", dd.unit),
                 tagged,
             },
         },
         Flavour::Unit => Operand {
             key,
             dd: runtime,
-            computed: true,
-            ordered: Ordered::Quantity {
-                amount: dd.amount,
-                unit: dd.unit.clone(),
-                well_typed: format!("(({}) IS NOT NULL)", dd.unit),
-                tagged,
-                literal: false,
-            },
+            static_unit: None,
+            ordered: Ordered::Quantity { tagged },
         },
     })
 }

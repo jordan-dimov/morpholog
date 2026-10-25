@@ -2404,22 +2404,6 @@ fn decimal_sql(col: &ColRef) -> String {
     )
 }
 
-/// A quantity position's amount as numeric, NULL for another kind.
-fn amount_sql(col: &ColRef) -> String {
-    format!(
-        "(CASE WHEN ({}.arguments -> {} ->> 'type') = 'quantity' THEN ({}.arguments -> {} -> 'value' ->> 'amount')::numeric END)",
-        col.alias, col.position, col.alias, col.position
-    )
-}
-
-/// A quantity position's unit, text; NULL for any other stored kind.
-fn unit_sql(col: &ColRef) -> String {
-    format!(
-        "{}.arguments -> {} -> 'value' ->> 'unit'",
-        col.alias, col.position
-    )
-}
-
 /// A literal in a claim pattern: the position must hold exactly it.
 fn literal_filter(col: &ColRef, value: &Value, ctx: &mut Ctx<'_>) -> Result<String, CompileReason> {
     if matches!(value, Value::CalendarSpan(_)) {
@@ -2866,27 +2850,25 @@ struct Operand {
     /// For a decimal or a quantity: its amount and the unit its value
     /// carries (NULL for a bare decimal), read from the value itself.
     dd: Option<(String, String)>,
-    /// Arithmetic or a builtin, whose flavour only the values decide.
-    computed: bool,
+    /// The unit, when it is known before any value is read: `Some(None)`
+    /// for a bare decimal literal or a sum, `Some(Some(unit))` for a
+    /// quantity literal, `None` for a value read at run time.
+    static_unit: Option<Option<String>>,
 }
 
 /// How a value takes part in an ordered comparison, with the test that
 /// it is of the kind the comparison expects and its tagged form for the
 /// kernel to word an error with. `well_typed` is `true` for a literal or
-/// a total.
+/// a total. A decimal or a quantity is ordered by the amount and unit its
+/// value carries (`Operand::dd`), so these two keep only what equality
+/// and the error report read.
 enum Ordered {
     Numeric {
         sql: String,
-        well_typed: String,
         tagged: String,
     },
     Quantity {
-        amount: String,
-        unit: String,
-        well_typed: String,
         tagged: String,
-        /// The unit is a literal, so two literals never raise.
-        literal: bool,
     },
     Timestamp {
         nanos: String,
@@ -2971,71 +2953,34 @@ fn ordered_sql(
         CompareOp::Ge => ">=",
         CompareOp::Gt => ">",
     };
-    // A computed side's flavour is its values': both sides compare as an
-    // amount and the unit each value carries, which is the kernel's rule
-    // whatever was declared.
-    if domain == OrderedDomain::Decimal && (l.computed || r.computed) {
-        let (Some((xa, xu)), Some((ya, yu)), Some(lt), Some(rt)) =
+    // Decimals and quantities compare by their values' flavour, not the
+    // declaration's: an amount and the unit each value carries, ordered
+    // only where the kernel would order them. What a literal or a sum
+    // fixes before any value is read needs no test.
+    if domain == OrderedDomain::Decimal
+        && let (Some((xa, xu)), Some((ya, yu)), Some(lt), Some(rt)) =
             (&l.dd, &r.dd, l.ordered.tagged(), r.ordered.tagged())
-        else {
-            return Err(CompileReason::UnvalidatedShape {
-                detail: "a computed comparison with an operand of no decimal kind".to_string(),
-            });
-        };
+    {
+        let mut tests = Vec::new();
+        if l.static_unit.is_none() {
+            tests.push(format!("({xa}) IS NOT NULL"));
+        }
+        if r.static_unit.is_none() {
+            tests.push(format!("({ya}) IS NOT NULL"));
+        }
+        match (&l.static_unit, &r.static_unit) {
+            (Some(a), Some(b)) => {
+                if a != b {
+                    tests.push("false".to_string());
+                }
+            }
+            _ => tests.push(format!("({xu}) IS NOT DISTINCT FROM ({yu})")),
+        }
         let clause = format!("({xa}) {op} ({ya})");
-        let well_typed = format!(
-            "(({xa}) IS NOT NULL AND ({ya}) IS NOT NULL AND ({xu}) IS NOT DISTINCT FROM ({yu}))"
-        );
-        let raises = raising(well_typed, domain, lt, rt);
+        let raises = raising(and_all(&tests), domain, lt, rt);
         return Ok(close_comparison(clause, raises, env, ctx));
     }
     let (clause, raises) = match (domain, &l.ordered, &r.ordered) {
-        (
-            OrderedDomain::Decimal,
-            Ordered::Numeric {
-                sql: x,
-                well_typed: xw,
-                tagged: xt,
-            },
-            Ordered::Numeric {
-                sql: y,
-                well_typed: yw,
-                tagged: yt,
-            },
-        ) => (
-            format!("({x}) {op} ({y})"),
-            raising(and_all(&[xw.clone(), yw.clone()]), domain, xt, yt),
-        ),
-        (
-            OrderedDomain::Decimal,
-            Ordered::Quantity {
-                amount: xa,
-                unit: xu,
-                well_typed: xw,
-                tagged: xt,
-                literal: xl,
-            },
-            Ordered::Quantity {
-                amount: ya,
-                unit: yu,
-                well_typed: yw,
-                tagged: yt,
-                literal: yl,
-            },
-        ) => (
-            format!("({xa}) {op} ({ya})"),
-            // Two literals of one unit are checked at authoring time.
-            if *xl && *yl {
-                None
-            } else {
-                raising(
-                    and_all(&[xw.clone(), yw.clone(), format!("({xu}) = ({yu})")]),
-                    domain,
-                    xt,
-                    yt,
-                )
-            },
-        ),
         (
             OrderedDomain::Timestamp,
             Ordered::Timestamp {
@@ -3167,15 +3112,10 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
             let ordered = match &col.kind {
                 PredicateArgKind::Decimal => Ordered::Numeric {
                     sql: decimal_sql(col),
-                    well_typed: tagged_as_sql(col, "decimal"),
                     tagged: tagged_sql(col),
                 },
                 PredicateArgKind::Quantity(_) => Ordered::Quantity {
-                    amount: amount_sql(col),
-                    unit: unit_sql(col),
-                    well_typed: tagged_as_sql(col, "quantity"),
                     tagged: tagged_sql(col),
-                    literal: false,
                 },
                 PredicateArgKind::Timestamp => Ordered::Timestamp {
                     nanos: format!("morpholog.timestamp_nanos({})", tagged_sql(col)),
@@ -3193,7 +3133,7 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                 key: Some(key_sql(col)),
                 ordered,
                 dd: arith::column_dd(col),
-                computed: false,
+                static_unit: None,
             })
         }
         ValueExpr::Term(Term::Literal(v)) => literal_operand(v),
@@ -3282,13 +3222,12 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                 key: None,
                 ordered: Ordered::Numeric {
                     sql: total.clone(),
-                    well_typed: "true".to_string(),
                     tagged: format!(
                         "jsonb_build_object('type', 'decimal', 'value', ({total})::text)"
                     ),
                 },
                 dd: Some((total.clone(), "NULL::text".to_string())),
-                computed: false,
+                static_unit: Some(None),
             })
         }
         ValueExpr::Arith { .. } | ValueExpr::Call { .. } => arith::computed_operand(expr, env, ctx),
@@ -3324,15 +3263,10 @@ fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
     let ordered = match &ev {
         EvalValue::Decimal(d) => Ordered::Numeric {
             sql: format!("{}::numeric", quote_literal(&d.to_string())),
-            well_typed: "true".to_string(),
             tagged: tagged.clone(),
         },
-        EvalValue::Quantity { amount, unit } => Ordered::Quantity {
-            amount: format!("{}::numeric", quote_literal(&amount.to_string())),
-            unit: quote_literal(unit.as_str()),
-            well_typed: "true".to_string(),
+        EvalValue::Quantity { .. } => Ordered::Quantity {
             tagged: tagged.clone(),
-            literal: true,
         },
         EvalValue::Timestamp(t) => Ordered::Timestamp {
             nanos: format!("{}::numeric", t.as_nanosecond()),
@@ -3350,7 +3284,11 @@ fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
         key: Some(key_lit(&ev)?),
         ordered,
         dd: arith::literal_dd(value),
-        computed: false,
+        static_unit: match value {
+            Value::Decimal(_) => Some(None),
+            Value::Quantity { unit, .. } => Some(Some(unit.as_str().to_string())),
+            _ => None,
+        },
     })
 }
 
