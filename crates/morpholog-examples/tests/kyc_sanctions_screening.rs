@@ -137,6 +137,28 @@ fn program_declares_its_outbox_intents() {
 // Round-trip pattern: request -> result, currentness pointer moves.
 // ============================================================
 
+/// The screening that is current for `customer` on `list`, if any.
+fn current(state: &State, customer: &str, list: &str) -> Option<EvalValue> {
+    state
+        .claims()
+        .iter()
+        .find(|c| {
+            c.predicate.as_str() == "CurrentScreening"
+                && c.args[..2] == [subj(customer), subj(list)]
+        })
+        .map(|c| c.args[2].clone())
+}
+
+/// Register `customer` and request `screening` on the sanctions list.
+fn requested(program: &Program, state: State, customer: &str, screening: &str, on: &str) -> State {
+    run(
+        program,
+        "request_screening",
+        vec![subj(screening), subj(customer), subj(SANCTIONS), date(on)],
+        state,
+    )
+}
+
 #[test]
 fn second_clean_result_retracts_first_and_takes_pointer() {
     let program = kyc_sanctions_screening::program();
@@ -189,6 +211,85 @@ fn second_clean_result_retracts_first_and_takes_pointer() {
     });
     assert!(pointer_b, "newer screening must own the pointer");
     assert!(!pointer_a, "older screening's pointer must be retracted");
+
+    // The older result replayed cannot take the pointer back: a screening
+    // takes one result.
+    let clean = program
+        .transformation("record_clean_screening_result")
+        .unwrap();
+    let reason = ex().must_reject(
+        clean,
+        vec![subj("scr_a"), date("2026-01-02"), date("2027-01-02")],
+        &state,
+    );
+    refused_by(&reason, "screening_not_yet_resulted");
+    assert_eq!(current(&state, alice, SANCTIONS), Some(subj("scr_b")));
+}
+
+/// A screening that came back a match cannot also come back clean: the
+/// clean path would make a matched screening current without an analyst.
+#[test]
+fn a_screening_takes_one_provider_result() {
+    let program = kyc_sanctions_screening::program();
+    let state = run(
+        &program,
+        "register_customer",
+        vec![subj("alice")],
+        State::default(),
+    );
+    let state = requested(&program, state, "alice", "scr_m", "2026-01-01");
+    let state = run(
+        &program,
+        "record_match_screening_result",
+        vec![
+            subj("scr_m"),
+            date("2026-01-02"),
+            date("2027-01-02"),
+            date("2026-01-02"),
+        ],
+        state,
+    );
+    let clean = program
+        .transformation("record_clean_screening_result")
+        .unwrap();
+    let reason = ex().must_reject(
+        clean,
+        vec![subj("scr_m"), date("2026-01-03"), date("2027-01-03")],
+        &state,
+    );
+    refused_by(&reason, "screening_not_yet_resulted");
+    assert_eq!(current(&state, "alice", SANCTIONS), None);
+}
+
+/// The pointer follows results as they arrive, not the order screenings
+/// were requested or completed in: scr_1 is requested and completed first
+/// but arrives last, and it is the one left current, judged on its own
+/// expiry.
+#[test]
+fn the_current_screening_is_the_latest_result_to_arrive() {
+    let program = kyc_sanctions_screening::program();
+    let state = run(
+        &program,
+        "register_customer",
+        vec![subj("alice")],
+        State::default(),
+    );
+    let state = requested(&program, state, "alice", "scr_1", "2026-01-01");
+    let state = requested(&program, state, "alice", "scr_2", "2026-02-01");
+    let state = run(
+        &program,
+        "record_clean_screening_result",
+        vec![subj("scr_2"), date("2026-02-02"), date("2027-02-02")],
+        state,
+    );
+    assert_eq!(current(&state, "alice", SANCTIONS), Some(subj("scr_2")));
+    let state = run(
+        &program,
+        "record_clean_screening_result",
+        vec![subj("scr_1"), date("2026-01-05"), date("2027-01-05")],
+        state,
+    );
+    assert_eq!(current(&state, "alice", SANCTIONS), Some(subj("scr_1")));
 }
 
 // ============================================================
