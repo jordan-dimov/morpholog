@@ -2863,6 +2863,11 @@ fn nested_scope(r: Rendered) -> Result<Rendered, CompileReason> {
 struct Operand {
     key: Option<String>,
     ordered: Ordered,
+    /// For a decimal or a quantity: its amount and the unit its value
+    /// carries (NULL for a bare decimal), read from the value itself.
+    dd: Option<(String, String)>,
+    /// Arithmetic or a builtin, whose flavour only the values decide.
+    computed: bool,
 }
 
 /// How a value takes part in an ordered comparison, with the test that
@@ -2896,6 +2901,19 @@ enum Ordered {
     /// A kind nothing orders here, or one the compiler cannot tell at
     /// compile time: the declared kind, for a column.
     None(Option<PredicateArgKind>),
+}
+
+impl Ordered {
+    /// The value's tagged form, for the kernel to word an error with.
+    fn tagged(&self) -> Option<&str> {
+        match self {
+            Ordered::Numeric { tagged, .. }
+            | Ordered::Quantity { tagged, .. }
+            | Ordered::Timestamp { tagged, .. }
+            | Ordered::Date { tagged, .. } => Some(tagged),
+            Ordered::None(_) => None,
+        }
+    }
 }
 
 /// `a = b`, or its negation: structural equality, which never raises. A
@@ -2953,6 +2971,24 @@ fn ordered_sql(
         CompareOp::Ge => ">=",
         CompareOp::Gt => ">",
     };
+    // A computed side's flavour is its values': both sides compare as an
+    // amount and the unit each value carries, which is the kernel's rule
+    // whatever was declared.
+    if domain == OrderedDomain::Decimal && (l.computed || r.computed) {
+        let (Some((xa, xu)), Some((ya, yu)), Some(lt), Some(rt)) =
+            (&l.dd, &r.dd, l.ordered.tagged(), r.ordered.tagged())
+        else {
+            return Err(CompileReason::UnvalidatedShape {
+                detail: "a computed comparison with an operand of no decimal kind".to_string(),
+            });
+        };
+        let clause = format!("({xa}) {op} ({ya})");
+        let well_typed = format!(
+            "(({xa}) IS NOT NULL AND ({ya}) IS NOT NULL AND ({xu}) IS NOT DISTINCT FROM ({yu}))"
+        );
+        let raises = raising(well_typed, domain, lt, rt);
+        return Ok(close_comparison(clause, raises, env, ctx));
+    }
     let (clause, raises) = match (domain, &l.ordered, &r.ordered) {
         (
             OrderedDomain::Decimal,
@@ -3156,6 +3192,8 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
             Ok(Operand {
                 key: Some(key_sql(col)),
                 ordered,
+                dd: arith::column_dd(col),
+                computed: false,
             })
         }
         ValueExpr::Term(Term::Literal(v)) => literal_operand(v),
@@ -3249,6 +3287,8 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                         "jsonb_build_object('type', 'decimal', 'value', ({total})::text)"
                     ),
                 },
+                dd: Some((total.clone(), "NULL::text".to_string())),
+                computed: false,
             })
         }
         ValueExpr::Arith { .. } | ValueExpr::Call { .. } => arith::computed_operand(expr, env, ctx),
@@ -3309,6 +3349,8 @@ fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
     Ok(Operand {
         key: Some(key_lit(&ev)?),
         ordered,
+        dd: arith::literal_dd(value),
+        computed: false,
     })
 }
 

@@ -21,9 +21,20 @@ enum Op {
     Div,
     Rem,
     Round,
+    Min,
+    Max,
 }
 
-const OPS: [Op; 6] = [Op::Add, Op::Sub, Op::Mul, Op::Div, Op::Rem, Op::Round];
+const OPS: [Op; 8] = [
+    Op::Add,
+    Op::Sub,
+    Op::Mul,
+    Op::Div,
+    Op::Rem,
+    Op::Round,
+    Op::Min,
+    Op::Max,
+];
 
 const EDGES: &[(&str, &str)] = &[
     ("0.0000000000000000000000000001", "0.5"),
@@ -56,8 +67,12 @@ const EDGES: &[(&str, &str)] = &[
 fn kernel(op: Op, a: Decimal, b: Decimal) -> Result<EvalValue, morpholog_core::EvalError> {
     let var = |n: &str| Box::new(ValueExpr::Term(Term::Var(Var::from(n))));
     let expr = match op {
-        Op::Round => ValueExpr::Call {
-            builtin: Builtin::Round,
+        Op::Round | Op::Min | Op::Max => ValueExpr::Call {
+            builtin: match op {
+                Op::Round => Builtin::Round,
+                Op::Min => Builtin::Min,
+                _ => Builtin::Max,
+            },
             args: vec![*var("a"), *var("b")],
         },
         other => ValueExpr::Arith {
@@ -66,7 +81,7 @@ fn kernel(op: Op, a: Decimal, b: Decimal) -> Result<EvalValue, morpholog_core::E
                 Op::Sub => ArithOp::Sub,
                 Op::Mul => ArithOp::Mul,
                 Op::Div => ArithOp::Div,
-                Op::Rem | Op::Round => ArithOp::Mod,
+                Op::Rem | Op::Round | Op::Min | Op::Max => ArithOp::Mod,
             },
             left: var("a"),
             right: var("b"),
@@ -89,6 +104,8 @@ fn sql(op: Op) -> &'static str {
         Op::Div => "morpholog.decimal_div_v1(a, b)",
         Op::Rem => "CASE WHEN b = 0 THEN NULL ELSE morpholog.decimal_fit_v1(mod(a, b)) END",
         Op::Round => "morpholog.decimal_round_v1(a, b)",
+        Op::Min => "morpholog.decimal_min_v1(a, b)",
+        Op::Max => "morpholog.decimal_max_v1(a, b)",
     }
 }
 
@@ -191,7 +208,7 @@ fn exact(op: Op, a: Decimal, b: Decimal) -> Option<Decimal> {
             )
         }
         Op::Mul => (ma.checked_mul(mb)?, sa + sb),
-        Op::Div | Op::Rem | Op::Round => return None,
+        Op::Div | Op::Rem | Op::Round | Op::Min | Op::Max => return None,
     };
     Decimal::try_from_i128_with_scale(m, s).ok()
 }

@@ -1045,3 +1045,42 @@ fn the_gallerys_decimal_arithmetic_compiles_and_time_arithmetic_is_named() {
         "anti-vacuity: the gallery still has time arithmetic"
     );
 }
+
+/// Every operator repeats its operands' SQL a bounded number of times:
+/// a chain of `min` grows its SQL linearly and compiles at the deepest
+/// nesting validation allows, a chain of products, whose unit test grows
+/// too, meets the budget and refuses by name, and either way compiling
+/// returns at once.
+#[test]
+fn deeply_nested_arithmetic_compiles_within_budget_or_refuses() {
+    let nested = |depth: usize, wrap: &str| {
+        let mut body = "n".to_string();
+        for level in 0..depth {
+            body = wrap
+                .replace("{b}", &body)
+                .replace("{l}", &level.to_string());
+        }
+        format!(
+            "program deep\npredicate Amount(x: Subject, n: Decimal)\ninvariant r:\n    Amount(x, n) implies {body} <= 1000\n"
+        )
+    };
+    let started = std::time::Instant::now();
+    let mins = morpholog_surface::parse_program(&nested(250, "min({b}, {l})")).expect("parses");
+    let set = compiled(&mins);
+    assert!(
+        set.invariants[0].violation_sql(None).len() < 1024 * 1024,
+        "a chain of min stays linear"
+    );
+    let products = morpholog_surface::parse_program(&nested(250, "({b}) * 2")).expect("parses");
+    assert_eq!(
+        refusals(&products)[0].reason,
+        CompileReason::Construct {
+            construct: "arithmetic too large to compile"
+        }
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "compilation returned in {:?}",
+        started.elapsed()
+    );
+}

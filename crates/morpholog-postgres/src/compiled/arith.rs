@@ -74,9 +74,12 @@ pub(super) fn computed_operand(
         u = dd.unit
     );
     let key = Some(format!("morpholog.value_key_v1({tagged})"));
+    let runtime = Some((dd.amount.clone(), dd.unit.clone()));
     Ok(match dd.flavour {
         Flavour::Bare => Operand {
             key,
+            dd: runtime,
+            computed: true,
             ordered: Ordered::Numeric {
                 sql: format!("(CASE WHEN ({}) IS NULL THEN {} END)", dd.unit, dd.amount),
                 well_typed: format!("(({}) IS NULL)", dd.unit),
@@ -85,6 +88,8 @@ pub(super) fn computed_operand(
         },
         Flavour::Unit => Operand {
             key,
+            dd: runtime,
+            computed: true,
             ordered: Ordered::Quantity {
                 amount: dd.amount,
                 unit: dd.unit.clone(),
@@ -117,14 +122,10 @@ fn render(
                         });
                     }
                 };
-                let (a, p) = (&col.alias, col.position);
+                let (amount, unit) = runtime_dd(col);
                 Ok(Dd {
-                    amount: format!(
-                        "(CASE {a}.arguments -> {p} ->> 'type' WHEN 'decimal' THEN ({a}.arguments -> {p} ->> 'value')::numeric WHEN 'quantity' THEN ({a}.arguments -> {p} -> 'value' ->> 'amount')::numeric END)"
-                    ),
-                    unit: format!(
-                        "(CASE WHEN {a}.arguments -> {p} ->> 'type' = 'quantity' THEN {a}.arguments -> {p} -> 'value' ->> 'unit' END)"
-                    ),
+                    amount,
+                    unit,
                     flavour,
                 })
             }
@@ -174,6 +175,7 @@ fn render(
         ValueExpr::Arith { op, left, right } => {
             let l = render(left, env, ctx, sums)?;
             let r = render(right, env, ctx, sums)?;
+            within_budget(&[&l, &r])?;
             arith(*op, &l, &r)
         }
         ValueExpr::Call { builtin, args } => {
@@ -181,6 +183,7 @@ fn render(
             for arg in args {
                 rendered.push(render(arg, env, ctx, sums)?);
             }
+            within_budget(&rendered.iter().collect::<Vec<_>>())?;
             call(*builtin, &rendered)
         }
         ValueExpr::Extremum { .. } => Err(CompileReason::Construct {
@@ -193,6 +196,33 @@ fn render(
             construct: "conditional value",
         }),
     }
+}
+
+fn runtime_dd(col: &super::ColRef) -> (String, String) {
+    let (a, p) = (&col.alias, col.position);
+    (
+        format!(
+            "(CASE {a}.arguments -> {p} ->> 'type' WHEN 'decimal' THEN ({a}.arguments -> {p} ->> 'value')::numeric WHEN 'quantity' THEN ({a}.arguments -> {p} -> 'value' ->> 'amount')::numeric END)"
+        ),
+        format!(
+            "(CASE WHEN {a}.arguments -> {p} ->> 'type' = 'quantity' THEN {a}.arguments -> {p} -> 'value' ->> 'unit' END)"
+        ),
+    )
+}
+
+/// A decimal- or quantity-declared position's amount and the unit its
+/// value carries; none for a position of another kind.
+pub(super) fn column_dd(col: &super::ColRef) -> Option<(String, String)> {
+    matches!(
+        col.kind,
+        PredicateArgKind::Decimal | PredicateArgKind::Quantity(_)
+    )
+    .then(|| runtime_dd(col))
+}
+
+/// A decimal or quantity literal's amount and unit; none for another.
+pub(super) fn literal_dd(value: &Value) -> Option<(String, String)> {
+    literal(value).ok().map(|dd| (dd.amount, dd.unit))
 }
 
 fn literal(value: &Value) -> Result<Dd, CompileReason> {
@@ -214,6 +244,21 @@ fn literal(value: &Value) -> Result<Dd, CompileReason> {
             detail: "a literal of no decimal kind in arithmetic".to_string(),
         }),
     }
+}
+
+/// The most SQL one computed value may take before it is combined again.
+/// Each operator repeats its operands' text a bounded number of times,
+/// so a deep expression grows its SQL; past this it stays interpreted.
+const SQL_BUDGET: usize = 64 * 1024;
+
+fn within_budget(operands: &[&Dd]) -> Result<(), CompileReason> {
+    let size: usize = operands.iter().map(|d| d.amount.len() + d.unit.len()).sum();
+    if size > SQL_BUDGET {
+        return Err(CompileReason::Construct {
+            construct: "arithmetic too large to compile",
+        });
+    }
+    Ok(())
 }
 
 fn fit(sql: &str) -> String {
@@ -287,14 +332,15 @@ fn call(builtin: Builtin, args: &[Dd]) -> Result<Dd, CompileReason> {
             if x.flavour != y.flavour {
                 return Err(across_flavours("an extremum"));
             }
-            let keep = if builtin == Builtin::Min { "<=" } else { ">=" };
+            let function = if builtin == Builtin::Min {
+                "morpholog.decimal_min_v1"
+            } else {
+                "morpholog.decimal_max_v1"
+            };
             Ok(Dd {
                 amount: format!(
-                    "(CASE WHEN ({xa}) IS NULL OR ({ya}) IS NULL OR ({xu}) IS DISTINCT FROM ({yu}) THEN NULL WHEN ({xa}) {keep} ({ya}) THEN {xa} ELSE {ya} END)",
-                    xa = x.amount,
-                    ya = y.amount,
-                    xu = x.unit,
-                    yu = y.unit
+                    "(CASE WHEN ({}) IS NOT DISTINCT FROM ({}) THEN {function}({}, {}) END)",
+                    x.unit, y.unit, x.amount, y.amount
                 ),
                 unit: x.unit.clone(),
                 flavour: x.flavour,

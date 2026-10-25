@@ -223,28 +223,34 @@ impl<'a> EvalContext<'a> {
 
 /// Evaluate a value expression over bindings alone: no state, no
 /// definitions, no actor. Each `Sum` node evaluates to the result `sums`
-/// gives it, in the order the structural walk meets the sums, so the
-/// kernel's own evaluation order decides which error wins. `None` when
-/// the expression reads state some other way, or `sums` does not give
-/// one result per sum.
+/// gives it, sums counted in the order the kernel evaluates them (an
+/// operator's left side before its right, a call's arguments in order),
+/// so the kernel's own order decides which error wins. `None` when the
+/// expression reads state some other way, or `sums` does not give one
+/// result per sum.
 pub fn eval_value_over(
     expr: &ValueExpr,
     bindings: &Bindings,
     sums: &[Result<EvalValue, EvalError>],
 ) -> Option<Result<EvalValue, EvalError>> {
-    use crate::fold::{Node, walk_value};
-    let mut nodes: Vec<*const ValueExpr> = Vec::new();
-    let mut reads_state = false;
-    walk_value(expr, &mut |node| match node {
-        Node::Value(v @ ValueExpr::Sum { .. }) => nodes.push(std::ptr::from_ref(v)),
-        Node::Value(
-            ValueExpr::ValueOf { .. } | ValueExpr::Cond { .. } | ValueExpr::Extremum { .. },
-        ) => {
-            reads_state = true;
+    fn sums_in_order(expr: &ValueExpr, out: &mut Vec<*const ValueExpr>) -> bool {
+        match expr {
+            ValueExpr::Sum { .. } => {
+                out.push(std::ptr::from_ref(expr));
+                true
+            }
+            ValueExpr::Arith { left, right, .. } => {
+                sums_in_order(left, out) && sums_in_order(right, out)
+            }
+            ValueExpr::Call { args, .. } => args.iter().all(|a| sums_in_order(a, out)),
+            ValueExpr::Term(_) => true,
+            ValueExpr::ValueOf { .. } | ValueExpr::Cond { .. } | ValueExpr::Extremum { .. } => {
+                false
+            }
         }
-        _ => {}
-    });
-    if reads_state || nodes.len() != sums.len() {
+    }
+    let mut nodes: Vec<*const ValueExpr> = Vec::new();
+    if !sums_in_order(expr, &mut nodes) || nodes.len() != sums.len() {
         return None;
     }
     let table: SumResults<'_> = nodes.into_iter().zip(sums).collect();

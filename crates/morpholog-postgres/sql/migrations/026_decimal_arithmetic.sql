@@ -1,6 +1,7 @@
 -- The kernel's decimal arithmetic for the compiled checks: one function
 -- that fits an exact result as the kernel's operations do, one exact
--- division, and the kernel's rounding step by step. Idempotent: each
+-- division, the kernel's rounding step by step, and a strict `min` and
+-- `max`. Idempotent: each
 -- function is created only where absent, and an existing one must be
 -- exactly this one, marker and body, or the migration refuses to touch it.
 
@@ -134,6 +135,54 @@ $$
         IF marker IS DISTINCT FROM 'morpholog decimal round v1'
            OR body_digest IS DISTINCT FROM '16f7b9e7225e64a8ac490edc7690dd12811faad410e08594152fed858d386c64' THEN
             RAISE EXCEPTION 'morpholog.decimal_round_v1 exists and is not the one migration 026 defines (marker %, body %); refusing to replace it', coalesce(marker, 'none'), body_digest;
+        END IF;
+    END IF;
+    IF to_regprocedure('morpholog.decimal_min_v1(numeric, numeric)') IS NULL THEN
+        EXECUTE $create$
+            CREATE FUNCTION morpholog.decimal_min_v1(a numeric, b numeric) RETURNS numeric
+                LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+            AS $$
+BEGIN
+    IF a <= b THEN
+        RETURN a;
+    END IF;
+    RETURN b;
+END
+$$
+        $create$;
+        COMMENT ON FUNCTION morpholog.decimal_min_v1(numeric, numeric) IS 'morpholog decimal min v1';
+    ELSE
+        SELECT obj_description(oid, 'pg_proc'), encode(sha256(convert_to(prosrc, 'UTF8')), 'hex')
+          INTO marker, body_digest
+          FROM pg_proc
+         WHERE oid = 'morpholog.decimal_min_v1(numeric, numeric)'::regprocedure;
+        IF marker IS DISTINCT FROM 'morpholog decimal min v1'
+           OR body_digest IS DISTINCT FROM 'c92e11e0736c9fd57ffc0a1a76f4c6982cef06307aacfe31c569b17c1178e288' THEN
+            RAISE EXCEPTION 'morpholog.decimal_min_v1 exists and is not the one migration 026 defines (marker %, body %); refusing to replace it', coalesce(marker, 'none'), body_digest;
+        END IF;
+    END IF;
+    IF to_regprocedure('morpholog.decimal_max_v1(numeric, numeric)') IS NULL THEN
+        EXECUTE $create$
+            CREATE FUNCTION morpholog.decimal_max_v1(a numeric, b numeric) RETURNS numeric
+                LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+            AS $$
+BEGIN
+    IF a >= b THEN
+        RETURN a;
+    END IF;
+    RETURN b;
+END
+$$
+        $create$;
+        COMMENT ON FUNCTION morpholog.decimal_max_v1(numeric, numeric) IS 'morpholog decimal max v1';
+    ELSE
+        SELECT obj_description(oid, 'pg_proc'), encode(sha256(convert_to(prosrc, 'UTF8')), 'hex')
+          INTO marker, body_digest
+          FROM pg_proc
+         WHERE oid = 'morpholog.decimal_max_v1(numeric, numeric)'::regprocedure;
+        IF marker IS DISTINCT FROM 'morpholog decimal max v1'
+           OR body_digest IS DISTINCT FROM '7763312df053dcf737e8359280e7a4d429bb27a808224fefcfe8372beffd4001' THEN
+            RAISE EXCEPTION 'morpholog.decimal_max_v1 exists and is not the one migration 026 defines (marker %, body %); refusing to replace it', coalesce(marker, 'none'), body_digest;
         END IF;
     END IF;
 END $migration$;

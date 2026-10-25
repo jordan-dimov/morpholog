@@ -2752,6 +2752,50 @@ transformation set(x, a, b):
             (Verdict::Accepted, true) | (Verdict::Rejected, false)
         ));
     }
+    // Bare decimals stored where quantities are declared compute and
+    // compare as the decimals they are.
+    let verdict = arithmetic_probe(
+        &source("a * 2 > b"),
+        &[],
+        "set",
+        vec![subj("p"), dec_text("2"), dec_text("3")],
+    )
+    .await;
+    assert!(
+        matches!(verdict, Verdict::Accepted),
+        "two drifted bare decimals compare"
+    );
+    // Quantities of one unit stored where decimals are declared compare
+    // as those quantities.
+    let declared_bare = "program bare
+predicate Pair(x: Subject, a: Decimal, b: Decimal)
+invariant rule:
+    Pair(x, a, b) implies a * 2 > b
+transformation set(x, a, b):
+    admit Pair(x, a, b)
+";
+    let verdict = arithmetic_probe(
+        declared_bare,
+        &[],
+        "set",
+        vec![subj("p"), q("2", "t"), q("3", "t")],
+    )
+    .await;
+    assert!(
+        matches!(verdict, Verdict::Accepted),
+        "two drifted quantities of one unit compare"
+    );
+    let verdict = arithmetic_probe(
+        declared_bare,
+        &[],
+        "set",
+        vec![subj("p"), q("1", "t"), q("3", "t")],
+    )
+    .await;
+    assert!(
+        matches!(verdict, Verdict::Rejected),
+        "and refuse where the kernel does"
+    );
     match arithmetic_probe(
         &source("a * 2 > 0 t"),
         &[],

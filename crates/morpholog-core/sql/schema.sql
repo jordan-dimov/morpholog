@@ -275,6 +275,35 @@ $$;
 
 COMMENT ON FUNCTION decimal_round_v1(numeric, numeric) IS 'morpholog decimal round v1';
 
+-- The kernel's `min` of two decimals: strict, so a failed argument is
+-- never skipped, as `LEAST` would skip it.
+CREATE FUNCTION decimal_min_v1(a numeric, b numeric) RETURNS numeric
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+    IF a <= b THEN
+        RETURN a;
+    END IF;
+    RETURN b;
+END
+$$;
+
+COMMENT ON FUNCTION decimal_min_v1(numeric, numeric) IS 'morpholog decimal min v1';
+
+-- The kernel's `max` of two decimals: strict, as `decimal_min_v1` is.
+CREATE FUNCTION decimal_max_v1(a numeric, b numeric) RETURNS numeric
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+    IF a >= b THEN
+        RETURN a;
+    END IF;
+    RETURN b;
+END
+$$;
+
+COMMENT ON FUNCTION decimal_max_v1(numeric, numeric) IS 'morpholog decimal max v1';
+
 -- The one equality the compiled checks compare stored values by: a key
 -- that is equal exactly when the kernel says two values are equal, for
 -- every value the codec writes. Decimals and quantity amounts lose their
