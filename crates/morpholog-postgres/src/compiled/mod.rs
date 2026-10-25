@@ -299,7 +299,7 @@ impl CompiledInvariantSet {
                     .await
                     .map_err(classify)?;
                 if let Some(erroring) = erroring {
-                    return Err(PgError::Kernel(decode_error(&erroring)?));
+                    return Err(PgError::Kernel(decode_error(&erroring, &inv.values)?));
                 }
             }
             let (witness, compared) = inv.diagnose(tx, case_filter.as_deref(), steps).await?;
@@ -402,6 +402,9 @@ async fn compared_off(
                     None => None,
                 }
             }
+            Side::Computed { expr, vars, sums } => {
+                computed_off(tx, label, chosen, prefix, expr, vars, sums).await?
+            }
         };
         let Some(value) = value else {
             return Ok(None);
@@ -418,6 +421,52 @@ async fn compared_off(
         right,
     };
     Ok((compared.holds() == Some(false)).then_some(compared))
+}
+
+/// A computed operand's value under the chosen rows, as the kernel
+/// evaluates it; `None` when any part of it errs there.
+async fn computed_off(
+    tx: &mut Transaction<'_, Postgres>,
+    label: &str,
+    chosen: &Chosen,
+    prefix: &str,
+    expr: &ValueExpr,
+    vars: &[(Var, Bound)],
+    sums: &[SumPart],
+) -> Result<Option<EvalValue>, PgError> {
+    let mut bindings = std::collections::HashMap::new();
+    for (var, bound) in vars {
+        let Ok(value) = chosen.value(bound) else {
+            return Ok(None);
+        };
+        bindings.insert(var.clone(), value);
+    }
+    let mut results = Vec::with_capacity(sums.len());
+    for sum in sums {
+        let sql = format!(
+            "{label}\nSELECT trim_scale({})::text AS \"t\", (({}) OR ({})) AS \"e\"{}\nWHERE {}\nLIMIT 1",
+            sum.total,
+            sum.kind,
+            sum.range,
+            chosen.sources_clause(&sum.lateral),
+            chosen.pins(prefix)
+        );
+        let Some(row) = fetch_diagnostic(tx, sql).await? else {
+            return Ok(None);
+        };
+        if row.try_get::<bool, _>("e").unwrap_or(true) {
+            return Ok(None);
+        }
+        let Some(total) = row
+            .try_get::<String, _>("t")
+            .ok()
+            .and_then(|t| t.parse::<rust_decimal::Decimal>().ok())
+        else {
+            return Ok(None);
+        };
+        results.push(Ok(EvalValue::Decimal(total)));
+    }
+    Ok(morpholog_core::eval_value_over(expr, &bindings, &results).and_then(Result::ok))
 }
 
 /// A query run only to explain a refusal already decided. A statement
@@ -469,7 +518,7 @@ async fn fetch(
 
 /// The kernel's error for the first erroring binding: a sum's range, or
 /// the kernel's own verdict on the two operands it could not order.
-fn decode_error(row: &sqlx::postgres::PgRow) -> Result<EvalError, PgError> {
+fn decode_error(row: &sqlx::postgres::PgRow, values: &[ValueExpr]) -> Result<EvalError, PgError> {
     let column = |name: &str| -> Result<String, PgError> {
         row.try_get::<Option<String>, _>(name)
             .map_err(|e| PgError::InvalidState(format!("error column {name} missing: {e}")))?
@@ -509,6 +558,27 @@ fn decode_error(row: &sqlx::postgres::PgRow) -> Result<EvalError, PgError> {
                     "the compiled check reported an error the kernel does not raise for {left:?} vs {right:?}"
                 ))
             })
+        }
+        "value" => {
+            let index: usize = column("domain")?.parse().map_err(|e| {
+                PgError::InvalidState(format!("error value index undecodable: {e}"))
+            })?;
+            let expr = values.get(index).ok_or_else(|| {
+                PgError::InvalidState(format!("error value index {index} names no computed value"))
+            })?;
+            let payload: serde_json::Value =
+                serde_json::from_str(&column("left")?).map_err(|e| {
+                    PgError::InvalidState(format!("error value payload undecodable: {e}"))
+                })?;
+            let (bindings, sums) = arith::decode(&payload).ok_or_else(|| {
+                PgError::InvalidState(format!("error value payload malformed: {payload}"))
+            })?;
+            match morpholog_core::eval_value_over(expr, &bindings, &sums) {
+                Some(Err(e)) => Ok(e),
+                other => Err(PgError::InvalidState(format!(
+                    "the compiled check reported an error the kernel does not raise for {payload}: {other:?}"
+                ))),
+            }
         }
         other => Err(PgError::InvalidState(format!(
             "error kind {other} is not one the compiler renders"
@@ -700,6 +770,8 @@ pub(crate) struct CompiledInvariant {
     probe_scopes: Vec<ProbeScope>,
     /// Where the witness comes from; `None` when the kernel reports none.
     diagnosis: Option<Level>,
+    /// The computed values a `value` error report names by index.
+    values: Vec<ValueExpr>,
     /// The indexes this invariant's SQL seeks on at a join or a literal,
     /// in specification order. The plan must reach each through its
     /// index.
@@ -766,7 +838,40 @@ struct LeafCompare {
 #[derive(Debug)]
 enum Side {
     Bound(Bound),
-    Sum { lateral: String, total: String },
+    Sum {
+        lateral: String,
+        total: String,
+    },
+    /// Arithmetic or a builtin over bindings and sums: the kernel
+    /// evaluates it over the chosen rows' values.
+    Computed {
+        expr: ValueExpr,
+        vars: Vec<(Var, Bound)>,
+        sums: Vec<SumPart>,
+    },
+}
+
+/// The variables a computed value reads outside its sums.
+fn computed_vars(expr: &ValueExpr, env: &Env, out: &mut Vec<(Var, Bound)>) {
+    match expr {
+        ValueExpr::Term(Term::Var(v)) => {
+            if !out.iter().any(|(seen, _)| seen == v)
+                && let Some(bound) = env.get(v)
+            {
+                out.push((v.clone(), bound.clone()));
+            }
+        }
+        ValueExpr::Arith { left, right, .. } => {
+            computed_vars(left, env, out);
+            computed_vars(right, env, out);
+        }
+        ValueExpr::Call { args, .. } => {
+            for arg in args {
+                computed_vars(arg, env, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The operand of a comparison the diagnosis may blame, or `None` for a
@@ -778,13 +883,35 @@ fn leaf_side(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Option<Side> {
         ValueExpr::Term(Term::Literal(value)) => Some(Side::Bound(Bound::Lit(value.clone()))),
         ValueExpr::Sum { .. } => {
             let operand = value_sql(expr, env, ctx).ok()?;
-            let rendered = ctx.pending_sums.pop()?;
+            let Some(Pending::Sum(rendered)) = ctx.pending.pop() else {
+                return None;
+            };
             let Ordered::Numeric { sql, .. } = operand.ordered else {
                 return None;
             };
             Some(Side::Sum {
                 lateral: rendered.lateral,
                 total: sql,
+            })
+        }
+        ValueExpr::Arith { .. } | ValueExpr::Call { .. } => {
+            let start = ctx.pending.len();
+            let computed = value_sql(expr, env, ctx);
+            let rendered: Vec<Pending> = ctx.pending.drain(start..).collect();
+            computed.ok()?;
+            let sums = rendered.into_iter().find_map(|p| match p {
+                Pending::Value(Probe {
+                    report: ErrorReport::Value { sums, .. },
+                    ..
+                }) => Some(sums),
+                _ => None,
+            })?;
+            let mut vars = Vec::new();
+            computed_vars(expr, env, &mut vars);
+            Some(Side::Computed {
+                expr: expr.clone(),
+                vars,
+                sums,
             })
         }
         _ => None,
@@ -1303,6 +1430,47 @@ fn report_column(
         (ErrorReport::SumRange, Column::Kind) => Some("'range'".to_string()),
         (ErrorReport::SumKind(_), Column::Kind) => Some("'sum_kind'".to_string()),
         (ErrorReport::Compare { .. }, Column::Kind) => Some("'compare'".to_string()),
+        (ErrorReport::Value { .. }, Column::Kind) => Some("'value'".to_string()),
+        (ErrorReport::Value { index, .. }, Column::Domain) => Some(format!("'{index}'")),
+        (ErrorReport::Value { vars, sums, .. }, Column::Left) => {
+            let vars: Vec<String> = vars
+                .iter()
+                .map(|(name, tagged)| format!("{}, {tagged}", quote_literal(name)))
+                .collect();
+            let mut parts = Vec::with_capacity(sums.len());
+            for sum in sums {
+                let (value, first) = match &sum.scope {
+                    Some(scope) => (
+                        format!(
+                            "(SELECT {}.arguments -> {} FROM {} WHERE {} AND {} ORDER BY {} LIMIT 1)",
+                            scope.alias,
+                            scope.position,
+                            scope.from,
+                            scope.where_,
+                            scope.foreign(),
+                            order(&scope.aliases)?
+                        ),
+                        format!(
+                            "(SELECT ({}) FROM {} WHERE {} ORDER BY {} LIMIT 1)",
+                            scope.foreign(),
+                            scope.from,
+                            scope.where_,
+                            order(&scope.aliases)?
+                        ),
+                    ),
+                    None => ("NULL::jsonb".to_string(), "NULL::boolean".to_string()),
+                };
+                parts.push(format!(
+                    "jsonb_build_object('total', trim_scale({})::text, 'kind', ({}), 'range', ({}), 'value', {value}, 'first', {first})",
+                    sum.total, sum.kind, sum.range
+                ));
+            }
+            Some(format!(
+                "(jsonb_build_object('vars', jsonb_build_object({}), 'sums', jsonb_build_array({})))::text",
+                vars.join(", "),
+                parts.join(", ")
+            ))
+        }
         (ErrorReport::Compare { domain, .. }, Column::Domain) => Some(match domain {
             OrderedDomain::Decimal => "'decimal'".to_string(),
             OrderedDomain::Timestamp => "'timestamp'".to_string(),
@@ -1357,7 +1525,8 @@ fn report_column(
         }
         (ErrorReport::SumRange, Column::Domain | Column::Left | Column::Right | Column::First)
         | (ErrorReport::SumKind(_), Column::Domain | Column::Right)
-        | (ErrorReport::Compare { .. }, Column::First) => None,
+        | (ErrorReport::Compare { .. }, Column::First)
+        | (ErrorReport::Value { .. }, Column::Right | Column::First) => None,
     })
 }
 
@@ -1492,9 +1661,31 @@ struct Ctx<'a> {
     /// Every (predicate, position) the SQL seeks on, collected where the
     /// seek is emitted: the index specification.
     required: BTreeSet<(PredicateName, usize)>,
-    /// Sums rendered while a comparison's operands were being rendered:
-    /// the comparison collects them into its own rendering.
-    pending_sums: Vec<RenderedSum>,
+    /// What a comparison's operands rendered, in the kernel's order of
+    /// evaluation: the comparison collects it into its own rendering.
+    pending: Vec<Pending>,
+    /// The computed values whose errors a `value` report names, by index.
+    values: Vec<ValueExpr>,
+}
+
+/// A part of a comparison's operands its rendering must carry: a sum with
+/// its own probes, a sum reported through the value it sits in, which
+/// keeps only its lateral, or a computed value's probe.
+enum Pending {
+    Sum(RenderedSum),
+    Covered(String),
+    Value(Probe),
+}
+
+/// A sum inside a computed value: where its total, its range test and its
+/// kind test are read, for the kernel to evaluate the value over.
+#[derive(Debug, Clone)]
+struct SumPart {
+    lateral: String,
+    total: String,
+    kind: String,
+    range: String,
+    scope: Option<SumScope>,
 }
 
 /// One sum, computed once per row of the scope it sits in as a LATERAL
@@ -1552,6 +1743,14 @@ enum ErrorReport {
         domain: OrderedDomain,
         left: String,
         right: String,
+    },
+    /// A computed value the kernel cannot evaluate on the row: the
+    /// expression by index, and the bindings and sum results it reads,
+    /// for the kernel to evaluate and name the error.
+    Value {
+        index: usize,
+        vars: Vec<(String, String)>,
+        sums: Vec<SumPart>,
     },
     /// A scope the kernel evaluates whole for each row of the enclosing
     /// one, with its probes in the kernel's order. The report is read from
@@ -1780,11 +1979,12 @@ fn violated(r: &Rendered, final_: String) -> Vec<String> {
 /// The typed refusal for a raising scope where the fragment has no place
 /// for one: a sum's, unless a comparison itself can raise.
 fn shape_refusal(r: &Rendered, sum: &'static str, comparison: &'static str) -> CompileReason {
-    if r.probes
-        .iter()
-        .flat_map(|d| d.probes.iter())
-        .any(|p| matches!(p.report, ErrorReport::Compare { .. }))
-    {
+    if r.probes.iter().flat_map(|d| d.probes.iter()).any(|p| {
+        matches!(
+            p.report,
+            ErrorReport::Compare { .. } | ErrorReport::Value { .. }
+        )
+    }) {
         CompileReason::ComparisonShape { detail: comparison }
     } else {
         CompileReason::SumShape { detail: sum }
@@ -1850,7 +2050,8 @@ fn compile_invariant(
         in_consequent: false,
         counter: 0,
         required: BTreeSet::new(),
-        pending_sums: Vec::new(),
+        pending: Vec::new(),
+        values: Vec::new(),
     };
 
     let (select_from_where, order_limit, error, case_cols, diagnosis) = match &inv.body {
@@ -1905,6 +2106,7 @@ fn compile_invariant(
         sql_order_limit: order_limit,
         probe_scopes: error,
         diagnosis,
+        values: ctx.values,
         required_indexes: ctx
             .required
             .iter()
@@ -2870,19 +3072,27 @@ fn close_comparison(
     env: &Env,
     ctx: &mut Ctx<'_>,
 ) -> Rendered {
-    let sums = std::mem::take(&mut ctx.pending_sums);
+    let pending = std::mem::take(&mut ctx.pending);
     let mut probes: Vec<Probe> = Vec::new();
-    for s in &sums {
-        if let Some(scope) = &s.kind_report {
-            probes.push(Probe {
-                condition: s.kind_error.clone(),
-                report: ErrorReport::SumKind(scope.clone()),
-            });
+    let mut laterals: Vec<String> = Vec::new();
+    for p in pending {
+        match p {
+            Pending::Sum(s) => {
+                if let Some(scope) = &s.kind_report {
+                    probes.push(Probe {
+                        condition: s.kind_error.clone(),
+                        report: ErrorReport::SumKind(scope.clone()),
+                    });
+                }
+                probes.push(Probe {
+                    condition: s.range_error.clone(),
+                    report: ErrorReport::SumRange,
+                });
+                laterals.push(s.lateral);
+            }
+            Pending::Covered(lateral) => laterals.push(lateral),
+            Pending::Value(probe) => probes.push(probe),
         }
-        probes.push(Probe {
-            condition: s.range_error.clone(),
-            report: ErrorReport::SumRange,
-        });
     }
     probes.extend(raises);
     if probes.is_empty() {
@@ -2892,7 +3102,6 @@ fn close_comparison(
             ..Rendered::default()
         };
     }
-    let laterals: Vec<String> = sums.into_iter().map(|s| s.lateral).collect();
     Rendered {
         laterals: laterals.clone(),
         where_: vec![clause],
@@ -3021,7 +3230,7 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
             let alias = format!("l{}", ctx.counter);
             ctx.counter += 1;
             let total = format!("{alias}.s");
-            ctx.pending_sums.push(RenderedSum {
+            ctx.pending.push(Pending::Sum(RenderedSum {
                 lateral: format!(
                     "LATERAL (SELECT COALESCE(sum({val}), 0::numeric) AS s, COALESCE({kind_test}, false) AS f FROM {} WHERE {}) {alias}",
                     from_list(&r),
@@ -3030,7 +3239,7 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                 range_error: range_error_sql(&total),
                 kind_error: format!("{alias}.f"),
                 kind_report,
-            });
+            }));
             Ok(Operand {
                 key: None,
                 ordered: Ordered::Numeric {
@@ -3042,9 +3251,7 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                 },
             })
         }
-        ValueExpr::Arith { .. } => Err(CompileReason::Construct {
-            construct: "arithmetic",
-        }),
+        ValueExpr::Arith { .. } | ValueExpr::Call { .. } => arith::computed_operand(expr, env, ctx),
         ValueExpr::Extremum { .. } => Err(CompileReason::Construct {
             construct: "extremum",
         }),
@@ -3053,9 +3260,6 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
         }),
         ValueExpr::Cond { .. } => Err(CompileReason::Construct {
             construct: "conditional value",
-        }),
-        ValueExpr::Call { .. } => Err(CompileReason::Construct {
-            construct: "builtin call",
         }),
     }
 }
@@ -3107,6 +3311,8 @@ fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
         ordered,
     })
 }
+
+mod arith;
 
 #[cfg(test)]
 mod tests;

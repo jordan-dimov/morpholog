@@ -439,6 +439,20 @@ transformation add_two(b, v):
     admit Line(b, #left, v)
     admit Line(b, #right, v)
 ",
+    // Arithmetic and the builtins over every boundary argument: the
+    // extremes overflow, a zero divides, a tiny value rounds away.
+    "program arith_edges
+predicate Amount(x: Subject, n: Decimal)
+predicate Ratio(x: Subject, a: Decimal, b: Decimal)
+invariant fitted:
+    Amount(x, n) implies round(n * 3 / 7, 0.01) - min(n, 100) <= abs(n) + 1
+invariant ratio_is_bounded:
+    Ratio(x, a, b) implies max(a / b, a % b) <= a * b + 1
+transformation set(x, n):
+    admit Amount(x, n)
+transformation ratio(x, a, b):
+    admit Ratio(x, a, b)
+",
     // A bare top-level negation, violated by admitting the second
     // conjunct: the kernel reports no witness for a failure with
     // nothing bound above it, and the compiled check must say the same.
@@ -2445,5 +2459,310 @@ transformation add_a(p):
         };
         let vars: Vec<&str> = witness.iter().map(|w| w.var.as_str()).collect();
         assert_eq!(vars, expected, "{body}");
+    }
+}
+
+// ============================================================
+// Arithmetic: the kernel's values, its quirks and its errors
+// ============================================================
+
+const MAX: &str = "79228162514264337593543950335";
+
+enum Verdict {
+    Accepted,
+    Rejected,
+    Errored(EvalError),
+}
+
+/// Which kernel error a case must reach.
+type Expect = fn(&EvalError) -> bool;
+
+/// Rows put on the record before a probe.
+type Rows = Vec<(&'static str, serde_json::Value)>;
+
+/// Put `rows` on the record, probe one act, and hold both compiled
+/// stages to the kernel: the verdict, the rule, the witness and the
+/// compared values, or the kernel's own error. The kernel's error is
+/// also returned, so a case can say which one it must reach.
+async fn arithmetic_probe(
+    source: &str,
+    rows: &[(&str, serde_json::Value)],
+    transformation: &str,
+    args: Vec<EvalValue>,
+) -> Verdict {
+    let program = morpholog_surface::parse_program(source).expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(&validated).expect("whole-in-fragment");
+    let prepared = PreparedProgram::new(program).expect("valid");
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    for (predicate, args) in rows {
+        insert_rows(&pool, predicate, std::slice::from_ref(args)).await;
+    }
+    let claims = rows
+        .iter()
+        .map(|(predicate, args)| morpholog_core::ClaimInstance {
+            predicate: (*predicate).into(),
+            args: serde_json::from_value(args.clone()).expect("a row decodes"),
+        })
+        .collect();
+    let kernel = prepared.propose(
+        &Transition {
+            transformation_name: transformation.into(),
+            args: args.clone(),
+            actor: Subject::from("differential"),
+        },
+        &morpholog_core::State::from_claims(claims),
+        &mut crate::propose::runtime_subjects(),
+    );
+    match probe_raw(&pool, &prepared, &sql_set, transformation, args).await {
+        Ok(Probe::KernelErrorAgreed) => match kernel {
+            Err(e) => Verdict::Errored(e),
+            other => panic!("the probe agreed an error the kernel did not raise: {other:?}"),
+        },
+        Ok(Probe::Observed(obs)) => match governed_contract(&obs) {
+            Ok(true) => Verdict::Accepted,
+            Ok(false) => Verdict::Rejected,
+            Err(d) => panic!("{d}"),
+        },
+        Ok(Probe::BodyRejected) => panic!("the body refused"),
+        Err(ProbeFailure::Disagreement(d)) => panic!("{d}"),
+        Err(ProbeFailure::Kernel(e)) => panic!("body error {e:?}"),
+        Err(ProbeFailure::Pg(e)) => panic!("pg error {e:?}"),
+    }
+}
+
+fn amount_rule(body: &str) -> String {
+    format!(
+        "program arith
+predicate Amount(x: Subject, n: Decimal)
+invariant rule:
+    Amount(x, n) implies {body}
+transformation set(x, n):
+    admit Amount(x, n)
+"
+    )
+}
+
+fn sum_rule(body: &str) -> String {
+    format!(
+        "program sums
+predicate Price(x: Subject, p: Decimal)
+predicate Cap(x: Subject, c: Decimal)
+invariant rule:
+    Cap(x, c) implies {body}
+transformation cap(x, c):
+    admit Cap(x, c)
+"
+    )
+}
+
+fn price(label: &str, p: &str) -> (&'static str, serde_json::Value) {
+    ("Price", serde_json::json!([subject(label), decimal(p)]))
+}
+
+fn dec_text(text: &str) -> EvalValue {
+    EvalValue::Decimal(text.parse().expect("a decimal"))
+}
+
+/// The kernel's arithmetic rounds where the exact result does not fit;
+/// the compiled checks must decide on the rounded value, not the exact
+/// one, or they admit and refuse different proposals.
+#[tokio::test]
+async fn arithmetic_decides_on_the_kernels_rounded_values() {
+    let cases: &[(&str, &str, bool)] = &[
+        ("n * 0.5 > 0", "0.0000000000000000000000000001", false),
+        ("n + 0.4 = n", MAX, true),
+        ("(n / 3) * 3 = n", "1", false),
+        ("round(n, 19) <= n", MAX, true),
+        ("abs(0 - n) = n", "2.5", true),
+        ("min(n, 5) + max(n, 5) = n + 5", "7.25", true),
+        ("n % 3 = 1", "10", true),
+        ("round(n, 0.01) = 2.35", "2.345", true),
+    ];
+    for (body, n, accepted) in cases {
+        let verdict =
+            arithmetic_probe(&amount_rule(body), &[], "set", vec![subj("a"), dec_text(n)]).await;
+        assert!(
+            matches!(
+                (&verdict, accepted),
+                (Verdict::Accepted, true) | (Verdict::Rejected, false)
+            ),
+            "{body} at n = {n}: {}",
+            match verdict {
+                Verdict::Accepted => "accepted".to_string(),
+                Verdict::Rejected => "rejected".to_string(),
+                Verdict::Errored(e) => format!("errored {e:?}"),
+            }
+        );
+    }
+}
+
+/// Where the kernel errs, both stages name the same error, the
+/// kernel-first one: the left side before the right, a failed argument
+/// never skipped by `min` or `max`, an equality that errs never false,
+/// the away result of `round` an error only when it wins.
+#[tokio::test]
+async fn arithmetic_errors_are_the_kernels_first_error() {
+    let zero_div = "n / (n - n)";
+    let cases: Vec<(String, &str, Expect)> = vec![
+        ("round(n, 10) <= n".to_string(), MAX, |e| {
+            matches!(e, EvalError::RoundOutOfRange { .. })
+        }),
+        (format!("min({zero_div}, 5) <= 10"), "1", |e| {
+            *e == EvalError::DivisionByZero
+        }),
+        (format!("max(5, {zero_div}) <= 10"), "1", |e| {
+            *e == EvalError::DivisionByZero
+        }),
+        ("n * n = n".to_string(), MAX, |e| {
+            matches!(e, EvalError::ArithOutOfRange(_))
+        }),
+        (format!("({zero_div}) + (n * n) <= n"), MAX, |e| {
+            *e == EvalError::DivisionByZero
+        }),
+        (format!("(n * n) + ({zero_div}) <= n"), MAX, |e| {
+            matches!(e, EvalError::ArithOutOfRange(_))
+        }),
+        ("n % (n - n) = 0".to_string(), "4", |e| {
+            *e == EvalError::DivisionByZero
+        }),
+        ("round(n, n - n) = n".to_string(), "4", |e| {
+            matches!(e, EvalError::RoundQuantumNotPositive(_))
+        }),
+    ];
+    for (body, n, expected) in cases {
+        match arithmetic_probe(
+            &amount_rule(&body),
+            &[],
+            "set",
+            vec![subj("a"), dec_text(n)],
+        )
+        .await
+        {
+            Verdict::Errored(e) => assert!(expected(&e), "{body} at n = {n}: {e:?}"),
+            _ => panic!("{body} at n = {n}: the kernel errs and both stages agree"),
+        }
+    }
+}
+
+/// Arithmetic over sums: the totals are the kernel's, a sum's own error
+/// is reported where the kernel meets it, and an error on the left of a
+/// sum wins over the sum's.
+#[tokio::test]
+async fn arithmetic_over_sums_is_the_kernels() {
+    let mean = "round(sum(p | Price(_, p)) / sum(1 | Price(_, _)), 0.01) <= c";
+    let prices = [price("a", "1"), price("b", "2"), price("c", "2")];
+    for (cap, accepted) in [("1.67", true), ("1.66", false)] {
+        let verdict = arithmetic_probe(
+            &sum_rule(mean),
+            &prices,
+            "cap",
+            vec![subj("k"), dec_text(cap)],
+        )
+        .await;
+        assert!(
+            matches!(
+                (&verdict, accepted),
+                (Verdict::Accepted, true) | (Verdict::Rejected, false)
+            ),
+            "the mean under a cap of {cap}"
+        );
+    }
+    let two_max = [price("a", MAX), price("b", MAX)];
+    let cases: Vec<(&str, Rows, Expect)> = vec![
+        (
+            "sum(p | Price(_, p)) / sum(1 | Price(_, _)) <= c",
+            vec![],
+            |e| *e == EvalError::DivisionByZero,
+        ),
+        (
+            "sum(p | Price(_, p)) * sum(p | Price(_, p)) <= c",
+            vec![price("a", MAX)],
+            |e| matches!(e, EvalError::ArithOutOfRange(m) if m.contains("Mul")),
+        ),
+        (
+            "(c / (c - c)) + sum(p | Price(_, p)) <= c",
+            two_max.to_vec(),
+            |e| *e == EvalError::DivisionByZero,
+        ),
+        ("sum(p | Price(_, p)) + 1 <= c", two_max.to_vec(), |e| {
+            *e == EvalError::sum_out_of_decimal_range()
+        }),
+    ];
+    for (body, rows, expected) in cases {
+        match arithmetic_probe(
+            &sum_rule(body),
+            &rows,
+            "cap",
+            vec![subj("k"), dec_text("1")],
+        )
+        .await
+        {
+            Verdict::Errored(e) => assert!(expected(&e), "{body}: {e:?}"),
+            _ => panic!("{body}: the kernel errs and both stages agree"),
+        }
+    }
+}
+
+/// Quantities carry the unit their values hold, not the one declared:
+/// two units under `+` are the kernel's error, an equality across units
+/// is false, and a bare decimal stored where a quantity is declared
+/// computes as the decimal it is.
+#[tokio::test]
+async fn quantity_arithmetic_reads_the_values_own_units() {
+    let source = |body: &str| {
+        format!(
+            "program qty
+predicate Pair(x: Subject, a: Decimal[t], b: Decimal[t])
+invariant rule:
+    Pair(x, a, b) implies {body}
+transformation set(x, a, b):
+    admit Pair(x, a, b)
+"
+        )
+    };
+    let q = |amount: &str, unit: &str| -> EvalValue {
+        serde_json::from_value(
+            serde_json::json!({"type": "quantity", "value": {"amount": amount, "unit": unit}}),
+        )
+        .expect("a quantity")
+    };
+    match arithmetic_probe(
+        &source("a + b > 0 t"),
+        &[],
+        "set",
+        vec![subj("p"), q("1", "t"), q("1", "EUR")],
+    )
+    .await
+    {
+        Verdict::Errored(EvalError::TypeMismatch(m)) => assert!(m.contains("same unit"), "{m}"),
+        _ => panic!("two units under + are the kernel's error"),
+    }
+    for (b, accepted) in [(q("2", "t"), true), (q("2", "EUR"), false)] {
+        let verdict = arithmetic_probe(
+            &source("a * 2 = b"),
+            &[],
+            "set",
+            vec![subj("p"), q("1", "t"), b],
+        )
+        .await;
+        assert!(matches!(
+            (&verdict, accepted),
+            (Verdict::Accepted, true) | (Verdict::Rejected, false)
+        ));
+    }
+    match arithmetic_probe(
+        &source("a * 2 > 0 t"),
+        &[],
+        "set",
+        vec![subj("p"), dec_text("1"), q("1", "t")],
+    )
+    .await
+    {
+        Verdict::Errored(EvalError::TypeMismatch(m)) => {
+            assert!(m.contains("got decimal vs Decimal[t]"), "{m}")
+        }
+        _ => panic!("a bare decimal times 2 compared with a quantity is the kernel's error"),
     }
 }

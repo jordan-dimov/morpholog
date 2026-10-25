@@ -163,7 +163,12 @@ pub(crate) struct EvalContext<'a> {
     pub(crate) actor: Option<&'a Subject>,
     /// The programme's definitions, for resolving `Prop::Defined` calls.
     pub(crate) definitions: DefinitionTable<'a>,
+    /// Results computed elsewhere for particular `Sum` nodes, keyed by
+    /// the node: a sum found here is not evaluated against the state.
+    sums: Option<&'a SumResults<'a>>,
 }
+
+type SumResults<'a> = std::collections::HashMap<*const ValueExpr, &'a Result<EvalValue, EvalError>>;
 
 impl<'a> EvalContext<'a> {
     pub(crate) fn new(
@@ -179,6 +184,7 @@ impl<'a> EvalContext<'a> {
             bindings,
             actor,
             definitions,
+            sums: None,
         }
     }
 
@@ -210,8 +216,44 @@ impl<'a> EvalContext<'a> {
             bindings: frame,
             actor: None,
             definitions: self.definitions,
+            sums: None,
         }
     }
+}
+
+/// Evaluate a value expression over bindings alone: no state, no
+/// definitions, no actor. Each `Sum` node evaluates to the result `sums`
+/// gives it, in the order the structural walk meets the sums, so the
+/// kernel's own evaluation order decides which error wins. `None` when
+/// the expression reads state some other way, or `sums` does not give
+/// one result per sum.
+pub fn eval_value_over(
+    expr: &ValueExpr,
+    bindings: &Bindings,
+    sums: &[Result<EvalValue, EvalError>],
+) -> Option<Result<EvalValue, EvalError>> {
+    use crate::fold::{Node, walk_value};
+    let mut nodes: Vec<*const ValueExpr> = Vec::new();
+    let mut reads_state = false;
+    walk_value(expr, &mut |node| match node {
+        Node::Value(v @ ValueExpr::Sum { .. }) => nodes.push(std::ptr::from_ref(v)),
+        Node::Value(
+            ValueExpr::ValueOf { .. } | ValueExpr::Cond { .. } | ValueExpr::Extremum { .. },
+        ) => {
+            reads_state = true;
+        }
+        _ => {}
+    });
+    if reads_state || nodes.len() != sums.len() {
+        return None;
+    }
+    let table: SumResults<'_> = nodes.into_iter().zip(sums).collect();
+    let empty = State::default();
+    let ctx = EvalContext {
+        sums: Some(&table),
+        ..EvalContext::new(&empty, None, bindings, None, DefinitionTable::new(&[]))
+    };
+    Some(eval_value(expr, &ctx))
 }
 
 /// Why two runtime values cannot be ordered under `domain`, or `None`
@@ -1155,6 +1197,9 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             })
         }
         ValueExpr::Sum { value, body, seed } => {
+            if let Some(result) = ctx.sums.and_then(|sums| sums.get(&std::ptr::from_ref(e))) {
+                return (*result).clone();
+            }
             // A sum keeps the kind of what it sums: decimals, durations,
             // or quantities of one unit. Mixing kinds or units is an
             // error. An empty sum is `seed`, the typed zero of the

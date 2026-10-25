@@ -242,10 +242,10 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
             },
         ),
         (
-            "arithmetic",
-            "invariant r:\n    Amount(x, n) implies 0 <= n + 1\n",
+            "time arithmetic",
+            "invariant r:\n    Dated(x, opened, closed) implies closed - opened <= 30\n",
             CompileReason::Construct {
-                construct: "arithmetic",
+                construct: "time arithmetic",
             },
         ),
         (
@@ -270,10 +270,10 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
             },
         ),
         (
-            "builtin call",
-            "invariant r:\n    Amount(x, n) implies abs(n) <= 100\n",
+            "period builtin",
+            "invariant r:\n    Dated(x, opened, closed) implies period_index(opened, span(P1Y), closed) <= 1\n",
             CompileReason::Construct {
-                construct: "builtin call",
+                construct: "time arithmetic",
             },
         ),
         (
@@ -966,4 +966,82 @@ invariant or_under_exists:
             "{outside}"
         );
     }
+}
+
+/// The gallery's decimal and quantity arithmetic compiles; what stays
+/// interpreted for arithmetic is time arithmetic, in the examples that
+/// compute with dates and instants.
+#[test]
+fn the_gallerys_decimal_arithmetic_compiles_and_time_arithmetic_is_named() {
+    let must_compile: &[(&str, &str)] = &[
+        (
+            "insurance_claim_settlement",
+            "settlement_within_eligible_payout",
+        ),
+        (
+            "chess_transition_invariants",
+            "bishops_on_opposite_square_colors",
+        ),
+        ("borrowing_base", "outstanding_within_advance_limit"),
+        ("margin_call_run", "call_amount_is_the_top_up"),
+        ("metered_billing", "line_net_is_the_rounded_recompute"),
+        ("metered_billing", "line_vat_is_the_rounded_recompute"),
+        ("metered_billing", "sealed_total_is_the_sum_of_its_lines"),
+        ("metered_billing", "a_credit_copy_negates_its_line"),
+        (
+            "operational_information",
+            "decision_value_is_the_risk_given_up",
+        ),
+        ("residue_classes", "residue_is_an_integer_in_range"),
+        ("residue_classes", "square_is_the_recompute"),
+    ];
+    let time_examples = [
+        "laytime_demurrage",
+        "covenant_reporting",
+        "charging_years",
+        "delivery_hour_limits",
+    ];
+    let mut time_refusals = 0;
+    let mut checked = 0;
+    for program in morpholog_examples::all_programs() {
+        let refused = compile_invariants(&program.validated().expect("gallery validates"))
+            .err()
+            .unwrap_or_default();
+        for (example, invariant) in must_compile {
+            if program.name == *example {
+                assert!(
+                    program
+                        .invariants
+                        .iter()
+                        .any(|i| i.name.as_str() == *invariant),
+                    "{example} declares {invariant}"
+                );
+                assert!(
+                    !refused.iter().any(|r| r.invariant.as_str() == *invariant),
+                    "{example}::{invariant} compiles: {refused:?}"
+                );
+                checked += 1;
+            }
+        }
+        for r in &refused {
+            if r.reason
+                == (CompileReason::Construct {
+                    construct: "time arithmetic",
+                })
+            {
+                time_refusals += 1;
+                assert!(
+                    time_examples.contains(&program.name.as_str()),
+                    "{}::{} refused for time arithmetic",
+                    program.name,
+                    r.invariant
+                );
+            }
+        }
+    }
+    assert_eq!(checked, must_compile.len(), "every named example was found");
+    assert!(
+        time_refusals > 0,
+        "anti-vacuity: the gallery still has time arithmetic"
+    );
 }

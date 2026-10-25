@@ -3520,6 +3520,7 @@ pub fn I::next_subject(&mut self) -> core::option::Option<morpholog_core::Subjec
 pub fn morpholog_core::client_refuses_name(&str) -> bool
 pub fn morpholog_core::controls(&morpholog_core::PreparedProgram) -> morpholog_core::ControlMatrix
 pub fn morpholog_core::effective_delta(&morpholog_core::State, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance]) -> morpholog_core::EffectiveDelta
+pub fn morpholog_core::eval_value_over(&morpholog_core::ValueExpr, &std::collections::hash::map::HashMap<morpholog_core::Var, morpholog_core::EvalValue>, &[core::result::Result<morpholog_core::EvalValue, morpholog_core::EvalError>]) -> core::option::Option<core::result::Result<morpholog_core::EvalValue, morpholog_core::EvalError>>
 pub fn morpholog_core::finish_staged_delta_with(morpholog_core::StagedDelta, &morpholog_core::State, &morpholog_core::Admission<'_>) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
 pub fn morpholog_core::guarantees(&morpholog_core::PreparedProgram) -> alloc::vec::Vec<morpholog_core::Guarantee>
 pub fn morpholog_core::has_admission_gate(&morpholog_core::Transformation) -> bool
