@@ -214,14 +214,16 @@ transformation adjudicate_match_as_confirmed(screening_id, adjudicated_on, expir
     emit MatchConfirmed(screening_id, customer, list_type)
 
 -- Onboard the customer - open the account. This step itself only checks
--- that the customer exists and is not already onboarded; the heavy
--- lifting is left to the invariants. They demand current clean
+-- that the customer exists, is not already onboarded and has not been
+-- rejected (reapplying is a separate process); the heavy lifting is left
+-- to the invariants. They demand current clean
 -- screenings on both the sanctions and PEP lists and no unresolved match
 -- anywhere. If any of that fails, the whole onboarding is refused and
 -- nothing is committed.
 transformation onboard_customer(customer, onboarded_on):
     require Customer(customer)
     require not OnboardedCustomer(customer, _)
+    require customer_not_rejected: not CustomerRejection(customer, _)
     admit OnboardedCustomer(customer, onboarded_on)
     emit CustomerOnboarded(customer, onboarded_on)
 

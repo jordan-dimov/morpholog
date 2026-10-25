@@ -60,7 +60,7 @@ Each outbox intent routes to a distinct downstream consumer, declared by name so
 | `record_match_screening_result(screening_id, completed_on, expires_on, raised_on)` | Records a `#match`, flags `MatchUnderReview`, emits `MatchRaised`; refused for a screening that already has a result. Does **not** become current. |
 | `adjudicate_match_as_false_positive(screening_id, adjudicated_on, expires_on)` | An analyst clears a flagged match: requires the match under review, records `#adjudicated_clear`, marks it adjudicated, clears the review flag, makes it current. |
 | `adjudicate_match_as_confirmed(screening_id, adjudicated_on, expires_on)` | The other side of the fork: an analyst confirms a genuine hit. Records `#adjudicated_confirmed`, marks it adjudicated, clears the review flag - but does **not** become current, and the confirmed-match invariant bars onboarding for good. Emits `MatchConfirmed`. |
-| `onboard_customer(customer, onboarded_on)` | Opens the account. Only checks the customer exists and is not already onboarded; the invariants do the heavy lifting. Emits `CustomerOnboarded`. |
+| `onboard_customer(customer, onboarded_on)` | Opens the account. Only checks the customer exists, is not already onboarded and has not been rejected; the invariants do the heavy lifting. Emits `CustomerOnboarded`. |
 | `reject_customer(customer, reason)` | Rejects a customer outright, once, recording `CustomerRejection`; nothing is removed, so the decision and its reason survive. Emits `CustomerRejected`. |
 
 ## How to run it

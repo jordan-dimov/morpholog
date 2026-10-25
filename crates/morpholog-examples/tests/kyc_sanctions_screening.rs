@@ -214,6 +214,23 @@ fn onboarding_succeeds_when_both_screenings_are_current_and_clean() {
     );
 }
 
+/// A rejected customer stays rejected: clean screenings do not reopen the
+/// account; reapplying is a separate process.
+#[test]
+fn a_rejected_customer_cannot_be_onboarded() {
+    let program = kyc_sanctions_screening::program();
+    let state = registered_and_screened(&program, State::default(), "alice");
+    let state = run(
+        &program,
+        "reject_customer",
+        vec![subj("alice"), subj("confirmed_sanctions_hit")],
+        state,
+    );
+    let onboard = program.transformation("onboard_customer").unwrap();
+    let reason = ex().must_reject(onboard, vec![subj("alice"), date("2026-02-01")], &state);
+    refused_by(&reason, "customer_not_rejected");
+}
+
 #[test]
 fn onboarding_rejects_when_sanctions_screening_missing() {
     let program = kyc_sanctions_screening::program();
