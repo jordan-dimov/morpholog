@@ -276,6 +276,14 @@ fn authorised_confirm_sets_the_official_price_in_force() {
         "CurrentOfficialPrice",
         &[subj("t1"), subj("op1")],
     ));
+    // `mo` already holds power: granting it again is refused, so the grant
+    // is announced once.
+    let regrant = ex().must_reject(
+        &trade_lifecycle::grant_confirm_authority(),
+        vec![subj("mo"), subj("power")],
+        &post,
+    );
+    refused_by_gate(&regrant, "authority_not_yet_held");
 }
 
 #[test]

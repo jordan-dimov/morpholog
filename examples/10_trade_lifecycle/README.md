@@ -190,7 +190,7 @@ money actually moves (that is computed downstream).
 | --- | --- |
 | `capture_trade(...)` | Books a trade: its identity, the trader's price, and the first terms version effective from the trade date. Refuses a second capture under the same id. |
 | `amend_trade_terms(...)` | Admits a new terms version - re-agreed quantity, corrected delivery - effective from a date that may be in the past. The old version stays; lineage is recorded; the new date must be distinct. Gated on commodity-scoped authority. |
-| `grant_confirm_authority(principal, commodity)` | Grants a desk per-commodity authority to confirm and amend. |
+| `grant_confirm_authority(principal, commodity)` | Grants a desk per-commodity authority to confirm and amend; refused if that authority is already held. |
 | `confirm_trade(...)` | The middle office confirms the trade and sets the official price in force. Gated on commodity-scoped authority tied to the trade's own commodity, and on the trade not already being confirmed. |
 | `correct_official_price(...)` | Restates the official price: admits the corrected figure, moves the in-force pointer, records the supersession. The prior figure and any settlement made under it stay on the record. |
 | `settle_trade(...)` | Records a settlement slice against the official price in force, effective on a business date, and emits a downstream settlement-request intent. Gated on an in-force official price, on terms effective by the settlement date, and on a fresh settlement id (an idempotency key, so replaying one is refused before the emit). May run more than once per trade. The cumulative effective cap is an invariant, not a gate. |
