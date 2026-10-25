@@ -101,7 +101,7 @@ Content claims (figures, grants, revocations, decisions) are append-only. Pointe
 | `correct_independent_verification(asset, period, new_amount, new_verification_id, prior_verification_id)` | The combined-doctrine transformation. Asserts new IV + `Supersedes`; retracts the prior pointer AND every `AdmissibleFor` on the prior verification (pattern retraction); asserts the new pointer. |
 | `grant_standing(verification_id, purpose, authority, grant_id)` | Grants `purpose` standing. Rejected if (a) no IV references the supplied id, (b) the verification is not currently in force, (c) the (verification, purpose) pair has been revoked, or (d) it already has active admissibility. |
 | `revoke_standing(verification_id, purpose, revocation_id)` | Requires currently-active standing; retracts `AdmissibleFor`; asserts terminal `StandingRevoked`. |
-| `admit_debt_service_revenue(asset, period, amount, decision_id, verification_id)` | Requires a matching IV AND `AdmissibleFor(verification_id, bank_debt_service)`. The purpose is embedded as a literal in the require. |
+| `admit_debt_service_revenue(asset, period, amount, decision_id, verification_id)` | Requires a matching IV AND `AdmissibleFor(verification_id, bank_debt_service)`, and refuses a `decision_id` already recorded, so a replay sends no second notice. The purpose is embedded as a literal in the require. |
 | `admit_investor_reported_revenue(asset, period, amount, report_id, verification_id)` | Same shape with `investor_reporting`. |
 
 ## How to run it
@@ -123,9 +123,11 @@ In-memory tests cover restatement, standing, and the combined load-bearing test 
 ## What this example deliberately does not cover
 
 - **Who may verify or approve.** `admit_independent_verification` is not
-  gated, and `grant_standing` records the approving authority as a value it
-  is given. A real system would gate both on the actor's own authority,
-  the pattern [approval controls](../04_approval_controls/) shows.
+  gated, and the `authority` argument of `grant_standing` records an
+  asserted authority: the programme does not check that whoever proposes
+  the grant is that authority. A real system would gate both on the
+  actor's own authority, the pattern
+  [approval controls](../04_approval_controls/) shows.
 - **Approval again after revocation.** A revocation here is final.
 - **Effective dates.** A real verification is *for* a period, distinct from
   when it was recorded. [Trade lifecycle](../10_trade_lifecycle/) shows
