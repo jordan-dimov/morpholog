@@ -115,8 +115,12 @@ transformation submit_monetary_document(doc_id, doc_type, amount):
 -- ===========================================================
 
 -- Grant someone the authority to approve a kind of document. This adds
--- the authority claim.
+-- the authority claim. The gate refuses an authority already held:
+-- granting it again would change nothing, but would announce the grant
+-- twice. The approvals below refuse a repeat by the same actor for the
+-- same reason.
 transformation grant_approval_authority(principal, doc_type):
+    require authority_not_yet_held: not MayApprove(principal, doc_type)
     admit MayApprove(principal, doc_type)
     emit ApprovalAuthorityGranted(principal, doc_type)
 
@@ -137,6 +141,7 @@ transformation revoke_approval_authority(principal, doc_type):
 -- with their identity stamped on it; if not, the whole action is
 -- refused and nothing is recorded.
 transformation approve_document(doc_id):
+    require not_yet_approved_by_actor: not Approval(doc_id, _, actor)
     bind Document(doc_id, doc_type)
     require document_has_no_amount: not DocumentAmount(doc_id, _)
     require actor_may_approve_the_kind: MayApprove(actor, doc_type)
@@ -150,8 +155,9 @@ transformation approve_document(doc_id):
 
 -- Grant someone an approval ceiling for a kind of document - "may
 -- approve invoices up to this amount". The same person can be given
--- ceilings for different document kinds.
+-- ceilings for different document kinds, but not the same ceiling twice.
 transformation grant_approval_limit(principal, doc_type, limit):
+    require limit_not_yet_granted: not ApprovalLimit(principal, doc_type, limit)
     admit ApprovalLimit(principal, doc_type, limit)
     emit ApprovalLimitGranted(principal, doc_type, limit)
 
@@ -172,6 +178,7 @@ transformation revoke_approval_limit(principal, doc_type, limit):
 -- Pass the gate and the approval is recorded with the actor and the
 -- authorised amount; fail it and nothing is recorded.
 transformation approve_within_limit(doc_id):
+    require not_yet_approved_by_actor: not LimitedApproval(doc_id, _, _, actor)
     bind Document(doc_id, doc_type)
     bind DocumentAmount(doc_id, amount)
     require amount_within_actors_ceiling: ApprovalLimit(actor, doc_type, limit) and amount <= limit

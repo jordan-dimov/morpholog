@@ -23,7 +23,7 @@
 mod common;
 use std::sync::OnceLock;
 
-use common::{Example, claim_instance, dec, has_claim, subj};
+use common::{Example, claim_instance, dec, has_claim, refused_by, subj};
 use morpholog_core::{EvalError, EvalValue, State, Subject};
 use morpholog_examples::approval_controls;
 
@@ -135,6 +135,21 @@ fn approve_with_authority_carries_proposing_actor_on_asserted_claim() {
         ),
         "Approval must carry the proposing actor and the recorded kind",
     );
+    // Neither the grant nor the approval is made twice, so neither notice
+    // goes out twice.
+    let regrant = ex().must_reject(
+        &approval_controls::grant_approval_authority(),
+        vec![subj("jordan"), subj("vendor_onboarding")],
+        &post,
+    );
+    refused_by(&regrant, "authority_not_yet_held");
+    let reapprove = ex().must_reject_as(
+        &approval_controls::approve_document(),
+        vec![subj("doc_001")],
+        "jordan",
+        &post,
+    );
+    refused_by(&reapprove, "not_yet_approved_by_actor");
 }
 
 #[test]
@@ -197,6 +212,19 @@ fn limit_approval_under_limit_commits_with_actor_and_amount() {
         "LimitedApproval",
         &[subj("inv_001"), subj("invoice"), dec(750), subj("jordan")],
     ));
+    let regrant = ex().must_reject(
+        &approval_controls::grant_approval_limit(),
+        vec![subj("jordan"), subj("invoice"), dec(1000)],
+        &post,
+    );
+    refused_by(&regrant, "limit_not_yet_granted");
+    let reapprove = ex().must_reject_as(
+        &approval_controls::approve_within_limit(),
+        vec![subj("inv_001")],
+        "jordan",
+        &post,
+    );
+    refused_by(&reapprove, "not_yet_approved_by_actor");
 }
 
 #[test]
