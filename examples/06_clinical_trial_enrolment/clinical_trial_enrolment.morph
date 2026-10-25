@@ -88,17 +88,19 @@ predicate ParticipantRandomised(participant_id: Subject, trial_id: Subject, prot
 -- change commits - "a trial opened", "a participant was randomised".
 -- They are how the trial tells the rest of the machinery (the
 -- randomisation system, the case-report-form database) what just
--- happened.
+-- happened. Each carries enough to name the one record it announces: a
+-- renewed delegation or a second screening is a new record, and its
+-- message must not read like the first one's.
 intent TrialOpened(trial_id: Subject)
 intent ProtocolVersionApproved(trial_id: Subject, protocol_version: Subject)
 intent ConsentFormVersionApproved(trial_id: Subject, consent_form_version: Subject)
-intent InvestigatorDelegated(investigator: Subject, trial_id: Subject, role: Subject)
-intent ParticipantScreened(participant_id: Subject, trial_id: Subject)
-intent InformedConsentObtained(participant_id: Subject, consent_form_version: Subject)
+intent InvestigatorDelegated(investigator: Subject, trial_id: Subject, role: Subject, effective_from: Date, effective_to: Date)
+intent ParticipantScreened(participant_id: Subject, trial_id: Subject, screened_on: Date)
+intent InformedConsentObtained(participant_id: Subject, trial_id: Subject, consent_form_version: Subject, consented_on: Date, obtained_by: Subject)
 intent EligibilityCriterionRecorded(protocol_version: Subject, criterion_id: Subject)
-intent EligibilityAssessmentRecorded(participant_id: Subject, criterion_id: Subject)
+intent EligibilityAssessmentRecorded(participant_id: Subject, criterion_id: Subject, result: Subject, assessed_on: Date, expires_on: Date)
 intent ImportantProtocolDeviationOpened(participant_id: Subject, trial_id: Subject, deviation_id: Subject)
-intent ParticipantRandomised(participant_id: Subject)
+intent ParticipantRandomised(participant_id: Subject, trial_id: Subject)
 
 
 -- The named conditions. Each one is a piece of evidence "holding" on a
@@ -172,8 +174,11 @@ invariant consent_obtained_before_randomisation:
 -- Each piece of the evidence (the ethics-approved protocol, the consent
 -- form, the doctor's delegated authority, the eligibility lab result)
 -- arrives as its own recorded step rather than being conjured as a side
--- effect of enrolment, exactly as it happens in a real trial.
+-- effect of enrolment, exactly as it happens in a real trial. Each step
+-- refuses a record already made: repeating it would change nothing, but
+-- would send its notice a second time.
 transformation open_trial(trial_id):
+    require trial_not_yet_open: not Trial(trial_id)
     admit Trial(trial_id)
     emit TrialOpened(trial_id)
 
@@ -185,6 +190,7 @@ transformation approve_protocol_version(
     ethics_committee,
     approval_id
 ):
+    require protocol_version_not_yet_approved: not ProtocolVersion(trial_id, protocol_version, _, _)
     require Trial(trial_id)
     admit ProtocolVersion(trial_id, protocol_version, effective_from, effective_to)
     admit ProtocolApprovedBy(protocol_version, ethics_committee, approval_id)
@@ -198,6 +204,7 @@ transformation approve_consent_form_version(
     ethics_committee,
     approval_id
 ):
+    require consent_form_not_yet_approved: not ConsentFormVersion(trial_id, consent_form_version, _, _)
     require Trial(trial_id)
     admit ConsentFormVersion(trial_id, consent_form_version, effective_from, effective_to)
     admit ConsentFormApprovedBy(consent_form_version, ethics_committee, approval_id)
@@ -210,14 +217,16 @@ transformation delegate_investigator(
     effective_from,
     effective_to
 ):
+    require delegation_not_yet_recorded: not DelegatedInvestigator(investigator, trial_id, role, effective_from, effective_to)
     require Trial(trial_id)
     admit DelegatedInvestigator(investigator, trial_id, role, effective_from, effective_to)
-    emit InvestigatorDelegated(investigator, trial_id, role)
+    emit InvestigatorDelegated(investigator, trial_id, role, effective_from, effective_to)
 
 transformation screen_participant(participant_id, trial_id, screened_on):
+    require screening_not_yet_recorded: not ParticipantScreened(participant_id, trial_id, screened_on)
     require Trial(trial_id)
     admit ParticipantScreened(participant_id, trial_id, screened_on)
-    emit ParticipantScreened(participant_id, trial_id)
+    emit ParticipantScreened(participant_id, trial_id, screened_on)
 
 transformation record_consent(
     participant_id,
@@ -226,6 +235,7 @@ transformation record_consent(
     consented_on,
     obtained_by
 ):
+    require consent_not_yet_recorded: not InformedConsentObtained(participant_id, trial_id, consent_form_version, consented_on, obtained_by)
     require Trial(trial_id)
     admit InformedConsentObtained(
         participant_id,
@@ -234,9 +244,10 @@ transformation record_consent(
         consented_on,
         obtained_by
     )
-    emit InformedConsentObtained(participant_id, consent_form_version)
+    emit InformedConsentObtained(participant_id, trial_id, consent_form_version, consented_on, obtained_by)
 
 transformation record_eligibility_criterion(protocol_version, criterion_id, required_result):
+    require criterion_not_yet_recorded: not EligibilityCriterion(protocol_version, criterion_id, _)
     admit EligibilityCriterion(protocol_version, criterion_id, required_result)
     emit EligibilityCriterionRecorded(protocol_version, criterion_id)
 
@@ -247,10 +258,12 @@ transformation record_eligibility_assessment(
     assessed_on,
     expires_on
 ):
+    require assessment_not_yet_recorded: not EligibilityAssessment(participant_id, criterion_id, result, assessed_on, expires_on)
     admit EligibilityAssessment(participant_id, criterion_id, result, assessed_on, expires_on)
-    emit EligibilityAssessmentRecorded(participant_id, criterion_id)
+    emit EligibilityAssessmentRecorded(participant_id, criterion_id, result, assessed_on, expires_on)
 
 transformation open_important_protocol_deviation(participant_id, trial_id, deviation_id):
+    require deviation_id_unused: not ImportantProtocolDeviationOpen(_, _, deviation_id)
     require Trial(trial_id)
     admit ImportantProtocolDeviationOpen(participant_id, trial_id, deviation_id)
     emit ImportantProtocolDeviationOpened(participant_id, trial_id, deviation_id)
@@ -263,7 +276,8 @@ transformation open_important_protocol_deviation(participant_id, trial_id, devia
 -- the required result, and has not expired - and there is no open
 -- protocol deviation blocking the participant. If any single check
 -- fails, the whole enrolment is refused. The doctor passes in which
--- protocol version they are enrolling under, since they know it.
+-- protocol version they are enrolling under, since they know it. Before
+-- all of that, a participant is randomised into a trial once.
 transformation randomise_participant(
     participant_id,
     trial_id,
@@ -277,6 +291,7 @@ transformation randomise_participant(
     -- exactly that version - the conditions chain, left to right. The
     -- enrolling doctor (`actor` - whoever proposes this change) is
     -- handed to the delegation check like any other input.
+    require participant_not_yet_randomised: not ParticipantRandomised(participant_id: participant_id, trial_id: trial_id, ..)
     require (
         Trial(trial_id)
         and protocol_in_force_on(trial_id, protocol_version, randomised_on)
@@ -288,4 +303,4 @@ transformation randomise_participant(
     )
 
     admit ParticipantRandomised(participant_id, trial_id, protocol_version, randomised_on, actor)
-    emit ParticipantRandomised(participant_id)
+    emit ParticipantRandomised(participant_id, trial_id)

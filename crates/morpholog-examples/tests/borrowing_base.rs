@@ -10,7 +10,7 @@
 mod common;
 use std::sync::OnceLock;
 
-use common::{Example, claim_instance, dec, dec_str, has_claim, subj};
+use common::{Example, claim_instance, dec, dec_str, has_claim, refused_by, subj};
 use morpholog_core::{EvalValue, RejectionReason, State};
 use morpholog_examples::borrowing_base;
 use morpholog_test_support::enumerate_derived;
@@ -148,11 +148,15 @@ fn an_asset_backs_one_facility_at_one_value() {
         vec![subj("f2"), dec_str("0.5")],
         pre,
     );
-    ex().must_reject(
-        &borrowing_base::pledge_collateral(),
+    // Neither the same pledge replayed, which would change nothing but
+    // announce the pledge again, nor a pledge elsewhere.
+    for pledge in [
+        vec![subj("f1"), subj("asset_1"), dec(100)],
         vec![subj("f2"), subj("asset_1"), dec(70)],
-        &pre,
-    );
+    ] {
+        let reason = ex().must_reject(&borrowing_base::pledge_collateral(), pledge, &pre);
+        refused_by(&reason, "asset_not_yet_pledged");
+    }
 }
 
 #[test]

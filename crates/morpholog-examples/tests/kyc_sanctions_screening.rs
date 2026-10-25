@@ -12,7 +12,7 @@
 
 mod common;
 
-use common::{Example, date, subj};
+use common::{Example, date, refused_by, subj};
 use morpholog_core::{EvalValue, Outcome, Program, State};
 use morpholog_examples::kyc_sanctions_screening::{self, PEP, SANCTIONS};
 use std::sync::OnceLock;
@@ -45,6 +45,13 @@ fn try_run(
         .transformation(name)
         .unwrap_or_else(|| panic!("transformation `{name}` not found"));
     ex().propose(t, args, state)
+}
+
+/// The same act replayed on its own result is refused by `rule`, so its
+/// notice goes out once.
+fn replay_refused(program: &Program, name: &str, args: Vec<EvalValue>, after: &State, rule: &str) {
+    let t = program.transformation(name).unwrap();
+    refused_by(&ex().must_reject(t, args, after), rule);
 }
 
 /// Register the customer and clear screenings against both sanctions
@@ -205,6 +212,23 @@ fn onboarding_succeeds_when_both_screenings_are_current_and_clean() {
         matches!(outcome, Outcome::Accepted { .. }),
         "onboarding with both screenings current+clean should accept; got {outcome:?}"
     );
+}
+
+/// A rejected customer stays rejected: clean screenings do not reopen the
+/// account; reapplying is a separate process.
+#[test]
+fn a_rejected_customer_cannot_be_onboarded() {
+    let program = kyc_sanctions_screening::program();
+    let state = registered_and_screened(&program, State::default(), "alice");
+    let state = run(
+        &program,
+        "reject_customer",
+        vec![subj("alice"), subj("confirmed_sanctions_hit")],
+        state,
+    );
+    let onboard = program.transformation("onboard_customer").unwrap();
+    let reason = ex().must_reject(onboard, vec![subj("alice"), date("2026-02-01")], &state);
+    refused_by(&reason, "customer_not_rejected");
 }
 
 #[test]
@@ -570,20 +594,18 @@ fn request_screening_emits_screening_requested_intent() {
         vec![subj(alice)],
         State::default(),
     );
-    let outcome = try_run(
-        &program,
-        "request_screening",
-        vec![
-            subj("scr_a"),
-            subj(alice),
-            subj(SANCTIONS),
-            date("2026-01-01"),
-        ],
-        &state,
-    )
-    .expect("propose should not error");
+    let args = vec![
+        subj("scr_a"),
+        subj(alice),
+        subj(SANCTIONS),
+        date("2026-01-01"),
+    ];
+    let outcome = try_run(&program, "request_screening", args.clone(), &state)
+        .expect("propose should not error");
     let Outcome::Accepted {
-        emitted_intents, ..
+        emitted_intents,
+        candidate_state,
+        ..
     } = outcome
     else {
         panic!("expected accept; got {outcome:?}");
@@ -593,6 +615,13 @@ fn request_screening_emits_screening_requested_intent() {
             .iter()
             .any(|i| i.name == "ScreeningRequested"),
         "expected ScreeningRequested intent; got {emitted_intents:?}"
+    );
+    replay_refused(
+        &program,
+        "request_screening",
+        args,
+        &candidate_state,
+        "screening_id_unused",
     );
 }
 
@@ -634,15 +663,13 @@ fn reject_customer_emits_customer_rejected_intent() {
         vec![subj(alice)],
         State::default(),
     );
-    let outcome = try_run(
-        &program,
-        "reject_customer",
-        vec![subj(alice), subj("confirmed_sanctions_hit")],
-        &state,
-    )
-    .expect("propose should not error");
+    let args = vec![subj(alice), subj("confirmed_sanctions_hit")];
+    let outcome = try_run(&program, "reject_customer", args.clone(), &state)
+        .expect("propose should not error");
     let Outcome::Accepted {
-        emitted_intents, ..
+        emitted_intents,
+        candidate_state,
+        ..
     } = outcome
     else {
         panic!("expected accept; got {outcome:?}");
@@ -650,6 +677,13 @@ fn reject_customer_emits_customer_rejected_intent() {
     assert!(
         emitted_intents.iter().any(|i| i.name == "CustomerRejected"),
         "expected CustomerRejected intent; got {emitted_intents:?}"
+    );
+    replay_refused(
+        &program,
+        "reject_customer",
+        args,
+        &candidate_state,
+        "customer_not_yet_rejected",
     );
 }
 
@@ -675,20 +709,23 @@ fn record_match_emits_match_raised_intent() {
         ],
         state,
     );
+    let args = vec![
+        subj("scr_match"),
+        date("2026-01-02"),
+        date("2027-01-02"),
+        date("2026-01-02"),
+    ];
     let outcome = try_run(
         &program,
         "record_match_screening_result",
-        vec![
-            subj("scr_match"),
-            date("2026-01-02"),
-            date("2027-01-02"),
-            date("2026-01-02"),
-        ],
+        args.clone(),
         &state,
     )
     .expect("propose should not error");
     let Outcome::Accepted {
-        emitted_intents, ..
+        emitted_intents,
+        candidate_state,
+        ..
     } = outcome
     else {
         panic!("expected accept; got {outcome:?}");
@@ -696,6 +733,13 @@ fn record_match_emits_match_raised_intent() {
     assert!(
         emitted_intents.iter().any(|i| i.name == "MatchRaised"),
         "expected MatchRaised intent; got {emitted_intents:?}"
+    );
+    replay_refused(
+        &program,
+        "record_match_screening_result",
+        args,
+        &candidate_state,
+        "screening_not_yet_resulted",
     );
 }
 

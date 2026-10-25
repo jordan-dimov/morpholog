@@ -33,6 +33,7 @@ See [`kyc.morph`](kyc.morph) for the surface syntax.
 | `MatchUnderReview(screening_id, raised_on)` | A possible match awaiting analyst adjudication. Retractable - cleared when adjudicated. |
 | `MatchAdjudicated(screening_id)` | A match that an analyst has reviewed and resolved (either way). Append-only - the durable marker the exactly-one-outcome invariant keys off. |
 | `OnboardedCustomer(customer, onboarded_on)` | Onboarded standing. Append-only. |
+| `CustomerRejection(customer, reason)` | A customer rejected outright, with the reason. |
 
 ### Intents
 
@@ -54,13 +55,13 @@ Each outbox intent routes to a distinct downstream consumer, declared by name so
 | Transformation | Effect |
 | --- | --- |
 | `register_customer(customer_id)` | Registers a customer; rejected if already on file. |
-| `request_screening(screening_id, customer, list_type, requested_on)` | Records a screening request and emits `ScreeningRequested` to the provider; requires the customer to exist. |
+| `request_screening(screening_id, customer, list_type, requested_on)` | Records a screening request and emits `ScreeningRequested` to the provider; requires a new screening id and the customer to exist. |
 | `record_clean_screening_result(screening_id, completed_on, expires_on)` | Records a `#clean` result and makes it the current screening, replacing the prior pointer. |
-| `record_match_screening_result(screening_id, completed_on, expires_on, raised_on)` | Records a `#match`, flags `MatchUnderReview`, emits `MatchRaised`. Does **not** become current. |
+| `record_match_screening_result(screening_id, completed_on, expires_on, raised_on)` | Records a `#match`, flags `MatchUnderReview`, emits `MatchRaised`; refused for a screening that already has a result. Does **not** become current. |
 | `adjudicate_match_as_false_positive(screening_id, adjudicated_on, expires_on)` | An analyst clears a flagged match: requires the match under review, records `#adjudicated_clear`, marks it adjudicated, clears the review flag, makes it current. |
 | `adjudicate_match_as_confirmed(screening_id, adjudicated_on, expires_on)` | The other side of the fork: an analyst confirms a genuine hit. Records `#adjudicated_confirmed`, marks it adjudicated, clears the review flag - but does **not** become current, and the confirmed-match invariant bars onboarding for good. Emits `MatchConfirmed`. |
-| `onboard_customer(customer, onboarded_on)` | Opens the account. Only checks the customer exists and is not already onboarded; the invariants do the heavy lifting. Emits `CustomerOnboarded`. |
-| `reject_customer(customer, reason)` | Rejects a customer outright; nothing is removed, so the decision and its reason survive in the audit trail. Emits `CustomerRejected`. |
+| `onboard_customer(customer, onboarded_on)` | Opens the account. Only checks the customer exists, is not already onboarded and has not been rejected; the invariants do the heavy lifting. Emits `CustomerOnboarded`. |
+| `reject_customer(customer, reason)` | Rejects a customer outright, once, recording `CustomerRejection`; nothing is removed, so the decision and its reason survive. Emits `CustomerRejected`. |
 
 ## How to run it
 

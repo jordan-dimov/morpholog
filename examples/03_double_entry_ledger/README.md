@@ -39,10 +39,10 @@ Every predicate here is content, terminal state, or lineage - no retractable poi
 
 | Transformation | Effect |
 | --- | --- |
-| `post_simple_entry` | Two-line balanced entry (one debit, one credit, same amount). Structurally balanced. Rejected if the period is closed. |
-| `post_split_entry` | Three-line entry (one debit, two credits with independent amounts). The balance invariant catches arithmetic mismatches on the candidate state. Rejected if the period is closed. |
+| `post_simple_entry` | Two-line balanced entry (one debit, one credit, same amount). Structurally balanced. Rejected if the entry id is already used or the period is closed. |
+| `post_split_entry` | Three-line entry (one debit, two credits with independent amounts). The balance invariant catches arithmetic mismatches on the candidate state. Rejected if the entry id is already used or the period is closed. |
 | `close_period` | Asserts `PeriodClosed(period)`. Rejects double-closing. |
-| `restate_entry` | Admits a new entry + `Supersedes(new, prior)`. Requires the prior entry to exist and not already be superseded. Does *not* check `PeriodClosed` - restatement is the path for closed periods. |
+| `restate_entry` | Admits a new entry + `Supersedes(new, prior)`. Requires a new entry id, and the prior entry to exist and not already be superseded. Does *not* check `PeriodClosed` - restatement is the path for closed periods. |
 
 The split between `post_simple_entry` (guaranteed-balanced) and `post_split_entry` (must be checked) is deliberate: the first exercises the period-close gate cleanly; the second exercises the balance invariant in earnest.
 

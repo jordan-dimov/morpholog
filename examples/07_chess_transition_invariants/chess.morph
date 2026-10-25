@@ -158,8 +158,10 @@ invariant single_capture_per_move:
 -- Set up the opening position: all 32 pieces on their starting squares,
 -- the move counter at zero, the piece count at 32, white to play. Files
 -- a to h are 1 to 8; the white army sits on ranks 1 and 2, the black
--- army on ranks 7 and 8.
+-- army on ranks 7 and 8. The gate refuses a game already under way:
+-- starting it again would announce a second start of the same game.
 transformation start_game():
+  require game_not_yet_started: not MoveCount(_)
   admit PieceAt(1, 1, #rook, #white)
   admit PieceAt(2, 1, #knight, #white)
   admit PieceAt(3, 1, #bishop, #white)

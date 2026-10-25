@@ -53,7 +53,7 @@ On the very first move there is no prior `MoveCount` to compare against, so a `p
 
 | Transformation | What it does |
 | --- | --- |
-| `start_game()` | The opening position: 32 pieces, `MoveCount(0)`, `PieceCount(32)`, white to move. |
+| `start_game()` | The opening position: 32 pieces, `MoveCount(0)`, `PieceCount(32)`, white to move. Refused once a game is under way. |
 | `quiet_move(src_f, src_r, dst_f, dst_r, new_turn)` | Moves a piece to an empty destination; counter up, turn flips, piece count unchanged. |
 | `capturing_move(src_f, src_r, dst_f, dst_r, new_turn)` | Same, but the destination holds an enemy piece, retracted; piece count down one. |
 

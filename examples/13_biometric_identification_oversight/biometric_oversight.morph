@@ -107,9 +107,12 @@ predicate MatchVerified(match: Subject, verifier: Subject, verified_at: Timestam
 -- the whole decision record - id, outcome, moment, decider. (The
 -- earlier hand-written rule pinned only the id; an id carrying two
 -- outcomes is a state no record should hold, so declaring the
--- discipline deliberately strengthens the model.)
+-- discipline deliberately strengthens the model.) And one match per
+-- decision id: the decision's notice names only the id, so an id reused
+-- on another match would announce two decisions alike.
 predicate IdentificationDecision(decision: Subject, match: Subject, outcome: Subject, decided_at: Timestamp, decided_by: Subject)
     unique by (match)
+    unique by (decision)
     append only
 
 -- Article 12(3)(a) asks for the period of each use - start and end

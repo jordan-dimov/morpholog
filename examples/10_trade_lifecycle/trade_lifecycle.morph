@@ -321,8 +321,10 @@ transformation amend_trade_terms(trade, prior_version_id, new_version_id, quanti
 
 -- Grant a desk the authority to confirm or amend for a commodity.
 -- Confirmation is a middle-office responsibility, scoped per commodity
--- and kept separate from whoever captured the trade.
+-- and kept separate from whoever captured the trade. An authority already
+-- held is not granted again, so the grant is announced once.
 transformation grant_confirm_authority(principal, commodity):
+    require authority_not_yet_held: not MayConfirm(principal, commodity)
     admit MayConfirm(principal, commodity)
     emit ConfirmAuthorityGranted(principal, commodity)
 

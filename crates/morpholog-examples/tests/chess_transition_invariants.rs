@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::{Example, dec, subj};
+use common::{Example, dec, refused_by, subj};
 use morpholog_core::{EvalValue, Outcome, Program, State};
 use morpholog_examples::chess_transition_invariants;
 use std::sync::OnceLock;
@@ -232,6 +232,10 @@ fn start_game_admits_opening_position() {
         next.claims().len(),
         35,
         "opening position is 32 pieces + MoveCount + PieceCount + CurrentTurn"
+    );
+    refused_by(
+        &ex().must_reject(&chess_transition_invariants::start_game(), vec![], &next),
+        "game_not_yet_started",
     );
 }
 

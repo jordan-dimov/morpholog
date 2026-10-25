@@ -88,12 +88,15 @@ invariant journal_entry_has_lines:
 -- still obeys every invariant. `admit` adds a claim.
 
 -- The everyday case: one account debited, one credited, same amount.
--- The gate allows posting only into an open period; the two equal-and-
+-- The first gate refuses an entry id already on the record: posting the
+-- same entry twice would change nothing, but would announce it twice.
+-- The second allows posting only into an open period; the two equal-and-
 -- opposite lines mean the balance invariant is satisfied by construction.
 transformation post_simple_entry(
     entry_id, posting_date, period,
     debit_account, credit_account, amount
 ):
+    require entry_id_unused: not JournalEntry(entry_id, _, _)
     require period_is_open: not PeriodClosed(period)
     admit JournalEntry(entry_id, posting_date, period)
     admit JournalLine(entry_id, debit_account, amount, 0)
@@ -111,6 +114,7 @@ transformation post_split_entry(
     credit_a_account, credit_a_amount,
     credit_b_account, credit_b_amount
 ):
+    require entry_id_unused: not JournalEntry(entry_id, _, _)
     require period_is_open: not PeriodClosed(period)
     admit JournalEntry(entry_id, posting_date, period)
     admit JournalLine(entry_id, debit_account, debit_amount, 0)
@@ -127,13 +131,15 @@ transformation close_period(period):
 
 -- Fix a mistake the honest way. Instead of editing the original entry
 -- (which would erase what was reported), we post a corrected entry and
--- record that it supersedes the old one. The gate refuses to supersede
--- an entry that has already been superseded, so the correction chain
--- never forks. The original entry stays untouched, on the record.
+-- record that it supersedes the old one. The gates give the corrected
+-- entry an id of its own and refuse to supersede an entry that has
+-- already been superseded, so the correction chain never forks. The
+-- original entry stays untouched, on the record.
 transformation restate_entry(
     new_entry_id, prior_entry_id, posting_date, period,
     debit_account, credit_account, amount
 ):
+    require new_entry_id_unused: not JournalEntry(new_entry_id, _, _)
     require prior_entry_exists: JournalEntry(prior_entry_id, _, period)
     require prior_entry_not_yet_superseded: not (exists newer: Supersedes(newer, prior_entry_id))
     admit JournalEntry(new_entry_id, posting_date, period)

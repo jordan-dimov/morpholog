@@ -41,14 +41,14 @@ Approval authority is different. It is checked when an approval is proposed. Tyi
 
 | Transformation | Effect |
 | --- | --- |
-| `grant_approval_authority(principal, doc_type)` | Asserts `MayApprove` for the principal, the person receiving authority (the proposer is the `actor`). Ungated. |
+| `grant_approval_authority(principal, doc_type)` | Asserts `MayApprove` for the principal, the person receiving authority (the proposer is the `actor`). Refused if that authority is already held. |
 | `revoke_approval_authority(principal, doc_type)` | Requires the authority to be currently held; retracts it. |
 | `submit_document(doc_id, doc_type)` | Registers a document with no amount. Refused if the id is already on the record. |
 | `submit_monetary_document(doc_id, doc_type, amount)` | Registers a document with a positive amount. Refused if the id is already on the record, so a document cannot gain or lose an amount after it is registered. |
-| `approve_document(doc_id)` | The unconditional approval. Reads the kind from the record and refuses a document with an amount. **Declares no `actor` parameter.** The proposing actor comes from the transition, is consulted as `actor` in the require, and is stamped onto the asserted `Approval`. |
-| `grant_approval_limit(principal, doc_type, limit)` | Asserts `ApprovalLimit`. Ungated. |
+| `approve_document(doc_id)` | The unconditional approval. Reads the kind from the record and refuses a document with an amount, or one the actor has already approved. **Declares no `actor` parameter.** The proposing actor comes from the transition, is consulted as `actor` in the require, and is stamped onto the asserted `Approval`. |
+| `grant_approval_limit(principal, doc_type, limit)` | Asserts `ApprovalLimit`. Refused if that exact ceiling is already granted. |
 | `revoke_approval_limit(principal, doc_type, limit)` | Requires the specific `(principal, doc_type, limit)` triple; retracts it. |
-| `approve_within_limit(doc_id)` | The quantitative approval. Reads the kind and amount from the record. No `actor` parameter. Require: `ApprovalLimit(actor, doc_type, limit) and amount <= limit` - binds `limit` from the authority claim; the `<=` comparison checks the recorded amount. Boundary equality is inclusive. |
+| `approve_within_limit(doc_id)` | The quantitative approval. Reads the kind and amount from the record and refuses a document the actor has already approved. No `actor` parameter. Require: `ApprovalLimit(actor, doc_type, limit) and amount <= limit` - binds `limit` from the authority claim; the `<=` comparison checks the recorded amount. Boundary equality is inclusive. |
 
 ## How to run it
 

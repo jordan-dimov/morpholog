@@ -12,7 +12,7 @@
 mod common;
 use std::sync::OnceLock;
 
-use common::{Example, subj, ts};
+use common::{Example, refused_by, subj, ts};
 use morpholog_core::{Rejection, State, Subject, Transition, Verdict};
 use morpholog_examples::biometric_identification_oversight as bio;
 use morpholog_test_support::enumerate_derived;
@@ -317,6 +317,61 @@ fn two_distinct_verifications_admit_the_decision() {
     let rows = enumerate_derived(&bio::program(), &bio::use_period(), &state).unwrap();
     assert_eq!(rows.len(), 1, "one completed use: {rows:?}");
     assert_eq!(rows[0].args[3], common::dur("PT8H30M"));
+}
+
+/// A decision id names one decision: the notice carries only the id, so a
+/// second match decided under the same id would read like the first.
+#[test]
+fn a_decision_id_names_one_decision() {
+    let state = match_awaiting_verification();
+    let state = ex().must_accept_as(
+        &bio::record_match(),
+        vec![
+            subj("match_2"),
+            subj("use_1"),
+            subj("frame_4412"),
+            subj("candidate_9"),
+            ts("2026-10-12T09:40:00Z"),
+        ],
+        "cam_system",
+        state,
+    );
+    let mut state = state;
+    for m in ["match_1", "match_2"] {
+        for (who, at) in [
+            ("anna", "2026-10-12T10:00:00Z"),
+            ("ben", "2026-10-12T10:20:00Z"),
+        ] {
+            state = ex().must_accept_as(&bio::verify_match(), vec![subj(m), ts(at)], who, state);
+        }
+    }
+    let decide = |id: &str, m: &str| {
+        vec![
+            subj(id),
+            subj(m),
+            subj("confirmed_identification"),
+            ts("2026-10-12T11:00:00Z"),
+        ]
+    };
+    let state = ex().must_accept_as(
+        &bio::decide_on_identification(),
+        decide("decision_1", "match_1"),
+        "anna",
+        state,
+    );
+    let reason = ex().must_reject_as(
+        &bio::decide_on_identification(),
+        decide("decision_1", "match_2"),
+        "anna",
+        &state,
+    );
+    refused_by(&reason, "identification_decision_unique_by_decision");
+    ex().must_accept_as(
+        &bio::decide_on_identification(),
+        decide("decision_2", "match_2"),
+        "anna",
+        state,
+    );
 }
 
 // Beat 4: revocation governs the future only. The revoked overseer

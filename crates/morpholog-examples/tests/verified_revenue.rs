@@ -17,24 +17,13 @@
 mod common;
 use std::sync::OnceLock;
 
-use common::{Example, dec, has_claim, subj};
-use morpholog_core::{Outcome, RejectionReason, State};
+use common::{Example, dec, has_claim, refused_by, subj};
+use morpholog_core::{Outcome, State};
 use morpholog_examples::verified_revenue;
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
     EX.get_or_init(|| Example::new(&verified_revenue::program()))
-}
-
-/// Refused by the gate or invariant named `rule`.
-fn refused_by(reason: &RejectionReason, rule: &str) {
-    match reason {
-        RejectionReason::Require {
-            name: Some(name), ..
-        } => assert_eq!(name.as_str(), rule),
-        RejectionReason::Invariant { name, .. } => assert_eq!(name.as_str(), rule),
-        other => panic!("expected a refusal by {rule}, got: {other}"),
-    }
 }
 
 fn asset() -> morpholog_core::EvalValue {

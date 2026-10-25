@@ -155,8 +155,11 @@ invariant coverage_terms_within_range:
 
 -- Open a policy. This records the contractual cap (set once, never
 -- touched again) and starts the headroom counter at the full aggregate,
--- since nothing has been paid yet.
+-- since nothing has been paid yet. The gate refuses a policy id already
+-- issued: issuing it again would change nothing, but would announce the
+-- policy twice. The claim and authority acts below guard the same way.
 transformation issue_policy(policy_id, aggregate_limit):
+    require policy_id_unused: not Policy(policy_id, _)
     admit Policy(policy_id, aggregate_limit)
     admit PolicyHeadroom(policy_id, aggregate_limit)
     emit PolicyIssued(policy_id)
@@ -166,12 +169,14 @@ transformation issue_policy(policy_id, aggregate_limit):
 -- the settlement; the aggregate cap is enforced from the payments
 -- actually made.
 transformation report_claim(claim_id, policy_id, claimed_amount):
+    require claim_id_unused: not ClaimReported(claim_id, _, _)
     require Policy(policy_id, _)
     admit ClaimReported(claim_id, policy_id, claimed_amount)
     emit ClaimReported(claim_id)
 
 -- Grant a claims handler their personal settlement ceiling.
 transformation grant_settlement_authority(principal, limit):
+    require authority_not_yet_granted: not SettlementAuthority(principal, limit)
     admit SettlementAuthority(principal, limit)
     emit SettlementAuthorityGranted(principal, limit)
 

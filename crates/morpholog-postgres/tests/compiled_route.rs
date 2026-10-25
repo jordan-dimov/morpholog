@@ -15,7 +15,7 @@ mod common;
 use common::routes::{RouteObservation, count, observe};
 use common::{reset_db, seed_claims, test_pool};
 use morpholog_core::{
-    ClaimInstance, EvalError, EvalValue, PreparedProgram, Program, Subject, Transition,
+    ClaimInstance, EvalError, EvalValue, PreparedProgram, Program, Stmt, Subject, Transition,
 };
 use morpholog_examples::{clinical_trial_enrolment, double_entry_ledger};
 use morpholog_postgres::{
@@ -126,8 +126,7 @@ async fn both_routes(
         ],
         actor: Subject::from("route_test"),
     };
-    let interpreted =
-        PgProgram::interpreted(PreparedProgram::new(double_entry_ledger::program()).unwrap());
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(ledger_program()).unwrap());
     let spec = observe(pool, &interpreted, seeded, &transition).await;
     let real = observe(pool, &ledger(), seeded, &transition).await;
     (spec, real)
@@ -272,11 +271,24 @@ async fn an_excess_that_cancels_is_representable_on_both_routes() {
     assert_eq!(real, spec);
 }
 
+/// The ledger without its entry-id guard, so a posting can reach an entry
+/// already on the record: these tests are about how each route checks
+/// that entry, not about the guard.
+fn ledger_program() -> Program {
+    let mut program = double_entry_ledger::program();
+    for t in &mut program.transformations {
+        t.body.retain(|s| {
+            !matches!(s, Stmt::Require { name: Some(n), .. } if n.as_str() == "entry_id_unused")
+        });
+    }
+    program
+}
+
 /// The ledger on the compiled route. Checked here so no test that
 /// compares the two routes can silently compare the interpreter with
 /// itself.
 fn ledger() -> PgProgram {
-    let program = PgProgram::new(PreparedProgram::new(double_entry_ledger::program()).unwrap());
+    let program = PgProgram::new(PreparedProgram::new(ledger_program()).unwrap());
     assert!(matches!(program.plan(), InvariantPlan::Compiled));
     program
 }
