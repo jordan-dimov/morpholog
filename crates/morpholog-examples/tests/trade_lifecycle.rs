@@ -333,16 +333,36 @@ fn an_amendment_must_extend_a_clean_chain_of_distinct_versions() {
         "trade_terms_unique_by_version_id",
     );
     // A terms quantity is positive.
-    refused_by_invariant(
-        &amend_refused(&pre, "tv1", "tv2", -10, "2026-02-01"),
-        "trade_terms_quantity_is_positive",
-    );
+    for qty in [-10, 0] {
+        refused_by_invariant(
+            &amend_refused(&pre, "tv1", "tv2", qty, "2026-02-01"),
+            "trade_terms_quantity_is_positive",
+        );
+    }
     // The chain never forks: once tv1 is amended, it cannot be again.
+    // Replaying the very same amendment is refused too: it would change
+    // no claim, but would send the amendment notice a second time.
     let amended = amend(pre, "tv1", "tv2", 120, "2026-02-01");
-    refused_by_gate(
-        &amend_refused(&amended, "tv1", "tv3", 130, "2026-03-01"),
-        "prior_version_not_yet_amended",
+    for (new, qty, eff) in [("tv2", 120, "2026-02-01"), ("tv3", 130, "2026-03-01")] {
+        refused_by_gate(
+            &amend_refused(&amended, "tv1", new, qty, eff),
+            "prior_version_not_yet_amended",
+        );
+    }
+}
+
+#[test]
+fn amending_needs_authority_for_the_trades_own_commodity() {
+    // `mo` may confirm gas; `t1` is power.
+    let reason = amend_refused(
+        &grant(captured(100), "mo", "gas"),
+        "tv1",
+        "tv2",
+        120,
+        "2026-02-01",
     );
+    refused_by_gate(&reason, "may_confirm_the_trade");
+    witnessed(&reason, "commodity", "power");
 }
 
 // ============================================================
@@ -386,6 +406,22 @@ fn correction_moves_the_pointer_and_leaves_history_and_settlements_standing() {
         &[subj("op2"), subj("op1")],
     ));
     assert!(settled(&post, 100, "s1", "op1", "2026-01-20"));
+}
+
+#[test]
+fn a_corrected_price_can_no_longer_be_settled_on() {
+    let corrected = ex().must_accept_as(
+        &trade_lifecycle::correct_official_price(),
+        vec![subj("t1"), subj("op1"), subj("op2"), dec(49)],
+        "mo",
+        confirmed(),
+    );
+    refused_by_gate(
+        &settle_refused(&corrected, 40, "s1", "op1", "2026-01-20"),
+        "official_price_in_force",
+    );
+    let post = settle(corrected, 40, "s1", "op2", "2026-01-20");
+    assert!(settled(&post, 40, "s1", "op2", "2026-01-20"));
 }
 
 #[test]
@@ -451,11 +487,13 @@ fn settlements_over_the_effective_quantity_are_rejected() {
         &settle_refused(&first, 60, "s2", "op1", "2026-01-25"),
         "settled_within_effective_terms",
     );
-    // A negative slice cannot make room under the cap.
-    refused_by_invariant(
-        &settle_refused(&confirmed(), -10, "s1", "op1", "2026-01-20"),
-        "settled_quantity_is_positive",
-    );
+    // A slice is positive: a negative one cannot make room under the cap.
+    for qty in [-10, 0] {
+        refused_by_invariant(
+            &settle_refused(&confirmed(), qty, "s1", "op1", "2026-01-20"),
+            "settled_quantity_is_positive",
+        );
+    }
 }
 
 #[test]
@@ -592,6 +630,18 @@ fn set_limit(state: State, actor: &str, commodity: &str, limit: i64) -> State {
 
 fn power_limited_to(limit: i64) -> State {
     set_limit(grant(State::default(), "mo", "power"), "mo", "power", limit)
+}
+
+#[test]
+fn setting_a_limit_needs_authority_for_its_commodity() {
+    // `mo` may confirm gas, not power.
+    let reason = ex().must_reject_as(
+        &trade_lifecycle::set_position_limit(),
+        vec![subj("power"), dec(100)],
+        "mo",
+        &grant(State::default(), "mo", "gas"),
+    );
+    refused_by_gate(&reason, "may_confirm_the_commodity");
 }
 
 #[test]
