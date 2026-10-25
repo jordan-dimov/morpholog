@@ -25,8 +25,8 @@
 mod common;
 use std::sync::OnceLock;
 
-use common::{Example, claim_instance, date, has_claim, subj};
-use morpholog_core::{CandidateScorer, EvalValue, Outcome, State, effective_delta};
+use common::{Example, claim_instance, date, has_claim, refused_by, subj};
+use morpholog_core::{CandidateScorer, EvalValue, Outcome, State, Transformation, effective_delta};
 use morpholog_examples::clinical_trial_enrolment::{self as cte, ROLE_RANDOMISE_PARTICIPANT};
 use morpholog_test_support::eval_invariant;
 
@@ -86,12 +86,25 @@ fn default_setup() -> Setup {
     }
 }
 
+/// Admit `t` once, and refuse the same step replayed by `rule`: a replay
+/// would change no claim, but would send the step's notice again.
+fn once(t: &Transformation, args: Vec<EvalValue>, rule: &str, state: State) -> State {
+    let post = ex().must_accept(t, args.clone(), state);
+    refused_by(&ex().must_reject(t, args, &post), rule);
+    post
+}
+
 /// Run the happy-path setup transformations from `State::default()` and
 /// return the resulting state.
 fn happy_path_state(s: &Setup) -> State {
     let mut state = State::default();
-    state = ex().must_accept(&cte::open_trial(), vec![subj(s.trial)], state);
-    state = ex().must_accept(
+    state = once(
+        &cte::open_trial(),
+        vec![subj(s.trial)],
+        "trial_not_yet_open",
+        state,
+    );
+    state = once(
         &cte::approve_protocol_version(),
         vec![
             subj(s.trial),
@@ -101,9 +114,10 @@ fn happy_path_state(s: &Setup) -> State {
             subj("ethics_committee_uk"),
             subj("approval_001"),
         ],
+        "protocol_version_not_yet_approved",
         state,
     );
-    state = ex().must_accept(
+    state = once(
         &cte::approve_consent_form_version(),
         vec![
             subj(s.trial),
@@ -113,9 +127,10 @@ fn happy_path_state(s: &Setup) -> State {
             subj("ethics_committee_uk"),
             subj("approval_002"),
         ],
+        "consent_form_not_yet_approved",
         state,
     );
-    state = ex().must_accept(
+    state = once(
         &cte::delegate_investigator(),
         vec![
             subj(s.investigator),
@@ -124,14 +139,16 @@ fn happy_path_state(s: &Setup) -> State {
             date(s.delegation_from),
             date(s.delegation_to),
         ],
+        "delegation_not_yet_recorded",
         state,
     );
-    state = ex().must_accept(
+    state = once(
         &cte::screen_participant(),
         vec![subj(s.participant), subj(s.trial), date("2026-03-07")],
+        "screening_not_yet_recorded",
         state,
     );
-    state = ex().must_accept(
+    state = once(
         &cte::record_consent(),
         vec![
             subj(s.participant),
@@ -140,18 +157,20 @@ fn happy_path_state(s: &Setup) -> State {
             date(s.consented_on),
             subj(s.investigator),
         ],
+        "consent_not_yet_recorded",
         state,
     );
-    state = ex().must_accept(
+    state = once(
         &cte::record_eligibility_criterion(),
         vec![
             subj(s.proto_v1),
             subj(s.criterion),
             subj(s.criterion_required_result),
         ],
+        "criterion_not_yet_recorded",
         state,
     );
-    state = ex().must_accept(
+    state = once(
         &cte::record_eligibility_assessment(),
         vec![
             subj(s.participant),
@@ -160,6 +179,7 @@ fn happy_path_state(s: &Setup) -> State {
             date(s.assessed_on),
             date(s.assessment_expires_on),
         ],
+        "assessment_not_yet_recorded",
         state,
     );
     state
@@ -201,6 +221,103 @@ fn happy_path_admits_randomisation() {
             ],
         ),
         "happy path must record the ParticipantRandomised claim with the actor"
+    );
+    let again = ex().must_reject_as(
+        &cte::randomise_participant(),
+        randomise_args(&s),
+        s.investigator,
+        &post,
+    );
+    refused_by(&again, "participant_not_yet_randomised");
+}
+
+/// A renewed delegation, a rescreen, a second consent or assessment and a
+/// randomisation into another trial are new records, so each notice names
+/// its own record: two of them never read the same.
+#[test]
+fn every_notice_names_the_record_it_announces() {
+    let s = default_setup();
+    let trial = || State::from_claims(vec![claim_instance("Trial", &[subj(s.trial)])]);
+    let notice = |t: &Transformation, args: Vec<EvalValue>, state: &State| {
+        let Ok(Outcome::Accepted {
+            emitted_intents, ..
+        }) = ex().propose(t, args, state)
+        else {
+            panic!("expected `{}` to be admitted", t.name);
+        };
+        emitted_intents[0].args.clone()
+    };
+    let delegation = |to: &str| {
+        vec![
+            subj(s.investigator),
+            subj(s.trial),
+            subj(ROLE_RANDOMISE_PARTICIPANT),
+            date(s.delegation_from),
+            date(to),
+        ]
+    };
+    let screening = |on: &str| vec![subj(s.participant), subj(s.trial), date(on)];
+    let consent = |on: &str| {
+        vec![
+            subj(s.participant),
+            subj(s.trial),
+            subj(s.consent_form),
+            date(on),
+            subj(s.investigator),
+        ]
+    };
+    let assessment = |on: &str| {
+        vec![
+            subj(s.participant),
+            subj(s.criterion),
+            subj("PASS"),
+            date(on),
+            date("2026-12-31"),
+        ]
+    };
+    for (t, first, second) in [
+        (
+            cte::delegate_investigator(),
+            delegation("2026-06-30"),
+            delegation("2026-12-31"),
+        ),
+        (
+            cte::screen_participant(),
+            screening("2026-03-01"),
+            screening("2026-03-07"),
+        ),
+        (
+            cte::record_consent(),
+            consent("2026-03-01"),
+            consent("2026-03-08"),
+        ),
+        (
+            cte::record_eligibility_assessment(),
+            assessment("2026-03-01"),
+            assessment("2026-03-09"),
+        ),
+    ] {
+        assert_ne!(
+            notice(&t, first, &trial()),
+            notice(&t, second, &trial()),
+            "`{}` announces two records alike",
+            t.name
+        );
+    }
+    let Ok(Outcome::Accepted {
+        emitted_intents, ..
+    }) = ex().propose_as(
+        &cte::randomise_participant(),
+        randomise_args(&s),
+        s.investigator,
+        &happy_path_state(&s),
+    )
+    else {
+        panic!("expected the randomisation to be admitted");
+    };
+    assert_eq!(
+        emitted_intents[0].args,
+        vec![subj(s.participant), subj(s.trial)]
     );
 }
 
@@ -389,12 +506,20 @@ fn open_important_protocol_deviation_rejects() {
     let mut pre = happy_path_state(&s);
     // Open a deviation, then attempt randomisation. The Not(...)
     // gate rejects.
+    let deviation = vec![subj(s.participant), subj(s.trial), subj("dev_001")];
     pre = ex().must_accept_as(
         &cte::open_important_protocol_deviation(),
-        vec![subj(s.participant), subj(s.trial), subj("dev_001")],
+        deviation.clone(),
         s.investigator,
         pre,
     );
+    let again = ex().must_reject_as(
+        &cte::open_important_protocol_deviation(),
+        deviation,
+        s.investigator,
+        &pre,
+    );
+    refused_by(&again, "deviation_id_unused");
     ex().must_reject_as(
         &cte::randomise_participant(),
         randomise_args(&s),

@@ -77,6 +77,8 @@ The absence of an invariant tying historical `ParticipantRandomised` claims to *
 | `open_important_protocol_deviation(participant_id, trial_id, deviation_id)` | Opens a deviation that blocks future randomisation of this participant. |
 | `randomise_participant(participant_id, trial_id, protocol_version, randomised_on)` | The load-bearing transformation. **Declares no `actor` parameter.** The proposing actor flows through transition context as `$actor` and is consulted in the `DelegatedInvestigator` gate. Admits only if every validity-window check holds on `randomised_on` and the eligibility evidence matches the criterion's required result. |
 
+Each step refuses a record already made, so a replayed step sends no second notice, and each notice carries enough to name the one record it announces. A participant is randomised into a trial once.
+
 ## How to run it
 
 ```bash
