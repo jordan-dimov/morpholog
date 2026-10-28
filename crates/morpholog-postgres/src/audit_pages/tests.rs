@@ -258,3 +258,14 @@ async fn a_bounded_page_asks_only_for_what_it_needs_and_the_walk_resumes_after_i
     assert_eq!(next(1).await, ids(&[6]));
     assert_eq!(next(1).await, ids(&[]), "a full page did not end the walk");
 }
+
+/// Time decides first, and the id breaks a tie: the order the queries use.
+#[test]
+fn a_position_orders_by_time_then_by_id() {
+    let mut positions = vec![pos(2, 3), pos(1, 9), pos(2, 1), pos(3, 0), pos(2, 2)];
+    positions.sort();
+    assert_eq!(
+        positions,
+        [pos(1, 9), pos(2, 1), pos(2, 2), pos(2, 3), pos(3, 0)]
+    );
+}
