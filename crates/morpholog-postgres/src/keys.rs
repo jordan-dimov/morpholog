@@ -22,6 +22,7 @@ use std::collections::HashSet;
 use morpholog_core::{ClaimInstance, EvalValue};
 
 use crate::audit::AuditRow;
+use crate::replay::Change;
 
 /// The predicate naming an authorised signing key. The operator declares
 /// it and admits/retracts it; the verifier recognises it by name and exact
@@ -65,17 +66,20 @@ pub(crate) fn authorized_keys_as_of(rows: &[AuditRow], tree_size: i64) -> HashSe
     keys
 }
 
-/// Advance the authorised set past one row: its retractions, then its
-/// assertions.
+/// Advance the authorised set past one row.
 pub(crate) fn apply_key_claims(keys: &mut HashSet<KeyTriple>, row: &AuditRow) {
-    for claim in &row.retracted_claims {
-        if let Some(triple) = key_triple(claim) {
-            keys.remove(&triple);
-        }
-    }
-    for claim in &row.asserted_claims {
-        if let Some(triple) = key_triple(claim) {
-            keys.insert(triple);
+    for change in row.effect().changes() {
+        match change {
+            Change::Retract(claim) => {
+                if let Some(triple) = key_triple(claim) {
+                    keys.remove(&triple);
+                }
+            }
+            Change::Admit(claim) => {
+                if let Some(triple) = key_triple(claim) {
+                    keys.insert(triple);
+                }
+            }
         }
     }
 }

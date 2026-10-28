@@ -1,0 +1,1054 @@
+{
+  "claims_at": [
+    {
+      "at": "t0",
+      "claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            }
+          ],
+          "asserted_in": "t0",
+          "predicate": "X"
+        }
+      ]
+    },
+    {
+      "at": "t1",
+      "claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            }
+          ],
+          "asserted_in": "t0",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "b"
+            }
+          ],
+          "asserted_in": "t1",
+          "predicate": "X"
+        }
+      ]
+    },
+    {
+      "at": "t2",
+      "claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            }
+          ],
+          "asserted_in": "t0",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "b"
+            }
+          ],
+          "asserted_in": "t1",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "3"
+            }
+          ],
+          "asserted_in": "t2",
+          "predicate": "Note"
+        }
+      ]
+    },
+    {
+      "at": "t3",
+      "claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            }
+          ],
+          "asserted_in": "t0",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "b"
+            }
+          ],
+          "asserted_in": "t1",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "3"
+            }
+          ],
+          "asserted_in": "t2",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "7"
+            }
+          ],
+          "asserted_in": "t3",
+          "predicate": "Note"
+        }
+      ]
+    },
+    {
+      "at": "t4",
+      "claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "b"
+            }
+          ],
+          "asserted_in": "t1",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "3"
+            }
+          ],
+          "asserted_in": "t2",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "7"
+            }
+          ],
+          "asserted_in": "t3",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            }
+          ],
+          "asserted_in": "t4",
+          "predicate": "X"
+        }
+      ]
+    },
+    {
+      "at": "t5",
+      "claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "b"
+            }
+          ],
+          "asserted_in": "t1",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "3"
+            }
+          ],
+          "asserted_in": "t2",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "7"
+            }
+          ],
+          "asserted_in": "t3",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            }
+          ],
+          "asserted_in": "t4",
+          "predicate": "X"
+        }
+      ]
+    },
+    {
+      "at": "t6",
+      "claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "b"
+            }
+          ],
+          "asserted_in": "t1",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "7"
+            }
+          ],
+          "asserted_in": "t3",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            }
+          ],
+          "asserted_in": "t4",
+          "predicate": "X"
+        }
+      ]
+    },
+    {
+      "at": "t7",
+      "claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "b"
+            }
+          ],
+          "asserted_in": "t1",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "7"
+            }
+          ],
+          "asserted_in": "t3",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            }
+          ],
+          "asserted_in": "t4",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "c"
+            }
+          ],
+          "asserted_in": "t7",
+          "predicate": "X"
+        }
+      ]
+    },
+    {
+      "at": "t8",
+      "claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "7"
+            }
+          ],
+          "asserted_in": "t3",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            }
+          ],
+          "asserted_in": "t4",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "c"
+            }
+          ],
+          "asserted_in": "t7",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "b"
+            }
+          ],
+          "asserted_in": "t8",
+          "predicate": "X"
+        }
+      ]
+    },
+    {
+      "at": "t9",
+      "claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "7"
+            }
+          ],
+          "asserted_in": "t3",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            }
+          ],
+          "asserted_in": "t4",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "c"
+            }
+          ],
+          "asserted_in": "t7",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "b"
+            }
+          ],
+          "asserted_in": "t8",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "c"
+            },
+            {
+              "type": "decimal",
+              "value": "9"
+            }
+          ],
+          "asserted_in": "t9",
+          "predicate": "Note"
+        }
+      ]
+    },
+    {
+      "at": "t10",
+      "claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "7"
+            }
+          ],
+          "asserted_in": "t3",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            }
+          ],
+          "asserted_in": "t4",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "c"
+            }
+          ],
+          "asserted_in": "t7",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "c"
+            },
+            {
+              "type": "decimal",
+              "value": "9"
+            }
+          ],
+          "asserted_in": "t9",
+          "predicate": "Note"
+        }
+      ]
+    },
+    {
+      "at": "t11",
+      "claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "7"
+            }
+          ],
+          "asserted_in": "t3",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            }
+          ],
+          "asserted_in": "t4",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "c"
+            }
+          ],
+          "asserted_in": "t7",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "c"
+            },
+            {
+              "type": "decimal",
+              "value": "9"
+            }
+          ],
+          "asserted_in": "t9",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "b"
+            }
+          ],
+          "asserted_in": "t11",
+          "predicate": "X"
+        }
+      ]
+    },
+    {
+      "at": "t12",
+      "claims": [
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            },
+            {
+              "type": "decimal",
+              "value": "7"
+            }
+          ],
+          "asserted_in": "t3",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "a"
+            }
+          ],
+          "asserted_in": "t4",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "c"
+            }
+          ],
+          "asserted_in": "t7",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "c"
+            },
+            {
+              "type": "decimal",
+              "value": "9"
+            }
+          ],
+          "asserted_in": "t9",
+          "predicate": "Note"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "b"
+            }
+          ],
+          "asserted_in": "t11",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
+              "value": "d"
+            }
+          ],
+          "asserted_in": "t12",
+          "predicate": "X"
+        }
+      ]
+    }
+  ],
+  "coverage": {
+    "invariants": [
+      {
+        "first_fired": "t2",
+        "invariant": "a_note_needs_its_x",
+        "last_fired": "t9",
+        "transitions_fired": 4,
+        "verdict": "fired"
+      }
+    ],
+    "program": "replay_characterisation",
+    "rejections_replayed": 0,
+    "transformations": [
+      {
+        "first": "t0",
+        "last": "t12",
+        "transformation": "admit_x",
+        "transitions": 6
+      },
+      {
+        "first": "t10",
+        "last": "t10",
+        "transformation": "retract_x",
+        "transitions": 1
+      },
+      {
+        "first": "t4",
+        "last": "t8",
+        "transformation": "readmit_x",
+        "transitions": 2
+      },
+      {
+        "first": "t2",
+        "last": "t9",
+        "transformation": "note",
+        "transitions": 3
+      },
+      {
+        "first": "t6",
+        "last": "t6",
+        "transformation": "drop_note",
+        "transitions": 1
+      }
+    ],
+    "transitions_replayed": 13
+  },
+  "notes_only_at_last": [
+    {
+      "args": [
+        {
+          "type": "subject",
+          "value": "a"
+        },
+        {
+          "type": "decimal",
+          "value": "7"
+        }
+      ],
+      "predicate": "Note"
+    },
+    {
+      "args": [
+        {
+          "type": "subject",
+          "value": "c"
+        },
+        {
+          "type": "decimal",
+          "value": "9"
+        }
+      ],
+      "predicate": "Note"
+    }
+  ],
+  "pack_rehearsal": {
+    "contract": "canonical_audit_prefix_v1",
+    "differences": [
+      {
+        "class": "would_reject",
+        "compared": {
+          "left": {
+            "type": "decimal",
+            "value": "7"
+          },
+          "op": "<=",
+          "right": {
+            "type": "decimal",
+            "value": "5"
+          }
+        },
+        "kind": "invariant",
+        "rule": "small_notes",
+        "semantics_version": 3,
+        "transformation": "note",
+        "transition_id": "t3",
+        "witness": [
+          {
+            "value": {
+              "type": "subject",
+              "value": "a"
+            },
+            "var": "k"
+          },
+          {
+            "value": {
+              "type": "decimal",
+              "value": "7"
+            },
+            "var": "n"
+          }
+        ]
+      },
+      {
+        "class": "would_reject",
+        "compared": {
+          "left": {
+            "type": "decimal",
+            "value": "9"
+          },
+          "op": "<=",
+          "right": {
+            "type": "decimal",
+            "value": "5"
+          }
+        },
+        "kind": "invariant",
+        "rule": "small_notes",
+        "semantics_version": 3,
+        "transformation": "note",
+        "transition_id": "t9",
+        "witness": [
+          {
+            "value": {
+              "type": "subject",
+              "value": "c"
+            },
+            "var": "k"
+          },
+          {
+            "value": {
+              "type": "decimal",
+              "value": "9"
+            },
+            "var": "n"
+          }
+        ]
+      }
+    ],
+    "program": "replay_characterisation",
+    "program_hash": "sha256:528f80e80c6f345c0c3439f4d8dab6e8123948939cd8dd1a3d332ff0cd893f50",
+    "refusals": [
+      {
+        "kind": "invariant",
+        "refused_transitions": [
+          "t3",
+          "t9"
+        ],
+        "rule": "small_notes",
+        "would_refuse": 2
+      }
+    ],
+    "rehearsal_format_version": 1,
+    "semantics_version": 3,
+    "totals": {
+      "different_delta": 0,
+      "same": 11,
+      "unreplayable": 0,
+      "would_error": 0,
+      "would_reject": 2
+    },
+    "transitions_replayed": 13
+  },
+  "pack_score": {
+    "invariants": [
+      {
+        "initially_holds": true,
+        "invariant": "a_note_needs_its_x",
+        "refused_transitions": [],
+        "version": 1,
+        "would_refuse": 0
+      },
+      {
+        "initially_holds": true,
+        "invariant": "small_notes",
+        "refused_transitions": [
+          "t3",
+          "t9"
+        ],
+        "version": 1,
+        "would_refuse": 2
+      }
+    ],
+    "program": "replay_characterisation",
+    "program_hash": "sha256:528f80e80c6f345c0c3439f4d8dab6e8123948939cd8dd1a3d332ff0cd893f50",
+    "score_format_version": 5,
+    "semantics": "case_bound_admission_v5",
+    "transitions_replayed": 13
+  },
+  "rehearsal": {
+    "contract": "canonical_audit_prefix_v1",
+    "differences": [
+      {
+        "class": "would_reject",
+        "compared": {
+          "left": {
+            "type": "decimal",
+            "value": "7"
+          },
+          "op": "<=",
+          "right": {
+            "type": "decimal",
+            "value": "5"
+          }
+        },
+        "kind": "invariant",
+        "rule": "small_notes",
+        "semantics_version": 3,
+        "transformation": "note",
+        "transition_id": "t3",
+        "witness": [
+          {
+            "value": {
+              "type": "subject",
+              "value": "a"
+            },
+            "var": "k"
+          },
+          {
+            "value": {
+              "type": "decimal",
+              "value": "7"
+            },
+            "var": "n"
+          }
+        ]
+      },
+      {
+        "class": "would_reject",
+        "compared": {
+          "left": {
+            "type": "decimal",
+            "value": "9"
+          },
+          "op": "<=",
+          "right": {
+            "type": "decimal",
+            "value": "5"
+          }
+        },
+        "kind": "invariant",
+        "rule": "small_notes",
+        "semantics_version": 3,
+        "transformation": "note",
+        "transition_id": "t9",
+        "witness": [
+          {
+            "value": {
+              "type": "subject",
+              "value": "c"
+            },
+            "var": "k"
+          },
+          {
+            "value": {
+              "type": "decimal",
+              "value": "9"
+            },
+            "var": "n"
+          }
+        ]
+      }
+    ],
+    "program": "replay_characterisation",
+    "program_hash": "sha256:528f80e80c6f345c0c3439f4d8dab6e8123948939cd8dd1a3d332ff0cd893f50",
+    "refusals": [
+      {
+        "kind": "invariant",
+        "refused_transitions": [
+          "t3",
+          "t9"
+        ],
+        "rule": "small_notes",
+        "would_refuse": 2
+      }
+    ],
+    "rehearsal_format_version": 1,
+    "semantics_version": 3,
+    "totals": {
+      "different_delta": 0,
+      "same": 11,
+      "unreplayable": 0,
+      "would_error": 0,
+      "would_reject": 2
+    },
+    "transitions_replayed": 13
+  },
+  "score": {
+    "invariants": [
+      {
+        "initially_holds": true,
+        "invariant": "a_note_needs_its_x",
+        "refused_transitions": [],
+        "version": 1,
+        "would_refuse": 0
+      },
+      {
+        "initially_holds": true,
+        "invariant": "small_notes",
+        "refused_transitions": [
+          "t3",
+          "t9"
+        ],
+        "version": 1,
+        "would_refuse": 2
+      }
+    ],
+    "program": "replay_characterisation",
+    "program_hash": "sha256:528f80e80c6f345c0c3439f4d8dab6e8123948939cd8dd1a3d332ff0cd893f50",
+    "score_format_version": 5,
+    "semantics": "case_bound_admission_v5",
+    "transitions_replayed": 13
+  },
+  "score_split_after_t4": {
+    "invariants": [
+      {
+        "initially_holds": true,
+        "invariant": "a_note_needs_its_x",
+        "refused_transitions": [],
+        "version": 1,
+        "would_refuse": 0
+      },
+      {
+        "initially_holds": true,
+        "invariant": "small_notes",
+        "refused_transitions": [
+          "t3",
+          "t9"
+        ],
+        "version": 1,
+        "would_refuse": 2
+      }
+    ],
+    "program": "replay_characterisation",
+    "program_hash": "sha256:528f80e80c6f345c0c3439f4d8dab6e8123948939cd8dd1a3d332ff0cd893f50",
+    "score_format_version": 5,
+    "semantics": "case_bound_admission_v5",
+    "split": {
+      "boundary": {
+        "requested": "t4",
+        "resolved_committed_at": "<time>",
+        "resolved_transition_id": "t4"
+      },
+      "test": {
+        "invariants": [
+          {
+            "invariant": "a_note_needs_its_x",
+            "refused_transitions": [],
+            "version": 1,
+            "would_refuse": 0
+          },
+          {
+            "invariant": "small_notes",
+            "refused_transitions": [
+              "t9"
+            ],
+            "version": 1,
+            "would_refuse": 1
+          }
+        ],
+        "transitions_replayed": 8
+      },
+      "train": {
+        "invariants": [
+          {
+            "invariant": "a_note_needs_its_x",
+            "refused_transitions": [],
+            "version": 1,
+            "would_refuse": 0
+          },
+          {
+            "invariant": "small_notes",
+            "refused_transitions": [
+              "t3"
+            ],
+            "version": 1,
+            "would_refuse": 1
+          }
+        ],
+        "transitions_replayed": 5
+      }
+    },
+    "transitions_replayed": 13
+  },
+  "transformations": [
+    "admit_x",
+    "admit_x",
+    "note",
+    "note",
+    "readmit_x",
+    "admit_x",
+    "drop_note",
+    "admit_x",
+    "readmit_x",
+    "note",
+    "retract_x",
+    "admit_x",
+    "admit_x"
+  ],
+  "verify": {
+    "only_in_claims_table": [],
+    "only_in_replay": [
+      {
+        "args": [
+          {
+            "type": "subject",
+            "value": "b"
+          }
+        ],
+        "predicate": "X"
+      }
+    ],
+    "status": "divergent"
+  }
+}
