@@ -2,6 +2,7 @@ use crate::audit::audit_cursor_for;
 use crate::audit_pages::ReplayPages;
 use crate::claims::ClaimRead;
 use crate::error::{PgError, classify, classify_checked_query};
+use crate::replay::RowEffect;
 use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
 use morpholog_core::{ClaimInstance, State};
@@ -203,17 +204,15 @@ pub(crate) async fn reconstruct_inner(
             };
             let asserted = in_scope(row.asserted_claims)?;
             let retracted = in_scope(row.retracted_claims)?;
-            // The kernel's own order within a transition: retractions
-            // first, then assertions.
+            let effect = RowEffect {
+                transition_id: row.transition_id,
+                retracted: &retracted,
+                asserted: &asserted,
+            };
             if let Some(map) = asserted_in.as_deref_mut() {
-                for claim in &retracted {
-                    map.remove(claim);
-                }
-                for claim in &asserted {
-                    map.entry(claim.clone()).or_insert(row.transition_id);
-                }
+                effect.apply_to_provenance(map);
             }
-            state.apply(&asserted, &retracted);
+            effect.apply_to(&mut state);
         }
         if let Some(report) = on_page.as_deref_mut() {
             report(replayed);

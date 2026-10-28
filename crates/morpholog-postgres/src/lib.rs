@@ -44,6 +44,7 @@ mod provision;
 mod receipt;
 mod rehearse;
 mod rejections;
+mod replay;
 mod role_rebindings;
 mod roles_move;
 #[cfg(test)]

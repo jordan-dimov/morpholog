@@ -5,6 +5,7 @@ use crate::checkpoints::TreeVerification;
 use crate::claims::decode_claim_rows;
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::propose::{REJECTION_KIND_BIND, REJECTION_KIND_INVARIANT, REJECTION_KIND_REQUIRE};
+use crate::replay::RowEffect;
 use crate::role_rebindings::RoleRebindings;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use crate::witnesses::WitnessesReport;
@@ -308,7 +309,12 @@ pub async fn coverage_replay(
                 .chain(asserted.iter())
                 .map(|c| c.predicate.clone())
                 .collect();
-            replay.apply(&asserted, &retracted);
+            RowEffect {
+                transition_id,
+                retracted: &retracted,
+                asserted: &asserted,
+            }
+            .apply_to(&mut replay);
             // Rules the change cannot fire are skipped inside observe;
             // the transition still counts.
             tracker

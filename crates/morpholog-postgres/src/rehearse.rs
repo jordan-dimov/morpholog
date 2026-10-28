@@ -32,7 +32,7 @@ fn rehearse_rows<'a>(
                 semantics_version: row.semantics_version,
             },
         );
-        replay.apply(&row.asserted_claims, &row.retracted_claims);
+        row.effect().apply_to(replay);
     }
 }
 
