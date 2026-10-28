@@ -432,11 +432,13 @@ async fn a_timestamp_boundary_matches_the_transition_form() {
     let e0 = common::commit_entry(&pool, "e0").await;
     common::commit_entry(&pool, "e1").await;
 
-    let mut conn = pool.acquire().await.unwrap();
-    let (at, _) = morpholog_postgres::audit_cursor_for(&mut conn, e0)
+    let at = morpholog_postgres::list_audit_rows(&pool)
         .await
-        .unwrap();
-    drop(conn);
+        .unwrap()
+        .into_iter()
+        .find(|r| r.transition_id == e0)
+        .unwrap()
+        .committed_at;
 
     let by_id = score_candidate(
         &pool,

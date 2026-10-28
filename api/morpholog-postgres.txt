@@ -1197,6 +1197,31 @@ impl core::marker::Unpin for morpholog_postgres::AtomicAct
 impl core::marker::UnsafeUnpin for morpholog_postgres::AtomicAct
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::AtomicAct
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::AtomicAct
+pub struct morpholog_postgres::AuditPosition
+impl core::clone::Clone for morpholog_postgres::AuditPosition
+pub fn morpholog_postgres::AuditPosition::clone(&self) -> morpholog_postgres::AuditPosition
+impl core::clone::TrivialClone for morpholog_postgres::AuditPosition
+impl core::cmp::Eq for morpholog_postgres::AuditPosition
+pub fn morpholog_postgres::AuditPosition::assert_fields_are_eq(&self)
+impl core::cmp::Ord for morpholog_postgres::AuditPosition
+pub fn morpholog_postgres::AuditPosition::cmp(&self, &morpholog_postgres::AuditPosition) -> core::cmp::Ordering
+impl core::cmp::PartialEq for morpholog_postgres::AuditPosition
+pub fn morpholog_postgres::AuditPosition::eq(&self, &morpholog_postgres::AuditPosition) -> bool
+impl core::cmp::PartialOrd for morpholog_postgres::AuditPosition
+pub fn morpholog_postgres::AuditPosition::partial_cmp(&self, &morpholog_postgres::AuditPosition) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for morpholog_postgres::AuditPosition
+pub fn morpholog_postgres::AuditPosition::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for morpholog_postgres::AuditPosition
+pub fn morpholog_postgres::AuditPosition::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_postgres::AuditPosition
+impl core::marker::StructuralPartialEq for morpholog_postgres::AuditPosition
+impl core::marker::Freeze for morpholog_postgres::AuditPosition
+impl core::marker::Send for morpholog_postgres::AuditPosition
+impl core::marker::Sync for morpholog_postgres::AuditPosition
+impl core::marker::Unpin for morpholog_postgres::AuditPosition
+impl core::marker::UnsafeUnpin for morpholog_postgres::AuditPosition
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::AuditPosition
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::AuditPosition
 pub struct morpholog_postgres::AuditRow
 pub morpholog_postgres::AuditRow::actor: morpholog_core::ir::Subject
 pub morpholog_postgres::AuditRow::arguments: alloc::vec::Vec<morpholog_core::state::EvalValue>
@@ -1214,6 +1239,7 @@ pub morpholog_postgres::AuditRow::semantics_version: core::option::Option<u32>
 pub morpholog_postgres::AuditRow::transformation_name: morpholog_core::ir::TransformationName
 pub morpholog_postgres::AuditRow::transition_id: uuid::Uuid
 impl morpholog_postgres::AuditRow
+pub fn morpholog_postgres::AuditRow::position(&self) -> morpholog_postgres::AuditPosition
 pub fn morpholog_postgres::AuditRow::validate_shape(&self) -> core::result::Result<(), alloc::string::String>
 impl core::clone::Clone for morpholog_postgres::AuditRow
 pub fn morpholog_postgres::AuditRow::clone(&self) -> morpholog_postgres::AuditRow
@@ -2633,7 +2659,7 @@ impl morpholog_postgres::Deliverer for morpholog_postgres::testing::AlwaysTransi
 pub async fn morpholog_postgres::testing::AlwaysTransient::deliver(&self, &morpholog_postgres::OutboxRow) -> morpholog_postgres::DeliveryOutcome
 pub async fn morpholog_postgres::apply_migrations(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::attach_witness(&sqlx_postgres::PgPool, i64, &morpholog_postgres::Digest, morpholog_postgres::Witness) -> core::result::Result<morpholog_postgres::Checkpoint, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::audit_cursor_for(&mut sqlx_postgres::connection::PgConnection, uuid::Uuid) -> core::result::Result<(jiff::timestamp::Timestamp, uuid::Uuid), morpholog_postgres::PgError>
+pub async fn morpholog_postgres::audit_cursor_for(&mut sqlx_postgres::connection::PgConnection, uuid::Uuid) -> core::result::Result<morpholog_postgres::AuditPosition, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::audit_resume_watermark(&sqlx_postgres::PgPool, core::option::Option<&[alloc::string::String]>) -> core::result::Result<jiff::timestamp::Timestamp, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::begin_audit_tail<'p>(&'p sqlx_postgres::PgPool, core::option::Option<uuid::Uuid>, core::option::Option<&[alloc::string::String]>) -> core::result::Result<morpholog_postgres::AuditTail<'p>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::begin_compensation(&sqlx_postgres::PgPool, uuid::Uuid, &str, core::time::Duration) -> core::result::Result<core::option::Option<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
@@ -2659,8 +2685,8 @@ pub fn morpholog_postgres::head_version() -> i32
 pub async fn morpholog_postgres::initialise_schema(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::InitOutcome, morpholog_postgres::PgError>
 pub fn morpholog_postgres::issue_receipt(&morpholog_core::validate::ValidatedProgram<'_>, &morpholog_postgres::EvidencePack, morpholog_postgres::ReceiptQuery) -> core::result::Result<morpholog_postgres::EvaluationReceipt, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_audit_rows(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::list_audit_rows_page(&mut sqlx_postgres::connection::PgConnection, core::option::Option<(jiff::timestamp::Timestamp, uuid::Uuid)>, core::option::Option<jiff::timestamp::Timestamp>, i64) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::list_audit_rows_page_mentioning(&mut sqlx_postgres::connection::PgConnection, core::option::Option<(jiff::timestamp::Timestamp, uuid::Uuid)>, core::option::Option<jiff::timestamp::Timestamp>, i64, &str) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::list_audit_rows_page(&mut sqlx_postgres::connection::PgConnection, core::option::Option<morpholog_postgres::AuditPosition>, core::option::Option<jiff::timestamp::Timestamp>, i64) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::list_audit_rows_page_mentioning(&mut sqlx_postgres::connection::PgConnection, core::option::Option<morpholog_postgres::AuditPosition>, core::option::Option<jiff::timestamp::Timestamp>, i64, &str) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_claims(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_core::state::ClaimInstance>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_claims_at(&sqlx_postgres::PgPool, uuid::Uuid) -> core::result::Result<alloc::vec::Vec<morpholog_core::state::ClaimInstance>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_claims_at_for_predicates(&sqlx_postgres::PgPool, uuid::Uuid, &[alloc::string::String]) -> core::result::Result<alloc::vec::Vec<morpholog_core::state::ClaimInstance>, morpholog_postgres::PgError>

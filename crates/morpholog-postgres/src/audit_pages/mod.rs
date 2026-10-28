@@ -1,5 +1,5 @@
 //! Every walk over the audit log in replay order: a keyset over
-//! `(committed_at, transition_id)`, one chunk in memory at a time, up to
+//! [`AuditPosition`], one chunk in memory at a time, up to
 //! a bound. The pager owns the bound, so no caller can apply a row past
 //! the coordinate it asked for.
 //!
@@ -17,20 +17,22 @@ use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
 use uuid::Uuid;
 
-use crate::audit::{AuditRow, REPLAY_CHUNK, list_audit_rows_page, list_audit_rows_page_mentioning};
+use crate::audit::{
+    AuditPosition, AuditRow, REPLAY_CHUNK, list_audit_rows_page, list_audit_rows_page_mentioning,
+};
 use crate::error::{PgError, classify};
 
 /// The paging state both projections share.
 #[derive(Debug)]
 struct Keyset {
-    cursor: Option<(Timestamp, Uuid)>,
-    through: Option<(Timestamp, Uuid)>,
+    cursor: Option<AuditPosition>,
+    through: Option<AuditPosition>,
     chunk: i64,
     done: bool,
 }
 
 impl Keyset {
-    fn new(through: Option<(Timestamp, Uuid)>, chunk: i64) -> Self {
+    fn new(through: Option<AuditPosition>, chunk: i64) -> Self {
         Keyset {
             cursor: None,
             through,
@@ -41,7 +43,7 @@ impl Keyset {
 
     /// A page shorter than the `asked` size ends the walk, and so does a
     /// page ending on the `through` target, saving an empty query.
-    fn advance(&mut self, asked: i64, len: usize, last: Option<(Timestamp, Uuid)>) {
+    fn advance(&mut self, asked: i64, len: usize, last: Option<AuditPosition>) {
         let Some(last) = last else {
             self.done = true;
             return;
@@ -61,17 +63,26 @@ pub(crate) struct ReplayRow {
     pub(crate) committed_at: Timestamp,
 }
 
+impl ReplayRow {
+    pub(crate) fn position(&self) -> AuditPosition {
+        AuditPosition {
+            committed_at: self.committed_at,
+            transition_id: self.transition_id,
+        }
+    }
+}
+
 /// A walk that reads `ReplayRow`s, to the end of the snapshot or through
 /// one transition inclusive.
 #[derive(Debug)]
 pub(crate) struct ReplayPages(Keyset);
 
 impl ReplayPages {
-    pub(crate) fn new(through: Option<(Timestamp, Uuid)>) -> Self {
+    pub(crate) fn new(through: Option<AuditPosition>) -> Self {
         Self::with_chunk(through, REPLAY_CHUNK)
     }
 
-    pub(crate) fn with_chunk(through: Option<(Timestamp, Uuid)>, chunk: i64) -> Self {
+    pub(crate) fn with_chunk(through: Option<AuditPosition>, chunk: i64) -> Self {
         ReplayPages(Keyset::new(through, chunk))
     }
 
@@ -88,7 +99,7 @@ impl ReplayPages {
         self.0.advance(
             self.0.chunk,
             rows.len(),
-            rows.last().map(|r| (r.committed_at, r.transition_id)),
+            rows.last().map(ReplayRow::position),
         );
         Ok(rows)
     }
@@ -125,7 +136,7 @@ impl AuditPages {
     }
 
     /// Start strictly after this coordinate rather than at the beginning.
-    pub(crate) fn after(mut self, cursor: Option<(Timestamp, Uuid)>) -> Self {
+    pub(crate) fn after(mut self, cursor: Option<AuditPosition>) -> Self {
         self.keyset.cursor = cursor;
         self
     }
@@ -164,11 +175,8 @@ impl AuditPages {
                 .await?
             }
         };
-        self.keyset.advance(
-            asked,
-            rows.len(),
-            rows.last().map(|r| (r.committed_at, r.transition_id)),
-        );
+        self.keyset
+            .advance(asked, rows.len(), rows.last().map(AuditRow::position));
         Ok(rows)
     }
 }
@@ -177,8 +185,8 @@ impl AuditPages {
 // plans; a change here belongs there too.
 async fn replay_page(
     conn: &mut sqlx::PgConnection,
-    cursor: Option<(Timestamp, Uuid)>,
-    through: Option<(Timestamp, Uuid)>,
+    cursor: Option<AuditPosition>,
+    through: Option<AuditPosition>,
     limit: i64,
 ) -> Result<Vec<ReplayRow>, PgError> {
     match (cursor, through) {
@@ -195,7 +203,13 @@ async fn replay_page(
             .fetch_all(&mut *conn)
             .await
         }
-        (Some((at, id)), None) => {
+        (
+            Some(AuditPosition {
+                committed_at: at,
+                transition_id: id,
+            }),
+            None,
+        ) => {
             sqlx::query_as!(
                 ReplayRow,
                 "SELECT transition_id, transformation_name,
@@ -211,7 +225,13 @@ async fn replay_page(
             .fetch_all(&mut *conn)
             .await
         }
-        (None, Some((to_at, to_id))) => {
+        (
+            None,
+            Some(AuditPosition {
+                committed_at: to_at,
+                transition_id: to_id,
+            }),
+        ) => {
             sqlx::query_as!(
                 ReplayRow,
                 "SELECT transition_id, transformation_name,
@@ -227,7 +247,16 @@ async fn replay_page(
             .fetch_all(&mut *conn)
             .await
         }
-        (Some((at, id)), Some((to_at, to_id))) => {
+        (
+            Some(AuditPosition {
+                committed_at: at,
+                transition_id: id,
+            }),
+            Some(AuditPosition {
+                committed_at: to_at,
+                transition_id: to_id,
+            }),
+        ) => {
             sqlx::query_as!(
                 ReplayRow,
                 "SELECT transition_id, transformation_name,

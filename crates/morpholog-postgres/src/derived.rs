@@ -1,8 +1,10 @@
 use crate::as_of::reconstruct_state_at_for_predicates;
+use crate::audit::latest_audit_position;
 use crate::claims::{decode_claim_rows, list_claims_for_predicates};
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use jiff::Timestamp;
+use jiff_sqlx::ToSqlx;
 use morpholog_core::{ClaimInstance, State, ValidatedProgram, predicates_referenced_by_derived};
 use sqlx::PgPool;
 use std::collections::BTreeSet;
@@ -115,13 +117,7 @@ pub async fn refresh_derived(
     // before the compute.
     let read_start = Instant::now();
     let mut read_tx = begin_isolated_tx(pool, TxIsolation::RepeatableRead).await?;
-    let latest_visible = sqlx::query!(
-        "SELECT transition_id, committed_at FROM morpholog.audit
-         ORDER BY committed_at DESC, transition_id DESC LIMIT 1",
-    )
-    .fetch_optional(&mut *read_tx)
-    .await
-    .map_err(classify_checked_query)?;
+    let latest_visible = latest_audit_position(&mut read_tx).await?;
     let claim_rows: Vec<(String, serde_json::Value)> = if footprint.is_empty() {
         Vec::new()
     } else {
@@ -139,7 +135,7 @@ pub async fn refresh_derived(
     };
     read_tx.commit().await.map_err(classify)?;
     let snapshot_tid = latest_visible.as_ref().map(|r| r.transition_id);
-    let snapshot_at = latest_visible.map(|r| r.committed_at);
+    let snapshot_at = latest_visible.map(|r| r.committed_at.to_sqlx());
     let source_claim_count = claim_rows.len();
     let read = read_start.elapsed();
     // Compute: no transaction held.

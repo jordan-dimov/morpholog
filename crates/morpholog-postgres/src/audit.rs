@@ -97,7 +97,30 @@ where
     T::deserialize(d).map(Some)
 }
 
+/// A row's place in the audit log's one order. Every walk, cursor, sort
+/// and latest-row read takes its order from here.
+// The derived ordering follows field order, which is the log order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AuditPosition {
+    pub(crate) committed_at: Timestamp,
+    pub(crate) transition_id: Uuid,
+}
+
+impl std::fmt::Display for AuditPosition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}, {})", self.committed_at, self.transition_id)
+    }
+}
+
 impl AuditRow {
+    /// This row's place in the log order.
+    pub fn position(&self) -> AuditPosition {
+        AuditPosition {
+            committed_at: self.committed_at,
+            transition_id: self.transition_id,
+        }
+    }
+
     /// Check the row is a shape the runtime writes: nothing extra, an
     /// attestation, an attestation plus one name per argument, those plus
     /// the model hash, those plus the semantics version, or those plus the
@@ -249,8 +272,7 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
     let mut conn = pool.acquire().await.map_err(classify)?;
     list_audit_rows_page(&mut conn, None, None, i64::MAX).await
 }
-/// One keyset page of audit rows in `(committed_at, transition_id)`
-/// order: strictly after `cursor` and strictly below `horizon`, each when
+/// One keyset page of audit rows in log order ([`AuditPosition`]): strictly after `cursor` and strictly below `horizon`, each when
 /// given. Takes a connection so the caller can hold one snapshot across
 /// pages.
 ///
@@ -260,7 +282,7 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
 // plans; a change here belongs there too.
 pub async fn list_audit_rows_page(
     conn: &mut sqlx::PgConnection,
-    cursor: Option<(Timestamp, Uuid)>,
+    cursor: Option<AuditPosition>,
     horizon: Option<Timestamp>,
     limit: i64,
 ) -> Result<Vec<AuditRow>, PgError> {
@@ -280,7 +302,13 @@ pub async fn list_audit_rows_page(
             .fetch_all(&mut *conn)
             .await
         }
-        (Some((at, id)), None) => {
+        (
+            Some(AuditPosition {
+                committed_at: at,
+                transition_id: id,
+            }),
+            None,
+        ) => {
             sqlx::query_as!(
                 AuditRowRaw,
                 "SELECT transition_id, transformation_name, arguments, actor,
@@ -315,7 +343,13 @@ pub async fn list_audit_rows_page(
             .fetch_all(&mut *conn)
             .await
         }
-        (Some((at, id)), Some(h)) => {
+        (
+            Some(AuditPosition {
+                committed_at: at,
+                transition_id: id,
+            }),
+            Some(h),
+        ) => {
             sqlx::query_as!(
                 AuditRowRaw,
                 "SELECT transition_id, transformation_name, arguments, actor,
@@ -349,7 +383,7 @@ pub async fn list_audit_rows_page(
 /// page still means the bound was reached.
 pub async fn list_audit_rows_page_mentioning(
     conn: &mut sqlx::PgConnection,
-    cursor: Option<(Timestamp, Uuid)>,
+    cursor: Option<AuditPosition>,
     horizon: Option<Timestamp>,
     limit: i64,
     subject: &str,
@@ -380,7 +414,10 @@ pub async fn list_audit_rows_page_mentioning(
             .fetch_all(&mut *conn)
             .await
         }
-        (Some((at, id)), None) => {
+        (Some(AuditPosition {
+            committed_at: at,
+            transition_id: id,
+        }), None) => {
             sqlx::query_as!(
                 AuditRowRaw,
                 r#"SELECT transition_id, transformation_name, arguments, actor,
@@ -423,7 +460,10 @@ pub async fn list_audit_rows_page_mentioning(
             .fetch_all(&mut *conn)
             .await
         }
-        (Some((at, id)), Some(h)) => {
+        (Some(AuditPosition {
+            committed_at: at,
+            transition_id: id,
+        }), Some(h)) => {
             sqlx::query_as!(
                 AuditRowRaw,
                 r#"SELECT transition_id, transformation_name, arguments, actor,
@@ -503,8 +543,7 @@ impl AuditTail<'_> {
         Ok(self)
     }
 
-    /// The next page of transitions in `(committed_at, transition_id)`
-    /// order; empty once the tail reaches the horizon.
+    /// The next page of transitions in log order; empty once the tail reaches the horizon.
     pub async fn next_page(&mut self) -> Result<Vec<AuditRow>, PgError> {
         self.pages.next(&mut self.tx).await
     }
@@ -517,13 +556,30 @@ impl AuditTail<'_> {
         self.pages.next_up_to(&mut self.tx, max).await
     }
 }
-/// Resolve a transition id to the `(committed_at, transition_id)`
-/// keyset cursor every audit read orders by. An unknown id is
+/// The last row in log order that this connection's snapshot sees, if
+/// any.
+pub(crate) async fn latest_audit_position(
+    conn: &mut sqlx::PgConnection,
+) -> Result<Option<AuditPosition>, PgError> {
+    let row = sqlx::query!(
+        "SELECT transition_id, committed_at FROM morpholog.audit
+         ORDER BY committed_at DESC, transition_id DESC LIMIT 1",
+    )
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(row.map(|r| AuditPosition {
+        committed_at: r.committed_at.into(),
+        transition_id: r.transition_id,
+    }))
+}
+/// Resolve a transition id to its [`AuditPosition`], the keyset cursor
+/// every audit read orders by. An unknown id is
 /// [`PgError::TransitionNotFound`], so a typo never restarts a tail.
 pub async fn audit_cursor_for(
     conn: &mut sqlx::PgConnection,
     transition_id: Uuid,
-) -> Result<(Timestamp, Uuid), PgError> {
+) -> Result<AuditPosition, PgError> {
     let row = sqlx::query!(
         "SELECT committed_at FROM morpholog.audit WHERE transition_id = $1",
         transition_id,
@@ -532,7 +588,10 @@ pub async fn audit_cursor_for(
     .await
     .map_err(classify_checked_query)?;
     match row {
-        Some(row) => Ok((row.committed_at.into(), transition_id)),
+        Some(row) => Ok(AuditPosition {
+            committed_at: row.committed_at.into(),
+            transition_id,
+        }),
         None => Err(PgError::TransitionNotFound(transition_id)),
     }
 }

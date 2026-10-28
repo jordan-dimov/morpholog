@@ -156,7 +156,7 @@ fn derive_over_pack(
 /// The state a pack's rows fold to, in log order.
 fn state_of(pack: &EvidencePack) -> State {
     let mut rows: Vec<&AuditRow> = pack.rows.iter().collect();
-    rows.sort_by_key(|r| (r.committed_at, r.transition_id));
+    rows.sort_by_key(|r| r.position());
     let mut state = State::default();
     for row in rows {
         state.apply(&row.asserted_claims, &row.retracted_claims);
