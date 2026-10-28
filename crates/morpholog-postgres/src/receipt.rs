@@ -159,7 +159,7 @@ fn state_of(pack: &EvidencePack) -> State {
     rows.sort_by_key(|r| r.position());
     let mut state = State::default();
     for row in rows {
-        state.apply(&row.asserted_claims, &row.retracted_claims);
+        row.effect().apply_to(&mut state);
     }
     state
 }
