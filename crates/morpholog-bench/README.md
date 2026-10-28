@@ -14,7 +14,7 @@ A minimal-size compatibility smoke test (`cargo test -p morpholog-bench`, gated 
 |---|---|---|---|
 | `write` | N journal entries inserted via direct SQL across K accounts | one `propose_against_pg(post_simple_entry, ...)` call | scoped `load_state` + invariant evaluation over the candidate state + commit |
 | `read`  | same fixture | inline `list_claims` + `State::from_claims` + `enumerate_derived`, each phase timed separately | each layer of the read path, so the dominant cost is visible directly |
-| `as-of` | N fabricated audit rows (direct SQL, bypassing the kernel) | one `reconstruct_state_at` and one `list_derived_at` against a target transition | audit-log replay as a function of N, `--at <fraction>` (how far through the log the target sits), and `--retract-fraction K` |
+| `as-of` | N fabricated audit rows (direct SQL, bypassing the kernel) | one `reconstruct_state_at` and one `list_derived_at` against a target transition | audit-log replay as a function of N, `--at <fraction>` (how far through the log the target sits), and `--retract-fraction K` or `--revise K` |
 | `contend` | optional `--prepopulate N` (ledger entries, or with `--disjoint` items per synthetic predicate), then W workers post concurrently | `--workers` x `--ops-per-worker` concurrent `propose_against_pg` calls, spread across `--periods P`, optionally `--disjoint` | throughput and the SERIALIZABLE 40001 retry rate under concurrency; whether value-level vs predicate-level partitioning relieves it |
 | `kernel` | an in-memory ledger of N entries; no database, no `--reset` | one `propose` with the ledger's invariants, the same with none, and `--acts` sequential proposals each against the candidate the act before it produced | the kernel alone: what invariant evaluation against the book costs (the difference between the two proposals), and the interpreted core of `transact` |
 | `replay` | the `as-of` fixture | `coverage_replay` and `score_candidate` of the ledger against itself | the audit-analysis arc: what a replay that observes every audit row costs as the log grows |
@@ -25,7 +25,7 @@ The `write` and `read` fixture distributes journal lines across `K` distinct acc
 
 `--noise-claims K` pre-populates K rows of an `UnrelatedNoise` predicate that no transformation or invariant touches. A correct predicate-scoped `load_state` skips these server-side (`WHERE predicate_name = ANY($1)`); an unscoped loader would fetch and JSONB-decode every one. It is the bench-side equivalent of the noise-claims regression test in `morpholog-postgres`.
 
-The `as-of` fixture fabricates audit rows directly via SQL (one `INSERT ... SELECT ... FROM generate_series`), bypassing `propose_against_pg`: the bench measures replay cost, not write cost, and going through the kernel per row would make fixture build dominate. Each row carries a 3-claim payload (1 JournalEntry + 2 JournalLines) and a strictly-monotone `committed_at` so replay order is deterministic. `--retract-fraction K` (0-50) makes every `stride`-th transition retract the immediately-prior entry's payload instead of asserting a fresh one; the stride is at least 2 so a retract always targets a still-live assert. The purely-additive default is best-case for replay, so this axis is what would expose any non-linearity in the `ReplaySet` retract path.
+The `as-of` fixture fabricates audit rows directly via SQL (one `INSERT ... SELECT ... FROM generate_series`), bypassing `propose_against_pg`: the bench measures replay cost, not write cost, and going through the kernel per row would make fixture build dominate. Each row carries a 3-claim payload (1 JournalEntry + 2 JournalLines) and a strictly-monotone `committed_at` so replay order is deterministic. `--retract-fraction K` (0-50) makes every `stride`-th transition retract the immediately-prior entry's payload instead of asserting a fresh one; the stride is at least 2 so a retract always targets a still-live assert. The purely-additive default is best-case for replay, so this axis is what would expose any non-linearity in the `ReplaySet` retract path. `--revise K` builds a different shape: the first K transitions admit K entries and every later one replaces one entry's current version (its date and line amounts change), so the live set stays at 3K claims however long the history grows. That is a register revised in vintages, NESO's TEC archive being the case that forced it: the answer stays small while the history before it does not.
 
 The `contend` fixture posts uniquely-keyed entries concurrently. In the default ledger workload, worker `w` posts into period `w mod P` (`--periods P`, default 1 = one shared period) but always shares the journal-line *predicate* footprint that `load_state` reads, so `--periods` partitions by value. With `--disjoint`, the workload becomes a synthetic one whose whole footprint is a single predicate `Bench_{w mod P}` (built via `ir_builder`, since the ledger's predicates are fixed), so `--periods` partitions by predicate and `--periods >= workers` makes the workers genuinely disjoint. Each proposal carries the retry loop a real embedder owns - the kernel and adapter never retry a 40001 - backing off and retrying up to `--max-retries` before an operation is recorded as failed. The pool is sized to the worker count so connections never serialise the workers ahead of SSI.
 
@@ -54,6 +54,9 @@ DATABASE_URL=postgres:///morpholog_bench \
 
 DATABASE_URL=postgres:///morpholog_bench \
   cargo run -p morpholog-bench --release -- as-of 100000 --at 1.0 --retract-fraction 50 --reset
+
+DATABASE_URL=postgres:///morpholog_bench \
+  cargo run -p morpholog-bench --release -- as-of 73038 --revise 730 --at 0.1 --reset
 
 DATABASE_URL=postgres:///morpholog_bench \
   cargo run -p morpholog-bench --release -- contend --workers 16 --ops-per-worker 20 --prepopulate 2000 --periods 16 --reset
@@ -312,6 +315,6 @@ So the fixed per-call tax a subprocess embedder pays is **single-digit milliseco
 
 ### Deferred
 
-- **Incremental snapshots** for as-of replay. Replay is linear in N and now confirmed linear under retraction too, so the materialise-every-K-transitions checkpoint is not forced; revisit if linear-in-N becomes unacceptable for an interactive query.
+- **As-of reads that cost what the answer costs.** Replay is linear in the transitions before the target, under retraction and revision alike. The TEC register made that unacceptable for an interactive read, and `asof/revise` is its ruler: a small live set over a long history, where the cost is all history.
 - **Streaming `sqlx::query::fetch`** instead of `fetch_all`. Memory scales with audit rows fetched; not pressing until past N=1M (per-row payload is ~200-500 bytes).
 - **Materialised derived claims**, with invalidation modelled as ordinary claims (not cache machinery). The current `list_scoped`-dominated read cost is the pressure; awaits a worked example.
