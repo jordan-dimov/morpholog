@@ -78,7 +78,7 @@ pub fn rehearse_candidate_against_pack(
         }
     }
     let mut rows: Vec<&AuditRow> = pack.rows.iter().collect();
-    rows.sort_by_key(|r| (r.committed_at, r.transition_id));
+    rows.sort_by_key(|r| r.position());
     let mut rehearsal = Rehearsal::new(program);
     let mut replay = State::default();
     rehearse_rows(&mut replay, &mut rehearsal, rows);

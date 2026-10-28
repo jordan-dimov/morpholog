@@ -215,16 +215,11 @@ async fn load_prefix_rows(
 /// rows at one coordinate are refused: a Merkle position holds one row.
 fn canonically_sorted(rows: &[AuditRow]) -> Result<Vec<&AuditRow>, PackError> {
     let mut rows: Vec<&AuditRow> = rows.iter().collect();
-    rows.sort_by_key(|a| (a.committed_at, a.transition_id));
+    rows.sort_by_key(|r| r.position());
     for pair in rows.windows(2) {
-        if (pair[0].committed_at, pair[0].transition_id)
-            == (pair[1].committed_at, pair[1].transition_id)
-        {
+        if pair[0].position() == pair[1].position() {
             return Err(PackError::Malformed {
-                detail: format!(
-                    "two rows share coordinates ({}, {})",
-                    pair[0].committed_at, pair[0].transition_id
-                ),
+                detail: format!("two rows share coordinates {}", pair[0].position()),
             });
         }
     }

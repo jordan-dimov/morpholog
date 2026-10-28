@@ -18,7 +18,7 @@ use super::{
     check_manifest, covering_checkpoint, manifest_agrees, row_count_disagrees,
     validate_prefix_chain,
 };
-use crate::audit::AuditRow;
+use crate::audit::{AuditPosition, AuditRow};
 use crate::audit_pages::AuditPages;
 use crate::checkpoints::{Checkpoint, TreeVerification, load_checkpoint_chain};
 use crate::error::{PgError, classify_checked_query};
@@ -177,7 +177,7 @@ struct RowStream<R> {
     lines: Lines<R>,
     manifest: PrefixPackManifest,
     fed: usize,
-    previous: Option<(jiff::Timestamp, uuid::Uuid)>,
+    previous: Option<AuditPosition>,
 }
 
 impl<R: BufRead> RowStream<R> {
@@ -232,14 +232,14 @@ impl<R: BufRead> RowStream<R> {
             return Err(row_count_disagrees(self.fed, self.manifest.tree_size));
         }
         let row: AuditRow = self.lines.parse("an audit row")?;
-        let here = (row.committed_at, row.transition_id);
+        let here = row.position();
         if let Some(before) = self.previous
             && here <= before
         {
             return Err(PackError::Malformed {
                 detail: format!(
-                    "line {}: rows are not in strictly increasing log order ({}, {}) after ({}, {})",
-                    self.lines.number, here.0, here.1, before.0, before.1
+                    "line {}: rows are not in strictly increasing log order {here} after {before}",
+                    self.lines.number
                 ),
             });
         }

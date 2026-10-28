@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use super::{AuditPages, ReplayPages};
 use crate::PgPool;
+use crate::audit::AuditPosition;
 
 async fn pool() -> PgPool {
     let url = std::env::var("DATABASE_URL").expect(
@@ -45,6 +46,13 @@ fn id(n: u128) -> Uuid {
 
 fn at(second: i64) -> Timestamp {
     Timestamp::from_second(1_780_000_000 + second).unwrap()
+}
+
+fn pos(second: i64, n: u128) -> AuditPosition {
+    AuditPosition {
+        committed_at: at(second),
+        transition_id: id(n),
+    }
 }
 
 // Hand-inserted audit rows carry an attestation, as every row the
@@ -156,12 +164,12 @@ async fn a_horizon_excludes_every_row_at_or_after_it() {
 async fn a_walk_through_a_target_includes_it_and_nothing_after() {
     let pool = seeded().await;
     // Mid-chunk: without the bound the second page would hold 3 and 4.
-    let (seen, _) = replay_walk(&pool, ReplayPages::with_chunk(Some((at(2), id(3))), 2)).await;
+    let (seen, _) = replay_walk(&pool, ReplayPages::with_chunk(Some(pos(2, 3)), 2)).await;
     assert_eq!(seen, ids(&[1, 2, 3]), "a target among tied timestamps");
     // The target is the first of three tied rows.
-    let (seen, _) = replay_walk(&pool, ReplayPages::with_chunk(Some((at(2), id(2))), 2)).await;
+    let (seen, _) = replay_walk(&pool, ReplayPages::with_chunk(Some(pos(2, 2)), 2)).await;
     assert_eq!(seen, ids(&[1, 2]));
-    let (seen, _) = replay_walk(&pool, ReplayPages::with_chunk(Some((at(4), id(6))), 2)).await;
+    let (seen, _) = replay_walk(&pool, ReplayPages::with_chunk(Some(pos(4, 6)), 2)).await;
     assert_eq!(seen, ids(&[1, 2, 3, 4, 5, 6]), "the last row");
 }
 
@@ -169,8 +177,7 @@ async fn a_walk_through_a_target_includes_it_and_nothing_after() {
 async fn a_page_ending_on_the_target_ends_the_walk_without_another_query() {
     let pool = seeded().await;
     // 4 is the last row of the second full page.
-    let (seen, queries) =
-        replay_walk(&pool, ReplayPages::with_chunk(Some((at(2), id(4))), 2)).await;
+    let (seen, queries) = replay_walk(&pool, ReplayPages::with_chunk(Some(pos(2, 4)), 2)).await;
     assert_eq!(seen, ids(&[1, 2, 3, 4]));
     assert_eq!(queries, 2, "two full pages, and no empty third query");
 }
@@ -207,7 +214,7 @@ async fn a_walk_resumed_after_a_row_starts_strictly_after_it() {
     assert_eq!(
         audit_walk(
             &pool,
-            AuditPages::with_chunk(None, 2).after(Some((at(2), id(3))))
+            AuditPages::with_chunk(None, 2).after(Some(pos(2, 3)))
         )
         .await,
         ids(&[4, 5, 6])
@@ -250,4 +257,15 @@ async fn a_bounded_page_asks_only_for_what_it_needs_and_the_walk_resumes_after_i
     assert_eq!(next(10).await, ids(&[2, 3, 4, 5]), "capped at a chunk");
     assert_eq!(next(1).await, ids(&[6]));
     assert_eq!(next(1).await, ids(&[]), "a full page did not end the walk");
+}
+
+/// Time decides first, and the id breaks a tie: the order the queries use.
+#[test]
+fn a_position_orders_by_time_then_by_id() {
+    let mut positions = vec![pos(2, 3), pos(1, 9), pos(2, 1), pos(3, 0), pos(2, 2)];
+    positions.sort();
+    assert_eq!(
+        positions,
+        [pos(1, 9), pos(2, 1), pos(2, 2), pos(2, 3), pos(3, 0)]
+    );
 }

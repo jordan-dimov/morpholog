@@ -1,5 +1,5 @@
 use crate::as_of::reconstruct_inner;
-use crate::audit::REPLAY_CHUNK;
+use crate::audit::{REPLAY_CHUNK, latest_audit_position};
 use crate::audit_pages::{ReplayPages, ReplayRow};
 use crate::checkpoints::TreeVerification;
 use crate::claims::decode_claim_rows;
@@ -412,14 +412,7 @@ pub async fn verify_replay(
     on_progress: &mut dyn FnMut(VerifyProgress),
 ) -> Result<VerifyOutcome, PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
-    let latest = sqlx::query!(
-        "SELECT transition_id FROM morpholog.audit
-         ORDER BY committed_at DESC, transition_id DESC
-         LIMIT 1",
-    )
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(classify_checked_query)?;
+    let latest = latest_audit_position(&mut tx).await?;
     // count(*) is never null, but Postgres cannot prove it.
     let transitions = sqlx::query!(r#"SELECT count(*) AS "count!" FROM morpholog.audit"#)
         .fetch_one(&mut *tx)

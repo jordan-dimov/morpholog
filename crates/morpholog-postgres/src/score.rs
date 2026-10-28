@@ -6,7 +6,7 @@
 //! replay from the live database or from an offline evidence pack.
 
 use crate::as_of::resolve_transition_at_or_before;
-use crate::audit::{AuditRow, audit_cursor_for};
+use crate::audit::{AuditPosition, AuditRow, audit_cursor_for};
 use crate::audit_pages::AuditPages;
 use crate::checkpoints::{Checkpoint, TreeVerification};
 use crate::error::{PgError, classify};
@@ -47,17 +47,17 @@ impl SplitBoundary {
 /// A resolved boundary waiting to be marked: the cursor to compare
 /// rows against, and the report the scorer records at the mark.
 struct PendingSplit {
-    cursor: (Timestamp, Uuid),
+    cursor: AuditPosition,
     report: SplitBoundaryReport,
 }
 
-fn pending_split(boundary: SplitBoundary, cursor: (Timestamp, Uuid)) -> PendingSplit {
+fn pending_split(boundary: SplitBoundary, cursor: AuditPosition) -> PendingSplit {
     PendingSplit {
         cursor,
         report: SplitBoundaryReport {
             requested: boundary.requested(),
-            resolved_transition_id: cursor.1.to_string(),
-            resolved_committed_at: crate::wire_time::render(&cursor.0),
+            resolved_transition_id: cursor.transition_id.to_string(),
+            resolved_committed_at: crate::wire_time::render(&cursor.committed_at),
         },
     }
 }
@@ -85,7 +85,7 @@ fn fold_rows<'a>(
         // Mark the boundary before the first row beyond it; a boundary
         // at or past the end of history is marked by the caller after
         // the fold (an empty test slice, not a lost one).
-        if let Some(pending) = split.take_if(|p| (row.committed_at, row.transition_id) > p.cursor) {
+        if let Some(pending) = split.take_if(|p| row.position() > p.cursor) {
             scorer.mark_split(pending.report);
         }
         // Read the effective delta before the state advances in place,
@@ -171,7 +171,7 @@ pub fn score_candidate_against_pack(
     // Replay in canonical order, as the verifier does, whatever order the
     // pack stores rows in.
     let mut rows: Vec<&AuditRow> = pack.rows.iter().collect();
-    rows.sort_by_key(|r| (r.committed_at, r.transition_id));
+    rows.sort_by_key(|r| r.position());
 
     // Resolved against the pack's own rows, so it splits where the live
     // replay would over the covered prefix.
@@ -180,7 +180,7 @@ pub fn score_candidate_against_pack(
             b,
             rows.iter()
                 .find(|r| r.transition_id == id)
-                .map(|r| (r.committed_at, r.transition_id))
+                .map(|r| r.position())
                 .ok_or(PgError::TransitionNotFound(id))?,
         )),
         Some(b @ SplitBoundary::AtOrBefore(at)) => Some(pending_split(
@@ -188,7 +188,7 @@ pub fn score_candidate_against_pack(
             rows.iter()
                 .rev()
                 .find(|r| r.committed_at <= at)
-                .map(|r| (r.committed_at, r.transition_id))
+                .map(|r| r.position())
                 .ok_or(PgError::NoTransitionAtOrBefore(at))?,
         )),
         None => None,
