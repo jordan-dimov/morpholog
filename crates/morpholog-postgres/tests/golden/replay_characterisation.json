@@ -479,6 +479,16 @@
           "args": [
             {
               "type": "subject",
+              "value": "b"
+            }
+          ],
+          "asserted_in": "t8",
+          "predicate": "X"
+        },
+        {
+          "args": [
+            {
+              "type": "subject",
               "value": "c"
             },
             {
@@ -541,16 +551,6 @@
           ],
           "asserted_in": "t9",
           "predicate": "Note"
-        },
-        {
-          "args": [
-            {
-              "type": "subject",
-              "value": "b"
-            }
-          ],
-          "asserted_in": "t11",
-          "predicate": "X"
         }
       ]
     },
@@ -609,16 +609,6 @@
           "args": [
             {
               "type": "subject",
-              "value": "b"
-            }
-          ],
-          "asserted_in": "t11",
-          "predicate": "X"
-        },
-        {
-          "args": [
-            {
-              "type": "subject",
               "value": "d"
             }
           ],
@@ -648,8 +638,8 @@
         "transitions": 6
       },
       {
-        "first": "t10",
-        "last": "t10",
+        "first": "t11",
+        "last": "t11",
         "transformation": "retract_x",
         "transitions": 1
       },
@@ -1032,23 +1022,13 @@
     "admit_x",
     "readmit_x",
     "note",
-    "retract_x",
     "admit_x",
+    "retract_x",
     "admit_x"
   ],
   "verify": {
-    "only_in_claims_table": [],
-    "only_in_replay": [
-      {
-        "args": [
-          {
-            "type": "subject",
-            "value": "b"
-          }
-        ],
-        "predicate": "X"
-      }
-    ],
-    "status": "divergent"
+    "claims": 5,
+    "status": "consistent",
+    "transitions": 13
   }
 }

@@ -1,8 +1,9 @@
+use crate::audit::Operation;
 use crate::audit::audit_cursor_for;
 use crate::audit_pages::ReplayPages;
 use crate::claims::ClaimRead;
 use crate::error::{PgError, classify, classify_checked_query};
-use crate::replay::RowEffect;
+use crate::replay::{EffectKind, RowEffect};
 use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
 use morpholog_core::{ClaimInstance, State};
@@ -204,10 +205,24 @@ pub(crate) async fn reconstruct_inner(
             };
             let asserted = in_scope(row.asserted_claims)?;
             let retracted = in_scope(row.retracted_claims)?;
+            let operations = row
+                .operations
+                .map(serde_json::from_value::<Vec<Operation>>)
+                .transpose()?
+                .map(|mut ops| {
+                    if let Some(scope) = scope_set.as_ref() {
+                        ops.retain(|op| scope.contains(op.predicate.as_str()));
+                    }
+                    ops
+                });
             let effect = RowEffect {
                 transition_id: row.transition_id,
-                retracted: &retracted,
-                asserted: &asserted,
+                kind: EffectKind::of(
+                    &row.transformation_name,
+                    &retracted,
+                    &asserted,
+                    operations.as_deref(),
+                ),
             };
             if let Some(map) = asserted_in.as_deref_mut() {
                 effect.apply_to_provenance(map);

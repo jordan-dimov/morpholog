@@ -133,6 +133,10 @@ mod tests {
             model_hash: None,
             semantics_version: None,
             drawn_subjects: None,
+            audit_order: None,
+            act_ordinal: None,
+            ordered_at: None,
+            operations: None,
         }
     }
 

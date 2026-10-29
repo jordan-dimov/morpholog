@@ -185,7 +185,8 @@ async fn a_database_the_last_release_wrote_upgrades_and_verifies() {
         morpholog_postgres::head_version(),
         "{migrated}"
     );
-    for (report, rows) in [(&verified, 3), (&verified_after, 4)] {
+    // The legacy rows, the activation record, then the new write.
+    for (report, rows) in [(&verified, 4), (&verified_after, 5)] {
         assert_eq!(report["passes"], true, "{report}");
         assert_eq!(report["replay"]["status"], "consistent", "{report}");
         assert_eq!(report["tree"]["status"], "intact", "{report}");

@@ -4,7 +4,9 @@ use crate::propose::AuditedInvariantCheck;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
-use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, Subject, TransformationName};
+use morpholog_core::{
+    ClaimInstance, EvalValue, IntentInstance, PredicateName, Subject, TransformationName,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -83,6 +85,88 @@ pub struct AuditRow {
         deserialize_with = "present"
     )]
     pub drawn_subjects: Option<Vec<Subject>>,
+    /// The row's place in the canonical order: the order its transaction
+    /// drew, the act's place within that transaction, and the ordered
+    /// timestamp. The four ordering fields come together, absent on rows
+    /// from before the order existed and present on every row after,
+    /// where they select the leaf encoding that commits to them.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub audit_order: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub act_ordinal: Option<u32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::wire_time::option::serialize",
+        deserialize_with = "present_instant"
+    )]
+    pub ordered_at: Option<Timestamp>,
+    /// What the commit did to the claims table, in execution order.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub operations: Option<Vec<Operation>>,
+}
+
+/// One row operation a commit performed on the claims table: a delete,
+/// an insert, or an insert that found the claim already present.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Operation {
+    pub op: OperationKind,
+    pub predicate: PredicateName,
+    pub args: Vec<EvalValue>,
+    /// On the activation record's baseline only: the transition that
+    /// admitted the claim.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub asserted_in: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OperationKind {
+    Del,
+    Ins,
+    Noop,
+}
+
+impl Operation {
+    pub(crate) fn new(op: OperationKind, claim: &ClaimInstance) -> Self {
+        Operation {
+            op,
+            predicate: claim.predicate.clone(),
+            args: claim.args.clone(),
+            asserted_in: None,
+        }
+    }
+
+    pub fn claim(&self) -> ClaimInstance {
+        ClaimInstance {
+            predicate: self.predicate.clone(),
+            args: self.args.clone(),
+        }
+    }
+}
+
+fn present_instant<'de, D>(d: D) -> Result<Option<Timestamp>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    crate::wire_time::deserialize(d).map(Some)
 }
 
 /// A leaf-rung field that is optional by omission only: absent is
@@ -98,17 +182,25 @@ where
 }
 
 /// A row's place in the audit log's one order. Every walk, cursor, sort
-/// and latest-row read takes its order from here.
+/// and latest-row read takes its order from here. Rows from before the
+/// canonical order have order and ordinal 0, so they come first, in the
+/// order they always had.
 // The derived ordering follows field order, which is the log order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AuditPosition {
+    pub(crate) audit_order: u64,
+    pub(crate) act_ordinal: u32,
     pub(crate) committed_at: Timestamp,
     pub(crate) transition_id: Uuid,
 }
 
 impl std::fmt::Display for AuditPosition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}, {})", self.committed_at, self.transition_id)
+        write!(
+            f,
+            "({}, {}, {}, {})",
+            self.audit_order, self.act_ordinal, self.committed_at, self.transition_id
+        )
     }
 }
 
@@ -116,6 +208,8 @@ impl AuditRow {
     /// This row's place in the log order.
     pub fn position(&self) -> AuditPosition {
         AuditPosition {
+            audit_order: self.audit_order.unwrap_or(0),
+            act_ordinal: self.act_ordinal.unwrap_or(0),
             committed_at: self.committed_at,
             transition_id: self.transition_id,
         }
@@ -123,12 +217,39 @@ impl AuditRow {
 
     /// Check the row is a shape the runtime writes: nothing extra, an
     /// attestation, an attestation plus one name per argument, those plus
-    /// the model hash, those plus the semantics version, or those plus the
-    /// drawn subjects. Each rung needs the one below it.
+    /// the model hash, those plus the semantics version, those plus the
+    /// drawn subjects, or those plus the four ordering fields. Each rung
+    /// needs the one below it.
     ///
     /// Checked at the database boundary and before hashing, because packs
     /// carry rows as hostile input.
     pub fn validate_shape(&self) -> Result<(), String> {
+        let ordering = [
+            self.audit_order.is_some(),
+            self.act_ordinal.is_some(),
+            self.ordered_at.is_some(),
+            self.operations.is_some(),
+        ];
+        if ordering.contains(&true) {
+            if ordering.contains(&false) {
+                return Err(format!(
+                    "audit row {} carries some of its ordering fields but not all",
+                    self.transition_id
+                ));
+            }
+            if self.drawn_subjects.is_none() {
+                return Err(format!(
+                    "audit row {} carries an order without drawn subjects",
+                    self.transition_id
+                ));
+            }
+            if self.audit_order == Some(0) {
+                return Err(format!(
+                    "audit row {} carries order 0; orders start at 1",
+                    self.transition_id
+                ));
+            }
+        }
         if self.drawn_subjects.is_some() && self.semantics_version.is_none() {
             return Err(format!(
                 "audit row {} records drawn subjects without a semantics version",
@@ -207,13 +328,19 @@ pub(crate) struct AuditRowRaw {
     semantics_version: Option<i64>,
     // Nullable for the same reason: historical rows recorded no draws.
     drawn_subjects: Option<serde_json::Value>,
+    // 0 on rows from before the canonical order.
+    audit_order: i64,
+    act_ordinal: i32,
+    ordered_at: Option<jiff_sqlx::Timestamp>,
+    operations: Option<serde_json::Value>,
 }
 // The canonical column order, shared by `AuditRowRaw` and every listing
 // SELECT (each `query_as!` must spell it out literally):
 //   transition_id, transformation_name, arguments, actor,
 //   invariant_epoch, invariants_checked,
 //   asserted_claims, retracted_claims, emitted_intents, committed_at,
-//   attestation, parameters, model_hash, semantics_version, drawn_subjects
+//   attestation, parameters, model_hash, semantics_version, drawn_subjects,
+//   audit_order, act_ordinal, ordered_at, operations
 pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
     let decoded = AuditRow {
         transition_id: row.transition_id,
@@ -256,9 +383,26 @@ pub(crate) fn decode_audit_row(row: AuditRowRaw) -> Result<AuditRow, PgError> {
             .drawn_subjects
             .map(serde_json::from_value::<Vec<Subject>>)
             .transpose()?,
+        audit_order: ordering_field(row.audit_order, row.operations.is_some())?,
+        act_ordinal: ordering_field(i64::from(row.act_ordinal), row.operations.is_some())?,
+        ordered_at: row.ordered_at.map(jiff_sqlx::Timestamp::to_jiff),
+        operations: row
+            .operations
+            .map(serde_json::from_value::<Vec<Operation>>)
+            .transpose()?,
     };
     decoded.validate_shape().map_err(PgError::InvalidState)?;
     Ok(decoded)
+}
+/// An ordering column as the row carries it: the table stores 0 on a
+/// legacy row, which the row leaves absent.
+fn ordering_field<T: TryFrom<i64>>(value: i64, ordered: bool) -> Result<Option<T>, PgError> {
+    if !ordered {
+        return Ok(None);
+    }
+    T::try_from(value)
+        .map(Some)
+        .map_err(|_| PgError::InvalidState(format!("audit ordering value {value} is out of range")))
 }
 /// Return every committed audit row, ordered by `(committed_at,
 /// transition_id)`: commit order, with the UUIDv7 key as tie-break.
@@ -283,7 +427,7 @@ pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
 pub async fn list_audit_rows_page(
     conn: &mut sqlx::PgConnection,
     cursor: Option<AuditPosition>,
-    horizon: Option<Timestamp>,
+    horizon: Option<u64>,
     limit: i64,
 ) -> Result<Vec<AuditRow>, PgError> {
     let rows = match (&cursor, &horizon) {
@@ -293,9 +437,10 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash, semantics_version, drawn_subjects
+                attestation, parameters, model_hash, semantics_version, drawn_subjects,
+                audit_order, act_ordinal, ordered_at, operations
                  FROM morpholog.audit
-                 ORDER BY committed_at, transition_id
+                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
                  LIMIT $1",
                 limit,
             )
@@ -304,6 +449,8 @@ pub async fn list_audit_rows_page(
         }
         (
             Some(AuditPosition {
+                audit_order: o,
+                act_ordinal: k,
                 committed_at: at,
                 transition_id: id,
             }),
@@ -314,14 +461,17 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash, semantics_version, drawn_subjects
+                attestation, parameters, model_hash, semantics_version, drawn_subjects,
+                audit_order, act_ordinal, ordered_at, operations
                  FROM morpholog.audit
-                 WHERE (committed_at, transition_id) > ($2, $3)
-                 ORDER BY committed_at, transition_id
+                 WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($4, $5, $2, $3)
+                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
                  LIMIT $1",
                 limit,
                 at.to_sqlx(),
                 *id,
+                o.cast_signed(),
+                k.cast_signed(),
             )
             .fetch_all(&mut *conn)
             .await
@@ -332,19 +482,22 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash, semantics_version, drawn_subjects
+                attestation, parameters, model_hash, semantics_version, drawn_subjects,
+                audit_order, act_ordinal, ordered_at, operations
                  FROM morpholog.audit
-                 WHERE committed_at < $2
-                 ORDER BY committed_at, transition_id
+                 WHERE audit_order < $2
+                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
                  LIMIT $1",
                 limit,
-                h.to_sqlx(),
+                h.cast_signed(),
             )
             .fetch_all(&mut *conn)
             .await
         }
         (
             Some(AuditPosition {
+                audit_order: o,
+                act_ordinal: k,
                 committed_at: at,
                 transition_id: id,
             }),
@@ -355,16 +508,19 @@ pub async fn list_audit_rows_page(
                 "SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash, semantics_version, drawn_subjects
+                attestation, parameters, model_hash, semantics_version, drawn_subjects,
+                audit_order, act_ordinal, ordered_at, operations
                  FROM morpholog.audit
-                 WHERE (committed_at, transition_id) > ($2, $3)
-                   AND committed_at < $4
-                 ORDER BY committed_at, transition_id
+                 WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($5, $6, $2, $3)
+                   AND audit_order < $4
+                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
                  LIMIT $1",
                 limit,
                 at.to_sqlx(),
                 *id,
-                h.to_sqlx(),
+                h.cast_signed(),
+                o.cast_signed(),
+                k.cast_signed(),
             )
             .fetch_all(&mut *conn)
             .await
@@ -384,7 +540,7 @@ pub async fn list_audit_rows_page(
 pub async fn list_audit_rows_page_mentioning(
     conn: &mut sqlx::PgConnection,
     cursor: Option<AuditPosition>,
-    horizon: Option<Timestamp>,
+    horizon: Option<u64>,
     limit: i64,
     subject: &str,
 ) -> Result<Vec<AuditRow>, PgError> {
@@ -401,12 +557,13 @@ pub async fn list_audit_rows_page_mentioning(
                 r#"SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash, semantics_version, drawn_subjects
+                attestation, parameters, model_hash, semantics_version, drawn_subjects,
+                audit_order, act_ordinal, ordered_at, operations
                  FROM morpholog.audit
                  WHERE jsonb_path_exists(
                      jsonb_build_array(arguments, asserted_claims, retracted_claims, emitted_intents),
                      '$.** ? (@.type == "subject" && @.value == $s)', $2)
-                 ORDER BY committed_at, transition_id
+                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
                  LIMIT $1"#,
                 limit,
                 vars,
@@ -415,6 +572,8 @@ pub async fn list_audit_rows_page_mentioning(
             .await
         }
         (Some(AuditPosition {
+            audit_order: o,
+            act_ordinal: k,
             committed_at: at,
             transition_id: id,
         }), None) => {
@@ -423,18 +582,21 @@ pub async fn list_audit_rows_page_mentioning(
                 r#"SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash, semantics_version, drawn_subjects
+                attestation, parameters, model_hash, semantics_version, drawn_subjects,
+                audit_order, act_ordinal, ordered_at, operations
                  FROM morpholog.audit
-                 WHERE (committed_at, transition_id) > ($2, $3)
+                 WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($5, $6, $2, $3)
                    AND jsonb_path_exists(
                      jsonb_build_array(arguments, asserted_claims, retracted_claims, emitted_intents),
                      '$.** ? (@.type == "subject" && @.value == $s)', $4)
-                 ORDER BY committed_at, transition_id
+                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
                  LIMIT $1"#,
                 limit,
                 at.to_sqlx(),
                 *id,
                 vars,
+                o.cast_signed(),
+                k.cast_signed(),
             )
             .fetch_all(&mut *conn)
             .await
@@ -445,22 +607,25 @@ pub async fn list_audit_rows_page_mentioning(
                 r#"SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash, semantics_version, drawn_subjects
+                attestation, parameters, model_hash, semantics_version, drawn_subjects,
+                audit_order, act_ordinal, ordered_at, operations
                  FROM morpholog.audit
-                 WHERE committed_at < $2
+                 WHERE audit_order < $2
                    AND jsonb_path_exists(
                      jsonb_build_array(arguments, asserted_claims, retracted_claims, emitted_intents),
                      '$.** ? (@.type == "subject" && @.value == $s)', $3)
-                 ORDER BY committed_at, transition_id
+                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
                  LIMIT $1"#,
                 limit,
-                h.to_sqlx(),
+                h.cast_signed(),
                 vars,
             )
             .fetch_all(&mut *conn)
             .await
         }
         (Some(AuditPosition {
+            audit_order: o,
+            act_ordinal: k,
             committed_at: at,
             transition_id: id,
         }), Some(h)) => {
@@ -469,20 +634,23 @@ pub async fn list_audit_rows_page_mentioning(
                 r#"SELECT transition_id, transformation_name, arguments, actor,
                         invariant_epoch, invariants_checked,
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
-                attestation, parameters, model_hash, semantics_version, drawn_subjects
+                attestation, parameters, model_hash, semantics_version, drawn_subjects,
+                audit_order, act_ordinal, ordered_at, operations
                  FROM morpholog.audit
-                 WHERE (committed_at, transition_id) > ($2, $3)
-                   AND committed_at < $4
+                 WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($6, $7, $2, $3)
+                   AND audit_order < $4
                    AND jsonb_path_exists(
                      jsonb_build_array(arguments, asserted_claims, retracted_claims, emitted_intents),
                      '$.** ? (@.type == "subject" && @.value == $s)', $5)
-                 ORDER BY committed_at, transition_id
+                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
                  LIMIT $1"#,
                 limit,
                 at.to_sqlx(),
                 *id,
-                h.to_sqlx(),
+                h.cast_signed(),
                 vars,
+                o.cast_signed(),
+                k.cast_signed(),
             )
             .fetch_all(&mut *conn)
             .await
@@ -510,7 +678,6 @@ pub struct AuditTail<'p> {
 pub async fn begin_audit_tail<'p>(
     pool: &'p PgPool,
     after: Option<Uuid>,
-    writers: Option<&[String]>,
 ) -> Result<AuditTail<'p>, PgError> {
     let cursor = match after {
         Some(tid) => {
@@ -521,7 +688,7 @@ pub async fn begin_audit_tail<'p>(
     };
     // Horizon strictly before the snapshot - the ordering the
     // lossless-resume proof rests on.
-    let horizon = audit_resume_watermark(pool, writers).await?;
+    let horizon = audit_resume_watermark(pool).await?;
     let tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
     Ok(AuditTail {
         tx,
@@ -562,13 +729,16 @@ pub(crate) async fn latest_audit_position(
     conn: &mut sqlx::PgConnection,
 ) -> Result<Option<AuditPosition>, PgError> {
     let row = sqlx::query!(
-        "SELECT transition_id, committed_at FROM morpholog.audit
-         ORDER BY committed_at DESC, transition_id DESC LIMIT 1",
+        "SELECT transition_id, committed_at, audit_order, act_ordinal FROM morpholog.audit
+         ORDER BY audit_order DESC, act_ordinal DESC, committed_at DESC, transition_id DESC
+         LIMIT 1",
     )
     .fetch_optional(&mut *conn)
     .await
     .map_err(classify_checked_query)?;
     Ok(row.map(|r| AuditPosition {
+        audit_order: r.audit_order.cast_unsigned(),
+        act_ordinal: r.act_ordinal.cast_unsigned(),
         committed_at: r.committed_at.into(),
         transition_id: r.transition_id,
     }))
@@ -581,7 +751,8 @@ pub async fn audit_cursor_for(
     transition_id: Uuid,
 ) -> Result<AuditPosition, PgError> {
     let row = sqlx::query!(
-        "SELECT committed_at FROM morpholog.audit WHERE transition_id = $1",
+        "SELECT committed_at, audit_order, act_ordinal FROM morpholog.audit
+         WHERE transition_id = $1",
         transition_id,
     )
     .fetch_optional(&mut *conn)
@@ -589,168 +760,34 @@ pub async fn audit_cursor_for(
     .map_err(classify_checked_query)?;
     match row {
         Some(row) => Ok(AuditPosition {
+            audit_order: row.audit_order.cast_unsigned(),
+            act_ordinal: row.act_ordinal.cast_unsigned(),
             committed_at: row.committed_at.into(),
             transition_id,
         }),
         None => Err(PgError::TransitionNotFound(transition_id)),
     }
 }
-/// The resume horizon for a lossless audit tail: every audit row with
-/// `committed_at` strictly below the returned instant is already
-/// visible to a snapshot taken AFTER this call returns.
+/// The resume horizon for a lossless audit tail: every audit row whose
+/// order is strictly below the returned one is final, committed or never
+/// to commit, and so visible to a snapshot taken after this call returns.
 ///
-/// Why: `committed_at` is the WRITER's transaction start (`now()`), but
-/// visibility follows commit order. A snapshot alone can miss an
-/// in-flight writer whose row will sort below rows already emitted, and
-/// a cursor past that slot would skip it forever. The horizon is the
-/// minimum `xact_start` over every other open transaction in this
-/// database except autovacuum's, or `now()` if none, computed BEFORE the
-/// read snapshot. Any row the snapshot cannot see belongs to a writer
-/// that started at or after the horizon, so the `< horizon` clamp
-/// excludes it. Such rows are withheld, never lost: the next call's
-/// horizon surfaces them.
+/// A writer draws its order under the ordering lock and holds it, as a
+/// transaction lock, until it commits or rolls back. The horizon is the
+/// least order still held in this database, a prepared transaction's
+/// included, or else the next order to be drawn, read under the same
+/// lock, so no order below it can still be drawn or be in flight. Rows
+/// from before the canonical order have order 0 and are always below it.
 ///
-/// Preconditions:
-/// - The caller takes its read snapshot AFTER this call returns.
-/// - This session can see other sessions in `pg_stat_activity` (same
-///   role as the writers, `pg_read_all_stats`, or superuser). An unseen
-///   session would silently drop out of the minimum, so it is detected
-///   and returned as [`PgError::StatVisibility`].
-/// - No prepared (2PC) transaction writes audit. PostgreSQL defaults to
-///   `max_prepared_transactions = 0` and the adapter never prepares.
-///
-/// Autovacuum workers are excluded: they hold long transactions and never
-/// write audit. The filter uses `IS DISTINCT FROM`, not `<>`, because an
-/// unseen session has a null `backend_type` and `<>` would drop it from
-/// both the minimum and the hidden count.
-///
-/// Liveness: a stuck session anywhere in the database stalls the tail;
-/// it never loses rows.
-///
-/// # The writer assertion (`writers: Some(..)`)
-///
-/// Managed PostgreSQL hides the platform's sessions and will not grant
-/// `pg_read_all_stats`, so the all-sessions horizon is unavailable. The
-/// operator can instead name the login roles that write audit, and the
-/// horizon covers only their sessions.
-///
-/// The assertion is verified, not trusted. In the SAME statement as the
-/// horizon (one snapshot, so a concurrent grant cannot split them), a
-/// catalog census lists every non-superuser role that (a) can hold a
-/// session - login-capable or currently connected, which catches a role
-/// made NOLOGIN after connecting - and (b) can insert into
-/// `morpholog.audit` directly, through inherited membership, or by
-/// `SET ROLE` (`pg_has_role(..., 'SET')`; `'MEMBER'` would also demand
-/// roles with no usable path). Errors:
-/// - an asserted name that does not exist: [`PgError::WriterRoleUnknown`];
-/// - a census role missing from the assertion:
-///   [`PgError::WriterAssertionIncomplete`];
-/// - a hidden session of an asserted role: [`PgError::WriterSessionsHidden`].
-///
-/// Sessions match by role OID, not name, so a rename cannot misclassify
-/// one.
-///
-/// What the assertion accepts:
-/// - SUPERUSER writes are outside the proof. Superusers bypass ACLs and
-///   every managed host runs them; they do not write embedder schemas.
-/// - Role configuration (grants, memberships, login) must stay stable
-///   from this statement until the caller's snapshot. A grant in that
-///   window, to a role with an already-open transaction, is the accepted
-///   residue.
-pub async fn audit_resume_watermark(
-    pool: &PgPool,
-    writers: Option<&[String]>,
-) -> Result<Timestamp, PgError> {
-    if let Some(asserted) = writers {
-        return audit_resume_watermark_asserted(pool, asserted).await;
-    }
-    // One statement: the `now()` fallback must be taken at the same
-    // instant as the minimum, or a writer starting in between would sort
-    // below it. An unseen session shows its query as
-    // '<insufficient privilege>' and hides `xact_start`, so it is counted.
-    // `horizon!` / `hidden!`: coalesce(_, now()) and count(*) are never
-    // null.
-    let row = sqlx::query!(
-        r#"SELECT coalesce(min(xact_start), now()) AS "horizon!",
-                  count(*) FILTER (WHERE query = '<insufficient privilege>') AS "hidden!"
-           FROM pg_stat_activity
-           WHERE datname = current_database()
-             AND pid <> pg_backend_pid()
-             AND backend_type IS DISTINCT FROM 'autovacuum worker'"#,
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(classify_checked_query)?;
-    if row.hidden > 0 {
-        return Err(PgError::StatVisibility { hidden: row.hidden });
-    }
-    Ok(row.horizon.into())
-}
-
-/// The assertion-mode horizon: census, filter, and minimum in one
-/// statement. See `audit_resume_watermark`.
-async fn audit_resume_watermark_asserted(
-    pool: &PgPool,
-    asserted: &[String],
-) -> Result<Timestamp, PgError> {
-    if asserted.is_empty() {
-        return Err(PgError::WriterAssertionEmpty);
-    }
-    let mut names: Vec<String> = asserted.to_vec();
-    names.sort();
-    names.dedup();
-    // `horizon!` / `hidden!`: coalesce and count are never null.
-    // `unknown` and `missing` stay nullable: array_agg over nothing is
-    // null, which means "nothing wrong".
-    let row = sqlx::query!(
-        r#"WITH asserted AS (
-               SELECT a.name, r.oid AS role_oid
-               FROM unnest($1::text[]) AS a(name)
-               LEFT JOIN pg_roles r ON r.rolname = a.name
-           ),
-           census AS (
-               SELECT r.rolname, r.oid
-               FROM pg_roles r
-               WHERE NOT r.rolsuper
-                 AND (r.rolcanlogin OR EXISTS (
-                        SELECT 1 FROM pg_stat_activity s
-                        WHERE s.usesysid = r.oid
-                          AND s.datname = current_database()))
-                 AND (has_table_privilege(r.oid, 'morpholog.audit', 'INSERT')
-                      OR EXISTS (
-                        SELECT 1 FROM pg_roles w
-                        WHERE has_table_privilege(w.oid, 'morpholog.audit', 'INSERT')
-                          AND pg_has_role(r.oid, w.oid, 'SET')))
-           )
-           SELECT
-               (SELECT array_agg(a.name ORDER BY a.name)
-                  FROM asserted a WHERE a.role_oid IS NULL) AS unknown,
-               (SELECT array_agg(c.rolname::text ORDER BY c.rolname)
-                  FROM census c
-                 WHERE c.oid NOT IN (SELECT a.role_oid FROM asserted a
-                                     WHERE a.role_oid IS NOT NULL)) AS missing,
-               coalesce(min(s.xact_start), now()) AS "horizon!",
-               count(*) FILTER (WHERE s.query = '<insufficient privilege>') AS "hidden!"
-           FROM pg_stat_activity s
-           WHERE s.datname = current_database()
-             AND s.pid <> pg_backend_pid()
-             AND s.usesysid IN (SELECT a.role_oid FROM asserted a
-                                WHERE a.role_oid IS NOT NULL)"#,
-        &names,
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(classify_checked_query)?;
-    if let Some(unknown) = row.unknown.filter(|u| !u.is_empty()) {
-        return Err(PgError::WriterRoleUnknown { roles: unknown });
-    }
-    if let Some(missing) = row.missing.filter(|m| !m.is_empty()) {
-        return Err(PgError::WriterAssertionIncomplete { missing });
-    }
-    if row.hidden > 0 {
-        return Err(PgError::WriterSessionsHidden { hidden: row.hidden });
-    }
-    Ok(row.horizon.into())
+/// No session view is read, so the horizon needs no visibility into
+/// other roles' sessions. A prepared transaction left unresolved holds
+/// the horizon back until it is committed or rolled back.
+pub async fn audit_resume_watermark(pool: &PgPool) -> Result<u64, PgError> {
+    let horizon = sqlx::query_scalar!(r#"SELECT morpholog.audit_watermark() AS "horizon!""#)
+        .fetch_one(pool)
+        .await
+        .map_err(classify_checked_query)?;
+    Ok(horizon.cast_unsigned())
 }
 
 /// `sha256:` and 64 lowercase hex digits: the canonical hash as

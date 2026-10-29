@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT committed_at, audit_order, act_ordinal FROM morpholog.audit\n         WHERE transition_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "committed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "committed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "audit_order",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "audit_order"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "act_ordinal",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "act_ordinal"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "fcbaa9396a8c2560365d7b111625c56c627ed132e7957c06751413d981bd3c21"
+}

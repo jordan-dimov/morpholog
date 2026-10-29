@@ -53,19 +53,25 @@ impl Keyset {
     }
 }
 
-/// The columns a claims replay folds: the claim arrays and the
-/// coordinates, plus the transformation name coverage attributes by.
+/// The columns a claims replay folds: the claim arrays, the operations
+/// and the coordinates, plus the transformation name coverage attributes
+/// by and the activation record is known by.
 pub(crate) struct ReplayRow {
     pub(crate) transition_id: Uuid,
     pub(crate) transformation_name: String,
     pub(crate) asserted_claims: serde_json::Value,
     pub(crate) retracted_claims: serde_json::Value,
     pub(crate) committed_at: Timestamp,
+    pub(crate) audit_order: i64,
+    pub(crate) act_ordinal: i32,
+    pub(crate) operations: Option<serde_json::Value>,
 }
 
 impl ReplayRow {
     pub(crate) fn position(&self) -> AuditPosition {
         AuditPosition {
+            audit_order: self.audit_order.cast_unsigned(),
+            act_ordinal: self.act_ordinal.cast_unsigned(),
             committed_at: self.committed_at,
             transition_id: self.transition_id,
         }
@@ -110,17 +116,17 @@ impl ReplayPages {
 #[derive(Debug)]
 pub(crate) struct AuditPages {
     keyset: Keyset,
-    horizon: Option<Timestamp>,
+    horizon: Option<u64>,
     /// Only rows mentioning this subject; the bounds apply either way.
     mentions: Option<String>,
 }
 
 impl AuditPages {
-    pub(crate) fn new(horizon: Option<Timestamp>) -> Self {
+    pub(crate) fn new(horizon: Option<u64>) -> Self {
         Self::with_chunk(horizon, REPLAY_CHUNK)
     }
 
-    pub(crate) fn with_chunk(horizon: Option<Timestamp>, chunk: i64) -> Self {
+    pub(crate) fn with_chunk(horizon: Option<u64>, chunk: i64) -> Self {
         AuditPages {
             keyset: Keyset::new(None, chunk),
             horizon,
@@ -194,9 +200,10 @@ async fn replay_page(
             sqlx::query_as!(
                 ReplayRow,
                 "SELECT transition_id, transformation_name,
-                        asserted_claims, retracted_claims, committed_at
+                        asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,
+                        operations
                  FROM morpholog.audit
-                 ORDER BY committed_at, transition_id
+                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
                  LIMIT $1",
                 limit,
             )
@@ -205,6 +212,8 @@ async fn replay_page(
         }
         (
             Some(AuditPosition {
+                audit_order: o,
+                act_ordinal: k,
                 committed_at: at,
                 transition_id: id,
             }),
@@ -213,14 +222,17 @@ async fn replay_page(
             sqlx::query_as!(
                 ReplayRow,
                 "SELECT transition_id, transformation_name,
-                        asserted_claims, retracted_claims, committed_at
+                        asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,
+                        operations
                  FROM morpholog.audit
-                 WHERE (committed_at, transition_id) > ($2, $3)
-                 ORDER BY committed_at, transition_id
+                 WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($4, $5, $2, $3)
+                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
                  LIMIT $1",
                 limit,
                 at.to_sqlx(),
                 id,
+                o.cast_signed(),
+                k.cast_signed(),
             )
             .fetch_all(&mut *conn)
             .await
@@ -228,6 +240,8 @@ async fn replay_page(
         (
             None,
             Some(AuditPosition {
+                audit_order: to_o,
+                act_ordinal: to_k,
                 committed_at: to_at,
                 transition_id: to_id,
             }),
@@ -235,24 +249,31 @@ async fn replay_page(
             sqlx::query_as!(
                 ReplayRow,
                 "SELECT transition_id, transformation_name,
-                        asserted_claims, retracted_claims, committed_at
+                        asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,
+                        operations
                  FROM morpholog.audit
-                 WHERE (committed_at, transition_id) <= ($2, $3)
-                 ORDER BY committed_at, transition_id
+                 WHERE (audit_order, act_ordinal, committed_at, transition_id) <= ($4, $5, $2, $3)
+                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
                  LIMIT $1",
                 limit,
                 to_at.to_sqlx(),
                 to_id,
+                to_o.cast_signed(),
+                to_k.cast_signed(),
             )
             .fetch_all(&mut *conn)
             .await
         }
         (
             Some(AuditPosition {
+                audit_order: o,
+                act_ordinal: k,
                 committed_at: at,
                 transition_id: id,
             }),
             Some(AuditPosition {
+                audit_order: to_o,
+                act_ordinal: to_k,
                 committed_at: to_at,
                 transition_id: to_id,
             }),
@@ -260,17 +281,22 @@ async fn replay_page(
             sqlx::query_as!(
                 ReplayRow,
                 "SELECT transition_id, transformation_name,
-                        asserted_claims, retracted_claims, committed_at
+                        asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,
+                        operations
                  FROM morpholog.audit
-                 WHERE (committed_at, transition_id) > ($2, $3)
-                   AND (committed_at, transition_id) <= ($4, $5)
-                 ORDER BY committed_at, transition_id
+                 WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($6, $7, $2, $3)
+                   AND (audit_order, act_ordinal, committed_at, transition_id) <= ($8, $9, $4, $5)
+                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
                  LIMIT $1",
                 limit,
                 at.to_sqlx(),
                 id,
                 to_at.to_sqlx(),
                 to_id,
+                o.cast_signed(),
+                k.cast_signed(),
+                to_o.cast_signed(),
+                to_k.cast_signed(),
             )
             .fetch_all(&mut *conn)
             .await

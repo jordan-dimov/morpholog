@@ -1277,7 +1277,13 @@ _AUDIT_ROW_OPTIONAL_KEYS = {
     "model_hash",
     "semantics_version",
     "drawn_subjects",
+    "audit_order",
+    "act_ordinal",
+    "ordered_at",
+    "operations",
 }
+
+_ORDERING_KEYS = ("audit_order", "act_ordinal", "ordered_at", "operations")
 
 
 def _parameters_of(data: _Fields) -> list[str] | None:
@@ -1336,12 +1342,70 @@ def _drawn_subjects_of(data: _Fields) -> list[str] | None:
 
 
 @dataclass(frozen=True)
+class Operation:
+    """One row operation a commit performed on the claims table: ``del``,
+    ``ins``, or ``noop`` (an insert that found the claim already present).
+    On the activation record's baseline, each insert names in
+    ``asserted_in`` the transition that admitted the claim."""
+
+    op: str
+    predicate: str
+    args: list[object]
+    asserted_in: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> Operation:
+        data = _strict("audit operation", payload, {"op", "predicate", "args"}, {"asserted_in"})
+        return cls(
+            op=data.member("op", {"del", "ins", "noop"}),
+            predicate=data.text("predicate"),
+            args=data.array("args", _tagged_item),
+            asserted_in=data.optional_text("asserted_in"),
+        )
+
+
+@dataclass(frozen=True)
+class Ordering:
+    """A row's place in the log's canonical order and what its commit did:
+    the order its transaction drew, the act's place within it, the ordered
+    timestamp, and the operations. Rows from before the order existed
+    carry none, and come first."""
+
+    audit_order: int
+    act_ordinal: int
+    ordered_at: datetime
+    operations: list[Operation]
+
+
+def _ordering_of(data: _Fields) -> Ordering | None:
+    """The four ordering fields together or none, only on a row that also
+    records its draws."""
+    present = [key in data for key in _ORDERING_KEYS]
+    if not any(present):
+        return None
+    if not all(present):
+        raise EnvelopeError("an audit row carries some of its ordering fields but not all")
+    if "drawn_subjects" not in data:
+        raise EnvelopeError("an audit row carries an order without drawn subjects")
+    ordinal = data.integer("act_ordinal", minimum=0)
+    if ordinal > 0x7FFFFFFF:
+        raise data.fail("act_ordinal", "within the i32 range")
+    return Ordering(
+        audit_order=data.integer("audit_order", minimum=1),
+        act_ordinal=ordinal,
+        ordered_at=data.timestamp("ordered_at"),
+        operations=data.array("operations", Operation.from_json),
+    )
+
+
+@dataclass(frozen=True)
 class Attestation:
     """How the actor identity on an audit row was established. Gateway
     mode records which PostgreSQL-authenticated role asserted the
     actor; it proves who asserted, never that the named actor
-    authorised anything. Rows written before attestation existed
-    carry none."""
+    authorised anything. Migration mode records the role that ran the
+    migration that wrote the activation record, the one row that carries
+    it. Rows written before attestation existed carry none."""
 
     mode: str
     authenticated_by: str
@@ -1355,11 +1419,16 @@ class Attestation:
         data = _strict(
             "attestation", payload, {"mode", "authenticated_by"}, {"authenticated_by_oid"}
         )
-        data.constant("mode", "gateway")
+        mode = data.member("mode", {"gateway", "migration"})
+        oid = data.optional_integer("authenticated_by_oid", minimum=0)
+        if oid is not None and oid > 0xFFFFFFFF:
+            raise data.fail("authenticated_by_oid", "within the u32 range")
+        if mode == "migration" and oid is None:
+            raise data.fail("authenticated_by_oid", "present on a migration attestation")
         return cls(
-            mode="gateway",
+            mode=mode,
             authenticated_by=data.text("authenticated_by"),
-            authenticated_by_oid=data.optional_integer("authenticated_by_oid", minimum=0),
+            authenticated_by_oid=oid,
         )
 
 
@@ -1396,6 +1465,9 @@ class AuditRow:
     # The subjects the act drew from `new Subject()`, in draw order; empty
     # when it drew none. None on rows from before draws were recorded.
     drawn_subjects: list[str] | None = None
+    # The row's place in the canonical order and its commit's operations.
+    # None on rows from before the order existed.
+    ordering: Ordering | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRow:
@@ -1416,6 +1488,7 @@ class AuditRow:
             model_hash=_model_hash_of(data),
             semantics_version=_semantics_version_of(data),
             drawn_subjects=_drawn_subjects_of(data),
+            ordering=_ordering_of(data),
         )
 
 
@@ -1451,6 +1524,9 @@ class AuditRowNamed:
     # The subjects the act drew from `new Subject()`, in draw order; empty
     # when it drew none. None on rows from before draws were recorded.
     drawn_subjects: list[str] | None = None
+    # The row's place in the canonical order and its commit's operations.
+    # None on rows from before the order existed.
+    ordering: Ordering | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AuditRowNamed:
@@ -1471,6 +1547,7 @@ class AuditRowNamed:
             model_hash=_model_hash_of(data),
             semantics_version=_semantics_version_of(data),
             drawn_subjects=_drawn_subjects_of(data),
+            ordering=_ordering_of(data),
         )
 
 

@@ -350,7 +350,7 @@ fn stored_digest(text: &str) -> Result<Digest, PgError> {
 /// row to its leaf. Returns the leaves and the last row's coordinates.
 async fn collect_leaves(
     conn: &mut sqlx::PgConnection,
-    horizon: Timestamp,
+    horizon: u64,
 ) -> Result<(Vec<[u8; 32]>, Option<(Uuid, Timestamp)>), PgError> {
     let mut leaves = Vec::new();
     let mut last = None;
@@ -373,16 +373,16 @@ async fn collect_leaves(
 async fn refuse_unless_covered(
     conn: &mut sqlx::PgConnection,
     id: Uuid,
-    horizon: Timestamp,
+    horizon: u64,
     tree_size: i64,
 ) -> Result<(), PgError> {
-    // `committed_at` is NOT NULL and the horizon is bound, so the
+    // `audit_order` is NOT NULL and the horizon is bound, so the
     // comparison is never NULL.
     let withheld = sqlx::query_scalar!(
-        r#"SELECT committed_at >= $2 AS "withheld!"
+        r#"SELECT audit_order >= $2 AS "withheld!"
            FROM morpholog.audit WHERE transition_id = $1"#,
         id,
-        horizon.to_sqlx(),
+        horizon.cast_signed(),
     )
     .fetch_optional(conn)
     .await
@@ -471,12 +471,11 @@ fn make_signature(signer: &CheckpointSigner, head: &signing::TreeHead<'_>) -> Tr
 pub async fn create_checkpoint(
     pool: &PgPool,
     signer: Option<&CheckpointSigner>,
-    writers: Option<&[String]>,
     covering: Option<Uuid>,
 ) -> Result<CheckpointOutcome, PgError> {
     // Watermark before the snapshot: only below the horizon can no
     // in-flight writer still insert inside the prefix.
-    let horizon = crate::audit::audit_resume_watermark(pool, writers).await?;
+    let horizon = crate::audit::audit_resume_watermark(pool).await?;
 
     let mut read_tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
     let (leaves, last) = collect_leaves(&mut read_tx, horizon).await?;
@@ -618,13 +617,12 @@ pub async fn create_checkpoint(
             checkpoint_id, tree_size, root_hash, prev_checkpoint_hash,
             checkpoint_hash, covered_until, last_transition_id, last_committed_at,
             signatures
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+         ) VALUES ($1, $2, $3, $4, $5, now(), $6, $7, $8)",
         Uuid::now_v7(),
         tree_size,
         root_hash.to_string(),
         prev_hash.map(|d| d.to_string()),
         cp_hash.to_string(),
-        horizon.to_sqlx(),
         last_tid,
         last_at.map(ToSqlx::to_sqlx),
         sqlx::types::Json(&signatures) as _,
@@ -674,7 +672,7 @@ fn signer_authority_violation(
 fn truncated_prefix_diagnosis(
     refusal: PgError,
     committed_beyond_horizon: i64,
-    horizon: Timestamp,
+    horizon: u64,
 ) -> PgError {
     match refusal {
         PgError::SigningKeyUnauthorised {
@@ -699,14 +697,14 @@ fn truncated_prefix_diagnosis(
 async fn with_horizon_diagnosis(
     refusal: PgError,
     conn: &mut sqlx::PgConnection,
-    horizon: Timestamp,
+    horizon: u64,
 ) -> Result<PgError, PgError> {
     // `>=` mirrors the pager's strict `<`: a row at the horizon is
     // withheld. count(*) is never NULL.
     let committed_beyond_horizon = sqlx::query!(
         r#"SELECT count(*) AS "committed_beyond_horizon!"
-           FROM morpholog.audit WHERE committed_at >= $1"#,
-        horizon.to_sqlx(),
+           FROM morpholog.audit WHERE audit_order >= $1"#,
+        horizon.cast_signed(),
     )
     .fetch_one(conn)
     .await

@@ -87,7 +87,7 @@ async fn checkpoint_chain_extends_and_old_prefix_stays_stable() {
     // No new rows -> no-op returning the unchanged head (a usable anchor),
     // not a forked checkpoint.
     common::drain_open_transactions(&pool).await;
-    let noop = create_checkpoint(&pool, None, None, None).await.unwrap();
+    let noop = create_checkpoint(&pool, None, None).await.unwrap();
     let CheckpointOutcome::NoNewRows(head) = noop else {
         panic!("expected NoNewRows, got {noop:?}");
     };
@@ -244,10 +244,7 @@ async fn signing_an_existing_unsigned_head_attaches_the_signature_idempotently()
         key,
     };
     common::drain_open_transactions(&pool).await;
-    let signed = match create_checkpoint(&pool, Some(&signer), None, None)
-        .await
-        .unwrap()
-    {
+    let signed = match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
         CheckpointOutcome::NoNewRows(c) => c,
         other @ CheckpointOutcome::Created(_) => panic!("expected no new rows, got {other:?}"),
     };
@@ -264,10 +261,7 @@ async fn signing_an_existing_unsigned_head_attaches_the_signature_idempotently()
 
     // Re-signing the same head with the same key is idempotent.
     common::drain_open_transactions(&pool).await;
-    let again = match create_checkpoint(&pool, Some(&signer), None, None)
-        .await
-        .unwrap()
-    {
+    let again = match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
         CheckpointOutcome::NoNewRows(c) => c,
         other @ CheckpointOutcome::Created(_) => panic!("expected no new rows, got {other:?}"),
     };

@@ -15,6 +15,7 @@ pub use sql_views::{RenderedViews, ViewRefusal, render_views};
 
 pub use sqlx::PgPool;
 
+mod activation;
 mod actor_policy;
 mod as_of;
 mod attestation;
@@ -68,8 +69,9 @@ pub use as_of::{
 };
 pub use attestation::{ActorAttestation, AuditAttestation, Proposal};
 pub use audit::{
-    AuditPosition, AuditRow, AuditTail, audit_cursor_for, audit_resume_watermark, begin_audit_tail,
-    list_audit_rows, list_audit_rows_page, list_audit_rows_page_mentioning,
+    AuditPosition, AuditRow, AuditTail, Operation, OperationKind, audit_cursor_for,
+    audit_resume_watermark, begin_audit_tail, list_audit_rows, list_audit_rows_page,
+    list_audit_rows_page_mentioning,
 };
 pub use checkpoints::{
     Checkpoint, CheckpointOutcome, CheckpointSigner, SignaturePolicy, SignaturePolicyViolation,

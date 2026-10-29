@@ -1639,7 +1639,7 @@ async fn measure_as_of(
     };
     let (target_tid,): (Uuid,) = sqlx::query_as(
         "SELECT transition_id FROM morpholog.audit
-         ORDER BY committed_at, transition_id LIMIT 1 OFFSET $1",
+         ORDER BY audit_order, act_ordinal, committed_at, transition_id LIMIT 1 OFFSET $1",
     )
     .bind(offset)
     .fetch_one(pool)
@@ -2395,9 +2395,9 @@ async fn run_wide(args: WideArgs) -> Result<()> {
 /// Going through `propose_against_pg` would make building the fixture
 /// cost more than the replay being measured.
 ///
-/// `transition_id` is a random UUIDv4: replay orders by
-/// `(committed_at, transition_id)`, and `committed_at` rises by one
-/// microsecond per row, so the order is deterministic.
+/// One statement is one transaction, so every row takes the same order
+/// and an act ordinal in insert order, which follows `i`. Each row
+/// records the operations its lists describe, which replay applies.
 ///
 /// With `retract_stride > 0`, every `stride`-th row retracts the entry
 /// asserted by the row before it. The stride is at least 2, so that
@@ -2413,7 +2413,7 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> R
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents,
             committed_at, attestation, parameters, model_hash, semantics_version,
-            drawn_subjects
+            drawn_subjects, operations
         )
         SELECT
             gen_random_uuid(),
@@ -2430,7 +2430,10 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> R
             '[]'::jsonb,
             'sha256:' || repeat('0', 64),
             1,
-            '[]'::jsonb
+            '[]'::jsonb,
+            (SELECT jsonb_agg(c || jsonb_build_object('op',
+                                  CASE WHEN is_retract THEN 'del' ELSE 'ins' END))
+               FROM jsonb_array_elements(payload) c)
         FROM (
             SELECT
                 i,
@@ -2470,7 +2473,8 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> R
                     CASE WHEN ($2 > 0 AND i % $2 = 0) THEN i - 1 ELSE i END AS target
                 FROM generate_series(1, $1) AS i
             ) base
-        ) rows",
+        ) rows
+        ORDER BY i",
     )
     .bind(n_i)
     .bind(retract_stride)
@@ -2517,7 +2521,7 @@ async fn fabricate_revision_log(pool: &PgPool, n: usize, k: usize) -> Result<()>
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents,
             committed_at, attestation, parameters, model_hash, semantics_version,
-            drawn_subjects
+            drawn_subjects, operations
         )
         SELECT
             gen_random_uuid(), 'bench_as_of_revise', '[]'::jsonb,
@@ -2528,11 +2532,16 @@ async fn fabricate_revision_log(pool: &PgPool, n: usize, k: usize) -> Result<()>
             '[]'::jsonb,
             now() + (i * interval '1 microsecond'),
             '{{\"mode\":\"gateway\",\"authenticated_by\":\"bench-fixture\"}}'::jsonb,
-            '[]'::jsonb, 'sha256:' || repeat('0', 64), 1, '[]'::jsonb
+            '[]'::jsonb, 'sha256:' || repeat('0', 64), 1, '[]'::jsonb,
+            (SELECT coalesce(jsonb_agg(c || '{{\"op\":\"del\"}}'::jsonb), '[]'::jsonb)
+               FROM jsonb_array_elements(CASE WHEN prev > 0 THEN {previous} ELSE '[]'::jsonb END) c)
+            || (SELECT jsonb_agg(c || '{{\"op\":\"ins\"}}'::jsonb)
+                  FROM jsonb_array_elements({current}) c)
         FROM (
             SELECT i, (i - 1) % $2 AS rec, i - $2 AS prev
             FROM generate_series(1, $1) AS i
-        ) versions",
+        ) versions
+        ORDER BY i",
         current = version("rec", "i"),
         previous = version("rec", "prev"),
     );
@@ -2546,8 +2555,7 @@ async fn fabricate_revision_log(pool: &PgPool, n: usize, k: usize) -> Result<()>
 }
 
 async fn reset_db(pool: &PgPool) -> Result<()> {
-    sqlx::query(morpholog_postgres::testing::RESET_SQL)
-        .execute(pool)
+    morpholog_postgres::testing::reset_database(pool)
         .await
         .context("TRUNCATE morpholog tables")?;
     Ok(())

@@ -2,7 +2,9 @@
 //! pinned as a golden file. The history holds each case a replay has to
 //! get right: a retract and re-admit in one act, an admit of a claim
 //! already present, an atomic batch, a predicate read on its own, and a
-//! lawful concurrent pair whose replay disagrees with the claims table.
+//! lawful concurrent pair: a retraction that commits after a concurrent
+//! admit found the claim present, which replay must follow as the table
+//! did.
 //! A change to how history is replayed shows up here as a diff, so a
 //! refactor that must not change any result is held to that.
 //!
@@ -76,9 +78,9 @@ fn proposal(name: &str, args: Vec<EvalValue>) -> Proposal {
 }
 
 /// A retraction that started first commits after a concurrent admit of
-/// the same claim, which found it present and changed nothing. Replay
-/// applies the retraction first, so it ends with the claim the table
-/// no longer holds.
+/// the same claim, which found it present and changed nothing. Replayed
+/// from the proposed lists, the retraction came first and the claim
+/// survived; replayed from the operations, it is gone, as in the table.
 async fn retract_around_a_no_op_admit(pool: &PgPool, pg: &Arc<PgProgram>, k: &str) {
     let mut holder = pool.begin().await.unwrap();
     sqlx::query(

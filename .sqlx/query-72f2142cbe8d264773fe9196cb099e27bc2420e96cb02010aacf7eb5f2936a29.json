@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH pairs AS (\n               SELECT o.oid AS old_oid, o.rolname::text AS old_name, n.oid AS new_oid\n               FROM pg_roles o\n               JOIN pg_roles n\n                 ON (o.rolname = $1 AND n.rolname = $3) OR (o.rolname = $2 AND n.rolname = $4)\n           ),\n           here AS (SELECT oid FROM pg_database WHERE datname = current_database()),\n           deps AS (\n               SELECT s.classid, s.objid, s.objsubid, s.deptype, p.old_oid, p.old_name, p.new_oid\n               FROM pg_shdepend s\n               JOIN pairs p ON p.old_oid = s.refobjid\n               WHERE s.refclassid = 'pg_authid'::regclass\n                 AND (s.dbid = (SELECT oid FROM here)\n                      OR (s.dbid = 0 AND s.classid = 'pg_database'::regclass\n                          AND s.objid = (SELECT oid FROM here)))\n           )\n           SELECT format('`%s` %s %s', d.old_name,\n                         CASE d.deptype WHEN 'o' THEN 'owns'\n                                        WHEN 'r' THEN 'is named in a policy on'\n                                        ELSE 'holds a privilege on' END,\n                         pg_describe_object(d.classid, d.objid, d.objsubid)) AS \"finding!\"\n           FROM deps d\n           WHERE NOT (d.deptype = 'a' AND d.objsubid = 0\n                      AND d.classid IN ('pg_class'::regclass, 'pg_namespace'::regclass,\n                                        'pg_proc'::regclass))\n           UNION ALL\n           SELECT format('`%s` holds %s%s on %s', d.old_name, a.privilege_type,\n                         CASE WHEN a.is_grantable THEN ' with grant option' ELSE '' END,\n                         pg_describe_object(d.classid, d.objid, 0))\n           FROM deps d\n           JOIN pg_class c ON d.classid = 'pg_class'::regclass AND c.oid = d.objid\n           CROSS JOIN LATERAL aclexplode(c.relacl) a\n           WHERE d.deptype = 'a' AND d.objsubid = 0 AND a.grantee = d.old_oid\n             AND (a.is_grantable OR NOT EXISTS (\n                   SELECT 1 FROM aclexplode(c.relacl) b\n                   WHERE b.grantee = d.new_oid AND b.privilege_type = a.privilege_type))\n           UNION ALL\n           SELECT format('`%s` holds %s%s on %s', d.old_name, a.privilege_type,\n                         CASE WHEN a.is_grantable THEN ' with grant option' ELSE '' END,\n                         pg_describe_object(d.classid, d.objid, 0))\n           FROM deps d\n           JOIN pg_namespace ns ON d.classid = 'pg_namespace'::regclass AND ns.oid = d.objid\n           CROSS JOIN LATERAL aclexplode(ns.nspacl) a\n           WHERE d.deptype = 'a' AND d.objsubid = 0 AND a.grantee = d.old_oid\n             AND (a.is_grantable OR NOT EXISTS (\n                   SELECT 1 FROM aclexplode(ns.nspacl) b\n                   WHERE b.grantee = d.new_oid AND b.privilege_type = a.privilege_type))\n           UNION ALL\n           SELECT format('`%s` holds %s%s on %s', d.old_name, a.privilege_type,\n                         CASE WHEN a.is_grantable THEN ' with grant option' ELSE '' END,\n                         pg_describe_object(d.classid, d.objid, 0))\n           FROM deps d\n           JOIN pg_proc f ON d.classid = 'pg_proc'::regclass AND f.oid = d.objid\n           CROSS JOIN LATERAL aclexplode(f.proacl) a\n           WHERE d.deptype = 'a' AND d.objsubid = 0 AND a.grantee = d.old_oid\n             AND (a.is_grantable OR NOT EXISTS (\n                   SELECT 1 FROM aclexplode(f.proacl) b\n                   WHERE b.grantee = d.new_oid AND b.privilege_type = a.privilege_type))\n           ORDER BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "finding!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Name",
+        "Name",
+        "Name",
+        "Name"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "72f2142cbe8d264773fe9196cb099e27bc2420e96cb02010aacf7eb5f2936a29"
+}

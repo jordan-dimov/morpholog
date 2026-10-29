@@ -25,8 +25,7 @@ pub async fn test_pool() -> PgPool {
 
 /// Truncate the governed `morpholog.*` tables on test entry.
 pub async fn reset_db(pool: &PgPool) {
-    sqlx::query(morpholog_postgres::testing::RESET_SQL)
-        .execute(pool)
+    morpholog_postgres::testing::reset_database(pool)
         .await
         .expect("failed to truncate test DB");
 }

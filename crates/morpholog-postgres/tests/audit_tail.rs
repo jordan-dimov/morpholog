@@ -1,8 +1,8 @@
-//! The audit tail's read contract: pages in `(committed_at,
-//! transition_id)` order, a resume cursor that excludes its own row,
-//! and a watermark that makes resume lossless. An in-flight writer's
-//! row sorts below rows already emitted, so it must be withheld now and
-//! surfaced next time, never lost.
+//! The audit tail's read contract: pages in the canonical order, a
+//! resume cursor that excludes its own row, and a watermark that makes
+//! resume lossless. A writer still in flight holds an order below rows
+//! a later writer has already committed, so everything from its order on
+//! must be withheld now and surfaced next time, never lost.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -10,7 +10,6 @@ mod common;
 use common::{drop_roles_if_present, recreate_roles, reset_db, session_is_superuser, test_pool};
 
 use common::{dec, subj};
-use jiff::Timestamp;
 use morpholog_core::Program;
 use morpholog_postgres::{
     PgError, PgPool, PgProposalOutcome, audit_cursor_for, audit_resume_watermark,
@@ -101,12 +100,12 @@ async fn an_unknown_cursor_is_an_error_never_a_silent_restart() {
     );
 }
 
-// The race behind lossless resume. `committed_at` is the writer's
-// transaction start, but rows become visible in commit order. A writer
-// that starts before the reader and commits after it leaves a row that
-// sorts below rows already emitted. Without the horizon a resume cursor
-// would skip it forever; with it, the row is withheld now and surfaced
-// next time.
+// The race behind lossless resume. Orders are drawn in one sequence but
+// rows become visible in commit order. A writer that draws its order and
+// is still open when a later writer commits leaves a gap below a row
+// that could already be emitted. Without the horizon a resume cursor
+// past the later row would skip the first forever; with it, both are
+// withheld now and surfaced next time, in order.
 #[tokio::test]
 async fn the_watermark_withholds_an_in_flight_writers_row_instead_of_losing_it() {
     let pool = test_pool().await;
@@ -114,268 +113,14 @@ async fn the_watermark_withholds_an_in_flight_writers_row_instead_of_losing_it()
     let p = fixture();
     let t1 = post(&pool, &p, "e1").await;
 
-    // Writer A: an open transaction started before the horizon is
-    // computed, standing in for a propose still in flight.
+    // Writer A draws its order and stays open, a propose still in flight.
     let mut writer = pool.begin().await.unwrap();
-    let writer_start: Timestamp =
-        sqlx::query_scalar::<_, jiff_sqlx::Timestamp>("SELECT transaction_timestamp()")
-            .fetch_one(&mut *writer)
-            .await
-            .unwrap()
-            .to_jiff();
-    common::insert_in_flight_audit_row(&mut writer, Uuid::now_v7()).await;
+    let a = Uuid::now_v7();
+    common::insert_in_flight_audit_row(&mut writer, a).await;
+    // Writer B starts later, draws the next order, and commits first.
+    let t2 = post(&pool, &p, "e2").await;
 
-    // The horizon, computed while A is in flight, clamps at or below
-    // A's start.
-    let horizon = audit_resume_watermark(&pool, None).await.unwrap();
-    assert!(
-        horizon <= writer_start,
-        "the horizon must trail the in-flight writer: {horizon} > {writer_start}"
-    );
-
-    // A commits after the horizon, but its row sorts at A's start.
-    writer.commit().await.unwrap();
-
-    // First read: A's row is withheld; t1 is emitted.
-    let mut conn = pool.acquire().await.unwrap();
-    let page = list_audit_rows_page(&mut conn, None, Some(horizon), 10)
-        .await
-        .unwrap();
-    let emitted: Vec<Uuid> = page.iter().map(|r| r.transition_id).collect();
-    assert_eq!(
-        emitted,
-        vec![t1],
-        "the in-flight row is withheld, t1 emitted"
-    );
-
-    // Second read: a fresh horizon surfaces A's row after the cursor.
-    let fresh = audit_resume_watermark(&pool, None).await.unwrap();
-    let cursor = audit_cursor_for(&mut conn, t1).await.unwrap();
-    let page = list_audit_rows_page(&mut conn, Some(cursor), Some(fresh), 10)
-        .await
-        .unwrap();
-    assert_eq!(
-        page.len(),
-        1,
-        "the withheld row surfaces under the next horizon"
-    );
-    assert_eq!(page[0].actor.as_str(), "in_flight");
-}
-
-// A reader that cannot see another session's transaction cannot know
-// the horizon, so it is refused rather than handed one that ignores the
-// session. Visibility follows the current role, so a pool that sets an
-// unprivileged role stands in for a second login.
-#[tokio::test]
-async fn a_session_the_reader_cannot_see_refuses_the_watermark() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
-    if !session_is_superuser(&pool).await {
-        eprintln!("skipping: needs a superuser test role to SET ROLE");
-        return;
-    }
-    let roles = ["mtest344_reader"];
-    recreate_roles(&pool, &roles, &["CREATE ROLE mtest344_reader NOLOGIN"]).await;
-
-    let mut writer = pool.begin().await.unwrap();
-    sqlx::query("SELECT txid_current()")
-        .execute(&mut *writer)
-        .await
-        .unwrap();
-
-    let url = morpholog_postgres::with_default_user(&std::env::var("DATABASE_URL").unwrap());
-    let reader = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(1)
-        .after_connect(|conn, _| {
-            Box::pin(async move {
-                sqlx::Executor::execute(conn, "SET ROLE mtest344_reader").await?;
-                Ok(())
-            })
-        })
-        .connect(&url)
-        .await
-        .unwrap();
-    let outcome = audit_resume_watermark(&reader, None).await;
-    reader.close().await;
-    writer.rollback().await.unwrap();
-    drop_roles_if_present(&pool, &roles).await;
-
-    assert!(
-        matches!(outcome, Err(PgError::StatVisibility { hidden }) if hidden >= 1),
-        "a hidden open transaction must refuse the horizon, got {outcome:?}"
-    );
-}
-
-// ============================================================
-// The writer assertion, for managed Postgres. The horizon covers only
-// the asserted roles' sessions, once a catalog census confirms they
-// include every non-superuser role that can write audit. A truly
-// hidden session needs a second login this setup cannot make, so a
-// live managed deployment tests that path.
-// ============================================================
-
-#[tokio::test]
-async fn an_unknown_asserted_role_is_refused_as_a_probable_typo() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
-    let err = audit_resume_watermark(&pool, Some(&["no_such_role_209".to_string()]))
-        .await
-        .expect_err("an unknown role must refuse");
-    assert!(
-        matches!(&err, PgError::WriterRoleUnknown { roles } if roles == &vec!["no_such_role_209".to_string()]),
-        "got {err:?}"
-    );
-}
-
-#[tokio::test]
-async fn an_empty_assertion_is_vacuous_and_refused() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
-    let err = audit_resume_watermark(&pool, Some(&[]))
-        .await
-        .expect_err("an empty assertion must refuse");
-    assert!(matches!(err, PgError::WriterAssertionEmpty), "got {err:?}");
-}
-
-#[tokio::test]
-async fn the_census_names_every_unasserted_writer_and_a_complete_assertion_passes() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
-    let me = common::session_user(&pool).await;
-    // Three writer paths the census must catch: a direct grant, an
-    // inherited membership, and a SET-ROLE-only membership (INHERIT
-    // FALSE, SET TRUE). The NOLOGIN group itself holds no sessions and
-    // must NOT be demanded.
-    let roles = [
-        "mtest209_direct",
-        "mtest209_group",
-        "mtest209_inheritor",
-        "mtest209_setter",
-        "mtest209_bystander",
-    ];
-    recreate_roles(
-        &pool,
-        &roles,
-        &[
-            "CREATE ROLE mtest209_direct LOGIN",
-            "GRANT INSERT ON morpholog.audit TO mtest209_direct",
-            "CREATE ROLE mtest209_group NOLOGIN",
-            "GRANT INSERT ON morpholog.audit TO mtest209_group",
-            "CREATE ROLE mtest209_inheritor LOGIN",
-            "GRANT mtest209_group TO mtest209_inheritor",
-            "CREATE ROLE mtest209_setter LOGIN",
-            "GRANT mtest209_group TO mtest209_setter WITH INHERIT FALSE, SET TRUE",
-            "CREATE ROLE mtest209_bystander LOGIN",
-            "GRANT mtest209_group TO mtest209_bystander WITH INHERIT FALSE, SET FALSE",
-        ],
-    )
-    .await;
-
-    let err = audit_resume_watermark(&pool, Some(std::slice::from_ref(&me)))
-        .await
-        .expect_err("unasserted writers must refuse");
-    let missing = match &err {
-        PgError::WriterAssertionIncomplete { missing } => missing.clone(),
-        other => panic!("expected WriterAssertionIncomplete, got {other:?}"),
-    };
-    for required in ["mtest209_direct", "mtest209_inheritor", "mtest209_setter"] {
-        assert!(
-            missing.iter().any(|m| m == required),
-            "census must name {required}: {missing:?}"
-        );
-    }
-    assert!(
-        !missing.iter().any(|m| m == "mtest209_group"),
-        "a NOLOGIN group with no session is not a session role: {missing:?}"
-    );
-    assert!(
-        !missing.iter().any(|m| m == "mtest209_bystander"),
-        "an INHERIT FALSE, SET FALSE membership confers no usable write \
-         path and must not be demanded: {missing:?}"
-    );
-
-    // Asserting what the census demanded (plus ourselves) passes. Built
-    // from the refusal, so pre-existing writer roles don't break it.
-    let mut complete = missing;
-    complete.push(me);
-    audit_resume_watermark(&pool, Some(&complete))
-        .await
-        .expect("the complete assertion passes");
-
-    // Duplicates are deterministic and harmless.
-    let mut doubled = complete.clone();
-    doubled.extend(complete.clone());
-    audit_resume_watermark(&pool, Some(&doubled))
-        .await
-        .expect("a duplicated assertion behaves identically");
-
-    drop_roles_if_present(&pool, &roles).await;
-}
-
-#[tokio::test]
-async fn the_asserted_horizon_ignores_sessions_outside_the_assertion() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
-    if !session_is_superuser(&pool).await {
-        // A non-superuser test role would be in the census itself, so
-        // the unasserted session below could not exist.
-        eprintln!("skipping: needs a superuser test role");
-        return;
-    }
-    let roles = ["mtest209_idle"];
-    recreate_roles(&pool, &roles, &["CREATE ROLE mtest209_idle LOGIN"]).await;
-
-    // Our own superuser session, exempt from the census and unasserted,
-    // holds an open transaction. The asserted horizon must ignore it,
-    // as it ignores a managed host's platform sessions.
-    let mut writer = pool.begin().await.unwrap();
-    let writer_start: Timestamp =
-        sqlx::query_scalar::<_, jiff_sqlx::Timestamp>("SELECT transaction_timestamp()")
-            .fetch_one(&mut *writer)
-            .await
-            .unwrap()
-            .to_jiff();
-    let horizon = audit_resume_watermark(&pool, Some(&["mtest209_idle".to_string()]))
-        .await
-        .expect("an idle asserted role with no unasserted census entries passes");
-    assert!(
-        horizon > writer_start,
-        "the unasserted session's transaction must not lower the horizon: \
-         {horizon} <= {writer_start}"
-    );
-    writer.rollback().await.unwrap();
-
-    drop_roles_if_present(&pool, &roles).await;
-}
-
-// The race test with an assertion: sessions of an asserted role still
-// hold the horizon back, so the row is withheld, then surfaced.
-#[tokio::test]
-async fn the_asserted_watermark_still_withholds_the_asserted_writers_in_flight_row() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
-    let p = fixture();
-    let t1 = post(&pool, &p, "e1").await;
-    let me = common::session_user(&pool).await;
-
-    let mut writer = pool.begin().await.unwrap();
-    let writer_start: Timestamp =
-        sqlx::query_scalar::<_, jiff_sqlx::Timestamp>("SELECT transaction_timestamp()")
-            .fetch_one(&mut *writer)
-            .await
-            .unwrap()
-            .to_jiff();
-    common::insert_in_flight_audit_row(&mut writer, Uuid::now_v7()).await;
-
-    let horizon = audit_resume_watermark(&pool, Some(std::slice::from_ref(&me)))
-        .await
-        .expect("asserting the connecting role passes");
-    assert!(
-        horizon <= writer_start,
-        "an asserted writer's in-flight transaction must trail the horizon"
-    );
-    writer.commit().await.unwrap();
-
+    let horizon = audit_resume_watermark(&pool).await.unwrap();
     let mut conn = pool.acquire().await.unwrap();
     let page = list_audit_rows_page(&mut conn, None, Some(horizon), 10)
         .await
@@ -383,16 +128,81 @@ async fn the_asserted_watermark_still_withholds_the_asserted_writers_in_flight_r
     assert_eq!(
         page.iter().map(|r| r.transition_id).collect::<Vec<_>>(),
         vec![t1],
-        "the in-flight row is withheld under the asserted horizon"
+        "A's order and everything after it is withheld, B included"
     );
-    let fresh = audit_resume_watermark(&pool, Some(std::slice::from_ref(&me)))
-        .await
-        .unwrap();
+
+    writer.commit().await.unwrap();
+    let fresh = audit_resume_watermark(&pool).await.unwrap();
     let cursor = audit_cursor_for(&mut conn, t1).await.unwrap();
     let page = list_audit_rows_page(&mut conn, Some(cursor), Some(fresh), 10)
         .await
         .unwrap();
-    assert_eq!(page.len(), 1, "the withheld row surfaces next invocation");
+    assert_eq!(
+        page.iter().map(|r| r.transition_id).collect::<Vec<_>>(),
+        vec![a, t2],
+        "both surface under the next horizon, in order"
+    );
+}
+
+// The horizon reads no session view, so a reader that cannot see the
+// writer's session still withholds its row. Visibility follows the
+// current role, so a pool that sets an unprivileged role stands in for a
+// second login.
+#[tokio::test]
+async fn a_reader_that_cannot_see_the_writer_still_withholds_its_row() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    if !session_is_superuser(&pool).await {
+        eprintln!("skipping: needs a superuser test role to SET ROLE");
+        return;
+    }
+    let roles = ["mtest625_reader"];
+    recreate_roles(
+        &pool,
+        &roles,
+        &[
+            "CREATE ROLE mtest625_reader NOLOGIN",
+            "GRANT USAGE ON SCHEMA morpholog TO mtest625_reader",
+            "GRANT EXECUTE ON FUNCTION morpholog.audit_watermark() TO mtest625_reader",
+        ],
+    )
+    .await;
+    let p = fixture();
+    post(&pool, &p, "e1").await;
+
+    let mut writer = pool.begin().await.unwrap();
+    common::insert_in_flight_audit_row(&mut writer, Uuid::now_v7()).await;
+    let held = audit_resume_watermark(&pool).await.unwrap();
+
+    let url = morpholog_postgres::with_default_user(&std::env::var("DATABASE_URL").unwrap());
+    let reader = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|conn, _| {
+            Box::pin(async move {
+                sqlx::Executor::execute(conn, "SET ROLE mtest625_reader").await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    let hidden: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_stat_activity
+         WHERE datname = current_database() AND query = '<insufficient privilege>'",
+    )
+    .fetch_one(&reader)
+    .await
+    .unwrap();
+    let seen = audit_resume_watermark(&reader).await;
+    reader.close().await;
+    writer.rollback().await.unwrap();
+    drop_roles_if_present(&pool, &roles).await;
+
+    assert!(
+        hidden >= 1,
+        "the writer's session is hidden from the reader"
+    );
+    assert_eq!(seen.unwrap(), held, "the reader's horizon is the writer's");
 }
 
 #[tokio::test]
@@ -403,7 +213,7 @@ async fn with_no_open_transactions_the_watermark_emits_everything_committed() {
     let t1 = post(&pool, &p, "e1").await;
     let t2 = post(&pool, &p, "e2").await;
 
-    let horizon = audit_resume_watermark(&pool, None).await.unwrap();
+    let horizon = audit_resume_watermark(&pool).await.unwrap();
     let mut conn = pool.acquire().await.unwrap();
     let page = list_audit_rows_page(&mut conn, None, Some(horizon), 10)
         .await

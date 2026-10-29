@@ -109,6 +109,8 @@ CASES = {
     "audit_row_model_hash.json": ("audit_row", E.AuditRow.from_json),
     "audit_row_semantics_version.json": ("audit_row", E.AuditRow.from_json),
     "audit_row_drawn_subjects.json": ("audit_row", E.AuditRow.from_json),
+    "audit_row_ordered.json": ("audit_row", E.AuditRow.from_json),
+    "audit_row_activation.json": ("audit_row", E.AuditRow.from_json),
     "audit_row_named.json": ("audit_row_named", E.AuditRowNamed.from_json),
     "check_report.json": ("check_report", E.CheckReport.from_json),
     "check_report_routes.json": ("check_report", E.CheckReport.from_json),

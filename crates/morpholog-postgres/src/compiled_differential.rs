@@ -63,8 +63,7 @@ pub(crate) async fn test_pool() -> PgPool {
 }
 
 async fn reset_db(pool: &PgPool) {
-    sqlx::query(crate::testing::RESET_SQL)
-        .execute(pool)
+    crate::testing::reset_database(pool)
         .await
         .expect("failed to truncate test DB");
 }
@@ -143,7 +142,7 @@ async fn probe_raw(
     let kernel = finish_staged_delta_with(staged, &state, &prepared.admission());
 
     let transition_id = Uuid::now_v7();
-    let effective = write_claim_delta(&mut tx, transition_id, &asserted, &retracted)
+    let (effective, _) = write_claim_delta(&mut tx, transition_id, &asserted, &retracted)
         .await
         .map_err(ProbeFailure::Pg)?;
 

@@ -120,51 +120,6 @@ pub enum PgError {
     /// corrected id.
     #[error("no transition committed at or before {0}")]
     NoTransitionAtOrBefore(Timestamp),
-    /// `pg_stat_activity` hides sessions from this role, so the audit
-    /// resume horizon cannot be computed soundly: a hidden writer would
-    /// drop out of the minimum and the tail could skip its row.
-    #[error(
-        "{hidden} session(s) in pg_stat_activity are hidden from this role, \
-         so a lossless audit resume horizon cannot be computed; connect as \
-         the role the writers use, or grant pg_read_all_stats \
-         (or, on a managed host where neither is possible, assert the \
-         audit-writing roles explicitly with --writer-role)"
-    )]
-    StatVisibility { hidden: i64 },
-    /// A writer assertion named a role that does not exist, probably a
-    /// typo. Refused so it cannot silently filter nothing.
-    #[error(
-        "asserted writer role(s) do not exist: {}",
-        roles.join(", ")
-    )]
-    WriterRoleUnknown { roles: Vec<String> },
-    /// The catalog shows non-superuser roles that can write
-    /// `morpholog.audit` (directly, by inheritance, or via SET ROLE)
-    /// and were not asserted, so a horizon over the asserted sessions
-    /// alone would be unsound.
-    #[error(
-        "role(s) not in the asserted writer set can write morpholog.audit: {}; \
-         assert them with --writer-role too, or revoke their access",
-        missing.join(", ")
-    )]
-    WriterAssertionIncomplete { missing: Vec<String> },
-    /// A session of an ASSERTED writer role is hidden from this role in
-    /// `pg_stat_activity`. The asserted writers' own sessions must be
-    /// visible; they always are when the asserted role is the connecting
-    /// role.
-    #[error(
-        "{hidden} session(s) of asserted writer roles are hidden from this \
-         role in pg_stat_activity; connect as the role the writers use, or \
-         grant pg_read_all_stats"
-    )]
-    WriterSessionsHidden { hidden: i64 },
-    /// An empty writer assertion is vacuous, not a claim that no one writes
-    /// audit. Omit it to get the default all-sessions horizon.
-    #[error(
-        "an empty writer-role assertion is vacuous; name the role(s) whose \
-         sessions write morpholog.audit, or omit the assertion"
-    )]
-    WriterAssertionEmpty,
     /// A programme declares one of the reserved actor-policy
     /// predicates in a shape the runtime does not match.
     ///
@@ -233,16 +188,16 @@ pub enum PgError {
     /// committed rows sit at or above the resume horizon, so a recent
     /// authorisation may not be visible yet. Distinct from
     /// [`PgError::SigningKeyUnauthorised`] because it may be transient: the
-    /// horizon advances once older open transactions end. The count is a
+    /// horizon advances once lower orders are resolved. The count is a
     /// floor: in-flight transactions' rows cannot be seen to count.
     #[error(
         "signing key is not authorised as AuditSigningKey({key_id}, {purpose}, \
          {public_key}) as of tree_size {tree_size}, and \
          {committed_beyond_horizon} committed audit row(s) at or above the \
-         resume horizon ({horizon}) are outside this stable prefix; if the \
-         key was authorised in one of those rows the condition is transient - \
-         retry after the horizon advances (it is held back while older \
-         transactions stay open)"
+         resume horizon (order {horizon}) are outside this stable prefix; if \
+         the key was authorised in one of those rows the condition is \
+         transient - retry after the horizon advances (it is held back while \
+         a transaction that drew a lower order stays open or prepared)"
     )]
     SigningKeyUnauthorisedAtTruncatedPrefix {
         key_id: String,
@@ -250,7 +205,7 @@ pub enum PgError {
         public_key: String,
         tree_size: i64,
         committed_beyond_horizon: i64,
-        horizon: Timestamp,
+        horizon: u64,
     },
 }
 /// Is this SQLSTATE the SSI serialization-failure code (`40001`)? A pure

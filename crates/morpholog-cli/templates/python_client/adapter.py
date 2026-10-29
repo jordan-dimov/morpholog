@@ -928,22 +928,14 @@ class Morpholog:
         self,
         after: str | None = None,
         *,
-        writer_roles: list[str] | None = None,
         mentions: str | None = None,
     ) -> list[envelopes.AuditRow]:
-        """The audit tail: committed transitions in commit order, one
-        ``AuditRow`` per NDJSON line. ``after`` resumes strictly after
-        a previously seen transition id - lossless: rows whose writers
-        were still in flight are withheld until the next call, never
-        skipped. An empty tail is a lawful empty list.
-
-        ``writer_roles`` asserts the session roles that write audit,
-        for managed PostgreSQL where the platform's hidden sessions
-        make the default refuse. The binary verifies the assertion
-        against the catalog; superuser writes are the residue the
-        assertion explicitly accepts, and role grants, memberships,
-        and login attributes must stay unchanged until the command
-        establishes its read snapshot.
+        """The audit tail: committed transitions in the log's canonical
+        order, one ``AuditRow`` per NDJSON line. ``after`` resumes
+        strictly after a previously seen transition id - lossless: rows
+        at or after the order of a writer still in flight are withheld
+        until the next call, never skipped. An empty tail is a lawful
+        empty list.
 
         ``mentions`` keeps only the transitions naming that subject in
         their arguments, claims or intents. ``after`` and the watermark
@@ -952,28 +944,23 @@ class Morpholog:
         walks the tail to find it, and an empty result moves no cursor."""
         return [
             envelopes.AuditRow.from_json(row)
-            for row in self._audit_lines(
-                after, named=False, writer_roles=writer_roles, mentions=mentions
-            )
+            for row in self._audit_lines(after, named=False, mentions=mentions)
         ]
 
     def audit_named(
         self,
         after: str | None = None,
         *,
-        writer_roles: list[str] | None = None,
         mentions: str | None = None,
     ) -> list[envelopes.AuditRowNamed]:
         """The audit tail with asserted/retracted claims decoded by
         declared field name under this programme's authority (skew is
         a hard error on the binary side). ``arguments`` and intent
         payloads stay positional - a different vocabulary.
-        ``writer_roles`` and ``mentions`` as on ``audit``."""
+        ``mentions`` as on ``audit``."""
         return [
             envelopes.AuditRowNamed.from_json(row)
-            for row in self._audit_lines(
-                after, named=True, writer_roles=writer_roles, mentions=mentions
-            )
+            for row in self._audit_lines(after, named=True, mentions=mentions)
         ]
 
     @staticmethod
@@ -988,7 +975,6 @@ class Morpholog:
         self,
         after: str | None,
         named: bool,
-        writer_roles: list[str] | None = None,
         mentions: str | None = None,
     ) -> list[dict[str, object]]:
         # Not _invoke: an empty tail is a lawful empty stdout, not a
@@ -1000,7 +986,6 @@ class Morpholog:
         if named:
             argv.extend(["--named", self.file])
         argv += self._mentions(mentions)
-        argv += self._repeat("--writer-role", writer_roles)
         argv.extend(["--database-url", self.database_url])
         proc = self._run(argv, timeout=self.timeout)
         if proc.returncode != 0:
@@ -1090,16 +1075,15 @@ class Morpholog:
         signing_key: str | None = None,
         key_id: str | None = None,
         *,
-        writer_roles: list[str] | None = None,
         witnesses: list[str] | None = None,
         covering: str | None = None,
     ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
         """Record a checkpoint over the current stable prefix, or return
         the unchanged head - either way a usable external anchor. Pass
         ``signing_key`` (a PKCS#8 PEM path) and ``key_id`` to sign the new
-        tree head, so the anchor is attributable. ``writer_roles`` as on
-        ``audit`` - the checkpoint's stable prefix rests on the same
-        resume horizon. ``witnesses`` (each ``"rfc3161:<url>"``) has those
+        tree head, so the anchor is attributable. The checkpoint's stable
+        prefix rests on the same resume horizon as ``audit``.
+        ``witnesses`` (each ``"rfc3161:<url>"``) has those
         timestamp authorities countersign the new head after the commit;
         the checkpoint is recorded either way, and a failed submission
         raises ``MorphologWitnessFailed`` carrying the head as stored, to
@@ -1114,7 +1098,6 @@ class Morpholog:
         args = ["audit", "checkpoint", "--database-url", self.database_url]
         if signing_key is not None:
             args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
-        args += self._repeat("--writer-role", writer_roles)
         args += self._repeat("--witness", witnesses)
         args += self._opt("--covering", covering)
         proc = self._run(args, timeout=self.timeout)

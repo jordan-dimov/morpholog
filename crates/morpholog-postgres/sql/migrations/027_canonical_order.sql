@@ -1,0 +1,139 @@
+-- One canonical order for the audit log. From here on every audit row
+-- takes its place from a trigger, and records the row operations its
+-- commit actually performed. Legacy rows keep order 0 and their leaf
+-- encoding: nothing already committed changes.
+--
+-- The runner writes the activation record after this script, in the
+-- same transaction, so the legacy root comes from the Rust leaf encoder.
+-- A database `init` creates is ordered from its first row and has none.
+
+-- A writer that has already written makes activation wait, so its row
+-- lands in the legacy prefix. One that starts later waits here and then
+-- meets the trigger.
+LOCK TABLE morpholog.claims, morpholog.audit IN EXCLUSIVE MODE;
+
+-- Defaults are stored in the catalog, so no legacy row is rewritten.
+ALTER TABLE morpholog.audit
+    ADD COLUMN audit_order bigint NOT NULL DEFAULT 0,
+    ADD COLUMN act_ordinal int NOT NULL DEFAULT 0,
+    ADD COLUMN ordered_at timestamptz,
+    ADD COLUMN operations jsonb CHECK (jsonb_typeof(operations) = 'array'),
+    ADD CONSTRAINT audit_order_all_or_none CHECK (
+        (operations IS NULL) = (audit_order = 0)
+        AND (operations IS NULL) = (ordered_at IS NULL)
+        AND (audit_order > 0 OR act_ordinal = 0)
+    ),
+    ADD CONSTRAINT audit_activation_attested CHECK (
+        (transformation_name = 'morpholog.activate') = (attestation ->> 'mode' = 'migration')
+    );
+
+CREATE UNIQUE INDEX audit_one_activation ON morpholog.audit (transformation_name)
+    WHERE transformation_name = 'morpholog.activate';
+
+CREATE INDEX audit_canonical ON morpholog.audit
+    (audit_order, act_ordinal, committed_at, transition_id);
+
+CREATE SEQUENCE morpholog.audit_order_seq CACHE 1;
+-- Microseconds since the epoch of the last `ordered_at` handed out.
+CREATE SEQUENCE morpholog.audit_ordered_at_us CACHE 1 MINVALUE 0 START 0;
+
+-- The order each open transaction drew, keyed by an id its caller cannot
+-- choose. Rows of finished transactions are pruned as orders are drawn.
+CREATE TABLE morpholog.audit_order_txn (
+    xid         xid8        PRIMARY KEY,
+    audit_order bigint      NOT NULL,
+    next_act    int         NOT NULL,
+    ordered_at  timestamptz NOT NULL
+);
+REVOKE ALL ON morpholog.audit_order_txn FROM PUBLIC;
+
+-- The ordering lock G is the advisory session lock (625626, 0). An
+-- order n is held as the transaction lock on the bigint (1 << 62) | n
+-- until commit. Both keys are reserved.
+CREATE FUNCTION morpholog.audit_order_assign() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = morpholog, pg_temp AS $$
+DECLARE
+    held audit_order_txn%ROWTYPE;
+    n bigint;
+    us bigint;
+BEGIN
+    IF NEW.operations IS NULL THEN
+        RAISE EXCEPTION 'this audit row records no operations: it was written by a binary older than the database'
+            USING ERRCODE = '55000';
+    END IF;
+    SELECT * INTO held FROM audit_order_txn WHERE xid = pg_current_xact_id();
+    IF FOUND THEN
+        UPDATE audit_order_txn SET next_act = next_act + 1 WHERE xid = held.xid;
+        NEW.audit_order := held.audit_order;
+        NEW.act_ordinal := held.next_act;
+        NEW.ordered_at := held.ordered_at;
+    ELSE
+        -- G is released on every path, a cancel included, so a pooled
+        -- connection never keeps it.
+        BEGIN
+            PERFORM pg_advisory_lock(625626, 0);
+            n := nextval('audit_order_seq');
+            PERFORM pg_advisory_xact_lock((1::bigint << 62) | n);
+            SELECT greatest(
+                       floor(extract(epoch FROM clock_timestamp()) * 1000000)::bigint,
+                       last_value + 1)
+              INTO us FROM audit_ordered_at_us;
+            PERFORM setval('audit_ordered_at_us', us);
+            PERFORM pg_advisory_unlock(625626, 0);
+        EXCEPTION WHEN OTHERS OR QUERY_CANCELED THEN
+            PERFORM pg_advisory_unlock(625626, 0);
+            RAISE;
+        END;
+        NEW.audit_order := n;
+        NEW.act_ordinal := 0;
+        NEW.ordered_at := timestamptz 'epoch' + us * interval '1 microsecond';
+        INSERT INTO audit_order_txn VALUES (pg_current_xact_id(), n, 1, NEW.ordered_at);
+        -- Open and prepared transactions are at or above the snapshot's
+        -- xmin, so only finished ones are removed.
+        IF n % 64 = 0 THEN
+            DELETE FROM audit_order_txn WHERE xid IN (
+                SELECT xid FROM audit_order_txn
+                 WHERE xid < pg_snapshot_xmin(pg_current_snapshot())
+                 LIMIT 256);
+        END IF;
+    END IF;
+    IF NEW.transformation_name = 'morpholog.activate'
+       AND (NEW.audit_order, NEW.act_ordinal) <> (1, 0) THEN
+        RAISE EXCEPTION 'the activation record can only be the first ordered audit row'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION morpholog.audit_order_assign() FROM PUBLIC;
+
+CREATE TRIGGER audit_order BEFORE INSERT ON morpholog.audit
+    FOR EACH ROW EXECUTE FUNCTION morpholog.audit_order_assign();
+
+-- Every order below the result is final: committed or rolled back. It is
+-- the least order still held, so a prepared transaction counts too, or
+-- else the next order to be drawn.
+CREATE FUNCTION morpholog.audit_watermark() RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = morpholog, pg_temp AS $$
+DECLARE
+    inflight bigint;
+    last bigint;
+    called boolean;
+BEGIN
+    BEGIN
+        PERFORM pg_advisory_lock(625626, 0);
+        SELECT min(((classid::bigint & 1073741823) << 32) | objid::bigint)
+          INTO inflight FROM pg_catalog.pg_locks
+         WHERE locktype = 'advisory'
+           AND database = (SELECT oid FROM pg_catalog.pg_database
+                            WHERE datname = current_database())
+           AND objsubid = 1 AND classid::bigint BETWEEN 1073741824 AND 2147483647
+           AND mode = 'ExclusiveLock' AND granted;
+        SELECT last_value, is_called INTO last, called FROM audit_order_seq;
+        PERFORM pg_advisory_unlock(625626, 0);
+    EXCEPTION WHEN OTHERS OR QUERY_CANCELED THEN
+        PERFORM pg_advisory_unlock(625626, 0);
+        RAISE;
+    END;
+    RETURN coalesce(inflight, CASE WHEN called THEN last + 1 ELSE last END);
+END $$;
+REVOKE ALL ON FUNCTION morpholog.audit_watermark() FROM PUBLIC;

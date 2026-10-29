@@ -876,36 +876,12 @@ class AdapterDiscrimination(unittest.TestCase):
             argv = argv_after(lambda: self.client.check(strict=True))
             self.assertNotIn("--database-url", argv)
 
-    def test_writer_roles_repeat_on_the_audit_and_checkpoint_argv(self):
-        # The managed-Postgres assertion: one --writer-role pair per
-        # role, on every watermark consumer, and absent when not asked.
-        self._mode("record_argv_empty")
-        with recording_argv() as argv_after:
-
-            argv = argv_after(lambda: self.client.audit(writer_roles=["app_rw", "batch_rw"]))
-            pairs = [
-                (argv[i], argv[i + 1])
-                for i in range(len(argv) - 1)
-                if argv[i] == "--writer-role"
-            ]
-            self.assertEqual(pairs, [("--writer-role", "app_rw"), ("--writer-role", "batch_rw")])
-
-            argv = argv_after(lambda: self.client.audit_named(writer_roles=["app_rw"]))
-            self.assertIn("--writer-role", argv)
-            self.assertIn("--named", argv)
-
-            argv = argv_after(lambda: self.client.audit())
-            self.assertNotIn("--writer-role", argv)
-
+    def test_the_checkpoint_argv_carries_only_what_was_asked(self):
         self._mode("record_argv_stdout")
         os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "checkpoint_created.json").read_text()
         self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
         with recording_argv() as argv_after:
-            argv = argv_after(lambda: self.client.audit_checkpoint(writer_roles=["app_rw"]))
-            self.assertEqual(argv[argv.index("--writer-role") + 1], "app_rw")
-
             argv = argv_after(lambda: self.client.audit_checkpoint())
-            self.assertNotIn("--writer-role", argv)
             self.assertNotIn("--witness", argv)
             self.assertNotIn("--covering", argv)
 

@@ -17,6 +17,10 @@ fn rehearse_rows<'a>(
     rows: impl IntoIterator<Item = &'a AuditRow>,
 ) {
     for row in rows {
+        if row.is_activation() {
+            row.effect().apply_to(replay);
+            continue;
+        }
         let transition_id = row.transition_id.to_string();
         rehearsal.observe(
             replay,

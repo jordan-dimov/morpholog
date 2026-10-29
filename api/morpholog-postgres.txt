@@ -54,7 +54,9 @@ impl core::marker::Unpin for morpholog_postgres::testing::AlwaysTransient
 impl core::marker::UnsafeUnpin for morpholog_postgres::testing::AlwaysTransient
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::testing::AlwaysTransient
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::testing::AlwaysTransient
-pub const morpholog_postgres::testing::RESET_SQL: &str
+pub async fn morpholog_postgres::testing::activate(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
+pub async fn morpholog_postgres::testing::reset_before_activation(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
+pub async fn morpholog_postgres::testing::reset_database(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
 pub mod morpholog_postgres::wire_time
 pub mod morpholog_postgres::wire_time::option
 pub fn morpholog_postgres::wire_time::option::deserialize<'de, D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<core::option::Option<jiff::timestamp::Timestamp>, <D as serde_core::de::Deserializer>::Error>
@@ -106,6 +108,9 @@ pub enum morpholog_postgres::AuditAttestation
 pub morpholog_postgres::AuditAttestation::Gateway
 pub morpholog_postgres::AuditAttestation::Gateway::authenticated_by: alloc::string::String
 pub morpholog_postgres::AuditAttestation::Gateway::authenticated_by_oid: core::option::Option<u32>
+pub morpholog_postgres::AuditAttestation::Migration
+pub morpholog_postgres::AuditAttestation::Migration::authenticated_by: alloc::string::String
+pub morpholog_postgres::AuditAttestation::Migration::authenticated_by_oid: u32
 impl core::clone::Clone for morpholog_postgres::AuditAttestation
 pub fn morpholog_postgres::AuditAttestation::clone(&self) -> morpholog_postgres::AuditAttestation
 impl core::cmp::Eq for morpholog_postgres::AuditAttestation
@@ -376,6 +381,31 @@ impl core::marker::Unpin for morpholog_postgres::NeedKind
 impl core::marker::UnsafeUnpin for morpholog_postgres::NeedKind
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::NeedKind
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::NeedKind
+pub enum morpholog_postgres::OperationKind
+pub morpholog_postgres::OperationKind::Del
+pub morpholog_postgres::OperationKind::Ins
+pub morpholog_postgres::OperationKind::Noop
+impl core::clone::Clone for morpholog_postgres::OperationKind
+pub fn morpholog_postgres::OperationKind::clone(&self) -> morpholog_postgres::OperationKind
+impl core::clone::TrivialClone for morpholog_postgres::OperationKind
+impl core::cmp::Eq for morpholog_postgres::OperationKind
+impl core::cmp::PartialEq for morpholog_postgres::OperationKind
+pub fn morpholog_postgres::OperationKind::eq(&self, &morpholog_postgres::OperationKind) -> bool
+impl core::fmt::Debug for morpholog_postgres::OperationKind
+pub fn morpholog_postgres::OperationKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_postgres::OperationKind
+impl core::marker::StructuralPartialEq for morpholog_postgres::OperationKind
+impl serde_core::ser::Serialize for morpholog_postgres::OperationKind
+pub fn morpholog_postgres::OperationKind::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for morpholog_postgres::OperationKind
+pub fn morpholog_postgres::OperationKind::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for morpholog_postgres::OperationKind
+impl core::marker::Send for morpholog_postgres::OperationKind
+impl core::marker::Sync for morpholog_postgres::OperationKind
+impl core::marker::Unpin for morpholog_postgres::OperationKind
+impl core::marker::UnsafeUnpin for morpholog_postgres::OperationKind
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::OperationKind
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::OperationKind
 pub enum morpholog_postgres::OutboxStatus
 pub morpholog_postgres::OutboxStatus::CompensationFailed
 pub morpholog_postgres::OutboxStatus::CompensationInProgress
@@ -548,26 +578,17 @@ pub morpholog_postgres::PgError::SigningKeyUnauthorised::purpose: alloc::string:
 pub morpholog_postgres::PgError::SigningKeyUnauthorised::tree_size: i64
 pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix
 pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix::committed_beyond_horizon: i64
-pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix::horizon: jiff::timestamp::Timestamp
+pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix::horizon: u64
 pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix::key_id: alloc::string::String
 pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix::public_key: alloc::string::String
 pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix::purpose: alloc::string::String
 pub morpholog_postgres::PgError::SigningKeyUnauthorisedAtTruncatedPrefix::tree_size: i64
-pub morpholog_postgres::PgError::StatVisibility
-pub morpholog_postgres::PgError::StatVisibility::hidden: i64
 pub morpholog_postgres::PgError::TransitionNotCovered
 pub morpholog_postgres::PgError::TransitionNotCovered::id: uuid::Uuid
 pub morpholog_postgres::PgError::TransitionNotCovered::tree_size: i64
 pub morpholog_postgres::PgError::TransitionNotFound(uuid::Uuid)
 pub morpholog_postgres::PgError::UnknownTransformation
 pub morpholog_postgres::PgError::UnknownTransformation::name: morpholog_core::ir::TransformationName
-pub morpholog_postgres::PgError::WriterAssertionEmpty
-pub morpholog_postgres::PgError::WriterAssertionIncomplete
-pub morpholog_postgres::PgError::WriterAssertionIncomplete::missing: alloc::vec::Vec<alloc::string::String>
-pub morpholog_postgres::PgError::WriterRoleUnknown
-pub morpholog_postgres::PgError::WriterRoleUnknown::roles: alloc::vec::Vec<alloc::string::String>
-pub morpholog_postgres::PgError::WriterSessionsHidden
-pub morpholog_postgres::PgError::WriterSessionsHidden::hidden: i64
 impl core::convert::From<morpholog_core::eval::EvalError> for morpholog_postgres::PgError
 pub fn morpholog_postgres::PgError::from(morpholog_core::eval::EvalError) -> Self
 impl core::convert::From<serde_json::error::Error> for morpholog_postgres::PgError
@@ -1223,16 +1244,20 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::AuditPosition
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::AuditPosition
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::AuditPosition
 pub struct morpholog_postgres::AuditRow
+pub morpholog_postgres::AuditRow::act_ordinal: core::option::Option<u32>
 pub morpholog_postgres::AuditRow::actor: morpholog_core::ir::Subject
 pub morpholog_postgres::AuditRow::arguments: alloc::vec::Vec<morpholog_core::state::EvalValue>
 pub morpholog_postgres::AuditRow::asserted_claims: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
 pub morpholog_postgres::AuditRow::attestation: core::option::Option<morpholog_postgres::AuditAttestation>
+pub morpholog_postgres::AuditRow::audit_order: core::option::Option<u64>
 pub morpholog_postgres::AuditRow::committed_at: jiff::timestamp::Timestamp
 pub morpholog_postgres::AuditRow::drawn_subjects: core::option::Option<alloc::vec::Vec<morpholog_core::ir::Subject>>
 pub morpholog_postgres::AuditRow::emitted_intents: alloc::vec::Vec<morpholog_core::state::IntentInstance>
 pub morpholog_postgres::AuditRow::invariant_epoch: i32
 pub morpholog_postgres::AuditRow::invariants_checked: alloc::vec::Vec<morpholog_postgres::AuditedInvariantCheck>
 pub morpholog_postgres::AuditRow::model_hash: core::option::Option<alloc::string::String>
+pub morpholog_postgres::AuditRow::operations: core::option::Option<alloc::vec::Vec<morpholog_postgres::Operation>>
+pub morpholog_postgres::AuditRow::ordered_at: core::option::Option<jiff::timestamp::Timestamp>
 pub morpholog_postgres::AuditRow::parameters: core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub morpholog_postgres::AuditRow::retracted_claims: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
 pub morpholog_postgres::AuditRow::semantics_version: core::option::Option<u32>
@@ -1702,6 +1727,33 @@ impl core::marker::Unpin for morpholog_postgres::MovedLogin
 impl core::marker::UnsafeUnpin for morpholog_postgres::MovedLogin
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::MovedLogin
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::MovedLogin
+pub struct morpholog_postgres::Operation
+pub morpholog_postgres::Operation::args: alloc::vec::Vec<morpholog_core::state::EvalValue>
+pub morpholog_postgres::Operation::asserted_in: core::option::Option<uuid::Uuid>
+pub morpholog_postgres::Operation::op: morpholog_postgres::OperationKind
+pub morpholog_postgres::Operation::predicate: morpholog_core::ir::PredicateName
+impl morpholog_postgres::Operation
+pub fn morpholog_postgres::Operation::claim(&self) -> morpholog_core::state::ClaimInstance
+impl core::clone::Clone for morpholog_postgres::Operation
+pub fn morpholog_postgres::Operation::clone(&self) -> morpholog_postgres::Operation
+impl core::cmp::Eq for morpholog_postgres::Operation
+pub fn morpholog_postgres::Operation::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::Operation
+pub fn morpholog_postgres::Operation::eq(&self, &morpholog_postgres::Operation) -> bool
+impl core::fmt::Debug for morpholog_postgres::Operation
+pub fn morpholog_postgres::Operation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::Operation
+impl serde_core::ser::Serialize for morpholog_postgres::Operation
+pub fn morpholog_postgres::Operation::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for morpholog_postgres::Operation
+pub fn morpholog_postgres::Operation::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for morpholog_postgres::Operation
+impl core::marker::Send for morpholog_postgres::Operation
+impl core::marker::Sync for morpholog_postgres::Operation
+impl core::marker::Unpin for morpholog_postgres::Operation
+impl core::marker::UnsafeUnpin for morpholog_postgres::Operation
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::Operation
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::Operation
 pub struct morpholog_postgres::OutboxRow
 pub morpholog_postgres::OutboxRow::arguments: alloc::vec::Vec<morpholog_core::state::EvalValue>
 pub morpholog_postgres::OutboxRow::attempt_count: i32
@@ -2660,8 +2712,8 @@ pub async fn morpholog_postgres::testing::AlwaysTransient::deliver(&self, &morph
 pub async fn morpholog_postgres::apply_migrations(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::attach_witness(&sqlx_postgres::PgPool, i64, &morpholog_postgres::Digest, morpholog_postgres::Witness) -> core::result::Result<morpholog_postgres::Checkpoint, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::audit_cursor_for(&mut sqlx_postgres::connection::PgConnection, uuid::Uuid) -> core::result::Result<morpholog_postgres::AuditPosition, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::audit_resume_watermark(&sqlx_postgres::PgPool, core::option::Option<&[alloc::string::String]>) -> core::result::Result<jiff::timestamp::Timestamp, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::begin_audit_tail<'p>(&'p sqlx_postgres::PgPool, core::option::Option<uuid::Uuid>, core::option::Option<&[alloc::string::String]>) -> core::result::Result<morpholog_postgres::AuditTail<'p>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::audit_resume_watermark(&sqlx_postgres::PgPool) -> core::result::Result<u64, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::begin_audit_tail<'p>(&'p sqlx_postgres::PgPool, core::option::Option<uuid::Uuid>) -> core::result::Result<morpholog_postgres::AuditTail<'p>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::begin_compensation(&sqlx_postgres::PgPool, uuid::Uuid, &str, core::time::Duration) -> core::result::Result<core::option::Option<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::begin_prefix_export(&sqlx_postgres::PgPool, core::option::Option<i64>) -> core::result::Result<morpholog_postgres::PrefixExport<'_>, morpholog_postgres::PgError>
 pub fn morpholog_postgres::check_named_programs(&[&morpholog_postgres::PgProgram]) -> core::result::Result<(), morpholog_postgres::PgError>
@@ -2669,7 +2721,7 @@ pub async fn morpholog_postgres::claim_pending_outbox_row(&sqlx_postgres::PgPool
 pub async fn morpholog_postgres::complete_compensation(&sqlx_postgres::PgPool, uuid::Uuid, &str, uuid::Uuid) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub fn morpholog_postgres::compute_idempotency_key(uuid::Uuid, &morpholog_core::state::IntentInstance) -> core::result::Result<alloc::string::String, serde_json::error::Error>
 pub async fn morpholog_postgres::coverage_replay(&sqlx_postgres::PgPool, &morpholog_core::validate::ValidatedProgram<'_>) -> core::result::Result<morpholog_core::coverage::CoverageReport, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::create_checkpoint(&sqlx_postgres::PgPool, core::option::Option<&morpholog_postgres::CheckpointSigner>, core::option::Option<&[alloc::string::String]>, core::option::Option<uuid::Uuid>) -> core::result::Result<morpholog_postgres::CheckpointOutcome, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::create_checkpoint(&sqlx_postgres::PgPool, core::option::Option<&morpholog_postgres::CheckpointSigner>, core::option::Option<uuid::Uuid>) -> core::result::Result<morpholog_postgres::CheckpointOutcome, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::databases_also_reached(&sqlx_postgres::PgPool, &morpholog_postgres::DeploymentRoles) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::deployment_roles(&sqlx_postgres::PgPool) -> core::result::Result<core::option::Option<morpholog_postgres::DeploymentRoles>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::direct_members(&sqlx_postgres::PgPool, &morpholog_postgres::DeploymentRoles) -> core::result::Result<morpholog_postgres::RoleMembers, morpholog_postgres::PgError>
@@ -2685,8 +2737,8 @@ pub fn morpholog_postgres::head_version() -> i32
 pub async fn morpholog_postgres::initialise_schema(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::InitOutcome, morpholog_postgres::PgError>
 pub fn morpholog_postgres::issue_receipt(&morpholog_core::validate::ValidatedProgram<'_>, &morpholog_postgres::EvidencePack, morpholog_postgres::ReceiptQuery) -> core::result::Result<morpholog_postgres::EvaluationReceipt, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_audit_rows(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::list_audit_rows_page(&mut sqlx_postgres::connection::PgConnection, core::option::Option<morpholog_postgres::AuditPosition>, core::option::Option<jiff::timestamp::Timestamp>, i64) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::list_audit_rows_page_mentioning(&mut sqlx_postgres::connection::PgConnection, core::option::Option<morpholog_postgres::AuditPosition>, core::option::Option<jiff::timestamp::Timestamp>, i64, &str) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::list_audit_rows_page(&mut sqlx_postgres::connection::PgConnection, core::option::Option<morpholog_postgres::AuditPosition>, core::option::Option<u64>, i64) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::list_audit_rows_page_mentioning(&mut sqlx_postgres::connection::PgConnection, core::option::Option<morpholog_postgres::AuditPosition>, core::option::Option<u64>, i64, &str) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_claims(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_core::state::ClaimInstance>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_claims_at(&sqlx_postgres::PgPool, uuid::Uuid) -> core::result::Result<alloc::vec::Vec<morpholog_core::state::ClaimInstance>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_claims_at_for_predicates(&sqlx_postgres::PgPool, uuid::Uuid, &[alloc::string::String]) -> core::result::Result<alloc::vec::Vec<morpholog_core::state::ClaimInstance>, morpholog_postgres::PgError>

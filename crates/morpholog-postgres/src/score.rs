@@ -90,6 +90,10 @@ fn fold_rows<'a>(
         }
         // Read the effective delta before the state advances in place,
         // so no per-row snapshot is needed.
+        if row.is_activation() {
+            row.effect().apply_to(replay);
+            continue;
+        }
         let effective = effective_delta(replay, &row.asserted_claims, &row.retracted_claims);
         row.effect().apply_to(replay);
         scorer.observe_transition(replay, &effective, &row.transition_id.to_string())?;

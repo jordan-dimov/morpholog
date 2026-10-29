@@ -1,11 +1,12 @@
 use crate::as_of::reconstruct_inner;
+use crate::audit::Operation;
 use crate::audit::{REPLAY_CHUNK, latest_audit_position};
 use crate::audit_pages::{ReplayPages, ReplayRow};
 use crate::checkpoints::TreeVerification;
 use crate::claims::decode_claim_rows;
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::propose::{REJECTION_KIND_BIND, REJECTION_KIND_INVARIANT, REJECTION_KIND_REQUIRE};
-use crate::replay::RowEffect;
+use crate::replay::{EffectKind, RowEffect};
 use crate::role_rebindings::RoleRebindings;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use crate::witnesses::WitnessesReport;
@@ -300,10 +301,20 @@ pub async fn coverage_replay(
                 transformation_name,
                 asserted_claims: asserted_json,
                 retracted_claims: retracted_json,
+                operations,
                 ..
             } = row;
             let asserted: Vec<ClaimInstance> = serde_json::from_value(asserted_json)?;
             let retracted: Vec<ClaimInstance> = serde_json::from_value(retracted_json)?;
+            let operations: Option<Vec<Operation>> =
+                operations.map(serde_json::from_value).transpose()?;
+            let kind = EffectKind::of(
+                &transformation_name,
+                &retracted,
+                &asserted,
+                operations.as_deref(),
+            );
+            let activation = matches!(kind, EffectKind::Activation { .. });
             let delta: std::collections::BTreeSet<PredicateName> = retracted
                 .iter()
                 .chain(asserted.iter())
@@ -311,10 +322,12 @@ pub async fn coverage_replay(
                 .collect();
             RowEffect {
                 transition_id,
-                retracted: &retracted,
-                asserted: &asserted,
+                kind,
             }
             .apply_to(&mut replay);
+            if activation {
+                continue;
+            }
             // Rules the change cannot fire are skipped inside observe;
             // the transition still counts.
             tracker

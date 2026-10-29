@@ -729,6 +729,11 @@ fn least_privilege_sql(writer: &str, reader: &str) -> String {
     );
     let _ = writeln!(out, "GRANT USAGE ON SCHEMA morpholog TO {w}, {r};");
     let _ = writeln!(out, "GRANT USAGE ON SCHEMA morpholog_read TO {w}, {r};");
+    // The resume horizon, which the tail and checkpoints both read.
+    let _ = writeln!(
+        out,
+        "GRANT EXECUTE ON FUNCTION morpholog.audit_watermark() TO {w}, {r};"
+    );
     // The write set: assert is INSERT, retract is DELETE (claims);
     // audit is append-only; the outbox lease and checkpoint co-sign
     // paths UPDATE; refresh derived owns the read cache.

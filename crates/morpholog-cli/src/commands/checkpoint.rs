@@ -41,14 +41,7 @@ pub(crate) async fn run(args: CheckpointArgs) -> anyhow::Result<()> {
     };
 
     let pool = connect(&args.db.database_url).await?;
-    let mut outcome = match create_checkpoint(
-        &pool,
-        signer.as_ref(),
-        args.writers.as_writers(),
-        args.covering,
-    )
-    .await
-    {
+    let mut outcome = match create_checkpoint(&pool, signer.as_ref(), args.covering).await {
         Ok(outcome) => outcome,
         Err(PgError::TransitionNotCovered { id, tree_size }) => {
             print_json(&envelopes::CheckpointRefusal::not_covered(id, tree_size))?;

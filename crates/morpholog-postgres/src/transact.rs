@@ -162,7 +162,7 @@ pub async fn propose_all_against_pg(
                         retracted,
                         emitted,
                     } => {
-                        let effective =
+                        let (effective, operations) =
                             write_claim_delta(&mut tx, transition_id, &asserted, &retracted)
                                 .await?;
                         steps.push(DeltaStep {
@@ -185,6 +185,7 @@ pub async fn propose_all_against_pg(
                             prepared,
                             &asserted,
                             &retracted,
+                            &operations,
                             &emitted,
                             &draws,
                             &login_role,

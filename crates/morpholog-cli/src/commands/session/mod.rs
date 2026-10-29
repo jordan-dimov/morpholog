@@ -555,8 +555,6 @@ struct AuditBody {
     #[serde(default)]
     mentions: Option<String>,
     #[serde(default)]
-    writer_roles: Option<Vec<String>>,
-    #[serde(default)]
     limit: Option<u32>,
 }
 
@@ -586,7 +584,7 @@ async fn handle_audit(
     let limit = body
         .limit
         .map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX));
-    let mut tail = morpholog_postgres::begin_audit_tail(pool, after, body.writer_roles.as_deref())
+    let mut tail = morpholog_postgres::begin_audit_tail(pool, after)
         .await
         .map_err(audit_failure)?;
     if let Some(subject) = &body.mentions {
@@ -623,9 +621,7 @@ async fn handle_audit(
 /// one it could not compute.
 fn audit_failure(e: PgError) -> SessionFailure {
     match e {
-        PgError::TransitionNotFound(_)
-        | PgError::WriterRoleUnknown { .. }
-        | PgError::WriterAssertionEmpty => invalid_arguments(e.into()),
+        PgError::TransitionNotFound(_) => invalid_arguments(e.into()),
         other => {
             SessionFailure::Operational(anyhow::Error::new(other).context("reading the audit tail"))
         }

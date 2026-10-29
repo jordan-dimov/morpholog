@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT committed_at >= $2 AS \"withheld!\"\n           FROM morpholog.audit WHERE transition_id = $1",
+  "query": "SELECT audit_order >= $2 AS \"withheld!\"\n           FROM morpholog.audit WHERE transition_id = $1",
   "describe": {
     "columns": [
       {
@@ -13,12 +13,12 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Timestamptz"
+        "Int8"
       ]
     },
     "nullable": [
       null
     ]
   },
-  "hash": "ba7fc32f7d125aac880adfc2f2855456faa227700e53b85511ed1428f3e6bd8c"
+  "hash": "e9066332f24e04a253fc4cbb91994ad20ed94c1ed63e094d4334be5812077953"
 }

@@ -39,7 +39,17 @@ pub(crate) const MIGRATIONS: &[(i32, &str, &str)] = &[
         "decimal_arithmetic",
         include_str!("../sql/migrations/026_decimal_arithmetic.sql"),
     ),
+    (
+        27,
+        "canonical_order",
+        include_str!("../sql/migrations/027_canonical_order.sql"),
+    ),
 ];
+
+/// The migration after whose script the runner writes the activation
+/// record, in the same transaction: the record's legacy root comes from
+/// the Rust leaf encoder.
+const ACTIVATION_VERSION: i32 = 27;
 
 /// The newest migration this binary carries.
 pub fn head_version() -> i32 {
@@ -272,6 +282,9 @@ pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError>
             .execute(&mut *tx)
             .await
             .map_err(classify)?;
+        if version == ACTIVATION_VERSION {
+            crate::activation::write_activation_record(&mut tx).await?;
+        }
         sqlx::query!(
             "INSERT INTO morpholog.schema_migrations (version, name)
              VALUES ($1, $2) ON CONFLICT (version) DO NOTHING",
@@ -307,6 +320,24 @@ pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError>
 mod tests {
     use super::*;
 
+    /// The lines of `sql` that control a transaction. A function body's
+    /// `END;` closes a block, not a transaction, so bodies are skipped.
+    fn transaction_statements(sql: &str) -> Vec<usize> {
+        let mut in_body = false;
+        sql.lines()
+            .enumerate()
+            .filter_map(|(n, line)| {
+                let code = line.split("--").next().unwrap_or("");
+                let was_in_body = in_body;
+                in_body ^= code.matches("$$").count() % 2 == 1;
+                let bare = code.trim().to_ascii_uppercase();
+                (!was_in_body
+                    && matches!(bare.as_str(), "BEGIN;" | "COMMIT;" | "ROLLBACK;" | "END;"))
+                .then_some(n + 1)
+            })
+            .collect()
+    }
+
     /// The runner owns each migration's transaction, and a COMMIT inside
     /// one would separate the schema change from its version record.
     #[test]
@@ -314,19 +345,18 @@ mod tests {
         let offenders: Vec<String> = MIGRATIONS
             .iter()
             .flat_map(|&(_, name, sql)| {
-                sql.lines().enumerate().filter_map(move |(n, line)| {
-                    let bare = line
-                        .split("--")
-                        .next()
-                        .unwrap_or("")
-                        .trim()
-                        .to_ascii_uppercase();
-                    matches!(bare.as_str(), "BEGIN;" | "COMMIT;" | "ROLLBACK;" | "END;")
-                        .then(|| format!("{name}:{}", n + 1))
-                })
+                transaction_statements(sql)
+                    .into_iter()
+                    .map(move |line| format!("{name}:{line}"))
             })
             .collect();
         assert!(offenders.is_empty(), "{}", offenders.join(", "));
+    }
+
+    #[test]
+    fn a_function_bodys_end_is_not_transaction_control() {
+        let sql = "CREATE FUNCTION f() RETURNS void AS $$\nBEGIN\nEND;\n$$ LANGUAGE plpgsql;\nCOMMIT;\nEND;\n";
+        assert_eq!(transaction_statements(sql), vec![5, 6]);
     }
 
     #[test]

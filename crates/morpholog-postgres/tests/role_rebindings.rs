@@ -75,6 +75,10 @@ fn oids(rows: &[morpholog_postgres::AuditRow]) -> Vec<Option<u32>> {
                 authenticated_by_oid,
                 ..
             }) => *authenticated_by_oid,
+            Some(AuditAttestation::Migration {
+                authenticated_by_oid,
+                ..
+            }) => Some(*authenticated_by_oid),
             None => None,
         })
         .collect()

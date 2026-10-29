@@ -1219,6 +1219,10 @@ fn audit_rows_serialize_as_pinned() {
         model_hash: None,
         semantics_version: None,
         drawn_subjects: None,
+        audit_order: None,
+        act_ordinal: None,
+        ordered_at: None,
+        operations: None,
     };
     assert_golden("audit_row.json", &to_value(&row));
 
@@ -1286,12 +1290,75 @@ fn audit_rows_serialize_as_pinned() {
         &to_value(&subjects_recording),
     );
 
+    // The row as written now: also its place in the canonical order and
+    // what its commit did to the claims table.
+    let ordered = AuditRow {
+        audit_order: Some(7),
+        act_ordinal: Some(1),
+        ordered_at: Some(
+            "2026-06-01T12:00:00.000250Z"
+                .parse::<jiff::Timestamp>()
+                .unwrap(),
+        ),
+        operations: Some(vec![
+            morpholog_postgres::Operation {
+                op: morpholog_postgres::OperationKind::Del,
+                predicate: kitchen_sink_claim().predicate,
+                args: kitchen_sink_claim().args,
+                asserted_in: None,
+            },
+            morpholog_postgres::Operation {
+                op: morpholog_postgres::OperationKind::Noop,
+                predicate: kitchen_sink_claim().predicate,
+                args: kitchen_sink_claim().args,
+                asserted_in: None,
+            },
+        ]),
+        ..subjects_recording.clone()
+    };
+    assert_golden("audit_row_ordered.json", &to_value(&ordered));
+
+    // The activation record: a control record the migration wrote, whose
+    // operations are the baseline, each claim with the transition that
+    // admitted it.
+    let activation = AuditRow {
+        transformation_name: "morpholog.activate".into(),
+        arguments: vec![
+            EvalValue::Decimal(3.into()),
+            EvalValue::Subject(Subject::from(format!("sha256:{}", "a".repeat(64)))),
+            EvalValue::Subject(Subject::from(format!("sha256:{}", "b".repeat(64)))),
+        ],
+        invariants_checked: vec![],
+        asserted_claims: vec![],
+        emitted_intents: vec![],
+        attestation: Some(morpholog_postgres::AuditAttestation::Migration {
+            authenticated_by: "deployer".to_string(),
+            authenticated_by_oid: 10,
+        }),
+        parameters: Some(vec![
+            "legacy_tree_size".to_string(),
+            "legacy_root".to_string(),
+            "baseline_digest".to_string(),
+        ]),
+        drawn_subjects: Some(vec![]),
+        audit_order: Some(1),
+        act_ordinal: Some(0),
+        operations: Some(vec![morpholog_postgres::Operation {
+            op: morpholog_postgres::OperationKind::Ins,
+            predicate: kitchen_sink_claim().predicate,
+            args: kitchen_sink_claim().args,
+            asserted_in: Some(sample_uuid()),
+        }]),
+        ..ordered.clone()
+    };
+    assert_golden("audit_row_activation.json", &to_value(&activation));
+
     // The --named form replaces the claim arrays with named claims and
     // leaves the rest unchanged, via the binary's own projection. Built
     // from the row as written now, so the named schema is held to every
     // rung.
     let named = morpholog_cli::envelopes::audit_row_named(
-        &subjects_recording,
+        &ordered,
         vec![morpholog_cli::envelopes::NamedClaim {
             args: [
                 ("account_id".to_string(), serde_json::json!("acct_1")),
@@ -1993,6 +2060,10 @@ fn sample_audit_row() -> AuditRow {
         model_hash: None,
         semantics_version: None,
         drawn_subjects: None,
+        audit_order: None,
+        act_ordinal: None,
+        ordered_at: None,
+        operations: None,
     }
 }
 

@@ -8,7 +8,6 @@
 mod common;
 use common::{dec, reset_db, subj, test_pool};
 
-use jiff::Timestamp;
 use morpholog_core::{EvalValue, Program};
 use morpholog_postgres::{
     PgError, PgPool, PgProposalOutcome, audit_cursor_for, audit_resume_watermark, begin_audit_tail,
@@ -87,7 +86,7 @@ async fn refuse(pool: &PgPool, p: &Program, name: &str, args: Vec<EvalValue>) {
 }
 
 async fn mentioning(pool: &PgPool, subject: &str, after: Option<Uuid>) -> Vec<Uuid> {
-    let mut tail = begin_audit_tail(pool, after, None)
+    let mut tail = begin_audit_tail(pool, after)
         .await
         .unwrap()
         .mentioning(subject)
@@ -200,15 +199,8 @@ async fn the_filtered_tail_withholds_an_in_flight_writers_row_instead_of_losing_
     let t1 = commit(&pool, &p, "post", vec![subj("s"), dec(1)]).await;
 
     let mut writer = pool.begin().await.unwrap();
-    let writer_start: Timestamp =
-        sqlx::query_scalar::<_, jiff_sqlx::Timestamp>("SELECT transaction_timestamp()")
-            .fetch_one(&mut *writer)
-            .await
-            .unwrap()
-            .to_jiff();
     common::insert_in_flight_audit_row_mentioning(&mut writer, Uuid::now_v7(), "s").await;
-    let horizon = audit_resume_watermark(&pool, None).await.unwrap();
-    assert!(horizon <= writer_start);
+    let horizon = audit_resume_watermark(&pool).await.unwrap();
     writer.commit().await.unwrap();
 
     let mut conn = pool.acquire().await.unwrap();
@@ -220,7 +212,7 @@ async fn the_filtered_tail_withholds_an_in_flight_writers_row_instead_of_losing_
         vec![t1],
         "the in-flight row is withheld, t1 emitted"
     );
-    let fresh = audit_resume_watermark(&pool, None).await.unwrap();
+    let fresh = audit_resume_watermark(&pool).await.unwrap();
     let cursor = audit_cursor_for(&mut conn, t1).await.unwrap();
     let page = list_audit_rows_page_mentioning(&mut conn, Some(cursor), Some(fresh), 10, "s")
         .await
@@ -281,7 +273,7 @@ async fn a_refusal_is_found_by_its_arguments_its_witness_or_its_compared_values(
 async fn an_empty_subject_is_refused_on_both_reads() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let tail = begin_audit_tail(&pool, None, None).await.unwrap();
+    let tail = begin_audit_tail(&pool, None).await.unwrap();
     assert!(matches!(tail.mentioning(""), Err(PgError::InvalidState(_))));
     let mut conn = pool.acquire().await.unwrap();
     assert!(matches!(

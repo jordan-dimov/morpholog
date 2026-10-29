@@ -1,0 +1,191 @@
+{
+  "act_ordinal": 1,
+  "actor": {
+    "type": "subject",
+    "value": "alex"
+  },
+  "arguments": [
+    {
+      "type": "subject",
+      "value": "acct_1"
+    }
+  ],
+  "asserted_claims": [
+    {
+      "args": [
+        {
+          "type": "subject",
+          "value": "acct_1"
+        },
+        {
+          "type": "decimal",
+          "value": "100.50"
+        },
+        {
+          "type": "bool",
+          "value": true
+        },
+        {
+          "type": "date",
+          "value": "2026-06-01"
+        },
+        {
+          "type": "timestamp",
+          "value": "2026-06-01T12:00:00Z"
+        },
+        {
+          "type": "duration",
+          "value": "PT6H"
+        },
+        {
+          "type": "quantity",
+          "value": {
+            "amount": "25000",
+            "unit": "USD"
+          }
+        },
+        {
+          "type": "collection",
+          "value": [
+            {
+              "type": "subject",
+              "value": "nested"
+            }
+          ]
+        }
+      ],
+      "predicate": "EveryKind"
+    }
+  ],
+  "attestation": {
+    "authenticated_by": "morpholog_writer",
+    "mode": "gateway"
+  },
+  "audit_order": 7,
+  "committed_at": "2026-06-01T12:00:00Z",
+  "drawn_subjects": [
+    "01900000-0000-7000-8000-00000000000a",
+    "01900000-0000-7000-8000-00000000000b"
+  ],
+  "emitted_intents": [
+    {
+      "args": [
+        {
+          "type": "subject",
+          "value": "acct_1"
+        }
+      ],
+      "name": "AccountOpened"
+    }
+  ],
+  "invariant_epoch": 1,
+  "invariants_checked": [
+    {
+      "name": "account_unique_by_account_id",
+      "version": 1
+    }
+  ],
+  "model_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "operations": [
+    {
+      "args": [
+        {
+          "type": "subject",
+          "value": "acct_1"
+        },
+        {
+          "type": "decimal",
+          "value": "100.50"
+        },
+        {
+          "type": "bool",
+          "value": true
+        },
+        {
+          "type": "date",
+          "value": "2026-06-01"
+        },
+        {
+          "type": "timestamp",
+          "value": "2026-06-01T12:00:00Z"
+        },
+        {
+          "type": "duration",
+          "value": "PT6H"
+        },
+        {
+          "type": "quantity",
+          "value": {
+            "amount": "25000",
+            "unit": "USD"
+          }
+        },
+        {
+          "type": "collection",
+          "value": [
+            {
+              "type": "subject",
+              "value": "nested"
+            }
+          ]
+        }
+      ],
+      "op": "del",
+      "predicate": "EveryKind"
+    },
+    {
+      "args": [
+        {
+          "type": "subject",
+          "value": "acct_1"
+        },
+        {
+          "type": "decimal",
+          "value": "100.50"
+        },
+        {
+          "type": "bool",
+          "value": true
+        },
+        {
+          "type": "date",
+          "value": "2026-06-01"
+        },
+        {
+          "type": "timestamp",
+          "value": "2026-06-01T12:00:00Z"
+        },
+        {
+          "type": "duration",
+          "value": "PT6H"
+        },
+        {
+          "type": "quantity",
+          "value": {
+            "amount": "25000",
+            "unit": "USD"
+          }
+        },
+        {
+          "type": "collection",
+          "value": [
+            {
+              "type": "subject",
+              "value": "nested"
+            }
+          ]
+        }
+      ],
+      "op": "noop",
+      "predicate": "EveryKind"
+    }
+  ],
+  "ordered_at": "2026-06-01T12:00:00.000250Z",
+  "parameters": [
+    "account_id"
+  ],
+  "retracted_claims": [],
+  "semantics_version": 1,
+  "transformation_name": "open_account",
+  "transition_id": "01900000-0000-7000-8000-000000000001"
+}

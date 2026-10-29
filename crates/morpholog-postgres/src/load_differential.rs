@@ -29,8 +29,7 @@ use crate::propose::{LoadScope, Reads, compute_load_scope, load_state, write_cla
 use crate::scope_differential::corpus_with_hostiles;
 
 async fn reset_db(pool: &PgPool) {
-    sqlx::query(crate::testing::RESET_SQL)
-        .execute(pool)
+    crate::testing::reset_database(pool)
         .await
         .expect("failed to truncate test DB");
 }

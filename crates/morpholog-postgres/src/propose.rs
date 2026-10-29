@@ -1,4 +1,5 @@
 use crate::attestation::{AuditAttestation, Proposal};
+use crate::audit::{Operation, OperationKind};
 use crate::compiled::{CompiledInvariantSet, DeltaStep, Run, Stage, disable_jit};
 use crate::error::{PgError, classify, classify_checked_query, classify_commit};
 use crate::program::{PgProgram, Route};
@@ -413,7 +414,7 @@ pub(crate) async fn propose_against_pg_run(
                 } => {
                     let transition_id = Uuid::now_v7();
                     // Check only what the database says the delta changed.
-                    let effective =
+                    let (effective, operations) =
                         write_claim_delta(&mut tx, transition_id, &asserted, &retracted).await?;
                     disable_jit(&mut tx).await?;
                     let steps = [DeltaStep {
@@ -432,6 +433,7 @@ pub(crate) async fn propose_against_pg_run(
                                 transition_id,
                                 asserted,
                                 retracted,
+                                operations,
                                 emitted,
                             },
                             None,
@@ -462,6 +464,7 @@ pub(crate) async fn propose_against_pg_run(
             transition_id,
             asserted,
             retracted,
+            operations,
             emitted,
         } => {
             write_acceptance_record(
@@ -472,6 +475,7 @@ pub(crate) async fn propose_against_pg_run(
                 prepared,
                 &asserted,
                 &retracted,
+                &operations,
                 &emitted,
                 &draws,
                 &login_role,
@@ -575,6 +579,7 @@ enum Decided {
         transition_id: Uuid,
         asserted: Vec<ClaimInstance>,
         retracted: Vec<ClaimInstance>,
+        operations: Vec<Operation>,
         emitted: Vec<IntentInstance>,
     },
 }
@@ -1105,14 +1110,16 @@ pub(crate) async fn write_rejection(
 ///
 /// Returns the effective delta, with the table answering membership: a
 /// delete that removed a row, or an insert that changed nothing, found
-/// the claim present.
+/// the claim present. Returns too the row operations, in the order they
+/// ran, for the audit row: scoring reads the first, replay the second.
 pub(crate) async fn write_claim_delta(
     tx: &mut Transaction<'_, Postgres>,
     transition_id: Uuid,
     asserted_claims: &[ClaimInstance],
     retracted_claims: &[ClaimInstance],
-) -> Result<EffectiveDelta, PgError> {
+) -> Result<(EffectiveDelta, Vec<Operation>), PgError> {
     let mut present: HashSet<ClaimInstance> = HashSet::new();
+    let mut operations = Vec::new();
     // Each distinct retraction must delete exactly one row; zero means
     // the table disagrees with the pre-state (SSI catches concurrent
     // interference later). The digest finds the row; the equality on the
@@ -1143,6 +1150,7 @@ pub(crate) async fn write_claim_delta(
                 result.rows_affected()
             )));
         }
+        operations.push(Operation::new(OperationKind::Del, claim));
         present.insert(claim.clone());
     }
 
@@ -1160,16 +1168,24 @@ pub(crate) async fn write_claim_delta(
         .execute(&mut **tx)
         .await
         .map_err(classify_checked_query)?;
+        let inserted = result.rows_affected() == 1;
+        operations.push(Operation::new(
+            if inserted {
+                OperationKind::Ins
+            } else {
+                OperationKind::Noop
+            },
+            claim,
+        ));
         // A claim retracted by this delta was just re-inserted, so only
         // an unretracted claim reports pre-state presence here.
-        if result.rows_affected() == 0 && !present.contains(claim) {
+        if !inserted && !present.contains(claim) {
             present.insert(claim.clone());
         }
     }
 
-    Ok(EffectiveDelta::of(asserted_claims, retracted_claims, |c| {
-        present.contains(c)
-    }))
+    let effective = EffectiveDelta::of(asserted_claims, retracted_claims, |c| present.contains(c));
+    Ok((effective, operations))
 }
 
 /// Persist an accepted outcome whole: the claim delta, then the
@@ -1188,7 +1204,8 @@ pub(crate) async fn write_accepted(
     draws: &DrawRecord,
     login_role: &LoginRole,
 ) -> Result<(), PgError> {
-    let _ = write_claim_delta(tx, transition_id, asserted_claims, retracted_claims).await?;
+    let (_, operations) =
+        write_claim_delta(tx, transition_id, asserted_claims, retracted_claims).await?;
     write_acceptance_record(
         tx,
         transition_id,
@@ -1197,6 +1214,7 @@ pub(crate) async fn write_accepted(
         prepared,
         asserted_claims,
         retracted_claims,
+        &operations,
         emitted_intents,
         draws,
         login_role,
@@ -1217,6 +1235,7 @@ pub(crate) async fn write_acceptance_record(
     prepared: &PreparedProgram,
     asserted_claims: &[ClaimInstance],
     retracted_claims: &[ClaimInstance],
+    operations: &[Operation],
     emitted_intents: &[IntentInstance],
     draws: &DrawRecord,
     login_role: &LoginRole,
@@ -1244,8 +1263,8 @@ pub(crate) async fn write_acceptance_record(
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents, attestation,
-            parameters, model_hash, semantics_version, drawn_subjects
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+            parameters, model_hash, semantics_version, drawn_subjects, operations
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
         transition_id,
         transformation.name.as_str(),
         serde_json::to_value(&transition.args)?,
@@ -1267,6 +1286,7 @@ pub(crate) async fn write_acceptance_record(
         // The kernel linked into this binary decided the row.
         i64::from(morpholog_core::SEMANTICS_VERSION),
         serde_json::to_value(&draws.0)?,
+        serde_json::to_value(operations)?,
     )
     .execute(&mut **tx)
     .await

@@ -449,12 +449,36 @@ CREATE TABLE audit (
             AND NOT jsonb_path_exists(drawn_subjects, 'strict $[*] ? (@.type() != "string")')
             AND semantics_version IS NOT NULL)
     ),
-    CONSTRAINT audit_drawn_subjects_required CHECK (drawn_subjects IS NOT NULL)
+    CONSTRAINT audit_drawn_subjects_required CHECK (drawn_subjects IS NOT NULL),
+    -- The canonical order, from the `audit_order` trigger: the order the
+    -- transaction drew, the act's place within it, and the ordered
+    -- timestamp, strictly increasing with the order. A row from before
+    -- the order existed keeps 0, 0 and no timestamp.
+    audit_order          bigint       NOT NULL DEFAULT 0,
+    act_ordinal          int          NOT NULL DEFAULT 0,
+    ordered_at           timestamptz,
+    -- The row operations the commit performed on the claims table, in
+    -- execution order: `del`, `ins` or `noop`. The activation record's
+    -- are the baseline.
+    operations           jsonb        CHECK (jsonb_typeof(operations) = 'array'),
+    CONSTRAINT audit_order_all_or_none CHECK (
+        (operations IS NULL) = (audit_order = 0)
+        AND (operations IS NULL) = (ordered_at IS NULL)
+        AND (audit_order > 0 OR act_ordinal = 0)
+    ),
+    CONSTRAINT audit_activation_attested CHECK (
+        (transformation_name = 'morpholog.activate') = (attestation ->> 'mode' = 'migration')
+    )
 );
 
 -- Keyset replay order: every audit read (the blessed tail, verify,
 -- coverage, as-of) orders and pages by this pair.
 CREATE INDEX audit_committed_at ON audit (committed_at, transition_id);
+
+CREATE UNIQUE INDEX audit_one_activation ON audit (transformation_name)
+    WHERE transformation_name = 'morpholog.activate';
+
+CREATE INDEX audit_canonical ON audit (audit_order, act_ordinal, committed_at, transition_id);
 
 
 -- Tamper-evident checkpoints over the audit log: a signed-tree-head
@@ -470,8 +494,7 @@ CREATE INDEX audit_committed_at ON audit (committed_at, transition_id);
 CREATE TABLE audit_checkpoints (
     checkpoint_id         uuid         PRIMARY KEY,        -- UUIDv7
     -- Number of audit rows this checkpoint commits to (the RFC 6962
-    -- tree size), counted in the canonical (committed_at, transition_id)
-    -- order, watermark-bounded. UNIQUE: one root per prefix length, so
+    -- tree size), counted in the canonical order, watermark-bounded. UNIQUE: one root per prefix length, so
     -- two checkpoint runs cannot record diverging roots at the same size.
     tree_size             bigint       NOT NULL UNIQUE CHECK (tree_size >= 0),
     -- The Merkle Tree Hash of those rows, rendered `sha256:<hex>`.
@@ -483,8 +506,8 @@ CREATE TABLE audit_checkpoints (
     -- SHA-256 over (tree_size, root_hash, prev_checkpoint_hash),
     -- rendered `sha256:<hex>` - this checkpoint's identity in the chain.
     checkpoint_hash       text         NOT NULL UNIQUE CHECK (checkpoint_hash ~ '^sha256:[0-9a-f]{64}$'),
-    -- The resume-watermark horizon the prefix was bounded by, and the
-    -- last covered row's coordinates (NULL at tree_size 0). Diagnostic
+    -- When the checkpoint was taken, and the last covered row's
+    -- coordinates (NULL at tree_size 0). Diagnostic
     -- only - the root is the cryptographic commitment - but they make an
     -- operator's incident report legible.
     covered_until         timestamptz  NOT NULL,
@@ -741,6 +764,112 @@ CREATE TABLE morpholog_read.derived_claims (
 CREATE INDEX derived_claims_generation_predicate
     ON morpholog_read.derived_claims (refresh_id, predicate_name);
 
+-- The canonical audit order (migration 27).
+CREATE SEQUENCE morpholog.audit_order_seq CACHE 1;
+-- Microseconds since the epoch of the last `ordered_at` handed out.
+CREATE SEQUENCE morpholog.audit_ordered_at_us CACHE 1 MINVALUE 0 START 0;
+
+-- The order each open transaction drew, keyed by an id its caller cannot
+-- choose. Rows of finished transactions are pruned as orders are drawn.
+CREATE TABLE morpholog.audit_order_txn (
+    xid         xid8        PRIMARY KEY,
+    audit_order bigint      NOT NULL,
+    next_act    int         NOT NULL,
+    ordered_at  timestamptz NOT NULL
+);
+REVOKE ALL ON morpholog.audit_order_txn FROM PUBLIC;
+
+-- The ordering lock G is the advisory session lock (625626, 0). An
+-- order n is held as the transaction lock on the bigint (1 << 62) | n
+-- until commit. Both keys are reserved.
+CREATE FUNCTION morpholog.audit_order_assign() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = morpholog, pg_temp AS $$
+DECLARE
+    held audit_order_txn%ROWTYPE;
+    n bigint;
+    us bigint;
+BEGIN
+    IF NEW.operations IS NULL THEN
+        RAISE EXCEPTION 'this audit row records no operations: it was written by a binary older than the database'
+            USING ERRCODE = '55000';
+    END IF;
+    SELECT * INTO held FROM audit_order_txn WHERE xid = pg_current_xact_id();
+    IF FOUND THEN
+        UPDATE audit_order_txn SET next_act = next_act + 1 WHERE xid = held.xid;
+        NEW.audit_order := held.audit_order;
+        NEW.act_ordinal := held.next_act;
+        NEW.ordered_at := held.ordered_at;
+    ELSE
+        -- G is released on every path, a cancel included, so a pooled
+        -- connection never keeps it.
+        BEGIN
+            PERFORM pg_advisory_lock(625626, 0);
+            n := nextval('audit_order_seq');
+            PERFORM pg_advisory_xact_lock((1::bigint << 62) | n);
+            SELECT greatest(
+                       floor(extract(epoch FROM clock_timestamp()) * 1000000)::bigint,
+                       last_value + 1)
+              INTO us FROM audit_ordered_at_us;
+            PERFORM setval('audit_ordered_at_us', us);
+            PERFORM pg_advisory_unlock(625626, 0);
+        EXCEPTION WHEN OTHERS OR QUERY_CANCELED THEN
+            PERFORM pg_advisory_unlock(625626, 0);
+            RAISE;
+        END;
+        NEW.audit_order := n;
+        NEW.act_ordinal := 0;
+        NEW.ordered_at := timestamptz 'epoch' + us * interval '1 microsecond';
+        INSERT INTO audit_order_txn VALUES (pg_current_xact_id(), n, 1, NEW.ordered_at);
+        -- Open and prepared transactions are at or above the snapshot's
+        -- xmin, so only finished ones are removed.
+        IF n % 64 = 0 THEN
+            DELETE FROM audit_order_txn WHERE xid IN (
+                SELECT xid FROM audit_order_txn
+                 WHERE xid < pg_snapshot_xmin(pg_current_snapshot())
+                 LIMIT 256);
+        END IF;
+    END IF;
+    IF NEW.transformation_name = 'morpholog.activate'
+       AND (NEW.audit_order, NEW.act_ordinal) <> (1, 0) THEN
+        RAISE EXCEPTION 'the activation record can only be the first ordered audit row'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION morpholog.audit_order_assign() FROM PUBLIC;
+
+CREATE TRIGGER audit_order BEFORE INSERT ON morpholog.audit
+    FOR EACH ROW EXECUTE FUNCTION morpholog.audit_order_assign();
+
+-- Every order below the result is final: committed or rolled back. It is
+-- the least order still held, so a prepared transaction counts too, or
+-- else the next order to be drawn.
+CREATE FUNCTION morpholog.audit_watermark() RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = morpholog, pg_temp AS $$
+DECLARE
+    inflight bigint;
+    last bigint;
+    called boolean;
+BEGIN
+    BEGIN
+        PERFORM pg_advisory_lock(625626, 0);
+        SELECT min(((classid::bigint & 1073741823) << 32) | objid::bigint)
+          INTO inflight FROM pg_catalog.pg_locks
+         WHERE locktype = 'advisory'
+           AND database = (SELECT oid FROM pg_catalog.pg_database
+                            WHERE datname = current_database())
+           AND objsubid = 1 AND classid::bigint BETWEEN 1073741824 AND 2147483647
+           AND mode = 'ExclusiveLock' AND granted;
+        SELECT last_value, is_called INTO last, called FROM audit_order_seq;
+        PERFORM pg_advisory_unlock(625626, 0);
+    EXCEPTION WHEN OTHERS OR QUERY_CANCELED THEN
+        PERFORM pg_advisory_unlock(625626, 0);
+        RAISE;
+    END;
+    RETURN coalesce(inflight, CASE WHEN called THEN last + 1 ELSE last END);
+END $$;
+REVOKE ALL ON FUNCTION morpholog.audit_watermark() FROM PUBLIC;
+
 -- The ledger of the v0.0.14 schema this file embodies, so that a v0.0.14
 -- binary reads a fresh database as current too. The newest row is the
 -- baseline this binary starts from; a test holds it there.
@@ -770,4 +899,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (23, 'deployment_roles'),
     (24, 'gate_witness'),
     (25, 'rejection_compared'),
-    (26, 'decimal_arithmetic');
+    (26, 'decimal_arithmetic'),
+    (27, 'canonical_order');

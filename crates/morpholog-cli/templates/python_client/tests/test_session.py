@@ -324,15 +324,13 @@ class TranscriptConversation(SessionHarness):
         with self.session("empty_rows") as s:
             self.assertEqual(s.audit(), [])
             self.assertEqual(
-                s.audit_named("t1", writer_roles=["w"], mentions="acct_1", limit=5), []
+                s.audit_named("t1", mentions="acct_1", limit=5), []
             )
             self.assertEqual(s.rejections(limit=3, mentions="acct_1"), [])
             with self.assertRaises(ValueError):
                 s.audit(mentions="")
             with self.assertRaises(ValueError):
                 s.rejections(mentions="")
-            with self.assertRaises(ValueError):
-                s.audit(writer_roles=[])
         self.assertEqual(
             [json.loads(line) for line in self.recorded()],
             [
@@ -343,7 +341,6 @@ class TranscriptConversation(SessionHarness):
                     "mentions": "acct_1",
                     "named": True,
                     "op": "audit",
-                    "writer_roles": ["w"],
                 },
                 {"limit": 3, "mentions": "acct_1", "op": "rejections"},
             ],

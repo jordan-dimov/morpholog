@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT transition_id, transformation_name, arguments, actor,\n                        invariant_epoch, invariants_checked,\n                        asserted_claims, retracted_claims, emitted_intents, committed_at,\n                attestation, parameters, model_hash, semantics_version, drawn_subjects\n                 FROM morpholog.audit\n                 ORDER BY committed_at, transition_id\n                 LIMIT $1",
+  "query": "SELECT transition_id, transformation_name, arguments, actor,\n                        invariant_epoch, invariants_checked,\n                        asserted_claims, retracted_claims, emitted_intents, committed_at,\n                attestation, parameters, model_hash, semantics_version, drawn_subjects,\n                audit_order, act_ordinal, ordered_at, operations\n                 FROM morpholog.audit\n                 WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($4, $5, $2, $3)\n                 ORDER BY audit_order, act_ordinal, committed_at, transition_id\n                 LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -167,11 +167,59 @@
             "name": "drawn_subjects"
           }
         }
+      },
+      {
+        "ordinal": 15,
+        "name": "audit_order",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "audit_order"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "act_ordinal",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "act_ordinal"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "ordered_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "ordered_at"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "operations",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "operations"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int8",
+        "Timestamptz",
+        "Uuid",
+        "Int8",
+        "Int4"
       ]
     },
     "nullable": [
@@ -189,8 +237,12 @@
       true,
       true,
       true,
+      true,
+      false,
+      false,
+      true,
       true
     ]
   },
-  "hash": "4102b5cf348c11f129b77b66fba6ed0a04d0f5d1df60a8620d80214a1c3db959"
+  "hash": "0e2a99305d3de4ccd929bd7760bbb047f61b95d38a071b3d35d39fadfdfd5bf6"
 }
