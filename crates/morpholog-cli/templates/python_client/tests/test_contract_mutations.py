@@ -135,6 +135,7 @@ CASES = {
     ),
     "verify_report_consistent.json": ("verify_report", E.VerifyReport.from_json),
     "verify_report_divergent.json": ("verify_report", E.VerifyReport.from_json),
+    "verify_report_indeterminate.json": ("verify_report", E.VerifyReport.from_json),
     "verify_report_with_views.json": ("verify_report", E.VerifyReport.from_json),
     "verify_report_witnessed.json": ("verify_report", E.VerifyReport.from_json),
     "views_verification_intact.json": ("views_verification", E.parse_views_verification),

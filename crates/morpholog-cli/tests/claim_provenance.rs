@@ -1,9 +1,9 @@
 //! A claims read names the transition whose commit made each claim
 //! present. Read now, that is the claims table's own column; read as of a
 //! transition, it comes from replaying the audit history. The two agree
-//! on everything the runtime wrote, and only the replay is checkable: the
-//! tamper case models an operator with write access to the claims table,
-//! who can change the column without touching the audit log.
+//! on everything the runtime wrote, and `audit verify` holds the column to
+//! the replay: the tamper case models an operator with write access to the
+//! claims table, who can change the column without touching the audit log.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -152,9 +152,18 @@ async fn a_claims_read_names_the_transition_that_made_each_claim_present() {
         .unwrap();
     assert_eq!(asserted_in(None).as_deref(), Some(first.as_str()));
     assert_eq!(asserted_in(Some(&both)).as_deref(), Some(both.as_str()));
-    let verify = cli(&["audit", "verify"]);
-    assert_eq!(
-        verify["replay"]["status"], "consistent",
-        "verify compares claims, not the column: {verify}"
+    let output = Command::new(common::bin())
+        .args(["audit", "verify", "--database-url", &database_url()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let verify: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(verify["replay"]["status"], "divergent", "{verify}");
+    let conflicts = verify["replay"]["conflicts"].as_array().unwrap();
+    assert_eq!(conflicts.len(), 1, "{verify}");
+    assert_eq!(conflicts[0]["transition_id"], both.as_str(), "{verify}");
+    assert!(
+        conflicts[0]["detail"].as_str().unwrap().contains(&first),
+        "the conflict names the column's transition: {verify}"
     );
 }

@@ -1,10 +1,11 @@
-use crate::as_of::reconstruct_inner;
 use crate::audit::Operation;
-use crate::audit::{REPLAY_CHUNK, latest_audit_position};
+use crate::audit::{REPLAY_CHUNK, list_audit_rows_page};
 use crate::audit_pages::{ReplayPages, ReplayRow};
 use crate::checkpoints::TreeVerification;
-use crate::claims::decode_claim_rows;
 use crate::error::{PgError, classify, classify_checked_query};
+use crate::history::{
+    HistoryCheck, HistoryVerdict, LegacyDisagreement, ReplayConflict, sort_key, sorted,
+};
 use crate::propose::{REJECTION_KIND_BIND, REJECTION_KIND_INVARIANT, REJECTION_KIND_REQUIRE};
 use crate::replay::{EffectKind, RowEffect};
 use crate::role_rebindings::RoleRebindings;
@@ -23,8 +24,9 @@ use uuid::Uuid;
 /// The outcome of replaying the audit log against the claims table.
 ///
 /// The claims table and the audit log are independent records of one
-/// history. Replaying the log must land on the same claim set; a
-/// difference means one was modified outside the runtime.
+/// history. Replaying the log must land on the same claim set, each claim
+/// admitted by the same transition; a difference means one was modified
+/// outside the runtime.
 ///
 /// Serialises with a `status` tag.
 #[derive(Debug, Clone, Serialize)]
@@ -32,12 +34,26 @@ use uuid::Uuid;
 pub enum VerifyOutcome {
     /// Replay reproduces the claims table exactly.
     Consistent {
-        /// Committed transitions replayed.
+        /// Audit rows replayed, the activation record among them.
         transitions: i64,
         /// Currently-admitted claims confirmed.
         claims: usize,
     },
-    /// The two records disagree.
+    /// Everything holds except the legacy history, written before the log
+    /// had one order: replayed from what it proposed, it does not reach
+    /// the baseline the activation record names. Overlapping writers
+    /// could commit something other than what they proposed, so this is
+    /// uncertainty about that history, not evidence of tampering. Later
+    /// transitions never settle it. It does not pass.
+    Indeterminate {
+        transitions: i64,
+        claims: usize,
+        /// Claims the baseline holds that the legacy replay does not.
+        legacy_only_in_baseline: Vec<ClaimInstance>,
+        /// Claims the legacy replay holds that the baseline does not.
+        legacy_only_in_replay: Vec<ClaimInstance>,
+    },
+    /// The two records disagree, or the log contradicts itself.
     Divergent {
         /// Claims present in the claims table that replaying the audit
         /// log does not produce - out-of-band inserts or edits.
@@ -45,8 +61,80 @@ pub enum VerifyOutcome {
         /// Claims the audit log says should be current but the claims
         /// table lacks - out-of-band deletes or edits.
         only_in_replay: Vec<ClaimInstance>,
+        /// Rows whose record contradicts the history before them or the
+        /// claims table, in log order.
+        conflicts: Vec<ReplayConflict>,
     },
 }
+
+impl VerifyOutcome {
+    /// The verdict on a history checked row by row, against the claims
+    /// table and the transition that admitted each, when it was read.
+    pub(crate) fn of(
+        history: HistoryVerdict,
+        table: Option<&HashMap<ClaimInstance, Uuid>>,
+    ) -> Self {
+        let HistoryVerdict {
+            rows,
+            admitted_by,
+            legacy_disagreement,
+            mut conflicts,
+        } = history;
+        let mut only_in_claims_table = Vec::new();
+        let mut only_in_replay = Vec::new();
+        if let Some(table) = table {
+            only_in_claims_table = sorted(
+                table
+                    .keys()
+                    .filter(|c| !admitted_by.contains_key(c))
+                    .cloned(),
+            );
+            only_in_replay = sorted(
+                admitted_by
+                    .keys()
+                    .filter(|c| !table.contains_key(c))
+                    .cloned(),
+            );
+            let mut moved: Vec<(&ClaimInstance, Uuid, Uuid)> = admitted_by
+                .iter()
+                .filter_map(|(c, by)| table.get(c).filter(|t| *t != by).map(|t| (c, *by, *t)))
+                .collect();
+            moved.sort_by_key(|(c, ..)| sort_key(c));
+            conflicts.extend(moved.into_iter().map(|(c, by, recorded)| ReplayConflict {
+                transition_id: by,
+                detail: format!(
+                    "admits {} {}, which the claims table says {recorded} admitted",
+                    c.predicate,
+                    serde_json::to_string(&c.args).unwrap_or_default()
+                ),
+            }));
+        }
+        if !conflicts.is_empty() || !only_in_claims_table.is_empty() || !only_in_replay.is_empty() {
+            return VerifyOutcome::Divergent {
+                only_in_claims_table,
+                only_in_replay,
+                conflicts,
+            };
+        }
+        let claims = admitted_by.len();
+        match legacy_disagreement {
+            Some(LegacyDisagreement {
+                only_in_baseline,
+                only_in_replay,
+            }) => VerifyOutcome::Indeterminate {
+                transitions: rows,
+                claims,
+                legacy_only_in_baseline: only_in_baseline,
+                legacy_only_in_replay: only_in_replay,
+            },
+            None => VerifyOutcome::Consistent {
+                transitions: rows,
+                claims,
+            },
+        }
+    }
+}
+
 /// The `morpholog audit verify` envelope: the replay verdict (claims vs
 /// audit log) and the tree verdict (Merkle tree vs checkpoints), plus the
 /// view-surface verdict when requested and the witness report when any
@@ -416,60 +504,62 @@ pub async fn coverage_replay(
     tx.commit().await.map_err(classify)?;
     Ok(tracker.into_report())
 }
-/// Replay the audit log to its latest transition and compare the
-/// reconstructed state against the claims table.
+/// Replay the audit log to its latest row, checking each row against the
+/// history before it, and compare the result with the claims table.
 ///
 /// All reads share one `REPEATABLE READ READ ONLY` snapshot, so a
 /// concurrent commit cannot fake a divergence by appearing in one record
 /// but not the other. Safe against a live system.
 ///
-/// An empty database is consistent. The comparison is an
-/// order-insensitive multiset diff; divergences are sorted by
+/// An empty database is consistent. Divergences are sorted by
 /// `(predicate, args)` so the report is deterministic.
 pub async fn verify_replay(
     pool: &PgPool,
     on_progress: &mut dyn FnMut(VerifyProgress),
 ) -> Result<VerifyOutcome, PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
-    let latest = latest_audit_position(&mut tx).await?;
     // count(*) is never null, but Postgres cannot prove it.
     let transitions = sqlx::query!(r#"SELECT count(*) AS "count!" FROM morpholog.audit"#)
         .fetch_one(&mut *tx)
         .await
         .map_err(classify_checked_query)?
         .count;
-    let replayed = match latest {
-        Some(row) => {
-            let total = u64::try_from(transitions).unwrap_or(0);
-            let mut on_page = |done| {
-                on_progress(VerifyProgress {
-                    pass: VerifyPass::Replay,
-                    done,
-                    total,
-                });
-            };
-            reconstruct_inner(&mut tx, row.transition_id, None, None, Some(&mut on_page))
-                .await?
-                .claims()
-                .to_vec()
+    let total = u64::try_from(transitions).unwrap_or(0);
+    let mut history = HistoryCheck::default();
+    let mut cursor = None;
+    let mut done = 0u64;
+    loop {
+        let page = list_audit_rows_page(&mut tx, cursor, None, REPLAY_CHUNK).await?;
+        for row in &page {
+            history.push(row)?;
         }
-        None => Vec::new(),
-    };
-    // Keyset over the primary key: the diff ignores order, and the claims
-    // table is paged rather than held whole.
+        done += page.len() as u64;
+        on_progress(VerifyProgress {
+            pass: VerifyPass::Replay,
+            done,
+            total,
+        });
+        match page.last() {
+            Some(last) if page.len() as i64 == REPLAY_CHUNK => cursor = Some(last.position()),
+            _ => break,
+        }
+    }
+    // Keyset over the primary key, so the claims table is paged rather
+    // than read in one statement.
     struct ClaimRow {
         predicate_name: String,
         arguments: serde_json::Value,
         arguments_hash: Vec<u8>,
+        asserted_in: Uuid,
     }
-    let mut rows: Vec<(String, serde_json::Value)> = Vec::new();
+    let mut table: HashMap<ClaimInstance, Uuid> = HashMap::new();
     let mut claims_cursor: Option<(String, Vec<u8>)> = None;
     loop {
         let page: Vec<ClaimRow> = match &claims_cursor {
             None => {
                 sqlx::query_as!(
                     ClaimRow,
-                    "SELECT predicate_name, arguments, arguments_hash
+                    "SELECT predicate_name, arguments, arguments_hash, asserted_in
                      FROM morpholog.claims
                      ORDER BY predicate_name, arguments_hash
                      LIMIT $1",
@@ -481,7 +571,7 @@ pub async fn verify_replay(
             Some((pred, hash)) => {
                 sqlx::query_as!(
                     ClaimRow,
-                    "SELECT predicate_name, arguments, arguments_hash
+                    "SELECT predicate_name, arguments, arguments_hash, asserted_in
                      FROM morpholog.claims
                      WHERE (predicate_name, arguments_hash) > ($2, $3)
                      ORDER BY predicate_name, arguments_hash
@@ -500,53 +590,19 @@ pub async fn verify_replay(
         };
         claims_cursor = Some((last.predicate_name.clone(), last.arguments_hash.clone()));
         let exhausted = (page.len() as i64) < REPLAY_CHUNK;
-        rows.extend(page.into_iter().map(|r| (r.predicate_name, r.arguments)));
+        for row in page {
+            let claim = ClaimInstance {
+                predicate: PredicateName::from(row.predicate_name),
+                args: serde_json::from_value(row.arguments)?,
+            };
+            table.insert(claim, row.asserted_in);
+        }
         if exhausted {
             break;
         }
     }
     tx.commit().await.map_err(classify)?;
-    let current = decode_claim_rows(rows)?;
-    // Multiset diff: +1 per current claim, -1 per replayed claim.
-    // Positive residue exists only in the claims table, negative only
-    // in the replay.
-    let mut counts: HashMap<&ClaimInstance, i64> = HashMap::new();
-    for c in &current {
-        *counts.entry(c).or_default() += 1;
-    }
-    for c in &replayed {
-        *counts.entry(c).or_default() -= 1;
-    }
-    let mut only_in_claims_table = Vec::new();
-    let mut only_in_replay = Vec::new();
-    for (claim, n) in counts {
-        for _ in 0..n.abs() {
-            if n > 0 {
-                only_in_claims_table.push(claim.clone());
-            } else if n < 0 {
-                only_in_replay.push(claim.clone());
-            }
-        }
-    }
-    let sort_key = |c: &ClaimInstance| {
-        (
-            c.predicate.to_string(),
-            serde_json::to_string(&c.args).unwrap_or_default(),
-        )
-    };
-    only_in_claims_table.sort_by_key(sort_key);
-    only_in_replay.sort_by_key(sort_key);
-    if only_in_claims_table.is_empty() && only_in_replay.is_empty() {
-        Ok(VerifyOutcome::Consistent {
-            transitions,
-            claims: current.len(),
-        })
-    } else {
-        Ok(VerifyOutcome::Divergent {
-            only_in_claims_table,
-            only_in_replay,
-        })
-    }
+    Ok(VerifyOutcome::of(history.finish(), Some(&table)))
 }
 
 #[cfg(test)]
@@ -607,6 +663,13 @@ mod tests {
         let divergent = VerifyOutcome::Divergent {
             only_in_claims_table: Vec::new(),
             only_in_replay: Vec::new(),
+            conflicts: Vec::new(),
+        };
+        let indeterminate = VerifyOutcome::Indeterminate {
+            transitions: 1,
+            claims: 1,
+            legacy_only_in_baseline: Vec::new(),
+            legacy_only_in_replay: Vec::new(),
         };
         let broken = TreeVerification::ChainBroken {
             detail: "a prev link is broken".to_string(),
@@ -617,6 +680,7 @@ mod tests {
         };
         for failing in [
             report(divergent, intact(), None, None),
+            report(indeterminate, intact(), None, None),
             report(consistent(), broken, None, None),
             report(consistent(), intact(), Some(tampered_views), None),
             report(consistent(), intact(), None, Some(WitnessStanding::Invalid)),

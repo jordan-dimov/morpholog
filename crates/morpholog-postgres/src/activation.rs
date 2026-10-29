@@ -36,6 +36,18 @@ pub(crate) fn baseline_digest(baseline: &[Operation]) -> Result<Digest, serde_js
     ))
 }
 
+/// The record's arguments over this legacy prefix and baseline.
+pub(crate) fn activation_arguments(
+    legacy: &Frontier,
+    baseline: &[Operation],
+) -> Result<Vec<EvalValue>, serde_json::Error> {
+    Ok(vec![
+        EvalValue::Decimal(legacy.len().into()),
+        EvalValue::Subject(Subject::from(Digest::from_bytes(legacy.root()).to_string())),
+        EvalValue::Subject(Subject::from(baseline_digest(baseline)?.to_string())),
+    ])
+}
+
 /// Write the activation record over every row already in the log and
 /// every claim in the table. The caller holds both tables locked.
 pub(crate) async fn write_activation_record(
@@ -82,11 +94,7 @@ pub(crate) async fn write_activation_record(
     let oid = u32::try_from(login.oid)
         .map_err(|_| PgError::InvalidState(format!("role oid {} is not a u32", login.oid)))?;
 
-    let arguments = vec![
-        EvalValue::Decimal(legacy.len().into()),
-        EvalValue::Subject(Subject::from(Digest::from_bytes(legacy.root()).to_string())),
-        EvalValue::Subject(Subject::from(baseline_digest(&baseline)?.to_string())),
-    ];
+    let arguments = activation_arguments(&legacy, &baseline)?;
     let attestation = AuditAttestation::Migration {
         authenticated_by: login.name.clone(),
         authenticated_by_oid: oid,

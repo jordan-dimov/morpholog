@@ -1685,11 +1685,35 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["status", "only_in_claims_table", "only_in_replay"],
+          "required": ["status", "transitions", "claims", "legacy_only_in_baseline", "legacy_only_in_replay"],
+          "properties": {
+            "status": { "const": "indeterminate" },
+            "transitions": { "type": "integer" },
+            "claims": { "type": "integer" },
+            "legacy_only_in_baseline": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
+            "legacy_only_in_replay": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "only_in_claims_table", "only_in_replay", "conflicts"],
           "properties": {
             "status": { "const": "divergent" },
             "only_in_claims_table": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
-            "only_in_replay": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } }
+            "only_in_replay": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
+            "conflicts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["transition_id", "detail"],
+                "properties": {
+                  "transition_id": { "type": "string", "format": "uuid" },
+                  "detail": { "type": "string" }
+                }
+              }
+            }
           }
         }
       ]

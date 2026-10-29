@@ -30,6 +30,7 @@ mod compiled_differential;
 mod compiled_plan_shapes;
 mod derived;
 mod error;
+mod history;
 mod indexes;
 mod keys;
 #[cfg(test)]
@@ -89,6 +90,7 @@ pub use compiled::fetch_diagnostic;
 pub use compiled::{CompileReason, CompileRefusal};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
 pub use error::PgError;
+pub use history::ReplayConflict;
 pub use indexes::{
     IndexAction, IndexNeed, IndexPlanEntry, NeedKind, ProvisionReport, ProvisionedProgram,
     RequiredElsewhere, StatisticsAction, StatisticsPlanEntry, check_named_programs, plan_indexes,

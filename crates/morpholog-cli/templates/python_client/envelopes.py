@@ -2607,28 +2607,84 @@ class ReplayConsistent:
 
 
 @dataclass(frozen=True)
+class ReplayIndeterminate:
+    """Everything holds except the legacy history, written before the log
+    had one order: replayed from what it proposed, it does not reach the
+    activation baseline. Uncertainty about that history, not evidence of
+    tampering, and it does not pass."""
+
+    transitions: int
+    claims: int
+    legacy_only_in_baseline: list[ClaimInstance]
+    legacy_only_in_replay: list[ClaimInstance]
+
+    @classmethod
+    def from_json(cls, payload: object) -> ReplayIndeterminate:
+        data = _strict(
+            "indeterminate replay",
+            payload,
+            {
+                "status",
+                "transitions",
+                "claims",
+                "legacy_only_in_baseline",
+                "legacy_only_in_replay",
+            },
+        )
+        data.constant("status", "indeterminate")
+        return cls(
+            transitions=data.integer("transitions"),
+            claims=data.integer("claims"),
+            legacy_only_in_baseline=data.array("legacy_only_in_baseline", ClaimInstance.from_json),
+            legacy_only_in_replay=data.array("legacy_only_in_replay", ClaimInstance.from_json),
+        )
+
+
+@dataclass(frozen=True)
+class ReplayConflict:
+    """A row whose record contradicts the history before it or the
+    claims table."""
+
+    transition_id: str
+    detail: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> ReplayConflict:
+        data = _strict("replay conflict", payload, {"transition_id", "detail"})
+        return cls(transition_id=data.text("transition_id"), detail=data.text("detail"))
+
+
+@dataclass(frozen=True)
 class ReplayDivergent:
-    """The claims table and the audit log disagree - evidence one was
-    edited out of band."""
+    """The claims table and the audit log disagree, or the log contradicts
+    itself - evidence one was edited out of band."""
 
     only_in_claims_table: list[ClaimInstance]
     only_in_replay: list[ClaimInstance]
+    conflicts: list[ReplayConflict]
 
     @classmethod
     def from_json(cls, payload: object) -> ReplayDivergent:
         data = _strict(
-            "divergent replay", payload, {"status", "only_in_claims_table", "only_in_replay"}
+            "divergent replay",
+            payload,
+            {"status", "only_in_claims_table", "only_in_replay", "conflicts"},
         )
         data.constant("status", "divergent")
         return cls(
             only_in_claims_table=data.array("only_in_claims_table", ClaimInstance.from_json),
             only_in_replay=data.array("only_in_replay", ClaimInstance.from_json),
+            conflicts=data.array("conflicts", ReplayConflict.from_json),
         )
 
 
-def parse_verify_outcome(payload: object) -> ReplayConsistent | ReplayDivergent:
-    parsers: dict[str, Callable[[object], ReplayConsistent | ReplayDivergent]] = {
+ReplayVerdict = ReplayConsistent | ReplayIndeterminate | ReplayDivergent
+
+
+def parse_verify_outcome(payload: object) -> ReplayVerdict:
+    parsers: dict[str, Callable[[object], ReplayVerdict]] = {
         "consistent": ReplayConsistent.from_json,
+        "indeterminate": ReplayIndeterminate.from_json,
         "divergent": ReplayDivergent.from_json,
     }
     return _by_status(payload, "a replay verdict", parsers)
@@ -3078,7 +3134,7 @@ class VerifyReport:
     no witness judged invalid. Read it rather than re-deriving the rule."""
 
     passes: bool
-    replay: ReplayConsistent | ReplayDivergent
+    replay: ReplayVerdict
     tree: TreeVerification
     role_rebindings: RoleRebindings
     views: ViewsVerification | None = None

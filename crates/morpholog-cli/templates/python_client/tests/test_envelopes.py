@@ -1180,8 +1180,16 @@ class TamperEvidence(unittest.TestCase):
         self.assertIsInstance(report.replay, envelopes.ReplayDivergent)
         self.assertEqual(report.replay.only_in_claims_table[0].predicate, "EveryKind")
         self.assertEqual(report.replay.only_in_replay, [])
+        self.assertIn("finds no such claim", report.replay.conflicts[0].detail)
         self.assertIsInstance(report.tree, envelopes.TreeTampered)
         self.assertNotEqual(report.tree.recorded_root, report.tree.recomputed_root)
+
+    def test_verify_report_indeterminate(self):
+        report = envelopes.VerifyReport.from_json(golden("verify_report_indeterminate.json"))
+        self.assertIsInstance(report.replay, envelopes.ReplayIndeterminate)
+        self.assertFalse(report.passes)
+        self.assertEqual(report.replay.legacy_only_in_baseline[0].predicate, "EveryKind")
+        self.assertEqual(report.replay.legacy_only_in_replay, [])
 
     def test_checkpoint_outcomes(self):
         created = envelopes.parse_checkpoint_outcome(golden("checkpoint_created.json"))

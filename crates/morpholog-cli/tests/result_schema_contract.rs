@@ -31,11 +31,11 @@ use morpholog_core::{
 use morpholog_postgres::{
     AtomicAct, AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, CheckpointWitnesses,
     OutboxRow, PackVerdict, PackVerificationReport, PgAtomicOutcome, PgProposalOutcome,
-    PrefixPackManifest, RebindingScope, RoleRebinding, RoleRebindings, RowInclusionProof,
-    SelectiveEvidencePack, SelectivePackManifest, SelectiveVerification, TreeHeadSignature,
-    TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification, WindowEvidencePack,
-    WindowPackManifest, WindowVerification, WitnessScheme, WitnessStanding, WitnessVerdict,
-    WitnessesReport,
+    PrefixPackManifest, RebindingScope, ReplayConflict, RoleRebinding, RoleRebindings,
+    RowInclusionProof, SelectiveEvidencePack, SelectivePackManifest, SelectiveVerification,
+    TreeHeadSignature, TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification,
+    WindowEvidencePack, WindowPackManifest, WindowVerification, WitnessScheme, WitnessStanding,
+    WitnessVerdict, WitnessesReport,
 };
 use morpholog_postgres::{
     CheckpointMatch, Completeness, Evaluation, EvaluationReceipt, ProgramMatch, ReceiptCheckpoint,
@@ -2150,6 +2150,10 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             replay: VerifyOutcome::Divergent {
                 only_in_claims_table: vec![kitchen_sink_claim()],
                 only_in_replay: vec![],
+                conflicts: vec![ReplayConflict {
+                    transition_id: uuid::Uuid::from_u128(0x0193_0000_0000_7000_8000_0000_0000_0007),
+                    detail: "del EveryKind [] finds no such claim".to_string(),
+                }],
             },
             views: None,
             witnesses: None,
@@ -2159,6 +2163,24 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 tree_size: 2,
                 recorded_root: format!("sha256:{}", "a".repeat(64)).parse().unwrap(),
                 recomputed_root: format!("sha256:{}", "c".repeat(64)),
+            },
+        }),
+    );
+    assert_golden(
+        "verify_report_indeterminate.json",
+        &to_value(&VerifyReport {
+            replay: VerifyOutcome::Indeterminate {
+                transitions: 4,
+                claims: 1,
+                legacy_only_in_baseline: vec![kitchen_sink_claim()],
+                legacy_only_in_replay: vec![],
+            },
+            views: None,
+            witnesses: None,
+            role_rebindings: RoleRebindings::NotEvaluated,
+            tree: TreeVerification::Intact {
+                checkpoints: 1,
+                tree_size: 4,
             },
         }),
     );
@@ -3146,6 +3168,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ),
         ("verify_report_consistent.json", "verify_report"),
         ("verify_report_divergent.json", "verify_report"),
+        ("verify_report_indeterminate.json", "verify_report"),
         ("verify_report_with_views.json", "verify_report"),
         ("views_verification_intact.json", "views_verification"),
         ("views_verification_tampered.json", "views_verification"),

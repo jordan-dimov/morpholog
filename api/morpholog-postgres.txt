@@ -1007,8 +1007,14 @@ pub morpholog_postgres::VerifyOutcome::Consistent
 pub morpholog_postgres::VerifyOutcome::Consistent::claims: usize
 pub morpholog_postgres::VerifyOutcome::Consistent::transitions: i64
 pub morpholog_postgres::VerifyOutcome::Divergent
+pub morpholog_postgres::VerifyOutcome::Divergent::conflicts: alloc::vec::Vec<morpholog_postgres::ReplayConflict>
 pub morpholog_postgres::VerifyOutcome::Divergent::only_in_claims_table: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
 pub morpholog_postgres::VerifyOutcome::Divergent::only_in_replay: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
+pub morpholog_postgres::VerifyOutcome::Indeterminate
+pub morpholog_postgres::VerifyOutcome::Indeterminate::claims: usize
+pub morpholog_postgres::VerifyOutcome::Indeterminate::legacy_only_in_baseline: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
+pub morpholog_postgres::VerifyOutcome::Indeterminate::legacy_only_in_replay: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
+pub morpholog_postgres::VerifyOutcome::Indeterminate::transitions: i64
 impl core::clone::Clone for morpholog_postgres::VerifyOutcome
 pub fn morpholog_postgres::VerifyOutcome::clone(&self) -> morpholog_postgres::VerifyOutcome
 impl core::fmt::Debug for morpholog_postgres::VerifyOutcome
@@ -2201,6 +2207,27 @@ impl core::marker::Unpin for morpholog_postgres::RenderedViews
 impl core::marker::UnsafeUnpin for morpholog_postgres::RenderedViews
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RenderedViews
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RenderedViews
+pub struct morpholog_postgres::ReplayConflict
+pub morpholog_postgres::ReplayConflict::detail: alloc::string::String
+pub morpholog_postgres::ReplayConflict::transition_id: uuid::Uuid
+impl core::clone::Clone for morpholog_postgres::ReplayConflict
+pub fn morpholog_postgres::ReplayConflict::clone(&self) -> morpholog_postgres::ReplayConflict
+impl core::cmp::Eq for morpholog_postgres::ReplayConflict
+pub fn morpholog_postgres::ReplayConflict::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::ReplayConflict
+pub fn morpholog_postgres::ReplayConflict::eq(&self, &morpholog_postgres::ReplayConflict) -> bool
+impl core::fmt::Debug for morpholog_postgres::ReplayConflict
+pub fn morpholog_postgres::ReplayConflict::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::ReplayConflict
+impl serde_core::ser::Serialize for morpholog_postgres::ReplayConflict
+pub fn morpholog_postgres::ReplayConflict::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::ReplayConflict
+impl core::marker::Send for morpholog_postgres::ReplayConflict
+impl core::marker::Sync for morpholog_postgres::ReplayConflict
+impl core::marker::Unpin for morpholog_postgres::ReplayConflict
+impl core::marker::UnsafeUnpin for morpholog_postgres::ReplayConflict
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ReplayConflict
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ReplayConflict
 pub struct morpholog_postgres::RequiredElsewhere
 pub morpholog_postgres::RequiredElsewhere::index_name: alloc::string::String
 pub morpholog_postgres::RequiredElsewhere::required_by: alloc::vec::Vec<alloc::string::String>

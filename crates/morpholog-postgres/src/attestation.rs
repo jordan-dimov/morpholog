@@ -82,8 +82,8 @@ pub enum AuditAttestation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         authenticated_by_oid: Option<u32>,
     },
-    /// The login role that ran the migration, or the `init`, that wrote
-    /// the activation record. Only that record carries it.
+    /// The login role that ran the migration that wrote the activation
+    /// record. Only that record carries it.
     Migration {
         authenticated_by: String,
         authenticated_by_oid: u32,
