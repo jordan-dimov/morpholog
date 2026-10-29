@@ -1,7 +1,12 @@
-//! How one committed audit row moves the admitted state. Every replay of
-//! the log advances through here, so the state a reader rebuilds does not
-//! depend on which reader rebuilt it. What a reader makes of a row (a
-//! score, a coverage count, a rehearsal class) stays with that reader.
+//! How a replay of the audit log moves the admitted state, one row at a
+//! time. Every replay advances through here, so the state a reader
+//! rebuilds does not depend on which reader rebuilt it. What a reader
+//! makes of a row (a score, a coverage count, a rehearsal class) stays
+//! with that reader.
+//!
+//! A row's effect is read from the claims it proposed to retract and
+//! admit. When two writers overlapped, that can differ from what the
+//! commit actually did to the claims table.
 
 use std::collections::HashMap;
 
@@ -10,7 +15,8 @@ use uuid::Uuid;
 
 use crate::audit::AuditRow;
 
-/// What one row did to the admitted claims.
+/// What replay takes one row to have done: the claims it proposed to
+/// retract and admit.
 pub(crate) struct RowEffect<'r> {
     pub(crate) transition_id: Uuid,
     pub(crate) retracted: &'r [ClaimInstance],
