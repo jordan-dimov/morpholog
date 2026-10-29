@@ -84,9 +84,9 @@ pub struct RefreshSummary {
 /// Three phases keep the kernel compute outside any transaction:
 ///  - **read** (one short `REPEATABLE READ` snapshot): the latest visible
 ///    audit transition, then the scoped claims. `source_snapshot_*` is a
-///    freshness marker, NOT a lossless high-water: `committed_at` is the
-///    writer's start time but visibility follows commit order, so an
-///    in-flight transaction may sort earlier and is picked up next time.
+///    freshness marker, NOT a lossless high-water: orders are drawn in
+///    sequence but commits land in any order, so an in-flight transaction
+///    may sort earlier and is picked up next time.
 ///  - **compute** (no transaction): the kernel builds the rows.
 ///  - **write** (one short transaction): insert a new generation, load its
 ///    rows, flip the active pointer, drop the old generation. Readers see

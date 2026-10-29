@@ -506,9 +506,8 @@ pub(crate) async fn require_recorded_roles(
 /// particular `morpholog.audit` gets INSERT and SELECT only, so the log is
 /// append-only in the database even for the runtime's own role.
 ///
-/// Membership grants (and `pg_read_all_stats` for an audit-tailing
-/// reader) are left to the operator, so no secret or cluster-wide policy
-/// hides inside provisioning.
+/// Membership grants are left to the operator, so no secret or
+/// cluster-wide policy hides inside provisioning.
 pub async fn provision_least_privilege(
     pool: &PgPool,
     roles: &DeploymentRoles,
