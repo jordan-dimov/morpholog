@@ -15,7 +15,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use super::{
     EvidencePack, PACK_FORMAT, PackError, PackHead, PackKind, PackManifest, WRITER_VERSION,
-    check_manifest, covering_checkpoint, manifest_agrees, row_count_disagrees,
+    check_manifest, covering_checkpoint, manifest_agrees, row_count_disagrees, row_fits_format,
     validate_prefix_chain,
 };
 use crate::audit::{AuditPosition, AuditRow};
@@ -232,6 +232,7 @@ impl<R: BufRead> RowStream<R> {
             return Err(row_count_disagrees(self.fed, self.manifest.tree_size));
         }
         let row: AuditRow = self.lines.parse("an audit row")?;
+        row_fits_format(self.manifest.pack_format_version, &row)?;
         let here = row.position();
         if let Some(before) = self.previous
             && here <= before

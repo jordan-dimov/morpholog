@@ -11,8 +11,8 @@
 //! revealed). None proves that a pack holds *all* of one subject's
 //! history; that needs a subject-indexed commitment.
 //!
-//! Every pack announces one format, [`PACK_FORMAT`], its kind and the
-//! release that wrote it, before anything else.
+//! Every pack announces its format, its kind and the release that wrote
+//! it, before anything else.
 
 use crate::role_rebindings::{RebindingFold, RebindingScope, RoleRebindings};
 use crate::witnesses::PackVerdict;
@@ -34,12 +34,39 @@ use crate::merkle::{
 use crate::prefix_verify::PrefixVerifier;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 
-/// The one evidence-pack format this binary writes and reads. Every pack
-/// announces it beside its kind and the release that wrote it, so a
-/// verifier refuses any other format by name before reading a row. A
+/// The evidence-pack format this binary writes. Every pack announces its
+/// format beside its kind and the release that wrote it, so a verifier
+/// refuses a format it does not read by name before reading a row. A
 /// change to what a pack carries, a row field among it, moves this number
 /// once, for every kind.
-pub const PACK_FORMAT: u32 = 17;
+pub const PACK_FORMAT: u32 = 18;
+/// The older format this binary still reads. It was written before the
+/// log had one order, so its rows are legacy rows only.
+pub const LEGACY_PACK_FORMAT: u32 = 17;
+
+fn reads_format(version: u32) -> bool {
+    version == PACK_FORMAT || version == LEGACY_PACK_FORMAT
+}
+
+/// Hold a row to what its pack's format can carry: an ordered row in a
+/// legacy pack is no row any writer of that format produced.
+pub(crate) fn row_fits_format(version: u32, row: &AuditRow) -> Result<(), PackError> {
+    if version == LEGACY_PACK_FORMAT && (row.audit_order.is_some() || row.operations.is_some()) {
+        return Err(PackError::Malformed {
+            detail: format!(
+                "a format {LEGACY_PACK_FORMAT} pack carries legacy rows only, but transition {} \
+                 is an ordered row",
+                row.transition_id
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn rows_fit_format(version: u32, rows: &[AuditRow]) -> Result<(), PackError> {
+    rows.iter()
+        .try_for_each(|row| row_fits_format(version, row))
+}
 /// The release stamped on every pack this binary writes.
 pub(crate) const WRITER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -85,7 +112,7 @@ pub struct PackHead {
 impl PackHead {
     /// `Ok` when this binary reads the announced format.
     pub fn check_format(&self) -> Result<(), PackError> {
-        if self.pack_format_version == PACK_FORMAT {
+        if reads_format(self.pack_format_version) {
             return Ok(());
         }
         Err(PackError::Unsupported {
@@ -108,7 +135,7 @@ pub(crate) fn check_manifest(
     kind: &str,
     expected: PackKind,
 ) -> Result<(), PackError> {
-    if version != PACK_FORMAT {
+    if !reads_format(version) {
         return Err(PackError::Unsupported {
             pack_format_version: version,
             written_by: Some(written_by.to_string()),
@@ -130,14 +157,14 @@ pub(crate) fn unsupported_detail(pack_format_version: u32, written_by: Option<&s
         Some(v) => format!("the manifest names Morpholog {v} as its writer"),
         None => "the manifest does not name its writer".to_string(),
     };
-    let remedy = if pack_format_version < PACK_FORMAT {
+    let remedy = if pack_format_version < LEGACY_PACK_FORMAT {
         "export the pack again with a current release".to_string()
     } else {
         format!("verify it with a release that reads format {pack_format_version}")
     };
     format!(
-        "unsupported pack format {pack_format_version}: this verifier reads format \
-         {PACK_FORMAT} only; {writer}; {remedy}"
+        "unsupported pack format {pack_format_version}: this verifier reads formats \
+         {LEGACY_PACK_FORMAT} and {PACK_FORMAT} only; {writer}; {remedy}"
     )
 }
 
@@ -352,6 +379,7 @@ fn validate_envelope(pack: &EvidencePack) -> Result<(), PackError> {
         &m.pack_kind,
         PackKind::Prefix,
     )?;
+    rows_fit_format(m.pack_format_version, &pack.rows)?;
     let covering = validate_prefix_chain(&pack.checkpoints)?;
     // Exactly the rows the covering checkpoint commits to: extra rows would
     // ride along unproven.
@@ -717,6 +745,7 @@ fn validate_window_envelope(pack: &WindowEvidencePack) -> Result<(), PackError> 
         &m.pack_kind,
         PackKind::Window,
     )?;
+    rows_fit_format(m.pack_format_version, &pack.rows)?;
 
     let from = &pack.from_checkpoint;
     let to = &pack.to_checkpoint;
@@ -1029,6 +1058,7 @@ fn validate_selective_envelope(pack: &SelectiveEvidencePack) -> Result<(), PackE
         &m.pack_kind,
         PackKind::Selective,
     )?;
+    rows_fit_format(m.pack_format_version, &pack.rows)?;
 
     let cp = &pack.checkpoint;
     if cp.tree_size < 0 {

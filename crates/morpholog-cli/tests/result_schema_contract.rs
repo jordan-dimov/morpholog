@@ -2366,7 +2366,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
     assert_golden_bytes(
         "prefix_pack_manifest.json",
         &PrefixPackManifest {
-            pack_format_version: 17,
+            pack_format_version: 18,
             pack_kind: "prefix".into(),
             morpholog_version: "0.0.0".into(),
             tree_size: 2,
@@ -2401,7 +2401,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
     assert_golden(
         "tree_verification_unsupported_pack.json",
         &to_value(&TreeVerification::unsupported_pack(
-            18,
+            19,
             Some("9.9.9".into()),
         )),
     );
@@ -2442,7 +2442,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "window_evidence_pack.json",
         &to_value(&WindowEvidencePack {
             manifest: WindowPackManifest {
-                pack_format_version: 17,
+                pack_format_version: 18,
                 pack_kind: "window".into(),
                 morpholog_version: "0.0.0".into(),
                 from_tree_size: 2,
@@ -2523,7 +2523,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "selective_evidence_pack.json",
         &to_value(&SelectiveEvidencePack {
             manifest: SelectivePackManifest {
-                pack_format_version: 17,
+                pack_format_version: 18,
                 pack_kind: "selective".into(),
                 morpholog_version: "0.0.0".into(),
                 tree_size: 3,

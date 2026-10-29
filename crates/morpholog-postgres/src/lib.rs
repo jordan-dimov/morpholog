@@ -107,8 +107,8 @@ pub use outbox::{
     process_one_outbox_row, record_compensation, release_outbox_claim,
 };
 pub use pack::{
-    EvidencePack, PACK_FORMAT, PackError, PackHead, PackKind, PackManifest, PrefixExport,
-    PrefixPackManifest, PrefixStreamReport, RowInclusionProof, SelectiveEvidencePack,
+    EvidencePack, LEGACY_PACK_FORMAT, PACK_FORMAT, PackError, PackHead, PackKind, PackManifest,
+    PrefixExport, PrefixPackManifest, PrefixStreamReport, RowInclusionProof, SelectiveEvidencePack,
     SelectivePackManifest, SelectiveVerification, WindowEvidencePack, WindowPackManifest,
     WindowStart, WindowVerification, begin_prefix_export, document_pack_head, export_pack,
     export_selective, export_window, pack_role_rebindings, read_prefix_stream, streamed_pack_head,

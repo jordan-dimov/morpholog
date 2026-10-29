@@ -21,7 +21,7 @@
     "from_root_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "from_tree_size": 2,
     "morpholog_version": "0.0.0",
-    "pack_format_version": 17,
+    "pack_format_version": 18,
     "pack_kind": "window",
     "to_checkpoint_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "to_root_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",

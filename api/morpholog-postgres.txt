@@ -2699,6 +2699,7 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::WitnessesRepor
 pub const morpholog_postgres::AUTHORITY_PREDICATE: &str
 pub const morpholog_postgres::BASELINE_VERSION: i32
 pub const morpholog_postgres::DEFAULT_ROLE_PREFIX: &str
+pub const morpholog_postgres::LEGACY_PACK_FORMAT: u32
 pub const morpholog_postgres::PACK_FORMAT: u32
 pub const morpholog_postgres::RESTRICTED_PREDICATE: &str
 pub trait morpholog_postgres::Deliverer: core::marker::Send + core::marker::Sync

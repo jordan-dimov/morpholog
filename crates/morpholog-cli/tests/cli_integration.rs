@@ -889,7 +889,7 @@ async fn the_pin_never_masks_a_sparse_packs_intrinsic_verdict() {
     let mut malformed = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(
         &mut malformed,
-        br#"{"manifest": {"pack_format_version": 17, "pack_kind": "window", "morpholog_version": "0.0.0"}}"#,
+        br#"{"manifest": {"pack_format_version": 18, "pack_kind": "window", "morpholog_version": "0.0.0"}}"#,
     )
     .unwrap();
     let malformed_path = malformed.path().to_str().unwrap();
@@ -1262,8 +1262,11 @@ async fn evidence_verify_names_a_format_it_does_not_read() {
         assert_eq!(verdict["written_by"], written_by, "got: {stdout}");
         let detail = verdict["detail"].as_str().unwrap();
         assert!(
-            detail.contains(&format!("reads format {reads}")),
-            "the detail names the format this binary reads: {detail}"
+            detail.contains(&format!(
+                "reads formats {} and {reads}",
+                morpholog_postgres::LEGACY_PACK_FORMAT
+            )),
+            "the detail names the formats this binary reads: {detail}"
         );
     }
 }
@@ -1288,8 +1291,8 @@ async fn evidence_verify_on_a_readable_but_invalid_pack_is_a_malformed_verdict()
     // A kind this binary does not read, under the format it does, in
     // either spelling: malformed, naming the kind.
     for text in [
-        r#"{"manifest": {"pack_format_version": 17, "pack_kind": "ledger", "morpholog_version": "0.0.0"}}"#.to_string(),
-        "{\"pack_format_version\": 17, \"pack_kind\": \"ledger\", \"morpholog_version\": \"0.0.0\"}\n{}\n".to_string(),
+        r#"{"manifest": {"pack_format_version": 18, "pack_kind": "ledger", "morpholog_version": "0.0.0"}}"#.to_string(),
+        "{\"pack_format_version\": 18, \"pack_kind\": \"ledger\", \"morpholog_version\": \"0.0.0\"}\n{}\n".to_string(),
     ] {
         let packfile = temp_file(text.as_bytes());
         let (status, stdout, _stderr) =
@@ -1314,7 +1317,7 @@ async fn evidence_verify_refuses_a_pack_whose_hash_is_not_a_digest() {
     std::io::Write::write_all(
         &mut packfile,
         format!(
-            r#"{{"manifest": {{"pack_format_version": 17, "pack_kind": "prefix", "morpholog_version": "0.0.0", "root_hash": "{uppercase}"}}}}"#
+            r#"{{"manifest": {{"pack_format_version": 18, "pack_kind": "prefix", "morpholog_version": "0.0.0", "root_hash": "{uppercase}"}}}}"#
         )
             .as_bytes(),
     )

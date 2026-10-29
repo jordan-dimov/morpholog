@@ -2,7 +2,8 @@
 //! a real upgrade takes. The release's own binary, downloaded and held to
 //! its published digest, writes the history, a checkpoint and a pack.
 //! This binary then migrates the database, verifies what the old one
-//! wrote, and writes on. The old binary, connecting afresh, is refused.
+//! wrote, writes on and exports the whole history again. The old binary,
+//! connecting afresh, is refused.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -110,6 +111,14 @@ fn json(output: &Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
+fn lines(ndjson: &[u8]) -> Vec<Value> {
+    ndjson
+        .split(|b| *b == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).unwrap())
+        .collect()
+}
+
 fn propose(binary: &Path, url: &str, file: &Path, act: &str, k: &str) -> Output {
     let args = format!(r#"[{{"type":"subject","value":"{k}"}}]"#);
     run(
@@ -170,6 +179,16 @@ async fn a_database_the_last_release_wrote_upgrades_and_verifies() {
     ));
     let written = json(&propose(new, &url, &file, "admit_x", "c"));
     let verified_after = json(&run(new, &url, &["audit", "verify"]));
+    json(&run(new, &url, &["audit", "checkpoint"]));
+    let exported_after = run(new, &url, &["audit", "export"]);
+    assert!(exported_after.status.success());
+    let pack_after = common::write_fixture("pack_after.ndjson", "");
+    std::fs::write(&*pack_after, &exported_after.stdout).unwrap();
+    let offline_after = json(&run(
+        new,
+        &url,
+        &["audit", "verify-pack", pack_after.to_str().unwrap()],
+    ));
     let refused = propose(&old, &url, &file, "admit_x", "d");
 
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
@@ -194,10 +213,44 @@ async fn a_database_the_last_release_wrote_upgrades_and_verifies() {
         assert_eq!(report["tree"]["tree_size"], 3, "the checkpoint's: {report}");
         assert_eq!(report["tree"]["checkpoints"], 1, "{report}");
     }
+    let old_pack = lines(&exported.stdout);
+    assert_eq!(
+        old_pack[0]["pack_format_version"],
+        morpholog_postgres::LEGACY_PACK_FORMAT
+    );
     assert_eq!(offline["passes"], true, "the old pack verifies: {offline}");
     assert_eq!(offline["verdict"]["status"], "intact", "{offline}");
     assert_eq!(offline["verdict"]["tree_size"], 3, "{offline}");
     assert_eq!(written["status"], "committed");
+
+    // A pack of the whole history now: the old checkpoint keeps its root,
+    // the activation record is the first ordered row, and the new write
+    // follows it under the next order.
+    let new_pack = lines(&exported_after.stdout);
+    let manifest = &new_pack[0];
+    assert_eq!(
+        manifest["pack_format_version"],
+        morpholog_postgres::PACK_FORMAT
+    );
+    assert_eq!(manifest["checkpoint_count"], 2, "{manifest}");
+    assert_eq!(new_pack[1], old_pack[1], "the old checkpoint is unchanged");
+    let rows = &new_pack[3..];
+    assert_eq!(rows.len(), 5);
+    assert_eq!(&rows[..3], &old_pack[2..], "the legacy rows are unchanged");
+    assert!(rows[..3].iter().all(|r| r.get("audit_order").is_none()));
+    assert_eq!(rows[3]["transformation_name"], "morpholog.activate");
+    assert_eq!(
+        (&rows[3]["audit_order"], &rows[3]["act_ordinal"]),
+        (&1.into(), &0.into())
+    );
+    assert_eq!(rows[4]["transformation_name"], "admit_x");
+    assert_eq!(rows[4]["audit_order"], 2, "the new write is ordered");
+    assert_eq!(offline_after["passes"], true, "{offline_after}");
+    assert_eq!(
+        offline_after["verdict"]["status"], "intact",
+        "{offline_after}"
+    );
+    assert_eq!(offline_after["verdict"]["tree_size"], 5, "{offline_after}");
     let stderr = String::from_utf8_lossy(&refused.stderr);
     assert!(
         !refused.status.success() && stderr.contains("older than the database"),
