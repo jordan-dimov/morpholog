@@ -116,11 +116,12 @@ const PROGRESS_SQL: &str = "CREATE TABLE IF NOT EXISTS morpholog.migration_progr
 pub const BASELINE_LIMIT_BYTES: i64 = (1 << 28) - 1;
 
 /// Measured on 2026-10-30 (release build, laptop): preparation scans
-/// about 0.6 us per audit row; the cutover's legacy pass 11.5 us per row
-/// and its baseline 3.5 us per live claim.
-const PREPARATION_NS_PER_ROW: i64 = 600;
+/// about 0.6 us per audit row for its schema steps and 12 us per row for
+/// the frontier; the cutover's legacy tail 11.5 us per row and its
+/// baseline 12.7 us per live claim, the record's serialisation included.
+const PREPARATION_NS_PER_ROW: i64 = 12_600;
 const PAUSE_NS_PER_ROW: i64 = 11_500;
-const PAUSE_NS_PER_CLAIM: i64 = 3_500;
+const PAUSE_NS_PER_CLAIM: i64 = 12_700;
 
 /// How a brief ACCESS EXCLUSIVE lock is taken: with a short timeout and
 /// bounded retries, so a request never queues behind a long-running

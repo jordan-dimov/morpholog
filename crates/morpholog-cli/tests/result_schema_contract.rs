@@ -1117,8 +1117,8 @@ fn migration_reports_serialize_as_pinned() {
             live_claims: 300_000,
             baseline_bytes: 83_660_004,
             baseline_limit_bytes: morpholog_postgres::BASELINE_LIMIT_BYTES,
-            estimated_preparation_ms: 1_800,
-            estimated_writer_pause_ms: 2_200,
+            estimated_preparation_ms: 37_800,
+            estimated_writer_pause_ms: 4_960,
             refusals: vec!["1 prepared transaction(s) are open on this database; commit or roll them back first (`pg_prepared_xacts`)".to_string()],
         }),
     };
